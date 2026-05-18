@@ -97,7 +97,7 @@ async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module):
     mock_pulse_defer = AsyncMock()
     mock_pulse_task.defer_async = mock_pulse_defer
 
-    with patch.dict(task_registry.KIND_TO_TASK, {"pulse.generate": mock_pulse_task}):
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_pulse_task}):
         await scheduler_module.run_pulse_wrapper(app)
 
     mock_pulse_defer.assert_awaited_once()
@@ -162,7 +162,7 @@ async def test_run_pulse_classifier_training_wrapper_defers_when_enabled(schedul
     mock_train_defer = AsyncMock()
     mock_train_task.defer_async = mock_train_defer
 
-    with patch.dict(task_registry.KIND_TO_TASK, {"pulse.train_classifier": mock_train_task}):
+    with patch.dict(task_registry._TASK_MAP, {"pulse.train_classifier": mock_train_task}):
         await scheduler_module.run_pulse_classifier_training_wrapper(app)
 
     mock_train_defer.assert_awaited_once()
@@ -186,7 +186,7 @@ async def test_run_weekly_digest_wrapper_enqueues_digest_weekly(scheduler_module
     mock_digest_defer = AsyncMock()
     mock_digest_task.defer_async = mock_digest_defer
 
-    with patch.dict(task_registry.KIND_TO_TASK, {"digest.weekly": mock_digest_task}):
+    with patch.dict(task_registry._TASK_MAP, {"digest.weekly": mock_digest_task}):
         await scheduler_module.run_weekly_digest_wrapper(app)
 
     mock_digest_defer.assert_awaited_once()

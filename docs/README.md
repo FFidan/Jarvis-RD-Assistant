@@ -14,9 +14,9 @@ below outrank archived notes.
 
 ## Current Roadmaps And Closeouts
 
-- [Post-v0.2.0 Roadmap](plans/2026-05-10-post-v02-roadmap.md) — remaining deferred work and closeout state.
-- [Deferred Roadmap Closeout Plan](superpowers/plans/2026-05-12-deferred-roadmap-closeout.md) — execution plan for Buckets C/E1/E2/G/H.
-- [Audit Gap Closeout](audit/2026-05-12-audit-gap-closeout.md) — latest audit-gap implementation report.
+- [Post-v0.2.0 Roadmap](archive/2026-05/plans/2026-05-10-post-v02-roadmap.md) — remaining deferred work and closeout state.
+- [Deferred Roadmap Closeout Plan](archive/2026-05/superpowers-plans/2026-05-12-deferred-roadmap-closeout.md) — execution plan for Buckets C/E1/E2/G/H.
+- [Audit Gap Closeout](archive/2026-05/2026-05-12-audit-gap-closeout.md) — latest audit-gap implementation report.
 
 ## Operations
 
@@ -24,7 +24,7 @@ below outrank archived notes.
 - [Deployment](DEPLOYMENT.md)
 - [Requirements](REQUIREMENTS.md)
 - [Performance Profiling HOWTO](perf/HOWTO.md)
-- [Library Wishlist Decisions](perf/2026-05-12-library-wishlist-decisions.md)
+- [Library Wishlist Decisions](archive/2026-05/perf/2026-05-12-library-wishlist-decisions.md)
 
 ## Historical Material
 

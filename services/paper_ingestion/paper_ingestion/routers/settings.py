@@ -1,28 +1,30 @@
-"""Settings, nudges, and source management endpoints."""
+"""Settings, nudges, and source management endpoints.
 
-import contextlib
+HTTP transport layer only — all business logic lives in
+``paper_ingestion.services.settings_service``.
+
+Route handlers are thin:  parse → auth check → delegate → return.
+
+Symbols that tests patch via ``paper_ingestion.routers.settings.*`` are
+re-exported here so existing patch-paths remain stable after the extraction.
+"""
+
 import logging
-import re
-from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlparse
 
 import asyncpg
-import httpx
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
+import httpx  # noqa: F401 — in namespace so tests can patch routers.settings.httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from jarvis_common import dynamic_update, log_audit
 from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
 from jarvis_common.crypto import (
-    decrypt_secret,
-    encrypt_secret,
-    mask_secret,
+    decrypt_secret,  # noqa: F401 — in namespace for test patch-path compat
+    encrypt_secret,  # noqa: F401 — tests patch routers.settings.encrypt_secret
+    mask_secret,  # noqa: F401 — imported by downstream (service uses it; keep for compat)
     resolve_secret_row,
 )
-from jarvis_common.event_log import log_event as _log_event
-from jarvis_common.settings import get_core_settings, get_telegram_settings
+from jarvis_common.event_log import log_event as _log_event  # noqa: F401 — tests patch this name
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_scheduler, limiter
@@ -35,15 +37,76 @@ from paper_ingestion.models import (
     SourceResponse,
     SourceUpdate,
 )
+
+# update_litellm_model is passed to write_config so the router-module symbol is
+# what tests monkeypatch.  ROLE_TO_ALIAS / reload_litellm are re-exported for
+# any caller that previously imported them from this module.
 from paper_ingestion.services.litellm_config import (
-    ROLE_TO_ALIAS,
-    reload_litellm,
+    ROLE_TO_ALIAS,  # noqa: F401
+    reload_litellm,  # noqa: F401
     update_litellm_model,
 )
-from paper_ingestion.services.model_lifecycle import catalog_entry_for_model, normalize_model_tag
+
+# --- Symbols used by handler code ---
+# --- Re-exports: symbols that existing tests import from this module ---
+# Tests that do `from paper_ingestion.routers.settings import X` or
+# `patch("paper_ingestion.routers.settings.X")` must still find X here.
+from paper_ingestion.services.settings_service import (  # noqa: F401
+    _ALLOWED_CONFIG_KEYS,
+    _CONFIG_VALIDATORS,
+    _ENCRYPTED_KEYS,
+    _NUDGE_ALLOWED_COLUMNS,
+    _NUDGE_JSONB_COLUMNS,
+    _NUM_CTX_PATTERN,
+    _SECRET_KEYS,
+    _SOURCE_ALLOWED_COLUMNS,
+    _SOURCE_JSONB_COLUMNS,
+    _SUPPORTED_PROVIDERS,
+    _THINKING_DISABLED_PATTERN,
+    _ZOTERO_LIBRARY_SCOPE_KEYS,
+    PERSONAL_KEYS,
+    SYSTEM_KEYS,
+    _classify_config_key,
+    _fetch_effective_config_row,
+    _is_allowed_config_key,
+    _resolve_config_value,
+    _validate_bool,
+    _validate_cron,
+    _validate_fsrs_learning_steps,
+    _validate_fsrs_retention,
+    _validate_group_id,
+    _validate_l2_lambda,
+    _validate_langfuse_dashboard_url,
+    _validate_library_type,
+    _validate_lookback_days,
+    _validate_nonempty_str,
+    _validate_optional_int,
+    _validate_positive_int,
+    _validate_pulse_weights,
+    _validate_startup_grace_seconds,
+    _validate_zotero_cron,
+    _write_config_row,
+    apply_fetch_interval,
+    apply_pulse_cron,
+    apply_zotero_cron,
+    build_export_zip,
+    cloud_provider_key_present,
+    fetch_papers_by_source,
+    fetch_papers_by_status,
+    migrate_plaintext_secrets,
+    reload_telegram_nudges,
+    test_provider_connectivity,
+    validate_model_assignment,
+    write_config,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
+
+
+# ---------------------------------------------------------------------------
+# Response models (router-local; not part of the service contract)
+# ---------------------------------------------------------------------------
 
 
 class ProviderTestResponse(BaseModel):
@@ -51,694 +114,22 @@ class ProviderTestResponse(BaseModel):
     error: str | None = None
 
 
-_ALLOWED_CONFIG_KEYS = frozenset(
-    {
-        "llm.smart_model",
-        "llm.fast_model",
-        "llm.embed_model",
-        # FSRS
-        "fsrs.desired_retention",
-        "fsrs.learning_steps",
-        # User preferences
-        "user.timezone",
-        # Recommendation engine
-        "recommendation.liked_weight",
-        "recommendation.project_weight",
-        "recommendation.enabled",
-        # Pulse (overnight deck subsystem)
-        "pulse.enabled",
-        "pulse.cron",
-        "pulse.deck_size",
-        "pulse.stage2_top_k",
-        "pulse.weights",
-        "pulse.l2_lambda",
-        "pulse.lookback_days",
-        "pulse.startup_grace_seconds",
-        # Setup wizard
-        "setup.completed",
-        "telegram.owner_chat_id",
-        # Zotero integration
-        "zotero.api_key",
-        "zotero.user_id",
-        "zotero.library_type",
-        "zotero.group_id",
-        "zotero.poll_enabled",
-        "zotero.poll_cron",
-        "zotero.auto_push_on_star",
-        # Cloud LLM provider keys
-        "llm.anthropic.api_key",
-        "llm.openai.api_key",
-        "llm.google.api_key",
-        # SMTP relay (system-wide; collected in the first-run wizard, viewable
-        # and editable post-onboarding by admins). Key names MUST match the
-        # rows persisted by routers/setup.py (_SMTP_PLAINTEXT_KEYS / _SMTP_ENCRYPTED_KEYS).
-        "smtp.host",
-        "smtp.port",
-        "smtp.user",
-        "smtp.from",
-        "smtp.pass",
-        # Observability — deployment-wide Langfuse dashboard link (admin-only).
-        "observability.langfuse_dashboard_url",
-        # Automation — auto-fetch pipeline interval (system-wide scheduler).
-        "automation.fetch_interval_hours",
-    }
-)
-
-# ---------------------------------------------------------------------------
-# Dynamic config key patterns for per-machine hardware-aware settings.
-# These cannot be expressed as a literal set because they contain the machine
-# hostname as a segment.
-#
-# Accepted:
-#   llm.<hostname>.<role>_num_ctx      e.g. llm.host-rtx5060.smart_num_ctx
-#   llm.<hostname>.thinking_disabled.<model_id>
-#                                      e.g. llm.host.thinking_disabled.qwen3:14b
-#
-# <hostname>  = [a-zA-Z0-9.-]{1,64}   (strict; rejects wildcards, slashes, etc.)
-# <role>      = smart | fast | embed
-# <model_id>  = [a-z0-9_./:-]+        (catalog ID character set)
-# ---------------------------------------------------------------------------
-
-_MACHINE_ID_RE = re.compile(r"^[a-zA-Z0-9.\-]{1,64}$")
-_ROLE_RE = re.compile(r"^(smart|fast|embed)$")
-_MODEL_ID_RE = re.compile(r"^[a-z0-9_./:\-]+$")
-
-# e.g. llm.host-rtx5060.smart_num_ctx
-_NUM_CTX_PATTERN = re.compile(r"^llm\.([a-zA-Z0-9.\-]{1,64})\.(smart|fast|embed)_num_ctx$")
-# e.g. llm.host-rtx5060.thinking_disabled.qwen3:14b
-_THINKING_DISABLED_PATTERN = re.compile(
-    r"^llm\.([a-zA-Z0-9.\-]{1,64})\.thinking_disabled\.([a-z0-9_./:\-]+)$"
-)
-
-
-def _is_allowed_config_key(key: str) -> bool:
-    """Return True if *key* is either a known static key or a valid dynamic pattern."""
-    if key in _ALLOWED_CONFIG_KEYS:
-        return True
-    if _NUM_CTX_PATTERN.fullmatch(key):
-        return True
-    if _THINKING_DISABLED_PATTERN.fullmatch(key):
-        return True
-    return False
+class ReorderRequest(BaseModel):
+    source_types: list[str]
 
 
 # ---------------------------------------------------------------------------
-# Key classification: personal vs system
-#
-# PERSONAL_KEYS — per-user settings.  Any authenticated user (or non-session
-# caller in single-tenant mode) may read/write these.  In Wave-3 these will
-# be scoped to (user_id, key) rows; today the table has no user_id column, so
-# the scoping is enforced at the role level only.
-#
-# Consumers checked (grounding):
-#   zotero.*          → zotero_service._get_zotero_config()  (per-user Zotero API)
-#   llm.*.api_key     → _cloud_provider_key_present(), test_provider endpoint
-#   fsrs.*            → learning_engine FSRS (per-user retention schedule)
-#   user.timezone     → telegram_bot nudge reload
-#   recommendation.*  → recommendation engine; NOTE: currently system-wide
-#                        (no per-user table), left PERSONAL so users can tune
-#                        their own feed weights.
-#
-# SYSTEM_KEYS — deployment-wide settings.  Require admin role when the
-# request carries a browser session; API-key-only callers (Telegram bot,
-# cron) are unaffected (single-tenant legacy path).
-#
-# Consumers checked:
-#   llm.smart/fast/embed_model → main.py startup + litellm_config (all users)
-#   pulse.*                    → scheduler.py (system-wide overnight run)
-#   setup.completed            → setup wizard gate (system-wide)
-#   telegram.owner_chat_id     → Telegram pairing (one owner, system-wide)
-#   llm.<hostname>.*           → dynamic hardware patterns (system-wide)
-#
+# Private router helpers
 # ---------------------------------------------------------------------------
-
-PERSONAL_KEYS: frozenset[str] = frozenset(
-    {
-        # FSRS (per-user spaced repetition schedule)
-        "fsrs.desired_retention",
-        "fsrs.learning_steps",
-        # User locale preference
-        "user.timezone",
-        # Per-user recommendation feed weights
-        "recommendation.liked_weight",
-        "recommendation.project_weight",
-        "recommendation.enabled",
-        # Zotero integration (per-user library credentials)
-        "zotero.api_key",
-        "zotero.user_id",
-        "zotero.library_type",
-        "zotero.group_id",
-        "zotero.poll_enabled",
-        "zotero.poll_cron",
-        "zotero.auto_push_on_star",
-        # Cloud LLM provider keys (per-user API credentials)
-        "llm.anthropic.api_key",
-        "llm.openai.api_key",
-        "llm.google.api_key",
-    }
-)
-
-SYSTEM_KEYS: frozenset[str] = frozenset(
-    {
-        # System-wide LLM model role assignments (affects all users + LiteLLM)
-        "llm.smart_model",
-        "llm.fast_model",
-        "llm.embed_model",
-        # Pulse overnight deck (system-wide scheduler job)
-        "pulse.enabled",
-        "pulse.cron",
-        "pulse.deck_size",
-        "pulse.stage2_top_k",
-        "pulse.weights",
-        "pulse.l2_lambda",
-        "pulse.lookback_days",
-        "pulse.startup_grace_seconds",
-        # Setup wizard gate
-        "setup.completed",
-        # Telegram owner pairing (single owner, system-wide)
-        "telegram.owner_chat_id",
-        # SMTP relay — one deployment-wide mail config; admin-only.
-        "smtp.host",
-        "smtp.port",
-        "smtp.user",
-        "smtp.from",
-        "smtp.pass",
-        # Observability — one deployment-wide Langfuse dashboard link; admin-only.
-        "observability.langfuse_dashboard_url",
-        # Automation — pipeline interval; system-wide, admin-only.
-        "automation.fetch_interval_hours",
-    }
-)
-# Note: dynamic llm.<hostname>.* patterns are SYSTEM_KEYS (hardware-wide).
-# They cannot be listed here as literals since they contain the machine hostname.
-# _classify_config_key() handles them via regex match.
-
-_ZOTERO_LIBRARY_SCOPE_KEYS: frozenset[str] = frozenset(
-    {"zotero.library_type", "zotero.user_id", "zotero.group_id"}
-)
-
-
-def _classify_config_key(key: str) -> str:
-    """Return 'personal', 'system', or 'unknown' for a config key."""
-    if key in PERSONAL_KEYS:
-        return "personal"
-    if key in SYSTEM_KEYS:
-        return "system"
-    # Dynamic hardware patterns are system-scoped
-    if _NUM_CTX_PATTERN.fullmatch(key) or _THINKING_DISABLED_PATTERN.fullmatch(key):
-        return "system"
-    return "unknown"
-
-
-_SECRET_KEYS: frozenset[str] = frozenset(
-    {
-        "zotero.api_key",
-        "llm.anthropic.api_key",
-        "llm.openai.api_key",
-        "llm.google.api_key",
-        "smtp.pass",
-    }
-)
-
-_ENCRYPTED_KEYS: frozenset[str] = frozenset(
-    {
-        "llm.anthropic.api_key",
-        "llm.openai.api_key",
-        "llm.google.api_key",
-        "zotero.api_key",
-        # setup.py persists smtp.pass as Fernet ciphertext in encrypted_value;
-        # keep the generic /api/config surface masking it consistently.
-        "smtp.pass",
-    }
-)
-
-
-async def migrate_plaintext_secrets(db_pool: asyncpg.Pool) -> int:
-    """Eagerly re-encrypt any plaintext rows for keys in :data:`_ENCRYPTED_KEYS`.
-
-    Older rows may still hold a plaintext secret in ``user_config.value`` while
-    ``encrypted_value`` is NULL — the result of upgrading from a release that
-    predated envelope encryption. This helper runs once at service startup and
-    rewrites such rows in place: encrypts ``value`` into ``encrypted_value``
-    and clears ``value`` so the API never returns plaintext.
-
-    Skips rows that already have ``encrypted_value`` populated (idempotent).
-    Returns the number of rows rewritten.
-    """
-    if not _ENCRYPTED_KEYS:
-        return 0
-    keys = sorted(_ENCRYPTED_KEYS)
-    rewritten = 0
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT id, key, value FROM user_config "
-            "WHERE key = ANY($1::text[]) AND value IS NOT NULL AND encrypted_value IS NULL",
-            keys,
-        )
-        for row in rows:
-            value = row["value"]
-            # asyncpg JSONB codec auto-decodes — accept str or numeric values.
-            if value is None:
-                continue
-            plaintext = value if isinstance(value, str) else str(value)
-            if not plaintext:
-                continue
-            try:
-                ciphertext_bytes = encrypt_secret(plaintext).encode("ascii")
-            except Exception:
-                logger.warning(
-                    "migrate_plaintext_secrets: encrypt failed for key=%s; skipping",
-                    row["key"],
-                    exc_info=True,
-                )
-                continue
-            await conn.execute(
-                "UPDATE user_config SET value = NULL, encrypted_value = $2, updated_at = NOW() "
-                "WHERE id = $1",
-                row["id"],
-                ciphertext_bytes,
-            )
-            rewritten += 1
-    if rewritten:
-        logger.info("migrate_plaintext_secrets: re-encrypted %d row(s)", rewritten)
-    return rewritten
-
-
-_NUDGE_ALLOWED_COLUMNS: set[str] = {"cron_expression", "enabled"}
-_NUDGE_JSONB_COLUMNS: frozenset[str] = frozenset()
-
-_SOURCE_ALLOWED_COLUMNS: set[str] = {"enabled", "priority", "config", "display_order"}
-_SOURCE_JSONB_COLUMNS: frozenset[str] = frozenset({"config"})
-
-
-# --- Config key validators ---
-
-_PULSE_WEIGHT_KEYS = frozenset(
-    {
-        "embedding",
-        "topic",
-        "llm_relevance",
-        "llm_novelty",
-        "author_bonus",
-        "recency",
-        "citation_pagerank",
-        "citation_count",
-        "citation_adamic_adar",
-        "classifier",
-    }
-)
-_PULSE_REQUIRED_WEIGHT_KEYS = frozenset(
-    {"embedding", "topic", "llm_relevance", "llm_novelty", "author_bonus", "recency"}
-)
-
-
-def _validate_cron(v: Any) -> None:
-    if not isinstance(v, str):
-        raise ValueError("pulse.cron must be a string")
-    try:
-        trigger = CronTrigger.from_crontab(v)
-    except Exception as exc:
-        raise ValueError(f"invalid cron expression: {exc}") from exc
-    # Reject sub-hourly schedules — pulse runs are expensive; once per hour is the minimum.
-    base = datetime.now()
-    t1 = trigger.get_next_fire_time(None, base)
-    t2 = trigger.get_next_fire_time(t1, t1)
-    if t1 is not None and t2 is not None and (t2 - t1) < timedelta(hours=1):
-        raise ValueError("Pulse cron must fire no more than once per hour")
-
-
-def _validate_pulse_weights(v: Any) -> None:
-    if not isinstance(v, dict):
-        raise ValueError("pulse.weights must be a dict")
-    keys = set(v.keys())
-    if not _PULSE_REQUIRED_WEIGHT_KEYS.issubset(keys) or not keys.issubset(_PULSE_WEIGHT_KEYS):
-        raise ValueError(
-            "pulse.weights must include the core keys and only known optional keys: "
-            f"{sorted(_PULSE_WEIGHT_KEYS)}"
-        )
-    for k, val in v.items():
-        if not isinstance(val, int | float) or isinstance(val, bool) or not (0 <= val <= 1):
-            raise ValueError(f"pulse.weights.{k} must be a float between 0 and 1")
-
-
-def _validate_positive_int(v: Any) -> None:
-    if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
-        raise ValueError("value must be a positive integer")
-
-
-def _validate_bool(v: Any) -> None:
-    if not isinstance(v, bool):
-        raise ValueError("value must be a boolean")
-
-
-def _validate_optional_int(v: Any) -> None:
-    if v is None:
-        return
-    if not isinstance(v, int) or isinstance(v, bool):
-        raise ValueError("value must be an integer or null")
-
-
-def _record_get(row: Any, key: str) -> Any:
-    if hasattr(row, "get"):
-        return row.get(key)
-    try:
-        return row[key]
-    except Exception:
-        return None
-
-
-def _validate_l2_lambda(v: Any) -> None:
-    """Validate pulse.l2_lambda — cosine-penalty multiplier for negative signals.
-
-    Range [0, 2]: 0 disables the penalty, 1 = equal-weight, 2 = double-weight.
-    Values >2 make the penalty dominate scoring, which is considered unsafe.
-    """
-    if isinstance(v, bool) or not isinstance(v, int | float):
-        raise ValueError("pulse.l2_lambda must be a number")
-    if not (0.0 <= float(v) <= 2.0):
-        raise ValueError("pulse.l2_lambda must be between 0.0 and 2.0")
-
-
-def _validate_lookback_days(v: Any) -> None:
-    """Validate pulse.lookback_days — discovery window in days, [1, 90]."""
-    if isinstance(v, bool) or not isinstance(v, int):
-        raise ValueError("pulse.lookback_days must be an integer")
-    if not (1 <= v <= 90):
-        raise ValueError("pulse.lookback_days must be between 1 and 90")
-
-
-def _validate_startup_grace_seconds(v: Any) -> None:
-    """Validate pulse.startup_grace_seconds — warmup pause, [0, 300]."""
-    if isinstance(v, bool) or not isinstance(v, int | float):
-        raise ValueError("pulse.startup_grace_seconds must be a number")
-    if not (0.0 <= float(v) <= 300.0):
-        raise ValueError("pulse.startup_grace_seconds must be between 0 and 300")
-
-
-def _validate_nonempty_str(v: Any) -> None:
-    if not isinstance(v, str) or not v.strip():
-        raise ValueError("value must be a non-empty string")
-
-
-def _validate_library_type(v: Any) -> None:
-    if v not in ("user", "group"):
-        raise ValueError("zotero.library_type must be 'user' or 'group'")
-
-
-def _validate_group_id(v: Any) -> None:
-    """Validate zotero.group_id — positive integer or null.
-
-    ``null`` is allowed so users can clear the field when switching back to
-    a personal library.  When ``library_type`` is ``"group"`` the backend
-    requires a non-null positive integer, but that cross-field validation is
-    enforced by :class:`~paper_ingestion.integrations.zotero_client.ZoteroClient`
-    at construction time.
-    """
-    if v is None:
-        return
-    if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
-        raise ValueError("zotero.group_id must be a positive integer or null")
-
-
-async def _reload_telegram_nudges() -> None:
-    """Best-effort POST to telegram_bot /internal/reload-nudges."""
-    telegram_url = get_telegram_settings().url_or_none
-    if not telegram_url:
-        logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
-        return
-    api_key_secret = get_core_settings().jarvis_api_key
-    api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
-    with contextlib.suppress(Exception):
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{telegram_url}/internal/reload-nudges",
-                headers={"X-API-Key": api_key},
-                timeout=2.0,
-            )
-
-
-def _validate_fsrs_retention(v: Any) -> None:
-    """Validate fsrs.desired_retention — float in (0, 1) exclusive."""
-    if isinstance(v, bool) or not isinstance(v, int | float):
-        raise ValueError("fsrs.desired_retention must be a number")
-    fv = float(v)
-    if not (0.0 < fv < 1.0):
-        raise ValueError("fsrs.desired_retention must be between 0.0 and 1.0 (exclusive)")
-
-
-def _validate_fsrs_learning_steps(v: Any) -> None:
-    """Validate fsrs.learning_steps — list of exactly 2 positive integers (minutes)."""
-    if not isinstance(v, list):
-        raise ValueError("fsrs.learning_steps must be a list")
-    if len(v) != 2:
-        raise ValueError("fsrs.learning_steps must have exactly 2 elements")
-    for i, step in enumerate(v):
-        if isinstance(step, bool) or not isinstance(step, int) or step <= 0:
-            raise ValueError(f"fsrs.learning_steps[{i}] must be a positive integer (minutes)")
-
-
-def _validate_zotero_cron(v: Any) -> None:
-    if not isinstance(v, str):
-        raise ValueError("zotero.poll_cron must be a string")
-    try:
-        CronTrigger.from_crontab(v)
-    except Exception as exc:
-        raise ValueError(f"invalid cron expression: {exc}") from exc
-
-
-def _validate_langfuse_dashboard_url(v: Any) -> None:
-    """Validate observability.langfuse_dashboard_url.
-
-    Accepts an empty string (clears the link), any ``https://`` URL with a
-    host, or an ``http://`` URL whose host is loopback (``localhost`` /
-    ``127.0.0.1``) so a local-dev Langfuse reachable only over plain HTTP
-    still works. Everything else is rejected — the value is rendered as a
-    user-facing link, so non-http(s) schemes (e.g. ``javascript:``) and
-    plain-HTTP non-loopback hosts must not be storable.
-    """
-    if not isinstance(v, str):
-        raise ValueError("observability.langfuse_dashboard_url must be a string")
-    if v == "":
-        return
-    parsed = urlparse(v)
-    if parsed.scheme == "https" and parsed.netloc:
-        return
-    if parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1"):
-        return
-    raise ValueError(
-        "observability.langfuse_dashboard_url must be empty, an https:// URL, "
-        "or an http://localhost / http://127.0.0.1 URL"
-    )
-
-
-_CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
-    # FSRS
-    "fsrs.desired_retention": _validate_fsrs_retention,
-    "fsrs.learning_steps": _validate_fsrs_learning_steps,
-    "pulse.cron": _validate_cron,
-    "pulse.weights": _validate_pulse_weights,
-    "pulse.deck_size": _validate_positive_int,
-    "pulse.stage2_top_k": _validate_positive_int,
-    "pulse.l2_lambda": _validate_l2_lambda,
-    "pulse.lookback_days": _validate_lookback_days,
-    "pulse.startup_grace_seconds": _validate_startup_grace_seconds,
-    "pulse.enabled": _validate_bool,
-    "setup.completed": _validate_bool,
-    "telegram.owner_chat_id": _validate_optional_int,
-    # LLM model role assignments
-    "llm.smart_model": _validate_nonempty_str,
-    "llm.fast_model": _validate_nonempty_str,
-    "llm.embed_model": _validate_nonempty_str,
-    # Zotero
-    "zotero.api_key": _validate_nonempty_str,
-    "zotero.user_id": _validate_nonempty_str,
-    "zotero.library_type": _validate_library_type,
-    "zotero.group_id": _validate_group_id,
-    "zotero.poll_enabled": _validate_bool,
-    "zotero.poll_cron": _validate_zotero_cron,
-    "zotero.auto_push_on_star": _validate_bool,
-    # Observability
-    "observability.langfuse_dashboard_url": _validate_langfuse_dashboard_url,
-    # Automation
-    "automation.fetch_interval_hours": _validate_positive_int,
-    # Cloud LLM provider keys
-    "llm.anthropic.api_key": _validate_nonempty_str,
-    "llm.openai.api_key": _validate_nonempty_str,
-    "llm.google.api_key": _validate_nonempty_str,
-}
-
-
-# --- User Config ---
-
-
-async def _fetch_installed_ollama_names(request: Request) -> set[str]:
-    """Return normalized Ollama model names for assignment validation."""
-    http = request.app.state.http_client
-    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
-
-    ollama_url = get_paper_ingestion_settings().ollama_base_url
-    try:
-        resp = await http.get(f"{ollama_url}/api/tags", timeout=10.0)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Could not verify installed Ollama models",
-        ) from exc
-    if resp.status_code != 200:
-        raise HTTPException(status_code=503, detail="Could not verify installed Ollama models")
-    data = resp.json()
-    return {normalize_model_tag(str(item.get("name", ""))) for item in data.get("models", [])}
-
-
-async def _cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> bool:
-    config_key = f"llm.{provider}.api_key"
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",
-            config_key,
-        )
-    return bool(
-        row is not None
-        and (
-            _record_get(row, "encrypted_value") is not None or _record_get(row, "value") is not None
-        )
-    )
-
-
-async def _validate_model_assignment(
-    *,
-    request: Request,
-    key: str,
-    model_id: str,
-    db_pool: asyncpg.Pool,
-) -> None:
-    """Reject model assignments that are not usable in this deployment."""
-    role = ROLE_TO_ALIAS.get(key)
-    if role is None:
-        return
-    entry = catalog_entry_for_model(model_id)
-    if entry is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model {model_id!r} is not in the model catalog",
-        )
-    if not entry.assignable:
-        raise HTTPException(
-            status_code=422,
-            detail="This model is tracked for evaluation but is not assignable yet.",
-        )
-    if role not in entry.roles:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model {model_id!r} cannot be assigned to the {role!r} role",
-        )
-    if entry.provider == "ollama":
-        installed_names = await _fetch_installed_ollama_names(request)
-        tag = normalize_model_tag(entry.ollama_tag or entry.id)
-        if tag not in installed_names:
-            raise HTTPException(status_code=422, detail="Model not pulled. Pull it first.")
-        return
-    if not await _cloud_provider_key_present(entry.provider, db_pool):
-        raise HTTPException(
-            status_code=422,
-            detail=f"Configure the {entry.provider} API key before assigning this model.",
-        )
-
-
-def _resolve_config_value(key: str, row: Any) -> Any:
-    """Return the display value for a config row, applying masking / decryption."""
-    if key in _ENCRYPTED_KEYS:
-        enc = row.get("encrypted_value")
-        if enc is not None:
-            # Decrypt then mask — never expose plaintext over the API
-            plaintext = decrypt_secret(enc.decode("ascii"))
-            return mask_secret(plaintext)
-        raw = row.get("value")
-        if raw is not None:
-            # Legacy plaintext row: mask without decrypting
-            return mask_secret(str(raw))
-        return None
-    if key in _SECRET_KEYS:
-        raw = row.get("value")
-        return "****" if raw is not None else None
-    return row.get("value")
 
 
 def _has_browser_session(request: Request) -> bool:
     return getattr(request.state, "user_role", None) is not None
 
 
-async def _fetch_effective_config_row(
-    conn: Any,
-    key: str,
-    user_id: int | None,
-    *,
-    is_admin: bool = False,
-) -> asyncpg.Record | None:
-    """Return caller-specific personal config, with NULL-row fallback only for admins.
-
-    For personal keys the NULL-row (system default) is only returned when the
-    caller is an admin; regular authenticated users see only their own row
-    (404 if absent) to prevent system-default leakage (DOM-A-09).
-    System/unknown keys always use the NULL-row path regardless of role.
-    """
-    scope = _classify_config_key(key)
-    if scope == "personal" and user_id is not None:
-        if is_admin:
-            # Admins may see system default as fallback.
-            return await conn.fetchrow(
-                """SELECT key, value, encrypted_value, user_id
-                   FROM user_config
-                   WHERE key = $1 AND (user_id = $2 OR user_id IS NULL)
-                   ORDER BY user_id IS NULL
-                   LIMIT 1""",
-                key,
-                user_id,
-            )
-        # Non-admin: only return the caller's own row — no NULL-row fallback.
-        return await conn.fetchrow(
-            """SELECT key, value, encrypted_value, user_id
-               FROM user_config
-               WHERE key = $1 AND user_id = $2""",
-            key,
-            user_id,
-        )
-    return await conn.fetchrow(
-        """SELECT key, value, encrypted_value, user_id
-           FROM user_config
-           WHERE key = $1 AND user_id IS NULL""",
-        key,
-    )
-
-
-async def _write_config_row(
-    conn: Any,
-    *,
-    user_id: int | None,
-    key: str,
-    value: Any,
-    encrypted_value: bytes | None = None,
-) -> None:
-    if encrypted_value is not None:
-        await conn.execute(
-            """INSERT INTO user_config (user_id, key, value, encrypted_value)
-               VALUES ($1, $2, NULL, $3)
-               ON CONFLICT (user_id, key) DO UPDATE
-                   SET value = NULL, encrypted_value = $3, updated_at = NOW()""",
-            user_id,
-            key,
-            encrypted_value,
-        )
-        return
-    await conn.execute(
-        """INSERT INTO user_config (user_id, key, value)
-           VALUES ($1, $2, $3::jsonb)
-           ON CONFLICT (user_id, key) DO UPDATE
-               SET value = $3::jsonb, encrypted_value = NULL, updated_at = NOW()""",
-        user_id,
-        key,
-        value,
-    )
+# ---------------------------------------------------------------------------
+# Config endpoints
+# ---------------------------------------------------------------------------
 
 
 @router.get("/config", response_model=list[ConfigEntry])
@@ -824,221 +215,38 @@ async def set_config(
     if _classify_config_key(key) == "system":
         await require_admin(request)
     caller_user_id = await current_user_id_strict(request)
-    row_user_id = caller_user_id if _classify_config_key(key) == "personal" else None
 
-    # Dynamic-key validators (num_ctx and thinking_disabled patterns).
-    # These are checked before the static _CONFIG_VALIDATORS dict lookup since
-    # dynamic keys are never present in that dict.
-    if _NUM_CTX_PATTERN.fullmatch(key):
-        try:
-            _validate_positive_int(body.value)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    elif _THINKING_DISABLED_PATTERN.fullmatch(key):
-        try:
-            _validate_bool(body.value)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Delegate the full write + side-effects to the service layer.
+    # require_admin and audit logging stay here so patch paths on this module
+    # remain stable (tests patch paper_ingestion.routers.settings.require_admin
+    # and paper_ingestion.routers.settings._log_event).
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
-    validator = _CONFIG_VALIDATORS.get(key)
-    if validator is not None:
-        try:
-            validator(body.value)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if key in ROLE_TO_ALIAS:
-        await _validate_model_assignment(
-            request=request,
-            key=key,
-            model_id=str(body.value),
-            db_pool=db_pool,
-        )
-    # For pulse.cron / zotero.poll_cron: read the current value before overwriting
-    # so we can roll back if the scheduler refresh fails (DOM-A-12).
-    old_pulse_cron: str | None = None
-    if key == "pulse.cron":
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT value FROM user_config WHERE key = 'pulse.cron' AND user_id IS NULL"
-            )
-        if row is not None and isinstance(row["value"], str):
-            old_pulse_cron = row["value"]
+    ollama_url = get_paper_ingestion_settings().ollama_base_url
+    http_client = request.app.state.http_client
 
-    old_zotero_poll_cron: str | None = None
-    if key == "zotero.poll_cron":
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT value FROM user_config"
-                " WHERE key = 'zotero.poll_cron' AND user_id IS NOT DISTINCT FROM $1",
-                row_user_id,
-            )
-        if row is not None and isinstance(row["value"], str):
-            old_zotero_poll_cron = row["value"]
+    # Pass update_litellm_model from the router namespace so monkeypatching
+    # ``paper_ingestion.routers.settings.update_litellm_model`` in tests still works.
+    display_value = await write_config(
+        db_pool=db_pool,
+        scheduler=scheduler,
+        http_client=http_client,
+        ollama_url=ollama_url,
+        key=key,
+        value=body.value,
+        caller_user_id=caller_user_id,
+        update_litellm_model_fn=update_litellm_model,
+    )
 
-    if key in ROLE_TO_ALIAS:
-        from paper_ingestion.services.litellm_config import _config_lock
-
-        try:
-            async with _config_lock:
-                updated = await update_litellm_model(key, str(body.value), db_pool=db_pool)
-                if updated:
-                    reloaded = await reload_litellm()
-                    if not reloaded:
-                        raise RuntimeError("LiteLLM accepted the alias update but reload failed")
-        except (ValueError, RuntimeError) as exc:
-            # SEC-002: validation, read-only config, or LiteLLM admin API failure.
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    # Pass body.value directly — asyncpg's JSONB codec (registered via init_pg_connection)
-    # handles JSON encoding. Wrapping with json.dumps() would double-encode the value,
-    # storing e.g. '"0 4 * * *"' instead of '"0 4 * * *"' in JSONB. (WEB-C01)
     if key in _ENCRYPTED_KEYS:
-        # Encrypt the secret and store in encrypted_value; clear plaintext value column.
-        ciphertext_bytes = encrypt_secret(str(body.value)).encode("ascii")
-        async with db_pool.acquire() as conn:
-            await _write_config_row(
-                conn,
-                user_id=row_user_id,
-                key=key,
-                value=None,
-                encrypted_value=ciphertext_bytes,
-            )
         await log_audit(
             db_pool,
             action="secret.rotate",
             resource=key,
             user_id=str(caller_user_id) if caller_user_id is not None else None,
         )
-    else:
-        async with db_pool.acquire() as conn:
-            await _write_config_row(conn, user_id=row_user_id, key=key, value=body.value)
-    if key == "pulse.cron":
-        try:
-            if scheduler is not None:
-                scheduler.reschedule_job(
-                    "pulse_overnight",
-                    trigger=CronTrigger.from_crontab(body.value),
-                )
-                logger.info("pulse_overnight rescheduled live (cron=%s)", body.value)
 
-                # Bounds check: next_run_time must be within [now, now+366d].
-                # A malformed or adversarial cron could schedule a run in the past
-                # or arbitrarily far in the future.
-                job = scheduler.get_job("pulse_overnight")
-                now = datetime.now(UTC)
-                next_run = job.next_run_time if job is not None else None
-                if next_run is None or not (now <= next_run <= now + timedelta(days=366)):
-                    logger.error(
-                        "pulse_overnight reschedule produced invalid next_run_time=%s"
-                        " for cron=%s; reverting",
-                        next_run,
-                        body.value,
-                    )
-                    # Roll back DB to the old cron value.
-                    _rollback_sql = (
-                        "INSERT INTO user_config (user_id, key, value)"
-                        " VALUES (NULL, 'pulse.cron', $1::jsonb)"
-                        " ON CONFLICT (user_id, key) DO UPDATE"
-                        " SET value = $1::jsonb, updated_at = NOW()"
-                    )
-                    async with db_pool.acquire() as conn:
-                        if old_pulse_cron is not None:
-                            await conn.execute(_rollback_sql, old_pulse_cron)
-                        else:
-                            await conn.execute(
-                                "DELETE FROM user_config "
-                                "WHERE key = 'pulse.cron' AND user_id IS NULL"
-                            )
-                    # Revert the live scheduler trigger.
-                    with contextlib.suppress(Exception):
-                        if old_pulse_cron is not None:
-                            scheduler.reschedule_job(
-                                "pulse_overnight",
-                                trigger=CronTrigger.from_crontab(old_pulse_cron),
-                            )
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Cron expression produced an invalid next run time"
-                        " (must be within the next 366 days)",
-                    )
-        except HTTPException:
-            raise
-        except Exception:
-            # Let scheduler update failures propagate — silencing them hides broken schedules.
-            # The only expected benign failure is "job not found yet" during first-boot;
-            # callers should handle that by ensuring the job is registered before saving config.
-            raise
-    if key == "zotero.poll_cron":
-        try:
-            if scheduler is not None:
-                scheduler.reschedule_job(
-                    "zotero_library_sync",
-                    trigger=CronTrigger.from_crontab(body.value),
-                )
-                logger.info("zotero_library_sync rescheduled live (cron=%s)", body.value)
-        except Exception:
-            # Scheduler refresh failed — roll back the DB write so DB and live cron
-            # stay consistent (DOM-A-12).
-            _zotero_rollback_sql = (
-                "INSERT INTO user_config (user_id, key, value)"
-                " VALUES ($1, 'zotero.poll_cron', $2::jsonb)"
-                " ON CONFLICT (user_id, key) DO UPDATE"
-                " SET value = $2::jsonb, updated_at = NOW()"
-            )
-            async with db_pool.acquire() as conn:
-                if old_zotero_poll_cron is not None:
-                    await conn.execute(_zotero_rollback_sql, row_user_id, old_zotero_poll_cron)
-                else:
-                    await conn.execute(
-                        "DELETE FROM user_config"
-                        " WHERE key = 'zotero.poll_cron'"
-                        " AND user_id IS NOT DISTINCT FROM $1",
-                        row_user_id,
-                    )
-            logger.error(
-                "zotero_library_sync reschedule failed; DB write rolled back (cron=%s)",
-                body.value,
-                exc_info=True,
-            )
-            raise
-    if key == "automation.fetch_interval_hours":
-        # Reschedule the auto-pipeline job live so the new interval takes effect without restart.
-        # Follow-up known gap: the env-based self-gate in auto_fetch.py / config.py
-        # (AUTO_FETCH_INTERVAL_HOURS / auto_fetch_interval_hours) is NOT yet unified with
-        # this user_config key — out of scope here; this path persists + rescheduling only.
-        hours = max(int(body.value), 1)
-        job = scheduler.get_job("auto_pipeline") if scheduler is not None else None
-        if job is not None:
-            try:
-                scheduler.reschedule_job(
-                    "auto_pipeline",
-                    trigger=IntervalTrigger(hours=hours),
-                )
-                logger.info("auto_pipeline rescheduled live (interval=%dh)", hours)
-            except Exception:
-                logger.warning(
-                    "auto_pipeline reschedule failed (interval=%dh); persisted value still saved",
-                    hours,
-                    exc_info=True,
-                )
-        else:
-            logger.warning(
-                "auto_pipeline job not found in scheduler;"
-                " persisted value will take effect on restart"
-            )
-    if key in _ZOTERO_LIBRARY_SCOPE_KEYS:
-        async with db_pool.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM user_config WHERE user_id IS NOT DISTINCT FROM $1"
-                " AND key = 'zotero.last_library_version'",
-                row_user_id,
-            )
-    if key == "user.timezone":
-        # Best-effort: notify telegram_bot to reload nudge jobs with the new timezone
-        await _reload_telegram_nudges()
-    display_value = mask_secret(str(body.value)) if key in _ENCRYPTED_KEYS else body.value
-    # Emit a config-change event for audit trail. Best-effort: never block the
-    # response if event logging fails (e.g. pool closed during tests).
+    # Emit a config-change event for audit trail. Best-effort.
     try:
         await _log_event(
             pool=db_pool,
@@ -1050,10 +258,13 @@ async def set_config(
         )
     except Exception:  # noqa: BLE001
         logger.debug("config event log_event failed (non-fatal)", exc_info=True)
+
     return ConfigEntry(key=key, value=display_value)
 
 
-# --- Scheduled Nudges ---
+# ---------------------------------------------------------------------------
+# Scheduled Nudges
+# ---------------------------------------------------------------------------
 
 
 @router.get("/nudges", response_model=list[NudgeResponse], dependencies=[Depends(require_admin)])
@@ -1101,16 +312,14 @@ async def update_nudge(
         )
 
     # Best-effort: notify telegram_bot to reload its nudge jobs
-    await _reload_telegram_nudges()
+    await reload_telegram_nudges()
 
     return NudgeResponse(**dict(row))
 
 
-# --- Paper Sources ---
-
-
-class ReorderRequest(BaseModel):
-    source_types: list[str]
+# ---------------------------------------------------------------------------
+# Paper Sources
+# ---------------------------------------------------------------------------
 
 
 @router.get("/sources", response_model=list[SourceResponse])
@@ -1181,7 +390,9 @@ async def update_source(
     return SourceResponse(**dict(row))
 
 
-# --- Analytics ---
+# ---------------------------------------------------------------------------
+# Analytics
+# ---------------------------------------------------------------------------
 
 
 @router.get("/analytics/papers-by-source", response_model=list[PapersBySourceItem])
@@ -1194,23 +405,7 @@ async def papers_by_source(
     user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
-        if user_id is None or is_admin:
-            rows = await conn.fetch(
-                "SELECT source_type, COUNT(*) AS count"
-                " FROM papers GROUP BY source_type ORDER BY count DESC"
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT p.source_type, COUNT(*) AS count
-                FROM papers p
-                JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
-                GROUP BY p.source_type
-                ORDER BY count DESC
-                """,
-                user_id,
-            )
-    return [{"source_type": r["source_type"], "count": r["count"]} for r in rows]
+        return await fetch_papers_by_source(conn, user_id, is_admin=is_admin)
 
 
 @router.get("/analytics/papers-by-status", response_model=list[PapersByStatusItem])
@@ -1223,35 +418,12 @@ async def papers_by_status(
     user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
-        if user_id is None or is_admin:
-            rows = await conn.fetch(
-                """
-                SELECT COALESCE(pus.state::TEXT, 'inbox') AS status, COUNT(*) AS count
-                FROM papers p
-                LEFT JOIN paper_user_state pus ON p.id = pus.paper_id
-                GROUP BY COALESCE(pus.state::TEXT, 'inbox')
-                ORDER BY count DESC
-                """
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT COALESCE(pus.state::TEXT, 'inbox') AS status, COUNT(*) AS count
-                FROM papers p
-                JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
-                LEFT JOIN paper_user_state pus
-                  ON p.id = pus.paper_id AND pus.user_id = $1
-                GROUP BY COALESCE(pus.state::TEXT, 'inbox')
-                ORDER BY count DESC
-                """,
-                user_id,
-            )
-    return [{"status": r["status"], "count": r["count"]} for r in rows]
+        return await fetch_papers_by_status(conn, user_id, is_admin=is_admin)
 
 
-# --- Cloud LLM Provider Test ---
-
-_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "google"})
+# ---------------------------------------------------------------------------
+# Cloud LLM Provider Test
+# ---------------------------------------------------------------------------
 
 
 @router.post("/providers/{provider}/test", response_model=ProviderTestResponse)
@@ -1282,62 +454,13 @@ async def test_provider(
     if not api_key:
         return ProviderTestResponse(ok=False, error="no api key configured")
 
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-            if provider == "anthropic":
-                resp = await client.post(
-                    "https://api.anthropic.com/v1/messages/count_tokens",
-                    json={
-                        "model": "claude-sonnet-4-5",
-                        "messages": [{"role": "user", "content": "ping"}],
-                    },
-                    headers={
-                        "x-api-key": api_key,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
-                )
-            elif provider == "openai":
-                resp = await client.get(
-                    "https://api.openai.com/v1/models",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
-            else:  # google
-                resp = await client.get(
-                    "https://generativelanguage.googleapis.com/v1beta/models",
-                    headers={"x-goog-api-key": api_key},
-                )
-    except httpx.HTTPError as exc:
-        return ProviderTestResponse(ok=False, error=str(exc)[:200])
-
-    if resp.is_success:
-        return ProviderTestResponse(ok=True)
-    return ProviderTestResponse(ok=False, error=f"provider returned HTTP {resp.status_code}")
+    result = await test_provider_connectivity(provider, api_key)
+    return ProviderTestResponse(ok=result.ok, error=result.error)
 
 
 # ---------------------------------------------------------------------------
-# WS-USER-DELETION D4 — GDPR data export (structured JSON only)
+# GDPR data export
 # ---------------------------------------------------------------------------
-
-# (table-in-zip name, SQL). Each query is scoped to the calling user via $1.
-# Structured data only: no PDF binaries, no embeddings (paper_chunks.embedding
-# / vectors are excluded — papers carries metadata + abstract, notes carry the
-# user's own annotations). papers is scoped by discovered_by (canonical-corpus
-# owner column, mig 072); everything else by user_id.
-_EXPORT_QUERIES: tuple[tuple[str, str], ...] = (
-    ("papers", "SELECT row_to_json(p) FROM papers p WHERE p.discovered_by = $1"),
-    ("paper_notes", "SELECT row_to_json(t) FROM paper_notes t WHERE t.user_id = $1"),
-    ("paper_summaries", "SELECT row_to_json(t) FROM paper_summaries t WHERE t.user_id = $1"),
-    ("cards", "SELECT row_to_json(t) FROM cards t WHERE t.user_id = $1"),
-    ("decks", "SELECT row_to_json(t) FROM decks t WHERE t.user_id = $1"),
-    ("review_logs", "SELECT row_to_json(t) FROM review_logs t WHERE t.user_id = $1"),
-    ("projects", "SELECT row_to_json(t) FROM projects t WHERE t.user_id = $1"),
-    ("tasks", "SELECT row_to_json(t) FROM tasks t WHERE t.user_id = $1"),
-    ("milestones", "SELECT row_to_json(t) FROM milestones t WHERE t.user_id = $1"),
-    ("journal_entries", "SELECT row_to_json(t) FROM journal_entries t WHERE t.user_id = $1"),
-    ("daily_log", "SELECT row_to_json(t) FROM daily_log t WHERE t.user_id = $1"),
-    ("user_config", "SELECT row_to_json(t) FROM user_config t WHERE t.user_id = $1"),
-)
 
 
 @router.get("/me/export")
@@ -1347,38 +470,17 @@ async def export_my_data(request: Request) -> Any:
 
     JSON dumps only — no PDF binaries, no embeddings. Scoped to
     ``current_user_id_strict`` so a caller can never read another user's data.
-    Rows are streamed per-table (asyncpg cursor) so memory stays bounded for
-    large corpora.
     """
-    import io  # noqa: PLC0415
-    import json  # noqa: PLC0415
-    import zipfile  # noqa: PLC0415
-
-    from fastapi.responses import StreamingResponse  # noqa: PLC0415
-
     caller_user_id = await current_user_id_strict(request)
     pool = request.app.state.db_pool
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        async with pool.acquire() as conn, conn.transaction():
-            for name, sql in _EXPORT_QUERIES:
-                lines: list[str] = []
-                async for record in conn.cursor(sql, caller_user_id):
-                    value = record[0]
-                    # row_to_json yields PG `json`; asyncpg returns it as str
-                    # unless a codec decodes it — normalise to a JSON string.
-                    if isinstance(value, str):
-                        lines.append(value)
-                    else:
-                        lines.append(json.dumps(value, default=str))
-                zf.writestr(f"{name}.jsonl", "\n".join(lines))
-    buf.seek(0)
-
+    data = await build_export_zip(pool, caller_user_id)
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        iter([data]),
         media_type="application/zip",
         headers={
-            "Content-Disposition": f'attachment; filename="jarvis-export-user-{caller_user_id}.zip"'
+            "Content-Disposition": (
+                f'attachment; filename="jarvis-export-user-{caller_user_id}.zip"'
+            )
         },
     )

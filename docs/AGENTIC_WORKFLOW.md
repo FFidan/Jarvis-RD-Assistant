@@ -90,7 +90,7 @@ Agents editing files through pre-commit hooks must verify the commit succeeded
 before reporting done. The `ruff-format` hook rewrites `.py` files on disk but
 marks itself `FAILED`; this leaves the git index diverged from the working tree.
 A subsequent `git add -u` in a new shell invocation may silently drop the edit.
-Root-cause analysis: [docs/agentic/format-watcher-rca.md](agentic/format-watcher-rca.md).
+Root-cause analysis: [docs/archive/2026-05/agentic/format-watcher-rca.md](archive/2026-05/agentic/format-watcher-rca.md).
 Backstop: `scripts/verify-edits.sh` performs post-commit blob verification.
 
 Steps to avoid silent reverts:

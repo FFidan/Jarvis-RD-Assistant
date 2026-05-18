@@ -207,6 +207,13 @@ def _missing_resolver(
 
 
 def main() -> int:
+    """Scan all router files for unsafe user-id resolver usage and missing resolvers.
+
+    Returns
+    -------
+    int
+        0 if all routers are clean, 1 if any violations are found.
+    """
     routers = sorted(_REPO_ROOT.glob("services/*/*/routers/*.py"))
     failed = False
     for path in routers:

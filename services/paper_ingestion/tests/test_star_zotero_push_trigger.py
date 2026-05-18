@@ -19,6 +19,8 @@ import jarvis_common.task_registry as task_registry
 import pytest
 from paper_ingestion.routers import papers
 
+from tests.conftest import _make_pool_and_conn
+
 
 def _mock_zotero_push_task():
     """Return a (mock_task, mock_defer) pair for zotero.push patching."""
@@ -31,32 +33,6 @@ def _mock_zotero_push_task():
 # ---------------------------------------------------------------------------
 # Helpers — mirror test_papers_lifecycle.py pattern exactly
 # ---------------------------------------------------------------------------
-
-
-def _conn_with_txn():
-    """AsyncMock connection that also supports nested transactions."""
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    return conn
-
-
-def _pool(conn):
-    """Wrap a mock conn in an asyncpg-style pool acquire() context manager."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
-
-
-def _make_pool_and_conn():
-    conn = _conn_with_txn()
-    pool = _pool(conn)
-    return pool, conn
 
 
 def _mock_request():
@@ -95,7 +71,7 @@ async def test_star_no_project_links_does_not_enqueue():
             "paper_ingestion.routers.papers.assert_paper_ownership",
             new_callable=AsyncMock,
         ),
-        patch.dict(task_registry.KIND_TO_TASK, {"zotero.push": mock_task}),
+        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
     ):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None
@@ -132,7 +108,7 @@ async def test_star_with_project_links_and_toggle_on_enqueues_zotero_push():
             "paper_ingestion.routers.papers.assert_paper_ownership",
             new_callable=AsyncMock,
         ),
-        patch.dict(task_registry.KIND_TO_TASK, {"zotero.push": mock_task}),
+        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
     ):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None
@@ -173,7 +149,7 @@ async def test_star_with_project_links_toggle_off_does_not_enqueue():
             "paper_ingestion.routers.papers.assert_paper_ownership",
             new_callable=AsyncMock,
         ),
-        patch.dict(task_registry.KIND_TO_TASK, {"zotero.push": mock_task}),
+        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
     ):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None
@@ -211,7 +187,7 @@ async def test_star_with_project_links_toggle_not_set_does_not_enqueue():
             "paper_ingestion.routers.papers.assert_paper_ownership",
             new_callable=AsyncMock,
         ),
-        patch.dict(task_registry.KIND_TO_TASK, {"zotero.push": mock_task}),
+        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
     ):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None
@@ -250,7 +226,7 @@ async def test_star_enqueue_failure_is_best_effort():
             "paper_ingestion.routers.papers.assert_paper_ownership",
             new_callable=AsyncMock,
         ),
-        patch.dict(task_registry.KIND_TO_TASK, {"zotero.push": mock_task}),
+        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
         patch.object(papers.logger, "exception") as mock_log_exc,
     ):
         # Must NOT raise
@@ -293,7 +269,7 @@ async def test_star_already_starred_does_not_double_enqueue():
             "paper_ingestion.routers.papers.assert_paper_ownership",
             new_callable=AsyncMock,
         ),
-        patch.dict(task_registry.KIND_TO_TASK, {"zotero.push": mock_task}),
+        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
     ):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None

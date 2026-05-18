@@ -21,26 +21,11 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from tests.conftest import FakeRecord, _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Shared mock helpers
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    """asyncpg.Record substitute that supports dict[key], .keys(), .get()."""
-
-    def keys(self):
-        return super().keys()
-
-
-def _make_pool_and_conn():
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 @pytest.fixture()
@@ -86,7 +71,7 @@ async def test_rag_summarize_paper_passes_for_owned_paper(_app, monkeypatch):
 
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock()
-    monkeypatch.setitem(task_registry.KIND_TO_TASK, "paper.summarize", mock_task)
+    monkeypatch.setitem(task_registry._TASK_MAP, "paper.summarize", mock_task)
 
     # Ownership probe: canonical paper (NULL discovered_by) → fast-grant.
     conn.fetchrow.return_value = {"discovered_by": None}
@@ -123,7 +108,7 @@ async def test_extractions_extract_paper_passes_for_owned_paper(_app, monkeypatc
 
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock()
-    monkeypatch.setitem(task_registry.KIND_TO_TASK, "extraction.single", mock_task)
+    monkeypatch.setitem(task_registry._TASK_MAP, "extraction.single", mock_task)
 
     conn.fetchrow.return_value = {"discovered_by": None}
 

@@ -51,10 +51,20 @@ class _SubCtx:
         self._end = end
 
     async def update_progress(self, progress: float, message: str | None = None) -> None:
+        """Report scaled progress to the outer job context.
+
+        Parameters
+        ----------
+        progress : float
+            Inner progress (0.0–1.0); mapped linearly to [start, end].
+        message : str | None
+            Optional human-readable status string forwarded to the outer context.
+        """
         scaled = self._start + progress * (self._end - self._start)
         await self._ctx.update_progress(scaled, message)
 
     async def is_cancelled(self) -> bool:
+        """Return ``True`` if the outer job context has been cancelled."""
         return await self._ctx.is_cancelled()
 
 

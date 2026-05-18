@@ -25,39 +25,7 @@ from paper_ingestion.models import (  # noqa: E402
 )
 from paper_ingestion.routers import papers  # noqa: E402
 
-
-class FakeRecord(dict):
-    """Dict-like asyncpg.Record substitute."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):
-        return super().get(key, default)
-
-
-def _make_pool_and_conn():
-    """Create a mock pool whose acquire() returns an async context manager.
-
-    The returned connection's ``transaction()`` is also stubbed to behave as
-    an async context manager so handlers that wrap SQL in ``async with
-    conn.transaction()`` keep working without further ceremony.
-    """
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    # conn.transaction() must work as an async context manager too.
-    txn_ctx = MagicMock()
-    txn_ctx.__aenter__ = AsyncMock(return_value=None)
-    txn_ctx.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_ctx)
-    return pool, conn
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _paper_row(id=1):
@@ -2067,7 +2035,7 @@ async def test_process_batch_happy_path_returns_job_id():
     mock_task = MagicMock()
     mock_defer = AsyncMock()
     mock_task.defer_async = mock_defer
-    with patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"papers.batch_process": mock_task}):
         from paper_ingestion.models import ProcessBatchRequest
 
         body = ProcessBatchRequest(paper_ids=[1, 2, 3])

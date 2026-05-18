@@ -30,8 +30,9 @@ handler signature is::
 
 so each task forwards exactly that.
 
-KIND_TO_TASK is populated at runtime as services call ``register_tasks``.
-It is used by ``jobs_router.create_job`` for procrastinate dispatch.
+KIND_TO_TASK is a sealed ``MappingProxyType`` view populated at runtime as
+services call ``register_tasks``.  It is used by ``jobs_router.create_job``
+for procrastinate dispatch.  Use it read-only; writes go through ``register_tasks``.
 
 Connector choice: ``procrastinate.contrib.aiopg.AiopgConnector`` (matches
 ``procrastinate[aiopg]>=0.49`` declared in root ``pyproject.toml`` and in
@@ -45,6 +46,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 import procrastinate
@@ -174,8 +176,9 @@ class TaskRegistry:
         )
 
 
-KIND_TO_TASK: dict[str, Any] = {}
-_DEFAULT_REGISTRY = TaskRegistry(app, task_map=KIND_TO_TASK)
+_TASK_MAP: dict[str, Any] = {}
+KIND_TO_TASK: MappingProxyType[str, Any] = MappingProxyType(_TASK_MAP)
+_DEFAULT_REGISTRY = TaskRegistry(app, task_map=_TASK_MAP)
 
 # Backward-compatible mirrors for tests and legacy direct imports. New code
 # should use ``TaskRegistry`` / ``TaskDependencies`` instead.
@@ -309,22 +312,27 @@ def register_tasks(
 ) -> None:
     """Register kind→handler entries as procrastinate tasks on ``procrastinate_app``.
 
-    For each ``(kind, handler)`` pair:
-      - Registers an ``@app.task(name=kind, queue=queue, pass_context=True)`` wrapper.
-      - Inserts the resulting task object into the module-level ``KIND_TO_TASK``
-        dict so ``jobs_router.create_job`` can dispatch via ``task.defer_async``.
+    For each ``(kind, handler)`` pair this registers a
+    ``@app.task(name=kind, queue=queue, pass_context=True)`` wrapper and inserts
+    the resulting task object into the internal ``_TASK_MAP`` backing
+    ``KIND_TO_TASK`` so ``jobs_router.create_job`` can dispatch via
+    ``task.defer_async``.
 
-    Must be called BEFORE ``procrastinate_app.run_worker_async()`` is started.
+    Must be called **before** ``procrastinate_app.run_worker_async()`` is started.
 
-    Args:
-        procrastinate_app: The shared procrastinate ``App`` instance from this module.
-        mapping: Dict mapping JARVIS job kind strings to legacy handler callables.
-        queue: The procrastinate queue name for this service (e.g. "paper_ingestion").
+    Parameters
+    ----------
+    procrastinate_app:
+        The shared procrastinate ``App`` instance from this module.
+    mapping:
+        Dict mapping JARVIS job kind strings to legacy handler callables.
+    queue:
+        The procrastinate queue name for this service (e.g. ``"paper_ingestion"``).
     """
     if procrastinate_app is _DEFAULT_REGISTRY.app:
         registry = _DEFAULT_REGISTRY
     else:
-        registry = TaskRegistry(procrastinate_app, task_map=KIND_TO_TASK)
+        registry = TaskRegistry(procrastinate_app, task_map=_TASK_MAP)
         registry._dependencies = _DEFAULT_REGISTRY._dependencies
     registry.register_tasks(mapping, queue)
 
@@ -334,13 +342,13 @@ def register_tasks(
 # ---------------------------------------------------------------------------
 #
 # noop_task is decorated @app.task at module-import time (always registered with
-# procrastinate). Insertion into KIND_TO_TASK is gated on JARVIS_ENABLE_TEST_JOBS=1.
+# procrastinate). Insertion into _TASK_MAP is gated on JARVIS_ENABLE_TEST_JOBS=1.
 #
 # Two gate evaluations in sequence:
-# 1. Module-import time: KIND_TO_TASK["noop.test"] = noop_task if env set at import.
+# 1. Module-import time: _TASK_MAP["noop.test"] = noop_task if env set at import.
 # 2. Service startup, in services/<svc>/_task_register.py: re-checks env in case
 #    it was set after import. This is the canonical path; the import-time gate
-#    is a fallback for legacy direct imports of KIND_TO_TASK.
+#    is a fallback for legacy direct imports.
 
 
 @app.task(name="noop.test", queue="paper_ingestion", pass_context=True)
@@ -353,7 +361,7 @@ async def noop_task(context: procrastinate.JobContext, **payload: Any) -> dict[s
 
 # Gate noop.test on the test-jobs toggle so production envs are unaffected.
 if get_jobs_settings().test_jobs_enabled:
-    KIND_TO_TASK["noop.test"] = noop_task
+    _TASK_MAP["noop.test"] = noop_task
 
 # ---------------------------------------------------------------------------
 # Public exports

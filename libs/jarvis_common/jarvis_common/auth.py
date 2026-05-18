@@ -492,7 +492,27 @@ async def get_current_user_id(
 
 
 def validate_production_config() -> None:
-    """Crash at startup if production config is unsafe."""
+    """Crash at startup if production config is unsafe.
+
+    Enforces a set of production-readiness gates so misconfigurations cause a
+    loud ``RuntimeError`` at boot rather than silent runtime failures:
+
+    * ``DEV_MODE=true`` is rejected when ``ENVIRONMENT=production``.
+    * All granular ``dev_*`` flags are rejected in production.
+    * ``JARVIS_API_KEY`` must be set, ≥ 32 characters, and not a placeholder.
+    * ``JARVIS_MODEL_HMAC_KEY`` is required in production (M-07; no derivation
+      fallback from the API key).
+    * ``JARVIS_CONFIG_KEY`` must be set in production (Fernet row-level encrypt).
+    * ``LITELLM_MASTER_KEY`` must be strong (SEC-A; rejects known placeholders).
+    * ``POSTGRES_PASSWORD`` must be strong (SEC-A; mirrored from readiness-check).
+    * ``APP_BASE_URL`` must be set (prevents magic-link host-header poisoning).
+    * SMTP (host, port, from) must all be configured in production (H-2).
+
+    Raises
+    ------
+    RuntimeError
+        On the first failed gate encountered.
+    """
     from jarvis_common.settings import get_core_settings, get_secrets_settings  # noqa: PLC0415
 
     core = get_core_settings()

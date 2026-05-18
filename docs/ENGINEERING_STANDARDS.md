@@ -119,3 +119,8 @@ LLM-generated scientific content must remain evidence-backed:
   mocked, live smoke, and mutating live flows.
 - Test coverage should scale with blast radius. Shared contracts need broader
   tests than local helper cleanups.
+
+## Docs
+
+- Links in documentation MUST target heading slugs (e.g. `#anti-hallucination-invariants`), never GitHub `#Lxx` line anchors — line anchors are never resolved by MkDocs and will silently 404.
+- Migration counts in documentation MUST reference `db/migrations/README.md` rather than hand-stamped literals; literals drift silently as new migrations are added.

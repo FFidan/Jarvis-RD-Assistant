@@ -16,16 +16,7 @@ fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
 from paper_ingestion.routers import pdf  # noqa: E402
 from paper_ingestion.services import local_pdfs  # noqa: E402
-
-
-class FakeRecord(dict):
-    """Dict-like asyncpg.Record substitute for router tests."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
+from tests.conftest import FakeRecord  # noqa: E402
 
 
 def _make_pool(conn):
@@ -291,7 +282,7 @@ async def test_process_pdf_async_enqueues_job():
     mock_defer = AsyncMock()
     mock_task.defer_async = mock_defer
     with (
-        mock_patch.dict(task_registry.KIND_TO_TASK, {"paper.process": mock_task}),
+        mock_patch.dict(task_registry._TASK_MAP, {"paper.process": mock_task}),
         mock_patch("uuid.uuid4", return_value=fake_uuid),
     ):
         result = await pdf.process_pdf.__wrapped__(
@@ -375,7 +366,7 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
     mock_task_bp = MagicMock()
     mock_task_bp.defer_async = mock_defer
     with (
-        mock_patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_task_bp}),
+        mock_patch.dict(task_registry._TASK_MAP, {"papers.batch_process": mock_task_bp}),
         mock_patch("uuid.uuid4", return_value=fake_uuid),
     ):
         result = await pdf.batch_process_papers.__wrapped__(
@@ -444,7 +435,7 @@ async def test_batch_process_papers_scopes_to_user_library(tmp_path, monkeypatch
     mock_task_bp = MagicMock()
     mock_task_bp.defer_async = mock_defer
     with (
-        mock_patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_task_bp}),
+        mock_patch.dict(task_registry._TASK_MAP, {"papers.batch_process": mock_task_bp}),
         mock_patch("uuid.uuid4", return_value=fake_uuid),
     ):
         result = await pdf.batch_process_papers.__wrapped__(
@@ -685,7 +676,7 @@ def test_process_pdf_async_response_model_no_500():
     mock_task_proc = MagicMock()
     mock_task_proc.defer_async = AsyncMock()
     with (
-        mock_patch.dict(task_registry.KIND_TO_TASK, {"paper.process": mock_task_proc}),
+        mock_patch.dict(task_registry._TASK_MAP, {"paper.process": mock_task_proc}),
         mock_patch("uuid.uuid4", return_value=fake_job_id),
         TestClient(app, raise_server_exceptions=True) as client,
     ):

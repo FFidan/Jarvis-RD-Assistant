@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import FakeRecord
+
 # ---------------------------------------------------------------------------
 # Helpers — reuse the same fake-record pattern from test_feed.py
 # ---------------------------------------------------------------------------
@@ -41,14 +43,6 @@ def _make_paper_record(paper_id: int = 1) -> dict:
         "user_status": "new",
         "rating": None,
     }
-
-
-class FakeRecord(dict):
-    def __getitem__(self, key):
-        return super().__getitem__(key)
-
-    def get(self, key, default=None):
-        return super().get(key, default)
 
 
 def _to_record(d: dict) -> FakeRecord:

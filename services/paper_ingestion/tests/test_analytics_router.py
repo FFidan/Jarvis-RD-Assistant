@@ -111,7 +111,7 @@ async def test_fetch_and_process_local_pdf_promotes_stub_and_enqueues_process(ap
     mock_task = MagicMock()
     defer_async = AsyncMock()
     mock_task.defer_async = defer_async
-    with patch.dict(task_registry.KIND_TO_TASK, {"paper.process": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"paper.process": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -149,7 +149,7 @@ async def test_fetch_and_process_pdf_url_promotes_stub_and_enqueues_analyze(app_
     mock_task = MagicMock()
     defer_async = AsyncMock()
     mock_task.defer_async = defer_async
-    with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -188,9 +188,7 @@ async def test_fetch_and_process_without_pdf_promotes_stub_but_does_not_enqueue(
     mock_pa = MagicMock()
     defer_analyze = AsyncMock()
     mock_pa.defer_async = defer_analyze
-    with patch.dict(
-        task_registry.KIND_TO_TASK, {"paper.process": mock_pp, "paper.analyze": mock_pa}
-    ):
+    with patch.dict(task_registry._TASK_MAP, {"paper.process": mock_pp, "paper.analyze": mock_pa}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -225,9 +223,7 @@ async def test_fetch_and_process_missing_or_non_stub_row_returns_404(app_with_po
     mock_pa = MagicMock()
     defer_analyze = AsyncMock()
     mock_pa.defer_async = defer_analyze
-    with patch.dict(
-        task_registry.KIND_TO_TASK, {"paper.process": mock_pp, "paper.analyze": mock_pa}
-    ):
+    with patch.dict(task_registry._TASK_MAP, {"paper.process": mock_pp, "paper.analyze": mock_pa}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

@@ -302,6 +302,9 @@ services:
       # QDRANT_API_KEY is injected via Docker Secret (_FILE convention)
       QDRANT_API_KEY_FILE: /run/secrets/qdrant_api_key
       RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
+      # Opt-in for bench/multi-user deployments: bypasses the single-tenant
+      # session-mint guardrail so API-key sessions can be created without a DB user.
+      API_KEY_LOGIN_ENABLED: ${API_KEY_LOGIN_ENABLED:-false}
       # JARVIS_CONFIG_KEY (Fernet) is injected via Docker Secret (_FILE convention)
       JARVIS_CONFIG_KEY_FILE: /run/secrets/jarvis_config_key
       # Vector sidecar uses this to authenticate to POST /infra-events

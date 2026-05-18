@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import FakeRecord
+
 # ---------------------------------------------------------------------------
 # Helpers — fake asyncpg records
 # ---------------------------------------------------------------------------
@@ -41,16 +43,6 @@ def _make_paper_record(
         "user_status": user_status,
         "rating": rating,
     }
-
-
-class FakeRecord(dict):
-    """Dict subclass that supports both dict[key] and .get()."""
-
-    def __getitem__(self, key):
-        return super().__getitem__(key)
-
-    def get(self, key, default=None):
-        return super().get(key, default)
 
 
 def _to_record(d: dict) -> FakeRecord:

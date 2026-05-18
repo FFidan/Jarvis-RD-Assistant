@@ -15,22 +15,11 @@ from fastapi import HTTPException
 from learning_engine.models import CardCreate, CardType
 from learning_engine.routers import cards
 
+from tests.conftest import FakeRecord
+
 # ---------------------------------------------------------------------------
 # Helpers (mirrors test_cards_router.py pattern)
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    """Dict-like asyncpg.Record substitute."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):
-        return super().get(key, default)
 
 
 def _now():

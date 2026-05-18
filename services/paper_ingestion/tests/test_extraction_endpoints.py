@@ -8,34 +8,18 @@ Covers:
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import asyncpg.exceptions
 import httpx
 import pytest
 from httpx import ASGITransport
 
+from tests.conftest import FakeRecord, _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    """Dict subclass that supports both dict[key] and .keys() like asyncpg.Record."""
-
-    def keys(self):
-        return super().keys()
-
-
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool whose acquire() returns an async CM."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _now():

@@ -18,20 +18,11 @@ from paper_ingestion.services.litellm_config import (
     update_litellm_model,
 )
 
+from tests.conftest import _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool + Connection pair."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 # ---------------------------------------------------------------------------

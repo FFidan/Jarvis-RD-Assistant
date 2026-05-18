@@ -261,7 +261,9 @@ JARVIS_CONFIG_KEY=<Fernet key from: python -c "from cryptography.fernet import F
 - `DEV_MODE=true` is a meta-flag: it promotes any granular dev flag (`DEV_AUTH_BYPASS`, `DEV_ERROR_DETAIL`, `DEV_CORS_OPEN`, `DEV_SMTP_LOG_ONLY`, `DEV_CRYPTO_RELAXED`) to `true` unless that flag is explicitly set in the environment. An explicit value always wins. In production, set each flag independently; none are permitted in `ENVIRONMENT=production` (startup will crash if any is `true`).
 - `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`. See finding S-7.4 in `docs/archive/2026-05/CODE_SECURITY_REVIEW_2026-04-14.md`.
 
-### Rate-limit client-IP trust (automatic, updated 2026-05-17, agent: claude-code)
+### Rate-limit client-IP trust (automatic)
+
+_Updated 2026-05-17, agent: claude-code._
 
 JARVIS pins the internal Docker network to a static subnet (`10.137.241.0/24` by default) and assigns Caddy a fixed IP within it (`10.137.241.2` for the public Caddy TLS terminator, `10.137.241.3` for `caddy_local`). nginx is configured to trust **only** those two /32 addresses plus `127.0.0.1` as `set_real_ip_from` sources — so client IP extraction is automatic and requires no operator step.
 

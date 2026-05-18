@@ -7,7 +7,7 @@ Covers:
 - zotero.poll_enabled / zotero.auto_push_on_star accept True/False, reject strings
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -15,24 +15,11 @@ from cryptography.fernet import Fernet
 from httpx import ASGITransport
 from jarvis_common.crypto import refresh_fernet_cache
 
+from tests.conftest import _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers (mirrors test_settings.py style)
 # ---------------------------------------------------------------------------
-
-
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool whose acquire() returns an async CM."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    txn_ctx = MagicMock()
-    txn_ctx.__aenter__ = AsyncMock(return_value=None)
-    txn_ctx.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_ctx)
-    return pool, conn
 
 
 # ---------------------------------------------------------------------------

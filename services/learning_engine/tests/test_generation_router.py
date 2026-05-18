@@ -13,40 +13,11 @@ from learning_engine import _state as le_state  # noqa: E402
 from learning_engine.models import BatchGenerateRequest, GenerateCardsRequest  # noqa: E402
 from learning_engine.routers import generation  # noqa: E402
 
-
-class FakeRecord(dict):
-    """Dict-like asyncpg.Record substitute."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):
-        return super().get(key, default)
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _now():
     return datetime.now(UTC)
-
-
-def _make_pool_and_conn():
-    """Create a mock pool whose acquire() returns an async context manager."""
-    conn = AsyncMock()
-
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _make_card_row(id=1, deck_id=1, paper_id=1):
@@ -228,7 +199,7 @@ async def test_generate_cards_endpoint_returns_job_id():
     mock_card_generate_task = MagicMock()
     mock_defer = AsyncMock()
     mock_card_generate_task.defer_async = mock_defer
-    with patch.dict(task_registry.KIND_TO_TASK, {"card.generate": mock_card_generate_task}):
+    with patch.dict(task_registry._TASK_MAP, {"card.generate": mock_card_generate_task}):
         response = await generation.generate_cards.__wrapped__(
             SimpleNamespace(state=SimpleNamespace(user_id=7)),
             body=GenerateCardsRequest(paper_id=101, deck_id=1),
@@ -264,7 +235,7 @@ async def test_generate_cards_rejects_other_users_deck():
     # user_id=42; deck_id=99 belongs to a different user
     req = SimpleNamespace(state=SimpleNamespace(user_id=42))
     with (
-        patch.dict(task_registry.KIND_TO_TASK, {"card.generate": mock_card_generate_task}),
+        patch.dict(task_registry._TASK_MAP, {"card.generate": mock_card_generate_task}),
         patch.object(generation, "assert_paper_ownership", AsyncMock(return_value=None)),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -296,7 +267,7 @@ async def test_batch_generate_cards_returns_202_with_job_id():
     mock_defer = AsyncMock()
     mock_card_generate_batch_task.defer_async = mock_defer
     with patch.dict(
-        task_registry.KIND_TO_TASK, {"card.generate_batch": mock_card_generate_batch_task}
+        task_registry._TASK_MAP, {"card.generate_batch": mock_card_generate_batch_task}
     ):
         response = await generation.batch_generate_cards.__wrapped__(
             SimpleNamespace(state=SimpleNamespace(user_id=3)),

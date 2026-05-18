@@ -6,33 +6,13 @@ category='config', message='setting_changed' after a successful UPSERT.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
 
-
-class FakeRecord(dict):
-    """Dict subclass that supports both dict[key] and .keys() like asyncpg.Record."""
-
-    def keys(self):
-        return super().keys()
-
-
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool whose acquire() returns an async CM."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    txn_ctx = MagicMock()
-    txn_ctx.__aenter__ = AsyncMock(return_value=None)
-    txn_ctx.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_ctx)
-    return pool, conn
+from tests.conftest import _make_pool_and_conn
 
 
 @pytest.fixture()

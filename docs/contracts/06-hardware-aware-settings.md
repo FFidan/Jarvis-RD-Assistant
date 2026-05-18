@@ -4,7 +4,7 @@
 **Date:** 2026-05-07
 **Scope:** Per-machine VRAM transparency in Settings — fit indicators, `num_ctx` slider per role, thinking-mode toggle for thinking-capable models, support for the user's two machines (RTX 5060 Ti 16 GB and a separate 48 GB box).
 **Depends on:** Contract 05 (Model Lifecycle) — additive only; does not contradict it.
-**Related:** [`docs/contracts/01-settings.md`](01-settings.md), [`docs/contracts/03-llm.md`](03-llm.md), [`docs/contracts/05-model-lifecycle.md`](05-model-lifecycle.md), [W3-SMOKE-03/04/05](../plans/2026-05-07-deep-audit-security-review.md#l898-l1046).
+**Related:** [`docs/contracts/01-settings.md`](01-settings.md), [`docs/contracts/03-llm.md`](03-llm.md), [`docs/contracts/05-model-lifecycle.md`](05-model-lifecycle.md), [W3-SMOKE-03/04/05](../archive/2026-05/2026-05-07-deep-audit-security-review.md#l898-l1046).
 
 This contract was reviewed and ratified by the user on 2026-05-07. The
 six open questions in §10 have all been resolved; recommendations the user

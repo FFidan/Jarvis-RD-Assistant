@@ -56,7 +56,7 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
     Parameters
     ----------
     scheduler:
-        The :class:`~app.scheduler.JarvisScheduler` instance to attach.
+        The :class:`~telegram_bot.scheduler.JarvisScheduler` instance to attach.
     port:
         TCP port to listen on (default 8002).
     """

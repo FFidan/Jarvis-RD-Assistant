@@ -12,26 +12,17 @@ All DB calls are mocked via the project's _make_pool_and_conn() pattern from con
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import paper_ingestion.routers.source_config as sc_router
 import pytest
 from fastapi import HTTPException
 
+from tests.conftest import _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_pool_and_conn():
-    """Create mock asyncpg Pool + Connection."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _build_request(*, user_id: int | None = 1, user_role: str = "admin") -> SimpleNamespace:

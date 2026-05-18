@@ -12,6 +12,16 @@ from pydantic import BaseModel, Field, create_model
 
 
 class ExtractedFieldOutput(BaseModel):
+    """Single extracted field value with a verbatim supporting quote.
+
+    Attributes
+    ----------
+    value : str | int | float | None
+        The extracted field value, or ``None`` when the field is absent.
+    quote : str | None
+        Exact verbatim quote from the source text that supports the value.
+    """
+
     value: str | int | float | None = Field(
         default=None, description="Extracted value or null if not found"
     )

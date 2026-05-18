@@ -32,11 +32,35 @@ COLLECTION_NAME = "paper_chunks"
 
 
 def get_qdrant_url() -> str:
+    """Return the Qdrant service URL from ``QDRANT_URL`` (default: ``http://localhost:6333``).
+
+    Returns
+    -------
+    str
+        Qdrant base URL.
+    """
     return os.environ.get("QDRANT_URL", "http://localhost:6333")
 
 
 async def stage1_sql(pool: asyncpg.Pool, *, dry_run: bool) -> int:
-    """Populate paper_chunks.user_id from papers.discovered_by. Returns row count."""
+    """Populate ``paper_chunks.user_id`` from ``papers.discovered_by``.
+
+    In dry-run mode returns the count of rows that *would* be updated without
+    making any changes. In apply mode runs the UPDATE and returns the affected
+    row count.
+
+    Parameters
+    ----------
+    pool : asyncpg.Pool
+        Database connection pool.
+    dry_run : bool
+        When ``True``, runs a COUNT query only (no writes).
+
+    Returns
+    -------
+    int
+        Number of rows updated (or that would be updated in dry-run mode).
+    """
     async with pool.acquire() as conn:
         if dry_run:
             return await conn.fetchval(
@@ -60,7 +84,25 @@ async def stage1_sql(pool: asyncpg.Pool, *, dry_run: bool) -> int:
 async def stage2_qdrant(
     pool: asyncpg.Pool, qdrant: AsyncQdrantClient, *, dry_run: bool
 ) -> tuple[int, int]:
-    """Stamp user_id payload on every existing Qdrant point. Returns (papers, points)."""
+    """Stamp ``user_id`` payload on every existing Qdrant point for papers with chunks.
+
+    Scrolls all points in the ``paper_chunks`` Qdrant collection by paper and
+    calls ``set_payload`` for each batch (no-op in dry-run mode).
+
+    Parameters
+    ----------
+    pool : asyncpg.Pool
+        Database connection pool used to resolve ``papers.discovered_by``.
+    qdrant : AsyncQdrantClient
+        Qdrant async client.
+    dry_run : bool
+        When ``True``, scrolls points but skips ``set_payload`` writes.
+
+    Returns
+    -------
+    tuple[int, int]
+        ``(papers_processed, total_points_visited)``.
+    """
     async with pool.acquire() as conn:
         papers = await conn.fetch(
             """SELECT id, discovered_by
@@ -98,6 +140,7 @@ async def stage2_qdrant(
 
 
 async def main() -> None:
+    """Parse CLI arguments and run Stage 1 (SQL) then Stage 2 (Qdrant) backfill."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--apply",

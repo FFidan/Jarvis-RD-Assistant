@@ -17,19 +17,7 @@ from fastapi.dependencies import utils as fastapi_dependency_utils
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
 from paper_ingestion.routers import pdf  # noqa: E402
-
-
-class FakeRecord(dict):
-    """Dict-like asyncpg.Record substitute."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def keys(self):  # needed by row_to_paper_response priority_score branch
-        return super().keys()
+from tests.conftest import FakeRecord  # noqa: E402
 
 
 def _make_pool(conn):

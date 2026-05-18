@@ -148,6 +148,17 @@ async def run_research_pulse(
     Sprint A: iterates ``telegram_user_pairings`` and delivers per-user Pulse
     by sending ``X-Owner-User-Id`` + ``X-API-Key`` headers to the backend.
     Skips with a warning when no pairings exist.
+
+    Parameters
+    ----------
+    http_client : httpx.AsyncClient
+        Shared HTTP client.
+    db_pool : asyncpg.Pool
+        Database connection pool used to list active pairings.
+    bot : Bot
+        Telegram bot instance.
+    config : BotConfig
+        Bot configuration (service URLs and API key).
     """
     from telegram_bot.owner import list_user_pairings
 

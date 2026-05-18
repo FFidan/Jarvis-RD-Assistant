@@ -17,20 +17,11 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from tests.conftest import _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_pool_and_conn():
-    """Return (pool, conn) with async-context-manager support."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _make_qdrant_client(*, healthy: bool = True) -> MagicMock:

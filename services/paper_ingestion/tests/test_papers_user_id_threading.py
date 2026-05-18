@@ -16,22 +16,12 @@ After Phase-A Wave 1cd, ``submit_feedback`` delegates the write to
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from paper_ingestion.models import FeedbackRequest
 from paper_ingestion.routers import papers
 
-
-def _make_pool_and_conn():
-    """Create a mock pool whose acquire() returns an async context manager."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
-
+from tests.conftest import _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # C2: submit_feedback — user_id must be in INSERT and SELECT

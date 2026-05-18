@@ -12,27 +12,14 @@ authenticated non-admin tenant could otherwise mutate the global catalogue.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport
 
-
-class FakeRecord(dict):
-    def keys(self):
-        return super().keys()
-
-
-def _make_pool_and_conn():
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _topic_row(id=1, name="ML"):

@@ -10,6 +10,14 @@ from .logging_config import correlation_id_var
 
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    """Starlette middleware that propagates a per-request correlation ID.
+
+    Accepts an inbound ``X-Correlation-Id`` UUID header when supplied;
+    generates a fresh UUID otherwise (or when the header value is malformed).
+    The ID is stored in :data:`jarvis_common.logging_config.correlation_id_var`
+    for the duration of the request and echoed back in the response header.
+    """
+
     async def dispatch(self, request: Request, call_next) -> Response:
         header = request.headers.get("X-Correlation-Id")
         try:

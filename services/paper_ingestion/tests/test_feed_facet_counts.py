@@ -16,34 +16,11 @@ import pytest
 from paper_ingestion.routers import papers
 from paper_ingestion.services.feed_query import fetch_feed_facet_counts
 
+from tests.conftest import _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _pool(conn):
-    """Wrap a mock conn in an asyncpg-style pool context manager."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
-
-
-def _conn_with_txn():
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    return conn
-
-
-def _make_pool_and_conn():
-    conn = _conn_with_txn()
-    pool = _pool(conn)
-    return pool, conn
 
 
 def _mock_request():

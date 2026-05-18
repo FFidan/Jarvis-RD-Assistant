@@ -17,7 +17,13 @@ class AnkiExporter:
     # Stable model ID — generated once, must never change
     JARVIS_MODEL_ID = 1607392319
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialise the genanki model with the stable JARVIS card template.
+
+        The model ID (``JARVIS_MODEL_ID``) is a fixed constant that must never
+        change once cards have been exported; Anki uses it to match incoming
+        notes against existing card types.
+        """
         self.model = genanki.Model(
             self.JARVIS_MODEL_ID,
             "JARVIS Research Card",

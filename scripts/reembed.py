@@ -54,6 +54,7 @@ from typing import Any, Protocol
 import asyncpg
 import httpx
 from qdrant_client import AsyncQdrantClient
+from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import (
     Distance,
     FieldCondition,
@@ -271,7 +272,29 @@ def select_onnx_provider(
     available_providers: list[str],
     require_cuda: bool,
 ) -> str:
-    """Select an ONNX Runtime provider that actually exists in this environment."""
+    """Select an ONNX Runtime execution provider that exists in this environment.
+
+    Parameters
+    ----------
+    device : str
+        Torch device string (``"cuda"`` or ``"cpu"``).
+    available_providers : list[str]
+        Providers returned by ``onnxruntime.get_available_providers()``.
+    require_cuda : bool
+        When ``True``, raises if CUDA is requested but not available in
+        onnxruntime (``REEMBED_ONNX_REQUIRE_CUDA=true``).
+
+    Returns
+    -------
+    str
+        Provider name, e.g. ``"CUDAExecutionProvider"`` or
+        ``"CPUExecutionProvider"``.
+
+    Raises
+    ------
+    ScriptError
+        If no supported provider is found, or CUDA is required but missing.
+    """
     if device == "cuda" and "CUDAExecutionProvider" in available_providers:
         return "CUDAExecutionProvider"
     if device == "cuda" and require_cuda:
@@ -289,7 +312,25 @@ def select_onnx_provider(
 
 
 def build_embedding_backend(name: str | None = None) -> EmbeddingBackend:
-    """Return the configured embedding backend for this run."""
+    """Return the configured embedding backend for this run.
+
+    Parameters
+    ----------
+    name : str or None
+        Backend name override. When ``None``, uses the ``REEMBED_BACKEND``
+        module constant.  Recognised values: ``"litellm"`` (or ``"remote"``),
+        ``"local"`` (or ``"sentence-transformers"``/``"st"``), ``"onnx"``.
+
+    Returns
+    -------
+    EmbeddingBackend
+        Concrete backend instance implementing :class:`EmbeddingBackend`.
+
+    Raises
+    ------
+    ScriptError
+        If the backend name is not recognised.
+    """
     backend_name = name or REEMBED_BACKEND
     normalized = backend_name.strip().lower()
     if normalized in {"litellm", "remote"}:
@@ -304,12 +345,47 @@ def build_embedding_backend(name: str | None = None) -> EmbeddingBackend:
 
 
 async def embed_texts(client: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:
-    """Compatibility wrapper used by older tests."""
+    """Embed texts via the LiteLLM backend.
+
+    Compatibility wrapper used by older tests that reference this function
+    directly rather than going through :func:`build_embedding_backend`.
+
+    Parameters
+    ----------
+    client : httpx.AsyncClient
+        HTTP client for the LiteLLM proxy.
+    texts : list[str]
+        Texts to embed.
+
+    Returns
+    -------
+    list[list[float]]
+        Dense embedding vectors in the same order as *texts*.
+    """
     return await LiteLLMEmbeddingBackend().embed_texts(client, texts)
 
 
 def deterministic_point_id(paper_id: int, chunk_index: int, model_name: str) -> str:
-    """Return a stable Qdrant point ID for a target paper chunk embedding."""
+    """Return a stable UUID-format Qdrant point ID for a paper chunk + model combination.
+
+    The ID is derived from ``SHA-256("<paper_id>:<chunk_index>:<model_name>")``
+    so it is reproducible across re-embedding runs — enabling idempotent upsert
+    without a prior lookup.
+
+    Parameters
+    ----------
+    paper_id : int
+        Database paper ID.
+    chunk_index : int
+        Zero-based chunk index within the paper.
+    model_name : str
+        Embedding model name (e.g. ``"qwen3-embedding:4b"``).
+
+    Returns
+    -------
+    str
+        UUID-format string (8-4-4-4-12 hex groups).
+    """
     digest = hashlib.sha256(f"{paper_id}:{chunk_index}:{model_name}".encode()).hexdigest()
     return f"{digest[0:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
 
@@ -344,7 +420,29 @@ async def embed_texts_in_batches(
     *,
     paper_id: int | None = None,
 ) -> list[list[float]]:
-    """Embed texts in configured batches and validate count/dimension."""
+    """Embed texts in batches of ``EMBED_BATCH_SIZE`` and validate count/dimension.
+
+    Parameters
+    ----------
+    backend : EmbeddingBackend
+        Embedding backend to call.
+    client : httpx.AsyncClient or None
+        HTTP client passed through to the backend (required for LiteLLM).
+    texts : list[str]
+        All texts to embed; order is preserved in the output.
+    paper_id : int or None
+        Used only in error messages to identify the failing paper.
+
+    Returns
+    -------
+    list[list[float]]
+        Dense embedding vectors in the same order as *texts*.
+
+    Raises
+    ------
+    ScriptError
+        If the backend returns a wrong count or wrong vector dimension.
+    """
     all_embeddings: list[list[float]] = []
     for i in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[i : i + EMBED_BATCH_SIZE]
@@ -364,7 +462,7 @@ async def _collection_exists(qdrant: AsyncQdrantClient) -> bool:
         return bool(await qdrant.collection_exists(collection_name=COLLECTION_NAME))
     try:
         await qdrant.get_collection(collection_name=COLLECTION_NAME)
-    except Exception:
+    except UnexpectedResponse:
         return False
     return True
 
@@ -377,7 +475,24 @@ async def _create_collection(qdrant: AsyncQdrantClient) -> None:
 
 
 async def ensure_collection_dimension(qdrant: AsyncQdrantClient) -> None:
-    """Ensure Qdrant has the target collection with the configured vector size."""
+    """Ensure the Qdrant collection exists with the configured vector dimension.
+
+    Creates the collection if it does not exist. If it exists with a different
+    dimension, raises unless both ``REEMBED_RECREATE_COLLECTION`` and
+    ``REEMBED_SNAPSHOT_CONFIRMED`` are set, in which case the collection is
+    deleted and recreated.
+
+    Parameters
+    ----------
+    qdrant : AsyncQdrantClient
+        Qdrant async client.
+
+    Raises
+    ------
+    ScriptError
+        If the collection dimension mismatches and the safety flags are not
+        set, or if ``validate_embedding_configuration`` rejects the model/dim.
+    """
     validate_embedding_configuration(
         model_name=EMBEDDING_MODEL_NAME,
         dimension=EMBEDDING_DIMENSION,
@@ -424,7 +539,37 @@ async def reembed_paper(
     http_client: httpx.AsyncClient,
     backend: EmbeddingBackend | None = None,
 ) -> int:
-    """Re-embed all chunks for a single paper. Returns chunk count."""
+    """Re-embed all chunks for a single paper and sync Qdrant + DB.
+
+    Fetches chunks from the DB, embeds them via the backend, upserts new
+    Qdrant points with deterministic IDs, deletes stale old points, and
+    updates ``paper_chunks.embedding_id`` + ``embedding_model`` atomically.
+
+    Parameters
+    ----------
+    paper_id : int
+        Database paper ID to re-embed.
+    pool : asyncpg.Pool
+        Database connection pool.
+    qdrant : AsyncQdrantClient
+        Qdrant async client.
+    http_client : httpx.AsyncClient
+        HTTP client for the LiteLLM backend (ignored by local/ONNX backends).
+    backend : EmbeddingBackend or None
+        Backend to use. Defaults to :class:`LiteLLMEmbeddingBackend` when
+        ``None``.
+
+    Returns
+    -------
+    int
+        Number of chunks embedded (0 if the paper has no chunks).
+
+    Raises
+    ------
+    ScriptError
+        On embedding count/dimension mismatch or stale-point cleanup failure
+        when ``REEMBED_CONTINUE_ON_ERROR`` is false.
+    """
     if backend is None:
         backend = LiteLLMEmbeddingBackend()
 
@@ -525,7 +670,20 @@ async def reembed_paper(
 
 
 async def verify_postconditions(pool: asyncpg.Pool, qdrant: AsyncQdrantClient) -> None:
-    """Verify DB target-model chunks and Qdrant collection vectors are in parity."""
+    """Verify DB target-model chunk count matches Qdrant vector count.
+
+    Parameters
+    ----------
+    pool : asyncpg.Pool
+        Database connection pool.
+    qdrant : AsyncQdrantClient
+        Qdrant async client.
+
+    Raises
+    ------
+    ScriptError
+        If the DB count and Qdrant count for the target model diverge.
+    """
     async with pool.acquire() as conn:
         db_target_chunks = int(
             await conn.fetchval(
@@ -563,7 +721,24 @@ async def verify_postconditions(pool: asyncpg.Pool, qdrant: AsyncQdrantClient) -
 
 
 async def run_benchmark(pool: asyncpg.Pool, backend: EmbeddingBackend) -> None:
-    """Run a read-only embedding benchmark against sampled DB chunks."""
+    """Run a read-only embedding benchmark against sampled paper_chunks rows.
+
+    Samples up to ``REEMBED_BENCHMARK_SIZE`` content strings from the DB,
+    embeds them via the backend, and logs throughput (chunks/s) and latency.
+    Does not write to Qdrant or the database.
+
+    Parameters
+    ----------
+    pool : asyncpg.Pool
+        Database connection pool.
+    backend : EmbeddingBackend
+        Backend to benchmark.
+
+    Raises
+    ------
+    ScriptError
+        If no content rows are found for benchmarking.
+    """
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT content
@@ -594,7 +769,19 @@ async def run_benchmark(pool: asyncpg.Pool, backend: EmbeddingBackend) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse CLI flags without changing env-driven defaults."""
+    """Parse CLI flags without changing env-driven defaults.
+
+    Parameters
+    ----------
+    argv : list[str] or None
+        Argument list. Defaults to ``sys.argv[1:]`` when ``None``.
+
+    Returns
+    -------
+    argparse.Namespace
+        Parsed arguments with attributes: ``backend``, ``benchmark``,
+        ``benchmark_size``, ``continue_on_error``.
+    """
     parser = argparse.ArgumentParser(
         description="Re-embed existing paper chunks with the configured embedding model."
     )
@@ -622,7 +809,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 async def main(argv: list[str] | None = None) -> None:
-    """Run the re-embedding pipeline."""
+    """Run the re-embedding pipeline for all papers with stale or missing embeddings.
+
+    Parses CLI flags, constructs the embedding backend, connects to Postgres and
+    Qdrant, and iterates over papers that need re-embedding. In benchmark mode,
+    measures throughput without writing any state. Verifies postconditions after
+    a full run.
+
+    Parameters
+    ----------
+    argv : list[str] or None
+        CLI argument list. ``None`` uses ``sys.argv[1:]``.
+
+    Raises
+    ------
+    ScriptError
+        On backend warmup failure, pool creation failure, per-paper failure
+        (unless ``REEMBED_CONTINUE_ON_ERROR=true``), or postcondition mismatch.
+    """
     global REEMBED_BACKEND, REEMBED_BENCHMARK, REEMBED_BENCHMARK_SIZE, REEMBED_CONTINUE_ON_ERROR
 
     args = parse_args([] if argv is None else argv)

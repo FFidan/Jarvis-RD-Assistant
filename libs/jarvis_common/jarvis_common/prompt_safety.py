@@ -71,9 +71,10 @@ def safe_for_prompt(text: str | None, mode: str = "escape") -> str:
         HTML-encode ``<`` and ``>`` so XML-style delimiters cannot be forged
         (former :func:`escape_llm_text` behaviour).
 
-        ``'delimit'`` — escape then wrap in XML delimiters.  Not useful
-        on its own; delegates to :func:`wrap_delimited`.  Raises
-        ``ValueError`` unless called via :func:`wrap_delimited`.
+        ``'delimit'`` — reserved sentinel; **always raises**
+        ``ValueError``. There is no valid caller (``wrap_delimited``
+        uses ``mode='escape'`` internally). Call :func:`wrap_delimited`
+        directly to escape-and-wrap text in XML delimiters.
 
         ``'strip'`` — strip ASCII/Unicode control characters that could
         confuse tokenisers or embed hidden instructions. **Does not escape

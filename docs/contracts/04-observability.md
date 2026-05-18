@@ -352,7 +352,7 @@ The implementation MUST satisfy these. Testable.
 ## 12. Cross-contract references
 
 - **[01-settings.md §2.1](01-settings.md#21-live-keys-written-and-read-by-code-that-affects-user-visible-behavior)** — encrypted keys whose plaintext MUST NEVER appear in span metadata.
-- **[02-pulse.md §6.1](02-pulse.md#61-degraded-vs-fatal--the-difference-that-matters)** — `degraded_reason` field that the Pulse trace span MUST mirror as a tag.
+- **[02-pulse.md §6.1](02-pulse.md#61-degraded-vs-fatal-the-difference-that-matters)** — `degraded_reason` field that the Pulse trace span MUST mirror as a tag.
 - **[03-llm.md §1.1](03-llm.md#11-call_llm_structured-signature-target)** — the choke-point function that gets the auto-`@observe(as_type="generation")` wrap.
 - **[docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md §2 / §5](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md)** — archived implementation spec.
 

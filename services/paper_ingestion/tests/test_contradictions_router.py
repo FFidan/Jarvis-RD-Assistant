@@ -94,7 +94,7 @@ async def test_scan_contradictions_endpoint_enqueues_job(app_with_pool):
     mock_task = MagicMock()
     defer = AsyncMock()
     mock_task.defer_async = defer
-    with patch.dict(task_registry.KIND_TO_TASK, {"contradictions.scan": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"contradictions.scan": mock_task}):
         with patch(
             "paper_ingestion.routers.contradictions.uuid.uuid4", return_value="job-contradictions"
         ):
@@ -119,7 +119,7 @@ async def test_scan_paper_contradictions_endpoint_enqueues_scoped_job(app_with_p
     mock_task = MagicMock()
     defer = AsyncMock()
     mock_task.defer_async = defer
-    with patch.dict(task_registry.KIND_TO_TASK, {"contradictions.scan": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"contradictions.scan": mock_task}):
         with patch(
             "paper_ingestion.routers.contradictions.uuid.uuid4",
             return_value="job-paper-contradictions",

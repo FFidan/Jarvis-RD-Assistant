@@ -9,25 +9,20 @@ Covers:
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 import httpx
 import pytest
 from httpx import ASGITransport
 
+from tests.conftest import FakeRecord, _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers — fake asyncpg records
 # ---------------------------------------------------------------------------
 
 _NOW = datetime(2026, 3, 1, tzinfo=UTC)
-
-
-class FakeRecord(dict):
-    """Dict subclass that supports both dict[key] and .keys() like asyncpg.Record."""
-
-    def keys(self):
-        return super().keys()
 
 
 def _make_paper_record(**overrides: object) -> FakeRecord:
@@ -85,24 +80,6 @@ def _make_detail_paper_record(paper_id: int = 1) -> FakeRecord:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-def _make_pool_and_conn() -> tuple[MagicMock, AsyncMock]:
-    """Create a mock asyncpg Pool whose ``acquire()`` returns an async CM.
-
-    ``pool.acquire()`` must be usable as ``async with pool.acquire() as conn``
-    (like a real asyncpg PoolAcquireContext) so ``acquire`` is a plain
-    MagicMock (returns the context manager synchronously), and the context
-    manager yields an AsyncMock connection.
-    """
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 @pytest.fixture()

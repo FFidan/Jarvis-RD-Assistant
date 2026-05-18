@@ -47,11 +47,25 @@ async def _maybe_emit_auth_event(chat_id: int, pool: Any) -> None:
 
 
 def auth_required(func: Any) -> Any:
-    """Decorator that:
+    """Decorator that enforces authentication on a Telegram command handler.
+
+    Specifically:
 
     1. Sets a fresh ``correlation_id`` ContextVar for each invocation.
     2. Emits a one-time ``auth`` event the first time a chat is seen.
     3. Rejects messages from unauthorised chats.
+    4. Rejects authorized chats that have no paired JARVIS user account,
+       prompting them to complete the pairing flow via the dashboard.
+
+    Parameters
+    ----------
+    func : Callable
+        Async Telegram handler ``(update, context) -> Any``.
+
+    Returns
+    -------
+    Callable
+        Wrapped handler with auth + correlation-id middleware applied.
     """
 
     @wraps(func)

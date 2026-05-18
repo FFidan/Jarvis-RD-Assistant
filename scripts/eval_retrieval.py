@@ -122,7 +122,20 @@ class EvalCase(NamedTuple):
 
 
 async def embed_text(client: httpx.AsyncClient, text: str) -> list[float]:
-    """Get embedding for a single text via LiteLLM."""
+    """Get embedding for a single text via LiteLLM.
+
+    Parameters
+    ----------
+    client : httpx.AsyncClient
+        Shared HTTP client for the LiteLLM proxy.
+    text : str
+        Text to embed.
+
+    Returns
+    -------
+    list[float]
+        Dense embedding vector.
+    """
     embeddings = await embed_texts(
         client,
         [text],
@@ -138,7 +151,23 @@ async def search_qdrant(
     query_embedding: list[float],
     limit: int = 3,
 ) -> list[dict]:
-    """Search Qdrant for similar chunks, returning paper_id and score."""
+    """Search Qdrant for similar chunks, returning paper_id and score.
+
+    Parameters
+    ----------
+    qdrant : AsyncQdrantClient
+        Qdrant async client.
+    query_embedding : list[float]
+        Dense query vector.
+    limit : int
+        Maximum number of results to return.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains keys ``paper_id``, ``chunk_index``, ``score``, and
+        ``content``.
+    """
     response = await qdrant.query_points(
         collection_name=COLLECTION_NAME,
         query=query_embedding,
@@ -157,7 +186,18 @@ async def search_qdrant(
 
 
 def extract_ground_truth(rows: list[asyncpg.Record | dict]) -> list[tuple[str, int]]:
-    """Extract verified findings and their paper ids from summary rows."""
+    """Extract verified findings and their paper ids from summary rows.
+
+    Parameters
+    ----------
+    rows : list[asyncpg.Record | dict]
+        Rows from ``paper_summaries`` containing ``paper_id`` and ``key_findings``.
+
+    Returns
+    -------
+    list[tuple[str, int]]
+        ``[(finding_text, paper_id), ...]`` for findings where ``verified=True``.
+    """
     ground_truth: list[tuple[str, int]] = []
     for row in rows:
         paper_id = row["paper_id"]
@@ -212,7 +252,28 @@ def _case_from_json_line(payload: dict, *, source: str) -> EvalCase:
 
 
 def load_eval_set(path: str | Path) -> list[EvalCase]:
-    """Load curated retrieval eval cases from JSONL."""
+    """Load curated retrieval eval cases from a JSONL file.
+
+    Each non-blank, non-comment line must be a JSON object with at minimum a
+    ``query`` string and ``expected_paper_ids`` list (or ``expected_paper_id``
+    integer for single-paper cases).
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to the JSONL eval set file.
+
+    Returns
+    -------
+    list[EvalCase]
+        Parsed eval cases, one per valid JSON line.
+
+    Raises
+    ------
+    ScriptError
+        If the file is missing, a line contains invalid JSON, or required
+        fields are absent or wrong type.
+    """
     eval_path = Path(path)
     cases: list[EvalCase] = []
     with eval_path.open("r", encoding="utf-8") as handle:
@@ -233,14 +294,42 @@ def load_eval_set(path: str | Path) -> list[EvalCase]:
 
 
 def precision_at_1(results: list[dict], expected_paper_ids: set[int]) -> float:
-    """Return binary precision@1 for a single query."""
+    """Return binary precision@1 for a single query.
+
+    Parameters
+    ----------
+    results : list[dict]
+        Retrieved results ordered by rank (index 0 is top result).
+    expected_paper_ids : set[int]
+        Set of relevant paper IDs for this query.
+
+    Returns
+    -------
+    float
+        1.0 if the top result is relevant, 0.0 otherwise.
+    """
     if not results:
         return 0.0
     return 1.0 if results[0].get("paper_id") in expected_paper_ids else 0.0
 
 
 def recall_at_k(results: list[dict], expected_paper_ids: set[int], k: int) -> float:
-    """Return recall@k for a single query with one or more relevant papers."""
+    """Return recall@k for a single query with one or more relevant papers.
+
+    Parameters
+    ----------
+    results : list[dict]
+        Retrieved results ordered by rank.
+    expected_paper_ids : set[int]
+        Set of relevant paper IDs.
+    k : int
+        Cutoff rank.
+
+    Returns
+    -------
+    float
+        Fraction of relevant papers found in the top-k results.
+    """
     if not expected_paper_ids:
         return 0.0
     retrieved = {result.get("paper_id") for result in results[:k]}
@@ -248,7 +337,25 @@ def recall_at_k(results: list[dict], expected_paper_ids: set[int], k: int) -> fl
 
 
 def ndcg_at_k(results: list[dict], expected_paper_ids: set[int], k: int) -> float:
-    """Return binary nDCG@k for a single query."""
+    """Return binary nDCG@k for a single query.
+
+    Uses binary relevance (relevant = 1, irrelevant = 0) and compares against
+    the ideal ranking where all relevant papers appear at the top.
+
+    Parameters
+    ----------
+    results : list[dict]
+        Retrieved results ordered by rank.
+    expected_paper_ids : set[int]
+        Set of relevant paper IDs.
+    k : int
+        Cutoff rank.
+
+    Returns
+    -------
+    float
+        Normalised Discounted Cumulative Gain in [0, 1].
+    """
     if not expected_paper_ids:
         return 0.0
     dcg = 0.0
@@ -278,7 +385,19 @@ async def _load_cases(pool: asyncpg.Pool) -> tuple[list[EvalCase], str]:
 
 
 async def main() -> None:
-    """Run the retrieval evaluation."""
+    """Run the retrieval evaluation and print per-query and aggregate metrics.
+
+    Loads eval cases either from ``EVAL_RETRIEVAL_SET`` (JSONL file) or from
+    verified ``paper_summaries`` key_findings rows in the database. Embeds
+    queries via LiteLLM, retrieves from Qdrant, optionally reranks, and
+    computes Precision@1, Recall@3, and nDCG@3. Writes a JSON report to
+    ``EVAL_OUTPUT_FILE`` when set.
+
+    Raises
+    ------
+    ScriptError
+        On missing fixture, unsupported reranker, or failed pool creation.
+    """
     pool: asyncpg.Pool | None = None
     if EVAL_RETRIEVAL_SET:
         cases, source_label = load_eval_set(EVAL_RETRIEVAL_SET), "fixed eval set"
@@ -449,7 +568,11 @@ async def main() -> None:
             "mean_latency_ms": avg_latency_ms,
             "per_case": per_case_results,
         }
-        Path(EVAL_OUTPUT_FILE).write_text(json.dumps(output, indent=2))
+        _payload = json.dumps(output, indent=2)
+        _target = Path(EVAL_OUTPUT_FILE)
+        _tmp = _target.with_suffix(".tmp")
+        _tmp.write_text(_payload)
+        os.replace(_tmp, _target)
         print(f"Results written to {EVAL_OUTPUT_FILE}")
 
     if pool is not None:

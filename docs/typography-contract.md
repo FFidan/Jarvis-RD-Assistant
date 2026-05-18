@@ -2,11 +2,11 @@
 
 This document is the canonical source for headline rhythm and caption usage
 across the JARVIS RD Assistant frontend. It exists because
-[`docs/plans/2026-05-07-ui-headline-rhythm-audit.md`](plans/2026-05-07-ui-headline-rhythm-audit.md)
+[`docs/archive/2026-05/2026-05-07-ui-headline-rhythm-audit.md`](archive/2026-05/2026-05-07-ui-headline-rhythm-audit.md)
 catalogued 28 HIGH findings where the `SectionHeader` marker, `<h2>`/`<h3>`
 siblings, `CardTitle`, and tab labels were all competing to caption the same
 visual block. Fixing those instances was Wave-1 of the
-[fix-and-feature sweep](plans/2026-05-07-tier-1-2-3-fix-and-feature-sweep.md);
+[fix-and-feature sweep](archive/2026-05/2026-05-07-tier-1-2-3-fix-and-feature-sweep.md);
 this contract is what keeps them from coming back.
 
 There is no ESLint enforcement: the frontend's `npm run lint` is
@@ -88,9 +88,9 @@ into individual page files or component JSDoc; link back here.
 
 ## References
 
-- [UI headline rhythm audit (2026-05-07)](plans/2026-05-07-ui-headline-rhythm-audit.md)
+- [UI headline rhythm audit (2026-05-07)](archive/2026-05/2026-05-07-ui-headline-rhythm-audit.md)
   — the 28 HIGH findings that motivated this contract.
-- [Tier 1+2+3 fix-and-feature sweep (2026-05-07)](plans/2026-05-07-tier-1-2-3-fix-and-feature-sweep.md)
+- [Tier 1+2+3 fix-and-feature sweep (2026-05-07)](archive/2026-05/2026-05-07-tier-1-2-3-fix-and-feature-sweep.md)
   — Wave-1 removed every existing offender; Wave-2 (this) ratifies the
   contract.
 - `frontend/src/components/typography/MarkerCaption.tsx` — the section

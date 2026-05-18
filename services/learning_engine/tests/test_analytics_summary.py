@@ -14,17 +14,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.conftest import FakeRecord
+
 # ---------------------------------------------------------------------------
 # Helpers (mirror test_analytics.py style)
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
 
 
 def _make_streak_row(log_date: datetime.date) -> FakeRecord:

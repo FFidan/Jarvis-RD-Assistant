@@ -349,7 +349,30 @@ async def purge_system_events_task(app: Any) -> None:
 
 
 async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
-    """Start the APScheduler and return the scheduler instance."""
+    """Start the APScheduler with all registered cron/interval jobs.
+
+    Registers jobs for: auto-fetch pipeline, nightly recommendations, Pulse
+    overnight deck, Pulse classifier retraining, weekly digest, Zotero sync,
+    system-events purge, and user-deletion hard-purge.  Each job is gated by
+    its own feature-flag check at run time so no service restart is required
+    to enable/disable individual features via the web UI.
+
+    Parameters
+    ----------
+    app : FastAPI
+        Running FastAPI application instance; used to access ``app.state``
+        (``db_pool``, ``sources``, etc.) from inside scheduled callbacks.
+    interval_hours : float
+        Requested auto-fetch interval.  0 registers the job at a 24 h interval
+        but the job self-gates on the feature flag so it effectively becomes
+        a no-op until enabled.
+
+    Returns
+    -------
+    AsyncIOScheduler
+        Started APScheduler instance.  The caller stores it on ``app.state``
+        so it can be shut down during the FastAPI lifespan teardown.
+    """
 
     async def _run_recommendations(app: Any) -> None:
         try:

@@ -15,6 +15,8 @@ from paper_ingestion.models import (
     GraphNode,
 )
 
+from tests.conftest import FakeRecord, _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Model validation tests
 # ---------------------------------------------------------------------------
@@ -461,17 +463,6 @@ async def test_build_graph_depth_2():
 # ---------------------------------------------------------------------------
 
 
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool whose acquire() returns an async context manager."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
-
-
 @pytest.mark.asyncio
 async def test_batch_fetch_citations_enqueues_job():
     """POST /api/citations/batch-fetch enqueues a citations.batch_fetch job.
@@ -488,7 +479,7 @@ async def test_batch_fetch_citations_enqueues_job():
     mock_task = MagicMock()
     mock_defer = AsyncMock(return_value=None)
     mock_task.defer_async = mock_defer
-    with patch.dict(task_registry.KIND_TO_TASK, {"citations.batch_fetch": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"citations.batch_fetch": mock_task}):
         result = await citations_router.batch_fetch_citations.__wrapped__(
             MagicMock(),
             db_pool=pool,
@@ -512,7 +503,7 @@ async def test_batch_fetch_citations_response_shape():
 
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock(return_value=None)
-    with patch.dict(task_registry.KIND_TO_TASK, {"citations.batch_fetch": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"citations.batch_fetch": mock_task}):
         result = await citations_router.batch_fetch_citations.__wrapped__(
             MagicMock(),
             db_pool=pool,
@@ -535,13 +526,6 @@ async def test_batch_fetch_citations_response_shape():
 #
 # These tests exercise the "user B cannot access user A's paper" path for each
 # of the three endpoints added in H11.
-
-
-class FakeRecord(dict):
-    """asyncpg.Record substitute that supports dict[key] and .keys()."""
-
-    def keys(self):
-        return super().keys()
 
 
 async def _user_b(_request, *_args, **_kwargs):

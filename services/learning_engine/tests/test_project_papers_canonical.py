@@ -47,7 +47,7 @@ async def test_link_paper_uses_canonical_ownership_and_enqueues_for_caller(monke
 
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock()
-    with patch.dict(task_registry.KIND_TO_TASK, {"zotero.push": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await project_papers.link_paper.__wrapped__(
             _request(42),
             project_id=5,

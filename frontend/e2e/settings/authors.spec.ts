@@ -4,9 +4,8 @@ import { ensureAuthenticated } from '../helpers/auth';
 test.describe('Settings - Authors', () => {
   test.beforeEach(async ({ page }) => {
     await ensureAuthenticated(page);
-    await page.goto('/settings');
+    await page.goto('/settings?section=research&item=authors');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
-    await page.getByRole('tab', { name: 'Authors' }).click();
   });
 
   test('authors list loads or shows empty state', async ({ page }) => {

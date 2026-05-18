@@ -25,22 +25,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from paper_ingestion.models import PaperCreate, SourceType
 
+from tests.conftest import FakeRecord
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    """Minimal asyncpg.Record substitute."""
-
-    def __getattr__(self, name: str):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):  # type: ignore[override]
-        return super().get(key, default)
 
 
 def _txn_cm() -> MagicMock:
@@ -800,7 +789,7 @@ async def test_zotero_sync_stamps_user_initiated() -> None:
             AsyncMock(side_effect=_fake_upsert),
         ),
         patch.dict(
-            task_registry.KIND_TO_TASK,
+            task_registry._TASK_MAP,
             {
                 "paper.analyze": mock_analyze_task,
                 "zotero.sync_annotations": mock_annotations_task,

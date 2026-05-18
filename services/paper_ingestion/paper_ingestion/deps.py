@@ -12,14 +12,17 @@ limiter = create_limiter()
 
 
 def get_db_pool(request: Request) -> asyncpg.Pool:
+    """Return the shared asyncpg connection pool from app state."""
     return request.app.state.db_pool
 
 
 def get_http_client(request: Request) -> httpx.AsyncClient:
+    """Return the shared httpx async HTTP client from app state."""
     return request.app.state.http_client
 
 
 def get_pdf_processor(request: Request):
+    """Return the PDFProcessor singleton from app state."""
     return request.app.state.pdf_processor
 
 
@@ -47,6 +50,7 @@ def get_verifier(request: Request):
 
 
 def get_embedder(request: Request):
+    """Return the Embedder singleton from app state."""
     return request.app.state.embedder
 
 

@@ -1,130 +1,271 @@
 """Paper-ingestion data models, split by domain.
 
-Back-compat: the full public surface of the old ``models.py`` is re-exported
-here so existing ``from paper_ingestion.models import X`` imports keep
-working. New code should import from the specific submodule
-(``paper_ingestion.models.papers``, ``...topics``, ``...pulse``, etc.).
+Back-compat facade
+------------------
+This package is a **back-compat barrel** for the old monolithic ``models.py``
+surface.  Every name in ``__all__`` is still importable via::
+
+    from paper_ingestion.models import X
+
+but symbols are now resolved **lazily** via PEP 562 ``__getattr__``.  Only the
+submodule that owns the requested name is imported on first access; the rest
+remain unloaded until needed.
+
+New code should import directly from the owning submodule
+(``paper_ingestion.models.papers``, ``paper_ingestion.models.rag``, etc.)
+to make provenance explicit and avoid loading unrelated domains.
 """
 
-from paper_ingestion.models.authors import (
-    AuthorCheckResponse,
-    AutoDetectResponse,
-    TrackedAuthorCreate,
-    TrackedAuthorResponse,
-    TrackedAuthorUpdate,
-)
-from paper_ingestion.models.contradictions import (
-    ContradictionListResponse,
-    ContradictionScanRequest,
-    PaperContradictionResponse,
-)
-from paper_ingestion.models.dashboard import DashboardMetrics
-from paper_ingestion.models.extractions import (
-    BatchEntityExtractResponse,
-    BatchExtractionRequest,
-    BatchExtractionResponse,
-    ExtractedField,
-    ExtractionField,
-    ExtractionRequest,
-    ExtractionResponse,
-    ExtractionTableRow,
-    ExtractionTemplateCreate,
-    ExtractionTemplateResponse,
-    ExtractionTemplateUpdate,
-    VerificationReport,
-    VerificationResult,
-)
-from paper_ingestion.models.kg import (
-    BatchCitationFetchResponse,
-    CitationFetchResponse,
-    CitationGraphResponse,
-    CitationRelation,
-    EntityCreate,
-    EntityDetailResponse,
-    EntityExtractionResponse,
-    EntityResponse,
-    GraphEdge,
-    GraphNode,
-    KGQueryResponse,
-    KnowledgeGraphResponse,
-    RelationshipCreate,
-    RelationshipResponse,
-)
-from paper_ingestion.models.notes import NoteCreate, NoteResponse, NoteUpdate
-from paper_ingestion.models.papers import (
-    AnnotationsRequest,
-    BatchProcessResponse,
-    BulkActionRequest,
-    ChunkForEmbedding,
-    ChunkResponse,
-    Confidence,
-    CrossReference,
-    DiscoverRequest,
-    DiscoveryResultItem,
-    FeedbackRequest,
-    FeedbackResponse,
-    FeedCountsResponse,
-    FeedPaper,
-    FeedResponse,
-    HybridSearchResult,
-    KeyFinding,
-    MarkReadResponse,
-    PaperBase,
-    PaperBriefResponse,
-    PaperCreate,
-    PaperDetailResponse,
-    PaperPriorityResponse,
-    PaperResponse,
-    PapersBySourceItem,
-    PapersByStatusItem,
-    PaperSourceConfig,
-    ProcessBatchRequest,
-    ProcessPdfResponse,
-    RecentFeedback,
-    RecomputePrioritiesResponse,
-    RelevanceScoreResponse,
-    ScanLocalPdfsResponse,
-    SearchRequest,
-    SimilarPaperResult,
-    SourceResponse,
-    SourceType,
-    SourceUpdate,
-    SummaryResponse,
-    SystemModelsResponse,
-    TopicFacetCount,
-    UserStateResponse,
-    WeeklyDigestResponse,
-    compute_priority,
-    priority_level,
-)
-from paper_ingestion.models.pulse import (
-    PulseCardResponse,
-    PulseDebugResponse,
-    PulseDebugTopCard,
-    PulseDebugTopicEmbedding,
-    PulseDeckResponse,
-    PulseExplainResponse,
-    PulseGenerateResponse,
-    PulseRateRequest,
-    PulseRateResponse,
-    PulseStatsResponse,
-)
-from paper_ingestion.models.rag import (
-    AskRequest,
-    AskResponse,
-    AskSourceItem,
-    AskVerifiedSentence,
-    CrossPaperAskRequest,
-)
-from paper_ingestion.models.topics import (
-    ConfigEntry,
-    NudgeResponse,
-    NudgeUpdate,
-    TopicCreate,
-    TopicRef,
-    TopicResponse,
-    TopicUpdate,
-)
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Static-analysis re-exports: give type-checkers a direct view of every
+    # symbol declared in __all__ without changing runtime laziness.  The PEP 562
+    # __getattr__ below handles all actual imports at runtime; this block is
+    # only evaluated by mypy / pyright (TYPE_CHECKING is False at runtime).
+    from paper_ingestion.models.authors import (
+        AuthorCheckResponse,
+        AutoDetectResponse,
+        TrackedAuthorCreate,
+        TrackedAuthorResponse,
+        TrackedAuthorUpdate,
+    )
+    from paper_ingestion.models.contradictions import (
+        ContradictionListResponse,
+        ContradictionScanRequest,
+        PaperContradictionResponse,
+    )
+    from paper_ingestion.models.dashboard import DashboardMetrics
+    from paper_ingestion.models.extractions import (
+        BatchEntityExtractResponse,
+        BatchExtractionRequest,
+        BatchExtractionResponse,
+        ExtractedField,
+        ExtractionField,
+        ExtractionRequest,
+        ExtractionResponse,
+        ExtractionTableRow,
+        ExtractionTemplateCreate,
+        ExtractionTemplateResponse,
+        ExtractionTemplateUpdate,
+        VerificationReport,
+        VerificationResult,
+    )
+    from paper_ingestion.models.kg import (
+        BatchCitationFetchResponse,
+        CitationFetchResponse,
+        CitationGraphResponse,
+        CitationRelation,
+        EntityCreate,
+        EntityDetailResponse,
+        EntityExtractionResponse,
+        EntityResponse,
+        GraphEdge,
+        GraphNode,
+        KGQueryResponse,
+        KnowledgeGraphResponse,
+        RelationshipCreate,
+        RelationshipResponse,
+    )
+    from paper_ingestion.models.notes import NoteCreate, NoteResponse, NoteUpdate
+    from paper_ingestion.models.papers import (
+        AnnotationsRequest,
+        BatchProcessResponse,
+        BulkActionRequest,
+        ChunkForEmbedding,
+        ChunkResponse,
+        Confidence,
+        CrossReference,
+        DiscoverRequest,
+        DiscoveryResultItem,
+        FeedbackRequest,
+        FeedbackResponse,
+        FeedCountsResponse,
+        FeedPaper,
+        FeedResponse,
+        HybridSearchResult,
+        KeyFinding,
+        MarkReadResponse,
+        PaperBase,
+        PaperBriefResponse,
+        PaperCreate,
+        PaperDetailResponse,
+        PaperPriorityResponse,
+        PaperResponse,
+        PapersBySourceItem,
+        PapersByStatusItem,
+        PaperSourceConfig,
+        ProcessBatchRequest,
+        ProcessPdfResponse,
+        RecentFeedback,
+        RecomputePrioritiesResponse,
+        RelevanceScoreResponse,
+        ScanLocalPdfsResponse,
+        SearchRequest,
+        SimilarPaperResult,
+        SourceResponse,
+        SourceType,
+        SourceUpdate,
+        SummaryResponse,
+        SystemModelsResponse,
+        TopicFacetCount,
+        UserStateResponse,
+        WeeklyDigestResponse,
+        compute_priority,
+        priority_level,
+    )
+    from paper_ingestion.models.pulse import (
+        PulseCardResponse,
+        PulseDebugResponse,
+        PulseDebugTopCard,
+        PulseDebugTopicEmbedding,
+        PulseDeckResponse,
+        PulseExplainResponse,
+        PulseGenerateResponse,
+        PulseRateRequest,
+        PulseRateResponse,
+        PulseStatsResponse,
+    )
+    from paper_ingestion.models.rag import (
+        AskRequest,
+        AskResponse,
+        AskSourceItem,
+        AskVerifiedSentence,
+        CrossPaperAskRequest,
+    )
+    from paper_ingestion.models.topics import (
+        ConfigEntry,
+        NudgeResponse,
+        NudgeUpdate,
+        TopicCreate,
+        TopicRef,
+        TopicResponse,
+        TopicUpdate,
+    )
+
+# ---------------------------------------------------------------------------
+# Provenance map: symbol → owning submodule (relative dotted name).
+# Adding a symbol here is enough to make it importable from this package.
+# ---------------------------------------------------------------------------
+_SYMBOL_MODULE: dict[str, str] = {
+    # authors
+    "AuthorCheckResponse": "paper_ingestion.models.authors",
+    "AutoDetectResponse": "paper_ingestion.models.authors",
+    "TrackedAuthorCreate": "paper_ingestion.models.authors",
+    "TrackedAuthorResponse": "paper_ingestion.models.authors",
+    "TrackedAuthorUpdate": "paper_ingestion.models.authors",
+    # contradictions
+    "ContradictionListResponse": "paper_ingestion.models.contradictions",
+    "ContradictionScanRequest": "paper_ingestion.models.contradictions",
+    "PaperContradictionResponse": "paper_ingestion.models.contradictions",
+    # dashboard
+    "DashboardMetrics": "paper_ingestion.models.dashboard",
+    # extractions
+    "BatchEntityExtractResponse": "paper_ingestion.models.extractions",
+    "BatchExtractionRequest": "paper_ingestion.models.extractions",
+    "BatchExtractionResponse": "paper_ingestion.models.extractions",
+    "ExtractedField": "paper_ingestion.models.extractions",
+    "ExtractionField": "paper_ingestion.models.extractions",
+    "ExtractionRequest": "paper_ingestion.models.extractions",
+    "ExtractionResponse": "paper_ingestion.models.extractions",
+    "ExtractionTableRow": "paper_ingestion.models.extractions",
+    "ExtractionTemplateCreate": "paper_ingestion.models.extractions",
+    "ExtractionTemplateResponse": "paper_ingestion.models.extractions",
+    "ExtractionTemplateUpdate": "paper_ingestion.models.extractions",
+    "VerificationReport": "paper_ingestion.models.extractions",
+    "VerificationResult": "paper_ingestion.models.extractions",
+    # kg
+    "BatchCitationFetchResponse": "paper_ingestion.models.kg",
+    "CitationFetchResponse": "paper_ingestion.models.kg",
+    "CitationGraphResponse": "paper_ingestion.models.kg",
+    "CitationRelation": "paper_ingestion.models.kg",
+    "EntityCreate": "paper_ingestion.models.kg",
+    "EntityDetailResponse": "paper_ingestion.models.kg",
+    "EntityExtractionResponse": "paper_ingestion.models.kg",
+    "EntityResponse": "paper_ingestion.models.kg",
+    "GraphEdge": "paper_ingestion.models.kg",
+    "GraphNode": "paper_ingestion.models.kg",
+    "KGQueryResponse": "paper_ingestion.models.kg",
+    "KnowledgeGraphResponse": "paper_ingestion.models.kg",
+    "RelationshipCreate": "paper_ingestion.models.kg",
+    "RelationshipResponse": "paper_ingestion.models.kg",
+    # notes
+    "NoteCreate": "paper_ingestion.models.notes",
+    "NoteResponse": "paper_ingestion.models.notes",
+    "NoteUpdate": "paper_ingestion.models.notes",
+    # papers
+    "AnnotationsRequest": "paper_ingestion.models.papers",
+    "BatchProcessResponse": "paper_ingestion.models.papers",
+    "BulkActionRequest": "paper_ingestion.models.papers",
+    "ChunkForEmbedding": "paper_ingestion.models.papers",
+    "ChunkResponse": "paper_ingestion.models.papers",
+    "Confidence": "paper_ingestion.models.papers",
+    "CrossReference": "paper_ingestion.models.papers",
+    "DiscoverRequest": "paper_ingestion.models.papers",
+    "DiscoveryResultItem": "paper_ingestion.models.papers",
+    "FeedbackRequest": "paper_ingestion.models.papers",
+    "FeedbackResponse": "paper_ingestion.models.papers",
+    "FeedCountsResponse": "paper_ingestion.models.papers",
+    "FeedPaper": "paper_ingestion.models.papers",
+    "FeedResponse": "paper_ingestion.models.papers",
+    "HybridSearchResult": "paper_ingestion.models.papers",
+    "KeyFinding": "paper_ingestion.models.papers",
+    "MarkReadResponse": "paper_ingestion.models.papers",
+    "PaperBase": "paper_ingestion.models.papers",
+    "PaperBriefResponse": "paper_ingestion.models.papers",
+    "PaperCreate": "paper_ingestion.models.papers",
+    "PaperDetailResponse": "paper_ingestion.models.papers",
+    "PaperPriorityResponse": "paper_ingestion.models.papers",
+    "PaperResponse": "paper_ingestion.models.papers",
+    "PapersBySourceItem": "paper_ingestion.models.papers",
+    "PapersByStatusItem": "paper_ingestion.models.papers",
+    "PaperSourceConfig": "paper_ingestion.models.papers",
+    "ProcessBatchRequest": "paper_ingestion.models.papers",
+    "ProcessPdfResponse": "paper_ingestion.models.papers",
+    "RecentFeedback": "paper_ingestion.models.papers",
+    "RecomputePrioritiesResponse": "paper_ingestion.models.papers",
+    "RelevanceScoreResponse": "paper_ingestion.models.papers",
+    "ScanLocalPdfsResponse": "paper_ingestion.models.papers",
+    "SearchRequest": "paper_ingestion.models.papers",
+    "SimilarPaperResult": "paper_ingestion.models.papers",
+    "SourceResponse": "paper_ingestion.models.papers",
+    "SourceType": "paper_ingestion.models.papers",
+    "SourceUpdate": "paper_ingestion.models.papers",
+    "SummaryResponse": "paper_ingestion.models.papers",
+    "SystemModelsResponse": "paper_ingestion.models.papers",
+    "TopicFacetCount": "paper_ingestion.models.papers",
+    "UserStateResponse": "paper_ingestion.models.papers",
+    "WeeklyDigestResponse": "paper_ingestion.models.papers",
+    "compute_priority": "paper_ingestion.models.papers",
+    "priority_level": "paper_ingestion.models.papers",
+    # pulse
+    "PulseCardResponse": "paper_ingestion.models.pulse",
+    "PulseDebugResponse": "paper_ingestion.models.pulse",
+    "PulseDebugTopCard": "paper_ingestion.models.pulse",
+    "PulseDebugTopicEmbedding": "paper_ingestion.models.pulse",
+    "PulseDeckResponse": "paper_ingestion.models.pulse",
+    "PulseExplainResponse": "paper_ingestion.models.pulse",
+    "PulseGenerateResponse": "paper_ingestion.models.pulse",
+    "PulseRateRequest": "paper_ingestion.models.pulse",
+    "PulseRateResponse": "paper_ingestion.models.pulse",
+    "PulseStatsResponse": "paper_ingestion.models.pulse",
+    # rag
+    "AskRequest": "paper_ingestion.models.rag",
+    "AskResponse": "paper_ingestion.models.rag",
+    "AskSourceItem": "paper_ingestion.models.rag",
+    "AskVerifiedSentence": "paper_ingestion.models.rag",
+    "CrossPaperAskRequest": "paper_ingestion.models.rag",
+    # topics
+    "ConfigEntry": "paper_ingestion.models.topics",
+    "NudgeResponse": "paper_ingestion.models.topics",
+    "NudgeUpdate": "paper_ingestion.models.topics",
+    "TopicCreate": "paper_ingestion.models.topics",
+    "TopicRef": "paper_ingestion.models.topics",
+    "TopicResponse": "paper_ingestion.models.topics",
+    "TopicUpdate": "paper_ingestion.models.topics",
+}
 
 __all__ = [
     "AnnotationsRequest",
@@ -233,3 +374,20 @@ __all__ = [
     "compute_priority",
     "priority_level",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """PEP 562 lazy attribute resolution for the back-compat barrel.
+
+    Imports only the owning submodule for the requested *name*, leaving all
+    other submodules unloaded until (if ever) they are needed.
+    """
+    if name in _SYMBOL_MODULE:
+        import importlib
+
+        mod = importlib.import_module(_SYMBOL_MODULE[name])
+        obj = getattr(mod, name)
+        # Cache in module globals so subsequent accesses skip __getattr__.
+        globals()[name] = obj
+        return obj
+    raise AttributeError(f"module 'paper_ingestion.models' has no attribute {name!r}")

@@ -560,22 +560,7 @@ class TestGetStarredIds:
 # 4. refresh_recommendations — integration (fully mocked DB + embedder)
 # ===========================================================================
 
-# Re-use the FakeRecord helper defined in conftest.py (auto-loaded by pytest)
-# The conftest.py FakeRecord is available via the fake_record fixture, but we
-# can also import it directly after conftest adds _SERVICE_ROOT to sys.path.
-try:
-    from conftest import FakeRecord  # type: ignore[import]
-except ImportError:
-    # Fallback: minimal dict-with-attr-access substitute
-    class FakeRecord(dict):  # type: ignore[no-redef]
-        def __getattr__(self, name):
-            try:
-                return self[name]
-            except KeyError as exc:
-                raise AttributeError(name) from exc
-
-        def get(self, key, default=None):
-            return super().get(key, default)
+from tests.conftest import FakeRecord
 
 
 def _build_app(

@@ -36,6 +36,18 @@ _VALID_TARGETS = ("first_admin", "delete", "fail")
 
 
 def resolve_target() -> str:
+    """Read and validate ``JARVIS_NULL_USER_MIGRATION_TARGET`` from the environment.
+
+    Returns
+    -------
+    str
+        One of ``"first_admin"``, ``"delete"``, or ``"fail"``.
+
+    Raises
+    ------
+    SystemExit
+        If the env var value is not one of the valid targets.
+    """
     target = os.environ.get("JARVIS_NULL_USER_MIGRATION_TARGET", "first_admin").strip()
     if target not in _VALID_TARGETS:
         raise SystemExit(
@@ -108,6 +120,13 @@ async def _run(target: str) -> int:
 
 
 def main() -> int:
+    """Resolve the migration target and run the NULL-user data migration.
+
+    Returns
+    -------
+    int
+        0 on success, 2 when ``target=fail`` and NULL-user rows are found.
+    """
     target = resolve_target()
     return asyncio.run(_run(target))
 

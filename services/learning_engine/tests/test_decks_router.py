@@ -4,37 +4,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from learning_engine.routers import decks
 
-
-class FakeRecord(dict):
-    """Dict-like asyncpg.Record substitute."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):
-        return super().get(key, default)
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _now():
     return datetime.now(UTC)
-
-
-def _make_pool_and_conn():
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _make_deck_row(**overrides):

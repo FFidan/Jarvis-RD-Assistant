@@ -194,6 +194,8 @@ class RetentionStats(BaseModel):
 
 
 class ProjectCreate(BaseModel):
+    """Request body for POST /api/projects."""
+
     name: str = Field(..., max_length=255)
     description: str | None = None
     status: Literal["active", "paused", "completed", "archived"] = Field(default="active")
@@ -206,6 +208,8 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
+    """Request body for PUT /api/projects/{project_id} (all fields optional)."""
+
     name: str | None = Field(default=None, max_length=255)
     description: str | None = None
     status: Literal["active", "paused", "completed", "archived"] | None = None
@@ -218,6 +222,12 @@ class ProjectUpdate(BaseModel):
 
 
 class ProjectResponse(BaseModel):
+    """Project summary returned by list and create endpoints.
+
+    ``paper_count`` and ``open_question_count`` are LEFT JOIN aggregations
+    computed at query time; both default to 0 when nothing is linked.
+    """
+
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
@@ -259,6 +269,8 @@ class ProjectActivityItem(BaseModel):
 
 
 class TaskCreate(BaseModel):
+    """Request body for POST /api/projects/{project_id}/tasks."""
+
     title: str = Field(..., max_length=500)
     description: str | None = None
     status: Literal["todo", "in_progress", "done", "blocked"] = Field(default="todo")
@@ -269,6 +281,8 @@ class TaskCreate(BaseModel):
 
 
 class TaskUpdate(BaseModel):
+    """Request body for PUT /api/tasks/{task_id} (all fields optional)."""
+
     title: str | None = Field(default=None, max_length=500)
     description: str | None = None
     status: Literal["todo", "in_progress", "done", "blocked"] | None = None
@@ -280,6 +294,13 @@ class TaskUpdate(BaseModel):
 
 
 class TaskResponse(BaseModel):
+    """Task returned by list, create, and update endpoints.
+
+    ``deadline`` is stored as TIMESTAMPTZ; the frontend receives an
+    ISO-8601 datetime string.  ``completed_at`` is set automatically
+    when status transitions to ``done``.
+    """
+
     model_config = ConfigDict(from_attributes=True)
     id: int
     project_id: int | None = None
@@ -299,12 +320,16 @@ class TaskResponse(BaseModel):
 
 
 class MilestoneCreate(BaseModel):
+    """Request body for POST /api/projects/{project_id}/milestones."""
+
     name: str = Field(..., max_length=255)
     deadline: datetime = Field(...)
     description: str | None = None
 
 
 class MilestoneUpdate(BaseModel):
+    """Request body for PUT /api/milestones/{milestone_id} (all fields optional)."""
+
     name: str | None = Field(default=None, max_length=255)
     deadline: datetime | None = None  # DB column is TIMESTAMPTZ
     description: str | None = None
@@ -312,6 +337,12 @@ class MilestoneUpdate(BaseModel):
 
 
 class MilestoneResponse(BaseModel):
+    """Milestone returned by list, create, and update endpoints.
+
+    ``completed_at`` is set automatically when ``completed`` transitions to
+    ``True`` and cleared when it transitions back to ``False``.
+    """
+
     model_config = ConfigDict(from_attributes=True)
     id: int
     project_id: int
@@ -324,6 +355,8 @@ class MilestoneResponse(BaseModel):
 
 
 class TaskPaperLinkCreate(BaseModel):
+    """Request body for POST /api/tasks/{task_id}/papers."""
+
     paper_id: int
     note: str | None = Field(
         default=None,

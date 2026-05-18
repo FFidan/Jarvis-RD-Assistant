@@ -39,7 +39,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     summary_brief: null,
     tldr: null,
     confidence: null,
-    user_status: 'new',
     rating: null,
     has_chunks: false,
     has_summary: false,

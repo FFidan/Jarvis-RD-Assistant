@@ -16,40 +16,11 @@ from jarvis_common.jobs import JobContext
 from learning_engine import _state as le_state
 from learning_engine.routers import generation
 
-
-class FakeRecord(dict):
-    """Dict-like asyncpg.Record substitute."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):
-        return super().get(key, default)
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _now():
     return datetime.now(UTC)
-
-
-def _make_pool_and_conn():
-    """Create a mock pool whose acquire() returns an async context manager."""
-    conn = AsyncMock()
-
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _make_card_row(id=1, deck_id=1, paper_id=1, user_id=None):

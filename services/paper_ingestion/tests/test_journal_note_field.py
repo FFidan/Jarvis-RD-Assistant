@@ -15,15 +15,7 @@ import pytest
 from paper_ingestion.models.journal import JournalEntryCreate, JournalPrompts
 from paper_ingestion.routers import my_day
 
-
-def _make_pool_and_conn():
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
+from tests.conftest import _make_pool_and_conn
 
 
 def test_journal_prompts_note_optional_and_defaults_none():

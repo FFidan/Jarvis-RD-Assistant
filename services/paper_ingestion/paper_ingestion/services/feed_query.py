@@ -88,7 +88,19 @@ class FeedQueryParts:
 
 
 def split_csv_filter(raw_value: str | None) -> list[str]:
-    """Normalize a comma-separated query parameter into trimmed values."""
+    """Normalize a comma-separated query parameter into trimmed, non-empty values.
+
+    Parameters
+    ----------
+    raw_value : str | None
+        Raw query-parameter value, e.g. ``"arxiv,semantic_scholar"``.
+
+    Returns
+    -------
+    list[str]
+        Trimmed non-empty tokens.  Returns ``[]`` when *raw_value* is ``None``
+        or consists entirely of whitespace/commas.
+    """
     if not raw_value:
         return []
     return [item.strip() for item in raw_value.split(",") if item.strip()]
@@ -264,7 +276,27 @@ async def fetch_feed_rows(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     query_parts: FeedQueryParts,
 ) -> list[asyncpg.Record]:
-    """Fetch feed rows, retrying without TLDR if the column is absent."""
+    """Fetch feed rows, retrying without the TLDR column if it is absent.
+
+    Parameters
+    ----------
+    conn : asyncpg.Connection
+        Active database connection or pool proxy.
+    query_parts : FeedQueryParts
+        Pre-built SQL fragments and bound parameter list from
+        :func:`build_feed_queries`.
+
+    Returns
+    -------
+    list[asyncpg.Record]
+        Feed rows with all available columns populated.
+
+    Notes
+    -----
+    The ``ps.tldr`` column was added in a later migration.  The fallback
+    query omits it so deployments that have not yet run that migration
+    continue to work without a 500 error.
+    """
     try:
         return await conn.fetch(query_parts.data_query, *query_parts.params)
     except asyncpg.exceptions.UndefinedColumnError:
@@ -273,7 +305,18 @@ async def fetch_feed_rows(
 
 
 def derive_feed_search_mode(q: str | None) -> str:
-    """Return the frontend search-mode marker for a feed response."""
+    """Return the frontend search-mode marker for a feed response.
+
+    Parameters
+    ----------
+    q : str | None
+        Full-text search query from the request, or ``None`` when absent.
+
+    Returns
+    -------
+    str
+        ``"bm25"`` when a search query is present; ``"filtered"`` otherwise.
+    """
     return "bm25" if q else "filtered"
 
 

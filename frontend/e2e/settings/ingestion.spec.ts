@@ -4,9 +4,8 @@ import { ensureAuthenticated } from '../helpers/auth';
 test.describe('Settings - Ingestion Config', () => {
   test.beforeEach(async ({ page }) => {
     await ensureAuthenticated(page);
-    await page.goto('/settings');
+    await page.goto('/settings?section=models&item=llm');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
-    await page.getByRole('tab', { name: 'Ingestion' }).click();
   });
 
   test('config list loads', async ({ page }) => {

@@ -47,7 +47,18 @@ def safe_url(url: str) -> str:
 
 
 def escape(text: str | None) -> str:
-    """Escape HTML special characters for Telegram, stripping BIDI/zero-width chars."""
+    """Escape HTML special characters for Telegram, stripping BIDI/zero-width chars.
+
+    Parameters
+    ----------
+    text : str or None
+        Text to escape. ``None`` is treated as an empty string.
+
+    Returns
+    -------
+    str
+        HTML-escaped text safe for use in Telegram HTML messages.
+    """
     if text is None:
         return ""
     text = _BIDI_ZW_RE.sub("", str(text))
@@ -91,7 +102,19 @@ def _format_authors(authors: list[str], max_display: int = 3) -> str:
 
 
 def confidence_badge(confidence: str) -> str:
-    """Return a confidence indicator."""
+    """Return a coloured confidence indicator string.
+
+    Parameters
+    ----------
+    confidence : str
+        Confidence level key: ``"HIGH"``, ``"MEDIUM"``, or ``"LOW"``.
+
+    Returns
+    -------
+    str
+        Emoji-prefixed label (e.g. ``"🟢 HIGH"``), or the HTML-escaped raw
+        value when the key is unrecognised.
+    """
     badges = {
         "HIGH": "🟢 HIGH",
         "MEDIUM": "🟡 MEDIUM",
@@ -146,7 +169,7 @@ def format_pulse_card(card: dict) -> str:
     ----------
     card : dict
         A single card from ``/api/pulse/today`` (``PulseCardResponse`` shape).
-        Expected keys: paper_id, paper_title, paper_authors, paper_url, score,
+        Expected keys: paper_title, paper_authors, paper_url, score,
         reasoning, rank.
 
     Returns
@@ -496,7 +519,13 @@ def format_author_alert(author_name: str, papers: list[dict]) -> str:
 
 
 def format_help() -> str:
-    """Format the /help command response."""
+    """Format the static /help command response listing all bot commands.
+
+    Returns
+    -------
+    str
+        HTML-formatted help text for Telegram.
+    """
     return (
         "🤖 <b>JARVIS RD Assistant</b>\n\n"
         "<b>Papers:</b>\n"

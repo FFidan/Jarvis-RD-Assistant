@@ -23,6 +23,8 @@ router = APIRouter(prefix="/api/executive", tags=["executive"])
 
 
 class IntentBody(BaseModel):
+    """Request body for POST /api/executive/intent/today."""
+
     intent: str = Field(..., max_length=280)
 
 

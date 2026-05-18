@@ -76,9 +76,9 @@ def register_paper_ingestion_tasks(procrastinate_app: procrastinate.App) -> None
     assert not missing, f"register_paper_ingestion_tasks: failed to register kinds: {missing}"
 
     # noop.test is registered directly on the app in task_registry (always);
-    # wire it into KIND_TO_TASK when test jobs are enabled.
+    # wire it into the internal task map when test jobs are enabled.
     if get_jobs_settings().test_jobs_enabled:
-        from jarvis_common.task_registry import KIND_TO_TASK, noop_task  # noqa: PLC0415
+        from jarvis_common.task_registry import _TASK_MAP, noop_task  # noqa: PLC0415
 
-        if "noop.test" not in KIND_TO_TASK:
-            KIND_TO_TASK["noop.test"] = noop_task
+        if "noop.test" not in _TASK_MAP:
+            _TASK_MAP["noop.test"] = noop_task

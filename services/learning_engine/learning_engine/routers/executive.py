@@ -1,3 +1,5 @@
+"""Executive dashboard router — my-day, my-day-bundle, focus/log, quick-add task."""
+
 import asyncio
 import datetime
 from typing import Any
@@ -108,27 +110,39 @@ _PROJECT_PULSE_SQL = """
 
 
 async def _fetch(pool: Pool, sql: str, *args: Any) -> list[Any]:
+    """Acquire a pool connection, run ``conn.fetch``, and release it.
+
+    Each call acquires its own connection so callers can issue multiple
+    ``_fetch`` / ``_fetchval`` / ``_fetchrow`` calls concurrently via
+    ``asyncio.gather`` without sharing a single non-reentrant connection.
+    """
     async with pool.acquire() as conn:
         return await conn.fetch(sql, *args)
 
 
 async def _fetchval(pool: Pool, sql: str, *args: Any) -> Any:
+    """Acquire a pool connection, run ``conn.fetchval``, and release it."""
     async with pool.acquire() as conn:
         return await conn.fetchval(sql, *args)
 
 
 async def _fetchrow(pool: Pool, sql: str, *args: Any) -> Any:
+    """Acquire a pool connection, run ``conn.fetchrow``, and release it."""
     async with pool.acquire() as conn:
         return await conn.fetchrow(sql, *args)
 
 
 class FocusSessionRequest(BaseModel):
+    """Request body for POST /api/executive/focus/log."""
+
     duration_hours: float = Field(..., gt=0, le=24)
     task_id: int | None = None
     paper_id: int | None = None
 
 
 class QuickAddTaskRequest(BaseModel):
+    """Request body for POST /api/executive/tasks (quick-add)."""
+
     title: str = Field(..., min_length=1, max_length=500)
     project_id: int | None = None
     priority: int = Field(3, ge=1, le=4)
@@ -217,6 +231,11 @@ _YDAY_LOG_SQL = (
 
 
 def _intent_payload(row: Any) -> dict[str, Any]:
+    """Serialize a ``daily_intent`` row to the bundle's ``intent`` fragment.
+
+    Returns ``{intent: None, updated_at: None}`` when *row* is falsy
+    (no entry today).
+    """
     if not row:
         return {"intent": None, "updated_at": None}
     updated = row["updated_at"]
@@ -227,6 +246,12 @@ def _intent_payload(row: Any) -> dict[str, Any]:
 
 
 def _thread_payload(row: Any) -> dict[str, Any]:
+    """Serialize a ``thread`` row to the bundle's ``threads`` list fragment.
+
+    Datetime fields are converted to ISO-8601 strings; ``None`` timestamps
+    are passed through as ``None`` so the frontend can distinguish "no date"
+    from "date not yet loaded".
+    """
     return {
         "id": row["id"],
         "title": row["title"],
@@ -239,6 +264,11 @@ def _thread_payload(row: Any) -> dict[str, Any]:
 
 
 def _journal_payload(row: Any) -> dict[str, Any] | None:
+    """Serialize a ``journal_entries`` row to the bundle's ``journal`` fragment.
+
+    Returns ``None`` when *row* is falsy (no entry today), allowing the
+    frontend to distinguish "no journal yet today" from an empty entry.
+    """
     if not row:
         return None
     return {

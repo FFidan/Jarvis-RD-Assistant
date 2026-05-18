@@ -8,52 +8,17 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from httpx import ASGITransport
 
+from tests.conftest import FakeRecord, _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers (mirrors conftest + test_le_endpoints patterns)
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    """Dict subclass that behaves like an asyncpg.Record."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):
-        return super().get(key, default)
-
-    def keys(self):
-        return super().keys()
-
-    def values(self):
-        return super().values()
-
-
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool whose acquire() returns an async CM."""
-    conn = AsyncMock()
-
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _route_my_day(

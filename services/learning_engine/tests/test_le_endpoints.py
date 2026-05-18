@@ -19,46 +19,11 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from tests.conftest import FakeRecord, _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    """Dict subclass that supports both dict[key] and .keys() like asyncpg.Record."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def keys(self):
-        return super().keys()
-
-    def get(self, key, default=None):
-        return super().get(key, default)
-
-    def values(self):
-        return super().values()
-
-
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool whose acquire() returns an async CM."""
-    conn = AsyncMock()
-
-    # Make conn.transaction() return a proper async context manager (not a coroutine)
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _now():
@@ -617,7 +582,7 @@ async def test_generate_enqueues_job_and_returns_202(_app):
 
     mock_card_gen_task = MagicMock()
     mock_card_gen_task.defer_async = AsyncMock()
-    with patch.dict(task_registry.KIND_TO_TASK, {"card.generate": mock_card_gen_task}):
+    with patch.dict(task_registry._TASK_MAP, {"card.generate": mock_card_gen_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -683,7 +648,7 @@ async def test_batch_generate_success_returns_202_accepted(_app):
 
     mock_card_gen_batch_task = MagicMock()
     mock_card_gen_batch_task.defer_async = AsyncMock()
-    with patch.dict(task_registry.KIND_TO_TASK, {"card.generate_batch": mock_card_gen_batch_task}):
+    with patch.dict(task_registry._TASK_MAP, {"card.generate_batch": mock_card_gen_batch_task}):
         resp = await handler(
             MagicMock(),
             body=BatchGenerateRequest(deck_id=1),

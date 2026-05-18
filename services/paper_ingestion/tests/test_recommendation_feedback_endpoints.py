@@ -13,20 +13,11 @@ import pytest
 from paper_ingestion.routers import recommendation_feedback
 from paper_ingestion.routers._paper_helpers import _upsert_recommendation_feedback
 
+from tests.conftest import _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_pool_and_conn():
-    """Mirror the helper in test_papers_lifecycle.py."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _row(**kwargs):

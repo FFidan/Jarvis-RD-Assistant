@@ -28,9 +28,19 @@ def test_required_env_returns_present_value(monkeypatch: pytest.MonkeyPatch) -> 
     assert rotate_config_key._required_env("DATABASE_URL") == "postgresql://example"
 
 
-def test_required_env_exits_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_required_env_raises_on_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing required settings should fail before any database connection."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
-    with pytest.raises(SystemExit, match="DATABASE_URL is required"):
+    with pytest.raises(
+        (rotate_config_key.ScriptError, SystemExit), match="DATABASE_URL is required"
+    ):
+        rotate_config_key._required_env("DATABASE_URL")
+
+
+def test_required_env_raises_script_error_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_required_env must raise ScriptError (not SystemExit) outside __main__."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(rotate_config_key.ScriptError, match="DATABASE_URL is required"):
         rotate_config_key._required_env("DATABASE_URL")

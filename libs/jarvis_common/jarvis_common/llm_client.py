@@ -6,7 +6,7 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, TypedDict, TypeVar, cast, overload
 
 import httpx
 from pydantic import BaseModel
@@ -102,6 +102,20 @@ class ChatCompletionOptions:
         return replace(self, response_format=response_format)
 
 
+class _ChatCompletionPayload(TypedDict, total=False):
+    """Wire payload for a LiteLLM /v1/chat/completions request.
+
+    ``model``, ``messages``, ``max_tokens``, and ``temperature`` are always
+    present (``total=False`` used for the optional ``response_format`` key).
+    """
+
+    model: str
+    messages: list[dict[str, str]]
+    max_tokens: int
+    temperature: float
+    response_format: dict[str, str]
+
+
 def get_litellm_config(
     *,
     base_url_default: str = DEFAULT_LITELLM_BASE_URL,
@@ -186,7 +200,41 @@ async def request_chat_completion_content(
     options: ChatCompletionOptions,
     config: LiteLLMConfig | None = None,
 ) -> str:
-    """Request a LiteLLM chat completion and return stripped message content."""
+    """Request a non-streaming LiteLLM chat completion and return the text content.
+
+    Sends to ``POST {config.base_url}/v1/chat/completions``, parses
+    ``choices[0].message.content``, and passes the result through
+    :func:`strip_think_blocks` to remove ``<think>…</think>`` markup emitted
+    by reasoning models.
+
+    Parameters
+    ----------
+    http_client:
+        Shared ``httpx.AsyncClient`` from the service lifespan.
+    prompt:
+        Convenience single user-role message.  Supply either *prompt* or
+        *messages*, not both independently (if both are provided, *messages*
+        is used as-is and *prompt* is ignored).
+    messages:
+        Full message list.  When ``None`` a list is built from *options.system*
+        + *prompt*.
+    options:
+        Model, token, temperature, and timeout settings.
+    config:
+        LiteLLM connection config; defaults to env-resolved config.
+
+    Returns
+    -------
+    str
+        Model response text with think-block markup stripped.
+
+    Raises
+    ------
+    RuntimeError
+        On HTTP error, timeout, or connection failure.
+    ValueError
+        If the response body does not contain ``choices[0].message.content``.
+    """
     litellm = config or get_litellm_config()
     if messages is None:
         if prompt is None:
@@ -195,7 +243,7 @@ async def request_chat_completion_content(
         if options.system:
             messages.append({"role": "system", "content": options.system})
         messages.append({"role": "user", "content": prompt})
-    payload: dict[str, Any] = {
+    payload: _ChatCompletionPayload = {
         "model": options.model,
         "messages": messages,
         "max_tokens": options.max_tokens,
@@ -343,7 +391,35 @@ async def embed_texts(
     timeout: float = 60.0,
     config: LiteLLMConfig | None = None,
 ) -> list[list[float]]:
-    """Request embeddings from LiteLLM and return them in index order."""
+    """Request text embeddings from LiteLLM and return them in input order.
+
+    Posts to ``POST {config.base_url}/v1/embeddings``, sorts the returned
+    ``data`` array by the per-item ``index`` field, and returns the embedding
+    vectors as a list of float lists.
+
+    Parameters
+    ----------
+    http_client:
+        Shared ``httpx.AsyncClient`` from the service lifespan.
+    texts:
+        List of strings to embed.  An empty list returns ``[]`` immediately.
+    model:
+        LiteLLM model alias (default ``"embed"``).
+    timeout:
+        HTTP timeout in seconds (default 60.0).
+    config:
+        LiteLLM connection config; defaults to env-resolved config.
+
+    Returns
+    -------
+    list[list[float]]
+        One embedding vector per input string, in the same order as *texts*.
+
+    Raises
+    ------
+    RuntimeError
+        On HTTP error, timeout, connection failure, or malformed response body.
+    """
     if not texts:
         return []
 

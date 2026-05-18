@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.conftest import FakeRecord
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -26,14 +28,6 @@ def _make_pool(rows: list) -> tuple[MagicMock, AsyncMock]:
     pool = MagicMock()
     pool.acquire.return_value = ctx
     return pool, conn
-
-
-class FakeRecord(dict):
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
 
 
 _TODAY = datetime.now(UTC).date()

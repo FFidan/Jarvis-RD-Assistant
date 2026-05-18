@@ -15,24 +15,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from paper_ingestion.routers import my_day
 
+from tests.conftest import _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers — mirror test_star_zotero_push_trigger.py pattern
 # ---------------------------------------------------------------------------
-
-
-def _make_pool_and_conn():
-    """Return a (pool, conn) pair backed by AsyncMock."""
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _mock_request():

@@ -11,44 +11,15 @@ from fastapi import HTTPException
 from learning_engine.models import CardCreate, CardType, CardUpdate, Evidence  # noqa: E402
 from learning_engine.routers import cards  # noqa: E402
 
+from tests.conftest import FakeRecord, _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # DOM-C-06: create_card asserts paper ownership before FK insert
 # ---------------------------------------------------------------------------
 
 
-class FakeRecord(dict):
-    """Dict-like asyncpg.Record substitute."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):
-        return super().get(key, default)
-
-
 def _now():
     return datetime.now(UTC)
-
-
-def _make_pool_and_conn():
-    """Create a mock pool whose acquire() returns an async context manager."""
-    conn = AsyncMock()
-
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _make_card_row(id=1, deck_id=1, paper_id=1):

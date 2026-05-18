@@ -4,9 +4,8 @@ import { ensureAuthenticated } from '../helpers/auth';
 test.describe('Settings - Automation', () => {
   test.beforeEach(async ({ page }) => {
     await ensureAuthenticated(page);
-    await page.goto('/settings');
+    await page.goto('/settings?section=system&item=automation');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
-    await page.getByRole('tab', { name: 'Automation' }).click();
   });
 
   test('nudge list loads with human-readable labels', async ({ page }) => {

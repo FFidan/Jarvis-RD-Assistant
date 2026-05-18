@@ -12,6 +12,13 @@ from pydantic import BaseModel, Field
 
 
 class CardOutput(BaseModel):
+    """One flashcard returned by the LLM, validated at the generation boundary.
+
+    All fields are validated by Instructor/Pydantic before the caller receives
+    the object, so callers may trust that ``card_type`` is a valid literal and
+    all string fields meet the length constraints.
+    """
+
     card_type: Literal["concept", "quote", "method", "comparison"]
     front: str = Field(min_length=10, max_length=500)
     back: str = Field(min_length=5, max_length=2000)
@@ -20,4 +27,12 @@ class CardOutput(BaseModel):
 
 
 class CardGenerationOutput(BaseModel):
+    """Structured response from the LLM card-generation call.
+
+    Wraps a list of ``CardOutput`` objects validated by Instructor.
+    Callers receive this only when the LLM produced at least one valid card
+    (``min_length=1``); a ``None`` return from ``_call_llm_for_cards`` signals
+    unrecoverable parse failure instead.
+    """
+
     cards: list[CardOutput] = Field(min_length=1, max_length=20)

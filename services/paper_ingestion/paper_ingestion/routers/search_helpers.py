@@ -186,7 +186,7 @@ def _source_display_name(source_name: str) -> str:
     return _SOURCE_DISPLAY_NAMES.get(source_name, source_name.replace("_", " ").title())
 
 
-def _library_match_priority(row: Any) -> tuple[int, int, int]:
+def _library_match_priority(row: asyncpg.Record) -> tuple[int, int, int]:
     """Rank duplicate local rows by actionability, then recency.
 
     Preference order:
@@ -271,7 +271,7 @@ def _store_preferred_library_match(
     indexes: dict[tuple[str, Any], SearchPreviewLibraryMatch],
     priorities: dict[tuple[str, Any], tuple[int, int, int]],
     key: tuple[str, Any],
-    row: Any,
+    row: asyncpg.Record,
     match: SearchPreviewLibraryMatch,
 ) -> None:
     """Store the best local match for a lookup key using deterministic tie-breaking."""

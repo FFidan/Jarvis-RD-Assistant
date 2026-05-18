@@ -4,33 +4,12 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
 
-
-class FakeRecord(dict):
-    """Dict subclass that mimics asyncpg.Record."""
-
-    def keys(self):
-        return super().keys()
-
-
-def _make_pool_and_conn():
-    conn = AsyncMock()
-    # Transaction context manager mock (needed by create_pairing's conn.transaction()).
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 @pytest.fixture(autouse=True)

@@ -2,26 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
 
-
-class FakeRecord(dict):
-    def keys(self):
-        return super().keys()
-
-
-def _make_pool_and_conn():
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _user_config_rows(

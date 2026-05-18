@@ -4,9 +4,8 @@ import { ensureAuthenticated } from '../helpers/auth';
 test.describe('Settings - Sources', () => {
   test.beforeEach(async ({ page }) => {
     await ensureAuthenticated(page);
-    await page.goto('/settings');
+    await page.goto('/settings?section=sources&item=sources');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
-    await page.getByRole('tab', { name: 'Sources' }).click();
   });
 
   test('sources list loads', async ({ page }) => {

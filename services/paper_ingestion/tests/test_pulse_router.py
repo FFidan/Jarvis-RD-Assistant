@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common import verify_api_key
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
+
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -89,7 +90,7 @@ def test_generate_returns_job_id(client):
     mock_task = MagicMock()
     mp = AsyncMock(return_value=None)
     mock_task.defer_async = mp
-    with patch.dict(task_registry.KIND_TO_TASK, {"pulse.generate": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_task}):
         resp = tc.post("/api/pulse/generate")
 
     assert resp.status_code == 200
@@ -113,7 +114,7 @@ def test_pulse_generate_returns_409_when_lock_held(client):
 
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock(return_value=None)
-    with patch.dict(task_registry.KIND_TO_TASK, {"pulse.generate": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_task}):
         resp = tc.post("/api/pulse/generate")
 
     assert resp.status_code == 409
@@ -137,7 +138,7 @@ def test_pulse_generate_succeeds_when_lock_free(client):
     mock_task = MagicMock()
     mp = AsyncMock(return_value=None)
     mock_task.defer_async = mp
-    with patch.dict(task_registry.KIND_TO_TASK, {"pulse.generate": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_task}):
         resp = tc.post("/api/pulse/generate")
 
     assert resp.status_code == 200
@@ -346,11 +347,6 @@ def test_stats_null_safe_empty_window(client):
     assert body["last_run_at"] is None
     assert body["window_days"] == 30
     assert body["degraded_reason"] is None
-
-
-@pytest.mark.skip(reason="slowapi rate limit state is hard to test deterministically")
-def test_generate_rate_limited():
-    pass
 
 
 # ---------------------------------------------------------------------------

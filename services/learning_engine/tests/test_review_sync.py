@@ -22,18 +22,7 @@ import pytest
 from learning_engine.models import ReviewSyncEvent, ReviewSyncRequest
 from learning_engine.routers import review
 
-
-class FakeRecord(dict):
-    """Dict-like asyncpg.Record substitute (mirrors conftest.FakeRecord)."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):
-        return super().get(key, default)
+from tests.conftest import FakeRecord
 
 
 def _now() -> datetime:

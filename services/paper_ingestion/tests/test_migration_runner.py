@@ -6,34 +6,15 @@ fragile monkeypatching of Path internals.
 """
 
 from pathlib import Path
-from unittest.mock import ANY, AsyncMock, MagicMock
+from unittest.mock import ANY
 
 import asyncpg
 import pytest
 
+from tests.conftest import _make_pool_and_conn
+
 # The real migrations directory in this repo
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
-
-
-def _make_pool_and_conn():
-    """Create mock asyncpg Pool + Connection with transaction support.
-
-    The outer transaction (wraps the advisory lock) and each per-migration
-    transaction are all handled by the same reusable transaction context
-    manager mock.
-    """
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    conn.fetchval.return_value = True
-    return pool, conn
 
 
 def _count_real_migrations() -> int:

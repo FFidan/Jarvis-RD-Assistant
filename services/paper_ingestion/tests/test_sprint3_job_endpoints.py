@@ -51,7 +51,7 @@ async def test_summarize_endpoint_enqueues_job(app_with_pool):
     mock_task = MagicMock()
     defer_async = AsyncMock()
     mock_task.defer_async = defer_async
-    with patch.dict(task_registry.KIND_TO_TASK, {"paper.summarize": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"paper.summarize": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -78,7 +78,7 @@ async def test_extract_endpoint_enqueues_single_extraction_job(app_with_pool):
     mock_task = MagicMock()
     defer_async = AsyncMock()
     mock_task.defer_async = defer_async
-    with patch.dict(task_registry.KIND_TO_TASK, {"extraction.single": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"extraction.single": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -106,7 +106,7 @@ async def test_scan_local_pdfs_endpoint_enqueues_job(app_with_pool):
     mock_task = MagicMock()
     defer_async = AsyncMock()
     mock_task.defer_async = defer_async
-    with patch.dict(task_registry.KIND_TO_TASK, {"papers.scan_local": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"papers.scan_local": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

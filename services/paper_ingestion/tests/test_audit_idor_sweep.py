@@ -25,26 +25,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests.conftest import FakeRecord, _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    """asyncpg.Record substitute."""
-
-    def keys(self):
-        return super().keys()
-
-
-def _make_pool_and_conn():
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _make_pulse_client(user_id_override=7):
@@ -326,7 +311,7 @@ async def test_process_batch_asserts_ownership_before_enqueue():
     mock_batch_task.defer_async = AsyncMock(side_effect=_fake_defer)
     with (
         patch("paper_ingestion.routers.papers.assert_paper_ownership", side_effect=_fake_ownership),
-        patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_batch_task}),
+        patch.dict(task_registry._TASK_MAP, {"papers.batch_process": mock_batch_task}),
     ):
         try:
             async with httpx.AsyncClient(

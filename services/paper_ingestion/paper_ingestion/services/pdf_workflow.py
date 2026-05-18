@@ -35,13 +35,30 @@ ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore
 
 
 class ProcessPdfResult(TypedDict):
+    """Return value from :func:`run_process_pdf`.
+
+    Attributes
+    ----------
+    paper_id : int
+        DB paper ID that was processed.
+    chunk_count : int
+        Number of chunks in the database after processing.
+    status : str
+        ``"already_processed"`` if chunks already existed and *force* was
+        ``False``; ``"processed"`` after a successful embed+store run.
+    """
+
     paper_id: int
     chunk_count: int
     status: Literal["already_processed", "processed"]
 
 
 class ProcessPdfProgressContext(Protocol):
-    async def update_progress(self, progress: float, message: str | None = None) -> None: ...
+    """Duck-typed progress reporter accepted by :func:`run_process_pdf`."""
+
+    async def update_progress(self, progress: float, message: str | None = None) -> None:
+        """Report fractional progress (0.0–1.0) with an optional status message."""
+        ...
 
 
 _EMBEDDING_ERROR_SECRET_RE = re.compile(
@@ -101,6 +118,11 @@ async def _persist_chunk_rows(
 
 
 def _embedding_failure_message(exc: BaseException) -> str:
+    """Build a user-facing embedding failure message with redacted detail.
+
+    Sanitizes URLs and credentials from the exception string, then appends
+    a standard remediation hint.
+    """
     detail = _sanitize_embedding_failure_detail(exc)
     base = detail if detail.lower().startswith("embedding service") else "Embedding service error"
     if detail and base != detail:
@@ -118,7 +140,24 @@ def _embedding_failure_message(exc: BaseException) -> str:
 
 @asynccontextmanager
 async def advisory_lock(conn: ConnLike, lock_key: int, paper_id: int):
-    """PostgreSQL advisory lock context manager."""
+    """Acquire a PostgreSQL session-level advisory lock and release on exit.
+
+    Parameters
+    ----------
+    conn : ConnLike
+        Active asyncpg connection or pool proxy.
+    lock_key : int
+        First key component (classifies the lock type, e.g. 1=process, 2=summarize).
+    paper_id : int
+        Second key component (paper DB ID); combined with *lock_key* forms the
+        unique 64-bit advisory lock identifier.
+
+    Notes
+    -----
+    Uses ``pg_advisory_lock`` (blocking) rather than ``pg_try_advisory_lock``.
+    Callers must not hold this lock across async I/O (see C-6): acquire it for
+    the DB idempotency check only, then release before calling embedder or LLM.
+    """
     await conn.execute("SELECT pg_advisory_lock($1, $2)", lock_key, paper_id)
     try:
         yield

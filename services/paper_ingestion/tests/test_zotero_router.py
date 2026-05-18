@@ -14,24 +14,11 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from tests.conftest import _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool whose acquire() returns an async context manager."""
-    conn = AsyncMock()
-    txn_ctx = MagicMock()
-    txn_ctx.__aenter__ = AsyncMock(return_value=None)
-    txn_ctx.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_ctx)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +150,7 @@ async def test_poll_now_enqueues_job(_app):
     mock_task = MagicMock()
     mock_defer = AsyncMock(return_value=None)
     mock_task.defer_async = mock_defer
-    with patch.dict(task_registry.KIND_TO_TASK, {"zotero.sync_from_zotero": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"zotero.sync_from_zotero": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -191,7 +178,7 @@ async def test_poll_now_response_shape(_app):
 
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock(return_value=None)
-    with patch.dict(task_registry.KIND_TO_TASK, {"zotero.sync_from_zotero": mock_task}):
+    with patch.dict(task_registry._TASK_MAP, {"zotero.sync_from_zotero": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

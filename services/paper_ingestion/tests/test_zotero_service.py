@@ -16,22 +16,11 @@ from paper_ingestion.integrations.zotero_service import (
     sync_annotations_for_paper,
 )
 
+from tests.conftest import FakeRecord
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    """Minimal asyncpg.Record substitute."""
-
-    def __getattr__(self, name):
-        try:
-            return self[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
-
-    def get(self, key, default=None):
-        return super().get(key, default)
 
 
 def _make_pool(*conn_returns):
@@ -538,7 +527,7 @@ async def test_poll_library_skips_jarvis_origin():
         mock_analyze_task = MagicMock()
         mock_analyze_defer = AsyncMock()
         mock_analyze_task.defer_async = mock_analyze_defer
-        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # JARVIS-originated item must not be enqueued
@@ -571,7 +560,7 @@ async def test_poll_library_enqueues_new_items():
         mock_analyze_task = MagicMock()
         mock_analyze_defer = AsyncMock()
         mock_analyze_task.defer_async = mock_analyze_defer
-        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     mock_analyze_defer.assert_awaited_once()
@@ -603,7 +592,7 @@ async def test_poll_library_updates_version():
 
         mock_analyze_task = MagicMock()
         mock_analyze_task.defer_async = AsyncMock()
-        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # The version-persist connection should have had execute called
@@ -708,7 +697,7 @@ async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
         mock_analyze_task = MagicMock()
         mock_analyze_defer = AsyncMock()
         mock_analyze_task.defer_async = mock_analyze_defer
-        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # Exactly MAX_ENQUEUE_PER_SYNC jobs must have been enqueued.
@@ -946,7 +935,7 @@ async def test_poll_does_not_advance_cursor_when_items_fail():
         mock_analyze_task = MagicMock()
         mock_analyze_defer = AsyncMock()
         mock_analyze_task.defer_async = mock_analyze_defer
-        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # Cursor must NOT have advanced — version_to should remain at last_version (0).

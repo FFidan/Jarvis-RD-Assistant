@@ -17,21 +17,9 @@ from fastapi import HTTPException
 from paper_ingestion.models.thread import ThreadCreate, ThreadUpdate
 from paper_ingestion.routers import threads
 
+from tests.conftest import _make_pool_and_conn
+
 _NOW = datetime(2026, 5, 15, 12, 0, 0)
-
-
-def _make_pool_and_conn():
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _mock_request():

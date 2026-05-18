@@ -122,7 +122,13 @@ async def post_shutdown(application: Application) -> None:
 
 
 def main() -> None:
-    """Start the Telegram bot."""
+    """Build the bot application and start polling for updates.
+
+    Reads configuration via :func:`BotConfig.from_env`, constructs the
+    ``python-telegram-bot`` ``Application``, registers all command and
+    callback handlers, and runs the event loop with ``run_polling``.
+    Exits with code 1 when configuration is invalid.
+    """
     try:
         config = BotConfig.from_env()
     except SystemExit:

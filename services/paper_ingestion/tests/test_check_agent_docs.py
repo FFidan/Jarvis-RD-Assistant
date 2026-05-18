@@ -60,3 +60,36 @@ def test_line_count_counts_split_lines(tmp_path: Path) -> None:
     doc.write_text("a\nb\nc\n", encoding="utf-8")
 
     assert check_agent_docs._line_count(doc) == 3
+
+
+def test_main_returns_zero_on_real_tree() -> None:
+    """main() must pass cleanly against the actual repository tree."""
+    assert check_agent_docs.main() == 0
+
+
+def test_main_returns_one_when_stale_token_injected(tmp_path: Path, monkeypatch) -> None:
+    """main() must return 1 and surface the offending token when a stale path is present."""
+    stale_token = check_agent_docs.STALE_PATTERNS[0]
+
+    # Stub out every file the checker iterates over.
+    for rel_path in check_agent_docs.DOC_PATHS:
+        stub = tmp_path / rel_path
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text("clean content\n", encoding="utf-8")
+
+    # AGENTS.md must be within the line limit so that size error is not triggered.
+    agents_stub = tmp_path / "AGENTS.md"
+    agents_stub.write_text(
+        "\n".join(f"line {i}" for i in range(check_agent_docs.AGENTS_LINE_LIMIT - 5)),
+        encoding="utf-8",
+    )
+
+    # Inject the stale token into a doc that is NOT AGENTS.md (DOC_PATHS[0]).
+    # Use CLAUDE.md (DOC_PATHS[1]) so the AGENTS.md overwrite above doesn't clobber it.
+    non_agents_doc = next(rel for rel in check_agent_docs.DOC_PATHS if str(rel) != "AGENTS.md")
+    (tmp_path / non_agents_doc).write_text(
+        f"content containing {stale_token} here\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(check_agent_docs, "ROOT", tmp_path)
+    assert check_agent_docs.main() == 1

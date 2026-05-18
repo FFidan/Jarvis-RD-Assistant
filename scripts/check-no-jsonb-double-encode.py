@@ -113,6 +113,20 @@ def check_file(path: Path) -> list[tuple[int, str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Scan path roots for JSONB double-encode violations and report them.
+
+    Parameters
+    ----------
+    argv : list[str] or None
+        Paths to scan. When ``None``, defaults to ``sys.argv[1:]``. When no
+        paths are provided at all, scans ``services/`` and ``libs/`` relative
+        to the repo root.
+
+    Returns
+    -------
+    int
+        0 if no violations are found, 1 if violations exist, 2 on usage error.
+    """
     roots = argv if argv is not None else sys.argv[1:]
     if not roots:
         # Default: walk services/ and libs/ relative to this script's repo root

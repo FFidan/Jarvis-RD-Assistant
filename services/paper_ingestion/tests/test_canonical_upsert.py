@@ -14,10 +14,7 @@ import pytest
 from paper_ingestion.models import PaperCreate, SourceType
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
-
-class FakeRecord(dict):
-    def __getitem__(self, key):
-        return super().__getitem__(key)
+from tests.conftest import FakeRecord
 
 
 def _make_paper() -> PaperCreate:

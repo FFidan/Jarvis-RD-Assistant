@@ -39,7 +39,7 @@ def task_registry_mocks(monkeypatch):
         "zotero.sync_from_zotero": MagicMock(defer_async=AsyncMock()),
     }
     for kind, task in mock_tasks.items():
-        monkeypatch.setitem(task_registry.KIND_TO_TASK, kind, task)
+        monkeypatch.setitem(task_registry._TASK_MAP, kind, task)
     return mock_tasks
 
 

@@ -16,10 +16,14 @@ import asyncpg
 from cryptography.fernet import Fernet
 
 
+class ScriptError(RuntimeError):
+    """Script-level error; caught by the __main__ block."""
+
+
 def _required_env(name: str) -> str:
     value = os.environ.get(name, "")
     if not value:
-        raise SystemExit(f"{name} is required")
+        raise ScriptError(f"{name} is required")
     return value
 
 
@@ -70,6 +74,16 @@ async def _rotate(*, apply: bool) -> None:
 
 
 def main() -> None:
+    """Parse ``--apply`` flag and run the config-key rotation.
+
+    Reads ``DATABASE_URL``, ``OLD_JARVIS_CONFIG_KEY``, and
+    ``NEW_JARVIS_CONFIG_KEY`` from the environment.
+
+    Raises
+    ------
+    ScriptError
+        If any required environment variable is missing.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="write rotated ciphertexts")
     args = parser.parse_args()
@@ -77,4 +91,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ScriptError as exc:
+        import sys as _sys
+
+        print(f"ERROR: {exc}", file=_sys.stderr)
+        _sys.exit(1)

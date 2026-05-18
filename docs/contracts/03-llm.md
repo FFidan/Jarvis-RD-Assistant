@@ -278,7 +278,7 @@ class WeeklyDigestOutput(BaseModel):
 ## 5. Anti-hallucination integration
 
 LLM-generated scientific content MUST remain evidence-backed per
-[ENGINEERING_STANDARDS.md "Anti-Hallucination Invariants"](../ENGINEERING_STANDARDS.md#L73-L89). Instructor validation
+[ENGINEERING_STANDARDS.md "Anti-Hallucination Invariants"](../ENGINEERING_STANDARDS.md#anti-hallucination-invariants). Instructor validation
 catches *shape* errors but cannot catch *fabrication*. The QuoteVerifier
 layer remains mandatory for sites that produce verifiable claims.
 
@@ -391,7 +391,7 @@ The implementation MUST satisfy these. Testable.
 - **[01-settings.md §2.2](01-settings.md#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write)** — `llm.{smart,fast,embed}_model` and the cloud-provider keys live at the LiteLLM layer; this contract is concerned with the OpenAI-compatible HTTP path, not which underlying model the alias resolves to.
 - **[02-pulse.md §5](02-pulse.md#5-timeout-concurrency-and-budget-policy)** — Pulse Stage-2 owns the 600 s wall-clock cap; per-call timeout is 120 s, owned here.
 - **[04-observability.md §3](04-observability.md)** — every site here gets a `@observe(as_type="generation")` wrap on the choke-point function; per-site spans live on the surrounding `@observe()` boundary.
-- **[docs/ENGINEERING_STANDARDS.md "Anti-Hallucination"](../ENGINEERING_STANDARDS.md#L73-L89)** — verifier requirements that this contract embeds in §5.
+- **[docs/ENGINEERING_STANDARDS.md "Anti-Hallucination"](../ENGINEERING_STANDARDS.md#anti-hallucination-invariants)** — verifier requirements that this contract embeds in §5.
 - **[docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md)** — archived implementation spec; the
   contract above describes its endpoint state.
 

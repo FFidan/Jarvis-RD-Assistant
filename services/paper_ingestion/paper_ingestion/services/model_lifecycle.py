@@ -10,7 +10,7 @@ import socket
 import subprocess
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 import httpx
 from jarvis_common.model_catalog import (
@@ -24,6 +24,76 @@ logger = logging.getLogger(__name__)
 
 Status = Literal["active", "pulled", "downloadable", "unfit", "cloud_active", "cloud_required"]
 Fit = Literal["recommended", "stretch", "available", "key_required", "unfit"]
+
+
+class FitDetail(TypedDict):
+    """VRAM-fit breakdown for a single model at a requested context length.
+
+    Parameters
+    ----------
+    default:
+        Categorical fit verdict: ``"fits"``, ``"partial"``, ``"unfit"``,
+        ``"cloud"``, or ``"unknown"``.
+    at_num_ctx:
+        The ``num_ctx`` value for which the fit was computed.
+    required_vram_gb:
+        Estimated VRAM requirement in GB, or ``None`` when indeterminate.
+    default_num_ctx:
+        Catalog default context length used as the VRAM baseline.
+    max_num_ctx:
+        Maximum supported context length for this entry.
+    kv_cache_bytes_per_token:
+        KV-cache memory cost per token in bytes, or ``None`` when unknown.
+    """
+
+    default: Literal["fits", "partial", "unfit", "cloud", "unknown"]
+    at_num_ctx: int
+    required_vram_gb: float | None
+    default_num_ctx: int
+    max_num_ctx: int
+    kv_cache_bytes_per_token: int | None
+
+
+class ModelStatusDict(TypedDict):
+    """Combined model status entry returned by :func:`build_model_statuses`.
+
+    All keys are required: every item produced by :func:`build_model_statuses`
+    contains both the base catalog fields (from ``ModelCatalogEntry.to_dict()``)
+    and the runtime-computed fields listed below.
+    """
+
+    # -- base keys from ModelCatalogEntry.to_dict() / asdict() --
+    id: str
+    name: str
+    provider: str
+    ollama_tag: str | None
+    roles: tuple[str, ...]
+    vram_gb: float
+    disk_gb: float
+    context_tokens: int
+    license: str
+    tier: int
+    description: str
+    notes: str
+    last_reviewed: str
+    embedding_dimension: int | None
+    phase: str
+    assignable: bool
+    min_vram_gb_at_default_ctx: float | None
+    kv_cache_bytes_per_token: int | None
+    default_num_ctx: int | None
+    max_num_ctx: int | None
+    supports_thinking: bool
+    # -- runtime keys added by build_model_statuses --
+    active: bool
+    pulled: bool
+    provider_key_present: bool | None
+    fit: Fit
+    status: Status
+    can_assign: bool
+    assign_blocker: str | None
+    fit_detail: FitDetail
+
 
 MODEL_CATALOG: tuple[ModelCatalogEntry, ...] = load_model_catalog()
 warn_if_catalog_stale(MODEL_CATALOG)
@@ -44,6 +114,22 @@ async def _raise_if_cancelled(ctx: Any) -> None:
 
 @dataclass(frozen=True)
 class HardwareInfo:
+    """Immutable snapshot of the detected GPU/CPU memory configuration.
+
+    Attributes
+    ----------
+    vram_gb : float
+        Total available VRAM in gigabytes (0.0 for CPU-only machines).
+    vram_source : str
+        Detection method: ``"nvidia-smi"``, ``"macos-approx"``, or ``"cpu"``.
+    tier : int
+        Hardware capability tier (0=CPU, 1=4–10 GB, 2=10–20 GB, 3=20–40 GB, 4=40+ GB).
+    detected_at : str
+        ISO 8601 UTC timestamp of when the hardware was probed.
+    machine_id : str
+        Hostname of the machine, for diagnostics.
+    """
+
     vram_gb: float
     vram_source: Literal["nvidia-smi", "macos-approx", "cpu"]
     tier: int
@@ -51,11 +137,25 @@ class HardwareInfo:
     machine_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a plain dict representation of this hardware snapshot."""
         return asdict(self)
 
 
 def normalize_model_tag(tag: str) -> str:
-    """Normalize implicit latest suffixes and LiteLLM provider prefixes."""
+    """Normalize implicit ``latest`` suffixes and LiteLLM provider prefixes.
+
+    Parameters
+    ----------
+    tag : str
+        Raw model tag as returned by Ollama or the LiteLLM config, e.g.
+        ``"ollama/qwen3:8b"`` or ``"mistral-nemo:latest"``.
+
+    Returns
+    -------
+    str
+        Canonical tag with the ``ollama/`` prefix and ``:latest`` suffix
+        stripped (e.g. ``"qwen3:8b"`` or ``"mistral-nemo"``).
+    """
     value = tag.strip()
     if value.startswith("ollama/"):
         value = value.removeprefix("ollama/")
@@ -63,6 +163,18 @@ def normalize_model_tag(tag: str) -> str:
 
 
 def hardware_tier(vram_gb: float) -> int:
+    """Map a VRAM value (GB) to a hardware capability tier (0–4).
+
+    Parameters
+    ----------
+    vram_gb : float
+        Available VRAM in gigabytes.
+
+    Returns
+    -------
+    int
+        Tier level: 0=CPU/no-GPU, 1=4–10 GB, 2=10–20 GB, 3=20–40 GB, 4=40+ GB.
+    """
     if vram_gb >= 40:
         return 4
     if vram_gb >= 20:
@@ -202,6 +314,20 @@ def _active_model_ids(current: dict[str, Any], embedding_model_name: str) -> set
 
 
 def catalog_entry_for_model(model_id: str) -> ModelCatalogEntry | None:
+    """Look up a catalog entry by model ID or Ollama tag.
+
+    Parameters
+    ----------
+    model_id : str
+        Model identifier to look up. Matched against both ``entry.id`` and
+        ``entry.ollama_tag`` after normalization (strips ``ollama/`` prefix
+        and ``:latest`` suffix).
+
+    Returns
+    -------
+    ModelCatalogEntry | None
+        The matching catalog entry, or ``None`` if no entry matches.
+    """
     normalized = normalize_model_tag(model_id)
     for entry in MODEL_CATALOG:
         if normalize_model_tag(entry.id) == normalized:
@@ -212,6 +338,19 @@ def catalog_entry_for_model(model_id: str) -> ModelCatalogEntry | None:
 
 
 def cloud_provider_for_model(model_id: str) -> str | None:
+    """Return the cloud provider name for a model, or ``None`` for local Ollama models.
+
+    Parameters
+    ----------
+    model_id : str
+        Model identifier (e.g. ``"anthropic/claude-3-5-sonnet"`` or ``"qwen3:8b"``).
+
+    Returns
+    -------
+    str | None
+        Provider string (``"anthropic"``, ``"openai"``, ``"google"``) when the
+        model has a known cloud provider; ``None`` for local Ollama models.
+    """
     entry = catalog_entry_for_model(model_id)
     if entry is not None and entry.provider != "ollama":
         return entry.provider
@@ -251,7 +390,7 @@ def compute_vram_fit(
     entry: ModelCatalogEntry,
     num_ctx: int,
     hardware: HardwareInfo,
-) -> dict[str, Any]:
+) -> FitDetail:
     """Compute VRAM fit for an entry at a given num_ctx on this machine.
 
     Returns a dict matching contract §5.1 fit_detail shape:
@@ -334,7 +473,7 @@ def build_model_statuses(
     hardware: HardwareInfo | None = None,
     cloud_api_keys: dict[str, bool] | None = None,
     num_ctx_per_role: dict[str, int] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[ModelStatusDict]:
     """Combine catalog, installed Ollama models, active assignments, and hardware.
 
     Parameters
@@ -351,7 +490,7 @@ def build_model_statuses(
     installed_names = _installed_by_name(installed)
     active_ids = _active_model_ids(current, embedding_model_name)
 
-    statuses: list[dict[str, Any]] = []
+    statuses: list[ModelStatusDict] = []
     for entry in MODEL_CATALOG:
         payload = entry.to_dict()
         active = normalize_model_tag(entry.id) in active_ids or (
@@ -440,8 +579,31 @@ def recommendations_for_role(
     embedding_model_name: str,
     hardware: HardwareInfo | None = None,
     cloud_api_keys: dict[str, bool] | None = None,
-) -> list[dict[str, Any]]:
-    """Return catalog entries for one role, ranked by fit and readiness."""
+) -> list[ModelStatusDict]:
+    """Return catalog entries for one role, ranked by fit and readiness.
+
+    Parameters
+    ----------
+    role : Role
+        Target role (e.g. ``"smart"``, ``"fast"``, ``"embed"``).
+    installed : list[dict]
+        Ollama ``/api/tags`` response data (``[{"name": "...", ...}]``).
+    current : dict
+        Current model assignments from user config (e.g.
+        ``{"smart": "qwen3:8b", "fast": "qwen3:4b", "embed": "nomic-embed-text"}``).
+    embedding_model_name : str
+        Canonical embedding model name from settings (used to mark it active
+        regardless of the ``current`` dict).
+    hardware : HardwareInfo | None
+        Probed hardware info.  Detected fresh when ``None``.
+    cloud_api_keys : dict[str, bool] | None
+        Mapping of provider name → key-present flag.  Empty dict assumed when ``None``.
+
+    Returns
+    -------
+    list[ModelStatusDict]
+        Entries supporting *role* sorted by status priority then tier then name.
+    """
     priority = {
         "active": 0,
         "pulled": 1,

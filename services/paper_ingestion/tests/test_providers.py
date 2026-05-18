@@ -9,14 +9,14 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
 import httpx
 import pytest
 import respx
 from cryptography.fernet import Fernet
 from httpx import ASGITransport
 from jarvis_common.crypto import refresh_fernet_cache
+
+from tests.conftest import _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -32,21 +32,6 @@ def fernet_key(monkeypatch):
     yield key
     # Restore clean cache state so other tests are unaffected.
     refresh_fernet_cache()
-
-
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool whose acquire() returns an async CM."""
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 @pytest.fixture()

@@ -2,31 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
 import httpx
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport
 
-# ---------------------------------------------------------------------------
-# Helpers (same pattern as test_le_endpoints.py)
-# ---------------------------------------------------------------------------
-
-
-def _make_pool_and_conn():
-    """Return (pool, conn) with transaction context-manager support."""
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
+from tests.conftest import _make_pool_and_conn
 
 
 @pytest.fixture()

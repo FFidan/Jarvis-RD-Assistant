@@ -13,16 +13,11 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from tests.conftest import FakeRecord, _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-class FakeRecord(dict):
-    """Dict subclass that supports both dict[key] and .keys() like asyncpg.Record."""
-
-    def keys(self):
-        return super().keys()
 
 
 class MockResponse:
@@ -34,17 +29,6 @@ class MockResponse:
 
     def json(self):
         return self._json
-
-
-def _make_pool_and_conn():
-    """Create a mock asyncpg Pool whose acquire() returns an async CM."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _make_request(mock_pool, mock_http):
@@ -450,7 +434,7 @@ async def test_pull_system_model_enqueues_model_pull_job(_app, monkeypatch):
     request = _make_request(app.state.db_pool, mock_http)
     fake_task = MagicMock()
     fake_task.defer_async = AsyncMock()
-    monkeypatch.setitem(task_registry.KIND_TO_TASK, "model.pull", fake_task)
+    monkeypatch.setitem(task_registry._TASK_MAP, "model.pull", fake_task)
 
     body = await pull_system_model("qwen3:4b", request, user_id=None)
 

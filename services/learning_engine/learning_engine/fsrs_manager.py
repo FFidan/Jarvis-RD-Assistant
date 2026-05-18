@@ -20,7 +20,19 @@ class FSRSManager:
         self,
         desired_retention: float = 0.9,
         learning_steps: list[timedelta] | None = None,
-    ):
+    ) -> None:
+        """Initialise the FSRS scheduler.
+
+        Parameters
+        ----------
+        desired_retention : float
+            Target long-term retention rate (0–1).  Defaults to 0.9 (90 %).
+            Review endpoints build a fresh manager from live ``user_config``
+            values so that per-user edits take effect immediately.
+        learning_steps : list[timedelta] | None
+            Intraday learning steps.  ``None`` falls back to
+            ``[1 min, 10 min]`` — the py-fsrs default-compatible pair.
+        """
         _steps = (
             learning_steps
             if learning_steps is not None

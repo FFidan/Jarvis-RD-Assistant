@@ -184,17 +184,26 @@ def make_ctx_shim(
 ) -> ProcrastinateJobContextShim:
     """Build a ``ProcrastinateJobContextShim`` from a procrastinate ``JobContext``.
 
-    Args:
-        procrastinate_ctx: the ``procrastinate.JobContext`` instance handed to
-            a ``@app.task(pass_context=True)`` body. May be ``None`` for tests
-            that exercise the shim directly.
-        job_id: explicit override for ``job_id``. If omitted, derived from
-            ``procrastinate_ctx.job.task_kwargs['job_id']`` (the JARVIS UUID),
-            falling back to ``str(procrastinate_ctx.job.id)`` (the
-            procrastinate bigint id) and finally to ``""``.
-        pool: asyncpg pool used by ``update_progress`` to UPSERT into
-            ``job_progress``. When ``None``, progress reporting is a no-op
-            (safe for unit tests).
+    Parameters
+    ----------
+    procrastinate_ctx:
+        The ``procrastinate.JobContext`` instance handed to a
+        ``@app.task(pass_context=True)`` body.  May be ``None`` for tests
+        that exercise the shim directly.
+    job_id:
+        Explicit override for the JARVIS job UUID.  When omitted, derived from
+        ``procrastinate_ctx.job.task_kwargs['job_id']`` (the JARVIS UUID),
+        falling back to ``str(procrastinate_ctx.job.id)`` (the procrastinate
+        bigint id), and finally to ``""``.
+    pool:
+        asyncpg pool used by :meth:`ProcrastinateJobContextShim.update_progress`
+        to UPSERT into ``job_progress``.  When ``None``, progress reporting is
+        a no-op (safe for unit tests).
+
+    Returns
+    -------
+    ProcrastinateJobContextShim
+        A shim with ``job_id`` resolved and the pool attached.
     """
     if job_id is None:
         if procrastinate_ctx is not None:

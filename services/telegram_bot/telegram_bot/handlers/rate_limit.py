@@ -33,7 +33,7 @@ def rate_limit(
     window_seconds: int = 60,
     cooldown_seconds: int = 0,
 ):
-    """Decorator that rate-limits a Telegram command handler.
+    """Decorator factory that rate-limits a Telegram command handler.
 
     *cooldown_seconds* > 0 enforces a hard per-command cooldown after the last
     invocation (distinct from the sliding-window cap). Use for heavyweight
@@ -42,6 +42,24 @@ def rate_limit(
     Thread/coroutine safety: all timestamp mutations happen under a per-key
     ``asyncio.Lock`` so that concurrent invocations cannot interleave between
     the window check and the append (TOCTOU fix, DOM-D-06).
+
+    Parameters
+    ----------
+    max_calls : int
+        Maximum number of invocations allowed within *window_seconds*.
+    window_seconds : int
+        Sliding-window size in seconds.
+    cooldown_seconds : int
+        Minimum wait between any two successive calls (0 = disabled). When
+        non-zero, the cooldown applies *in addition* to the sliding-window cap
+        and uses the same underlying timestamp store.
+
+    Returns
+    -------
+    Callable
+        A decorator that wraps the handler function with rate-limiting logic.
+        Blocked calls reply with a user-facing message and return ``None``
+        without invoking the wrapped handler.
     """
 
     def decorator(func):  # type: ignore[no-untyped-def]

@@ -41,8 +41,8 @@ import pytest
 
 
 def _get_kind_to_task() -> dict:
-    """Return the module-level KIND_TO_TASK dict for patching."""
-    return task_registry.KIND_TO_TASK
+    """Return the mutable backing dict for KIND_TO_TASK, suitable for patching."""
+    return task_registry._TASK_MAP
 
 
 def _mock_paper_analyze_task() -> MagicMock:

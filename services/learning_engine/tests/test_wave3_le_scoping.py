@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.conftest import _make_pool_and_conn
+
 # ---------------------------------------------------------------------------
 # Shared helpers (mirror existing test patterns)
 # ---------------------------------------------------------------------------
@@ -38,21 +40,6 @@ def _pool_with_conn(conn: AsyncMock) -> MagicMock:
     pool = MagicMock()
     pool.acquire.return_value = _Acquire(conn)
     return pool
-
-
-def _make_pool_and_conn() -> tuple[MagicMock, AsyncMock]:
-    """Return (pool, conn) — same pattern used across learning_engine tests."""
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 # ---------------------------------------------------------------------------

@@ -13,29 +13,13 @@ template).
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport
 
-
-class FakeRecord(dict):
-    """Dict subclass mimicking asyncpg.Record (supports .keys())."""
-
-    def keys(self):
-        return super().keys()
-
-
-def _make_pool_and_conn():
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _template_row(id=1, name="Default Template", is_default=True):

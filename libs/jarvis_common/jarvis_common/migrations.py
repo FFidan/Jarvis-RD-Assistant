@@ -285,14 +285,28 @@ async def run_migrations(
 ) -> None:
     """Apply unapplied SQL migrations from a migrations directory on startup.
 
-    Args:
-        pool: asyncpg connection pool to run migrations against.
-        migrations_dir: directory containing ``NNN_*.sql`` migration files. When
-            ``None``, defaults to the canonical paper_ingestion-style resolution:
-            first ``/app/db/migrations`` (the in-container path), then a
-            ``parents[3] / "db" / "migrations"`` fallback for local dev. Pass an
-            explicit path when calling from outside paper_ingestion (e.g. the
-            learning_engine service) so the resolution is unambiguous.
+    Holds a Postgres advisory transaction lock (key 42) so concurrent service
+    replicas do not race.  Each migration file is applied inside a savepoint;
+    ``BEGIN``/``COMMIT``/``ROLLBACK`` lines at the outer transaction level are
+    stripped to avoid conflicts with asyncpg's own transaction wrapping.
+
+    Parameters
+    ----------
+    pool:
+        asyncpg connection pool to run migrations against.
+    migrations_dir:
+        Directory containing ``NNN_*.sql`` migration files.  When ``None``,
+        defaults to ``/app/db/migrations`` (in-container), falling back to
+        ``parents[3] / "db" / "migrations"`` for local dev.  Pass an
+        explicit path when calling from services other than ``paper_ingestion``
+        so the resolution is unambiguous.
+
+    Raises
+    ------
+    RuntimeError
+        If another instance holds the migration lock and
+        ``JARVIS_MIGRATION_LOCK_CONTENDED_OK`` is not set, or if a duplicate
+        migration version number is detected in the directory.
     """
     async with pool.acquire() as conn:
         async with conn.transaction():

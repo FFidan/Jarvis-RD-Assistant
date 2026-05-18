@@ -226,9 +226,8 @@ Known open items post-Phase-2 (see `docs/known-residual-risks.md`):
 
 Fresh schema is defined in `db/init.sql`; existing installs advance through
 `db/migrations/`. The migration runner applies migrations on
-`paper_ingestion` startup. As of 2026-05-17 there are 88 migrations (001–088),
-including Telegram pairings, canonical corpus, scoped `user_config` rows, multi-tenant GA hardening,
-and performance indexes (088). <!-- migration count refreshed 2026-05-17 (agent: claude-code) -->
+`paper_ingestion` startup. The current migration count and range are documented in
+[`db/migrations/README.md`](../db/migrations/README.md) — that file is the authoritative source; do not hand-stamp a literal count here.
 Fresh-install validation must replay `db/init.sql` and migrations against live
 Docker Postgres when schema duplication risk is in scope.
 
@@ -241,7 +240,7 @@ Durable behavioral contracts for cross-cutting workflows live in `docs/specs/`:
 When changing paper status logic, lifecycle transitions, feed filtering, or the
 recommender feedback loop, verify the implementation against this spec before
 shipping. The spec ships in phases (see
-[docs/plans/](plans/) for the META plan and per-phase implementation plans).
+[docs/archive/2026-05/plans/](archive/2026-05/plans/) for the META plan and per-phase implementation plans).
 
 ## Frontend Contract Boundary
 

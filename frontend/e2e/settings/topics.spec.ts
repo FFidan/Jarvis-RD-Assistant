@@ -4,9 +4,8 @@ import { ensureAuthenticated } from '../helpers/auth';
 test.describe('Settings - Topics', () => {
   test.beforeEach(async ({ page }) => {
     await ensureAuthenticated(page);
-    await page.goto('/settings');
+    await page.goto('/settings?section=research&item=topics');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
-    await page.getByRole('tab', { name: 'Topics' }).click();
   });
 
   test('does not render redundant § TOPICS marker (W4-2 regression guard)', async ({ page }) => {

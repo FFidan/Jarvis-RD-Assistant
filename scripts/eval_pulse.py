@@ -239,6 +239,17 @@ def _load_fixture() -> tuple[list[PaperCreate], dict[str, str], dict[str, str], 
 
 
 async def run_eval() -> tuple[float, float, float]:
+    """Run the Pulse scoring pipeline against the labeled fixture and return metrics.
+
+    Loads the fixture, constructs mock embedder and LLM clients, runs the full
+    three-stage Pulse pipeline (embedding filter → LLM rerank → combine), and
+    computes precision, recall, and leakage on the assembled deck.
+
+    Returns
+    -------
+    tuple[float, float, float]
+        ``(precision_at_10, yes_recall, no_leakage)`` as fractions in [0, 1].
+    """
     candidates, labels_by_id, labels_by_title, topics = _load_fixture()
 
     # Build the text-keyed label map the mock embedder expects. Stage 1
@@ -253,7 +264,8 @@ async def run_eval() -> tuple[float, float, float]:
 
     profile = UserProfile(
         topics=topics,
-        tracked_author_ids=[],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
         library_centroid=None,  # eval relies on topic similarity only
         weights={
             "embedding": 0.0,  # no library centroid in eval
@@ -290,6 +302,13 @@ async def run_eval() -> tuple[float, float, float]:
 
 
 async def main() -> None:
+    """Run the Pulse evaluation harness and print pass/fail results.
+
+    Raises
+    ------
+    ScriptError
+        If the fixture file is missing or the precision/leakage targets are not met.
+    """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
 
     if not FIXTURE_PATH.exists():

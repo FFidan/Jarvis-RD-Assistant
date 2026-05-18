@@ -18,6 +18,23 @@ def _is_dev_mode() -> bool:
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Return a standardised JSON error body for Starlette ``HTTPException``.
+
+    The response includes the exception ``detail`` string and the current
+    ``X-Request-ID`` (``None`` when no request ID is in scope).
+
+    Parameters
+    ----------
+    request:
+        The incoming FastAPI/Starlette request (used for context only).
+    exc:
+        The ``HTTPException`` instance raised by route or middleware code.
+
+    Returns
+    -------
+    JSONResponse
+        ``{"detail": ..., "request_id": ...}`` with the original status code.
+    """
     request_id = request_id_ctx.get("") or None
     return JSONResponse(
         status_code=exc.status_code,
@@ -60,6 +77,24 @@ async def validation_exception_handler(
 
 
 async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all handler for unhandled exceptions — always returns HTTP 500.
+
+    Logs the full traceback server-side (keyed by ``X-Request-ID``) and
+    returns a generic ``"An internal error occurred."`` response so exception
+    details are never leaked to clients.
+
+    Parameters
+    ----------
+    request:
+        The incoming FastAPI/Starlette request.
+    exc:
+        The unhandled exception.
+
+    Returns
+    -------
+    JSONResponse
+        HTTP 500 with ``{"detail": "An internal error occurred.", "request_id": ...}``.
+    """
     request_id = request_id_ctx.get("") or None
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(

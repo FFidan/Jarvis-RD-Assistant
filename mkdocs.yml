@@ -79,19 +79,27 @@ exclude_docs: |
   screenshots/
   audit/
 
-# Curated allowlist — ONLY existing operator/developer docs.
-# End-user docs (USER_GUIDE.md, screenshots/, specs/, plans/, archive/) are
-# intentionally omitted.
+# Curated allowlist — operator/developer docs + user manual scaffold.
+# archive/, plans/, specs/, perf/, agentic/, superpowers/, screenshots/,
+# audit/ remain excluded (see exclude_docs above).
 nav:
   - Home: index.md
-  - Quickstart: readme-shim.md
-  - Deployment: DEPLOYMENT.md
-  - Architecture: ARCHITECTURE.md
-  - Engineering Standards: ENGINEERING_STANDARDS.md
-  - Security: SECURITY.md
-  - Agentic Workflow: AGENTIC_WORKFLOW.md
-  - Migrations: migrations-shim.md
-  - Agent Guide: agents-shim.md
+  - Get Started:
+      - Quickstart: readme-shim.md
+      - Deployment: DEPLOYMENT.md
+      - Requirements: REQUIREMENTS.md
+  - Operate:
+      - Security: SECURITY.md
+      - Release Process: RELEASE.md
+      - Known Residual Risks: known-residual-risks.md
+  - Develop:
+      - Architecture: ARCHITECTURE.md
+      - Product Requirements: PRD.md
+      - Engineering Standards: ENGINEERING_STANDARDS.md
+      - Typography Contract: typography-contract.md
+      - Agentic Workflow: AGENTIC_WORKFLOW.md
+      - Migrations: migrations-shim.md
+      - Agent Guide: agents-shim.md
   - System Contracts:
       - Overview: contracts/README.md
       - Settings: contracts/01-settings.md
@@ -100,6 +108,24 @@ nav:
       - Observability: contracts/04-observability.md
       - Model Lifecycle: contracts/05-model-lifecycle.md
       - Hardware-Aware Settings: contracts/06-hardware-aware-settings.md
+  - User Guide:
+      - Overview: manual/index.md
+      - Getting Started: manual/getting-started.md
+      - Navigation: manual/navigation.md
+      - Research Feed & Library: manual/research-feed.md
+      - Paper Detail: manual/paper-detail.md
+      - Ask (Cross-paper RAG): manual/ask.md
+      - Pulse: manual/pulse.md
+      - Learning Cards: manual/learning-cards.md
+      - Projects: manual/projects.md
+      - Knowledge Graph: manual/knowledge-graph.md
+      - Citation Graph: manual/citation-graph.md
+      - Extraction Table: manual/extraction-table.md
+      - Analytics: manual/analytics.md
+      - My Day & Home: manual/home-my-day.md
+      - Settings: manual/settings.md
+      - Telegram: manual/telegram.md
+      - Admin & Multi-tenant: manual/admin.md
 
 theme:
   name: material
