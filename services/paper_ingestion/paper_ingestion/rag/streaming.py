@@ -278,6 +278,15 @@ async def prepare_cross_paper_rag(
             )
         paper_meta = {row["id"]: row for row in rows}
 
+        # Defense-in-depth: drop chunks the DB visibility check denied so they
+        # never reach the prompt or the sources list.
+        selected_chunks = [c for c in selected_chunks if c["paper_id"] in paper_meta]
+        if not selected_chunks:
+            return CrossPaperRagNoResults(
+                answer="No relevant information found in the paper collection.",
+                sources=[],
+            )
+
         # 5. Build prompt with per-paper sections
         safe_question = escape_llm_text(body.question)
 
