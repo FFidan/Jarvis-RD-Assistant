@@ -104,6 +104,13 @@ function largestFittingCtxForEntry(fitDetail: ModelFitDetail, vramGb: number): n
   return best;
 }
 
+/**
+ * Effective fit string for a catalog entry: prefer fit_detail.default (populated by
+ * T3-B backend) so the pull-CTA predicate uses the same VRAM-aware value as the
+ * row-disable logic. Falls back to entry.fit for older backends that omit fit_detail.
+ */
+const effectiveFit = (e: ModelCatalogEntry): string => e.fit_detail?.default ?? e.fit;
+
 // ---------------------------------------------------------------------------
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -257,7 +264,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
     (entry) =>
       isLocalModel(entry) &&
       entry.status === 'downloadable' &&
-      entry.fit !== 'unfit',
+      effectiveFit(entry) !== 'unfit',
   );
   const pullMutation = useMutation({
     mutationFn: (entry: ModelCatalogEntry) =>

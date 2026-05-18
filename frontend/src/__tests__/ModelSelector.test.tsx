@@ -680,4 +680,72 @@ describe('ModelSelector', () => {
     // Cloud badge should be visible
     expect(screen.getByText('Cloud')).toBeInTheDocument();
   });
+
+  // DA-07: effectiveFit predicate unification
+  it('excludes a downloadable entry with fit_detail.default="unfit" from pull CTAs', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      hardware: { vram_gb: 4, tier: 1, vram_source: 'nvidia-smi' },
+      current: { smart_model: 'qwen3:14b' },
+      catalog: [
+        defaultModels.catalog[0], // qwen3:14b — active, fits
+        {
+          // A model that reports fit:'fits' at the top level but whose
+          // fit_detail.default is 'unfit' (e.g. VRAM check at configured num_ctx).
+          id: 'qwen3:8b',
+          name: 'Qwen3 8B',
+          provider: 'ollama',
+          ollama_tag: 'qwen3:8b',
+          roles: ['smart'],
+          vram_gb: 5.5,
+          disk_gb: 4.9,
+          context_tokens: 32768,
+          license: 'Apache 2.0',
+          tier: 1,
+          description: 'Mid-size local model.',
+          notes: '',
+          last_reviewed: '2026-05-18',
+          // top-level fit says 'fits' — this is the stale/coarse backend value
+          status: 'downloadable',
+          active: false,
+          pulled: false,
+          provider_key_present: false,
+          fit: 'fits',
+          can_assign: false,
+          assign_blocker: 'Pull this model before assigning it.',
+          quantization: 'Q4_K_M',
+          // fit_detail.default says 'unfit' — VRAM-aware value; must win
+          fit_detail: {
+            default: 'unfit',
+            at_num_ctx: 8192,
+            required_vram_gb: 6.0,
+            default_num_ctx: 8192,
+            max_num_ctx: 32768,
+            kv_cache_bytes_per_token: 1024,
+          },
+        },
+      ],
+    });
+
+    renderComponent({ configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Qwen3 14B')).toBeInTheDocument();
+      expect(screen.getByText('Qwen3 8B')).toBeInTheDocument();
+    });
+
+    // The model must NOT appear as a pull button CTA (neither recommended nor in pull list)
+    expect(
+      screen.queryByRole('button', { name: /pull model qwen3 8b/i }),
+    ).not.toBeInTheDocument();
+    // It must NOT be the recommended pull (setup-needed banner)
+    expect(
+      screen.queryByRole('button', { name: /pull qwen3 8b to get started/i }),
+    ).not.toBeInTheDocument();
+
+    // The row itself is still rendered but disabled (row-disable not changed)
+    const option = screen.getByTestId('select-item-qwen3:8b');
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+  });
 });
