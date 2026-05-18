@@ -255,13 +255,24 @@ async def prepare_cross_paper_rag(
         # 4. Fetch paper metadata — defense-in-depth user-scope predicate (RAG-DB-1).
         # Primary isolation is Qdrant's _user_scope_filter (SEC-4); this secondary
         # check ensures mis-tagged Qdrant payloads cannot surface another user's
-        # paper metadata.  NULL user_id = shared canonical corpus, visible to all.
+        # paper metadata.  `papers` is the shared canonical corpus and has NO
+        # user_id column — ownership lives in the `user_library` join table.
+        # Mirror SEC-4 ("payload user_id == X OR IS NULL") against the real
+        # schema: a paper is visible iff the caller is unscoped, OR owns it
+        # (user_library membership), OR it is canonical (in nobody's library →
+        # the relational equivalent of a NULL-user_id chunk).
         unique_paper_ids = list({c["paper_id"] for c in selected_chunks})
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id, title, authors, url FROM papers"
-                " WHERE id = ANY($1::int[])"
-                " AND (user_id = $2 OR user_id IS NULL)",
+                "SELECT p.id, p.title, p.authors, p.url FROM papers p"
+                " WHERE p.id = ANY($1::int[])"
+                " AND ("
+                "   $2::int IS NULL"
+                "   OR EXISTS (SELECT 1 FROM user_library ul"
+                "              WHERE ul.paper_id = p.id AND ul.user_id = $2)"
+                "   OR NOT EXISTS (SELECT 1 FROM user_library ul2"
+                "                  WHERE ul2.paper_id = p.id)"
+                " )",
                 unique_paper_ids,
                 user_id,
             )
