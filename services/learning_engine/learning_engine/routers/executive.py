@@ -4,7 +4,7 @@ from typing import Any
 
 from asyncpg import Pool
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common.auth import current_user_id_strict_with_owner_override
+from jarvis_common.auth import current_user_id_strict, current_user_id_strict_with_owner_override
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 from pydantic import BaseModel, Field
 
@@ -334,7 +334,7 @@ async def quick_add_task(
     request: Request,
     payload: QuickAddTaskRequest,
     db_pool: Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict_with_owner_override),
+    user_id: int = Depends(current_user_id_strict),
 ) -> dict[str, Any]:
     """Quick-add a task, optionally linked to a project."""
     async with db_pool.acquire() as conn:

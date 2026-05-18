@@ -117,3 +117,17 @@ def test_cards_router_is_session_only_by_design() -> None:
     dep = _user_id_dep(cards.list_cards)
     assert dep.dependency is current_user_id_strict
     assert dep.dependency is not current_user_id_strict_with_owner_override
+
+
+def test_quick_add_task_is_session_only_by_design() -> None:
+    """POST /api/executive/tasks is NOT reached by the Telegram bot per-user.
+    No cross-service caller of this route exists (only /api/executive/focus/log
+    is Telegram-reached). The owner-override resolver is unnecessary blast
+    radius — any shared-API-key holder from an allowlisted net could create
+    tasks in any user's account via X-Owner-User-Id. This guard fails loudly
+    if a future change silently re-widens the auth surface without a documented
+    caller (DA-03).
+    """
+    dep = _user_id_dep(executive.quick_add_task)
+    assert dep.dependency is current_user_id_strict
+    assert dep.dependency is not current_user_id_strict_with_owner_override
