@@ -259,6 +259,9 @@ async def run_process_pdf(
         _full_text, chunks, point_ids = await pdf_processor.process(
             pdf_path, paper_id, user_id=owner_id
         )
+        # Subtract newly upserted IDs: deterministic uuid5 IDs are identical for
+        # unchanged chunk indices, so deleting them would erase just-written vectors.
+        point_ids_to_delete = list(set(point_ids_to_delete) - set(point_ids))
     except torch.OutOfMemoryError as e:
         logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, e)
         raise RuntimeError(
@@ -339,8 +342,8 @@ async def run_process_pdf(
             )
 
     # Qdrant cleanup runs after DB replacement so a failed force reprocess keeps
-    # the previous chunk rows intact. If vector deletion fails, old vectors are
-    # orphaned but harmless because DB metadata now points at the new embeddings.
+    # the previous chunk rows intact. point_ids_to_delete contains only stale IDs
+    # (new IDs already subtracted above), so unchanged chunk indices are not deleted.
     if point_ids_to_delete:
         try:
             await embedder.qdrant.delete(

@@ -560,3 +560,103 @@ async def test_embed_and_store_point_ids_are_deterministic():
         str(uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, "7:1")),
     ]
     assert ids_first == expected
+
+
+# ---------------------------------------------------------------------------
+# DA-02: force-reprocess must not delete just-upserted vectors
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_force_reprocess_preserves_overlapping_vectors():
+    """DA-02: when old and new chunk sets share point IDs (same chunk index),
+    the Qdrant delete must exclude the new IDs so just-upserted vectors survive.
+
+    Scenario:
+      old  = [vec-0, vec-1, vec-2]  (3 chunks, paper shrinks to 2)
+      new  = [vec-0, vec-1]         (reprocess produces same IDs for indices 0+1)
+      expected delete = {vec-2}     (only the stale trailing chunk)
+    """
+    conn = AsyncMock()
+    conn.fetchval.return_value = 3  # existing_count > 0, triggers force path
+    conn.fetch.return_value = [
+        {"embedding_id": "vec-0"},
+        {"embedding_id": "vec-1"},
+        {"embedding_id": "vec-2"},
+    ]
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool = _make_pool(conn)
+
+    new_chunks = [
+        SimpleNamespace(chunk_index=0, content="A", page_number=1, start_char=0, end_char=1),
+        SimpleNamespace(chunk_index=1, content="B", page_number=1, start_char=2, end_char=3),
+    ]
+    new_point_ids = ["vec-0", "vec-1"]  # overlap with old[0] and old[1]
+
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(return_value=("full text", new_chunks, new_point_ids))
+    embedder = MagicMock()
+    embedder.qdrant.delete = AsyncMock()
+
+    result = await run_process_pdf(
+        paper_id=99,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        force=True,
+    )
+
+    assert result == {"paper_id": 99, "chunk_count": 2, "status": "processed"}
+
+    # Only vec-2 (stale) should be deleted; vec-0 and vec-1 must be preserved.
+    embedder.qdrant.delete.assert_awaited_once()
+    call_kwargs = embedder.qdrant.delete.await_args
+    deleted_ids = set(call_kwargs.kwargs["points_selector"].points)
+    assert deleted_ids == {"vec-2"}, f"Expected only stale vec-2 deleted, got {deleted_ids}"
+
+
+@pytest.mark.asyncio
+async def test_force_reprocess_skips_qdrant_delete_when_new_fully_covers_old():
+    """DA-02: when new chunk IDs fully cover all old IDs (no stale vectors),
+    the Qdrant delete must not be called at all (empty difference → guarded by if)."""
+    conn = AsyncMock()
+    conn.fetchval.return_value = 2
+    conn.fetch.return_value = [
+        {"embedding_id": "vec-0"},
+        {"embedding_id": "vec-1"},
+    ]
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool = _make_pool(conn)
+
+    new_chunks = [
+        SimpleNamespace(chunk_index=0, content="A", page_number=1, start_char=0, end_char=1),
+        SimpleNamespace(chunk_index=1, content="B", page_number=1, start_char=2, end_char=3),
+    ]
+    # Identical IDs → set difference is empty
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(return_value=("full text", new_chunks, ["vec-0", "vec-1"]))
+    embedder = MagicMock()
+    embedder.qdrant.delete = AsyncMock()
+
+    result = await run_process_pdf(
+        paper_id=100,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        force=True,
+    )
+
+    assert result == {"paper_id": 100, "chunk_count": 2, "status": "processed"}
+    embedder.qdrant.delete.assert_not_awaited()
