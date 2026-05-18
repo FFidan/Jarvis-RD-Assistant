@@ -481,6 +481,7 @@ The catalog is static in the package. If Ollama renames `qwen3:14b` → `qwen3:1
 | Phase C | Pulled `qwen3-embedding:0.6b`, rebuilt `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, updated `litellm/config.yaml` embed alias, and left `kg_entities` as a separately checkpointed/rebuildable optional collection. Full historical spec at `docs/specs/2026-05-03-c-embedding-upgrade.md`. |
 | Shipped | Removed `nomic-embed-text` and `mistral-nemo:12b` from active `litellm/config.yaml` defaults. |
 | Shipped | Set smart/fast defaults: `smart=qwen3:14b`, `fast=qwen3:4b`. |
+| Shipped (14b→8b) | Downgraded smart default to qwen3:8b in litellm/config.yaml — qwen3:14b starved the GPU-resident embedder on 16 GB cards; admins restore 14b via Settings → llm.smart_model. |
 | 2026-05-11 closeout | Promoted `embed=qwen3-embedding:4b` and `EMBEDDING_DIMENSION=2560` for local scientific retrieval, keeping `qwen3-embedding:0.6b` as the explicit 1024d fallback. |
 | This sprint | Pull new smart/fast/embed defaults on first boot if not already present — this is the ONE exception to "no auto-pull": the initial default models are pulled silently during stack startup (analogous to current behavior where `docker compose up` downloads Ollama models). Not a background job; Ollama's own `OLLAMA_PRELOAD` or startup script. |
 

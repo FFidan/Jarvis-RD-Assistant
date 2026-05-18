@@ -19,6 +19,7 @@ Inputs are capped at ``MAX_PASSAGES`` passages per call to bound latency.
 from __future__ import annotations
 
 import logging
+import os
 
 try:
     import torch
@@ -35,6 +36,11 @@ except ImportError:
     _HAS_QWEN3 = False
 
 logger = logging.getLogger(__name__)
+
+# HuggingFace revision (branch, tag, or commit SHA) used for both tokenizer and
+# model downloads.  A pinned commit SHA is a stronger supply-chain guarantee than
+# the default "main" branch tip.
+QWEN3_RERANKER_REVISION: str = os.environ.get("QWEN3_RERANKER_REVISION", "main")
 
 # Maximum number of passages accepted per rerank() call.
 # Bounds GPU memory usage and per-call latency on large result sets.
@@ -82,10 +88,14 @@ class Qwen3Reranker:
             self._device,
             self._dtype,
         )
-        self._tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore[union-attr]
+        self._tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[union-attr]
+            model_name,
+            revision=QWEN3_RERANKER_REVISION,
+        )
         self._model = AutoModelForCausalLM.from_pretrained(  # type: ignore[union-attr]
             model_name,
             torch_dtype=self._dtype,
+            revision=QWEN3_RERANKER_REVISION,
         ).to(self._device)
         self._model.eval()
 

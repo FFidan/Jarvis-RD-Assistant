@@ -272,27 +272,32 @@ def _make_pool_with_chunks(
 
 
 async def test_metadata_fetch_excludes_other_user_paper():
-    """RAG-DB-1 (a): metadata SQL must include user-scope predicate.
+    """RAG-DB-1 (a): metadata SQL uses user_library predicate; denied chunk is dropped.
 
-    A paper owned by a different user must be filtered out at the DB layer.
-    We verify the SQL contains AND (user_id = $2 OR user_id IS NULL) and that
-    the $2 parameter is the caller's user_id.
+    A paper not in the caller's user_library and not canonical (i.e. owned by
+    someone else) is invisible: the mock DB returns no rows (simulating the
+    user_library EXISTS predicate filtering it out). We verify:
+      - the SQL uses the user_library join table (not a phantom papers.user_id column)
+      - the owned arm correlates ul.user_id = $2
+      - the canonical arm is a NOT EXISTS on user_library
+      - the $2 positional parameter carries the caller's user_id
+      - the denied chunk does NOT appear in sources (defense-in-depth filter)
     """
     from paper_ingestion.models import CrossPaperAskRequest
-    from paper_ingestion.rag.streaming import prepare_cross_paper_rag
+    from paper_ingestion.rag.streaming import CrossPaperRagNoResults, prepare_cross_paper_rag
 
-    # Qdrant returns a chunk for paper_id=5 (owned by user 99, correctly scoped by Qdrant)
+    # Qdrant returns a chunk for paper_id=5 (mis-tagged — owned by a different user)
     chunks = [
         {
             "paper_id": 5,
             "chunk_index": 0,
-            "content": "content from paper 5",
+            "content": "content from other-user paper 5",
             "page_number": 1,
             "score": 0.9,
         }
     ]
-    # DB row for the other user — should be excluded by the predicate
-    db_rows: list[dict] = []  # empty: simulates predicate filtered it out
+    # DB returns empty: the user_library predicate denies paper 5 for user 99
+    db_rows: list[dict] = []
 
     embedder, db_pool, captured = _make_pool_with_chunks(chunks, db_rows)
 
@@ -303,25 +308,43 @@ async def test_metadata_fetch_excludes_other_user_paper():
         decompose=False,
     )
 
-    await prepare_cross_paper_rag(embedder, db_pool, body, AsyncMock(), user_id=99)
+    result = await prepare_cross_paper_rag(embedder, db_pool, body, AsyncMock(), user_id=99)
 
     assert captured, "DB fetch was not called"
     sql, args = captured[0]
     sql_lower = sql.lower()
-    assert "user_id = $2" in sql_lower, f"Missing user_id = $2 predicate in metadata SQL: {sql!r}"
-    assert "user_id is null" in sql_lower, (
-        f"Missing user_id IS NULL predicate in metadata SQL (shared corpus): {sql!r}"
+
+    # Current schema: ownership via user_library join table (not papers.user_id column)
+    assert "user_library" in sql_lower, (
+        f"Metadata SQL must query user_library (not papers.user_id): {sql!r}"
     )
-    # The second positional arg must be the caller's user_id
+    # Owned-paper arm: EXISTS (... ul.user_id = $2)
+    assert "ul.user_id = $2" in sql_lower, (
+        f"Missing ul.user_id = $2 in owned-paper EXISTS arm: {sql!r}"
+    )
+    # Canonical-paper arm: NOT EXISTS on user_library (paper in nobody's library)
+    assert "not exists" in sql_lower, f"Missing NOT EXISTS canonical arm in metadata SQL: {sql!r}"
+    # $2 positional arg is the caller's user_id
     assert args[1] == 99, f"Expected user_id=99 as $2 parameter, got args={args}"
+
+    # Defense-in-depth: denied chunk must not surface in sources
+    assert isinstance(result, CrossPaperRagNoResults), (
+        f"Expected no-results short-circuit when all chunks are DB-denied, got {result!r}"
+    )
+    assert result.sources == [], "Denied paper must not appear in sources"
 
 
 async def test_metadata_fetch_includes_canonical_paper():
-    """RAG-DB-1 (b): canonical papers (user_id IS NULL) are included for all users.
+    """RAG-DB-1 (b): canonical papers (in nobody's library) are included for all users.
 
-    The SQL predicate must allow user_id IS NULL rows so the shared corpus
-    remains accessible. We verify the returned paper_meta includes the canonical
-    paper when the DB returns it (i.e. the predicate allows it).
+    A paper that exists in the papers table but appears in no user_library row is
+    canonical — the NOT EXISTS arm of the predicate allows it through for every
+    caller.  We verify:
+      - the SQL uses user_library (not a phantom papers.user_id column)
+      - the NOT EXISTS canonical arm is present
+      - the owned arm correlates ul.user_id = $2
+      - $2 carries the caller's user_id
+      - the canonical paper's title surfaces in sources (shared corpus accessible)
     """
     from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
@@ -335,7 +358,7 @@ async def test_metadata_fetch_includes_canonical_paper():
             "score": 0.85,
         }
     ]
-    # DB returns the canonical paper (user_id IS NULL allowed by predicate)
+    # DB returns the canonical paper (NOT EXISTS arm allows it through)
     db_rows = [{"id": 20, "title": "Canonical Paper", "authors": "System", "url": "http://c"}]
 
     embedder, db_pool, captured = _make_pool_with_chunks(chunks, db_rows)
@@ -354,12 +377,18 @@ async def test_metadata_fetch_includes_canonical_paper():
     assert "Canonical Paper" in titles, (
         f"Canonical paper missing from sources — shared corpus broken: {titles}"
     )
-    # SQL must still have both predicates
+
+    # SQL shape: user_library join table, owned arm, NOT EXISTS canonical arm
     sql, args = captured[0]
     sql_lower = sql.lower()
-    assert "user_id = $2" in sql_lower
-    assert "user_id is null" in sql_lower
-    assert args[1] == 7
+    assert "user_library" in sql_lower, (
+        f"Metadata SQL must query user_library (not papers.user_id): {sql!r}"
+    )
+    assert "ul.user_id = $2" in sql_lower, (
+        f"Missing ul.user_id = $2 owned-paper EXISTS arm: {sql!r}"
+    )
+    assert "not exists" in sql_lower, f"Missing NOT EXISTS canonical arm in metadata SQL: {sql!r}"
+    assert args[1] == 7, f"Expected user_id=7 as $2 parameter, got args={args}"
 
 
 async def test_metadata_fetch_same_user_paper_unaffected():
@@ -394,3 +423,99 @@ async def test_metadata_fetch_same_user_paper_unaffected():
     assert "My Paper" in titles, f"Same-user paper missing from sources: {titles}"
     sql, args = captured[0]
     assert args[1] == 5, f"Expected user_id=5 as $2, got {args}"
+
+
+# ---------------------------------------------------------------------------
+# RAG-DB-1 defense-in-depth: stale/mis-tagged Qdrant payloads must not leak
+# ---------------------------------------------------------------------------
+
+
+async def test_cross_paper_rag_drops_db_denied_chunk():
+    """Defense-in-depth: chunks whose paper_id is absent from DB auth result are dropped.
+
+    Scenario: Qdrant returns two chunks — one for an authorized paper (paper_id=10,
+    present in the mocked DB rows) and one for a DB-denied paper (paper_id=99, absent
+    from DB rows, simulating a stale/mis-tagged Qdrant payload for a paper the caller
+    does not own and is not canonical).
+
+    Expected outcomes:
+      1. The denied chunk's content does NOT appear in the LLM prompt messages.
+      2. The denied paper's id does NOT appear in sources.
+      3. When ALL selected chunks are denied (only paper_id=99 present), the
+         function returns CrossPaperRagNoResults with empty sources.
+
+    ``search_chunks_global`` is mocked (via _make_pool_with_chunks) so
+    ``selected_chunks`` is fully controlled without touching Qdrant or BM25.
+    """
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import (
+        CrossPaperRagNoResults,
+        CrossPaperRagPrep,
+        prepare_cross_paper_rag,
+    )
+
+    # --- Part 1: mixed — one authorized chunk + one denied chunk ---
+    authorized_chunk = {
+        "paper_id": 10,
+        "chunk_index": 0,
+        "content": "authorized content from paper 10",
+        "page_number": 1,
+        "score": 0.95,
+    }
+    denied_chunk = {
+        "paper_id": 99,
+        "chunk_index": 0,
+        "content": "leaked content from denied paper 99",
+        "page_number": 1,
+        "score": 0.88,
+    }
+
+    # DB returns metadata only for paper_id=10; paper_id=99 is absent (denied)
+    db_rows_partial = [{"id": 10, "title": "Authorized Paper", "authors": "A", "url": "http://a"}]
+
+    embedder, db_pool, _captured = _make_pool_with_chunks(
+        [authorized_chunk, denied_chunk], db_rows_partial
+    )
+
+    body = CrossPaperAskRequest(
+        question="test leak",
+        max_chunks=5,
+        max_papers=3,
+        decompose=False,
+    )
+
+    result = await prepare_cross_paper_rag(embedder, db_pool, body, AsyncMock(), user_id=3)
+
+    assert isinstance(result, CrossPaperRagPrep), (
+        f"Expected CrossPaperRagPrep (one authorized chunk passes), got {result!r}"
+    )
+
+    # Denied chunk content must not appear in the LLM prompt
+    prompt_text = " ".join(m["content"] for m in result.messages)
+    assert "leaked content from denied paper 99" not in prompt_text, (
+        "Denied paper content leaked into LLM prompt"
+    )
+
+    # Denied paper must not appear in sources
+    source_paper_ids = [s["paper_id"] for s in result.sources]
+    assert 99 not in source_paper_ids, f"Denied paper_id=99 appeared in sources: {result.sources}"
+
+    # Authorized paper is still present
+    assert 10 in source_paper_ids, f"Authorized paper_id=10 missing from sources: {result.sources}"
+
+    # --- Part 2: all-denied — every selected chunk belongs to a denied paper ---
+    embedder_all_denied, db_pool_all_denied, _cap2 = _make_pool_with_chunks(
+        [denied_chunk],
+        [],  # DB returns nothing — paper_id=99 denied entirely
+    )
+
+    result_all_denied = await prepare_cross_paper_rag(
+        embedder_all_denied, db_pool_all_denied, body, AsyncMock(), user_id=3
+    )
+
+    assert isinstance(result_all_denied, CrossPaperRagNoResults), (
+        f"Expected CrossPaperRagNoResults when all chunks denied, got {result_all_denied!r}"
+    )
+    assert result_all_denied.sources == [], (
+        "No-results object must have empty sources when all chunks are DB-denied"
+    )

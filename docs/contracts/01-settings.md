@@ -64,6 +64,12 @@ Scope is part of the contract:
 - `GET /api/config` hides system rows from non-admin browser users; `GET
   /api/config/{key}` applies the same server-side role check.
 
+**`telegram.bot_token` is intentionally absent from `_ALLOWED_CONFIG_KEYS`.** It is written
+Fernet-encrypted via the dedicated `POST /api/setup/telegram-bot-token` endpoint, which applies
+additional validation (token format check, Telegram API reachability test) before persisting.
+Routing a bot token through the general `PUT /api/config/{key}` surface would bypass that
+validation and is an intentional non-regression: the omission is by design, not a gap.
+
 ### 2.1 LIVE keys (written and read by code that affects user-visible behavior)
 
 | Key | Default | Validator | Read sites | Notes |

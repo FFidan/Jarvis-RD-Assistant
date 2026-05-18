@@ -29,6 +29,7 @@ Dependencies: stdlib only (``os``, ``time``, ``json``, ``contextlib``,
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from contextlib import contextmanager
@@ -55,6 +56,11 @@ PERF_PROBE_DEFAULT_PATH = "artifacts/perf/perf-probe.jsonl"
 
 _ENABLED: bool = os.environ.get(PERF_PROBE_ENV_ENABLED, "0").strip() == "1"
 _PROBE_PATH: str = os.environ.get(PERF_PROBE_ENV_PATH, PERF_PROBE_DEFAULT_PATH).strip()
+if _ENABLED:
+    logging.getLogger(__name__).info(
+        "perf_probe ENABLED — synchronous JSONL writes block the event loop; output → %s",
+        Path(_PROBE_PATH).resolve(),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -108,6 +108,7 @@ def exec_app():
     """Minimal app with mocked dependencies and disabled auth + rate limiting."""
     from jarvis_common import verify_api_key
     from jarvis_common.auth import (
+        current_user_id_strict,
         current_user_id_strict_with_owner_override,
     )
     from learning_engine.deps import get_db_pool
@@ -120,6 +121,7 @@ def exec_app():
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 1
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
 
     yield app, conn
 

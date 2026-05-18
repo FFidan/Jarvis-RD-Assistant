@@ -135,6 +135,14 @@ make profile
 
 The probe writes `{"span": "<name>", "ms": …, "ts": …, …}` JSONL lines.
 
+**Observer-effect caveat — synchronous writes on the asyncio event loop.** `perf_probe.py`
+appends JSONL records synchronously inside `__exit__`, which blocks the event loop for the
+duration of the file write. This is acceptable for profiling runs where the probe is the point,
+but it is NOT production-safe — do not enable `PERF_PROBE_ENABLED=1` in normal deployments.
+Additionally, `learning_engine` LLM paths (FSRS scheduling, card generation) are **not**
+instrumented by `perf_probe` (SYM-02) — only `paper_ingestion` hot paths are wired. Cross-service
+bottleneck analysis requires separate instrumentation (e.g. Langfuse traces).
+
 **Caveat 1 — rebuild or you get nothing.** The deployed `jarvis/paper_ingestion`
 image is a pinned tag, not a live bind-mount of the source. If it was built
 before the probe code (or any code you want to measure) landed, the running

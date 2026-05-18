@@ -382,9 +382,9 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
     );
     // Access-denied must NOT appear
     expect(screen.queryByText(/Admin access required/i)).not.toBeInTheDocument();
-    // TelegramBotTokenSection renders a heading-level label; wait for it
-    await waitFor(() =>
-      expect(screen.queryByText(/Admin access required/i)).not.toBeInTheDocument(),
-    );
+    // Positive: TelegramBotTokenSection renders its settled content for an admin
+    // (mock resolves has_token:false → "No bot token set").
+    expect(await screen.findByText(/No bot token set/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Admin access required/i)).not.toBeInTheDocument();
   });
 });

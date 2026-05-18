@@ -217,8 +217,6 @@ The canonical corpus refactor shipped in migration 072:
 
 Known open items post-Phase-2 (see `docs/known-residual-risks.md`):
 
-- Per-user topic subscriptions are still not implemented; auto-fetched papers
-  enter only the canonical corpus until users explicitly acquire them.
 - `paper_digest.py` still has a single-tenant fallback when no Telegram pairing
   exists. Remove it after production telemetry proves pairings are universal.
 - IDOR regression coverage is broader than the original Phase-2 pass but is not

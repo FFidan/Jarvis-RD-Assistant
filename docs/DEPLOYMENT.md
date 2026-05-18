@@ -567,6 +567,7 @@ Key `paper_ingestion` endpoints referenced in operator workflows:
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET` | `/health` | none | Service health; returns 200 OK or 503 on dependency failure |
+| `GET` | `/health/live` | none | Liveness only (no downstream checks); point proxy/sidecar restart probes here |
 | `GET` | `/api/papers` | API key | Paper list with filtering and pagination |
 | `GET` | `/api/papers/{id}` | API key | Full paper detail including user state |
 | `PUT` | `/api/papers/{id}/save`        | API key (60/min) | Set lifecycle to `to_read` (no body) |
