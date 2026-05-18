@@ -82,6 +82,7 @@ check: no-tracked-secrets secure-secrets deps-check lint typecheck test
 ## Keys are loaded from .env (written by gen-langfuse-keys.sh) so they never
 ## appear in the process environment or docker inspect output.
 observability-up: gen-langfuse-keys
+	@echo "WARNING: Langfuse DB/NextAuth/Salt are plaintext env (Langfuse v2 has no _FILE support) — single-operator host only; 'docker inspect' exposes them."
 	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 \
 	  $(COMPOSE) --profile observability up -d langfuse paper_ingestion learning_engine
 
@@ -127,4 +128,4 @@ profile:
 
 ## Boot the local stack with profiling-only Postgres/ptrace overrides.
 profile-stack-up:
-	$(COMPOSE_PERF) up -d --no-deps postgres paper_ingestion dashboard
+	$(COMPOSE_PERF) --profile perf up -d --no-deps postgres paper_ingestion dashboard

@@ -62,7 +62,7 @@ services:
     # Instruct-AWQ — vLLM's batching advantage is exercised by PERF_CONCURRENCY,
     # not model size. See docs/perf/2026-05-18-vllm-vs-ollama-decision.md
     # §"Lean 16 GB bench".
-    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.6.6}
     profiles: [vllm]
     restart: "no"
     # Loopback-bind only — same security posture as the ollama service

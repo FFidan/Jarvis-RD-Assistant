@@ -16,6 +16,7 @@ services:
       - shared_preload_libraries=pg_stat_statements
 
   paper_ingestion:
+    profiles: ["perf"]
     cap_add:
       - SYS_PTRACE
     security_opt:
