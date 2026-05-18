@@ -129,4 +129,24 @@ describe('ProjectsPage', () => {
       expect(screen.getByText(/§ CHAPTERS · 0/i)).toBeInTheDocument();
     });
   });
+
+  it('shows QueryErrorState (not empty 2-pane) when fetchProjects rejects', async () => {
+    mockFetchProjects.mockRejectedValue(new Error('server error'));
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/couldn't load/i)).toBeInTheDocument();
+    });
+    // 2-pane layout must NOT be rendered
+    expect(screen.queryByText(/§ CHAPTERS/i)).not.toBeInTheDocument();
+  });
+
+  it('empty projects shows 2-pane layout (not error UI)', async () => {
+    mockFetchProjects.mockResolvedValue([]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/§ CHAPTERS · 0/i)).toBeInTheDocument();
+    });
+    // A successful empty response must not show the error UI
+    expect(screen.queryByText(/couldn't load/i)).not.toBeInTheDocument();
+  });
 });

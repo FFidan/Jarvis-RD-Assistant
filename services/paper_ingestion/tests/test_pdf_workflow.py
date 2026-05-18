@@ -617,6 +617,7 @@ async def test_force_reprocess_preserves_overlapping_vectors():
     # Only vec-2 (stale) should be deleted; vec-0 and vec-1 must be preserved.
     embedder.qdrant.delete.assert_awaited_once()
     call_kwargs = embedder.qdrant.delete.await_args
+    assert call_kwargs is not None
     deleted_ids = set(call_kwargs.kwargs["points_selector"].points)
     assert deleted_ids == {"vec-2"}, f"Expected only stale vec-2 deleted, got {deleted_ids}"
 

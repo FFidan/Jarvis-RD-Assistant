@@ -213,6 +213,44 @@ describe('ReviewMode', () => {
     await waitFor(() => screen.getByText(CARD_FIXTURE.front));
     expect(mockGetNextReview).toHaveBeenCalledWith(1);
   });
+
+  it('shows QueryErrorState (not null/empty) when query rejects', async () => {
+    mockGetNextReview.mockRejectedValue(new Error('network error'));
+    const qc = makeQueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ReviewMode sessionCardIndex={1} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/couldn't load/i),
+      ).toBeInTheDocument();
+    });
+    // Retry button must be present (refetch wired as onRetry)
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+    // Must NOT render empty canvas (no rating buttons, no skip)
+    expect(screen.queryByRole('button', { name: /skip/i })).not.toBeInTheDocument();
+  });
+
+  it('error state is distinct from true-empty queue (empty returns null, not error UI)', async () => {
+    mockGetNextReview.mockResolvedValue([]);
+    const qc = makeQueryClient();
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ReviewMode sessionCardIndex={1} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(container.querySelector('.mx-auto')).toBeNull();
+    });
+    // Error UI must NOT be shown for a successful empty response
+    expect(screen.queryByText(/couldn't load/i)).not.toBeInTheDocument();
+  });
 });
 
 // --- P2 offline seam contract test ---

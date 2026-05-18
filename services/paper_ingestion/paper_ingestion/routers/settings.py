@@ -818,9 +818,9 @@ async def set_config(
     if not _is_allowed_config_key(key):
         raise HTTPException(status_code=400, detail=f"Unknown config key: {key!r}")
 
-    # System-scope keys require admin role when a browser session is present.
-    # API-key-only callers (Telegram bot, cron, DEV_MODE) are exempt from role
-    # enforcement — they run as the implicit single-tenant owner.
+    # System-scope keys require an admin browser session. API-key-only callers
+    # (Telegram/cron/lifespan) never reach this endpoint for system keys — they
+    # write directly to user_config via SQL, bypassing this gate.
     if _classify_config_key(key) == "system":
         await require_admin(request)
     caller_user_id = await current_user_id_strict(request)

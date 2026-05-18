@@ -15,7 +15,7 @@ from jarvis_common.settings import get_core_settings
 logger = logging.getLogger(__name__)
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-_HEALTH_PATHS = frozenset({"/health", "/health/", "/healthz", "/health/readiness"})
+_HEALTH_PATHS = frozenset({"/health", "/health/", "/health/live", "/healthz", "/health/readiness"})
 
 # Production secret-strength gate (SEC-A). Minimum lengths mirror the project
 # convention enforced by scripts/production-readiness-check.sh so the boot gate
@@ -121,7 +121,7 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     # /infra-events authenticates via X-Infra-Key (separate secret from
     # JARVIS_API_KEY) so the Vector sidecar doesn't need the main API key.
     # The endpoint enforces its own auth via _check_auth().
-    if request.url.path.startswith("/infra-events"):
+    if request.url.path == "/infra-events" or request.url.path.startswith("/infra-events/"):
         return
     # /api/auth/* IS the auth bootstrap surface — magic-link request, magic-link
     # verify, and logout. They cannot themselves require API-key auth without

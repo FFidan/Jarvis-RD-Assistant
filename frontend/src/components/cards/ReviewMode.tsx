@@ -22,6 +22,7 @@ import type { Card as CardType } from '@/types';
 import { getNextReview, submitReview, fetchDecks } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { EvidenceSnapshot } from '@/components/shared/EvidenceSnapshot';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { computeLastSeenDays, resolveDeckName } from '@/components/cards/SessionShell';
 
 const RATING_LABELS: Record<number, { label: string; color: string }> = {
@@ -65,7 +66,7 @@ export function ReviewMode({
     ? ['review-next', { deckId }]
     : ['review-next'];
 
-  const { data: cards = [], isLoading, refetch } = useQuery({
+  const { data: cards = [], isLoading, isError, refetch } = useQuery({
     queryKey: reviewQueryKey,
     queryFn: () => getNextReview(1),
   });
@@ -106,6 +107,10 @@ export function ReviewMode({
         <p className="text-muted-foreground text-sm">Loading next card…</p>
       </div>
     );
+  }
+
+  if (isError) {
+    return <QueryErrorState onRetry={refetch} />;
   }
 
   if (!currentCard) {

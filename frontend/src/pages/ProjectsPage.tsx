@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom';
 import { FolderKanban } from 'lucide-react';
 import { fetchProjects } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
+import { QueryErrorState } from '@/components/shared/QueryErrorState';
 import { ChapterRail } from '@/components/projects/ChapterRail';
 import { ChapterPane } from '@/components/projects/ChapterPane';
 
@@ -11,7 +12,7 @@ export function ProjectsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const location = useLocation();
 
-  const { data: projects = [], isLoading } = useQuery({
+  const { data: projects = [], isLoading, isError } = useQuery({
     queryKey: ['projects'],
     queryFn: () => fetchProjects(),
   });
@@ -31,6 +32,10 @@ export function ProjectsPage() {
   const selectedProject = selectedId
     ? projects.find((p) => p.id === selectedId) ?? null
     : null;
+
+  if (isError) {
+    return <QueryErrorState />;
+  }
 
   if (isLoading) {
     return (
