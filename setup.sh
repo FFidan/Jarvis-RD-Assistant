@@ -753,6 +753,15 @@ info "Writing Docker secret files via scripts/init-secrets.sh..."
 bash "${SCRIPT_DIR}/scripts/init-secrets.sh"
 ok "Docker secret files ready in secrets/ (mode 600)."
 
+# init-secrets.sh does NOT generate the Langfuse init keypair, yet the default
+# (no-profile) paper_ingestion/learning_engine services mount langfuse_init_pk
+# /_sk as file:-backed Docker secrets — so a fresh clone would hard-fail
+# `docker compose up`.  gen-langfuse-keys.sh is the single source of truth
+# (also invoked by `make up`); it is idempotent and self-rotates burned keys.
+info "Generating Langfuse init keypair via scripts/gen-langfuse-keys.sh..."
+bash "${SCRIPT_DIR}/scripts/gen-langfuse-keys.sh"
+ok "Langfuse init keypair ready in secrets/ (mode 600)."
+
 # Enforce 600 mode on any secret files that already exist
 if [ -d secrets ]; then
   find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 600 {} \;

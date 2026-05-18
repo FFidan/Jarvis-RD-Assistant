@@ -41,6 +41,9 @@ jobs:
       - name: Guard - no tracked secrets
         run: bash scripts/check-no-tracked-secrets.sh
 
+      - name: Guard - no burned Langfuse init secrets
+        run: bash scripts/check-burned-secrets.sh
+
       - name: Guard - no unsafe user-id resolver
         run: python3 scripts/check-no-unsafe-resolver.py
 
