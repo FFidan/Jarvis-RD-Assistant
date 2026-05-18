@@ -26,6 +26,7 @@ import { SourcesList } from './SourcesList';
 import { SmtpSection } from './SmtpSection';
 import { TelegramBotTokenSection } from './TelegramBotTokenSection';
 import { AccessModeSection } from './AccessModeSection';
+import { useAuthStore } from '@/stores/auth-store';
 
 // ---------------------------------------------------------------------------
 // Section title map (mirrors STATIC_SECTIONS in SettingsRail)
@@ -102,9 +103,11 @@ function Breadcrumb({
 function DetailContent({
   section,
   item,
+  isAdmin,
 }: {
   section: string;
   item: string;
+  isAdmin: boolean;
 }) {
   if (section === 'account') {
     if (item === 'profile') return <AccountSection />;
@@ -157,7 +160,11 @@ function DetailContent({
         </div>
       );
     }
-    if (item === 'bot-token') return <TelegramBotTokenSection />;
+    if (item === 'bot-token') {
+      return isAdmin
+        ? <TelegramBotTokenSection />
+        : <div className="p-6 text-sm text-destructive">Admin access required.</div>;
+    }
     if (item === 'zotero') return <ZoteroSection />;
   }
 
@@ -184,6 +191,7 @@ interface SettingsDetailPaneProps {
 }
 
 export function SettingsDetailPane({ section, item }: SettingsDetailPaneProps) {
+  const isAdmin = useAuthStore((s) => s.user)?.role === 'admin';
   const sectionTitle = SECTION_TITLES[section] ?? section;
   const itemLabel =
     ITEM_LABELS[section]?.[item] ?? item.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -192,7 +200,7 @@ export function SettingsDetailPane({ section, item }: SettingsDetailPaneProps) {
     <div className="flex-1 overflow-y-auto p-6 min-w-0">
       <Breadcrumb sectionTitle={sectionTitle} itemLabel={itemLabel} />
       <h2 className="font-serif text-3xl tracking-tight text-strong mb-6">{itemLabel}</h2>
-      <DetailContent section={section} item={item} />
+      <DetailContent section={section} item={item} isAdmin={isAdmin ?? false} />
     </div>
   );
 }

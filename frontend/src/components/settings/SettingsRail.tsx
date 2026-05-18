@@ -30,6 +30,8 @@ export interface RailItem {
   label: string;
   /** Small status dot colour — 'ok' (green), 'warn' (yellow), undefined = none. */
   status?: 'ok' | 'warn';
+  /** admin-only — item hidden for non-admin users (section may still be visible). */
+  adminOnly?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +83,7 @@ export const ALL_SECTIONS: RailSection[] = [
     title: 'Integrations',
     items: [
       { section: 'integrations', item: 'telegram', label: 'Telegram' },
-      { section: 'integrations', item: 'bot-token', label: 'Bot Token' },
+      { section: 'integrations', item: 'bot-token', label: 'Bot Token', adminOnly: true },
       { section: 'integrations', item: 'zotero', label: 'Zotero' },
     ],
   },
@@ -126,8 +128,8 @@ export function SettingsRail({ activeSection, activeItem, isAdmin, onSelect }: S
             </span>
           </div>
 
-          {/* Items */}
-          {section.items.map((item) => {
+          {/* Items — also filter item-level adminOnly for non-admin users */}
+          {section.items.filter((item) => !item.adminOnly || isAdmin).map((item) => {
             const isActive = activeSection === item.section && activeItem === item.item;
             return (
               <button

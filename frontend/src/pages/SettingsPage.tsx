@@ -57,6 +57,10 @@ export function SettingsPage() {
     if (SYSTEM_SECTIONS.has(requestedSection) && !isAdmin) {
       return { activeSection: DEFAULT_SECTION, activeItem: DEFAULT_ITEM };
     }
+    // Non-admin trying an admin-only item (e.g. bot-token) → redirect to default
+    if (requestedSection === 'integrations' && requestedItem === 'bot-token' && !isAdmin) {
+      return { activeSection: DEFAULT_SECTION, activeItem: DEFAULT_ITEM };
+    }
     // Valid section — use requested item or fall back to first reasonable default
     const item = requestedItem ?? getDefaultItem(requestedSection);
     return { activeSection: requestedSection, activeItem: item };
