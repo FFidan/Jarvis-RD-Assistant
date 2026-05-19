@@ -91,6 +91,33 @@ else
   RAG_CONCURRENCY=3
 fi
 
+# LOADGEN_STRICT: opt-in (set only by the confirmatory bench, never by
+# profile.sh / make profile). When 1, the three silent-degrade exits below
+# write a one-line reason to ${OUT_DIR}/loadgen-FATAL.txt and exit 3 instead
+# of exit 0, so a non-runnable Scenario C aborts the caller loudly instead of
+# yielding an empty/NA C1 discovered hours later. Default 0 = exact legacy
+# behaviour (backward-compatible with the existing profiling workflow).
+LOADGEN_STRICT="${LOADGEN_STRICT:-0}"
+
+# RAG_BATCHES: how many back-to-back batches of RAG_CONCURRENCY /api/ask
+# requests to fire for scenario_c_rag. Default 1 = EXACT legacy behaviour
+# (n = RAG_CONCURRENCY → make profile unchanged). The confirmatory bench
+# sets this >1 so scenario_c_rag_ask p95 is computed over n =
+# RAG_BATCHES×RAG_CONCURRENCY samples instead of a statistically
+# meaningless "max of 4/8".
+RAG_BATCHES="${RAG_BATCHES:-1}"
+
+# _strict_or_skip <reason> : in strict mode, record + exit 3; else return 0
+# so the caller's legacy "log WARN + exit 0" path runs unchanged.
+_strict_or_skip() {
+  if [[ "${LOADGEN_STRICT}" == "1" ]]; then
+    echo "loadgen FATAL: $* at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      >> "${OUT_DIR}/loadgen-FATAL.txt"
+    exit 3
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -105,12 +132,20 @@ TMPDIR_LG="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_LG}"' EXIT
 
 # ---------------------------------------------------------------------------
-# Reachability guard — degrade gracefully when the server is not running
+# Reachability guard — degrade gracefully when the server is not running.
+# Probe /health/live, NOT /health: /health does heavy dependency fan-out
+# (LiteLLM→LLM, Ollama, Qdrant) that routinely exceeds a 2s budget under load
+# or while a model is warming, yielding a FALSE "unreachable" that aborts the
+# whole run before any stats are emitted (empty loadgen-summary.csv → NA
+# metrics). /health/live is the purpose-built, rate-limiter-exempt liveness
+# route (added 2026-05-17) — it answers in milliseconds regardless of deps.
+# Timeout raised to 10s for slow-boot / GPU-saturated boxes.
 # ---------------------------------------------------------------------------
-if ! curl -s -o /dev/null --max-time 2 "${PAPER_INGEST_BASE}/health" \
+if ! curl -s -o /dev/null --max-time 10 "${PAPER_INGEST_BASE}/health/live" \
      -H "X-API-Key: ${API_KEY}" -H "Accept: application/json" 2>/dev/null; then
   log "WARN: backend not reachable at ${PAPER_INGEST_BASE} — skipping loadgen scenarios"
   log "      Start the stack with 'make up' and re-run to collect concurrency metrics."
+  _strict_or_skip "backend not reachable at ${PAPER_INGEST_BASE}/health/live"
   exit 0
 fi
 
@@ -156,7 +191,7 @@ _fire_post_batch() {
   for (( i=1; i<=conc; i++ )); do
     (
       result=$(curl -s -o /dev/null \
-                    --max-time "${RAG_MAX_SECONDS:-180}" \
+                    --max-time "${RAG_MAX_SECONDS:-600}" \
                     -w "%{time_total},%{http_code}" \
                     -X POST "${PAPER_INGEST_BASE}${path}" \
                     -b "${COOKIE_JAR}" \
@@ -212,7 +247,9 @@ _emit_stats() {
   }
   END {
     if (n == 0) {
-      print label ",0,0,0,0,0"
+      # NA (not 0) so a no-sample sweep is unambiguous downstream and does
+      # not masquerade as p95=0.0 ("looks instant, actually all-timeout").
+      print label ",0,NA,NA,NA,0"
       exit
     }
     p50 = pct(50)
@@ -330,6 +367,7 @@ if [[ "${auth_code}" != "200" ]] || ! grep -q 'jarvis_session' "${COOKIE_JAR}" 2
   log "WARN: api-key-session → HTTP ${auth_code} (need single-tenant + an admin"
   log "      user, or API_KEY_LOGIN_ENABLED). Skipping Scenario C — the LLM"
   log "      hot-path probes will not emit this run."
+  _strict_or_skip "Scenario C session mint failed (api-key-session HTTP ${auth_code}) — no scenario_c_rag_ask possible"
 else
   log "  session minted (owner: $(grep -o '\"email\":\"[^\"]*\"' "${TMPDIR_LG}/auth_resp.json" 2>/dev/null | head -1))"
 
@@ -338,7 +376,10 @@ else
                "${PAPER_INGEST_BASE}/api/papers/brief" 2>/dev/null \
              | grep -o '"id"' | wc -l | tr -d ' ' || echo 0)
   log "  corpus: ~${corpus_n} papers visible"
-  [[ "${corpus_n}" == "0" ]] && log "  WARN: empty corpus — pulse/RAG spans may be empty (query-embed + BM25 still fire)"
+  if [[ "${corpus_n}" == "0" ]]; then
+    log "  WARN: empty corpus — pulse/RAG spans may be empty (query-embed + BM25 still fire)"
+    _strict_or_skip "empty corpus — no embedded papers; scenario_c_rag_ask would be meaningless"
+  fi
 
   # Fire Pulse FIRST: it's an async deferred job (rate-limit 3/hour). Firing
   # early lets the worker run pulse_stage2_llm concurrently with the search/RAG
@@ -361,17 +402,23 @@ else
     >> "${SUMMARY_CSV}"
   log "  search-hybrid ×${PERF_CONCURRENCY} done in ${C1_ELAPSED}s"
 
-  # Batch 2 — cross-paper RAG: prepare_cross_paper_rag + embed_texts_post
+  # Batch 2 — cross-paper RAG: prepare_cross_paper_rag + embed_texts_post.
+  # RAG_BATCHES back-to-back batches accumulate into one latency file so p95
+  # is over n = RAG_BATCHES×RAG_CONCURRENCY (default 1 = legacy n=conc).
   : > "${TMPDIR_LG}/scen_c_rag_lat.txt"
   C2_START="$(date +%s)"
-  _fire_post_batch "scenario_c_rag" "/api/ask" \
-    '{"question":"What methods and results are discussed across these papers?","decompose":true}' \
-    "${RAG_CONCURRENCY}"
-  _drain_results "${TMPDIR_LG}/scen_c_rag_lat.txt"
+  _rag_b=1
+  while [[ ${_rag_b} -le ${RAG_BATCHES} ]]; do
+    _fire_post_batch "scenario_c_rag" "/api/ask" \
+      '{"question":"What methods and results are discussed across these papers?","decompose":true}' \
+      "${RAG_CONCURRENCY}"
+    _drain_results "${TMPDIR_LG}/scen_c_rag_lat.txt"
+    _rag_b=$(( _rag_b + 1 ))
+  done
   C2_ELAPSED=$(( $(date +%s) - C2_START )); [[ ${C2_ELAPSED} -le 0 ]] && C2_ELAPSED=1
   _emit_stats "scenario_c_rag_ask" "${TMPDIR_LG}/scen_c_rag_lat.txt" "${C2_ELAPSED}" \
     >> "${SUMMARY_CSV}"
-  log "  /api/ask ×${RAG_CONCURRENCY} (decompose) done in ${C2_ELAPSED}s"
+  log "  /api/ask ×${RAG_CONCURRENCY}×${RAG_BATCHES} batches (decompose) done in ${C2_ELAPSED}s"
 
   # Give the async Pulse worker a window to emit pulse_stage2_llm before
   # profile.sh collects the probe JSONL. Best-effort, bounded.

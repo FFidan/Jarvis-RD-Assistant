@@ -69,7 +69,7 @@ async def test_create_job_enqueues_allowed_kind(monkeypatch):
     fake_task.defer_async = AsyncMock(return_value=None)
     fake_kind_to_task = {"card.generate": fake_task}
 
-    with patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task):
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", fake_kind_to_task, clear=True):
         result = await jobs_router.create_job.__wrapped__(
             mock_request,
             body=CreateJobRequest(kind="card.generate"),

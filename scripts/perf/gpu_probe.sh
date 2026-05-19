@@ -51,6 +51,16 @@ TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_DIR="${OUT_DIR:-${REPO_ROOT}/artifacts/perf/${TIMESTAMP}}"
 mkdir -p "${OUT_DIR}"
 
+# Fail loud, not silent-0-line: if OUT_DIR is not writable (read-only FS,
+# wrong owner, SELinux), every >> append would die under `set -e` with an
+# opaque message. Probe-write a sentinel and exit 0 cleanly (the probe is
+# non-fatal to the bench; the bench records absent gpu-timeseries as a caveat).
+if ! ( : > "${OUT_DIR}/.gpu_probe.wtest" ) 2>/dev/null; then
+  echo "[gpu_probe] WARN: OUT_DIR not writable (${OUT_DIR}) — GPU probe disabled" >&2
+  exit 0
+fi
+rm -f "${OUT_DIR}/.gpu_probe.wtest" 2>/dev/null || true
+
 # Named constant for polling interval (env override supported).
 PERF_GPU_POLL_SECONDS="${PERF_GPU_POLL_SECONDS:-2}"
 
@@ -116,7 +126,9 @@ json_str_or_null() {
 # ---------------------------------------------------------------------------
 json_num_or_null() {
   local val="$1"
-  if [[ -z "${val}" ]]; then
+  # Empty OR non-numeric (e.g. nvidia-smi "N/A" / "[Not Supported]" on some
+  # driver/GPU combos) → JSON null, never a raw token that breaks the line.
+  if [[ -z "${val}" || ! "${val}" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
     printf 'null'
   else
     printf '%s' "${val}"
@@ -198,8 +210,14 @@ sample_nvidia_smi() {
     SAMPLE_VRAM_TOTAL=""
     SAMPLE_VRAM_USED=""
     SAMPLE_GPU_UTIL=""
+    SAMPLE_GPU_COUNT=""
     return
   fi
+
+  # Multi-GPU honesty: we only sample GPU 0 (head -n1 below). Record the count
+  # so a bundle from a box where load lands on GPU≠0 is detectable, not
+  # silently mismeasured.
+  SAMPLE_GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -c . || echo "")
 
   local raw
   # Query first GPU only (index 0). Fields: name,memory.total,memory.used,utilization.gpu
@@ -346,6 +364,7 @@ emit_run_metadata() {
   if [[ "${HAS_JQ}" -eq 1 ]]; then
     jq -n \
       --arg gpu_name "${SAMPLE_GPU_NAME:-}" \
+      --argjson gpu_count "$(json_num_or_null "${SAMPLE_GPU_COUNT:-}")" \
       --argjson vram_total_mb "$(json_num_or_null "${SAMPLE_VRAM_TOTAL}")" \
       --argjson vram_used_mb_at_start "$(json_num_or_null "${SAMPLE_VRAM_USED}")" \
       --argjson perf_concurrency "$(json_num_or_null "${concurrency_val}")" \
@@ -357,6 +376,7 @@ emit_run_metadata() {
       --arg degraded_note "${degraded_note}" \
       '{
         gpu_name: (if $gpu_name == "" then null else $gpu_name end),
+        gpu_count: $gpu_count,
         vram_total_mb: $vram_total_mb,
         vram_used_mb_at_start: $vram_used_mb_at_start,
         perf_concurrency: $perf_concurrency,
@@ -372,6 +392,7 @@ emit_run_metadata() {
     {
       printf '{\n'
       printf '  "gpu_name": %s,\n'                  "$(json_str_or_null "${SAMPLE_GPU_NAME}")"
+      printf '  "gpu_count": %s,\n'                 "$(json_num_or_null "${SAMPLE_GPU_COUNT:-}")"
       printf '  "vram_total_mb": %s,\n'              "$(json_num_or_null "${SAMPLE_VRAM_TOTAL}")"
       printf '  "vram_used_mb_at_start": %s,\n'      "$(json_num_or_null "${SAMPLE_VRAM_USED}")"
       printf '  "perf_concurrency": %s,\n'           "$(json_num_or_null "${concurrency_val}")"

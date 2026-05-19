@@ -214,3 +214,45 @@ grep -oE 'from"\./vendor-[^"]*\.js"' frontend/dist/assets/index-*.js | sort -u
 ```
 
 to identify which vendor chunks the entry bundle eagerly imports.
+
+---
+
+## Confirmatory bench — operator preconditions
+
+`scripts/perf/vllm_confirmatory_bench.sh` is a **separate, hermetic** entrypoint
+(not `make profile`). It runs the full vLLM-vs-Ollama matched-pair matrix on a
+GPU box and emits one verdictable bundle. Unlike `make profile` it **hard-aborts
+into the bundle** on any precondition failure (never a silent meaningless run).
+
+**Before the full run, prove the harness in ~5–8 min (zero matrix cost):**
+
+```bash
+BENCH_SMOKE=1 bash scripts/perf/vllm_confirmatory_bench.sh
+```
+
+Smoke forces Pair A only, concurrency 1, 1-paper seed, a 0.5B model, and
+`VLLM_GPU_MEMORY_UTILIZATION=0.30`. It exercises every stage/trap/assert/restore
+path; the verdict is **not valid** (stamped as such) — it only proves the
+harness on the real box. Only run the full matrix if smoke exits 0.
+
+**Operator preconditions (the bench preflight asserts these and aborts loudly):**
+
+| Requirement | Why |
+|---|---|
+| `docker curl python3 git awk tar` on host | preflight hard-checks |
+| NVIDIA GPU, `nvidia-smi` present, VRAM ≥ `MIN_VRAM_MB` (default 40000) | full matrix needs a 48 GB box; set `MIN_VRAM_MB=0` only for smoke |
+| `.env` present with `EMBEDDING_DIMENSION` matching `litellm/config.yaml` `embed` alias `dimensions:` | mismatch makes every paper fail to embed; preflight drift-guard aborts early |
+| `secrets/jarvis_api_key.txt`, `docker-compose.vllm.yml`, `docker-compose.perf.yml`, `litellm/config.yaml` | required files |
+| Single non-deleted user **or** `API_KEY_LOGIN_ENABLED=true` in `.env`, plus an admin (auto-provisioned if DB fresh) | Scenario C session mint → C1 |
+| Disk: ≥ ~20 GB free (vLLM image ~16 GB + AWQ weights + Ollama models) | image/model pulls |
+
+**Env knobs** (all optional): `BENCH_PAIRS` (`A B`), `BENCH_CONCURRENCY`
+(`4 8`), `RAG_MAX_SECONDS` (600), `BENCH_BOOT_TIMEOUT_S` (300),
+`VLLM_BOOT_TIMEOUT_S` (900), `VLLM_GPU_MEMORY_UTILIZATION` (0.90 — lower if the
+recorded coexistence budget warns of OOM risk vs the pinned embedder),
+`COMPOSE_PROJECT_NAME` (honored if set).
+
+**On abort the bundle self-diagnoses** — `ABORT.txt`, per-sweep `loadgen.log`,
+`loadgen-FATAL.txt`, `vllm-boot-fail.log`, `env.txt` (incl. derived compose
+project + VRAM budget). Copy `artifacts/perf/vllm-confirmatory-<ts>.tar.gz`
+back; the agent verdicts purely from it.

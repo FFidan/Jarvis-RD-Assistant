@@ -141,10 +141,28 @@ PY
 litellm_smart_to_vllm()   { _litellm_rewrite_smart vllm   "$1"; }
 litellm_smart_to_ollama() { _litellm_rewrite_smart ollama "$1"; }
 
-# Deterministic restore — the tracked file is pristine in git.
+# Deterministic restore. Primary: git checkout. Fallback (dirty index / a
+# `git checkout --` failure): write HEAD's content directly — same pristine
+# baseline _litellm_rewrite_smart builds from, never touches the index, so it
+# cannot clobber unrelated staged changes. A left-mutated config is a
+# measurement-validity hazard, so the post-condition is asserted loudly.
 litellm_restore() {
-  git -C "${BENCH_REPO_ROOT}" checkout -- litellm/config.yaml \
-    && bench_log "litellm/config.yaml restored (git checkout --)"
+  local cfg; cfg="$(_litellm_path)"
+  if git -C "${BENCH_REPO_ROOT}" checkout -- litellm/config.yaml 2>/dev/null; then
+    bench_log "litellm/config.yaml restored (git checkout --)"
+  elif git -C "${BENCH_REPO_ROOT}" show HEAD:litellm/config.yaml > "${cfg}" 2>/dev/null; then
+    bench_log "litellm/config.yaml restored (git show HEAD: fallback — index untouched)"
+  else
+    bench_die "litellm/config.yaml restore FAILED (git checkout AND HEAD-show) — config left MUTATED; bench validity compromised"
+    return 1
+  fi
+  # Post-condition: exactly one uncommented active `smart` entry.
+  local n
+  n="$(grep -cE '^[[:space:]]*-[[:space:]]+model_name:[[:space:]]*"smart"[[:space:]]*$' "${cfg}" 2>/dev/null || echo 0)"
+  if [[ "${n}" != "1" ]]; then
+    bench_die "litellm/config.yaml restore post-check: expected 1 active 'smart' block, found ${n} — config left MUTATED"
+    return 1
+  fi
 }
 
 # --- vLLM routing proof ---------------------------------------------------
@@ -154,8 +172,12 @@ litellm_restore() {
 # caller treats as inconclusive (warn, not silent-pass).
 vllm_success_total() {
   local port="${VLLM_HOST_PORT:-8080}"
+  # Explicit matched-flag (portable across gawk/mawk uninitialized-var
+  # semantics): counter ABSENT → "" (inconclusive, caller warns, never
+  # silent-pass); counter present (even 0) → the integer.
   curl -sf --max-time 5 "http://localhost:${port}/metrics" 2>/dev/null \
-    | awk '/^vllm:request_success_total/ {s+=$NF} END {if (s=="") print ""; else printf "%d", s}'
+    | awk '/^vllm:request_success_total/ {s+=$NF; seen=1}
+           END {if (seen) printf "%d", s}'
 }
 
 # --- /api/ask SSE drain (quality capture) ---------------------------------
@@ -166,8 +188,19 @@ vllm_success_total() {
 # DIFF.md still has something to compare.
 sse_drain() {
   local base="$1" cookie="$2" body="$3" out="$4"
-  local raw
-  raw="$(curl -sN --max-time "${SSE_MAX_SECONDS:-300}" \
+  local raw nobuf="-N"
+  # curl <7.68 silently ignores -N and buffers the whole stream → the
+  # SSE_MAX_SECONDS timeout fires before the answer returns. Detect + warn.
+  local cv; cv="$(curl --version 2>/dev/null | awk 'NR==1{print $2}')"
+  if [[ -n "${cv}" ]]; then
+    local cmaj cmin; cmaj="${cv%%.*}"; cmin="${cv#*.}"; cmin="${cmin%%.*}"
+    if [[ "${cmaj}" =~ ^[0-9]+$ && "${cmin}" =~ ^[0-9]+$ ]] \
+       && { (( cmaj < 7 )) || { (( cmaj == 7 )) && (( cmin < 68 )); }; }; then
+      nobuf=""
+      bench_warn "curl ${cv} < 7.68: -N unsupported, SSE may buffer (quality capture only)"
+    fi
+  fi
+  raw="$(curl -s ${nobuf} --max-time "${SSE_MAX_SECONDS:-300}" \
             -X POST "${base}/api/ask" \
             -b "${cookie}" \
             -H "Content-Type: application/json" \
@@ -177,12 +210,32 @@ sse_drain() {
     echo "[sse_drain: empty response — endpoint unreachable or 500]" > "${out}"
     return 1
   fi
-  # Extract `data:` payloads, drop the [DONE] sentinel, strip a leading space.
+  # /api/ask is NOT always SSE: the decompose path returns a single JSON body
+  # {"answer": "...","sources":[...]}. Try SSE `data:` frames first; if none,
+  # fall back to extracting .answer from a JSON body so the quality DIFF (and
+  # the manual sign-off gate) is actually populated instead of the useless
+  # "[sse_drain: no data events parsed]" placeholder.
   printf '%s\n' "${raw}" \
     | sed -n 's/^data: \{0,1\}//p' \
     | grep -v '^\[DONE\]$' \
     > "${out}" || true
-  [[ -s "${out}" ]] || echo "[sse_drain: no data events parsed]" > "${out}"
+  if [[ ! -s "${out}" ]]; then
+    printf '%s' "${raw}" | python3 -c '
+import sys, json
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.stdout.write(raw.strip()[:8000]); sys.exit(0)
+ans = d.get("answer")
+if ans:
+    src = d.get("sources") or []
+    sys.stdout.write(ans.rstrip() + "\n\n[sources: %d]\n" % len(src))
+else:
+    sys.stdout.write(json.dumps(d)[:8000])
+' > "${out}" 2>/dev/null || true
+  fi
+  [[ -s "${out}" ]] || echo "[sse_drain: empty/unparseable answer body]" > "${out}"
 }
 
 # --- scenario_c_rag_ask extractor ----------------------------------------

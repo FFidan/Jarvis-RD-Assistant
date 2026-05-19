@@ -98,7 +98,7 @@ async def test_build_jobs_router_known_kind_enqueues():
     fake_task.defer_async = AsyncMock(return_value=None)
     fake_kind_to_task = {"card.generate": fake_task}
 
-    with patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task):
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", fake_kind_to_task, clear=True):
         result = await handlers["create_job"](
             request=MagicMock(),
             body=request_model(kind="card.generate", payload={"paper_id": 1}),
@@ -346,7 +346,7 @@ async def test_create_job_skips_ownership_check_in_single_tenant_mode():
 
     fake_task = AsyncMock()
     fake_task.defer_async = AsyncMock(return_value=None)
-    with patch("jarvis_common.task_registry.KIND_TO_TASK", {"foo.bar": fake_task}):
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"foo.bar": fake_task}, clear=True):
         result = await handlers["create_job"](
             request=MagicMock(),
             body=request_model(kind="foo.bar", payload={"paper_id": 42}),
@@ -372,7 +372,7 @@ async def test_create_job_403_when_paper_owned_by_other_user():
     fake_task = AsyncMock()
     fake_task.defer_async = AsyncMock(return_value=None)
     with (
-        patch("jarvis_common.task_registry.KIND_TO_TASK", {"foo.bar": fake_task}),
+        patch.dict("jarvis_common.task_registry._TASK_MAP", {"foo.bar": fake_task}, clear=True),
         pytest.raises(HTTPException) as exc,
     ):
         await handlers["create_job"](
@@ -392,7 +392,7 @@ async def test_create_job_skips_acquire_when_extractor_returns_none():
 
     fake_task = AsyncMock()
     fake_task.defer_async = AsyncMock(return_value=None)
-    with patch("jarvis_common.task_registry.KIND_TO_TASK", {"foo.bar": fake_task}):
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"foo.bar": fake_task}, clear=True):
         result = await handlers["create_job"](
             request=MagicMock(),
             # no paper_id key → extractor returns None → no ownership probe
@@ -713,7 +713,7 @@ async def test_create_job_route_dispatches_to_task_registry():
     fake_task.defer_async = AsyncMock(return_value=None)
     fake_kind_to_task = {"paper.process": fake_task}
 
-    with patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task):
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", fake_kind_to_task, clear=True):
         result = await handlers["create_job"](
             request=MagicMock(),
             body=request_model(kind="paper.process", payload={"paper_id": 42}),
@@ -753,7 +753,7 @@ async def test_create_job_noop_test_returns_201(monkeypatch):
     fake_task.defer_async = AsyncMock(return_value=None)
     fake_kind_to_task = {"noop.test": fake_task}
 
-    with patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task):
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", fake_kind_to_task, clear=True):
         result = await handlers["create_job"](
             request=MagicMock(),
             body=request_model(kind="noop.test"),

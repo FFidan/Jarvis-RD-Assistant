@@ -62,7 +62,10 @@ services:
     # Instruct-AWQ — vLLM's batching advantage is exercised by PERF_CONCURRENCY,
     # not model size. See docs/perf/2026-05-18-vllm-vs-ollama-decision.md
     # §"Lean 16 GB bench".
-    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.6.6}
+    # Default bumped v0.6.6 → v0.11.0: v0.6.6 lacks Qwen3 (Transformers
+    # KeyError:'qwen3') and sm_120/Blackwell kernels. v0.11.0 supports
+    # Qwen3+AWQ, sm_89 (Ada) and sm_120 (Blackwell). Pinned + overridable.
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.11.0}
     profiles: [vllm]
     restart: "no"
     # Loopback-bind only — same security posture as the ollama service
