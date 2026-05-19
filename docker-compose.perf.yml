@@ -28,5 +28,6 @@ services:
     environment:
       PERF_PROBE_ENABLED: "1"
       PERF_PROBE_PATH: /data/perf/perf-probe.jsonl
+      ASK_RATE_LIMIT: "${ASK_RATE_LIMIT:-10/minute}"
     volumes:
       - ./shared/perf:/data/perf

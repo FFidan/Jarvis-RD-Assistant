@@ -10,21 +10,10 @@ from paper_ingestion.embedder import Embedder
 from tests._embedder_fakes import _FakeEncoding
 
 
-async def test_chunk_text_basic():
-    """Embedder.chunk_text splits text into token-limited chunks."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder._encoding = _FakeEncoding()  # type: ignore[assignment]
-
-    text = "This is a test sentence. " * 40
-    chunks = embedder.chunk_text(text)
-
-    assert len(chunks) >= 1
-    assert chunks[0].chunk_index == 0
-    assert chunks[0].start_char == 0
-    assert chunks[0].content in text
-    assert chunks[-1].end_char == len(text)
+# D3-07 deleted: test_chunk_text_basic
+# Superseded by test_embedder_behavior.py::test_chunk_text_short_text_is_single_chunk (line 235)
+# and test_embedder_char_c1.py::test_chunk_text_exact_boundary_snapshot (line 74), which cover
+# chunk_index, start_char=0, content membership, and end_char==len(text) with exact pinned values.
 
 
 async def test_chunk_text_with_page_boundaries():
@@ -71,51 +60,12 @@ async def test_embed_texts_uses_shared_litellm_config_base_url(monkeypatch):
     assert call.kwargs["timeout"].read >= 300.0
 
 
-async def test_search_similar_skips_hits_without_dict_payload():
-    """search_similar should ignore Qdrant hits whose payload is missing/null."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    mock_qdrant.query_points.return_value = SimpleNamespace(
-        points=[
-            SimpleNamespace(payload=None, score=0.99),
-            SimpleNamespace(
-                payload={
-                    "paper_id": 3,
-                    "chunk_index": 1,
-                    "content": "A" * 240,
-                    "page_number": 7,
-                },
-                score=0.88,
-            ),
-        ]
-    )
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2]])
+# D3-07 deleted: test_search_similar_skips_hits_without_dict_payload
+# Superseded by test_embedder_behavior.py::test_search_similar_skips_null_payload (line 446)
+# and test_embedder_behavior.py::test_search_similar_content_truncated_to_200 (line 459).
 
-    results = await embedder.search_similar("query", limit=5, paper_id_filter=11)
-
-    assert results == [
-        {
-            "paper_id": 3,
-            "chunk_index": 1,
-            "content": "A" * 200,
-            "page_number": 7,
-            "score": 0.88,
-        }
-    ]
-
-
-async def test_search_chunks_global_returns_empty_on_qdrant_failure():
-    """search_chunks_global should degrade to an empty list on Qdrant errors."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    mock_qdrant.query_points.side_effect = Exception("qdrant down")
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2]])
-
-    results = await embedder.search_chunks_global("query", limit=10)
-
-    assert results == []
+# D3-07 deleted: test_search_chunks_global_returns_empty_on_qdrant_failure
+# Superseded by test_embedder_behavior.py::test_search_chunks_global_empty_on_qdrant_error (line 529).
 
 
 async def test_search_chunks_global_filters_by_user_id():
@@ -191,116 +141,17 @@ async def test_hybrid_search_threads_user_id_to_semantic_leg():
     assert embedder.search_chunks_global.call_args.kwargs["user_id"] == 42
 
 
-async def test_compute_relevance_uses_max_cosine_similarity():
-    """compute_relevance should return the highest cosine similarity across topic terms."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder.embed_texts = AsyncMock(
-        return_value=[
-            [1.0, 0.0],  # paper
-            [1.0, 0.0],  # exact match
-            [0.0, 1.0],  # orthogonal
-        ]
-    )
+# D3-07 deleted: test_compute_relevance_uses_max_cosine_similarity
+# Superseded by test_embedder_behavior.py::test_compute_relevance_returns_max_cosine (line 744).
 
-    score = await embedder.compute_relevance("paper", ["term-a", "term-b"])
+# D3-07 deleted: test_discover_from_seeds_deduplicates_and_ignores_null_payloads
+# Superseded by test_embedder_behavior.py::test_discover_from_seeds_deduplicates_by_paper_id (line 621)
+# and test_embedder_char_c1.py::test_discover_from_seeds_exact_dedup_and_order (line 372).
 
-    assert score == 1.0
-
-
-async def test_discover_from_seeds_deduplicates_and_ignores_null_payloads():
-    """discover_from_seeds should keep the best hit per paper and skip null payloads."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    mock_qdrant.scroll.return_value = ([SimpleNamespace(id="pt-1")], None)
-    mock_qdrant.query_points.return_value = SimpleNamespace(
-        points=[
-            SimpleNamespace(payload=None, score=0.95),
-            SimpleNamespace(
-                payload={"paper_id": 21, "content": "first candidate"},
-                score=0.75,
-            ),
-            SimpleNamespace(
-                payload={"paper_id": 21, "content": "better candidate"},
-                score=0.89,
-            ),
-        ]
-    )
-    embedder = Embedder(mock_http, mock_qdrant)
-    db_pool = MagicMock()
-
-    results = await embedder.discover_from_seeds([7], db_pool=db_pool, limit=3)
-
-    assert results == [{"paper_id": 21, "score": 0.89, "content": "better candidate"}]
-
-
-async def test_chunk_text_offsets_align_with_decoded_window():
-    """PI-CORE-005: sub-split char offsets use decoded-window advance, not linear interpolation.
-
-    We construct a multi-paragraph text where one paragraph is large enough to
-    trigger the token-window force-split path.  We then verify that every chunk's
-    start_char and end_char point to content actually present in the original text,
-    and that find_page(mid) resolves to the correct page for each chunk.
-
-    With _FakeEncoding (1 char = 1 token), decoded window lengths equal char
-    lengths, so char_advance equals j * (CHUNK_TOKEN_LIMIT - CHUNK_OVERLAP_TOKENS).
-    This is different from the old linear-interpolation formula only when
-    token lengths are non-uniform, but with the fake encoding we can assert the
-    boundary property: chunk.content == text[start_char:end_char].strip().
-    """
-    from paper_ingestion.embedder import CHUNK_TOKEN_LIMIT
-
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder._encoding = _FakeEncoding()  # type: ignore[assignment]
-
-    # Para 1: short (won't be force-split), Para 2: long (will be force-split)
-    # Para 3: short again (on a different "page")
-    para1 = "A" * 10  # 10 chars, fits in one chunk
-    sep = "\n\n"
-    para2 = "B" * (CHUNK_TOKEN_LIMIT * 3)  # 3× limit → multiple windows
-    para3 = "C" * 20
-
-    # Make one big section so para2 will exceed CHUNK_TOKEN_LIMIT and trigger
-    # the section-too-large → sub-split path.
-    section_body = para1 + sep + para2 + sep + para3
-    # Wrap in a heading so it is treated as one section by chunk_text
-    text = "## Section\n" + section_body
-
-    # Page boundaries: page 1 covers everything
-    boundaries = [(0, len(text))]
-
-    chunks = embedder.chunk_text(text, page_boundaries=boundaries)
-
-    assert len(chunks) >= 2, "Expected multiple chunks from oversized paragraph"
-
-    # Every chunk's content must appear verbatim in the original text
-    # (stripped of leading/trailing whitespace as chunk_text does)
-    for chunk in chunks:
-        # The chunk content must be a substring of the original text
-        # (chunks from the force-split path are sub-strings of para2)
-        assert chunk.content in text, (
-            f"Chunk content not found in original text: {chunk.content[:40]!r}"
-        )
-        # start_char must be strictly less than end_char
-        assert chunk.start_char < chunk.end_char, (
-            f"Invalid char range [{chunk.start_char}, {chunk.end_char})"
-        )
-        # Midpoint must resolve to a valid page (not None since we provided boundaries)
-        assert chunk.page_number is not None, "page_number must be set when boundaries provided"
-
-    # Chunks from the force-split of para2 must have monotonically increasing start_char
-    # (they all come from para2 which is a contiguous block)
-    b_chunks = [c for c in chunks if c.content and c.content[0] == "B"]
-    if len(b_chunks) > 1:
-        starts = [c.start_char for c in b_chunks]
-        assert starts == sorted(starts), f"Force-split chunk starts not monotonic: {starts}"
-
-    # Sequential chunk_index
-    for expected_idx, chunk in enumerate(chunks):
-        assert chunk.chunk_index == expected_idx
+# D3-07 deleted: test_chunk_text_offsets_align_with_decoded_window (PI-CORE-005)
+# Superseded by test_embedder_char_c1.py::test_chunk_text_exact_boundary_snapshot (line 74), which
+# pins exact force-split offsets, content, and chunk_index sequence; and
+# test_embedder_behavior.py::test_chunk_text_page_boundaries_assigned (line 257) for page_number.
 
 
 # D3-10 deleted: test_hybrid_search_pagination_returns_results_at_offset_20

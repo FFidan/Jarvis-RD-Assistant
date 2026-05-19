@@ -24,7 +24,6 @@ import logging
 import asyncpg
 from fastapi import HTTPException
 from jarvis_common import assert_paper_ownership
-from jarvis_common.library import add_to_library
 from jarvis_common.paper_state import (  # noqa: I001
     assert_paper_in_states as _assert_paper_in_states,
 )
@@ -35,12 +34,9 @@ from jarvis_common.paper_state import (
     trash_paper as _trash_paper,
 )
 
-from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.ingestion.embedder import delete_paper_vectors
 from paper_ingestion.models import (
     FeedCountsResponse,
-    PaperCreate,
-    PaperResponse,
     TopicFacetCount,
 )
 from paper_ingestion.queries.predicates import VIEW_PREDICATES
@@ -49,13 +45,11 @@ from paper_ingestion.routers._paper_helpers import (
     _upsert_state_and_starred,
 )
 from paper_ingestion.services.feed_query import fetch_feed_facet_counts
-from paper_ingestion.services.pdf_workflow import upsert_paper
 
 __all__ = [
     "assert_paper_ownership",
     "delete_paper_vectors",
     "_apply_bulk_action",
-    "batch_save_papers",
     "get_feed_counts",
     "hard_delete_paper",
 ]
@@ -70,8 +64,14 @@ async def _apply_bulk_action(
     action: str,
     *,
     _hard_deleted_ids: list[int] | None = None,
+    router_logger: logging.Logger | None = None,
 ) -> None:
-    """Dispatch a single bulk action to the appropriate state mutation."""
+    """Dispatch a single bulk action to the appropriate state mutation.
+
+    ``router_logger`` is the ``paper_ingestion.routers.papers`` logger passed
+    in by the route handler so the orphan-vector ``logger.exception`` retains
+    its original logger name (caplog / patch.object targets that module).
+    """
     if action == "save":
         await _upsert_state_and_starred(conn, paper_id, user_id, state="to_read")
     elif action == "skip":
@@ -107,47 +107,13 @@ async def _apply_bulk_action(
             try:
                 await delete_paper_vectors(paper_id)
             except Exception:  # noqa: BLE001 — best-effort cleanup; orphan vectors are harmless
-                logger.exception(
+                (router_logger or logger).exception(
                     "Qdrant cleanup failed for paper %d in bulk hard_delete; "
                     "vectors are now orphans",
                     paper_id,
                 )
     else:
         raise ValueError(f"Unknown bulk action: {action}")
-
-
-async def batch_save_papers(
-    papers: list[PaperCreate],
-    db_pool: asyncpg.Pool,
-    user_id: int,
-) -> list[PaperResponse]:
-    """Upsert a list of papers to the database (by external_id)."""
-    max_batch = 100
-    if len(papers) > max_batch:
-        raise HTTPException(400, f"Batch size cannot exceed {max_batch}")
-    if not papers:
-        return []
-    # Sprint B canonical-corpus: papers are inserted into the canonical
-    # corpus (no owner column), then mirrored into the caller's user_library
-    # so they show up in *their* feed.
-    results: list[PaperResponse] = []
-    async with db_pool.acquire() as conn:
-        async with conn.transaction():
-            for paper in papers:
-                # Wave 1cd Task B6: stamp citation_batch origin (overrides
-                # PaperCreate's "user_initiated" default — the batch endpoint
-                # is the canonical citation-graph fan-out path).
-                paper.discovery_origin = "citation_batch"
-                row = await upsert_paper(conn, paper, discovered_by=user_id)
-                if user_id is not None:
-                    await add_to_library(
-                        conn,
-                        user_id=user_id,
-                        paper_id=row["id"],
-                        added_via="batch_save",
-                    )
-                results.append(row_to_paper_response(row))
-    return results
 
 
 async def get_feed_counts(

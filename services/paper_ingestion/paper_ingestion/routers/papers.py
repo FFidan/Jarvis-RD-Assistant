@@ -502,7 +502,7 @@ async def _apply_bulk_action(
 ) -> None:
     """Dispatch a single bulk action (C3: delegates to papers_service)."""
     await papers_service._apply_bulk_action(
-        conn, paper_id, user_id, action, _hard_deleted_ids=_hard_deleted_ids
+        conn, paper_id, user_id, action, _hard_deleted_ids=_hard_deleted_ids, router_logger=logger
     )
 
 

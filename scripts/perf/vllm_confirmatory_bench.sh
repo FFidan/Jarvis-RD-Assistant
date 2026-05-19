@@ -67,8 +67,16 @@ PAIR_B_OLLAMA_MODEL="${PAIR_B_OLLAMA_MODEL:-qwen3:8b}"
 # future-proof). Still pinned (reproducible) and overridable via VLLM_IMAGE.
 export VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.11.0}"
 export VLLM_HOST_PORT="${VLLM_HOST_PORT:-8080}"
-export VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
+export VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.75}"
 export VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-8192}"
+
+# --- bench-only opt-in overrides (profile.sh never sets these) ----------------
+# Exempts bench sweep requests from the default 10/minute /api/ask limit so
+# c8 × 5 batches = 40 requests land cleanly instead of hitting 429s.
+export ASK_RATE_LIMIT="${ASK_RATE_LIMIT:-1000/minute}"
+# Allows Ollama to serve concurrent embed calls; default 2 serialises requests
+# at c≥4, making C2 measure queue saturation rather than real throughput delta.
+export OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-16}"
 
 # --- BENCH_SMOKE: <8-min full-control-flow harness proof (verdict INVALID) --
 # Runs every stage/trap/assert/restore path with trivial cost so the harness
@@ -307,7 +315,7 @@ stage_boot() {
     LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev \
     docker compose --env-file .env --env-file versions.env \
       -f docker-compose.yml -f docker-compose.perf.yml --profile perf \
-      up -d qdrant ollama litellm ) \
+      up -d --force-recreate qdrant ollama litellm ) \
     || die "supporting services pre-start failed"
   # Wait for qdrant readiness via its compose healthcheck (qdrant has no host
   # port and no curl/python in-image, so docker-health is the only signal).

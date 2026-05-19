@@ -5,6 +5,7 @@ summarization, and weekly digest.
 """
 
 import logging
+import os
 
 import asyncpg
 import httpx
@@ -53,6 +54,10 @@ router = APIRouter(
         500: {"model": ErrorResponse},
     },
 )
+
+# Allows bench to exempt itself without application code risk; default preserves
+# the production rate limit (10/minute per user/IP).
+_ASK_RATE_LIMIT = os.getenv("ASK_RATE_LIMIT", "10/minute")
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +298,7 @@ async def ask_paper_stream(
 
 
 @router.post("/ask", response_model=AskResponse)
-@limiter.limit("10/minute")
+@limiter.limit(_ASK_RATE_LIMIT)
 async def ask_cross_paper(
     request: Request,
     body: CrossPaperAskRequest,
@@ -382,7 +387,7 @@ async def ask_cross_paper(
 
 
 @router.post("/ask/stream")
-@limiter.limit("10/minute")
+@limiter.limit(_ASK_RATE_LIMIT)
 async def ask_cross_paper_stream(
     request: Request,
     body: CrossPaperAskRequest,

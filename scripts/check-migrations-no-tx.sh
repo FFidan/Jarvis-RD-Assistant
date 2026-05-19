@@ -69,15 +69,39 @@ if printf '%s\n' "$INIT_SQL_NO_COMMENTS" | grep -q "generate_series"; then
   exit 1
 fi
 
+# WAVE 1 squash (2026-05-19): the RUNTIME_REPLAY_VERSIONS absence loop was
+# replaced by a positive contiguity check. Post-squash init.sql pre-marks ALL
+# 88 versions (1..88 contiguous, no gaps) so the runtime runner is a no-op on
+# fresh install. The generate_series ban above is still load-bearing — the
+# explicit contiguous list is the audit trail that init.sql truly embodies each
+# version.
 BOOTSTRAP_SQL=$(printf '%s\n' "$INIT_SQL_NO_COMMENTS" | sed -n '/CREATE TABLE IF NOT EXISTS schema_migrations/,$p')
-RUNTIME_REPLAY_VERSIONS=(33 52 53)
 
-for version in "${RUNTIME_REPLAY_VERSIONS[@]}"; do
-  if printf '%s\n' "$BOOTSTRAP_SQL" | grep -qE "\\($version\\)"; then
-    echo "db/init.sql must not pre-seed migration $version; it is replayed by the runtime runner." >&2
-    exit 1
-  fi
-done
+# Extract the seeded version numbers from the INSERT VALUES block.
+SEEDED_VERSIONS=$(printf '%s\n' "$BOOTSTRAP_SQL" \
+  | grep -oE '\([0-9]+\)' \
+  | tr -d '()' \
+  | sort -n)
+
+SEEDED_COUNT=$(printf '%s\n' "$SEEDED_VERSIONS" | grep -c '[0-9]')
+SEEDED_MIN=$(printf '%s\n' "$SEEDED_VERSIONS" | head -1)
+SEEDED_MAX=$(printf '%s\n' "$SEEDED_VERSIONS" | tail -1)
+
+if [ "$SEEDED_COUNT" -ne 88 ] || [ "$SEEDED_MIN" -ne 1 ] || [ "$SEEDED_MAX" -ne 88 ]; then
+  echo "db/init.sql schema_migrations bootstrap must seed exactly versions 1..88 contiguous." >&2
+  echo "  Found: count=$SEEDED_COUNT, min=$SEEDED_MIN, max=$SEEDED_MAX (expected 88, 1, 88)." >&2
+  exit 1
+fi
+
+# Verify no gaps: seeded list must equal seq 1 88.
+EXPECTED=$(seq 1 88 | tr '\n' ' ')
+ACTUAL=$(printf '%s\n' "$SEEDED_VERSIONS" | tr '\n' ' ')
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "db/init.sql schema_migrations bootstrap has gaps or duplicates." >&2
+  echo "  Expected: $EXPECTED" >&2
+  echo "  Actual:   $ACTUAL" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Check 4: ADD CONSTRAINT (migrations 044+) must be inside a DO $$ ... EXCEPTION
