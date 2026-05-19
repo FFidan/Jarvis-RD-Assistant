@@ -878,3 +878,129 @@ async def test_source_ctor_receives_db_pool():
     assert stubs["openalex"].db_pool is pool, (
         "openalex source was constructed without db_pool; per-source rate-limiter is inert"
     )
+
+
+# ---------------------------------------------------------------------------
+# B-CAP: per_source_cap must scale with ready_sources, not all sources
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_per_source_cap_scales_with_ready_sources_not_all_sources():
+    """B-CAP characterisation: when 3 of 5 sources are in cooldown, the 2 active
+    sources should receive a per_source_cap sized for 2, not 5.
+
+    Invariant: limit passed to fetch_new_since when 2/5 sources are ready
+    must be STRICTLY GREATER than limit passed when all 5 are ready
+    (because the same total budget is spread over fewer sources).
+
+    Uses all five valid SourceType values (arxiv, semantic_scholar, local,
+    openalex, pubmed) — no invalid enum strings.
+    """
+    from datetime import timedelta
+
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    # All five valid source type strings.
+    all_types = ["arxiv", "semantic_scholar", "local", "openalex", "pubmed"]
+    # 3 of the 5 will be put in cooldown; 2 remain active.
+    cooled = {"local", "openalex", "pubmed"}
+
+    # --- run 1: all 5 sources ready (no cooldowns) ---
+    class _CapRecorder(_StubSource):
+        """Records the ``limit`` kwarg passed to fetch_new_since."""
+
+        last_limit: int = 0
+
+        async def fetch_new_since(self, since, topics, limit=100, user_id=None):
+            _CapRecorder.last_limit = limit
+            self.fetch_new_since_calls += 1
+            return []
+
+    pool1, conn1 = _make_pool_and_conn()
+    conn1.fetch.return_value = [_source_row(t, i + 1) for i, t in enumerate(all_types)]
+    profile = _make_profile()  # stage2_top_k=30
+
+    stubs_all = {t: _CapRecorder() for t in all_types}
+
+    def fake_get_all(name):
+        return _make_source_class(stubs_all[name])
+
+    no_cooldown_rl = _stub_rate_limiter(in_cooldown=False)
+
+    with (
+        patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get_all),
+        patch(
+            "paper_ingestion.pulse.discovery.PersistentSourceRateLimiter",
+            return_value=no_cooldown_rl,
+        ),
+    ):
+        await discover_candidates(
+            pool1, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+
+    limit_all_ready = _CapRecorder.last_limit
+    assert limit_all_ready > 0, "fetch_new_since was never called in run-all-ready"
+
+    # --- run 2: 3 of 5 sources in cooldown → only 2 ready ---
+    class _ReadyCapRecorder(_StubSource):
+        last_limit: int = 0
+
+        async def fetch_new_since(self, since, topics, limit=100, user_id=None):
+            _ReadyCapRecorder.last_limit = limit
+            self.fetch_new_since_calls += 1
+            return []
+
+    class _CooledStub(_StubSource):
+        source_type = "local"
+
+    pool2, conn2 = _make_pool_and_conn()
+    conn2.fetch.return_value = [_source_row(t, i + 1) for i, t in enumerate(all_types)]
+
+    cooldown_until = datetime.now(UTC) + timedelta(hours=1)
+
+    # Assign source_type attribute so the cooldown gate can interrogate it.
+    ready1 = _ReadyCapRecorder()
+    ready1.source_type = "arxiv"
+    ready2 = _ReadyCapRecorder()
+    ready2.source_type = "semantic_scholar"
+
+    stubs_partial: dict = {
+        "arxiv": ready1,
+        "semantic_scholar": ready2,
+        "local": _CooledStub(),
+        "openalex": _CooledStub(),
+        "pubmed": _CooledStub(),
+    }
+
+    def fake_get_partial(name):
+        return _make_source_class(stubs_partial[name])
+
+    def rl_factory_partial(source_type, **_kwargs):
+        if source_type in cooled:
+            return _stub_rate_limiter(in_cooldown=True, until=cooldown_until)
+        return _stub_rate_limiter(in_cooldown=False)
+
+    with (
+        patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get_partial),
+        patch(
+            "paper_ingestion.pulse.discovery.PersistentSourceRateLimiter",
+            side_effect=rl_factory_partial,
+        ),
+    ):
+        await discover_candidates(
+            pool2, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+
+    limit_2_of_5_ready = _ReadyCapRecorder.last_limit
+    assert limit_2_of_5_ready > 0, (
+        "fetch_new_since was never called for ready sources in run-2-of-5"
+    )
+
+    # KEY INVARIANT: with fewer active sources, each should get a higher cap
+    assert limit_2_of_5_ready > limit_all_ready, (
+        f"B-CAP bug: with only 2/5 sources ready, per_source_cap={limit_2_of_5_ready} "
+        f"should be > {limit_all_ready} (cap when all 5 are ready), "
+        f"but it is not. The cap is still computed from len(sources)=5 "
+        f"instead of len(ready_sources)=2."
+    )

@@ -199,20 +199,6 @@ async def discover_candidates(
     if not sources:
         return ([], {}, {})
 
-    per_source_cap = max(
-        10,
-        min(
-            profile.stage2_top_k,
-            math.ceil(profile.stage2_top_k * 2 / max(1, len(sources))),
-        ),
-    )
-
-    logger.info(
-        "pulse.discover: fan-out start sources=%d per_source_cap=%d",
-        len(sources),
-        per_source_cap,
-    )
-
     # ------------------------------------------------------------------
     # Cooldown gate — skip sources that are in a persistent cooldown.
     # ------------------------------------------------------------------
@@ -284,6 +270,21 @@ async def discover_candidates(
                 snapshot["last_request_at"],
             )
         ready_sources.append(src)
+
+    per_source_cap = max(
+        10,
+        min(
+            profile.stage2_top_k,
+            math.ceil(profile.stage2_top_k * 2 / max(1, len(ready_sources))),
+        ),
+    )
+
+    logger.info(
+        "pulse.discover: fan-out start sources=%d ready=%d per_source_cap=%d",
+        len(sources),
+        len(ready_sources),
+        per_source_cap,
+    )
 
     results = await asyncio.gather(
         *[
