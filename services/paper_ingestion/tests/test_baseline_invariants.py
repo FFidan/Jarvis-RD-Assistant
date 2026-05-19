@@ -614,6 +614,129 @@ async def test_baseline_owned_data_cascades_on_user_delete(
 
 
 # ---------------------------------------------------------------------------
+# Invariant 083 — thread.user_id FK ON DELETE CASCADE.
+# Re-homed from: test_migration_083.py:114-121 (live behavioral) +
+#                test_migration_083.py:83-98 (FK introspection).
+# Re-home form: schema-introspection (delete_rule == CASCADE) +
+#               behavioral cascade round-trip (user delete removes thread row).
+# Confirmed: db/init.sql:1934 — thread_user_id_fkey … ON DELETE CASCADE.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_baseline_thread_user_id_fkey_is_cascade(live_pg_dsn: str) -> None:
+    """thread_user_id_fkey has delete_rule == CASCADE in the regenerated baseline."""
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            rule = await _fk_delete_rule(conn, "thread", "thread_user_id_fkey")
+            assert rule == "CASCADE", (
+                f"thread_user_id_fkey: expected ON DELETE CASCADE, got {rule!r}"
+            )
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_baseline_thread_cascades_on_user_delete(live_pg_dsn: str) -> None:
+    """Deleting a user removes all their thread rows (ON DELETE CASCADE round-trip).
+
+    Tracks the row by its primary key (not user_id) so the assertion is
+    non-vacuous: a SET-NULL FK would leave the row alive with user_id=NULL,
+    making count-by-id==1; CASCADE deletes it entirely, making count-by-id==0.
+    """
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            uid = await conn.fetchval(
+                "INSERT INTO users (email, role) "
+                "VALUES ('baseline-083@example.test', 'user') RETURNING id"
+            )
+            thread_id = await conn.fetchval(
+                "INSERT INTO thread (user_id, title, progress) VALUES ($1, 'kept', 0.5) RETURNING id",
+                uid,
+            )
+            assert await conn.fetchval("SELECT count(*) FROM thread WHERE id = $1", thread_id) == 1
+            await conn.execute("DELETE FROM users WHERE id = $1", uid)
+            assert (
+                await conn.fetchval("SELECT count(*) FROM thread WHERE id = $1", thread_id) == 0
+            ), "thread row must cascade-delete when the owning user is removed (not SET NULL)"
+    finally:
+        await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# Invariant 084 — project_questions.user_id FK ON DELETE CASCADE.
+# Re-homed from: test_migration_084.py:92-109 (FK introspection) and the
+#                implicit behavioral invariant (same I-class as 083).
+# Re-home form: schema-introspection (delete_rule == CASCADE for user_id FK) +
+#               behavioral cascade round-trip (user delete removes pq row).
+# Confirmed: db/init.sql:1885 — project_questions_user_id_fkey … ON DELETE CASCADE.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_baseline_project_questions_user_id_fkey_is_cascade(live_pg_dsn: str) -> None:
+    """project_questions_user_id_fkey has delete_rule == CASCADE in the regenerated baseline."""
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            rule = await _fk_delete_rule(
+                conn, "project_questions", "project_questions_user_id_fkey"
+            )
+            assert rule == "CASCADE", (
+                f"project_questions_user_id_fkey: expected ON DELETE CASCADE, got {rule!r}"
+            )
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_baseline_project_questions_cascades_on_user_delete(live_pg_dsn: str) -> None:
+    """Deleting a user removes all their project_questions rows (ON DELETE CASCADE round-trip).
+
+    Tracks the row by its primary key (not user_id) so the assertion is
+    non-vacuous: project_questions.user_id is NOT NULL, so a SET-NULL FK action
+    raises NotNullViolationError rather than silently surviving; CASCADE deletes
+    the row cleanly and count-by-id==0.
+    """
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            uid = await conn.fetchval(
+                "INSERT INTO users (email, role) "
+                "VALUES ('baseline-084@example.test', 'user') RETURNING id"
+            )
+            proj_id = await conn.fetchval(
+                "INSERT INTO projects (user_id, name) VALUES ($1, 'Baseline084Project') RETURNING id",
+                uid,
+            )
+            pq_id = await conn.fetchval(
+                "INSERT INTO project_questions (project_id, user_id, body) "
+                "VALUES ($1, $2, 'Q?') RETURNING id",
+                proj_id,
+                uid,
+            )
+            assert (
+                await conn.fetchval("SELECT count(*) FROM project_questions WHERE id = $1", pq_id)
+                == 1
+            )
+            await conn.execute("DELETE FROM users WHERE id = $1", uid)
+            assert (
+                await conn.fetchval("SELECT count(*) FROM project_questions WHERE id = $1", pq_id)
+                == 0
+            ), (
+                "project_questions row must cascade-delete when the owning user is removed (not SET NULL)"
+            )
+    finally:
+        await pool.close()
+
+
+# ---------------------------------------------------------------------------
 # Invariant 082 — the FK-gap tables: 6 ON DELETE CASCADE, pulse_models SET NULL.
 # Re-homed from: test_migration_082.py:120-281 (live).
 # Re-home form: schema-introspection (FK delete_rule).

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import asyncpg
 import pytest
 from paper_ingestion.migrations_runner import (
     _MIGRATION_SCHEMA_PROBES,
@@ -40,7 +39,12 @@ def test_no_duplicate_migration_versions() -> None:
 
 
 def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
-    """init.sql must not blanket-mark migrations that its schema does not contain."""
+    """init.sql bootstrap must use an explicit version list, not generate_series.
+
+    Post-squash (Wave-1 2026-05-19) contract: the seeded set must be exactly
+    set(range(1, 89)) — all 88 versions, contiguous, no gaps, no deferred subset.
+    Every version 1..88 is now embodied in db/init.sql; the runner owns 89+.
+    """
     repo_root = Path(__file__).resolve().parents[3]
     init_sql = (repo_root / "db" / "init.sql").read_text(encoding="utf-8")
     bootstrap_sql = init_sql.split("SCHEMA-MIGRATIONS BOOTSTRAP", maxsplit=1)[1]
@@ -51,29 +55,22 @@ def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     assert "generate_series" not in executable_bootstrap_sql
 
     seeded_versions = {int(value) for value in re.findall(r"\((\d+)\)", executable_bootstrap_sql)}
-    assert set(range(1, 33)).issubset(seeded_versions)
-    assert set(range(35, 49)).issubset(seeded_versions)
-    # 33 is intentionally absent (false-applied, repaired at runtime).
-    assert 33 not in seeded_versions
-    # 34 is intentionally absent: this snapshot does NOT embody migration
-    # 034's pulse_cards.reasoning_verified/_confidence columns, so the
-    # runtime runner must apply 034 on first boot.
-    assert 34 not in seeded_versions
-    # 49-51 and 54-61 are now baked into init.sql.
-    assert {49, 50, 51, 54, 55, 56, 57, 58, 59, 60, 61}.issubset(seeded_versions)
-    # 52 (procrastinate schema) and 53 (drop legacy jobs) are NOT baked into
-    # init.sql; the runtime runner applies them on first boot.
-    assert seeded_versions.isdisjoint({52, 53})
+    # Post-squash: exactly 1..88, contiguous, complete — no version is deferred.
+    assert seeded_versions == set(range(1, 89)), (
+        f"init.sql bootstrap must seed exactly versions 1..88 (post-squash). "
+        f"Missing: {sorted(set(range(1, 89)) - seeded_versions)}. "
+        f"Extra: {sorted(seeded_versions - set(range(1, 89)))}."
+    )
 
 
 def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
-    """The schema_migrations seed list must cover all migration versions that
-    are baked into init.sql.  As a lightweight regression guard, assert that
-    the highest version in the seed list is >= the highest version present in
-    db/migrations/ (minus the versions intentionally deferred to the runner).
+    """The schema_migrations seed in init.sql must own exactly versions 1..88.
 
-    Specifically: versions 52 and 53 are deferred; everything else up to the
-    latest migration file should appear in the seed.
+    Post-squash (Wave-1 2026-05-19) contract:
+    - init.sql owns ALL of 1..88 — no deferred set.
+    - Any on-disk migration file in db/migrations/ must have version >= 89
+      (runner-applied, never pre-seeded).
+    - No gaps in 1..88; no version > 88 in the seed list.
     """
     repo_root = Path(__file__).resolve().parents[3]
     migrations_dir = repo_root / "db" / "migrations"
@@ -85,7 +82,14 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     )
     seeded_versions = {int(v) for v in re.findall(r"\((\d+)\)", executable_bootstrap_sql)}
 
-    # Collect all migration versions from db/migrations/*.sql
+    # Post-squash: seed must be exactly 1..88, no gaps, no extras.
+    assert seeded_versions == set(range(1, 89)), (
+        f"init.sql seed list must be exactly {{1..88}} post-squash. "
+        f"Missing: {sorted(set(range(1, 89)) - seeded_versions)}. "
+        f"Extra: {sorted(seeded_versions - set(range(1, 89)))}."
+    )
+
+    # Any on-disk migration file must be version 89+ (runner territory).
     file_versions: list[int] = []
     for sql_file in migrations_dir.glob("*.sql"):
         try:
@@ -93,127 +97,19 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
         except (ValueError, IndexError):
             continue
 
-    if not file_versions:
-        return  # nothing to check
-
-    max_migration = max(file_versions)
-    # Versions intentionally deferred to the runtime runner (not baked into init.sql).
-    # 33: false-applied, repaired at runtime.
-    # 52, 53: procrastinate schema / drop legacy jobs — never baked into init.sql.
-    # 62: daily_log user_id — applied by runtime runner on existing installs.
-    # 63-66: Wave-3 multi-tenant user_id columns (paper_recommendations, projects,
-    #         tasks, milestones) — applied by runtime runner on existing installs.
-    # 69: Phase 2 WS-2A auth foundation (users / magic_link_tokens / sessions) —
-    #      applied by runtime runner so first-boot installs get the schema lazily.
-    # 70: Phase 2 WS-2D multi-tenant user_id columns on remaining tables — same.
-    # 71: Sprint A telegram_pairing_tokens + telegram_user_pairings — applied by
-    #      runtime runner on existing installs (new tables only, no column changes).
-    # 72: Sprint B canonical-corpus refactor (user_library, papers.discovered_by rename) —
-    #      applied at runtime on existing installs; init.sql bake-in is a separate pass.
-    # 73: user_config per-user scope — applied at runtime with Phase 2 auth state.
-    # 74: user_topic_subscriptions — new table, idempotent CREATE-IF-NOT-EXISTS;
-    #      mirrored in init.sql but also applied by the runtime runner.
-    # 75: JSONB double-encode backfill — idempotent UPDATE only, no schema; runtime-applied.
-    # 76: llm_usage_log.user_id column add — runtime-applied on existing installs.
-    # 77: FK constraints on user_id columns from 042/062-066/070 — runtime-applied
-    #      (idempotent IF NOT EXISTS guards; mirrored in init.sql if/when baked in).
-    # 78: paper_entities.user_id column add + backfill — runtime-applied on
-    #      existing installs (idempotent ADD COLUMN IF NOT EXISTS + UPDATE).
-    # 79: JSONB double-encode backfill for audit_log + job_progress — idempotent
-    #      UPDATE only, no schema; runtime-applied (mirrors mig 75 pattern).
-    # 80: user-deletion FK ON DELETE CASCADE flip — runtime-applied (idempotent
-    #      DROP/ADD CONSTRAINT guards; pre-flight RAISE on residual NULL rows).
-    # 81: audit_log (action, created_at DESC) index — runtime-applied, idempotent
-    #      CREATE INDEX IF NOT EXISTS.
-    # 82: user_id FK gap on 7 tables missed by 077/080 (H-3) — runtime-applied,
-    #      idempotent DROP/ADD CONSTRAINT guards + pre-flight RAISE on orphan rows.
-    # 83: `thread` table — FK REFERENCES users(id) ON DELETE CASCADE. users is
-    #      itself deferred (mig 069, not in init.sql), so baking thread into
-    #      init.sql would fail a fresh install with 'relation "users" does not
-    #      exist' (exactly the regression commit 318b2f4b fixed). Belongs with
-    #      its parent in the runtime-applied chain.
-    # 84: `project_questions` table — FK REFERENCES projects(id) AND users(id).
-    #      users is deferred (mig 069); same constraint as 83 — runtime-applied
-    #      alongside its 069+ parent chain.
-    # 85: users.display_name + magic_link_tokens.pending_email ADD COLUMN —
-    #      both target tables are deferred (mig 069, not in init.sql), so this
-    #      ALTER cannot be baked in standalone; runtime-applied with mig 069.
-    # 086: review_logs.idempotency_key + partial UNIQUE over (user_id, …); user_id is added by deferred mig 070, so this ALTER is runtime-applied with its parent chain (same as 83/84/85).
-    # 087: idx_pulse_models_user_id — index on pulse_models(user_id). pulse_models
-    #      is created by deferred mig 018 and FK'd by deferred mig 082, so this
-    #      index cannot be baked into init.sql standalone; runtime-applied with
-    #      its parent chain (same precedent as 86).
-    # 088: idx_paper_recommendations_user_score_active — partial composite index
-    #      on paper_recommendations(user_id, score DESC) WHERE NOT dismissed.
-    #      user_id is added by deferred mig 063, so this index cannot be baked
-    #      into init.sql standalone; runtime-applied with its parent chain (pure
-    #      additive perf index, idempotent IF NOT EXISTS, no backfill).
-    # 34: pulse_cards.reasoning_verified/_confidence columns — NOT embodied by
-    #      the init.sql snapshot, so the runtime runner applies 034 on first
-    #      boot (same false-applied class as 33).
-    deferred = {
-        33,
-        34,
-        52,
-        53,
-        62,
-        63,
-        64,
-        65,
-        66,
-        69,
-        70,
-        71,
-        72,
-        73,
-        74,
-        75,
-        76,
-        77,
-        78,
-        79,
-        80,
-        81,
-        82,
-        83,
-        84,
-        85,
-        86,
-        87,
-        88,
-    }
-    required = {v for v in range(1, max_migration + 1) if v not in deferred}
-    missing = required - seeded_versions
-    assert not missing, (
-        f"init.sql seed list is missing versions that should be baked in: {sorted(missing)}. "
-        f"Either bake their schema into init.sql and add them to the seed list, or add them "
-        f"to `deferred` in this test if they are intentionally applied by the runtime runner."
+    pre_89 = [v for v in file_versions if v < 89]
+    assert not pre_89, (
+        f"db/migrations/ contains squashed migration files (v < 89): {sorted(pre_89)}. "
+        "These should have been deleted by the Wave-1 squash."
     )
 
 
-def test_schema_probes_cover_recent_migrations() -> None:
-    """Probes for the most recent schema/state-affecting migrations must exist.
+# test_schema_probes_cover_recent_migrations — DELETED (Wave-1 squash 2026-05-19):
+# chain-coupled: asserted {56,60,61} <= versions on _MIGRATION_SCHEMA_PROBES which is
+# now an empty tuple. Probe data retired with the 88-file chain.
 
-    Migrations 56 (pulse.stage2_top_k), 60 (daily_intent.user_id → INTEGER),
-    and 61 (daily_intent.created_at added) all have observable schema effects.
-    Probe 59 was removed (W1-13): it checked data_type='text' for a column that
-    mig-060 already converted to INTEGER, causing infinite churn.
-    """
-    versions = {v for v, _, _ in _MIGRATION_SCHEMA_PROBES}
-    assert {56, 60, 61} <= versions
-    assert 59 not in versions, "probe 59 was removed (W1-13) — do not re-add"
-
-
-def test_migration_060_probe_checks_integer_with_schema_filter() -> None:
-    """Probe 60 must check data_type='integer' (post-mig-60 state) with a public schema filter.
-
-    Added table_schema = 'public' guard in W2-6 to prevent false positives from
-    extension schemas that happen to have a matching table/column name.
-    """
-    probes = {v: sql for v, _, sql in _MIGRATION_SCHEMA_PROBES}
-    assert 60 in probes
-    assert "integer" in probes[60].lower()
-    assert "public" in probes[60].lower()
+# test_migration_060_probe_checks_integer_with_schema_filter — DELETED (Wave-1 squash 2026-05-19):
+# chain-coupled: probes[60] on an empty tuple is a KeyError. Probe data retired.
 
 
 def test_strip_outer_transaction_control_same_line_dollar_quote() -> None:
@@ -263,73 +159,46 @@ class _FakeConnection:
 
 
 @pytest.mark.asyncio
-async def test_repair_false_applied_migrations_removes_failed_probe_rows() -> None:
-    """A false applied row is removed so run_migrations can replay the SQL file."""
-    probes = {version: probe_sql for version, _, probe_sql in _MIGRATION_SCHEMA_PROBES}
+async def test_repair_false_applied_migrations_no_ops_on_empty_probes() -> None:
+    """With an empty probe list (post-squash), _repair_false_applied_migrations
+    is a safe no-op — nothing to probe, nothing to delete."""
+    # _MIGRATION_SCHEMA_PROBES is now () — the chain is squashed.
+    assert _MIGRATION_SCHEMA_PROBES == (), (
+        "_MIGRATION_SCHEMA_PROBES must be empty post-squash; runner kept for 89+"
+    )
     conn = _FakeConnection(
-        applied_versions={33, 52},
-        probe_results={
-            probes[33]: False,
-            probes[52]: True,
-        },
+        applied_versions={1, 2, 88},
+        probe_results={},
     )
 
     await _repair_false_applied_migrations(conn)  # type: ignore[arg-type]
 
-    assert conn.deleted_versions == [33]
-    assert any("DELETE FROM schema_migrations" in s for s in conn.executed_sqls)
+    # Empty probes → no DELETE calls.
+    assert conn.deleted_versions == []
 
 
 @pytest.mark.asyncio
 async def test_repair_false_applied_migrations_treats_missing_dependencies_as_failed_probe() -> (
     None
 ):
-    """A missing dependent table/object should not abort startup repair."""
-    probes = {version: probe_sql for version, _, probe_sql in _MIGRATION_SCHEMA_PROBES}
+    """_repair_false_applied_migrations must not crash when _MIGRATION_SCHEMA_PROBES is empty.
+
+    Post-squash, the probe list is empty and the function is a no-op regardless of
+    what versions are in schema_migrations. This guards against future accidental
+    re-introduction of probe data that could trigger spurious DELETE calls.
+    """
     conn = _FakeConnection(
         applied_versions={57},
-        probe_results={probes[57]: asyncpg.UndefinedTableError("user_config missing")},
+        probe_results={},  # no probes registered post-squash
     )
 
     await _repair_false_applied_migrations(conn)  # type: ignore[arg-type]
 
-    assert conn.deleted_versions == [57]
+    assert conn.deleted_versions == []
 
 
-@pytest.mark.asyncio
-async def test_migration_049_probe_requires_recommendation_feedback_and_no_pulse_ratings() -> None:
-    """049 is false-applied if the target exists but legacy pulse_ratings still exists."""
-    probes = {version: probe_sql for version, _, probe_sql in _MIGRATION_SCHEMA_PROBES}
-    probe_049 = probes[49]
+# test_migration_049_probe_requires_recommendation_feedback_and_no_pulse_ratings — DELETED
+# (Wave-1 squash 2026-05-19): chain-coupled probe test; probes[49] KeyErrors on empty tuple.
 
-    assert "recommendation_feedback" in probe_049
-    assert "pulse_ratings" in probe_049
-
-    conn = _FakeConnection(
-        applied_versions={49},
-        probe_results={probe_049: False},
-    )
-
-    await _repair_false_applied_migrations(conn)  # type: ignore[arg-type]
-
-    assert conn.deleted_versions == [49]
-
-
-@pytest.mark.asyncio
-async def test_migration_058_probe_requires_job_terminal_columns() -> None:
-    """058 is false-applied if job_progress lacks terminal result/error columns."""
-    probes = {version: probe_sql for version, _, probe_sql in _MIGRATION_SCHEMA_PROBES}
-    probe_058 = probes[58]
-
-    assert "job_progress" in probe_058
-    assert "result" in probe_058
-    assert "error" in probe_058
-
-    conn = _FakeConnection(
-        applied_versions={58},
-        probe_results={probe_058: False},
-    )
-
-    await _repair_false_applied_migrations(conn)  # type: ignore[arg-type]
-
-    assert conn.deleted_versions == [58]
+# test_migration_058_probe_requires_job_terminal_columns — DELETED
+# (Wave-1 squash 2026-05-19): chain-coupled probe test; probes[58] KeyErrors on empty tuple.

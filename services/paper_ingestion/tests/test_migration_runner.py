@@ -14,36 +14,8 @@ import pytest
 from paper_ingestion.migrations_runner import _strip_outer_transaction_control
 from tests.conftest import _make_pool_and_conn
 
-# The real migrations directory in this repo
+# The real migrations directory in this repo (0089+ only post-squash)
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
-
-
-def _count_real_migrations() -> int:
-    """Count the number of .sql migration files with numeric prefixes."""
-    count = 0
-    for f in _MIGRATIONS_DIR.glob("*.sql"):
-        try:
-            int(f.name.split("_")[0])
-            count += 1
-        except (ValueError, IndexError):
-            pass
-    return count
-
-
-def _real_migration_versions() -> list[int]:
-    """Return the sorted list of migration versions present on disk.
-
-    The numbering may have gaps (e.g. migration 71 is reserved for Sprint A
-    and lives on a parallel branch). Tests must use this rather than
-    ``range(1, count + 1)`` to avoid spurious "missing migration" runs.
-    """
-    versions: list[int] = []
-    for f in _MIGRATIONS_DIR.glob("*.sql"):
-        try:
-            versions.append(int(f.name.split("_")[0]))
-        except (ValueError, IndexError):
-            continue
-    return sorted(versions)
 
 
 def _import_run_migrations():
@@ -57,8 +29,8 @@ async def test_creates_schema_migrations_table():
     """run_migrations should create the schema_migrations table after acquiring the lock."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
-    total = _count_real_migrations()
-    conn.fetch.return_value = [{"version": i} for i in range(1, total + 1)]
+    # Post-squash: no .sql files on disk; mock fetch returns empty (nothing to apply).
+    conn.fetch.return_value = []
 
     await run_migrations(pool)
 
@@ -73,8 +45,8 @@ async def test_skips_already_applied_migrations():
     """Migrations already in schema_migrations should not be re-executed."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
-    versions = _real_migration_versions()
-    conn.fetch.return_value = [{"version": v} for v in versions]
+    # Post-squash: all 1..88 are pre-seeded; no .sql files on disk.
+    conn.fetch.return_value = [{"version": v} for v in range(1, 89)]
 
     await run_migrations(pool)
 
@@ -82,58 +54,37 @@ async def test_skips_already_applied_migrations():
     assert conn.transaction.call_count == 1
 
 
-async def test_applies_unapplied_migration():
-    """A migration not yet in schema_migrations should be executed in a transaction."""
-    run_migrations = _import_run_migrations()
-    pool, conn = _make_pool_and_conn()
-    versions = _real_migration_versions()
-    # All applied except the lowest version (typically 1).
-    first = versions[0]
-    conn.fetch.return_value = [{"version": v} for v in versions if v != first]
+# test_applies_unapplied_migration — DELETED (Wave-1 squash 2026-05-19):
+# chain-coupled: used _real_migration_versions() which globs db/migrations/*.sql
+# → returns [] post-squash, causing IndexError at versions[0]. No post-squash contract.
 
-    await run_migrations(pool)
-
-    # Outer transaction (1) + one migration transaction (1) = 2
-    assert conn.transaction.call_count == 2
-    # The INSERT into schema_migrations should include the missing version
-    execute_calls = [str(c) for c in conn.execute.call_args_list]
-    assert any(str(first) in c and "schema_migrations" in c for c in execute_calls[1:])
-
-
-async def test_applies_multiple_unapplied_in_order():
-    """Multiple unapplied migrations should be applied in numeric order."""
-    run_migrations = _import_run_migrations()
-    pool, conn = _make_pool_and_conn()
-    # Only mark first 10 as applied; rest should be applied
-    conn.fetch.return_value = [{"version": i} for i in range(1, 11)]
-
-    await run_migrations(pool)
-
-    total = _count_real_migrations()
-    expected_new = total - 10
-    # Outer transaction (1) + one transaction per new migration
-    assert conn.transaction.call_count == expected_new + 1
+# test_applies_multiple_unapplied_in_order — DELETED (Wave-1 squash 2026-05-19):
+# chain-coupled: used _count_real_migrations() → 0 post-squash → expected_new = -10 FAIL.
 
 
 async def test_no_migrations_applied_when_all_fresh():
-    """When nothing is applied yet, all migrations should run."""
+    """When nothing is applied yet (fresh install), the runner applies zero SQL files.
+
+    Post-squash contract: db/migrations/ has no .sql files (0089+ era, empty until next
+    migration). init.sql pre-seeds schema_migrations 1..88; the runner is a no-op when
+    files == {} ∩ applied == {}, i.e. one outer transaction only.
+    """
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []  # Nothing applied yet
 
     await run_migrations(pool)
 
-    total = _count_real_migrations()
-    # Outer transaction (1) + one transaction per migration
-    assert conn.transaction.call_count == total + 1
+    # Post-squash: db/migrations/ is empty → only the outer wrapping transaction.
+    assert conn.transaction.call_count == 1
 
 
 async def test_schema_migrations_select_called():
     """run_migrations should SELECT existing versions from schema_migrations."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
-    total = _count_real_migrations()
-    conn.fetch.return_value = [{"version": i} for i in range(1, total + 1)]
+    # Post-squash: no .sql files → nothing to probe; mock returns empty applied list.
+    conn.fetch.return_value = []
 
     await run_migrations(pool)
 
@@ -148,8 +99,8 @@ async def test_migration_uses_xact_lock():
     """run_migrations must use pg_advisory_xact_lock (not session-level pg_advisory_lock)."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
-    total = _count_real_migrations()
-    conn.fetch.return_value = [{"version": i} for i in range(1, total + 1)]
+    # Post-squash: no .sql files; mock returns empty applied list.
+    conn.fetch.return_value = []
 
     await run_migrations(pool)
 
@@ -237,37 +188,7 @@ def test_migration_runner_strips_begin_commit():
     assert "SELECT 1" in result3
 
 
-def test_migration_runner_strips_begin_commit_in_real_migrations():
-    """Every real migration file that contains BEGIN/COMMIT must be safe to strip."""
-    import re
-
-    cleaned_count = 0
-    for sql_file in _MIGRATIONS_DIR.glob("*.sql"):
-        try:
-            int(sql_file.name.split("_")[0])
-        except (ValueError, IndexError):
-            continue
-        sql = sql_file.read_text()
-        if not re.search(
-            r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$", sql, re.IGNORECASE | re.MULTILINE
-        ):
-            continue
-        cleaned = re.sub(
-            r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$",
-            "",
-            sql,
-            flags=re.IGNORECASE | re.MULTILINE,
-        )
-        # After stripping, no standalone BEGIN/COMMIT/ROLLBACK lines should remain.
-        # Inline BEGIN inside dollar-quoted PL/pgSQL function bodies (e.g.,
-        # `BEGIN NEW.updated_at = NOW(); RETURN NEW; END;`) is fine and stays.
-        assert not re.search(
-            r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$",
-            cleaned,
-            re.IGNORECASE | re.MULTILINE,
-        ), f"{sql_file.name}: standalone BEGIN/COMMIT/ROLLBACK not fully stripped"
-        assert len(cleaned.strip()) > 0, f"{sql_file.name}: stripped to empty"
-        cleaned_count += 1
-
-    # We know several real migrations have BEGIN/COMMIT — assert at least one was processed
-    assert cleaned_count > 0, "No migrations with BEGIN/COMMIT found — update test expectations"
+# test_migration_runner_strips_begin_commit_in_real_migrations — DELETED (Wave-1 squash 2026-05-19):
+# chain-coupled: globs db/migrations/*.sql → empty post-squash → cleaned_count == 0
+# → assert cleaned_count > 0 FAIL. The pure-unit test above (test_migration_runner_strips_begin_commit)
+# fully covers _strip_outer_transaction_control behavior for 0089+ migrations.
