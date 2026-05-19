@@ -281,9 +281,14 @@ async def test_update_note(_app):
 
 
 async def test_update_zotero_note_is_rejected(_app):
-    """Imported Zotero annotations are read-only through the notes API."""
+    """Imported Zotero annotations are read-only through the notes API.
+
+    W2b B-NOTES: combined query returns both paper_id and source in one row
+    (ownership confirmed first), then the zotero check fires → 403.
+    """
     app, conn = _app
-    conn.fetchval.return_value = "zotero"
+    # Combined ownership+source query: caller owns the note, but source=zotero.
+    conn.fetchrow.return_value = {"paper_id": 1, "source": "zotero"}
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -307,9 +312,14 @@ async def test_delete_note_returns_204(_app):
 
 
 async def test_delete_zotero_note_is_rejected(_app):
-    """Imported Zotero annotations cannot be deleted via the user-note endpoint."""
+    """Imported Zotero annotations cannot be deleted via the user-note endpoint.
+
+    W2b B-NOTES: combined query returns both paper_id and source in one row
+    (ownership confirmed first), then the zotero check fires → 403.
+    """
     app, conn = _app
-    conn.fetchval.return_value = "zotero"
+    # Combined ownership+source query: caller owns the note, but source=zotero.
+    conn.fetchrow.return_value = {"paper_id": 1, "source": "zotero"}
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -767,14 +777,13 @@ async def test_list_notes_scopes_to_author(_app, monkeypatch):
 async def test_update_note_rejects_non_author(_app, monkeypatch):
     """DOM-A-05: update_note returns 404 when caller is not the note author.
 
-    Note was created by user 7. User 8 attempts to update it.  The authorship
-    SELECT (id + exact user_id match) returns None → 404.
+    Note was created by user 7. User 8 attempts to update it.
+    W2b B-NOTES: combined ownership+source SELECT (id + user_id) returns None → 404.
+    No separate fetchval source check is performed (no disclosure before ownership).
     """
     app, conn = _app
     app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
-    # First fetchval: source check → "user" (not zotero)
-    conn.fetchval.return_value = "user"
-    # The authorship SELECT returns None (note belongs to user 7, not 8)
+    # Combined ownership+source SELECT returns None (note belongs to user 7, not 8)
     conn.fetchrow.return_value = None
 
     async with httpx.AsyncClient(
@@ -788,14 +797,13 @@ async def test_update_note_rejects_non_author(_app, monkeypatch):
 async def test_delete_note_rejects_non_author(_app, monkeypatch):
     """DOM-A-06: delete_note returns 404 when caller is not the note author.
 
-    Note was created by user 7. User 8 attempts to delete it.  The authorship
-    SELECT returns None → 404.
+    Note was created by user 7. User 8 attempts to delete it.
+    W2b B-NOTES: combined ownership+source SELECT (id + user_id) returns None → 404.
+    No separate fetchval source check is performed (no disclosure before ownership).
     """
     app, conn = _app
     app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
-    # First fetchval: source check → "user" (not zotero)
-    conn.fetchval.return_value = "user"
-    # The authorship SELECT returns None (note belongs to user 7, not 8)
+    # Combined ownership+source SELECT returns None (note belongs to user 7, not 8)
     conn.fetchrow.return_value = None
 
     async with httpx.AsyncClient(
@@ -896,3 +904,121 @@ async def test_promote_zotero_note_author_succeeds(_app, monkeypatch):
     first_sql = conn.fetchrow.await_args_list[0].args[0]
     assert "user_id = $2" in first_sql
     assert conn.fetchrow.await_args_list[0].args[2] == 7
+
+
+# ---------------------------------------------------------------------------
+# W2b B-NOTES — Zotero existence disclosure before ownership check
+#
+# Security regression tests: user B must NEVER learn whether a note ID
+# exists or is of Zotero type before ownership is confirmed.
+# The correct response is always 404 (not 403 with "zotero" leakage).
+# ---------------------------------------------------------------------------
+
+
+async def test_update_zotero_note_other_user_gets_404_not_403(_app):
+    """W2b B-NOTES: user B updating a Zotero note owned by user A must get 404.
+
+    Before the fix: fetchval returned "zotero" → 403 disclosing note type.
+    After the fix: combined fetchrow with user_id filter returns None → 404,
+    with no "zotero" in response body.
+
+    The combined query is:
+      SELECT paper_id, source FROM paper_notes WHERE id=$1 AND user_id=$2
+    User B's user_id doesn't match → None → 404.
+    """
+    app, conn = _app
+    # Caller is user 8; note belongs to user 7 (Zotero type).
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
+    # Combined ownership+source query returns None (no row for user 8).
+    conn.fetchrow.return_value = None
+    # fetchval should NOT be called in the fixed path.
+    conn.fetchval.return_value = "zotero"  # would leak if old path runs
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put("/api/notes/42", json={"user_note": "spy"})
+
+    assert resp.status_code == 404, (
+        f"Expected 404 (ownership opaque), got {resp.status_code}: {resp.text}"
+    )
+    # Must not disclose note type in the body.
+    assert "zotero" not in resp.text.lower(), (
+        "Response must not mention 'zotero' before ownership is confirmed"
+    )
+
+
+async def test_delete_zotero_note_other_user_gets_404_not_403(_app):
+    """W2b B-NOTES: user B deleting a Zotero note owned by user A must get 404.
+
+    Before the fix: fetchval returned "zotero" → 403 disclosing note type.
+    After the fix: combined fetchrow with user_id filter returns None → 404,
+    with no "zotero" in response body.
+    """
+    app, conn = _app
+    # Caller is user 8; note belongs to user 7 (Zotero type).
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
+    # Combined ownership+source query returns None (no row for user 8).
+    conn.fetchrow.return_value = None
+    # fetchval should NOT be called in the fixed path.
+    conn.fetchval.return_value = "zotero"  # would leak if old path runs
+
+    with patch("paper_ingestion.routers.notes.delete_or_404", new_callable=AsyncMock):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.delete("/api/notes/42")
+
+    assert resp.status_code == 404, (
+        f"Expected 404 (ownership opaque), got {resp.status_code}: {resp.text}"
+    )
+    # Must not disclose note type in the body.
+    assert "zotero" not in resp.text.lower(), (
+        "Response must not mention 'zotero' before ownership is confirmed"
+    )
+
+
+async def test_update_own_zotero_note_still_gets_403(_app):
+    """W2b B-NOTES: user updating their OWN Zotero note still gets 403.
+
+    After the fix, a user who OWNS the note (fetchrow returns a row)
+    but the source is "zotero" must still get 403 (read-only annotation).
+    The ownership is confirmed first (row found), then source is checked.
+    """
+    app, conn = _app
+    # Caller is user 7, who owns the Zotero note.
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 7
+    # Combined query returns a row (user 7 owns note 5, source=zotero).
+    conn.fetchrow.return_value = {"paper_id": 1, "source": "zotero"}
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put("/api/notes/5", json={"user_note": "edit"})
+
+    assert resp.status_code == 403, (
+        f"Expected 403 (own Zotero note is read-only), got {resp.status_code}: {resp.text}"
+    )
+
+
+async def test_delete_own_zotero_note_still_gets_403(_app):
+    """W2b B-NOTES: user deleting their OWN Zotero note still gets 403.
+
+    After the fix, a user who OWNS the note (fetchrow returns a row)
+    but the source is "zotero" must still get 403 (read-only annotation).
+    """
+    app, conn = _app
+    # Caller is user 7, who owns the Zotero note.
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 7
+    # Combined query returns a row (user 7 owns note 5, source=zotero).
+    conn.fetchrow.return_value = {"paper_id": 1, "source": "zotero"}
+
+    with patch("paper_ingestion.routers.notes.delete_or_404", new_callable=AsyncMock):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.delete("/api/notes/5")
+
+    assert resp.status_code == 403, (
+        f"Expected 403 (own Zotero note is read-only), got {resp.status_code}: {resp.text}"
+    )

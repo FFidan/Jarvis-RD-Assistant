@@ -150,20 +150,32 @@ async def update_note(
         raise HTTPException(status_code=400, detail="No fields to update")
 
     async with db_pool.acquire() as conn:
-        note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
-        if note_source == "zotero":
-            raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
-        # DOM-A-05: authorship check — user B must not update user A's note.
-        # Also assert_paper_ownership for the parent paper (short-circuits in single-tenant mode).
+        # W2b B-NOTES: combine ownership + source check into ONE query to prevent
+        # existence/type disclosure before ownership is confirmed.
         if user_id is not None:
+            # Multi-tenant: ownership check is combined with source lookup.
+            # If no row matches (id + user_id), return 404 — user B cannot learn
+            # whether the note exists or is Zotero type before ownership is verified.
             note_row = await conn.fetchrow(
-                "SELECT paper_id FROM paper_notes WHERE id = $1 AND user_id = $2",
+                "SELECT paper_id, source FROM paper_notes WHERE id = $1 AND user_id = $2",
                 note_id,
                 user_id,
             )
             if note_row is None:
                 raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+            if note_row["source"] == "zotero":
+                raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
+            # DOM-A-05: assert_paper_ownership for the parent paper.
             await assert_paper_ownership(conn, note_row["paper_id"], user_id)
+        else:
+            # Single-tenant (user_id is None): no IDOR risk; source check safe.
+            note_row = await conn.fetchrow(
+                "SELECT paper_id, source FROM paper_notes WHERE id = $1", note_id
+            )
+            if note_row is None:
+                raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+            if note_row["source"] == "zotero":
+                raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
         row = await dynamic_update(
             conn,
             "paper_notes",
@@ -312,20 +324,32 @@ async def delete_note(
         Database ID of the note to delete.
     """
     async with db_pool.acquire() as conn:
-        note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
-        if note_source == "zotero":
-            raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
-        # DOM-A-06: authorship check — user B must not delete user A's note.
-        # Also assert_paper_ownership for the parent paper (short-circuits in single-tenant mode).
+        # W2b B-NOTES: combine ownership + source check into ONE query to prevent
+        # existence/type disclosure before ownership is confirmed.
         if user_id is not None:
+            # Multi-tenant: ownership check is combined with source lookup.
+            # If no row matches (id + user_id), return 404 — user B cannot learn
+            # whether the note exists or is Zotero type before ownership is verified.
             note_row = await conn.fetchrow(
-                "SELECT paper_id FROM paper_notes WHERE id = $1 AND user_id = $2",
+                "SELECT paper_id, source FROM paper_notes WHERE id = $1 AND user_id = $2",
                 note_id,
                 user_id,
             )
             if note_row is None:
                 raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+            if note_row["source"] == "zotero":
+                raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
+            # DOM-A-06: assert_paper_ownership for the parent paper.
             await assert_paper_ownership(conn, note_row["paper_id"], user_id)
+        else:
+            # Single-tenant (user_id is None): no IDOR risk; source check safe.
+            note_row = await conn.fetchrow(
+                "SELECT paper_id, source FROM paper_notes WHERE id = $1", note_id
+            )
+            if note_row is None:
+                raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+            if note_row["source"] == "zotero":
+                raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
         await delete_or_404(
             conn,
             "DELETE FROM paper_notes WHERE id = $1",
