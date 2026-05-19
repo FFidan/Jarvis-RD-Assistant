@@ -161,12 +161,19 @@ async def test_new_key_applies_fsrs_and_both_writes(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_duplicate_key_counts_synced_without_reapply(monkeypatch) -> None:
-    """A previously-applied key → synced, no FSRS recompute, no writes."""
+    """A previously-applied key → synced, no FSRS recompute, no writes.
+
+    Note: after the N+1 fix, _build_fsrs_manager_from_db is hoisted before the
+    loop so it is called once per batch (even all-duplicate batches).  The
+    contract guarantee is that schedule_review is NOT called for duplicate keys
+    and no DB writes are issued — not that the manager is never built.
+    """
     pool, conn = _make_pool_conn()
     conn.fetch = AsyncMock(return_value=[FakeRecord(idempotency_key="dup")])
     conn.fetchrow = AsyncMock()
     conn.execute = AsyncMock()
     build_spy = AsyncMock()
+    # build_spy returns an AsyncMock manager; schedule_review will not be called.
     monkeypatch.setattr(review, "_build_fsrs_manager_from_db", build_spy)
 
     resp = await review.sync_reviews.__wrapped__(
@@ -180,7 +187,10 @@ async def test_duplicate_key_counts_synced_without_reapply(monkeypatch) -> None:
     assert resp.skipped == 0
     conn.fetchrow.assert_not_called()
     conn.execute.assert_not_called()
-    build_spy.assert_not_called()
+    # Manager is built once (hoisted), but schedule_review is never called for dups.
+    build_spy.assert_called_once()
+    mgr = build_spy.return_value
+    mgr.schedule_review.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -371,3 +381,58 @@ def test_submit_review_unchanged_regression() -> None:
     src = inspect.getsource(review.submit_review)
     assert 'raise HTTPException(status_code=404, detail="Card not found")' in src
     assert "RETURNING id" in src  # still single-shot log_id fetchval
+
+
+@pytest.mark.asyncio
+async def test_sync_reviews_builds_fsrs_manager_exactly_once(monkeypatch) -> None:
+    """_build_fsrs_manager_from_db must be called once per sync, not per event (N+1 guard).
+
+    Pre-fix this fails with call_count == 2. Post-fix it passes with call_count == 1.
+    """
+    pool, conn = _make_pool_conn()
+    conn.fetch = AsyncMock(return_value=[])  # no applied keys
+    conn.fetchrow = AsyncMock(return_value=_card_row())
+    conn.fetchval = AsyncMock(return_value=42)  # INSERT won
+    conn.execute = AsyncMock(return_value=None)
+
+    call_count = 0
+    original_build = review._build_fsrs_manager_from_db
+
+    async def counting_build(c, user_id=None):
+        nonlocal call_count
+        call_count += 1
+        return await original_build(c, user_id=user_id)
+
+    # Use a real FSRSManager stub via _patch_fsrs but wrap to count first
+    async def counting_stub(c, user_id=None):  # noqa: ARG001
+        nonlocal call_count
+        call_count += 1
+        mgr = MagicMock()
+
+        def _schedule(state, rating):
+            reps = (state or {}).get("reps", 0) + 1
+            new_state = {"reps": reps}
+            return new_state, {"log": True}, _now() + timedelta(days=reps)
+
+        mgr.schedule_review.side_effect = _schedule
+        return mgr
+
+    monkeypatch.setattr(review, "_build_fsrs_manager_from_db", counting_stub)
+
+    resp = await review.sync_reviews.__wrapped__(
+        SimpleNamespace(state=SimpleNamespace(user_id=99)),
+        body=ReviewSyncRequest(
+            reviews=[
+                _event("k1", card_id=1, rating=3),
+                _event("k2", card_id=1, rating=4),
+            ]
+        ),
+        db_pool=pool,
+        user_id=99,
+    )
+
+    assert resp.synced == 2, f"Expected 2 synced, got {resp.synced}"
+    assert call_count == 1, (
+        f"_build_fsrs_manager_from_db called {call_count} times for 2 events "
+        f"(expected 1 — N+1 bug not fixed)"
+    )

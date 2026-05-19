@@ -190,6 +190,7 @@ async def sync_reviews(
             keys,
         )
         applied = {r["idempotency_key"] for r in applied_rows}
+        fsrs_manager = await _build_fsrs_manager_from_db(conn, user_id=user_id)
         for event in body.reviews:
             if event.idempotency_key in applied:
                 synced += 1
@@ -203,7 +204,6 @@ async def sync_reviews(
                 if not card:
                     skipped += 1
                     continue
-                fsrs_manager = await _build_fsrs_manager_from_db(conn, user_id=user_id)
                 new_state, log_dict, next_due = fsrs_manager.schedule_review(
                     card["fsrs_state"], event.rating.value
                 )
