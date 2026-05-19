@@ -59,11 +59,6 @@ def get_optional_embedder(request: Request):
     return getattr(request.app.state, "embedder", None)
 
 
-def get_optional_verifier(request: Request):
-    """Return quote verifier if wired on app.state, else None (test-safe)."""
-    return getattr(request.app.state, "verifier", None)
-
-
 def get_optional_qdrant(request: Request):
     """Return Qdrant client if wired on app.state, else None (test-safe)."""
     return getattr(request.app.state, "qdrant_client", None)

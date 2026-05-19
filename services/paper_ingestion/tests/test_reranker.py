@@ -6,8 +6,8 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paper_ingestion.embedder import Embedder
-from paper_ingestion.reranker import Reranker
+from paper_ingestion.ingestion.embedder import Embedder
+from paper_ingestion.ingestion.reranker import Reranker
 
 
 def test_rerank_empty_passages():

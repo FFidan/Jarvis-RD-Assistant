@@ -9,7 +9,6 @@ from fastapi import HTTPException
 from jarvis_common.db_helpers import (
     delete_or_404,
     dynamic_update,
-    fmt_safe,
     init_pg_connection,
     quote_ident,
     validated_model,
@@ -22,11 +21,6 @@ def test_quote_ident_escapes_quotes_and_blocks_null_bytes():
 
     with pytest.raises(ValueError, match="null byte"):
         quote_ident("bad\x00name")
-
-
-def test_fmt_safe_escapes_curly_braces_for_format_calls():
-    """fmt_safe prevents user strings from breaking later format() calls."""
-    assert fmt_safe("{x} -> {y}") == "{{x}} -> {{y}}"
 
 
 def test_validated_model_allows_known_aliases_and_falls_back(caplog):

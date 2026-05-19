@@ -107,29 +107,6 @@ def safe_for_prompt(text: str | None, mode: str = "escape") -> str:
     raise ValueError(f"Unknown safe_for_prompt mode: {mode!r}")
 
 
-def escape_llm_text(text: str) -> str:
-    """Escape angle-brackets so tagged delimiters can't be forged by input.
-
-    Replaces ``<`` with ``&lt;`` and ``>`` with ``&gt;`` so that crafted
-    inputs like ``</paper_text>IGNORE ABOVE`` cannot break out of their
-    delimiter tags in the LLM prompt.
-
-    .. deprecated::
-        Use :func:`safe_for_prompt` with ``mode='escape'`` (the default).
-
-    Parameters
-    ----------
-    text:
-        Raw input string (user question, paper title, abstract, etc.).
-
-    Returns
-    -------
-    str
-        Escaped string safe for interpolation inside XML-style delimiters.
-    """
-    return safe_for_prompt(text, mode="escape")
-
-
 def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> tuple[str, bool]:
     """Escape, optionally truncate, and wrap text in XML-style delimiters.
 
@@ -165,7 +142,7 @@ def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> tupl
     """
     if not _TAG_RE.match(tag):
         raise ValueError(f"Invalid tag {tag!r}: must match [a-zA-Z_][a-zA-Z0-9_]*")
-    body = escape_llm_text(_strip_bidi_zw(text))
+    body = safe_for_prompt(_strip_bidi_zw(text), mode="escape")
     truncated = False
     if max_chars is not None and len(body) > max_chars:
         body = body[:max_chars]

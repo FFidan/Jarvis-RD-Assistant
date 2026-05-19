@@ -295,19 +295,6 @@ class PaperSource(ABC):
         """
         return []
 
-    async def get_recommendations(
-        self,
-        positive_seeds: list[str],
-        negative_seeds: list[str] | None = None,
-        limit: int = 50,
-    ) -> list[PaperCreate]:
-        """Recommend papers similar to positive seeds, dissimilar to negative seeds.
-
-        ``positive_seeds``/``negative_seeds`` are source-native IDs (e.g. S2 paper IDs).
-        Default: returns empty list. Sources with a recommendation endpoint override this.
-        """
-        return []
-
     def consolidate_topics(self, topics: list["TopicRef"]) -> list["SourceQuery"]:
         """Group topics into 1+ API queries. Default: one query per topic.
 

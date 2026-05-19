@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from paper_ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedder import Embedder
 
 # ---------------------------------------------------------------------------
 # Helpers

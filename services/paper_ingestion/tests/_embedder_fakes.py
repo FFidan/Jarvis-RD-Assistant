@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from paper_ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedder import Embedder
 
 
 class _FakeEncoding:

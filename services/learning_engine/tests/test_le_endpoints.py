@@ -84,7 +84,6 @@ def _app():
     )
     from learning_engine.deps import (
         get_anki_exporter,
-        get_card_generator,
         get_db_pool,
         get_fsrs_manager,
     )
@@ -117,16 +116,12 @@ def _app():
     async def override_fsrs_manager():
         return mock_fsrs
 
-    async def override_card_generator():
-        return mock_generator
-
     async def override_anki_exporter():
         return mock_exporter
 
     app.dependency_overrides[get_db_pool] = override_db_pool
     app.dependency_overrides[verify_api_key] = override_api_key
     app.dependency_overrides[get_fsrs_manager] = override_fsrs_manager
-    app.dependency_overrides[get_card_generator] = override_card_generator
     app.dependency_overrides[get_anki_exporter] = override_anki_exporter
     app.dependency_overrides[current_user_id_strict] = lambda: 1
     app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 1

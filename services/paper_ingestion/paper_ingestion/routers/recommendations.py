@@ -6,7 +6,7 @@ from jarvis_common import get_current_user_id
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, limiter
-from paper_ingestion.recommender import refresh_recommendations
+from paper_ingestion.ingestion.recommender import refresh_recommendations
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
 

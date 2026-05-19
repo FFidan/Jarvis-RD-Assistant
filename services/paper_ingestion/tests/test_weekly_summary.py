@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paper_ingestion.extraction.verify import QuoteVerifier
+from jarvis_common.verify import QuoteVerifier
 from paper_ingestion.weekly_summary import generate_weekly_summary
 from paper_ingestion.weekly_summary_models import ThemeOutput, WeeklyDigestOutput
 

@@ -16,7 +16,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Import the module under test (recommender has no heavy transitive imports)
 # ---------------------------------------------------------------------------
-from paper_ingestion.recommender import (  # noqa: E402
+from paper_ingestion.ingestion.recommender import (  # noqa: E402
     _DEFAULT_LIKED_WEIGHT,
     _DEFAULT_PROJECT_WEIGHT,
     _aggregate_to_papers,

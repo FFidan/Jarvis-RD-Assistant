@@ -33,8 +33,6 @@ from jarvis_common.db_helpers import (
     delete_or_404,
     dynamic_update,
     escape_like,
-    fmt_safe,
-    get_embed_model,
     get_fast_model,
     get_smart_model,
     init_pg_connection,
@@ -80,13 +78,13 @@ from jarvis_common.models import (
     JobListResponse,
     JobStatusResponse,
 )
-from jarvis_common.prompt_safety import escape_llm_text, safe_for_prompt, wrap_delimited
+from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME, SessionMiddleware
 from jarvis_common.settings import SecretsSettings, get_secrets_settings
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.streak import compute_streak
-from jarvis_common.text_utils import author_matches, normalize_author_name
+from jarvis_common.text_utils import author_matches
 
 __all__ = [
     # DRY-002: shared FastAPI app factory
@@ -125,14 +123,12 @@ __all__ = [
     "dynamic_update",
     "delete_or_404",
     "escape_like",
-    "fmt_safe",
     "init_pg_connection",
     "quote_ident",
     "validated_model",
     "validated_model_with_reason",
     "get_smart_model",
     "get_fast_model",
-    "get_embed_model",
     "http_exception_handler",
     "validation_exception_handler",
     "generic_exception_handler",
@@ -143,9 +139,7 @@ __all__ = [
     "JobListResponse",
     "JobStatusResponse",
     "RequestIDMiddleware",
-    "normalize_author_name",
     "author_matches",
-    "escape_llm_text",
     "safe_for_prompt",
     "wrap_delimited",
     "ChatCompletionOptions",

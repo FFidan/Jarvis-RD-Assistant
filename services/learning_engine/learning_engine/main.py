@@ -36,7 +36,6 @@ from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.settings import get_core_settings
 
 from learning_engine.anki_exporter import AnkiExporter
-from learning_engine.card_generator import CardGenerator
 from learning_engine.deps import limiter
 from learning_engine.fsrs_manager import FSRSManager
 
@@ -73,17 +72,15 @@ def _set_openai_client(openai_client: Any) -> None:
 
 
 async def _init_fsrs_and_generators(app: FastAPI) -> None:
-    """Construct CardGenerator + AnkiExporter. FSRSManager is built per-review from DB."""
-    from jarvis_common.llm_client import get_litellm_config
+    """Construct AnkiExporter and default FSRSManager.
 
-    litellm_config = get_litellm_config()
+    CardGenerator is instantiated lazily inside ``generate_cards_core``; it no
+    longer needs to be stashed on app.state.
+    FSRSManager is built per-request on review paths (live DB retention values).
+    """
     # Default FSRSManager used by card-creation paths (not reviews — reviews get per-request
     # manager with live DB values for desired_retention and learning_steps).
     app.state.fsrs_manager = FSRSManager()
-    app.state.card_generator = CardGenerator(
-        http_client=app.state.http_client,
-        litellm_config=litellm_config,
-    )
     app.state.anki_exporter = AnkiExporter()
 
 

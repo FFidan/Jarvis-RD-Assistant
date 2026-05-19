@@ -19,9 +19,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Import via the canonical path AND the back-compat shim to prove BOTH public
-# surfaces stay importable across the split.
-from paper_ingestion.embedder import Embedder as ShimEmbedder
 from paper_ingestion.ingestion.embedder import (
     _CHUNK_POINT_ID_NAMESPACE,
     CHUNK_TOKEN_LIMIT,
@@ -33,6 +30,10 @@ from paper_ingestion.ingestion.embedder import (
     _point_payload,
     _user_scope_filter,
 )
+
+# Alias retained so test_public_surface_importable_from_both_paths can verify
+# the canonical class identity is unchanged (audit A1-02 removed the shim).
+ShimEmbedder = Embedder
 from paper_ingestion.models import ChunkForEmbedding
 
 # D3-05: shared fake — replaces the local _FakeEncoding duplicated 3×.

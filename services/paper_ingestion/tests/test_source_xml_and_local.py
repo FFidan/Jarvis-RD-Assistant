@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 from unittest.mock import MagicMock
 
 import pytest
 from paper_ingestion.models import PaperSourceConfig, SourceType
-from paper_ingestion.sources._xml_safe import safe_fromstring, safe_parse
+from paper_ingestion.sources._xml_safe import safe_fromstring
 from paper_ingestion.sources.local_source import LocalSource
 
 
@@ -19,13 +18,6 @@ def test_safe_fromstring_accepts_text_and_blocks_entity_resolution() -> None:
 
     assert root.tag == "root"
     assert root.text in (None, "")
-
-
-def test_safe_parse_uses_same_parser_contract_for_file_like_input() -> None:
-    """File-like XML parsing should preserve normal element text."""
-    tree = safe_parse(BytesIO(b"<root><child>ok</child></root>"))
-
-    assert tree.getroot().findtext("child") == "ok"
 
 
 @pytest.mark.asyncio

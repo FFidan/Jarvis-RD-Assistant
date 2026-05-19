@@ -217,11 +217,15 @@ async def test_get_intent_without_api_key_returns_401(monkeypatch):
 
 @pytest.mark.live_pg
 @pytest.mark.asyncio
-async def test_migration_060_daily_intent_user_id_is_integer(live_pg_dsn: str) -> None:
-    """Migration 060 changes daily_intent.user_id from TEXT NOT NULL to INTEGER NULL.
+async def test_baseline_daily_intent_user_id_is_integer(live_pg_dsn: str) -> None:
+    """Guards the baseline schema shape for daily_intent.user_id.
+
+    Post-squash (Wave-1, c6145af3): db/init.sql embodies all 88 migrations
+    including migration 060's INTEGER NULL conversion. This test applies
+    init.sql + no-op run_migrations and asserts the baseline shape.
 
     Verifies:
-    - The column data_type is 'integer' post-migration.
+    - The column data_type is 'integer' (not text).
     - The column is_nullable is 'YES'.
     - The NULLS NOT DISTINCT unique index on (user_id, intent_date) exists.
     - An upsert with user_id=NULL round-trips correctly.

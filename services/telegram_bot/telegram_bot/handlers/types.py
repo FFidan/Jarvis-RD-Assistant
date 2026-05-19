@@ -44,18 +44,3 @@ class TaskRow(TypedDict):
     updated_at: NotRequired[datetime]
     # JOIN column: present when queried with LEFT JOIN projects
     project_name: NotRequired[str | None]
-
-
-class MilestoneRow(TypedDict):
-    """Row shape returned by ``SELECT … FROM milestones``."""
-
-    id: int
-    project_id: int
-    name: str
-    deadline: datetime
-    description: NotRequired[str | None]
-    completed: bool
-    completed_at: NotRequired[datetime | None]
-    created_at: NotRequired[datetime]
-    # JOIN column: present when queried with JOIN projects
-    project_name: NotRequired[str | None]

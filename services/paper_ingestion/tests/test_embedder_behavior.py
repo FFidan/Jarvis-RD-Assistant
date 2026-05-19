@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paper_ingestion.embedder import (
+from paper_ingestion.ingestion.embedder import (
     COLLECTION_NAME,
     EMBEDDING_DIMENSION,
     validate_embedding_configuration,
@@ -243,7 +243,7 @@ async def test_chunk_text_short_text_is_single_chunk():
 
 async def test_chunk_text_respects_token_limit():
     """chunk_text splits text that exceeds CHUNK_TOKEN_LIMIT tokens."""
-    from paper_ingestion.embedder import CHUNK_TOKEN_LIMIT
+    from paper_ingestion.ingestion.embedder import CHUNK_TOKEN_LIMIT
 
     e = _make_embedder()
     # Each char = 1 token via _FakeEncoding; repeat 'A' * (3 * CHUNK_TOKEN_LIMIT)
@@ -265,7 +265,7 @@ async def test_chunk_text_page_boundaries_assigned():
     e = _make_embedder()
     # Two sections: page1 is large (600 chars) to force a chunk split, page2 smaller
     # CHUNK_TOKEN_LIMIT=512, so page1 alone exceeds it and must be sub-split
-    from paper_ingestion.embedder import CHUNK_TOKEN_LIMIT
+    from paper_ingestion.ingestion.embedder import CHUNK_TOKEN_LIMIT
 
     page1 = "A" * (CHUNK_TOKEN_LIMIT + 100)  # 612 chars — exceeds limit, will be split
     page2 = "B" * 100
@@ -680,8 +680,8 @@ async def test_discover_from_seeds_fallback_when_no_qdrant_points(monkeypatch):
 async def test_rerank_chunks_returns_top_k_when_no_reranker():
     """rerank_chunks falls back to top_k slice when reranker is None.
 
-    get_reranker is imported inside rerank_chunks from paper_ingestion.reranker
-    (the back-compat shim), so we patch at that module location.
+    get_reranker is imported inside rerank_chunks from paper_ingestion.ingestion.reranker,
+    so we patch at that module location.
     """
     e = _make_embedder()
     chunks = [{"content": f"chunk {i}", "score": 1.0 - i * 0.1} for i in range(10)]
@@ -697,8 +697,7 @@ async def test_rerank_chunks_uses_reranker_when_available():
 
     rerank_chunks skips the reranker when len(chunks) <= top_k, so we must
     supply more chunks than top_k to trigger the reranker path.
-    ingestion/embedder.py imports get_reranker from paper_ingestion.reranker
-    (the back-compat shim), so we patch there.
+    We patch at paper_ingestion.ingestion.reranker.get_reranker (canonical location).
     """
     e = _make_embedder()
     # 5 chunks, top_k=2 → reranker is invoked (5 > 2)

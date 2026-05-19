@@ -20,7 +20,7 @@ from jarvis_common.llm_client import (
     observe,
     strip_think_streaming,
 )
-from jarvis_common.prompt_safety import escape_llm_text, wrap_delimited
+from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
 from jarvis_common.sse import SSE_DONE, sse_event
 
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
@@ -124,9 +124,10 @@ async def prepare_single_paper_rag(
     # Build RAG prompt — full chunk text flows through to the prompt.
     # C-10: Wrap question and title in XML-style delimiters to prevent prompt injection.
     # Content between XML tags is DATA — never instructions.
-    safe_question = escape_llm_text(body.question)
+    safe_question = safe_for_prompt(body.question, mode="escape")
     context_blocks = "\n\n".join(
-        f'<excerpt page="{c["page_number"] or "?"}">{escape_llm_text(c["content"])}</excerpt>'
+        f'<excerpt page="{c["page_number"] or "?"}">'
+        f"{safe_for_prompt(c['content'], mode='escape')}</excerpt>"
         for c in chunks
     )
     safe_title, _ = wrap_delimited("title", paper["title"])
@@ -288,7 +289,7 @@ async def prepare_cross_paper_rag(
             )
 
         # 5. Build prompt with per-paper sections
-        safe_question = escape_llm_text(body.question)
+        safe_question = safe_for_prompt(body.question, mode="escape")
 
         # Group selected chunks by paper for the prompt
         prompt_chunks_by_paper: dict[int, list[dict]] = {}
@@ -307,7 +308,7 @@ async def prepare_cross_paper_rag(
 
             excerpts = "\n".join(
                 f'<excerpt page="{c["page_number"] or "?"}">'
-                f"{escape_llm_text(c['content'])}</excerpt>"
+                f"{safe_for_prompt(c['content'], mode='escape')}</excerpt>"
                 for c in prompt_chunks_by_paper[pid]
             )
             context_sections.append(f"--- Paper {i}: {title} ---\n{excerpts}")

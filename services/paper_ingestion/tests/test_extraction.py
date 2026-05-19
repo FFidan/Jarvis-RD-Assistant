@@ -584,7 +584,7 @@ async def test_batch_extract_job_handler(monkeypatch):
     """extraction.batch job handler delegates to batch_extract and shapes result."""
     import paper_ingestion._state as _state_mod  # noqa: PLC0415
     import paper_ingestion.extraction.jobs as extraction_jobs_mod  # noqa: PLC0415
-    from paper_ingestion.extraction.verify import QuoteVerifier  # noqa: PLC0415
+    from jarvis_common.verify import QuoteVerifier  # noqa: PLC0415
 
     # Populate svc so the handler resolves embedder/verifier.
     # cast() satisfies pyright without importing heavyweight Embedder/QuoteVerifier classes.

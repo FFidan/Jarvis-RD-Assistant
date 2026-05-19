@@ -1,11 +1,12 @@
-"""Smoke tests for jarvis_common.verify consolidation (W3-DRY-4).
+"""Smoke tests for jarvis_common.verify (W3-DRY-4).
 
 Verifies:
-1. QuoteVerifier is importable from both the new canonical path and the
-   legacy shim path, and they resolve to the exact same class object.
+1. QuoteVerifier is importable from the canonical path jarvis_common.verify.
 2. Basic functional behaviour is preserved: exact substring match verified,
    non-matching quote rejected.
 3. DictChunk adapts plain dicts to the ChunkLike Protocol.
+
+Note: paper_ingestion.extraction.verify shim removed in audit A1-04 (W2.A1a).
 """
 
 from __future__ import annotations
@@ -16,14 +17,9 @@ from jarvis_common.verify import DictChunk, QuoteVerifier
 from jarvis_common.verify import QuoteVerifier as QV_canonical
 
 
-def test_shim_exports_same_class_as_canonical():
-    """Legacy import path must resolve to the identical class object."""
-    from paper_ingestion.extraction.verify import QuoteVerifier as QV_shim  # noqa: PLC0415
-
-    assert QV_shim is QV_canonical, (
-        "paper_ingestion.extraction.verify.QuoteVerifier must be the same object as "
-        "jarvis_common.verify.QuoteVerifier (shim re-export broken)"
-    )
+def test_canonical_class_is_importable():
+    """QuoteVerifier is importable from the canonical jarvis_common.verify path."""
+    assert QV_canonical is QuoteVerifier
 
 
 def _make_dict_chunk(id_: int, content: str, page_number: int | None = None) -> dict:

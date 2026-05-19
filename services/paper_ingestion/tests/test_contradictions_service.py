@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
-from paper_ingestion.extraction.verify import QuoteVerifier
+from jarvis_common.verify import QuoteVerifier
 from paper_ingestion.services.contradiction_models import ContradictionClassification
 from paper_ingestion.services.contradictions import (
     ContradictionCandidate,

@@ -418,20 +418,11 @@ async def two_users(live_pg_dsn):
     Builds its OWN asyncpg pool against the disposable ``live_pg_dsn``
     container and provisions a complete schema.
 
-    ``init.sql`` references ``users(id)`` (the ``user_topic_subscriptions``
-    FK) but never creates ``users``/``sessions`` — those live only in
-    migration 069. So apply the idempotent 069 auth DDL first, then
-    ``init.sql`` whole.
-
-    Provisioning trusts ``init.sql``'s curated ``schema_migrations``
-    bootstrap, which deliberately pre-marks only the migrations its snapshot
-    actually embodies and omits the later additive/corrective ones (e.g.
-    034, 063, 070, 072, 074). ``run_migrations`` then applies exactly those
-    omitted migrations — in version order, so the ``papers.user_id`` ->
-    ``discovered_by`` rename (072) and ``user_topic_subscriptions`` (074)
-    land correctly — with no "relation already exists" conflicts, because
-    the blanket over-mark that used to suppress them has been removed. No
-    post-runner re-apply is needed.
+    Wave-1 squash (c6145af3): ``db/init.sql`` now embodies all 88 migrations
+    including the auth tables (``users``, ``sessions``, ``magic_link_tokens``).
+    Apply ``init.sql`` alone; ``run_migrations`` over the now-empty
+    ``db/migrations/`` is a clean no-op that just confirms no 0089+ tail
+    exists yet.
 
     The container is torn down by ``live_pg_dsn`` after the test, so no
     row-level cleanup is required — the DB is disposable per test.
@@ -446,7 +437,6 @@ async def two_users(live_pg_dsn):
     db_dir = Path(__file__).parent.parent.parent.parent / "db"
     init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
     migrations_dir = db_dir / "migrations"
-    auth_ddl = (migrations_dir / "069_auth.sql").read_text(encoding="utf-8")
 
     # init=init_pg_connection registers the JSON/JSONB codec exactly like the
     # app's lifespan-built pool, so JSONB columns deserialize to dicts (the
@@ -465,8 +455,7 @@ async def two_users(live_pg_dsn):
     assert pool is not None
     try:
         async with pool.acquire() as conn:
-            await conn.execute(auth_ddl)  # users + sessions (IF NOT EXISTS)
-            await conn.execute(init_sql)  # everything else, FK now resolvable
+            await conn.execute(init_sql)  # embodies all schema incl. users/sessions
         await run_migrations(pool, migrations_dir=migrations_dir)
 
         async with pool.acquire() as conn:

@@ -1,4 +1,4 @@
-"""Tests for PaperSource ABC default methods (fetch_new_since, get_recommendations).
+"""Tests for PaperSource ABC default methods (fetch_new_since).
 
 These methods have default empty-list implementations so source plugins that
 cannot support them simply inherit the no-op behaviour without needing to
@@ -40,26 +40,6 @@ async def test_fetch_new_since_returns_empty_list_by_default(dummy_source):
     assert result == []
 
 
-async def test_get_recommendations_returns_empty_list_by_default(dummy_source):
-    """get_recommendations default implementation returns [] without raising."""
-    result = await dummy_source.get_recommendations(
-        positive_seeds=["paper_id_abc"],
-        negative_seeds=["paper_id_xyz"],
-        limit=10,
-    )
-    assert result == []
-
-
-async def test_get_recommendations_accepts_none_negative_seeds(dummy_source):
-    """get_recommendations must accept negative_seeds=None (no mutable default)."""
-    result = await dummy_source.get_recommendations(
-        positive_seeds=["paper_id_abc"],
-        negative_seeds=None,
-        limit=5,
-    )
-    assert result == []
-
-
 async def test_fetch_new_since_default_limit(dummy_source):
     """fetch_new_since should have a default limit of 100."""
     since = datetime(2024, 6, 1, tzinfo=UTC)
@@ -67,10 +47,4 @@ async def test_fetch_new_since_default_limit(dummy_source):
         since=since,
         topics=[],
     )
-    assert result == []
-
-
-async def test_get_recommendations_default_limit(dummy_source):
-    """get_recommendations should have a default limit of 50."""
-    result = await dummy_source.get_recommendations(positive_seeds=[])
     assert result == []

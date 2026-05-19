@@ -8,7 +8,7 @@ breaking early on a perfect (100) match for performance.
 from datetime import UTC, datetime
 from unittest.mock import patch
 
-from paper_ingestion.extraction.verify import QuoteVerifier
+from jarvis_common.verify import QuoteVerifier
 from paper_ingestion.models import ChunkResponse
 
 _NOW = datetime.now(tz=UTC)

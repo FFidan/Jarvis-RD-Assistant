@@ -29,7 +29,7 @@ from jarvis_common.llm_client import (
     get_litellm_config,
     observe,
 )
-from jarvis_common.prompt_safety import escape_llm_text
+from jarvis_common.prompt_safety import safe_for_prompt
 from jarvis_common.time_utils import utc_now_iso
 from jarvis_common.verify import QuoteVerifier
 
@@ -189,8 +189,8 @@ async def generate_weekly_summary(
         for i, p in enumerate(papers[:10], 1):
             brief = p.get("summary_brief") or p.get("title", "")
             papers_context += (
-                f"\n[Paper {i}]: {escape_llm_text(p['title'])}"
-                f"\n  Summary: {escape_llm_text(brief[:300])}\n"
+                f"\n[Paper {i}]: {safe_for_prompt(p['title'], mode='escape')}"
+                f"\n  Summary: {safe_for_prompt(brief[:300], mode='escape')}\n"
             )
 
         themes: list[dict] = []
@@ -203,7 +203,7 @@ async def generate_weekly_summary(
                     response_model=WeeklyDigestOutput,
                     prompt=DIGEST_PROMPT.format(
                         count=len(papers[:10]),
-                        topic=escape_llm_text(topic_name),
+                        topic=safe_for_prompt(topic_name, mode="escape"),
                         papers_context=papers_context,
                     ),
                     options=ChatCompletionOptions(

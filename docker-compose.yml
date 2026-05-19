@@ -773,8 +773,6 @@ secrets:
     file: ./secrets/cloudflare_tunnel_token.txt
   backup_encrypt_key:
     file: ./secrets/backup_encrypt_key.txt
-  vector_writer_password:
-    file: ./secrets/vector_writer_password.txt
   infra_ingest_key:
     file: ./secrets/infra_ingest_key.txt
   langfuse_init_pk:

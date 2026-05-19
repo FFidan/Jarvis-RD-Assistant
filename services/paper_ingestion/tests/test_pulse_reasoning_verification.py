@@ -12,7 +12,7 @@ Exercises the four branches that gate persistence of
 from __future__ import annotations
 
 import pytest
-from paper_ingestion.extraction.verify import QuoteVerifier
+from jarvis_common.verify import QuoteVerifier
 from paper_ingestion.pulse.verification import verify_pulse_reasoning
 from paper_ingestion.rag.verification import RagConfidence
 

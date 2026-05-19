@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from httpx import ASGITransport
-from jarvis_common import normalize_author_name
+from jarvis_common.text_utils import normalize_author_name
 from paper_ingestion.models import (
     AutoDetectResponse,
     TrackedAuthorCreate,

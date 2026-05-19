@@ -6,7 +6,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from paper_ingestion.embedder import COLLECTION_NAME
+from paper_ingestion.ingestion.embedder import COLLECTION_NAME
 
 # ---------------------------------------------------------------------------
 # Per-test stub for qdrant_client.models

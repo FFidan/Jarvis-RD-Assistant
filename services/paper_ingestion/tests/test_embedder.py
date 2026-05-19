@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
-from paper_ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedder import Embedder
 
 # D3-05: shared fake — replaces the local _FakeEncoding that was duplicated 3×.
 from tests._embedder_fakes import _FakeEncoding

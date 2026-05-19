@@ -17,7 +17,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from paper_ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedder import Embedder
 
 
 def _hit(paper_id: int, user_id: int | None, score: float = 0.9) -> SimpleNamespace:
@@ -250,7 +250,7 @@ def _make_pool_with_chunks(
 ) -> tuple:
     """Return (embedder, db_pool) mocks for prepare_cross_paper_rag tests."""
     mock_qdrant = AsyncMock()
-    from paper_ingestion.embedder import Embedder
+    from paper_ingestion.ingestion.embedder import Embedder
 
     embedder = Embedder(AsyncMock(), mock_qdrant)
     embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2]])

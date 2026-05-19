@@ -69,11 +69,6 @@ async def init_pg_connection(conn: asyncpg.Connection) -> None:
     await conn.set_type_codec("json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
 
-def fmt_safe(s: str) -> str:
-    """Escape curly braces in user content before passing to str.format()."""
-    return str(s).replace("{", "{{").replace("}", "}}")
-
-
 _ALIAS_MODELS = frozenset({"smart", "fast", "embed"})
 
 
@@ -132,11 +127,6 @@ def get_smart_model() -> str:
 def get_fast_model() -> str:
     """Return the LiteLLM alias for the fast model role."""
     return "fast"
-
-
-def get_embed_model() -> str:
-    """Return the LiteLLM alias for the embedding model role."""
-    return "embed"
 
 
 async def dynamic_update(

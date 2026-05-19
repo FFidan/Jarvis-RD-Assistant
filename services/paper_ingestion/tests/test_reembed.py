@@ -793,7 +793,7 @@ async def test_reembed_fails_on_embedding_dimension_mismatch():
 async def test_embedder_payload_includes_model_name():
     """embed_and_store includes embedding_model in Qdrant point payloads."""
     # _install_reembed_stubs autouse fixture already evicted paper_ingestion.embedder.
-    from paper_ingestion.embedder import EMBEDDING_MODEL_NAME, Embedder
+    from paper_ingestion.ingestion.embedder import EMBEDDING_MODEL_NAME, Embedder
     from paper_ingestion.models import ChunkForEmbedding
 
     mock_http = AsyncMock()
@@ -801,7 +801,7 @@ async def test_embedder_payload_includes_model_name():
     embedder = Embedder(mock_http, mock_qdrant)
 
     # Mock embed_texts to return fake embeddings
-    from paper_ingestion.embedder import EMBEDDING_DIMENSION
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
 
     embedder.embed_texts = AsyncMock(
         return_value=[[0.1] * EMBEDDING_DIMENSION, [0.2] * EMBEDDING_DIMENSION]
