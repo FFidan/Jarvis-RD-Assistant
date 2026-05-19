@@ -892,10 +892,10 @@ async def test_star_paper_sets_starred_true_does_not_change_state():
     so the upsert SQL is now in conn.fetchrow calls, not conn.execute.
     """
     pool, conn = _make_pool_and_conn()
-    # First fetchrow: paper-existence check returns the paper row.
-    # Second fetchrow: CTE RETURNING — returns is_new_row + prev_starred.
+    # Only one fetchrow call now: CTE RETURNING — returns is_new_row + prev_starred.
+    # (The redundant paper-existence SELECT was removed in W2c B-DRY-RED9;
+    # assert_paper_ownership already guarantees existence before this point.)
     conn.fetchrow.side_effect = [
-        FakeRecord(id=42),
         FakeRecord(is_new_row=True, prev_starred=False),
     ]
     # fetchval: COUNT(*) from project_papers → 0 (no zotero.push needed)
@@ -1622,12 +1622,12 @@ async def test_star_paper_idempotent_recall():
     Each call issues 2 fetchrow calls: paper-existence check + CTE RETURNING.
     """
     pool, conn = _make_pool_and_conn()
-    # Each star_paper call: fetchrow[0]=paper exists, fetchrow[1]=CTE result.
-    # Both calls — 4 fetchrow calls total, cycling through [paper, cte, paper, cte].
+    # Each star_paper call issues 1 fetchrow: CTE RETURNING.
+    # Both calls — 2 fetchrow calls total.
+    # (The redundant paper-existence SELECT was removed in W2c B-DRY-RED9;
+    # assert_paper_ownership already guarantees existence before this point.)
     conn.fetchrow.side_effect = [
-        FakeRecord(id=1),
         FakeRecord(is_new_row=True, prev_starred=False),
-        FakeRecord(id=1),
         FakeRecord(is_new_row=False, prev_starred=True),
     ]
     conn.fetchval.return_value = 0  # project_papers COUNT — no zotero.push needed

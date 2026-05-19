@@ -641,9 +641,6 @@ async def save_paper(
     """Save a paper to the Reading List (``state := 'to_read'``)."""
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
         await _assert_paper_in_states(
             conn, paper_id, user_id, allowed=("inbox", "done", "to_read", "reading")
         )
@@ -691,9 +688,6 @@ async def skip_paper(
     """Skip a paper from the Inbox (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("inbox",))
         await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
     return {"status": "ok", "paper_id": paper_id}
@@ -715,9 +709,6 @@ async def reading_paper(
     """Mark a paper as currently being read (``state := 'reading'``)."""
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
         await _assert_paper_in_states(
             conn, paper_id, user_id, allowed=("to_read", "reading", "done")
         )
@@ -741,9 +732,6 @@ async def done_paper(
     """Mark a paper as done (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
         await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
     return {"status": "ok", "paper_id": paper_id}
 
@@ -782,9 +770,6 @@ async def star_paper(
     auto_push_on_star = False
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
         # Atomically upsert starred=TRUE and detect the off→on transition.
         # A CTE snapshots the previous starred value before the upsert so we
         # can determine whether this is a genuine transition without a separate
@@ -841,9 +826,6 @@ async def unstar_paper(
     """Set ``starred = FALSE``. Does not change reading state."""
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
         await _upsert_state_and_starred(conn, paper_id, user_id, starred=False)
     return {"status": "ok", "paper_id": paper_id}
 
@@ -864,9 +846,6 @@ async def trash_paper(
     """Move paper to Trash. Atomic: ``state_before_trash := state; state := 'trash'``."""
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
         await _trash_paper(conn, paper_id, user_id)
     return {"status": "ok", "paper_id": paper_id}
 
@@ -887,9 +866,6 @@ async def restore_paper(
     """Restore a paper from Trash to its prior state."""
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
         await _restore_paper(conn, paper_id, user_id)
     return {"status": "ok", "paper_id": paper_id}
@@ -914,9 +890,6 @@ async def trash_and_reject_paper(
     """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
         async with conn.transaction():
             await _trash_paper(conn, paper_id, user_id)
             await _upsert_recommendation_feedback(
