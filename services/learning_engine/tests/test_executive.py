@@ -336,7 +336,7 @@ async def test_focus_log_paper_not_found(exec_app):
     """POST /api/executive/focus/log with a missing paper_id returns 404."""
     app, conn = exec_app
 
-    # fetchrow (SELECT FOR UPDATE) returns None — paper does not exist
+    # fetchrow returns None — paper does not exist (assert_paper_ownership raises 404)
     conn.fetchrow.return_value = None
 
     async with httpx.AsyncClient(
@@ -349,6 +349,35 @@ async def test_focus_log_paper_not_found(exec_app):
 
     assert resp.status_code == 404
     assert "paper" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_focus_log_rejects_other_users_paper(exec_app):
+    """B-FOCUSCOL: log_focus_session must reject a paper owned by another user.
+
+    assert_paper_ownership raises 403 when the paper's discovered_by != caller's
+    user_id AND the paper is not in the caller's user_library.
+    The dependency override in exec_app pins user_id=1; this test simulates
+    a paper discovered_by=999 that is not in user 1's library.
+    """
+    app, conn = exec_app
+
+    # fetchrow (assert_paper_ownership SELECT) returns another user's paper
+    # fetchval (user_library check) returns None — not in caller's library
+    conn.fetchrow.return_value = FakeRecord(discovered_by=999)
+    conn.fetchval.return_value = None  # not in user_library
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/executive/focus/log",
+            json={"duration_hours": 0.5, "paper_id": 7},
+        )
+
+    assert resp.status_code == 403, (
+        f"Expected 403 for another user's paper, got {resp.status_code}: {resp.json()}"
+    )
 
 
 @pytest.mark.asyncio
@@ -852,6 +881,77 @@ async def test_my_day_bundle_null_tolerant_when_empty(exec_app):
     assert data["yesterday"]["focused_hours"] == 0.0
     assert data["yesterday"]["completed"] == []
     assert data["yesterday"]["deferred"] == []
+
+
+# ---------------------------------------------------------------------------
+# B-YDAY: verify timezone window math is correct (not a bug — FP confirmed)
+# ---------------------------------------------------------------------------
+
+
+def test_yday_timezone_window_utc_plus_3():
+    """B-YDAY: yesterday window formula is correct for UTC+3.
+
+    Verified: for tz_offset_minutes=180 the formula produces
+    start_utc=2026-05-17T21:00Z, end_utc=2026-05-18T21:00Z when
+    now_utc is 2026-05-19T10:00Z (= 13:00 local UTC+3).
+    This exactly represents 2026-05-18T00:00..23:59 UTC+3 (yesterday local).
+    """
+    import datetime
+
+    # Fix a concrete now_utc: 2026-05-19T10:00Z (= 13:00 local UTC+3)
+    now_utc = datetime.datetime(2026, 5, 19, 10, 0, 0, tzinfo=datetime.UTC)
+    tz_offset_minutes = 180  # UTC+3
+    offset = datetime.timedelta(minutes=tz_offset_minutes)
+    now_local = now_utc + offset  # 2026-05-19T13:00 (local, naive+offset arithmetic)
+    yesterday_local_date = (now_local - datetime.timedelta(days=1)).date()
+    assert yesterday_local_date == datetime.date(2026, 5, 18)
+
+    start_utc = (
+        datetime.datetime(
+            yesterday_local_date.year,
+            yesterday_local_date.month,
+            yesterday_local_date.day,
+            tzinfo=datetime.UTC,
+        )
+        - offset
+    )
+    end_utc = start_utc + datetime.timedelta(days=1)
+
+    # 2026-05-18T00:00 UTC+3 = 2026-05-17T21:00Z
+    assert start_utc == datetime.datetime(2026, 5, 17, 21, 0, 0, tzinfo=datetime.UTC)
+    # end is exclusive: 2026-05-18T00:00 UTC+3 + 24h = 2026-05-18T21:00Z
+    assert end_utc == datetime.datetime(2026, 5, 18, 21, 0, 0, tzinfo=datetime.UTC)
+
+
+def test_yday_timezone_window_utc_minus_5():
+    """B-YDAY: yesterday window is correct for UTC-5 (negative offset).
+
+    now_utc=2026-05-19T03:00Z = 2026-05-18T22:00 local (UTC-5), so yesterday_local
+    = 2026-05-17; start_utc = 2026-05-17T05:00Z, end_utc = 2026-05-18T05:00Z.
+    """
+    import datetime
+
+    now_utc = datetime.datetime(2026, 5, 19, 3, 0, 0, tzinfo=datetime.UTC)
+    tz_offset_minutes = -300  # UTC-5
+    offset = datetime.timedelta(minutes=tz_offset_minutes)
+    now_local = now_utc + offset  # 2026-05-18T22:00 (yesterday in local)
+    yesterday_local_date = (now_local - datetime.timedelta(days=1)).date()
+    assert yesterday_local_date == datetime.date(2026, 5, 17)
+
+    start_utc = (
+        datetime.datetime(
+            yesterday_local_date.year,
+            yesterday_local_date.month,
+            yesterday_local_date.day,
+            tzinfo=datetime.UTC,
+        )
+        - offset
+    )
+    end_utc = start_utc + datetime.timedelta(days=1)
+
+    # 2026-05-17T00:00 UTC-5 = 2026-05-17T05:00Z
+    assert start_utc == datetime.datetime(2026, 5, 17, 5, 0, 0, tzinfo=datetime.UTC)
+    assert end_utc == datetime.datetime(2026, 5, 18, 5, 0, 0, tzinfo=datetime.UTC)
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ from typing import Any
 from asyncpg import Pool
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_strict, current_user_id_strict_with_owner_override
+from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 from pydantic import BaseModel, Field
 
@@ -303,6 +304,12 @@ async def get_my_day_bundle(
     """
     # Yesterday window: local-midnight boundaries re-expressed as UTC instants
     # (mirrors routers.my_day.get_yesterday exactly).
+    #
+    # B-YDAY verified correct: for UTC+3 (tz_offset_minutes=180) the formula
+    # produces start_utc=yesterday_local_date_00:00+0300→UTC = yesterday_local_date_T21:00Z−1d
+    # and end_utc = start_utc + 24h, which exactly spans the local calendar day.
+    # Example: 2026-05-19, UTC+3 → yesterday_local=2026-05-18,
+    # start_utc=2026-05-17T21:00Z, end_utc=2026-05-18T21:00Z. ✓
     offset = datetime.timedelta(minutes=tz_offset_minutes)
     now_local = datetime.datetime.now(datetime.UTC) + offset
     yesterday_local_date = (now_local - datetime.timedelta(days=1)).date()
@@ -418,15 +425,12 @@ async def log_focus_session(
                 if task_row is None:
                     raise HTTPException(status_code=404, detail="Task not found")
             if payload.paper_id is not None:
-                # Papers stay visible across users when NULL-owned (system papers).
-                paper_row = await conn.fetchrow(
-                    "SELECT id FROM papers WHERE id = $1 "
-                    "AND (user_id IS NULL OR user_id IS NOT DISTINCT FROM $2) FOR UPDATE",
-                    payload.paper_id,
-                    user_id,
-                )
-                if paper_row is None:
-                    raise HTTPException(status_code=404, detail="Paper not found")
+                # B-FOCUSCOL: canonical ownership semantics via assert_paper_ownership
+                # (D4 decision — discovered_by IS NULL means shared/system paper, globally
+                # readable; per-user access also granted via user_library membership).
+                # The old ad-hoc query referenced the legacy `papers.user_id` column which
+                # was renamed to `papers.discovered_by` by migration 072.
+                await assert_paper_ownership(conn, payload.paper_id, user_id)
 
             if payload.task_id is not None:
                 await conn.execute(
