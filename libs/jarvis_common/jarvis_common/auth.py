@@ -545,6 +545,11 @@ def validate_production_config() -> None:
             raise RuntimeError(
                 f"JARVIS_API_KEY must be at least 32 characters (got {len(api_key)})"
             )
+        if _is_weak_secret(api_key):
+            raise RuntimeError(
+                "JARVIS_API_KEY is a known placeholder/weak value — "
+                "set a strong secret before deploying to production"
+            )
 
     # H14 / M-07 — Pulse model HMAC key gate. The pulse classifier signs
     # pickle blobs with HMAC-SHA256; without a real key, an attacker with DB

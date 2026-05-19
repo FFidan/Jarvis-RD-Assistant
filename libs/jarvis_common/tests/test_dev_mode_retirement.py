@@ -155,6 +155,65 @@ class TestDevModeMetaFlag:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# B-WEAKKEY — JARVIS_API_KEY must reject known-weak values via _is_weak_secret
+# ---------------------------------------------------------------------------
+
+
+class TestWeakJarvisApiKeyRejected:
+    """W1b B-WEAKKEY: _is_weak_secret must be applied to JARVIS_API_KEY.
+
+    Values that are ≥32 chars (pass the length gate) but contain a
+    placeholder/weak substring must be rejected in non-dev mode.
+    """
+
+    def _clear_env(self, monkeypatch) -> None:
+        for var in (
+            "DEV_MODE",
+            "DEV_AUTH_BYPASS",
+            "DEV_ERROR_DETAIL",
+            "DEV_CORS_OPEN",
+            "DEV_SMTP_LOG_ONLY",
+            "DEV_CRYPTO_RELAXED",
+            "ENVIRONMENT",
+            "JARVIS_API_KEY",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_weak_jarvis_api_key_rejected_outside_dev_mode(self, monkeypatch) -> None:
+        """JARVIS_API_KEY with a placeholder substring must be rejected when dev_mode=false.
+
+        "changeme" + "a" * 24 is 32 chars — passes length gate, passes the
+        CHANGE_ME_REQUIRED sentinel check — but _is_weak_secret must catch it.
+        """
+        self._clear_env(monkeypatch)
+        # dev_mode=false so the API-key gate is active
+        monkeypatch.setenv("DEV_MODE", "false")
+        # A key that is long enough but contains a known-weak substring
+        weak_key = "changeme" + "a" * 24  # 32 chars, contains "changeme"
+        monkeypatch.setenv("JARVIS_API_KEY", weak_key)
+
+        with pytest.raises(RuntimeError, match="weak|placeholder"):
+            validate_production_config()
+
+    def test_strong_jarvis_api_key_accepted_outside_dev_mode(self, monkeypatch) -> None:
+        """A genuine strong key must NOT be rejected by the weak-secret check."""
+        self._clear_env(monkeypatch)
+        monkeypatch.setenv("DEV_MODE", "false")
+        # Strong random-looking key — no weak substrings, ≥32 chars
+        strong_key = "xK9mP2qR7nL4wJ8vB5hC1dG6tF3sY0uA"
+        monkeypatch.setenv("JARVIS_API_KEY", strong_key)
+
+        # Should not raise for the API-key gate (may raise later for prod-only
+        # gates like LITELLM_MASTER_KEY, but that proves the key itself passed).
+        try:
+            validate_production_config()
+        except RuntimeError as exc:
+            assert "JARVIS_API_KEY" not in str(exc), (
+                f"Strong JARVIS_API_KEY was incorrectly rejected: {exc}"
+            )
+
+
 class TestProductionGuardGranularFlags:
     _PROD_ENV = {"ENVIRONMENT": "production", "JARVIS_API_KEY": "a" * 32}
 
