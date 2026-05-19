@@ -241,14 +241,21 @@ async def run_paper_digest(
                 '<a href="/feed?surface=inbox&amp;filter=pulse-this-week">'
                 "View in JARVIS inbox</a>"
             )
-            await _send_chunked(bot, pairing.chat_id, lines)
-            logger.info(
-                "LLM digest sent to chat_id=%d (user_id=%s): %d papers in %d topics",
-                pairing.chat_id,
-                pairing.user_id,
-                digest.get("total_papers", 0),
-                len(digest.get("topics", [])),
-            )
+            try:
+                await _send_chunked(bot, pairing.chat_id, lines)
+                logger.info(
+                    "LLM digest sent to chat_id=%d (user_id=%s): %d papers in %d topics",
+                    pairing.chat_id,
+                    pairing.user_id,
+                    digest.get("total_papers", 0),
+                    len(digest.get("topics", [])),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed sending weekly digest to chat %s (user %s) — skipping",
+                    pairing.chat_id,
+                    pairing.user_id,
+                )
         else:
             logger.warning(
                 "paper_digest: API returned no data for chat_id=%d (user_id=%s) — skipping",

@@ -238,3 +238,47 @@ async def test_paper_digest_per_pairing_user_scope():
     # Each call must carry the correct user_id for its pairing
     user_ids_sent = {call[0] for call in fetch_calls}
     assert user_ids_sent == {10, 20}, f"Expected user_ids {{10, 20}}, got {user_ids_sent}"
+
+
+@pytest.mark.asyncio
+async def test_digest_continues_after_blocked_user():
+    """A 403 Telegram error for one user must not prevent digest delivery to others."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    db_pool = AsyncMock()
+    config = _make_config()
+
+    from telegram_bot.owner import UserPairing
+
+    block_chat_id = 111
+    good_chat_id = 222
+    delivered_chats: list[int] = []
+
+    async def fake_send_chunked(bot_arg, chat_id: int, lines: list[str]) -> None:
+        if chat_id == block_chat_id:
+            raise Exception("Forbidden: bot was blocked by the user")
+        delivered_chats.append(chat_id)
+
+    with (
+        patch(
+            "telegram_bot.owner.list_user_pairings",
+            AsyncMock(
+                return_value=[
+                    UserPairing(user_id=1, chat_id=block_chat_id),
+                    UserPairing(user_id=2, chat_id=good_chat_id),
+                ]
+            ),
+        ),
+        patch.object(
+            paper_digest,
+            "_fetch_digest_from_api",
+            AsyncMock(return_value={"topics": [{"name": "AI"}], "total_papers": 1}),
+        ),
+        patch.object(paper_digest, "format_weekly_digest", return_value="digest line"),
+        patch.object(paper_digest, "_send_chunked", side_effect=fake_send_chunked),
+    ):
+        await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
+
+    assert good_chat_id in delivered_chats, (
+        "Good user must still get digest even after a blocked user raises a 403"
+    )
