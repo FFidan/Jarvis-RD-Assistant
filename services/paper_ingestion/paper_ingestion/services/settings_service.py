@@ -38,7 +38,9 @@ from jarvis_common.crypto import (
     encrypt_secret,
     mask_secret,
 )
-from jarvis_common.event_log import log_event as _log_event  # noqa: F401 — re-exported for compat
+from jarvis_common.event_log import (
+    log_event as _log_event,  # noqa: F401 — re-exported; live patch site is routers.settings._log_event
+)
 from jarvis_common.settings import get_core_settings, get_telegram_settings
 from pydantic import BaseModel
 

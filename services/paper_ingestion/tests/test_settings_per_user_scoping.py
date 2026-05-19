@@ -302,7 +302,7 @@ async def test_personal_zotero_api_key_accessible_to_non_admin(monkeypatch):
     zotero.api_key is encrypted; monkeypatch encrypt_secret to avoid FERNET_KEY dep.
     """
     monkeypatch.setattr(
-        "paper_ingestion.routers.settings.encrypt_secret",
+        "paper_ingestion.services.settings_service.encrypt_secret",
         lambda v: "encrypted-value",
     )
     app, pool, conn, _ = _make_app()

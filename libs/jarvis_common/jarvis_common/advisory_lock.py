@@ -14,6 +14,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import asyncpg
@@ -118,4 +119,4 @@ def _kind_lock_key(kind: str) -> int:
     int
         A value in ``[0, 2**31 - 1]``.
     """
-    return hash(kind) & 0x7FFF_FFFF
+    return int.from_bytes(hashlib.sha256(kind.encode()).digest()[:4], "big") & 0x7FFF_FFFF

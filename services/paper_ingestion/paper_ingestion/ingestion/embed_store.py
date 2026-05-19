@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from typing import TYPE_CHECKING
 
 import httpcore
 import httpx
@@ -32,6 +33,9 @@ from paper_ingestion.ingestion.embedding_config import (
 )
 from paper_ingestion.models import ChunkForEmbedding
 from paper_ingestion.perf_probe import probe_span
+
+if TYPE_CHECKING:
+    from qdrant_client import AsyncQdrantClient
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +64,14 @@ class EmbeddingBatchError(RuntimeError):
 
 class EmbeddingStoreMixin:
     """Embedding generation, collection lifecycle, and Qdrant upsert/delete."""
+
+    if TYPE_CHECKING:
+        # Shared state provided by Embedder.__init__ — declared here so pyright
+        # resolves attribute access inside this mixin without runtime overhead.
+        qdrant: AsyncQdrantClient
+        http_client: httpx.AsyncClient
+        _collection_lock: asyncio.Lock
+        _collection_ensured: bool
 
     async def ensure_collection(self) -> None:
         """Create the Qdrant collection if it does not exist.

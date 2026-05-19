@@ -92,6 +92,25 @@ class CoreSettings(BaseSettings):
     # Written by setup.sh into .env. Drives the first-run wizard SMTP step.
     jarvis_setup_mode: Literal["single", "multi"] = "single"
 
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_file_indirection(cls, values):
+        import os  # noqa: PLC0415
+
+        if not isinstance(values, dict):
+            return values
+        for field_name in cls.model_fields:
+            env_name = field_name.upper()
+            file_var = os.environ.get(f"{env_name}_FILE", "")
+            if file_var:
+                try:
+                    # An empty secret file must resolve to None, not "",
+                    # so downstream Optional[SecretStr] fields stay unset.
+                    values[field_name] = Path(file_var).read_text().strip() or None
+                except OSError as exc:
+                    raise RuntimeError(f"Failed to read secret from {file_var!r}") from exc
+        return values
+
     @model_validator(mode="after")
     def _promote_dev_flags(self) -> CoreSettings:
         """When dev_mode=True, promote any granular flag that was NOT explicitly

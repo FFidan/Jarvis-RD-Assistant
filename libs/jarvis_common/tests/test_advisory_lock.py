@@ -162,3 +162,22 @@ def test_kind_lock_key_different_kinds_differ():
     # Not guaranteed by hash, but true for any sane set of distinct strings.
     keys = {_kind_lock_key(k) for k in ["arxiv", "s2", "pubmed", "openalex"]}
     assert len(keys) == 4
+
+
+def test_kind_lock_key_stable_across_pythonhashseed():
+    """Key must equal SHA-256-derived value, independent of PYTHONHASHSEED."""
+    import hashlib
+
+    kind = "pulse"
+    expected = int.from_bytes(hashlib.sha256(kind.encode()).digest()[:4], "big") & 0x7FFF_FFFF
+    assert _kind_lock_key(kind) == expected
+    assert _kind_lock_key(kind) == expected  # second call confirms determinism
+
+
+def test_kind_lock_key_known_value_digest():
+    """Pin a known hash to catch accidental algorithm changes."""
+    import hashlib
+
+    kind = "digest"
+    expected = int.from_bytes(hashlib.sha256(kind.encode()).digest()[:4], "big") & 0x7FFF_FFFF
+    assert _kind_lock_key(kind) == expected

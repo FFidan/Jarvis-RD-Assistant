@@ -86,6 +86,17 @@ def test_core_settings_dev_mode_invalid_raises(monkeypatch):
         CoreSettings()
 
 
+def test_core_settings_resolves_jarvis_api_key_file(tmp_path, monkeypatch):
+    """CoreSettings must honor JARVIS_API_KEY_FILE like SecretsSettings does."""
+    key_file = tmp_path / "api_key"
+    key_file.write_text("my-secret-test-value")
+    monkeypatch.delenv("JARVIS_API_KEY", raising=False)
+    monkeypatch.setenv("JARVIS_API_KEY_FILE", str(key_file))
+    s = CoreSettings()
+    assert s.jarvis_api_key is not None
+    assert s.jarvis_api_key.get_secret_value() == "my-secret-test-value"
+
+
 # ---------------------------------------------------------------------------
 # RerankerSettings
 # ---------------------------------------------------------------------------

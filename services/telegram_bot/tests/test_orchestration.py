@@ -150,12 +150,12 @@ async def test_author_alerts_sends_message_when_new_paper_found():
 
 @pytest.mark.asyncio
 async def test_author_alerts_skips_when_no_owner():
-    """run_author_alerts returns early and sends nothing when owner is not paired."""
+    """run_author_alerts returns early and sends nothing when no pairings exist."""
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     pool = AsyncMock()
 
-    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=None)):
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
         await author_alerts_mod.run_author_alerts(http_client, pool, bot, _make_config())
 
     bot.send_message.assert_not_awaited()
@@ -262,12 +262,12 @@ async def test_daily_briefing_stats_call_includes_api_key_header():
 
 @pytest.mark.asyncio
 async def test_daily_briefing_skips_when_no_owner():
-    """run_daily_briefing returns early and sends nothing when owner is not paired."""
+    """run_daily_briefing returns early and sends nothing when no pairings exist."""
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     pool = AsyncMock()
 
-    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=None)):
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
         await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, _make_config())
 
     bot.send_message.assert_not_awaited()
@@ -318,13 +318,18 @@ async def test_deadline_warning_sends_alert_for_upcoming_milestones():
 
 @pytest.mark.asyncio
 async def test_deadline_warning_silent_when_no_milestones():
-    """run_deadline_warning sends nothing when no milestones are due within 3 days."""
+    """run_deadline_warning sends nothing when pairings exist but no milestones are due."""
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     pool = AsyncMock()
     pool.fetch.return_value = []
 
-    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
+    ):
         await deadline_warning_mod.run_deadline_warning(http_client, pool, bot, _make_config())
 
     bot.send_message.assert_not_awaited()
@@ -366,7 +371,7 @@ async def test_review_reminder_sends_message_for_due_cards():
 
 @pytest.mark.asyncio
 async def test_review_reminder_silent_when_no_cards_due():
-    """run_review_reminder sends nothing when due_now is 0."""
+    """run_review_reminder sends nothing when pairings exist but due_now is 0."""
     bot = AsyncMock()
     pool = AsyncMock()
 
@@ -376,7 +381,12 @@ async def test_review_reminder_silent_when_no_cards_due():
     resp.json.return_value = {"due_now": 0}
     http_client.get.return_value = resp
 
-    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
+    ):
         await review_reminder_mod.run_review_reminder(http_client, pool, bot, _make_config())
 
     bot.send_message.assert_not_awaited()
@@ -384,12 +394,12 @@ async def test_review_reminder_silent_when_no_cards_due():
 
 @pytest.mark.asyncio
 async def test_review_reminder_skips_when_no_owner():
-    """run_review_reminder returns early and sends nothing when owner is not paired."""
+    """run_review_reminder returns early and sends nothing when no pairings exist."""
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     pool = AsyncMock()
 
-    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=None)):
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
         await review_reminder_mod.run_review_reminder(http_client, pool, bot, _make_config())
 
     bot.send_message.assert_not_awaited()

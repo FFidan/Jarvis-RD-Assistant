@@ -24,12 +24,20 @@ from paper_ingestion.perf_probe import probe_span
 
 if TYPE_CHECKING:
     import asyncpg
+    from qdrant_client import AsyncQdrantClient
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingSearchMixin:
     """Vector search, hybrid (BM25+RRF) search, reranking, and recommendations."""
+
+    if TYPE_CHECKING:
+        # Shared state provided by Embedder.__init__ — declared here so pyright
+        # resolves attribute access inside this mixin without runtime overhead.
+        qdrant: AsyncQdrantClient
+
+        async def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
 
     async def search_similar(
         self,
