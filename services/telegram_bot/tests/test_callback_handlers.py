@@ -1001,3 +1001,53 @@ async def test_project_detail_none_user_id_scoped_to_null_rows_only() -> None:
     assert bound_user_id is None, (
         f"$2 must be None (NULL) for legacy single-tenant path; got {bound_user_id!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# TG-003: start_review_callback handles inaccessible message safely
+# (migrated from test_tg002_tg003_hardening.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_review_callback_handles_inaccessible_message_gracefully():
+    """TG-003: start_review_callback sends show_alert and returns early when the
+    message is inaccessible (query.message is not a telegram.Message instance).
+
+    The isinstance guard must prevent review_start from being called and must
+    answer the query with show_alert=True so Telegram removes the spinner.
+    """
+
+    # Build a query where message is NOT spec'd to telegram.Message
+    class _FakeInaccessibleMessage:
+        pass
+
+    update = MagicMock()
+    update.effective_chat = MagicMock()
+    update.effective_chat.id = _TEST_CHAT_ID
+
+    query = MagicMock()
+    query.data = "start_review"
+    query.answer = AsyncMock()
+    query.message = _FakeInaccessibleMessage()
+    update.callback_query = query
+
+    context = MagicMock()
+    context.application = MagicMock()
+    context.application.bot_data = {
+        "config": _make_config(),
+        "db_pool": AsyncMock(),
+        "http_client": AsyncMock(),
+    }
+
+    with patch(
+        "telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock
+    ) as mock_review_start:
+        await start_review_callback(update, context)
+
+    mock_review_start.assert_not_awaited()
+    query.answer.assert_awaited()
+    answer_kwargs = query.answer.await_args[1] if query.answer.await_args[1] else {}
+    assert answer_kwargs.get("show_alert") is True, (
+        "query.answer must be called with show_alert=True for inaccessible message"
+    )

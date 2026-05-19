@@ -50,6 +50,19 @@ def _paper_row(id=1):
     )
 
 
+def _paper_response(id=1):
+    """Return a minimal PaperResponse model for converter-stubbed get_paper_detail tests."""
+    return PaperResponse(
+        id=id,
+        external_id=f"paper-{id}",
+        source_type=SourceType.ARXIV,
+        title=f"Paper {id}",
+        authors=["Ada"],
+        url=f"https://example.com/papers/{id}",
+        created_at=datetime.now(UTC),
+    )
+
+
 # ---------------------------------------------------------------------------
 # list_papers — view-based filtering (post Phase A redesign)
 # ---------------------------------------------------------------------------
@@ -127,19 +140,21 @@ async def test_list_papers_search_query_uses_bm25_clause():
 
 
 @pytest.mark.asyncio
-async def test_get_paper_detail_raises_404_when_missing(monkeypatch):
+async def test_get_paper_detail_raises_404_when_missing():
     """get_paper_detail returns 404 when the paper row is absent.
 
     Ownership is covered by dedicated tests; here it is a pass-through so the
     route's own missing-paper 404 is exercised.
     """
-    monkeypatch.setattr(
-        "paper_ingestion.routers.papers.assert_paper_ownership", AsyncMock(return_value=None)
-    )
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = None
 
-    with pytest.raises(HTTPException, match="Paper not found") as exc_info:
+    with (
+        patch(
+            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+        ),
+        pytest.raises(HTTPException, match="Paper not found") as exc_info,
+    ):
         await papers.get_paper_detail.__wrapped__(
             MagicMock(),
             paper_id=999,
@@ -176,15 +191,7 @@ async def test_get_paper_detail_returns_summary_chunks_and_user_state():
     conn.fetch.return_value = [FakeRecord(id=1)]
     conn.fetchval = AsyncMock(return_value=2)
 
-    paper_model = PaperResponse(
-        id=3,
-        external_id="paper-3",
-        source_type=SourceType.ARXIV,
-        title="Paper 3",
-        authors=["Ada"],
-        url="https://example.com/papers/3",
-        created_at=datetime.now(UTC),
-    )
+    paper_model = _paper_response(id=3)
     summary_model = SummaryResponse(
         id=10,
         paper_id=3,
@@ -199,7 +206,9 @@ async def test_get_paper_detail_returns_summary_chunks_and_user_state():
     )
 
     with (
-        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
+        patch(
+            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+        ),
         patch.object(papers, "row_to_paper_response", return_value=paper_model) as paper_conv,
         patch.object(papers, "row_to_summary_response", return_value=summary_model) as summary_conv,
         patch.object(
@@ -258,19 +267,11 @@ async def test_get_paper_detail_starred_independent_of_state():
     conn.fetch.return_value = []
     conn.fetchval = AsyncMock(return_value=0)
 
-    paper_model = PaperResponse(
-        id=42,
-        external_id="paper-42",
-        source_type=SourceType.ARXIV,
-        title="Paper 42",
-        authors=["Ada"],
-        url="https://example.com/papers/42",
-        created_at=datetime.now(UTC),
-    )
-
     with (
-        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
-        patch.object(papers, "row_to_paper_response", return_value=paper_model),
+        patch(
+            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+        ),
+        patch.object(papers, "row_to_paper_response", return_value=_paper_response(id=42)),
     ):
         result = await papers.get_paper_detail.__wrapped__(
             MagicMock(),
@@ -300,19 +301,11 @@ async def test_get_paper_detail_processing_failed_true_when_last_job_failed():
     # fetchval order: (1) project-link COUNT → 0, (2) last process-job status.
     conn.fetchval = AsyncMock(side_effect=[0, "failed"])
 
-    paper_model = PaperResponse(
-        id=7,
-        external_id="paper-7",
-        source_type=SourceType.ARXIV,
-        title="Paper 7",
-        authors=["Ada"],
-        url="https://example.com/papers/7",
-        created_at=datetime.now(UTC),
-    )
-
     with (
-        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
-        patch.object(papers, "row_to_paper_response", return_value=paper_model),
+        patch(
+            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+        ),
+        patch.object(papers, "row_to_paper_response", return_value=_paper_response(id=7)),
     ):
         result = await papers.get_paper_detail.__wrapped__(
             MagicMock(),
@@ -337,19 +330,11 @@ async def test_get_paper_detail_processing_failed_false_when_last_job_succeeded(
     conn.fetch.return_value = []
     conn.fetchval = AsyncMock(side_effect=[0, "other"])
 
-    paper_model = PaperResponse(
-        id=8,
-        external_id="paper-8",
-        source_type=SourceType.ARXIV,
-        title="Paper 8",
-        authors=["Ada"],
-        url="https://example.com/papers/8",
-        created_at=datetime.now(UTC),
-    )
-
     with (
-        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
-        patch.object(papers, "row_to_paper_response", return_value=paper_model),
+        patch(
+            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+        ),
+        patch.object(papers, "row_to_paper_response", return_value=_paper_response(id=8)),
     ):
         result = await papers.get_paper_detail.__wrapped__(
             MagicMock(),
@@ -373,19 +358,11 @@ async def test_get_paper_detail_sets_has_project_links_false_when_unlinked():
     conn.fetch.return_value = []
     conn.fetchval = AsyncMock(return_value=0)
 
-    paper_model = PaperResponse(
-        id=4,
-        external_id="paper-4",
-        source_type=SourceType.ARXIV,
-        title="Paper 4",
-        authors=["Ada"],
-        url="https://example.com/papers/4",
-        created_at=datetime.now(UTC),
-    )
-
     with (
-        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
-        patch.object(papers, "row_to_paper_response", return_value=paper_model),
+        patch(
+            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+        ),
+        patch.object(papers, "row_to_paper_response", return_value=_paper_response(id=4)),
     ):
         result = await papers.get_paper_detail.__wrapped__(
             MagicMock(),
@@ -902,7 +879,9 @@ async def test_star_paper_sets_starred_true_does_not_change_state():
     conn.fetchval.return_value = 0
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
-    with patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)):
+    with patch(
+        "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+    ):
         result = await papers.star_paper.__wrapped__(request, 42, db_pool=pool)
 
     assert result == {"status": "ok", "paper_id": 42}
@@ -1151,13 +1130,14 @@ async def test_hard_delete_409_when_paper_not_in_trash():
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     with patch(
-        "paper_ingestion.routers.papers.delete_paper_vectors",
+        "paper_ingestion.papers_service.delete_paper_vectors",
         new_callable=AsyncMock,
     ) as mock_qdrant:
         with pytest.raises(HTTPException) as exc_info:
             await papers.hard_delete_paper.__wrapped__(request, 42, db_pool=pool)
     assert exc_info.value.status_code == 409
     assert "trash" in exc_info.value.detail
+    # State precondition fires before Qdrant — mock must never be reached
     mock_qdrant.assert_not_called()
 
 
@@ -1175,7 +1155,7 @@ async def test_hard_delete_aborts_qdrant_when_sql_delete_fails():
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     with patch(
-        "paper_ingestion.routers.papers.delete_paper_vectors",
+        "paper_ingestion.papers_service.delete_paper_vectors",
         new_callable=AsyncMock,
     ) as mock_qdrant:
         with pytest.raises(asyncpg.PostgresError):
@@ -1198,7 +1178,7 @@ async def test_hard_delete_logs_qdrant_failure_after_sql_success(caplog):
 
     with caplog.at_level(_logging.ERROR, logger="paper_ingestion.routers.papers"):
         with patch(
-            "paper_ingestion.routers.papers.delete_paper_vectors",
+            "paper_ingestion.papers_service.delete_paper_vectors",
             new_callable=AsyncMock,
             side_effect=RuntimeError("qdrant down"),
         ) as mock_qdrant:
@@ -1224,7 +1204,7 @@ async def test_hard_delete_calls_qdrant_after_sql_succeeds():
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     with patch(
-        "paper_ingestion.routers.papers.delete_paper_vectors",
+        "paper_ingestion.papers_service.delete_paper_vectors",
         new_callable=AsyncMock,
     ) as mock_qdrant:
         result = await papers.hard_delete_paper.__wrapped__(request, 42, db_pool=pool)
@@ -1633,7 +1613,9 @@ async def test_star_paper_idempotent_recall():
     conn.fetchval.return_value = 0  # project_papers COUNT — no zotero.push needed
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
-    with patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)):
+    with patch(
+        "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+    ):
         result1 = await papers.star_paper.__wrapped__(request, 1, db_pool=pool)
         result2 = await papers.star_paper.__wrapped__(request, 1, db_pool=pool)
 
@@ -1709,7 +1691,9 @@ async def test_annotate_paper_404_when_paper_missing():
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     with (
-        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
+        patch(
+            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+        ),
         pytest.raises(HTTPException) as exc_info,
     ):
         await papers.annotate_paper.__wrapped__(

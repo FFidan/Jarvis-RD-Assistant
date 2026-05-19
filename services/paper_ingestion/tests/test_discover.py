@@ -6,7 +6,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from paper_ingestion.embedder import COLLECTION_NAME, Embedder
+from paper_ingestion.embedder import COLLECTION_NAME
 
 # ---------------------------------------------------------------------------
 # Per-test stub for qdrant_client.models
@@ -49,19 +49,8 @@ def _stub_qdrant_models(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _make_embedder() -> Embedder:
-    """Create an Embedder with mocked HTTP and Qdrant clients."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    return Embedder(mock_http, mock_qdrant)
-
-
-def _dict_to_record(d: dict) -> MagicMock:
-    """Simulate an asyncpg.Record with dict-style access."""
-    rec = MagicMock()
-    rec.__getitem__ = lambda self, key: d[key]
-    rec.keys = lambda: d.keys()
-    return rec
+# D3-05/09: shared fakes — replaces _make_embedder/_dict_to_record duplicated 3×.
+from tests._embedder_fakes import _dict_to_record, _make_embedder
 
 
 def _make_pool_with_fetchrow(fetchrow_values: list[dict | None]) -> AsyncMock:

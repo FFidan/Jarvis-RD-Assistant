@@ -17,47 +17,22 @@ import pytest
 from fastapi import HTTPException, Response
 from jarvis_common.auth import current_user_id_or_none
 
+from tests._auth_fakes import build_mock_pool_with_txn, build_request_auth
+
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
-# Pool fixture: mocks pool.acquire() context manager + conn.transaction()
+# Pool / request stubs — delegated to shared _auth_fakes (D5-03)
 # ---------------------------------------------------------------------------
 
-
-def _build_mock_pool(conn: AsyncMock) -> MagicMock:
-    """Wrap an AsyncMock conn in a pool whose acquire() yields it."""
-    txn = MagicMock()
-    txn.__aenter__ = AsyncMock(return_value=txn)
-    txn.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
+_build_mock_pool = build_mock_pool_with_txn
 
 
-def _build_request(pool: MagicMock, *, cookies: dict[str, str] | None = None) -> SimpleNamespace:
-    """Build a Request stub good enough for the auth router and middleware."""
-    state = SimpleNamespace(db_pool=pool)
-    app = SimpleNamespace(state=state)
-    url = SimpleNamespace(
-        path="/api/auth/request-link",
-        replace=lambda **kw: SimpleNamespace(__str__=lambda self: "https://x/auth/verify?token=t"),
-    )
-    return SimpleNamespace(
-        url=url,
-        app=app,
-        client=SimpleNamespace(host="127.0.0.1"),
-        cookies=cookies or {},
-        state=SimpleNamespace(),
-    )
+def _build_request(pool: MagicMock, *, cookies: dict[str, str] | None = None):
+    return build_request_auth(pool, cookies=cookies)
 
 
 # ---------------------------------------------------------------------------

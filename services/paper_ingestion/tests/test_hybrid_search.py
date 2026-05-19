@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from paper_ingestion.embedder import Embedder
+
+# D3-05/09: shared fakes — replaces _make_embedder/_dict_to_record duplicated 3×.
+from tests._embedder_fakes import _dict_to_record, _make_embedder
 
 # ---------------------------------------------------------------------------
 # Pure RRF formula tests (no I/O)
@@ -77,13 +79,6 @@ def test_rrf_tiebreaking():
 # ---------------------------------------------------------------------------
 
 
-def _make_embedder() -> Embedder:
-    """Create an Embedder with mocked HTTP and Qdrant clients."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    return Embedder(mock_http, mock_qdrant)
-
-
 def _make_pool(rows: list[dict]) -> AsyncMock:
     """Create a mock asyncpg.Pool that returns the given rows from fetch()."""
     records = [_dict_to_record(r) for r in rows]
@@ -96,14 +91,6 @@ def _make_pool(rows: list[dict]) -> AsyncMock:
     pool = AsyncMock()
     pool.acquire = MagicMock(return_value=ctx)
     return pool
-
-
-def _dict_to_record(d: dict) -> MagicMock:
-    """Simulate an asyncpg.Record with dict-style access."""
-    rec = MagicMock()
-    rec.__getitem__ = lambda self, key: d[key]
-    rec.keys = lambda: d.keys()
-    return rec
 
 
 @pytest.mark.asyncio

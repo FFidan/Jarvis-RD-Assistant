@@ -222,46 +222,14 @@ class TestFilterUnread:
         assert "'negative'" in sql, "SQL must filter on signal = 'negative'"
         assert "60 days" in sql, "SQL must enforce the 60-day feedback window"
 
-    @pytest.mark.asyncio
-    async def test_negative_feedback_59d_excludes_paper(self) -> None:
-        """Negative feedback 59 days old (< 60d) fires the NOT EXISTS → paper excluded.
-
-        Boundary contract: `rf.created_at > NOW() - INTERVAL '60 days'`
-        A 59-day-old feedback row satisfies `> (now - 60d)` → EXISTS fires → excluded.
-        """
-        conn = AsyncMock()
-        # Simulate DB returning no rows (paper excluded by the EXISTS condition)
-        conn.fetch = AsyncMock(return_value=[])
-        result = await _filter_unread(conn, [10], user_id=1)
-        assert 10 not in result, (
-            "Paper with 59d-old negative feedback must be excluded (within 60d window)"
-        )
-
-    @pytest.mark.asyncio
-    async def test_negative_feedback_60d_boundary_exclusive(self) -> None:
-        """Negative feedback exactly 60 days old sits on the boundary — exclusive `>`.
-
-        With strict `>`, `created_at = (now - 60d)` is NOT > (now - 60d) → EXISTS does
-        not fire → paper is ELIGIBLE. 60-day-old feedback does NOT trigger exclusion.
-        """
-        conn = AsyncMock()
-        # Simulate DB returning the paper (boundary-exclusive: 60d is NOT excluded)
-        conn.fetch = AsyncMock(return_value=[{"id": 11}])
-        result = await _filter_unread(conn, [11], user_id=1)
-        assert 11 in result, (
-            "Paper with exactly 60d-old negative feedback must be ELIGIBLE "
-            "(strict > means boundary is exclusive: 60d old does NOT trigger exclusion)"
-        )
-
-    @pytest.mark.asyncio
-    async def test_negative_feedback_61d_eligible(self) -> None:
-        """Negative feedback 61 days old is outside the 60d window → paper eligible."""
-        conn = AsyncMock()
-        conn.fetch = AsyncMock(return_value=[{"id": 12}])
-        result = await _filter_unread(conn, [12], user_id=1)
-        assert 12 in result, (
-            "Paper with 61d-old negative feedback must be eligible (expired window)"
-        )
+    # D3-02 deleted: test_negative_feedback_59d_excludes_paper,
+    # test_negative_feedback_60d_boundary_exclusive, test_negative_feedback_61d_eligible.
+    # These mock-only tests set conn.fetch return value and assert on it — the
+    # SQL boundary is never exercised (the mock does whatever the test tells it).
+    # Real boundary coverage lives in the live test_db_pool variants:
+    #   test_filter_unread_excludes_negative_feedback_within_60d (line ~326)
+    #   test_filter_unread_includes_paper_after_60d_negative_feedback (line ~345)
+    # which insert actual feedback rows at specific ages and verify the SQL predicate.
 
     @pytest.mark.asyncio
     async def test_filter_unread_excludes_trash_state(self, test_db_pool):

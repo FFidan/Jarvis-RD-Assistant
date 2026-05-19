@@ -110,26 +110,27 @@ async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module):
 
 @pytest.mark.asyncio
 async def test_run_pulse_wrapper_swallows_errors(scheduler_module, monkeypatch):
+    """run_pulse_wrapper must not propagate exceptions from _defer_per_user.
+
+    run_pulse_wrapper calls _defer_per_user (which looks up the task in
+    task_registry._TASK_MAP and calls defer_async).  We make that call raise
+    to verify the outer try/except swallows the error instead of crashing
+    the APScheduler worker thread.
+    """
+    import jarvis_common.task_registry as task_registry
+
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord({"value": True})
+    conn.fetch.return_value = [{"id": 1}]  # one active user
 
-    app = SimpleNamespace(
-        state=SimpleNamespace(
-            db_pool=pool,
-            http_client=MagicMock(),
-            embedder=MagicMock(),
-        )
-    )
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    async def boom(**kwargs):
-        raise RuntimeError("kaboom")
+    boom_task = MagicMock()
+    boom_task.defer_async = AsyncMock(side_effect=RuntimeError("kaboom"))
 
-    import paper_ingestion.pulse.job as job_mod
-
-    monkeypatch.setattr(job_mod, "run_pulse", boom)
-
-    # Must not raise
-    await scheduler_module.run_pulse_wrapper(app)
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": boom_task}):
+        # Must not raise even though defer_async blows up
+        await scheduler_module.run_pulse_wrapper(app)
 
 
 @pytest.mark.asyncio

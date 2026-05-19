@@ -10,24 +10,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paper_ingestion.embedder import Embedder
 
-# ---------------------------------------------------------------------------
-# Helpers (same pattern as test_hybrid_search.py)
-# ---------------------------------------------------------------------------
-
-
-def _make_embedder() -> Embedder:
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    return Embedder(mock_http, mock_qdrant)
-
-
-def _dict_to_record(d: dict) -> MagicMock:
-    rec = MagicMock()
-    rec.__getitem__ = lambda self, key: d[key]
-    rec.keys = lambda: d.keys()
-    return rec
+# D3-05/09: shared fakes — replaces _make_embedder/_dict_to_record duplicated 3×.
+from tests._embedder_fakes import _dict_to_record, _make_embedder
 
 
 def _make_bm25_rows(n: int) -> list[dict]:

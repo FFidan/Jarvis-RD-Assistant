@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from fastapi import Request
 from httpx import ASGITransport
+from jarvis_common.testing import RoleMiddleware
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,27 +51,6 @@ def _event_row(*, id: int = 1) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# ASGI middleware shim — injects request.state.user_role
-# ---------------------------------------------------------------------------
-
-
-class _RoleMiddleware:
-    """Minimal ASGI middleware that sets request.state.user_role before routing."""
-
-    def __init__(self, app, role: str | None):
-        self._app = app
-        self._role = role
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            request = Request(scope)
-            if self._role is not None:
-                request.state.user_role = self._role
-            # If role is None we deliberately leave user_role absent (API-key path)
-        await self._app(scope, receive, send)
-
-
-# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -95,7 +74,7 @@ def _base_app(mock_db):
 
 def _client_with_role(app, role: str | None) -> httpx.AsyncClient:
     """Wrap *app* in the role-injection middleware and return an AsyncClient."""
-    wrapped = _RoleMiddleware(app, role)
+    wrapped = RoleMiddleware(app, role)
     return httpx.AsyncClient(transport=ASGITransport(app=wrapped), base_url="http://test")
 
 
@@ -215,7 +194,7 @@ async def test_list_events_api_key_only_allowed_through(_base_app):
     app, _pool, conn = _base_app
     conn.fetch = AsyncMock(return_value=[])
 
-    # role=None → _RoleMiddleware does NOT set request.state.user_role
+    # role=None → RoleMiddleware does NOT set request.state.user_role
     async with _client_with_role(app, None) as client:
         resp = await client.get("/api/logs/events")
 

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import respx
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.openalex_source import OPENALEX_API_URL, OpenAlexSource
+
+from tests._source_fakes import mock_log_event_pool
 
 _OA_WORK_ITEM = {
     "id": "https://openalex.org/W1234567890",
@@ -48,22 +50,12 @@ def _make_topic(name: str, terms: list[str] | None = None) -> TopicRef:
     return TopicRef(id=1, name=name, query_terms=terms or [name])
 
 
-def _mock_pool() -> MagicMock:
-    mock_conn = AsyncMock()
-    mock_conn.execute = AsyncMock()
-    pool = MagicMock()
-    pool.acquire = MagicMock()
-    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-    return pool
-
-
 @respx.mock
 async def test_openalex_emits_source_event_on_success():
     """fetch_new_since emits a 'source' log_event with message='fetch_succeeded' on success."""
     respx.get(OPENALEX_API_URL).mock(return_value=httpx.Response(200, json=_OA_RESPONSE))
 
-    pool = _mock_pool()
+    pool = mock_log_event_pool()
     source = _make_source(db_pool=pool)
     since = datetime(2026, 4, 1, 0, 0, 0, tzinfo=UTC)
     topics = [_make_topic("neural ODE")]
@@ -106,7 +98,7 @@ async def test_openalex_emits_source_event_on_rate_limit():
         return_value=httpx.Response(429, headers={"Retry-After": "30"})
     )
 
-    pool = _mock_pool()
+    pool = mock_log_event_pool()
     source = _make_source(db_pool=pool)
     since = datetime(2026, 4, 1, 0, 0, 0, tzinfo=UTC)
     topics = [_make_topic("ML")]
@@ -145,7 +137,7 @@ async def test_openalex_emits_source_event_on_http_error():
     """fetch_new_since emits a 'source' log_event with message='fetch_failed' on network error."""
     respx.get(OPENALEX_API_URL).mock(side_effect=httpx.ConnectError("connection refused"))
 
-    pool = _mock_pool()
+    pool = mock_log_event_pool()
     source = _make_source(db_pool=pool)
     since = datetime(2026, 4, 1, 0, 0, 0, tzinfo=UTC)
     topics = [_make_topic("ML")]

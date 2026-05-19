@@ -35,20 +35,15 @@ from paper_ingestion.ingestion.embedder import (
 )
 from paper_ingestion.models import ChunkForEmbedding
 
-
-class _FakeEncoding:
-    """Character-level tiktoken stand-in (1 char == 1 token)."""
-
-    def encode(self, text: str) -> list[str]:
-        return list(text)
-
-    def decode(self, tokens: list[str]) -> str:
-        return "".join(tokens)
+# D3-05: shared fake — replaces the local _FakeEncoding duplicated 3×.
+from tests._embedder_fakes import _FakeEncoding
 
 
 def _make_embedder() -> Embedder:
+    # Uses paper_ingestion.ingestion.embedder.Embedder (direct path, not shim)
+    # to validate both import surfaces stay in sync across the C3 split.
     e = Embedder(AsyncMock(), AsyncMock())
-    e._encoding = _FakeEncoding()
+    e._encoding = _FakeEncoding()  # type: ignore[assignment]
     return e
 
 

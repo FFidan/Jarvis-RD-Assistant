@@ -30,6 +30,9 @@ import pytest
 
 MIGRATION = Path(__file__).resolve().parents[3] / "db/migrations/088_perf_indexes.sql"
 
+# Module-level constant — text tests share one read instead of reading per-test.
+_SQL = MIGRATION.read_text(encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # Text-based correctness — always runs (no DB dependency).
@@ -40,12 +43,8 @@ def _executable(sql: str) -> str:
     return "\n".join(ln for ln in sql.splitlines() if not ln.lstrip().startswith("--"))
 
 
-def test_migration_088_file_exists() -> None:
-    assert MIGRATION.is_file(), f"Missing migration file: {MIGRATION}"
-
-
 def test_migration_088_creates_partial_composite_index_idempotently() -> None:
-    sql = _executable(MIGRATION.read_text(encoding="utf-8"))
+    sql = _executable(_SQL)
     assert "CREATE INDEX IF NOT EXISTS idx_paper_recommendations_user_score_active" in sql
     assert "ON paper_recommendations (user_id, score DESC)" in sql
     assert "WHERE NOT dismissed" in sql
@@ -53,14 +52,14 @@ def test_migration_088_creates_partial_composite_index_idempotently() -> None:
 
 def test_migration_088_omits_redundant_indexes() -> None:
     """user_library / paper_topics indexes are redundant with their PKs — must be absent."""
-    sql = _executable(MIGRATION.read_text(encoding="utf-8"))
+    sql = _executable(_SQL)
     assert "ON user_library" not in sql
     assert "ON paper_topics" not in sql
 
 
 def test_migration_088_no_outer_transaction() -> None:
     """Runner wraps each migration; migration must not BEGIN/COMMIT itself."""
-    for line in MIGRATION.read_text(encoding="utf-8").splitlines():
+    for line in _executable(_SQL).splitlines():
         stripped = line.strip().upper()
         assert not stripped.startswith(("BEGIN;", "COMMIT;", "ROLLBACK;"))
 
@@ -69,13 +68,7 @@ def test_migration_088_no_outer_transaction() -> None:
 # Live-PG: opt-in via JARVIS_RUN_LIVE_PG=1 (Docker-backed fixture).
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_INIT_SQL = _REPO_ROOT / "db" / "init.sql"
-
-
-async def _apply_fresh_init(pool: asyncpg.Pool) -> None:
-    async with pool.acquire() as conn:
-        await conn.execute(_INIT_SQL.read_text(encoding="utf-8"))
+from tests.migration_helpers import apply_fresh_init as _apply_fresh_init
 
 
 @pytest.mark.live_pg

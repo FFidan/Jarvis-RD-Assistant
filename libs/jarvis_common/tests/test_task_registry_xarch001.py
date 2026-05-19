@@ -137,15 +137,18 @@ def test_module_level_register_populates_kind_to_task() -> None:
     after registration the kind must be retrievable from the public mapping.
     """
     import jarvis_common.task_registry as tr
-    from jarvis_common.task_registry import register_tasks
+    from jarvis_common.task_registry import _TASK_MAP, register_tasks
 
     # We must pass the module-level app to hit the default-registry path
     kind = "_char_test.module_level"
-    register_tasks(tr.app, mapping={kind: _dummy_handler}, queue="_char_q")  # type: ignore[arg-type]
+    try:
+        register_tasks(tr.app, mapping={kind: _dummy_handler}, queue="_char_q")  # type: ignore[arg-type]
 
-    assert kind in tr.KIND_TO_TASK, (
-        f"kind {kind!r} should be in KIND_TO_TASK after module-level register_tasks"
-    )
+        assert kind in tr.KIND_TO_TASK, (
+            f"kind {kind!r} should be in KIND_TO_TASK after module-level register_tasks"
+        )
+    finally:
+        _TASK_MAP.pop(kind, None)
 
 
 # ---------------------------------------------------------------------------
@@ -181,11 +184,8 @@ def test_isolated_registrations_do_not_bleed() -> None:
 def test_kind_to_task_is_immutable_after_registration() -> None:
     """KIND_TO_TASK must not accept direct writes (MappingProxyType semantics).
 
-    This test is RED on the pre-refactor code (KIND_TO_TASK is a plain dict).
-    It turns GREEN after the xarch-001 refactor seals the mapping.
-
-    The test is a forward-assertion: it documents the target invariant.
-    Mark it xfail until the refactor lands, then remove the xfail mark.
+    Guard invariant: KIND_TO_TASK is a MappingProxyType backed by _TASK_MAP.
+    Direct writes raise TypeError; all mutations must go through register_tasks.
     """
     import jarvis_common.task_registry as tr
 

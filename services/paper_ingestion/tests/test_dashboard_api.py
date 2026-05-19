@@ -248,8 +248,9 @@ async def test_paper_detail_user_state_null_when_absent(_app):
 
     # WS-CROSS-USER: ownership now always runs; this test asserts detail
     # shape, not ownership (covered elsewhere) — pass it through.
+    # C3: ownership is dispatched via papers_service.assert_paper_ownership.
     with patch(
-        "paper_ingestion.routers.papers.assert_paper_ownership",
+        "paper_ingestion.papers_service.assert_paper_ownership",
         new=AsyncMock(return_value=None),
     ):
         async with httpx.AsyncClient(

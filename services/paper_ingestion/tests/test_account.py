@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import paper_ingestion.routers.account as account_router
@@ -24,32 +23,21 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
+from tests._auth_fakes import build_mock_pool_with_txn, build_request_account
+
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
-# Pool / request stubs (same shape as test_auth_magic_link.py)
+# Pool / request stubs — delegated to shared _auth_fakes (D5-03)
 # ---------------------------------------------------------------------------
 
-
-def _build_mock_pool(conn: AsyncMock) -> MagicMock:
-    txn = MagicMock()
-    txn.__aenter__ = AsyncMock(return_value=txn)
-    txn.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
+_build_mock_pool = build_mock_pool_with_txn
 
 
-def _build_request(pool: MagicMock, *, user_id: int | None = 1) -> SimpleNamespace:
+def _build_request(pool: MagicMock, *, user_id: int | None = 1):
     """Build a Request stub.
 
     NOTE: ``services/paper_ingestion/tests/conftest.py::_default_authenticated_user``
@@ -60,21 +48,7 @@ def _build_request(pool: MagicMock, *, user_id: int | None = 1) -> SimpleNamespa
     re-patch ``account_router.current_user_id_strict`` in their own scope
     (the documented IDOR-test pattern).
     """
-    state = SimpleNamespace(db_pool=pool)
-    app = SimpleNamespace(state=state)
-    url = SimpleNamespace(
-        path="/api/account",
-        replace=lambda **kw: SimpleNamespace(
-            __str__=lambda self: "https://x/account/confirm-email?token=t"
-        ),
-    )
-    return SimpleNamespace(
-        url=url,
-        app=app,
-        client=SimpleNamespace(host="127.0.0.1"),
-        cookies={},
-        state=SimpleNamespace(user_id=user_id) if user_id is not None else SimpleNamespace(),
-    )
+    return build_request_account(pool, user_id=user_id)
 
 
 def _account_row(**over):

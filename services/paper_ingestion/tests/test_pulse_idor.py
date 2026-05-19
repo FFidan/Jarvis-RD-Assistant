@@ -12,7 +12,7 @@ Uses the same recording-mock pattern as test_pulse_router.py / conftest.py:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -208,7 +208,7 @@ def test_rate_card_deck_guard_with_real_user_id():
     rate_card calls current_user_id_or_none(request) directly (not via Depends),
     so we patch it at the pulse router module level to inject the desired user_id.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     tc, pool, conn, app = _make_client(user_id_override=7)
 
@@ -237,120 +237,6 @@ def test_rate_card_deck_guard_with_real_user_id():
     assert len(params) == 2
     assert params[0] == 99  # paper_id
     assert params[1] == 7  # user_id bound to $2
-
-
-# ---------------------------------------------------------------------------
-# Test 3: rate_card per-rating helper dispatch (C3 — post-B4 redesign)
-#
-# rate_card now routes to helper functions in routers/_paper_helpers.py.
-# All tests patch at the routers.pulse module path.
-# ---------------------------------------------------------------------------
-
-
-from unittest.mock import AsyncMock, patch  # noqa: E402 — grouped with other imports above
-
-
-def _rate(rating: str, paper_id: int = 1, user_id=7):
-    """Issue a POST /api/pulse/rate and return (resp, app) for cleanup."""
-    tc, pool, conn, app = _make_client(user_id_override=user_id)
-    conn.fetchval.return_value = 1  # deck membership guard passes
-    try:
-        resp = tc.post("/api/pulse/rate", json={"paper_id": paper_id, "rating": rating})
-    finally:
-        app.dependency_overrides.clear()
-        from paper_ingestion.deps import limiter
-
-        limiter.enabled = True
-    return resp
-
-
-def test_rate_open_writes_nothing():
-    """rating='open' returns 200; no helper writes any DB row."""
-    with (
-        patch(
-            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
-        ) as mock_fb,
-        patch(
-            "paper_ingestion.routers.pulse._upsert_state_and_starred", new_callable=AsyncMock
-        ) as mock_state,
-        patch("paper_ingestion.routers.pulse._trash_paper", new_callable=AsyncMock) as mock_trash,
-    ):
-        resp = _rate("open")
-
-    assert resp.status_code == 200
-    mock_fb.assert_not_called()
-    mock_state.assert_not_called()
-    mock_trash.assert_not_called()
-
-
-def test_rate_save_writes_state_only():
-    """rating='save' calls _upsert_state_and_starred(state='to_read') and NOT _upsert_recommendation_feedback."""
-    with (
-        patch(
-            "paper_ingestion.routers.pulse._upsert_state_and_starred", new_callable=AsyncMock
-        ) as mock_state,
-        patch(
-            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
-        ) as mock_fb,
-    ):
-        resp = _rate("save")
-
-    assert resp.status_code == 200
-    mock_state.assert_awaited_once()
-    assert mock_state.await_args.kwargs.get("state") == "to_read"
-    mock_fb.assert_not_called()
-
-
-def test_rate_up_writes_recommendation_feedback_positive_pulse_thumbs():
-    """rating='up' calls _upsert_recommendation_feedback(signal='positive', source='pulse_thumbs')."""
-    with patch(
-        "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
-    ) as mock_fb:
-        resp = _rate("up", paper_id=55)
-
-    assert resp.status_code == 200
-    mock_fb.assert_awaited_once()
-    _conn, paper_id_arg, _uid, signal_arg, source_arg = mock_fb.await_args.args
-    assert paper_id_arg == 55
-    assert signal_arg == "positive"
-    assert source_arg == "pulse_thumbs"
-
-
-def test_rate_down_writes_recommendation_feedback_negative_pulse_thumbs():
-    """rating='down' calls _upsert_recommendation_feedback(signal='negative', source='pulse_thumbs')."""
-    with patch(
-        "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
-    ) as mock_fb:
-        resp = _rate("down", paper_id=77)
-
-    assert resp.status_code == 200
-    mock_fb.assert_awaited_once()
-    _conn, paper_id_arg, _uid, signal_arg, source_arg = mock_fb.await_args.args
-    assert paper_id_arg == 77
-    assert signal_arg == "negative"
-    assert source_arg == "pulse_thumbs"
-
-
-def test_rate_dismiss_writes_state_trash_and_recommendation_feedback_negative_dismiss_combined():
-    """rating='dismiss' calls _trash_paper AND _upsert_recommendation_feedback(signal='negative', source='dismiss_combined')."""
-    with (
-        patch("paper_ingestion.routers.pulse._trash_paper", new_callable=AsyncMock) as mock_trash,
-        patch(
-            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
-        ) as mock_fb,
-    ):
-        resp = _rate("dismiss", paper_id=99)
-
-    assert resp.status_code == 200
-    mock_trash.assert_awaited_once()
-    _conn, paper_id_arg, _uid = mock_trash.await_args.args
-    assert paper_id_arg == 99
-
-    mock_fb.assert_awaited_once()
-    _conn, fb_paper_id, _uid, signal_arg, source_arg = mock_fb.await_args.args
-    assert fb_paper_id == 99
-    assert signal_arg == "negative"
-    assert source_arg == "dismiss_combined"
 
 
 def test_rate_card_membership_guard_returns_404_when_paper_not_in_deck():

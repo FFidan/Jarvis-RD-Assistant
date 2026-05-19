@@ -87,25 +87,35 @@ def test_compute_streak_consecutive_three():
     assert _compute_streak(rows, field="focus_hours") == 3
 
 
-def test_compute_streak_month_boundary():
-    """Streak should span month boundary seamlessly."""
-    from learning_engine.routers.analytics import _compute_streak
+def test_compute_streak_month_boundary(monkeypatch):
+    """Streak must span a month boundary seamlessly (always deterministic).
 
-    # Build 5 consecutive days ending on the first day of a month.
-    month_start = _TODAY.replace(day=1)
-    rows = [_make_streak_row(month_start - datetime.timedelta(days=i)) for i in range(5)]
-    # Only valid if month_start is <= today and >= yesterday; force via monkeypatch-free approach:
-    # We trust Python date arithmetic — the test is mathematical, not clock-dependent.
-    # Just verify the count if the tail of the streak is reachable.
-    latest = rows[0]["log_date"]
-    if latest == _TODAY or latest == _TODAY - datetime.timedelta(days=1):
+    ``_compute_streak`` calls ``datetime.datetime.now(UTC).date()`` at call time.
+    We patch only ``datetime.datetime`` inside the analytics module so that
+    ``.now()`` returns a fixed date (2026-06-01) while ``datetime.timedelta``
+    and other helpers remain untouched.  The 5-day window spans May→June,
+    verifying that month-crossing arithmetic does not break the streak count.
+    """
+    import datetime as _dt
+    from unittest.mock import patch
+
+    import learning_engine.routers.analytics as _analytics_mod
+
+    _pinned = _dt.date(2026, 6, 1)
+
+    class _FixedDatetime(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _dt.datetime(2026, 6, 1, 12, 0, 0, tzinfo=tz)
+
+    with patch.object(_analytics_mod.datetime, "datetime", _FixedDatetime):
+        from learning_engine.routers.analytics import _compute_streak
+
+        # 5 consecutive days ending on 2026-06-01 (crosses May→June boundary).
+        rows = [_make_streak_row(_pinned - _dt.timedelta(days=i)) for i in range(5)]
         result = _compute_streak(rows, field="focus_hours")
-        # All 5 consecutive so result should be 5
-        assert result == 5
-    else:
-        # If the window doesn't touch today/yesterday, streak is 0 — still correct
-        result = _compute_streak(rows, field="focus_hours")
-        assert result == 0
+
+    assert result == 5
 
 
 def test_compute_streak_inner_gap():

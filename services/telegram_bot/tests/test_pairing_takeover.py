@@ -12,42 +12,15 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import SecretStr
-from telegram_bot.config import BotConfig
+from jarvis_common.testing import FakeAcquireCM, FakeTxnCM, make_bot_config, make_telegram_update
 from telegram_bot.handlers.commands.system_commands import _handle_pairing  # noqa: E402
 from telegram_bot.handlers.rate_limit import _timestamps  # noqa: E402
 
 _OWNER_CHAT_ID = 777
 
 
-def _make_config(telegram_chat_id: int | None = None) -> BotConfig:
-    return BotConfig(
-        telegram_token="test-token",
-        telegram_chat_id=telegram_chat_id,  # type: ignore[arg-type]
-        database_url="postgres://test",
-        paper_ingestion_url="http://paper:8000",
-        learning_engine_url="http://learn:8001",
-        jarvis_api_key=SecretStr("test-key"),
-    )
-
-
-class _FakeAcquireCM:
-    def __init__(self, conn):
-        self._conn = conn
-
-    async def __aenter__(self):
-        return self._conn
-
-    async def __aexit__(self, *_):
-        return None
-
-
-class _FakeTxnCM:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        return None
+def _make_config(telegram_chat_id: int | None = None):
+    return make_bot_config(telegram_chat_id=telegram_chat_id)
 
 
 def _make_conn(
@@ -59,23 +32,18 @@ def _make_conn(
     conn.fetchval = AsyncMock(return_value=fetchval_return)
     conn.fetchrow = AsyncMock(return_value=fetchrow_return)
     conn.execute = AsyncMock(return_value="EXECUTE 1")
-    conn.transaction = MagicMock(return_value=_FakeTxnCM())
+    conn.transaction = MagicMock(return_value=FakeTxnCM())
     return conn
 
 
 def _make_pool(conn):
     pool = MagicMock()
-    pool.acquire = MagicMock(return_value=_FakeAcquireCM(conn))
+    pool.acquire = MagicMock(return_value=FakeAcquireCM(conn))
     return pool
 
 
 def _make_update(chat_id: int = _OWNER_CHAT_ID):
-    update = MagicMock()
-    update.effective_chat = MagicMock()
-    update.effective_chat.id = chat_id
-    update.message = MagicMock()
-    update.message.reply_text = AsyncMock()
-    return update
+    return make_telegram_update(chat_id=chat_id)
 
 
 def _make_context(pool, config):

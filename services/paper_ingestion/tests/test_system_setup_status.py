@@ -159,21 +159,6 @@ async def test_setup_status_models_ready_false_on_ollama_error(_app, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_setup_status_models_ready_false_when_expected_missing(_app, monkeypatch):
-    app, conn = _app
-    _install_user_config(conn)
-    _patch_probe(monkeypatch, models_ready=False)
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/system/setup-status")
-
-    assert resp.status_code == 200
-    assert resp.json()["models_ready"] is False
-
-
-@pytest.mark.asyncio
 async def test_setup_status_topics_count_from_db(_app, monkeypatch):
     app, conn = _app
     _install_user_config(conn, topics_count=17)

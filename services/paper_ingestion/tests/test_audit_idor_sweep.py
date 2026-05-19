@@ -276,7 +276,7 @@ async def test_papers_brief_idor_user_id_filter_with_search():
 async def test_process_batch_asserts_ownership_before_enqueue():
     """POST /api/papers/process_batch must call assert_paper_ownership for each paper_id.
 
-    We mock assert_paper_ownership at the papers router module level and verify it
+    We mock assert_paper_ownership at the papers_service module level and verify it
     is called once per paper ID before the task is deferred.
     """
     import httpx
@@ -310,7 +310,7 @@ async def test_process_batch_asserts_ownership_before_enqueue():
     mock_batch_task = MagicMock()
     mock_batch_task.defer_async = AsyncMock(side_effect=_fake_defer)
     with (
-        patch("paper_ingestion.routers.papers.assert_paper_ownership", side_effect=_fake_ownership),
+        patch("paper_ingestion.papers_service.assert_paper_ownership", side_effect=_fake_ownership),
         patch.dict(task_registry._TASK_MAP, {"papers.batch_process": mock_batch_task}),
     ):
         try:

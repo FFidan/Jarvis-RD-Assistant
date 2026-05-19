@@ -26,10 +26,6 @@ MIGRATION = Path(__file__).resolve().parents[3] / "db/migrations/079_jsonb_repai
 # ---------------------------------------------------------------------------
 
 
-def test_migration_file_exists() -> None:
-    assert MIGRATION.is_file(), f"Missing migration file: {MIGRATION}"
-
-
 def test_migration_covers_audit_log_metadata() -> None:
     sql = MIGRATION.read_text()
     assert "audit_log" in sql

@@ -13,55 +13,22 @@ Coverage:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import paper_ingestion.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException, Response
 
+from tests._auth_fakes import build_mock_pool, build_request_admin
+
 # ---------------------------------------------------------------------------
-# Test helpers
+# Test helpers — pool/request stubs delegated to shared _auth_fakes (D5-03)
 # ---------------------------------------------------------------------------
 
 _NOW = datetime.now(UTC)
 
-
-def _build_mock_pool(conn: AsyncMock) -> MagicMock:
-    """Wrap a conn AsyncMock in a pool whose acquire() yields it."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
-
-
-def _build_request(
-    pool: MagicMock,
-    *,
-    user_id: int | None = None,
-    user_role: str | None = None,
-) -> SimpleNamespace:
-    """Build a Request stub with optional session state."""
-    state = SimpleNamespace(db_pool=pool)
-    if user_id is not None:
-        state.user_id = user_id
-    if user_role is not None:
-        state.user_role = user_role
-
-    app = SimpleNamespace(state=state)
-    url = SimpleNamespace(
-        path="/api/admin/users",
-        replace=lambda **kw: SimpleNamespace(__str__=lambda self: "https://x/auth/verify?token=t"),
-    )
-    return SimpleNamespace(
-        url=url,
-        app=app,
-        client=SimpleNamespace(host="127.0.0.1"),
-        cookies={},
-        state=state,
-    )
+_build_mock_pool = build_mock_pool
+_build_request = build_request_admin
 
 
 def _user_row(

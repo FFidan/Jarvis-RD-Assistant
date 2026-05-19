@@ -429,3 +429,85 @@ class TestEqualLengthContract:
         assert "init_b" in call_log
         # teardown_a runs in the finally block
         assert "teardown_a" in call_log
+
+
+# ---------------------------------------------------------------------------
+# H5 — validate_encrypted_config_rows tolerates missing table / column
+# (migrated from test_sprint5_1a.py)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateEncryptedConfigRowsToleratesMissingTable:
+    async def test_lifespan_tolerates_undefined_table_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """UndefinedTableError from validate_encrypted_config_rows must not abort startup."""
+        import asyncpg
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
+
+        fake_pool = AsyncMock()
+        fake_pool.close = AsyncMock()
+        fake_http_client = AsyncMock()
+        fake_http_client.aclose = AsyncMock()
+
+        # Simulate fresh DB: user_config table does not exist yet.
+        with (
+            patch(
+                "jarvis_common.app_factory.asyncpg.create_pool",
+                AsyncMock(return_value=fake_pool),
+            ),
+            patch(
+                "jarvis_common.app_factory.validate_encrypted_config_rows",
+                AsyncMock(side_effect=asyncpg.UndefinedTableError("relation does not exist")),
+            ),
+            patch(
+                "jarvis_common.app_factory.validate_production_config",
+                MagicMock(return_value=None),
+            ),
+            patch(
+                "jarvis_common.app_factory.httpx.AsyncClient",
+                MagicMock(return_value=fake_http_client),
+            ),
+        ):
+            config = ServiceLifespanConfig(service_name="test_fresh_db")
+            app = FastAPI()
+            # Must not raise — the UndefinedTableError should be caught and warned.
+            async with configure_lifespan(config)(app):
+                pass  # startup succeeded
+
+    async def test_lifespan_tolerates_undefined_column_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """UndefinedColumnError from validate_encrypted_config_rows must not abort startup."""
+        import asyncpg
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
+
+        fake_pool = AsyncMock()
+        fake_pool.close = AsyncMock()
+        fake_http_client = AsyncMock()
+        fake_http_client.aclose = AsyncMock()
+
+        with (
+            patch(
+                "jarvis_common.app_factory.asyncpg.create_pool",
+                AsyncMock(return_value=fake_pool),
+            ),
+            patch(
+                "jarvis_common.app_factory.validate_encrypted_config_rows",
+                AsyncMock(side_effect=asyncpg.UndefinedColumnError("column does not exist")),
+            ),
+            patch(
+                "jarvis_common.app_factory.validate_production_config",
+                MagicMock(return_value=None),
+            ),
+            patch(
+                "jarvis_common.app_factory.httpx.AsyncClient",
+                MagicMock(return_value=fake_http_client),
+            ),
+        ):
+            config = ServiceLifespanConfig(service_name="test_fresh_db_col")
+            app = FastAPI()
+            async with configure_lifespan(config)(app):
+                pass  # startup succeeded

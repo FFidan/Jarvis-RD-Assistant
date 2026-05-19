@@ -40,6 +40,10 @@ def fake_http_client() -> AsyncMock:
 
 
 def _patch_factory_io(fake_pool: AsyncMock, fake_http_client: AsyncMock) -> list[Any]:
+    # Use patch.object on the httpx module as bound in app_factory so that the
+    # patch target survives any future refactor of the import alias (D5-08).
+    import jarvis_common.app_factory as _af
+
     return [
         patch(
             "jarvis_common.app_factory.asyncpg.create_pool",
@@ -53,8 +57,9 @@ def _patch_factory_io(fake_pool: AsyncMock, fake_http_client: AsyncMock) -> list
             "jarvis_common.app_factory.validate_production_config",
             MagicMock(return_value=None),
         ),
-        patch(
-            "jarvis_common.app_factory.httpx.AsyncClient",
+        patch.object(
+            _af.httpx,
+            "AsyncClient",
             MagicMock(return_value=fake_http_client),
         ),
     ]

@@ -11,6 +11,7 @@ from unittest.mock import ANY
 import asyncpg
 import pytest
 
+from paper_ingestion.migrations_runner import _strip_outer_transaction_control
 from tests.conftest import _make_pool_and_conn
 
 # The real migrations directory in this repo
@@ -206,9 +207,10 @@ def test_migration_runner_strips_begin_commit():
     DB-C01 regression: asyncpg wraps each migration in a savepoint transaction;
     nested explicit BEGIN/COMMIT commands cause "can't run BEGIN inside a
     transaction" errors.  The runner must strip them before executing.
-    """
-    import re
 
+    Uses the real production ``_strip_outer_transaction_control`` to verify
+    correct behaviour (D4-10: prior version tested a local shadow copy).
+    """
     sql_with_txn = (
         "BEGIN;\n"
         "CREATE TABLE IF NOT EXISTS test_strip (id int);\n"
@@ -218,26 +220,18 @@ def test_migration_runner_strips_begin_commit():
     sql_with_trailing_semicolon = "BEGIN ;\nSELECT 1;\nCOMMIT ;\n"
     sql_with_rollback = "BEGIN\nSELECT 1;\nROLLBACK\n"
 
-    def strip(sql: str) -> str:
-        return re.sub(
-            r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$",
-            "",
-            sql,
-            flags=re.IGNORECASE | re.MULTILINE,
-        )
-
-    result1 = strip(sql_with_txn)
+    result1 = _strip_outer_transaction_control(sql_with_txn)
     assert "BEGIN" not in result1
     assert "COMMIT" not in result1
     assert "CREATE TABLE IF NOT EXISTS test_strip" in result1
     assert "ALTER TABLE" in result1
 
-    result2 = strip(sql_with_trailing_semicolon)
+    result2 = _strip_outer_transaction_control(sql_with_trailing_semicolon)
     assert "BEGIN" not in result2
     assert "COMMIT" not in result2
     assert "SELECT 1" in result2
 
-    result3 = strip(sql_with_rollback)
+    result3 = _strip_outer_transaction_control(sql_with_rollback)
     assert "BEGIN" not in result3
     assert "ROLLBACK" not in result3
     assert "SELECT 1" in result3

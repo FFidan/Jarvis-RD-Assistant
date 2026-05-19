@@ -10,8 +10,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
+import httpx
 import pytest
 from fastapi import HTTPException
+from httpx import ASGITransport
 
 # conftest.py provides FakeRecord, _make_pool_and_conn, and mock_db fixture.
 from paper_ingestion.models import (  # noqa: E402
@@ -42,7 +44,7 @@ async def test_hard_delete_requires_trash_state():
     # state precondition (ownership covered elsewhere) — pass it through.
     with (
         patch(
-            "paper_ingestion.routers.papers.assert_paper_ownership",
+            "paper_ingestion.papers_service.assert_paper_ownership",
             new=AsyncMock(return_value=None),
         ),
         pytest.raises(HTTPException) as exc_info,
@@ -64,7 +66,9 @@ async def test_hard_delete_with_trash_state_succeeds():
     # _assert_paper_in_state: fetchval returns 'trash' → precondition satisfied
     conn.fetchval.return_value = "trash"
 
-    with patch("paper_ingestion.routers.papers.delete_paper_vectors", new_callable=AsyncMock):
+    with patch(
+        "paper_ingestion.papers_service.delete_paper_vectors", new_callable=AsyncMock
+    ) as mock_delete:
         result = await papers.hard_delete_paper.__wrapped__(
             _mock_request(),
             paper_id=12,
@@ -76,6 +80,8 @@ async def test_hard_delete_with_trash_state_succeeds():
     sql = conn.execute.await_args.args[0]
     assert "DELETE FROM papers" in sql
     assert conn.execute.await_args.args[1] == 12
+    # Qdrant cleanup must have been called exactly once
+    mock_delete.assert_awaited_once_with(12)
 
 
 @pytest.mark.asyncio
@@ -85,7 +91,7 @@ async def test_hard_delete_calls_qdrant():
     conn.fetchval.return_value = "trash"
 
     with patch(
-        "paper_ingestion.routers.papers.delete_paper_vectors",
+        "paper_ingestion.papers_service.delete_paper_vectors",
         new_callable=AsyncMock,
     ) as mock_delete:
         await papers.hard_delete_paper.__wrapped__(
@@ -189,7 +195,7 @@ async def test_bulk_hard_delete_succeeds_on_trash_papers():
     conn.fetchval.return_value = "trash"
 
     with patch(
-        "paper_ingestion.routers.papers.delete_paper_vectors",
+        "paper_ingestion.papers_service.delete_paper_vectors",
         new_callable=AsyncMock,
     ) as mock_delete:
         result = await papers.bulk_action_papers.__wrapped__(
@@ -221,7 +227,7 @@ async def test_bulk_hard_delete_rejects_non_trash_papers():
     conn.fetchval.side_effect = _fetchval_side_effect
 
     with patch(
-        "paper_ingestion.routers.papers.delete_paper_vectors",
+        "paper_ingestion.papers_service.delete_paper_vectors",
         new_callable=AsyncMock,
     ):
         result = await papers.bulk_action_papers.__wrapped__(
@@ -364,7 +370,7 @@ async def test_hard_delete_reorders_qdrant_after_db_commit():
     conn.execute.side_effect = _fake_execute
 
     with patch(
-        "paper_ingestion.routers.papers.delete_paper_vectors",
+        "paper_ingestion.papers_service.delete_paper_vectors",
         side_effect=_fake_delete_vectors,
     ):
         result = await papers.hard_delete_paper.__wrapped__(
@@ -389,7 +395,7 @@ async def test_hard_delete_db_rollback_does_not_call_qdrant():
     conn.execute.side_effect = _asyncpg.PostgresError("simulated DB failure")
 
     with patch(
-        "paper_ingestion.routers.papers.delete_paper_vectors",
+        "paper_ingestion.papers_service.delete_paper_vectors",
         new_callable=AsyncMock,
     ) as mock_delete:
         with pytest.raises(_asyncpg.PostgresError):
@@ -399,6 +405,7 @@ async def test_hard_delete_db_rollback_does_not_call_qdrant():
                 db_pool=pool,
             )
 
+    # Postgres error before Qdrant call — mock must never be reached
     mock_delete.assert_not_awaited()
 
 
@@ -413,7 +420,7 @@ async def test_hard_delete_qdrant_failure_logs_orphan():
         raise RuntimeError("Qdrant connection refused")
 
     with patch(
-        "paper_ingestion.routers.papers.delete_paper_vectors",
+        "paper_ingestion.papers_service.delete_paper_vectors",
         side_effect=_fail_vectors,
     ):
         with patch.object(papers.logger, "exception") as mock_exc:
@@ -578,3 +585,126 @@ async def test_reading_paper_rejects_from_inbox():
 
     assert exc_info.value.status_code == 409
     assert "to_read" in exc_info.value.detail or "reading" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# C3 Task 2.2 — vacuity-immune integration seam tests
+#
+# These tests drive the real DELETE /api/papers/{id} route via
+# AsyncClient+ASGITransport and assert OBSERVABLE behaviour (HTTP status +
+# call ordering on mocked collaborators).  They do NOT patch
+# ``delete_paper_vectors`` or ``assert_paper_ownership`` — that is exactly
+# what makes them immune to the C3 module move: the observable effects
+# (DB delete, Qdrant delete, 403 response) are module-path-independent.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_seam_hard_delete_ordering_db_then_qdrant():
+    """C3-SEAM-1 (WS-AH2 NEW-H2): DELETE /api/papers/{id} issues the DB DELETE
+    *before* the Qdrant vector cleanup, even after papers_service extraction.
+
+    Immunity: wires the Qdrant call via ``svc.embedder`` (the concrete
+    collaborator ``delete_paper_vectors`` calls internally), not by patching
+    ``delete_paper_vectors`` itself.  The assert is on the call-order list,
+    which is indifferent to whether the call comes from routers.papers or
+    papers_service.
+    """
+    from jarvis_common import verify_api_key
+    from paper_ingestion._state import set_services
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    pool, conn = _make_pool_and_conn()
+
+    # Ownership check: paper discovered by user 1 (same as authed user).
+    # State check: paper is in 'trash'.
+    conn.fetchrow.return_value = {"discovered_by": 1}
+    conn.fetchval.return_value = "trash"
+
+    call_order: list[str] = []
+
+    async def _recording_execute(sql, *args):  # noqa: ARG001
+        if "DELETE FROM papers" in sql:
+            call_order.append("db_delete")
+
+    conn.execute.side_effect = _recording_execute
+
+    # Wire a mock embedder — delete_paper_vectors calls svc.embedder.delete_paper_vectors.
+    # We record the call here instead of patching delete_paper_vectors at any module path.
+    mock_embedder = MagicMock()
+
+    async def _recording_delete_vectors(paper_id):  # noqa: ARG001
+        call_order.append("qdrant_delete")
+
+    mock_embedder.delete_paper_vectors = AsyncMock(side_effect=_recording_delete_vectors)
+
+    saved_embedder = set_services(embedder=mock_embedder).embedder
+
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.delete("/api/papers/99")
+    finally:
+        app.dependency_overrides.pop(get_db_pool, None)
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.state.limiter.enabled = True
+        # Restore previous embedder value (None in unit-test context).
+        set_services(embedder=saved_embedder)
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    assert resp.json() == {"deleted": 99}
+
+    # WS-AH2 NEW-H2 ordering invariant: DB delete must precede Qdrant cleanup.
+    assert call_order == ["db_delete", "qdrant_delete"], (
+        f"Load-bearing ordering violated — got: {call_order}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_seam_ownership_enforced_cross_user_returns_4xx():
+    """C3-SEAM-2: DELETE /api/papers/{id} returns 403 when the paper is owned
+    by a different user and the caller has no user_library row.
+
+    Immunity: does NOT patch ``assert_paper_ownership`` at any module binding.
+    The assertion is on the HTTP response status, which is indifferent to
+    whether the ownership check is performed in routers.papers or papers_service.
+
+    Ownership status: 403 — confirmed at
+    libs/jarvis_common/jarvis_common/db_helpers.py:318
+    (``raise HTTPException(status_code=403, detail="paper not owned by current user")``).
+    """
+    from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    pool, conn = _make_pool_and_conn()
+
+    # Paper discovered_by=2 (other user); authed user is 1 (autouse fixture).
+    # assert_paper_ownership checks user_library next — return None → 403.
+    conn.fetchrow.return_value = {"discovered_by": 2}
+    conn.fetchval.return_value = None  # not in user_library
+
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.delete("/api/papers/77")
+    finally:
+        app.dependency_overrides.pop(get_db_pool, None)
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.state.limiter.enabled = True
+
+    # jarvis_common/db_helpers.py:318 — ownership violation → 403.
+    assert resp.status_code == 403, (
+        f"Expected 403 for cross-user access, got {resp.status_code}: {resp.text}"
+    )

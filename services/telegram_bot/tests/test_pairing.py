@@ -20,8 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
-from pydantic import SecretStr
-from telegram_bot.config import BotConfig
+from jarvis_common.testing import FakeAcquireCM, FakeTxnCM, make_bot_config, make_telegram_update
 from telegram_bot.handlers.commands.pairing_commands import (
     pair_command,
     unpair_command,
@@ -33,34 +32,8 @@ from telegram_bot.handlers.commands.pairing_commands import (
 # ---------------------------------------------------------------------------
 
 
-def _make_config(telegram_chat_id: int | None = 777) -> BotConfig:
-    return BotConfig(
-        telegram_token="test-token",
-        telegram_chat_id=telegram_chat_id,
-        database_url="postgres://test",
-        paper_ingestion_url="http://paper:8000",
-        learning_engine_url="http://learn:8001",
-        jarvis_api_key=SecretStr("test-key"),
-    )
-
-
-class _FakeTxnCM:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        return None
-
-
-class _FakeAcquireCM:
-    def __init__(self, conn):
-        self._conn = conn
-
-    async def __aenter__(self):
-        return self._conn
-
-    async def __aexit__(self, *_):
-        return None
+def _make_config(telegram_chat_id: int | None = 777):
+    return make_bot_config(telegram_chat_id=telegram_chat_id)
 
 
 def _make_conn(
@@ -72,13 +45,13 @@ def _make_conn(
     conn.fetchrow = AsyncMock(return_value=fetchrow_return)
     conn.fetchval = AsyncMock(return_value=fetchval_return)
     conn.execute = AsyncMock(return_value=execute_return)
-    conn.transaction = MagicMock(return_value=_FakeTxnCM())
+    conn.transaction = MagicMock(return_value=FakeTxnCM())
     return conn
 
 
 def _make_pool(conn, *, fetchrow_return=None, fetchval_return=None, fetch_return=None):
     pool = MagicMock()
-    pool.acquire = MagicMock(return_value=_FakeAcquireCM(conn))
+    pool.acquire = MagicMock(return_value=FakeAcquireCM(conn))
     pool.fetchrow = AsyncMock(return_value=fetchrow_return)
     pool.fetchval = AsyncMock(return_value=fetchval_return)
     pool.fetch = AsyncMock(return_value=fetch_return or [])
@@ -90,14 +63,7 @@ def _make_update(
     chat_id: int = 42,
     username: str | None = "testuser",
 ):
-    update = MagicMock()
-    update.effective_chat = MagicMock()
-    update.effective_chat.id = chat_id
-    update.effective_chat.username = username
-    update.message = MagicMock()
-    update.message.text = text
-    update.message.reply_text = AsyncMock()
-    return update
+    return make_telegram_update(chat_id=chat_id, text=text, username=username)
 
 
 def _make_context(pool, config=None, args=None):

@@ -21,6 +21,8 @@ from learning_engine.routers.projects import (  # noqa: E402
 )
 from learning_engine.routers.tasks import _VALID_TASK_STATUSES, list_tasks  # noqa: E402
 
+from tests.conftest import _make_pool_and_conn
+
 
 def _fake_request():
     # WS-CROSS: routers now use current_user_id_strict — user_id must be an int.
@@ -43,21 +45,9 @@ async def test_list_projects_rejects_invalid_status() -> None:
     assert "nonexistent" in exc_info.value.detail
 
 
-def _make_pool_conn(return_value=None):
-    """Create a pool mock whose acquire() context manager yields a conn mock."""
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=return_value or [])
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
-
-
 async def test_list_projects_accepts_valid_statuses() -> None:
     """list_projects does not raise for each valid status value."""
-    fake_pool = _make_pool_conn()
+    fake_pool, _ = _make_pool_and_conn(fetch_return=[])
 
     for status in sorted(_VALID_STATUSES):
         rows = await list_projects.__wrapped__(_fake_request(), status=status, db_pool=fake_pool)
@@ -66,7 +56,7 @@ async def test_list_projects_accepts_valid_statuses() -> None:
 
 async def test_list_projects_accepts_none_status() -> None:
     """list_projects returns results when status is None (no filter)."""
-    fake_pool = _make_pool_conn()
+    fake_pool, _ = _make_pool_and_conn(fetch_return=[])
 
     rows = await list_projects.__wrapped__(_fake_request(), status=None, db_pool=fake_pool)
     assert rows == []

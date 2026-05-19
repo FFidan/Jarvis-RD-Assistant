@@ -201,46 +201,47 @@ async def test_stage2_normalizes_scores_to_0_1():
 
 
 @pytest.mark.asyncio
-async def test_stage2_graceful_llm_exception():
-    """When LLM raises an exception, candidate gets None scores + 'LLM scoring failed' reasoning."""
-    paper = _make_paper(0)
-    stage1_out = [_make_scored(paper)]
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("LLM unavailable"),
+        ValueError("Invalid structured output"),
+        RuntimeError("LiteLLM unavailable"),
+        ValueError("Instructor could not parse LLM output"),
+    ],
+    ids=["runtime_error", "value_error_parse", "runtime_litellm", "value_error_instructor"],
+)
+async def test_stage2_graceful_fallback_on_llm_error(exc):
+    """Any exception from call_llm_structured yields None scores, 'LLM scoring failed' reasoning,
+    and preserves stage1 signals and final_score unchanged."""
+    stage1_signals = {"embedding": 0.6, "topic": 0.3, "recency": 0.8, "author_bonus": 0.0}
+    sc = ScoredCandidate(
+        paper=_make_paper(0),
+        signals=stage1_signals,
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=0.7,
+    )
     profile = _make_profile()
 
     with patch(
         "paper_ingestion.pulse.scoring.call_llm_structured",
         new_callable=AsyncMock,
-        side_effect=RuntimeError("LLM unavailable"),
+        side_effect=exc,
     ):
         result = await stage2_llm_rerank(
-            stage1_out, profile, verifier=_make_verifier(), openai_client=MagicMock()
+            [sc], profile, verifier=_make_verifier(), openai_client=MagicMock()
         )
 
     assert len(result) == 1
-    assert result[0].llm_relevance is None
-    assert result[0].llm_novelty is None
-    assert result[0].reasoning == "LLM scoring failed"
-
-
-@pytest.mark.asyncio
-async def test_stage2_graceful_json_parse_error():
-    """When call_llm_structured raises ValueError, candidate gets None scores gracefully."""
-    paper = _make_paper(0)
-    stage1_out = [_make_scored(paper)]
-    profile = _make_profile()
-
-    with patch(
-        "paper_ingestion.pulse.scoring.call_llm_structured",
-        new_callable=AsyncMock,
-        side_effect=ValueError("Invalid structured output"),
-    ):
-        result = await stage2_llm_rerank(
-            stage1_out, profile, verifier=_make_verifier(), openai_client=MagicMock()
-        )
-
-    assert result[0].llm_relevance is None
-    assert result[0].llm_novelty is None
-    assert result[0].reasoning == "LLM scoring failed"
+    out = result[0]
+    assert out.llm_relevance is None
+    assert out.llm_novelty is None
+    assert out.reasoning == "LLM scoring failed"
+    # stage1 signals and score must be preserved
+    assert out.signals == stage1_signals
+    assert out.final_score == 0.7
 
 
 @pytest.mark.asyncio
@@ -339,68 +340,6 @@ async def test_stage2_partial_failure_others_succeed():
     assert len(scored) == 2
     assert len(failed) == 1
     assert failed[0].reasoning == "LLM scoring failed"
-
-
-@pytest.mark.asyncio
-async def test_stage2_falls_back_on_llm_error():
-    """When call_llm_structured raises RuntimeError, fallback returns stage1 signals."""
-    paper = _make_paper(0)
-    stage1_signals = {"embedding": 0.6, "topic": 0.3, "recency": 0.8, "author_bonus": 0.0}
-    sc = ScoredCandidate(
-        paper=paper,
-        signals=stage1_signals,
-        llm_relevance=None,
-        llm_novelty=None,
-        reasoning=None,
-        final_score=0.7,
-    )
-    profile = _make_profile()
-
-    with patch(
-        "paper_ingestion.pulse.scoring.call_llm_structured",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("LiteLLM unavailable"),
-    ):
-        result = await stage2_llm_rerank(
-            [sc], profile, verifier=_make_verifier(), openai_client=MagicMock()
-        )
-
-    assert len(result) == 1
-    out = result[0]
-    # llm scores are absent — graceful fallback
-    assert out.llm_relevance is None
-    assert out.llm_novelty is None
-    assert out.reasoning == "LLM scoring failed"
-    # stage1 signals are preserved unchanged
-    assert out.signals == stage1_signals
-    # final_score is preserved from stage1
-    assert out.final_score == 0.7
-
-
-@pytest.mark.asyncio
-async def test_stage2_valid_json_missing_keys_graceful_fallback():
-    """call_llm_structured raises ValueError → graceful fallback.
-
-    After migrating to Instructor, parsing errors surface as ValueError.
-    stage2 must catch these and degrade gracefully rather than crash.
-    """
-    paper = _make_paper(0)
-    stage1_out = [_make_scored(paper, embedding=0.6)]
-    profile = _make_profile()
-
-    with patch(
-        "paper_ingestion.pulse.scoring.call_llm_structured",
-        new_callable=AsyncMock,
-        side_effect=ValueError("Instructor could not parse LLM output"),
-    ):
-        result = await stage2_llm_rerank(
-            stage1_out, profile, verifier=_make_verifier(), openai_client=MagicMock()
-        )
-
-    assert len(result) == 1
-    assert result[0].llm_relevance is None
-    assert result[0].llm_novelty is None
-    assert result[0].reasoning == "LLM scoring failed"
 
 
 @pytest.mark.asyncio

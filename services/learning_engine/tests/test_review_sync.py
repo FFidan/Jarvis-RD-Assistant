@@ -22,27 +22,11 @@ import pytest
 from learning_engine.models import ReviewSyncEvent, ReviewSyncRequest
 from learning_engine.routers import review
 
-from tests.conftest import FakeRecord
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def _make_pool_conn():
-    """Mock asyncpg pool/conn with an async-ctx transaction (per conftest)."""
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _card_row(card_id: int = 1, fsrs_state: dict | None = None) -> FakeRecord:
@@ -93,7 +77,7 @@ def _patch_fsrs(monkeypatch, *, recorder: list | None = None) -> None:
 @pytest.mark.asyncio
 async def test_empty_batch_returns_zero_zero() -> None:
     """Empty `reviews` → {synced:0, skipped:0}; no DB acquired."""
-    pool, conn = _make_pool_conn()
+    pool, conn = _make_pool_and_conn()
     resp = await review.sync_reviews.__wrapped__(
         SimpleNamespace(state=SimpleNamespace(user_id=1)),
         body=ReviewSyncRequest(reviews=[]),
@@ -109,7 +93,7 @@ async def test_empty_batch_returns_zero_zero() -> None:
 async def test_new_key_applies_fsrs_and_both_writes(monkeypatch) -> None:
     """New key → FSRS recompute + UPDATE cards + INSERT review_logs with the
     client `reviewed_at` and `idempotency_key`; counted under synced."""
-    pool, conn = _make_pool_conn()
+    pool, conn = _make_pool_and_conn()
     conn.fetch = AsyncMock(return_value=[])  # no keys applied yet
     # fetchrow serves the ownership SELECT; fetchval serves the dedupe-gated
     # INSERT ... RETURNING id (non-None → INSERT won, apply the card UPDATE).
@@ -168,7 +152,7 @@ async def test_duplicate_key_counts_synced_without_reapply(monkeypatch) -> None:
     contract guarantee is that schedule_review is NOT called for duplicate keys
     and no DB writes are issued — not that the manager is never built.
     """
-    pool, conn = _make_pool_conn()
+    pool, conn = _make_pool_and_conn()
     conn.fetch = AsyncMock(return_value=[FakeRecord(idempotency_key="dup")])
     conn.fetchrow = AsyncMock()
     conn.execute = AsyncMock()
@@ -196,7 +180,7 @@ async def test_duplicate_key_counts_synced_without_reapply(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_card_not_owned_is_skipped_not_404(monkeypatch) -> None:
     """Card missing / not owned → skipped, batch still returns 200 (no raise)."""
-    pool, conn = _make_pool_conn()
+    pool, conn = _make_pool_and_conn()
     conn.fetch = AsyncMock(return_value=[])
     conn.fetchrow = AsyncMock(return_value=None)  # no row for this user
     conn.execute = AsyncMock()
@@ -220,7 +204,7 @@ async def test_card_not_owned_is_skipped_not_404(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_ordered_multi_event_same_card_threads_fsrs_forward(monkeypatch) -> None:
     """Two ordered events on one card: event 2's input state = event 1's output."""
-    pool, conn = _make_pool_conn()
+    pool, conn = _make_pool_and_conn()
     conn.fetch = AsyncMock(return_value=[])
     # Re-SELECT per event returns the latest persisted fsrs_state.
     states = [{"reps": 0}, {"reps": 1, "last_rating": 3}]
@@ -250,7 +234,7 @@ async def test_ordered_multi_event_same_card_threads_fsrs_forward(monkeypatch) -
 @pytest.mark.asyncio
 async def test_cross_user_isolation(monkeypatch) -> None:
     """User B syncing only ever scopes to user B (dedupe + ownership + writes)."""
-    pool, conn = _make_pool_conn()
+    pool, conn = _make_pool_and_conn()
     conn.fetch = AsyncMock(return_value=[])
     conn.fetchrow = AsyncMock(return_value=_card_row())
     conn.fetchval = AsyncMock(return_value=1)  # INSERT won
@@ -273,7 +257,7 @@ async def test_cross_user_isolation(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_partial_resend_converges(monkeypatch) -> None:
     """Already-applied key → synced no-op; not-yet-applied key → applied now."""
-    pool, conn = _make_pool_conn()
+    pool, conn = _make_pool_and_conn()
     conn.fetch = AsyncMock(return_value=[FakeRecord(idempotency_key="old")])
     conn.fetchrow = AsyncMock(return_value=_card_row())
     conn.fetchval = AsyncMock(return_value=99)  # INSERT won for "new"
@@ -303,7 +287,7 @@ async def test_concurrent_duplicate_insert_conflict_does_not_double_advance(
     """A key that slips past the pre-batch dedupe SELECT but whose INSERT then
     hits ON CONFLICT (concurrent duplicate) must NOT issue the cards UPDATE
     (no FSRS double-advance); it is still counted under synced (contract §4)."""
-    pool, conn = _make_pool_conn()
+    pool, conn = _make_pool_and_conn()
     conn.fetch = AsyncMock(return_value=[])  # pre-SELECT saw nothing applied
     conn.fetchrow = AsyncMock(return_value=_card_row())
     # INSERT ... ON CONFLICT DO NOTHING RETURNING id → no row (dupe won the race).
@@ -389,7 +373,7 @@ async def test_sync_reviews_builds_fsrs_manager_exactly_once(monkeypatch) -> Non
 
     Pre-fix this fails with call_count == 2. Post-fix it passes with call_count == 1.
     """
-    pool, conn = _make_pool_conn()
+    pool, conn = _make_pool_and_conn()
     conn.fetch = AsyncMock(return_value=[])  # no applied keys
     conn.fetchrow = AsyncMock(return_value=_card_row())
     conn.fetchval = AsyncMock(return_value=42)  # INSERT won

@@ -214,16 +214,19 @@ async def test_get_project_detail_not_found(_app):
 
 @pytest.mark.asyncio
 async def test_delete_project_returns_204(_app):
-    """DELETE /api/projects/{id} returns 204 when project exists."""
-    from learning_engine.routers import projects as projects_mod
+    """DELETE /api/projects/{id} returns 204 when project exists.
 
+    The real ``delete_or_404`` helper runs; it calls ``pool.execute(DELETE ...)``
+    and checks the result tag.  Returning ``"DELETE 1"`` means a row was found and
+    deleted, so no 404 is raised.  This replaces the previous ``patch.object``
+    over-mock that bypassed all business logic.
+    """
     app, conn, pool = _app
-    # delete_or_404 returns None on success; patch it to avoid DB calls
-    from unittest.mock import patch
+    # delete_or_404 calls pool.execute(DELETE ...) and checks result != "DELETE 0".
+    pool.execute = AsyncMock(return_value="DELETE 1")
 
-    with patch.object(projects_mod, "delete_or_404", AsyncMock(return_value=None)):
-        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            resp = await c.delete("/api/projects/1")
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.delete("/api/projects/1")
 
     assert resp.status_code == 204
 
@@ -292,16 +295,19 @@ async def test_create_task_returns_201(_app):
 
 @pytest.mark.asyncio
 async def test_update_task_not_found(_app):
-    """PUT /api/tasks/999 returns 404 when the task does not exist."""
-    from unittest.mock import patch
+    """PUT /api/tasks/999 returns 404 when the task does not exist.
 
-    from learning_engine.routers import tasks as tasks_mod
-
+    The real ``update_task`` handler runs the full DB path: it opens a transaction,
+    issues ``SELECT * FROM tasks … FOR UPDATE`` (via ``conn.fetchrow``), and raises 404
+    immediately when ``fetchrow`` returns ``None``.  Setting ``conn.fetchrow.return_value
+    = None`` simulates the missing-row case without bypassing any business logic.
+    """
     app, conn, pool = _app
-    # dynamic_update returns None → 404
-    with patch.object(tasks_mod, "dynamic_update", AsyncMock(return_value=None)):
-        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            resp = await c.put("/api/tasks/999", json={"title": "Updated"})
+    # fetchrow(SELECT … FOR UPDATE) returns None → task not found → 404.
+    conn.fetchrow.return_value = None
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.put("/api/tasks/999", json={"title": "Updated"})
 
     assert resp.status_code == 404
 

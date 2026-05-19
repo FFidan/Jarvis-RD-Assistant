@@ -8,17 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from httpx import ASGITransport
-from tests.conftest import FakeRecord
 
-
-def _mock_pool() -> tuple[MagicMock, AsyncMock]:
-    pool = MagicMock()
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = ctx
-    return pool, conn
+# D3-08: use canonical pool builder instead of duplicated local _mock_pool.
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 @pytest.fixture()
@@ -28,7 +20,7 @@ def app_with_pool():
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    pool, conn = _mock_pool()
+    pool, conn = _make_pool_and_conn()
     app.state.db_pool = pool
     app.state.limiter.enabled = False
 

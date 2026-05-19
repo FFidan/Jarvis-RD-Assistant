@@ -73,7 +73,7 @@ def test_register_tasks_populates_kind_to_task() -> None:
     """``register_tasks`` should insert the task objects into ``KIND_TO_TASK``."""
     import jarvis_common.task_registry as task_registry
     import procrastinate
-    from jarvis_common.task_registry import register_tasks
+    from jarvis_common.task_registry import _TASK_MAP, register_tasks
     from procrastinate.contrib.aiopg import AiopgConnector
 
     fresh_app = procrastinate.App(connector=AiopgConnector())
@@ -82,9 +82,11 @@ def test_register_tasks_populates_kind_to_task() -> None:
         return {}
 
     kind = "unit.test_kind_to_task_inject"
-    register_tasks(fresh_app, mapping={kind: _dummy}, queue="test_q")
-
-    assert kind in task_registry.KIND_TO_TASK
+    try:
+        register_tasks(fresh_app, mapping={kind: _dummy}, queue="test_q")
+        assert kind in task_registry.KIND_TO_TASK
+    finally:
+        _TASK_MAP.pop(kind, None)
 
 
 def test_register_tasks_handler_closure() -> None:

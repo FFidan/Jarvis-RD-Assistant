@@ -7,26 +7,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
-from tests.conftest import FakeRecord
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _mock_pool() -> tuple[MagicMock, AsyncMock]:
-    pool = MagicMock()
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = ctx
-    return pool, conn
+# D3-08: use canonical pool builder instead of duplicated local _mock_pool.
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _contradiction_row(*, paper_a_id: int = 10, paper_b_id: int = 11) -> FakeRecord:
@@ -66,7 +54,7 @@ async def test_get_contradictions_no_session_returns_401() -> None:
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    pool, _conn = _mock_pool()
+    pool, _conn = _make_pool_and_conn()
     app.state.db_pool = pool
     app.state.limiter.enabled = False
 
@@ -107,7 +95,7 @@ async def test_get_contradictions_cross_tenant_isolation() -> None:
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    pool, conn = _mock_pool()
+    pool, conn = _make_pool_and_conn()
     # DB returns empty — user B has no contradictions in their library.
     conn.fetch.return_value = []
 
@@ -156,7 +144,7 @@ async def test_get_contradictions_user_id_threaded_to_sql() -> None:
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    pool, conn = _mock_pool()
+    pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_contradiction_row()]
 
     app.state.db_pool = pool

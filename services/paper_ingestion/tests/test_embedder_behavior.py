@@ -15,32 +15,12 @@ import pytest
 from paper_ingestion.embedder import (
     COLLECTION_NAME,
     EMBEDDING_DIMENSION,
-    Embedder,
     validate_embedding_configuration,
 )
 from paper_ingestion.models import ChunkForEmbedding
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-class _FakeEncoding:
-    """Character-level tiktoken stand-in so tests don't need the real model."""
-
-    def encode(self, text: str) -> list[str]:
-        return list(text)
-
-    def decode(self, tokens: list[str]) -> str:
-        return "".join(tokens)
-
-
-def _make_embedder() -> Embedder:
-    http = AsyncMock()
-    qdrant = AsyncMock()
-    e = Embedder(http, qdrant)
-    e._encoding = _FakeEncoding()
-    return e
+# D3-05: shared fakes — replaces local _FakeEncoding/_make_embedder duplicated 3-5×.
+from tests._embedder_fakes import _make_embedder
 
 
 def _embed_response(n: int = 1, dim: int = EMBEDDING_DIMENSION) -> MagicMock:

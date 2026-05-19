@@ -71,3 +71,71 @@ async def test_mock_embedder_yes_label_has_high_signal():
     yes_vec, no_vec = await embedder.embed_texts(["yes_title", "no_title"])
 
     assert yes_vec[0] > no_vec[0]
+
+
+# ---------------------------------------------------------------------------
+# Import-smoke tests (D2-10: merged from test_eval_pulse_smoke.py)
+#
+# These load eval_pulse via importlib with heavy-dep stubs so the assertions
+# run even on hosts that lack fitz/tiktoken/qdrant_client.
+# ---------------------------------------------------------------------------
+
+import importlib.util
+from unittest.mock import MagicMock
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SCRIPT_PATH = _REPO_ROOT / "scripts" / "eval_pulse.py"
+_SERVICE_ROOT = _REPO_ROOT / "services" / "paper_ingestion"
+
+
+def _load_eval_pulse_stubbed(monkeypatch):
+    """Load eval_pulse as a fresh module with heavy deps stubbed out."""
+    monkeypatch.syspath_prepend(str(_SERVICE_ROOT))
+
+    for mod_name in ("fitz", "tiktoken"):
+        if mod_name not in sys.modules:
+            monkeypatch.setitem(sys.modules, mod_name, MagicMock())
+
+    if "qdrant_client" not in sys.modules:
+        monkeypatch.setitem(
+            sys.modules,
+            "qdrant_client",
+            MagicMock(AsyncQdrantClient=MagicMock()),
+        )
+    if "qdrant_client.models" not in sys.modules:
+        monkeypatch.setitem(
+            sys.modules,
+            "qdrant_client.models",
+            MagicMock(
+                Distance=MagicMock(),
+                PointStruct=MagicMock(),
+                VectorParams=MagicMock(),
+            ),
+        )
+
+    module_name = "_eval_pulse_smoke"
+    sys.modules.pop(module_name, None)
+    spec = importlib.util.spec_from_file_location(module_name, _SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None, f"Cannot load {_SCRIPT_PATH}"
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+    except ImportError as exc:
+        pytest.skip(f"eval_pulse deps not available on host: {exc}")
+    return module
+
+
+def test_eval_pulse_imports_without_error(monkeypatch):
+    """eval_pulse.py can be loaded without raising ImportError."""
+    module = _load_eval_pulse_stubbed(monkeypatch)
+    assert module is not None
+
+
+def test_eval_pulse_constants_well_formed(monkeypatch):
+    """Module-level constants exist and have sensible values."""
+    module = _load_eval_pulse_stubbed(monkeypatch)
+    assert module.PRECISION_TARGET >= 0.0
+    assert module.NO_LEAKAGE_MAX <= 1.0
+    assert module.EMBEDDING_DIM > 0
+    assert module.DECK_SIZE > 0
+    assert module.FIXTURE_PATH.name == "eval_pulse_labeled_set.json"

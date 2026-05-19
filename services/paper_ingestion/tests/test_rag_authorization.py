@@ -21,21 +21,12 @@ import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport
 
+from tests.conftest import _make_pool_and_conn
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_mock_pool_and_conn():
-    """Return (pool, conn) with asyncpg-style acquire() context manager."""
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _make_app_client(app, pool):
@@ -76,7 +67,7 @@ async def test_ask_paper_rejects_other_users_paper():
     """POST /api/papers/{id}/ask returns 403 when the paper belongs to another user."""
     from paper_ingestion.main import app
 
-    pool, _conn = _make_mock_pool_and_conn()
+    pool, _conn = _make_pool_and_conn()
     async with _make_app_client(app, pool) as client:
         try:
             with patch(
@@ -105,7 +96,7 @@ async def test_ask_paper_stream_rejects_other_users_paper():
     """POST /api/papers/{id}/ask/stream returns 403 when paper belongs to another user."""
     from paper_ingestion.main import app
 
-    pool, _conn = _make_mock_pool_and_conn()
+    pool, _conn = _make_pool_and_conn()
     async with _make_app_client(app, pool) as client:
         try:
             with patch(
@@ -139,7 +130,7 @@ async def test_ask_paper_returns_504_on_llm_timeout():
     """
     from paper_ingestion.main import app
 
-    pool, _conn = _make_mock_pool_and_conn()
+    pool, _conn = _make_pool_and_conn()
     fake_messages = [{"role": "user", "content": "q"}]
     fake_sources: list[dict] = []
 
@@ -185,7 +176,7 @@ async def test_ask_paper_returns_502_on_llm_error():
     """
     from paper_ingestion.main import app
 
-    pool, _conn = _make_mock_pool_and_conn()
+    pool, _conn = _make_pool_and_conn()
     fake_messages = [{"role": "user", "content": "q"}]
     fake_sources: list[dict] = []
 
@@ -230,7 +221,7 @@ async def test_ask_paper_stream_emits_done_with_empty_results():
     """
     from paper_ingestion.main import app
 
-    pool, _conn = _make_mock_pool_and_conn()
+    pool, _conn = _make_pool_and_conn()
     fake_messages = [{"role": "user", "content": "q"}]
     fake_sources: list[dict] = []
 

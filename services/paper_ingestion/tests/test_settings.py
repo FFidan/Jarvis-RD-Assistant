@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
-from fastapi import Request
 from httpx import ASGITransport  # noqa: E402
+from jarvis_common.testing import RoleMiddleware
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -340,26 +340,6 @@ async def test_set_config_disallowed_key(_app):
 
 
 # ---------------------------------------------------------------------------
-# Role injection helper (used for admin-gate tests)
-# ---------------------------------------------------------------------------
-
-
-class _RoleMiddleware:
-    """Minimal ASGI middleware that sets request.state.user_role before routing."""
-
-    def __init__(self, app, role: str | None):
-        self._app = app
-        self._role = role
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            request = Request(scope)
-            if self._role is not None:
-                request.state.user_role = self._role
-        await self._app(scope, receive, send)
-
-
-# ---------------------------------------------------------------------------
 # Tests: Nudges
 # ---------------------------------------------------------------------------
 
@@ -391,25 +371,11 @@ async def test_list_nudges(_app):
     assert body[0]["nudge_type"] == "review_reminder"
 
 
-class _RoleMiddleware:
-    """Minimal ASGI middleware that injects request.state.user_role before routing."""
-
-    def __init__(self, app, role: str | None) -> None:
-        self._app = app
-        self._role = role
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and self._role is not None:
-            request = Request(scope)
-            request.state.user_role = self._role
-        await self._app(scope, receive, send)
-
-
 @pytest.mark.asyncio
 async def test_list_nudges_non_admin_returns_403(_app):
     """GET /api/nudges returns 403 for non-admin browser sessions (L-12)."""
     app, _conn, _ = _app
-    wrapped = _RoleMiddleware(app, "member")
+    wrapped = RoleMiddleware(app, "member")
     async with httpx.AsyncClient(
         transport=ASGITransport(app=wrapped), base_url="http://test"
     ) as client:
@@ -826,6 +792,9 @@ async def test_set_config_l2_lambda_valid_accepted(_app):
         )
 
     assert resp.status_code == 200
+    body = resp.json()
+    assert body["key"] == "pulse.l2_lambda"
+    assert body["value"] == 0.5
 
 
 @pytest.mark.asyncio
@@ -858,6 +827,9 @@ async def test_set_config_valid_cron_accepted(_app):
         )
 
     assert resp.status_code == 200
+    body = resp.json()
+    assert body["key"] == "pulse.cron"
+    assert body["value"] == "0 4 * * *"
 
 
 # ---------------------------------------------------------------------------
@@ -1164,90 +1136,30 @@ async def test_test_provider_error_response_does_not_leak_upstream_body():
 
 
 # ---------------------------------------------------------------------------
-# Tests: A.1 Ghost key deletion — deleted keys return 400
+# Tests: A.1 Ghost key deletion — deleted keys return 400  (D5-05)
 # ---------------------------------------------------------------------------
 
+# (key, value) pairs for keys removed from the allow-list at various clean-up
+# waves.  Each must produce HTTP 400 "Unknown config key".
+_GHOST_KEYS = [
+    ("paper.max_daily", 10),
+    ("paper.auto_generate_cards", True),
+    ("ui.page_size", 20),
+    ("ingestion.max_papers_per_run", 50),
+    ("ingestion.chunk_size", 512),
+]
+
 
 @pytest.mark.asyncio
-async def test_ghost_key_paper_max_daily_returns_400(_app):
-    """PUT /api/config/paper.max_daily returns 400 (key removed from allow-list)."""
-    app, conn, _ = _app
+@pytest.mark.parametrize("key,value", _GHOST_KEYS)
+async def test_ghost_key_returns_400(_app, key: str, value):
+    """PUT /api/config/<ghost-key> returns 400 (key removed from allow-list)."""
+    app, _conn, _ = _app
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.put(
-            "/api/config/paper.max_daily",
-            json={"key": "paper.max_daily", "value": 10},
-        )
-
-    assert resp.status_code == 400
-    assert "Unknown config key" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_ghost_key_paper_auto_generate_cards_returns_400(_app):
-    """PUT /api/config/paper.auto_generate_cards returns 400 (key removed from allow-list)."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/paper.auto_generate_cards",
-            json={"key": "paper.auto_generate_cards", "value": True},
-        )
-
-    assert resp.status_code == 400
-    assert "Unknown config key" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_ghost_key_ui_page_size_returns_400(_app):
-    """PUT /api/config/ui.page_size returns 400 (key removed from allow-list)."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/ui.page_size",
-            json={"key": "ui.page_size", "value": 20},
-        )
-
-    assert resp.status_code == 400
-    assert "Unknown config key" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_ghost_key_ingestion_max_papers_returns_400(_app):
-    """PUT /api/config/ingestion.max_papers_per_run returns 400 (key removed from allow-list)."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/ingestion.max_papers_per_run",
-            json={"key": "ingestion.max_papers_per_run", "value": 50},
-        )
-
-    assert resp.status_code == 400
-    assert "Unknown config key" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_ghost_key_ingestion_chunk_size_returns_400(_app):
-    """PUT /api/config/ingestion.chunk_size returns 400 (key removed from allow-list)."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/ingestion.chunk_size",
-            json={"key": "ingestion.chunk_size", "value": 512},
-        )
+        resp = await client.put(f"/api/config/{key}", json={"key": key, "value": value})
 
     assert resp.status_code == 400
     assert "Unknown config key" in resp.json()["detail"]
@@ -1496,37 +1408,21 @@ def test_fetch_interval_key_in_allow_list() -> None:
     assert settings._classify_config_key("automation.fetch_interval_hours") == "system"
 
 
-def test_fetch_interval_validator_rejects_zero() -> None:
-    """_validate_positive_int rejects 0 for automation.fetch_interval_hours."""
+@pytest.mark.parametrize("bad_value", [0, -1, "24"])
+def test_fetch_interval_validator_rejects_invalid(bad_value) -> None:
+    """_validate_positive_int rejects zero, negative, and non-int inputs (D5-13)."""
     from paper_ingestion.routers.settings import _validate_positive_int
 
     with pytest.raises(ValueError):
-        _validate_positive_int(0)
+        _validate_positive_int(bad_value)
 
 
-def test_fetch_interval_validator_rejects_negative() -> None:
-    """_validate_positive_int rejects negative values."""
+@pytest.mark.parametrize("good_value", [1, 24, 168])
+def test_fetch_interval_validator_accepts_positive_int(good_value: int) -> None:
+    """_validate_positive_int accepts valid positive integers (D5-13)."""
     from paper_ingestion.routers.settings import _validate_positive_int
 
-    with pytest.raises(ValueError):
-        _validate_positive_int(-1)
-
-
-def test_fetch_interval_validator_rejects_non_int() -> None:
-    """_validate_positive_int rejects float/string for automation.fetch_interval_hours."""
-    from paper_ingestion.routers.settings import _validate_positive_int
-
-    with pytest.raises(ValueError):
-        _validate_positive_int("24")
-
-
-def test_fetch_interval_validator_accepts_positive_int() -> None:
-    """_validate_positive_int accepts valid positive integers."""
-    from paper_ingestion.routers.settings import _validate_positive_int
-
-    _validate_positive_int(1)
-    _validate_positive_int(24)
-    _validate_positive_int(168)
+    _validate_positive_int(good_value)  # must not raise
 
 
 @pytest.mark.asyncio

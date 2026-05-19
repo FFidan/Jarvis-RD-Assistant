@@ -38,10 +38,6 @@ ALL_TABLES: tuple[str, ...] = CASCADE_TABLES + SET_NULL_TABLES
 # ---------------------------------------------------------------------------
 
 
-def test_migration_082_file_exists() -> None:
-    assert MIGRATION.is_file(), f"Missing migration file: {MIGRATION}"
-
-
 def test_migration_082_covers_all_7_tables() -> None:
     """Every expected table must appear with: orphan UPDATE, DROP CONSTRAINT IF EXISTS,
     ADD CONSTRAINT <table>_user_id_fkey REFERENCES users, wrapped in the canonical
@@ -116,13 +112,7 @@ def test_migration_082_no_outer_transaction() -> None:
 # Live-PG: opt-in via JARVIS_RUN_LIVE_PG=1 (Docker-backed fixture).
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_INIT_SQL = _REPO_ROOT / "db" / "init.sql"
-
-
-async def _apply_fresh_init(pool: asyncpg.Pool) -> None:
-    async with pool.acquire() as conn:
-        await conn.execute(_INIT_SQL.read_text(encoding="utf-8"))
+from tests.migration_helpers import apply_fresh_init as _apply_fresh_init
 
 
 @pytest.mark.live_pg

@@ -243,63 +243,20 @@ async def test_system_key_allowed_for_api_key_only_caller():
 
 
 @pytest.mark.asyncio
-async def test_personal_key_timezone_accessible_to_non_admin():
-    """PUT /api/config/user.timezone succeeds regardless of admin status.
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("user.timezone", "Europe/Berlin"),
+        ("fsrs.desired_retention", 0.85),
+        ("zotero.api_key", "my-zotero-api-key"),  # encrypted key — encrypt stub always applied
+    ],
+)
+async def test_personal_key_accessible_to_non_admin(monkeypatch, key: str, value):
+    """Personal keys bypass the require_admin gate — any caller may write them (D5-06).
 
-    Verifies that personal keys bypass the require_admin gate entirely.
-    """
-    app, pool, conn, _ = _make_app()
-    try:
-        with patch(
-            "paper_ingestion.routers.settings.require_admin",
-            new=_require_admin_deny,
-        ):
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.put(
-                    "/api/config/user.timezone",
-                    json={"key": "user.timezone", "value": "Europe/Berlin"},
-                )
-        assert resp.status_code == 200, (
-            f"Personal key user.timezone should be writable by any user, "
-            f"got {resp.status_code}: {resp.json()}"
-        )
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
-
-
-@pytest.mark.asyncio
-async def test_personal_key_fsrs_accessible_to_non_admin():
-    """PUT /api/config/fsrs.desired_retention succeeds regardless of admin status."""
-    app, pool, conn, _ = _make_app()
-    try:
-        with patch(
-            "paper_ingestion.routers.settings.require_admin",
-            new=_require_admin_deny,
-        ):
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.put(
-                    "/api/config/fsrs.desired_retention",
-                    json={"key": "fsrs.desired_retention", "value": 0.85},
-                )
-        assert resp.status_code == 200, (
-            f"Personal key fsrs.desired_retention should be writable by any user, "
-            f"got {resp.status_code}: {resp.json()}"
-        )
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
-
-
-@pytest.mark.asyncio
-async def test_personal_zotero_api_key_accessible_to_non_admin(monkeypatch):
-    """PUT /api/config/zotero.api_key succeeds regardless of admin status.
-
-    zotero.api_key is encrypted; monkeypatch encrypt_secret to avoid FERNET_KEY dep.
+    ``zotero.api_key`` is Fernet-encrypted; ``encrypt_secret`` is stubbed to avoid
+    the ``JARVIS_CONFIG_KEY`` env-var dependency for all cases (harmless for the
+    non-encrypted keys).
     """
     monkeypatch.setattr(
         "paper_ingestion.services.settings_service.encrypt_secret",
@@ -315,11 +272,11 @@ async def test_personal_zotero_api_key_accessible_to_non_admin(monkeypatch):
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
                 resp = await client.put(
-                    "/api/config/zotero.api_key",
-                    json={"key": "zotero.api_key", "value": "my-zotero-api-key"},
+                    f"/api/config/{key}",
+                    json={"key": key, "value": value},
                 )
         assert resp.status_code == 200, (
-            f"Personal Zotero key should be writable by any user, "
+            f"Personal key {key!r} should be writable by any user, "
             f"got {resp.status_code}: {resp.json()}"
         )
     finally:

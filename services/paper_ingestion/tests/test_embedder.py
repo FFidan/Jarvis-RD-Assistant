@@ -6,15 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 from paper_ingestion.embedder import Embedder
 
-
-class _FakeEncoding:
-    """Character-level encoding stand-in for tiktoken (not installed on host)."""
-
-    def encode(self, text):
-        return list(text)
-
-    def decode(self, tokens):
-        return "".join(tokens)
+# D3-05: shared fake — replaces the local _FakeEncoding that was duplicated 3×.
+from tests._embedder_fakes import _FakeEncoding
 
 
 async def test_chunk_text_basic():
@@ -148,19 +141,6 @@ async def test_search_chunks_global_filters_by_user_id():
         for c in qf.should
     )
     assert any(isinstance(c, IsNullCondition) for c in qf.should)
-
-
-async def test_search_chunks_global_no_filter_when_user_id_none():
-    """Omitting user_id leaves query_filter unset (legacy/single-tenant path)."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    mock_qdrant.query_points.return_value = SimpleNamespace(points=[])
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2]])
-
-    await embedder.search_chunks_global("query", limit=10)
-
-    assert mock_qdrant.query_points.call_args.kwargs["query_filter"] is None
 
 
 async def test_search_similar_filters_user_and_excludes_paper():
@@ -323,72 +303,7 @@ async def test_chunk_text_offsets_align_with_decoded_window():
         assert chunk.chunk_index == expected_idx
 
 
-async def test_hybrid_search_pagination_returns_results_at_offset_20():
-    """PI-CORE-006: hybrid_search with offset=20 uses candidate_limit for both legs.
-
-    We verify that:
-    1. The BM25 SQL is called with candidate_limit = limit + offset (capped at 200).
-    2. search_chunks_global is called with the same candidate_limit.
-    3. Results are non-empty when the merged RRF pool has enough candidates.
-    """
-    from paper_ingestion.embedder import EMBEDDING_DIMENSION
-
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder.embed_texts = AsyncMock(return_value=[[0.5] * EMBEDDING_DIMENSION])
-
-    # Seed the BM25 leg with 35 distinct papers (ids 1..35)
-    def _make_bm25_row(paper_id: int) -> MagicMock:
-        row = MagicMock()
-        row.__getitem__ = lambda s, k: {
-            "id": paper_id,
-            "title": f"Paper {paper_id}",
-            "authors": [],
-            "url": f"http://example.com/{paper_id}",
-            "abstract": f"abstract {paper_id}",
-            "published_date": None,
-        }[k]
-        return row
-
-    bm25_rows = [_make_bm25_row(i) for i in range(1, 36)]  # 35 papers
-
-    conn = AsyncMock()
-    conn.fetch.return_value = bm25_rows
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    db_pool = MagicMock()
-    db_pool.acquire.return_value = ctx
-
-    # Seed the semantic leg with the same 35 papers
-    semantic_chunks = [
-        {"paper_id": i, "score": 0.9 - i * 0.01, "content": f"content {i}", "chunk_index": 0}
-        for i in range(1, 36)
-    ]
-    embedder.search_chunks_global = AsyncMock(return_value=semantic_chunks)
-
-    # Query with offset=20, limit=10 — should return 10 results skipping first 20
-    results = await embedder.hybrid_search("test query", db_pool=db_pool, limit=10, offset=20)
-
-    # Must return results (the pool of 35 has items beyond offset 20)
-    assert len(results) > 0, "Expected non-empty results at offset=20 with 35 candidates"
-    assert len(results) <= 10, "Must not exceed requested limit"
-
-    # Verify candidate_limit passed to both legs = min(10+20, 200) = 30
-    expected_candidate_limit = min(10 + 20, 200)  # 30
-
-    # BM25: conn.fetch was called with (sql, query, candidate_limit)
-    fetch_call_args = conn.fetch.call_args
-    assert fetch_call_args is not None
-    actual_bm25_limit = fetch_call_args.args[2]  # third positional arg
-    assert actual_bm25_limit == expected_candidate_limit, (
-        f"BM25 LIMIT should be {expected_candidate_limit}, got {actual_bm25_limit}"
-    )
-
-    # Semantic: search_chunks_global called with limit=candidate_limit
-    scg_call = embedder.search_chunks_global.call_args
-    actual_sem_limit = scg_call.kwargs.get("limit") or scg_call.args[1]
-    assert actual_sem_limit == expected_candidate_limit, (
-        f"Semantic limit should be {expected_candidate_limit}, got {actual_sem_limit}"
-    )
+# D3-10 deleted: test_hybrid_search_pagination_returns_results_at_offset_20
+# Superseded by test_hybrid_pagination.py::test_pagination_page* suite, which
+# covers offset semantics with dedicated non-overlap, page-boundary, and
+# candidate-limit assertions (canonical per audit D3-10).

@@ -64,13 +64,7 @@ async def test_star_no_project_links_does_not_enqueue():
     conn.fetchval.side_effect = [0, True]
 
     mock_task, mock_enqueue = _mock_zotero_push_task()
-    with (
-        patch(
-            "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
-    ):
+    with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None
         )
@@ -100,13 +94,7 @@ async def test_star_with_project_links_and_toggle_on_enqueues_zotero_push():
     conn.fetchval.side_effect = [2, True]
 
     mock_task, mock_enqueue = _mock_zotero_push_task()
-    with (
-        patch(
-            "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
-    ):
+    with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None
         )
@@ -140,13 +128,7 @@ async def test_star_with_project_links_toggle_off_does_not_enqueue():
     conn.fetchval.side_effect = [1, False]
 
     mock_task, mock_enqueue = _mock_zotero_push_task()
-    with (
-        patch(
-            "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
-    ):
+    with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None
         )
@@ -177,13 +159,7 @@ async def test_star_with_project_links_toggle_not_set_does_not_enqueue():
     conn.fetchval.side_effect = [1, None]
 
     mock_task, mock_enqueue = _mock_zotero_push_task()
-    with (
-        patch(
-            "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
-    ):
+    with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None
         )
@@ -216,10 +192,6 @@ async def test_star_enqueue_failure_is_best_effort():
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock(side_effect=RuntimeError("queue down"))
     with (
-        patch(
-            "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
         patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
         patch.object(papers.logger, "exception") as mock_log_exc,
     ):
@@ -257,13 +229,7 @@ async def test_star_already_starred_does_not_double_enqueue():
     conn.fetchval.side_effect = [1, True]
 
     mock_task, mock_enqueue = _mock_zotero_push_task()
-    with (
-        patch(
-            "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
-    ):
+    with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
             _mock_request(), paper_id=10, db_pool=pool, user_id=None
         )

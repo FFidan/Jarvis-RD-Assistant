@@ -246,6 +246,8 @@ async def test_papers_with_query_searches_api():
     await papers_command(update, context)
     mock_http.post.assert_awaited_once()
     update.message.reply_text.assert_awaited()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Transformers Paper" in text
 
 
 @pytest.mark.asyncio

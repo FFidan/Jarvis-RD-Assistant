@@ -1,73 +1,14 @@
-"""Tests for cross-paper RAG: global search, endpoint, dedup, and XML escaping."""
+"""Tests for cross-paper RAG: endpoint, dedup, and XML escaping."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import respx
-from paper_ingestion.embedder import Embedder
 from paper_ingestion.models import CrossPaperAskRequest
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_hit(paper_id: int, chunk_index: int, content: str, page_number: int, score: float):
-    """Create a mock Qdrant ScoredPoint-like object."""
-    hit = MagicMock()
-    hit.payload = {
-        "paper_id": paper_id,
-        "chunk_index": chunk_index,
-        "content": content,
-        "page_number": page_number,
-    }
-    hit.score = score
-    return hit
-
-
-def _make_query_response(hits: list):
-    """Wrap hits in a mock Qdrant query_points response."""
-    resp = MagicMock()
-    resp.points = hits
-    return resp
-
-
-# ---------------------------------------------------------------------------
-# Test: search_chunks_global returns results without paper_id filter
-# ---------------------------------------------------------------------------
-
-
-async def test_search_chunks_global_no_filter():
-    """search_chunks_global queries Qdrant WITHOUT a paper_id filter."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-
-    embedder = Embedder(mock_http, mock_qdrant)
-
-    # Stub embed_texts to return a dummy vector
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
-
-    hits = [
-        _make_hit(paper_id=1, chunk_index=0, content="chunk A", page_number=1, score=0.9),
-        _make_hit(paper_id=2, chunk_index=1, content="chunk B", page_number=3, score=0.7),
-    ]
-    mock_qdrant.query_points.return_value = _make_query_response(hits)
-
-    results = await embedder.search_chunks_global("test query", limit=10, score_threshold=0.25)
-
-    # Verify query_points was called without a filter
-    call_kwargs = mock_qdrant.query_points.call_args
-    has_no_filter = (
-        call_kwargs.kwargs.get("query_filter") is None or "query_filter" not in call_kwargs.kwargs
-    )
-    assert has_no_filter
-
-    assert len(results) == 2
-    assert results[0]["paper_id"] == 1
-    assert results[0]["content"] == "chunk A"
-    assert results[0]["score"] == 0.9
-    assert results[1]["paper_id"] == 2
-
+# D3-12 deleted: test_search_chunks_global_no_filter
+# Superseded by test_rag_isolation.py::test_search_chunks_global_no_user_id_no_filter,
+# which covers the same "no user_id → no Qdrant filter" contract with a more
+# complete assertion (also checks result count and len). Canonical per audit D3-12.
 
 # ---------------------------------------------------------------------------
 # Test: deduplication logic (max 2 chunks per paper, respects max_papers)
@@ -75,8 +16,21 @@ async def test_search_chunks_global_no_filter():
 
 
 async def test_dedup_max_chunks_per_paper():
-    """Cross-paper dedup keeps at most 2 chunks per paper and trims to max_papers."""
-    # Simulate the dedup logic from ask_cross_paper
+    """prepare_cross_paper_rag deduplicates: keeps at most 2 chunks per paper
+    and trims to max_papers by best-chunk score.
+
+    D3-03: replaced the prior test that re-implemented the dedup logic in the
+    test body (asserting on its own local variables).  This version drives the
+    real prepare_cross_paper_rag path with a controlled chunk set and asserts
+    on the CrossPaperRagPrep.sources that come back out.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
+
+    # 3 chunks for paper 1 (only top 2 should survive dedup), 1 for paper 2,
+    # 1 for paper 3 — max_papers=2 should drop paper 3 (lowest top-chunk score).
     all_chunks = [
         {"paper_id": 1, "chunk_index": 0, "content": "c1a", "page_number": 1, "score": 0.9},
         {"paper_id": 1, "chunk_index": 1, "content": "c1b", "page_number": 2, "score": 0.85},
@@ -85,48 +39,48 @@ async def test_dedup_max_chunks_per_paper():
         {"paper_id": 3, "chunk_index": 0, "content": "c3a", "page_number": 1, "score": 0.7},
     ]
 
-    max_papers = 2
-    max_chunks = 4
+    # Embedder mock: returns the controlled chunk set directly.
+    mock_embedder = MagicMock()
+    mock_embedder.search_chunks_global = AsyncMock(return_value=all_chunks)
+    # rerank_chunks passes through unchanged (identity slice).
+    mock_embedder.rerank_chunks = AsyncMock(side_effect=lambda q, c, top_k: c[:top_k])
 
-    # Group by paper_id
-    chunks_by_paper: dict[int, list[dict]] = {}
-    for chunk in all_chunks:
-        pid = chunk["paper_id"]
-        if pid not in chunks_by_paper:
-            chunks_by_paper[pid] = []
-        chunks_by_paper[pid].append(chunk)
+    # DB mock: return metadata for paper_ids 1 and 2 only (paper 3 would be dropped
+    # before the DB fetch anyway, but simulating the metadata shape faithfully).
+    db_rows = [
+        {"id": 1, "title": "Paper One", "authors": "A", "url": "http://p1"},
+        {"id": 2, "title": "Paper Two", "authors": "B", "url": "http://p2"},
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=db_rows)
+    db_pool = MagicMock()
+    db_pool.acquire.return_value.__aenter__.return_value = conn
 
-    # Keep top 2 per paper
-    for pid in chunks_by_paper:
-        chunks_by_paper[pid].sort(key=lambda c: c["score"], reverse=True)
-        chunks_by_paper[pid] = chunks_by_paper[pid][:2]
-
-    # Paper 1 should have only 2 chunks (dropped c1c)
-    assert len(chunks_by_paper[1]) == 2
-    assert all(c["score"] >= 0.85 for c in chunks_by_paper[1])
-
-    # Trim to max_papers (top by best chunk score)
-    paper_ids_sorted = sorted(
-        chunks_by_paper.keys(),
-        key=lambda pid: chunks_by_paper[pid][0]["score"],
-        reverse=True,
+    body = CrossPaperAskRequest(
+        question="dedup test",
+        max_chunks=4,
+        max_papers=2,  # trims to top-2 papers by best-chunk score
+        decompose=False,
     )
-    paper_ids_sorted = paper_ids_sorted[:max_papers]
 
-    # Papers 1 (0.9) and 2 (0.8) should remain; paper 3 (0.7) dropped
-    assert 1 in paper_ids_sorted
-    assert 2 in paper_ids_sorted
-    assert 3 not in paper_ids_sorted
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
 
-    # Flatten and trim to max_chunks
-    selected: list[dict] = []
-    for pid in paper_ids_sorted:
-        selected.extend(chunks_by_paper[pid])
-    selected.sort(key=lambda c: c["score"], reverse=True)
-    selected = selected[:max_chunks]
+    assert isinstance(result, CrossPaperRagPrep), (
+        f"Expected CrossPaperRagPrep with 2 papers, got {result!r}"
+    )
+    paper_ids = {s["paper_id"] for s in result.sources}
 
-    assert len(selected) <= max_chunks
-    assert all(c["paper_id"] in (1, 2) for c in selected)
+    # Paper 1 (top-chunk score 0.9) and paper 2 (0.8) survive; paper 3 (0.7) dropped.
+    assert 1 in paper_ids, "Paper 1 (highest score) must be in sources"
+    assert 2 in paper_ids, "Paper 2 must be in sources"
+    assert 3 not in paper_ids, "Paper 3 must be dropped (max_papers=2, score 0.7 < 0.8)"
+
+    # No paper should contribute more than 2 chunks (dedup cap).
+    from collections import Counter
+
+    chunk_counts = Counter(s["paper_id"] for s in result.sources)
+    for pid, count in chunk_counts.items():
+        assert count <= 2, f"Paper {pid} contributed {count} chunks — dedup cap is 2"
 
 
 # ---------------------------------------------------------------------------
@@ -153,61 +107,87 @@ def test_xml_escaping():
 # ---------------------------------------------------------------------------
 
 
-@respx.mock
+@pytest.mark.asyncio
 async def test_ask_cross_paper_endpoint_structure():
-    """POST /api/ask returns answer + sources with paper attribution."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    embedder = Embedder(mock_http, mock_qdrant)
+    """POST /api/ask calls the endpoint and returns answer + sources with paper attribution.
 
-    # Stub embed_texts
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
+    D3-01: replaced the prior vacuous-green that built result/sources dicts
+    in the test body and asserted on its own local variables without ever
+    calling the endpoint.  This version drives the real FastAPI app via
+    ASGITransport and asserts on the HTTP response (status + body shape).
+    Pattern mirrors test_extraction_endpoints.py (cited by the audit).
+    """
+    import httpx
+    from httpx import ASGITransport
+    from unittest.mock import patch
 
-    # Stub search_chunks_global
-    embedder.search_chunks_global = AsyncMock(
-        return_value=[
-            {
-                "paper_id": 10,
-                "chunk_index": 0,
-                "content": "Finding about transformers.",
-                "page_number": 2,
-                "score": 0.88,
-            },
-            {
-                "paper_id": 20,
-                "chunk_index": 1,
-                "content": "Evidence about attention.",
-                "page_number": 5,
-                "score": 0.75,
-            },
-        ]
-    )
+    from jarvis_common.auth import verify_api_key
+    from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep
+    from tests.conftest import _make_pool_and_conn
 
-    # Simulate the dedup + metadata + LLM call logic
-    all_chunks = await embedder.search_chunks_global("test question", limit=20)
-    assert len(all_chunks) == 2
-
-    # Each source must have paper_id and paper_title
-    sources = [
+    fake_sources = [
         {
-            "paper_id": c["paper_id"],
-            "paper_title": f"Paper {c['paper_id']}",
-            "content": c["content"],
-            "page_number": c["page_number"],
-            "score": round(c["score"], 3),
-        }
-        for c in all_chunks
+            "paper_id": 10,
+            "paper_title": "Transformer Paper",
+            "content": "Finding about transformers.",
+            "page_number": 2,
+            "score": 0.88,
+        },
+        {
+            "paper_id": 20,
+            "paper_title": "Attention Paper",
+            "content": "Evidence about attention.",
+            "page_number": 5,
+            "score": 0.75,
+        },
     ]
+    fake_messages = [{"role": "user", "content": "How do transformers work?"}]
 
-    result = {
-        "answer": "Transformers use attention [Paper 1] as shown in [Paper 2].",
-        "sources": sources,
-    }
+    async def _stub_prepare(embedder, db_pool, body, http_client, *, user_id):
+        return CrossPaperRagPrep(messages=fake_messages, sources=fake_sources)
 
-    assert "answer" in result
-    assert isinstance(result["sources"], list)
-    assert len(result["sources"]) == 2
-    for src in result["sources"]:
+    async def _stub_llm(http_client, messages, options, config):
+        return "Transformers use attention as shown in the literature."
+
+    pool, _conn = _make_pool_and_conn()
+
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_embedder] = lambda: AsyncMock()
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_verifier] = lambda: MagicMock()
+    app.state.limiter.enabled = False
+
+    try:
+        with (
+            patch(
+                "paper_ingestion.routers.rag.prepare_cross_paper_rag",
+                side_effect=_stub_prepare,
+            ),
+            patch(
+                "paper_ingestion.routers.rag.request_chat_completion_content",
+                side_effect=_stub_llm,
+            ),
+        ):
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/api/ask",
+                    json={"question": "How do transformers work?"},
+                )
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "answer" in body
+    assert isinstance(body["sources"], list)
+    assert len(body["sources"]) == 2
+    for src in body["sources"]:
         assert "paper_id" in src
         assert "paper_title" in src
         assert "content" in src

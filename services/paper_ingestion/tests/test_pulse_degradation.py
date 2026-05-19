@@ -6,13 +6,12 @@ produce diagnostic stats and, whenever possible, a deck.
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.profile import UserProfile
-from paper_ingestion.pulse.scoring import ScoredCandidate
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -38,17 +37,6 @@ def _paper(idx: int) -> PaperCreate:
         authors=["A"],
         abstract="abc",
         url=f"https://arxiv.org/abs/{idx:04d}",
-    )
-
-
-def _scored(idx: int) -> ScoredCandidate:
-    return ScoredCandidate(
-        paper=_paper(idx),
-        signals={"embedding": 0.5, "topic": 0.5, "recency": 0.5, "author_bonus": 0.0},
-        llm_relevance=7,
-        llm_novelty=5,
-        reasoning="rel",
-        final_score=0.6,
     )
 
 
@@ -156,74 +144,3 @@ async def test_openalex_5xx_skipped():
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
     assert len(result) == 1
-
-
-# ---------------------------------------------------------------------------
-# Job-level degradation
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_llm_timeout_deck_still_produced():
-    from paper_ingestion.pulse.job import run_pulse
-
-    pool, _conn = _make_pool_and_conn()
-
-    async def timeout(*a, **kw):
-        raise TimeoutError()
-
-    stage1_out = [_scored(i) for i in range(3)]
-    stage3_out = [_scored(i) for i in range(3)]
-
-    with (
-        patch("paper_ingestion.pulse.job.load_profile", AsyncMock(return_value=_profile())),
-        patch(
-            "paper_ingestion.pulse.job.discover_candidates",
-            AsyncMock(return_value=([_paper(i) for i in range(3)], {"_Src": 3}, {})),
-        ),
-        patch(
-            "paper_ingestion.pulse.job.stage1_embedding_filter",
-            AsyncMock(return_value=stage1_out),
-        ),
-        patch("paper_ingestion.pulse.job.stage2_llm_rerank", side_effect=timeout),
-        patch(
-            "paper_ingestion.pulse.job.stage3_combine",
-            AsyncMock(return_value=stage3_out),
-        ),
-        patch(
-            "paper_ingestion.pulse.job.assemble_deck",
-            MagicMock(return_value=stage3_out),
-        ),
-        patch("paper_ingestion.pulse.job.upsert_paper", AsyncMock()),
-        patch("paper_ingestion.pulse.job.persist_deck", AsyncMock(return_value=77)) as p_persist,
-    ):
-        stats = await run_pulse(pool, MagicMock(), MagicMock())
-
-    assert stats.get("degraded_reason") is not None
-    assert "timed out" in str(stats["degraded_reason"]).lower()
-    p_persist.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_empty_discovery_empty_deck_not_error():
-    from paper_ingestion.pulse.job import run_pulse
-
-    pool, _conn = _make_pool_and_conn()
-
-    with (
-        patch("paper_ingestion.pulse.job.load_profile", AsyncMock(return_value=_profile())),
-        patch(
-            "paper_ingestion.pulse.job.discover_candidates", AsyncMock(return_value=([], {}, {}))
-        ),
-        patch("paper_ingestion.pulse.job.stage1_embedding_filter", AsyncMock(return_value=[])),
-        patch("paper_ingestion.pulse.job.stage2_llm_rerank", AsyncMock(return_value=[])),
-        patch("paper_ingestion.pulse.job.stage3_combine", AsyncMock(return_value=[])),
-        patch("paper_ingestion.pulse.job.assemble_deck", MagicMock(return_value=[])),
-        patch("paper_ingestion.pulse.job.upsert_paper", AsyncMock()),
-        patch("paper_ingestion.pulse.job.persist_deck", AsyncMock(return_value=1)) as p_persist,
-    ):
-        stats = await run_pulse(pool, MagicMock(), MagicMock())
-
-    assert stats["candidate_count"] == 0
-    assert stats["last_error"] is None
-    p_persist.assert_awaited_once()

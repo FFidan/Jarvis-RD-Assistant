@@ -16,8 +16,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import SecretStr
-from telegram_bot.config import BotConfig
+from jarvis_common.testing import FakeAcquireCM, FakeTxnCM, make_bot_config, make_telegram_update
 from telegram_bot.handlers.commands import start_command  # noqa: E402
 from telegram_bot.handlers.commands.pairing_commands import pair_command  # noqa: E402
 from telegram_bot.handlers.helpers import auth_check as _auth_check  # noqa: E402
@@ -25,41 +24,11 @@ from telegram_bot.handlers.helpers import auth_check as _auth_check  # noqa: E40
 _OWNER_CHAT_ID = 777
 
 
-def _make_config(telegram_chat_id: int | None = _OWNER_CHAT_ID) -> BotConfig:
+def _make_config(telegram_chat_id: int | None = _OWNER_CHAT_ID):
     # BotConfig is frozen and types telegram_chat_id as int, but at runtime
     # dataclass(frozen=True) doesn't enforce type hints, so passing None works
     # for the auth-fallback path tests.
-    return BotConfig(
-        telegram_token="test-token",
-        telegram_chat_id=telegram_chat_id,  # type: ignore[arg-type]
-        database_url="postgres://test",
-        paper_ingestion_url="http://paper:8000",
-        learning_engine_url="http://learn:8001",
-        jarvis_api_key=SecretStr("test-key"),
-    )
-
-
-class _FakeAcquireCM:
-    """Async context manager returned by ``pool.acquire()``."""
-
-    def __init__(self, conn):
-        self._conn = conn
-
-    async def __aenter__(self):
-        return self._conn
-
-    async def __aexit__(self, *_):
-        return None
-
-
-class _FakeTxnCM:
-    """Async context manager returned by ``conn.transaction()``."""
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        return None
+    return make_bot_config(telegram_chat_id=telegram_chat_id)
 
 
 def _make_conn(fetchrow_return=None, fetchrow_side_effect=None, fetchval_return=None):
@@ -67,25 +36,19 @@ def _make_conn(fetchrow_return=None, fetchrow_side_effect=None, fetchval_return=
     conn.fetchrow = AsyncMock(return_value=fetchrow_return, side_effect=fetchrow_side_effect)
     conn.fetchval = AsyncMock(return_value=fetchval_return)  # existing-owner check
     conn.execute = AsyncMock(return_value="EXECUTE 1")
-    conn.transaction = MagicMock(return_value=_FakeTxnCM())
+    conn.transaction = MagicMock(return_value=FakeTxnCM())
     return conn
 
 
 def _make_pool(conn, *, fetchval_return=None):
     pool = MagicMock()
-    pool.acquire = MagicMock(return_value=_FakeAcquireCM(conn))
+    pool.acquire = MagicMock(return_value=FakeAcquireCM(conn))
     pool.fetchval = AsyncMock(return_value=fetchval_return)
     return pool
 
 
 def _make_update(text: str, chat_id: int = _OWNER_CHAT_ID):
-    update = MagicMock()
-    update.effective_chat = MagicMock()
-    update.effective_chat.id = chat_id
-    update.message = MagicMock()
-    update.message.text = text
-    update.message.reply_text = AsyncMock()
-    return update
+    return make_telegram_update(chat_id=chat_id, text=text)
 
 
 def _make_context(pool, config):

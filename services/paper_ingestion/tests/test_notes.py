@@ -1,13 +1,15 @@
 """Tests for paper notes CRUD endpoints and models."""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
 from jarvis_common import current_user_id_strict_with_owner_override
 from paper_ingestion.models import NoteCreate, NoteResponse, NoteUpdate
+
+from tests.conftest import _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # Pydantic model tests
@@ -138,17 +140,6 @@ def _make_note_record(
     }
 
 
-def _mock_pool() -> tuple[MagicMock, AsyncMock]:
-    """Create a mock asyncpg pool with context-managed connection."""
-    pool = MagicMock()
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = ctx
-    return pool, conn
-
-
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked state for testing notes endpoints."""
@@ -160,7 +151,7 @@ def _app():
     from paper_ingestion.main import app
     from paper_ingestion.routers import notes as notes_router
 
-    pool, conn = _mock_pool()
+    pool, conn = _make_pool_and_conn()
     app.state.db_pool = pool
     # Disable rate limiting for tests
     app.state.limiter.enabled = False

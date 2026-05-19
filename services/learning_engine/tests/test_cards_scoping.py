@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from learning_engine.models import CardCreate, CardType
 from learning_engine.routers import cards
 
-from tests.conftest import FakeRecord
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # Helpers (mirrors test_cards_router.py pattern)
@@ -24,20 +24,6 @@ from tests.conftest import FakeRecord
 
 def _now():
     return datetime.now(UTC)
-
-
-def _make_pool_conn(*, fetchval_return=None):
-    """Build a mock asyncpg pool; conn.fetchval returns *fetchval_return*."""
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=fetchval_return)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 def _make_card_row(id=1, deck_id=1, paper_id=None):
@@ -69,7 +55,7 @@ async def test_create_card_rejects_other_users_deck() -> None:
     which must raise HTTPException(404) before insert_card is ever attempted.
     """
     # fetchval returns None — deck exists but belongs to a different user.
-    pool, conn = _make_pool_conn(fetchval_return=None)
+    pool, conn = _make_pool_and_conn(fetchval_return=None)
 
     fsrs_manager = MagicMock()
     fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
@@ -108,7 +94,7 @@ async def test_create_card_rejects_other_users_deck() -> None:
 @pytest.mark.asyncio
 async def test_create_card_passes_for_own_deck() -> None:
     """User B POSTing with their own deck_id succeeds (fetchval returns deck id)."""
-    pool, conn = _make_pool_conn(fetchval_return=5)  # owns deck 5
+    pool, conn = _make_pool_and_conn(fetchval_return=5)  # owns deck 5
 
     fsrs_manager = MagicMock()
     fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())

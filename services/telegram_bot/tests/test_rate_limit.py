@@ -352,3 +352,115 @@ async def test_rate_limit_fires_before_silent_drop_auth():
         f"handler_calls={handler_calls} exceeds max_calls={max_calls}: "
         "rate-limiter did not stop the flood."
     )
+
+
+# ---------------------------------------------------------------------------
+# TG-002: rate_limit applied to review handler functions
+# (migrated from test_tg002_tg003_hardening.py)
+# ---------------------------------------------------------------------------
+
+_REVIEW_CARD = {
+    "id": 1,
+    "deck_id": 1,
+    "paper_id": None,
+    "card_type": "concept",
+    "front": "Q?",
+    "back": "A.",
+    "evidence": {},
+    "fsrs_state": {},
+    "due_at": "2026-03-01T00:00:00Z",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+}
+
+
+def _make_review_update_and_context(callback_data: str, chat_id: int = 54321):
+    """Build a minimal (update, context, mock_http) for review-handler rate-limit tests."""
+    from pydantic import SecretStr
+    from telegram_bot.config import BotConfig
+
+    update = MagicMock()
+    update.effective_chat = MagicMock()
+    update.effective_chat.id = chat_id
+    update.message = MagicMock()
+    update.message.reply_text = AsyncMock()
+
+    query = MagicMock()
+    query.data = callback_data
+    query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock()
+    update.callback_query = query
+
+    mock_http = AsyncMock()
+    context = MagicMock()
+    context.user_data = {}
+    context.application = MagicMock()
+    context.application.bot_data = {
+        "config": BotConfig(
+            telegram_token="test-token",
+            telegram_chat_id=chat_id,
+            database_url="postgres://test",
+            paper_ingestion_url="http://paper:8000",
+            learning_engine_url="http://learn:8001",
+            jarvis_api_key=SecretStr("test-key"),
+        ),
+        "db_pool": AsyncMock(),
+        "http_client": mock_http,
+    }
+    return update, context, mock_http
+
+
+@pytest.mark.asyncio
+async def test_show_answer_rate_limited_after_10_calls():
+    """TG-002: show_answer is rate-limited at 10 calls per 60 seconds.
+
+    The 11th call within the window must be rejected (returns None).
+    """
+    _timestamps.clear()
+
+    from telegram_bot.handlers.review_handler import show_answer
+
+    for _ in range(10):
+        update, context, _ = _make_review_update_and_context("show_answer")
+        context.user_data = {"current_card": _REVIEW_CARD, "cards_reviewed": 0}
+        result = await show_answer(update, context)
+        assert result is not None, "First 10 calls must succeed"
+
+    update, context, _ = _make_review_update_and_context("show_answer")
+    context.user_data = {"current_card": _REVIEW_CARD, "cards_reviewed": 0}
+    result = await show_answer(update, context)
+    assert result is None, "11th call within 60 s must be rate-limited (returns None)"
+
+
+@pytest.mark.asyncio
+async def test_rate_card_rate_limited_after_5_calls():
+    """TG-002: rate_card is rate-limited at 5 calls per 60 seconds.
+
+    The 6th call within the window must be rejected (returns None).
+    """
+    _timestamps.clear()
+
+    from telegram_bot.handlers.review_handler import rate_card
+
+    submit_resp = MagicMock()
+    submit_resp.raise_for_status = MagicMock()
+    submit_resp.json.return_value = {"next_due_at": "2026-04-01T00:00:00Z"}
+
+    next_resp = MagicMock()
+    next_resp.raise_for_status = MagicMock()
+    next_resp.json.return_value = []  # no more cards — each call ends the session
+
+    for _ in range(5):
+        update, context, mock_http = _make_review_update_and_context("rate_3")
+        context.user_data = {"current_card": _REVIEW_CARD, "cards_reviewed": 0}
+        mock_http.post.return_value = submit_resp
+        mock_http.get.return_value = next_resp
+        result = await rate_card(update, context)
+        assert result is not None, "First 5 calls must succeed"
+
+    update, context, mock_http = _make_review_update_and_context("rate_3")
+    context.user_data = {"current_card": _REVIEW_CARD, "cards_reviewed": 0}
+    mock_http.post.return_value = submit_resp
+    mock_http.get.return_value = next_resp
+    result = await rate_card(update, context)
+    assert result is None, "6th call within 60 s must be rate-limited (returns None)"

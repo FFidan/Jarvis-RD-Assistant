@@ -767,3 +767,197 @@ async def test_m2_race_live_pg_cooldown_interleave_is_observed(live_pg_dsn: str)
         )
     finally:
         await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# D7-BLOCK: reset() and health_snapshot() — migrated from deleted B2 block
+# (originally in test_source_rate_limiter.py, removed by D7 commit aebbefaf
+# on the incorrect claim that test_persistent_source_rate_limiter.py "fully
+# covers" these methods — it did not cover reset() or health_snapshot() at all)
+# ---------------------------------------------------------------------------
+
+
+async def test_reset_issues_upsert_clearing_cooldown_and_failures():
+    """reset() UPSERTs last_status='ok', cooldown_until=NULL, failures=0."""
+    pool, conn = _make_pool(fetchrow_side_effects=[None])
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=None,
+        min_interval_seconds=3.0,
+        db_pool=pool,
+    )
+
+    await limiter.reset()
+
+    conn.execute.assert_called_once()
+    sql: str = conn.execute.call_args[0][0]
+    assert "INSERT" in sql and "ON CONFLICT" in sql
+    assert "cooldown_until = NULL" in sql
+    assert "consecutive_failures = 0" in sql
+    assert "'ok'" in sql
+    # Bound params: user_id, source_type, now
+    params = conn.execute.call_args[0][1:]
+    assert "arxiv" in params
+
+
+async def test_reset_swallows_db_error():
+    """reset() never raises even when the DB pool errors."""
+    pool, _ = _make_pool(raise_exc=OSError("db down"))
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=7,
+        min_interval_seconds=3.0,
+        db_pool=pool,
+    )
+
+    # Must not raise.
+    await limiter.reset()
+
+
+async def test_health_snapshot_in_cooldown():
+    """Future cooldown_until → in_cooldown True, stale False."""
+    until = datetime.now(tz=UTC) + timedelta(hours=1)
+    last_req = datetime.now(tz=UTC) - timedelta(minutes=5)
+    pool, _ = _make_pool(
+        fetchrow_side_effects=[
+            {
+                "cooldown_until": until,
+                "last_status": "rate_limit",
+                "last_request_at": last_req,
+            }
+        ]
+    )
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=None,
+        min_interval_seconds=3.0,
+        db_pool=pool,
+    )
+
+    snap = await limiter.health_snapshot()
+
+    assert snap["in_cooldown"] is True
+    assert snap["stale"] is False
+    assert snap["cooldown_until"] == until.isoformat()
+    assert snap["last_status"] == "rate_limit"
+    assert snap["last_request_at"] == last_req.isoformat()
+
+
+async def test_health_snapshot_stale_when_rate_limit_and_cooldown_expired():
+    """rate_limit + past cooldown_until → stale True, in_cooldown False.
+
+    This is exactly the stuck arXiv state from the bug report: a genuine 429
+    set rate_limit + cooldown, the cooldown lapsed, nothing reset it.
+    """
+    past = datetime.now(tz=UTC) - timedelta(days=7)
+    pool, _ = _make_pool(
+        fetchrow_side_effects=[
+            {
+                "cooldown_until": past,
+                "last_status": "rate_limit",
+                "last_request_at": None,
+            }
+        ]
+    )
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=None,
+        min_interval_seconds=3.0,
+        db_pool=pool,
+    )
+
+    snap = await limiter.health_snapshot()
+
+    assert snap["in_cooldown"] is False
+    assert snap["stale"] is True
+    assert snap["last_status"] == "rate_limit"
+    assert snap["last_request_at"] is None
+
+
+async def test_health_snapshot_stale_when_rate_limit_and_no_cooldown():
+    """rate_limit + NULL cooldown_until → stale True (null-or-past rule)."""
+    pool, _ = _make_pool(
+        fetchrow_side_effects=[
+            {
+                "cooldown_until": None,
+                "last_status": "rate_limit",
+                "last_request_at": None,
+            }
+        ]
+    )
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=None,
+        min_interval_seconds=3.0,
+        db_pool=pool,
+    )
+
+    snap = await limiter.health_snapshot()
+
+    assert snap["stale"] is True
+    assert snap["in_cooldown"] is False
+    assert snap["cooldown_until"] is None
+
+
+async def test_health_snapshot_fresh_ok_not_stale():
+    """last_status='ok' is never stale and never in cooldown."""
+    now = datetime.now(tz=UTC)
+    pool, _ = _make_pool(
+        fetchrow_side_effects=[
+            {
+                "cooldown_until": None,
+                "last_status": "ok",
+                "last_request_at": now,
+            }
+        ]
+    )
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=None,
+        min_interval_seconds=3.0,
+        db_pool=pool,
+    )
+
+    snap = await limiter.health_snapshot()
+
+    assert snap["in_cooldown"] is False
+    assert snap["stale"] is False
+    assert snap["last_status"] == "ok"
+
+
+async def test_health_snapshot_no_row_returns_safe_default():
+    """No source_health row → safe all-default snapshot."""
+    pool, _ = _make_pool(fetchrow_side_effects=[None])
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=None,
+        min_interval_seconds=3.0,
+        db_pool=pool,
+    )
+
+    snap = await limiter.health_snapshot()
+
+    assert snap == {
+        "in_cooldown": False,
+        "cooldown_until": None,
+        "last_status": None,
+        "last_request_at": None,
+        "stale": False,
+    }
+
+
+async def test_health_snapshot_db_error_returns_safe_default():
+    """A DB error yields the safe default snapshot, never raises."""
+    pool, _ = _make_pool(raise_exc=OSError("db down"))
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=None,
+        min_interval_seconds=3.0,
+        db_pool=pool,
+    )
+
+    snap = await limiter.health_snapshot()
+
+    assert snap["in_cooldown"] is False
+    assert snap["stale"] is False
+    assert snap["last_status"] is None

@@ -18,11 +18,6 @@ def sql_text() -> str:
     return _MIGRATION_FILE.read_text(encoding="utf-8")
 
 
-def test_migration_file_exists() -> None:
-    """Migration 021 SQL file must exist."""
-    assert _MIGRATION_FILE.exists()
-
-
 def test_deduplicates_before_adding_constraint(sql_text: str) -> None:
     """Migration must keep one row per logical author before adding uniqueness."""
     assert re.search(

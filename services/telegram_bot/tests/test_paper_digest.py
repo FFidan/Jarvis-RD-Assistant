@@ -145,13 +145,22 @@ async def test_send_chunked_handles_nested_tags():
 
 @pytest.mark.asyncio
 async def test_run_paper_digest_uses_llm_digest_when_topics_present():
-    """run_paper_digest prefers the API digest when it returns topics."""
+    """run_paper_digest prefers the API digest when it returns topics.
+
+    Uses a capturing side-effect so we assert delivery to the correct chat_id
+    rather than merely asserting the patched _send_chunked mock was called.
+    """
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
     config = _make_config()
 
     from telegram_bot.owner import UserPairing
+
+    deliveries: list[tuple[int, list[str]]] = []
+
+    async def _capturing_send(bot_arg, chat_id: int, lines: list[str]) -> None:
+        deliveries.append((chat_id, lines))
 
     with (
         patch(
@@ -164,12 +173,19 @@ async def test_run_paper_digest_uses_llm_digest_when_topics_present():
             AsyncMock(return_value={"topics": [{"name": "Agents"}], "total_papers": 2}),
         ) as fetch_digest,
         patch.object(paper_digest, "format_weekly_digest", return_value="digest line"),
-        patch.object(paper_digest, "_send_chunked", AsyncMock()) as send_chunked,
+        patch.object(paper_digest, "_send_chunked", side_effect=_capturing_send),
     ):
         await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
 
     fetch_digest.assert_awaited_once()
-    send_chunked.assert_awaited_once()
+    assert len(deliveries) == 1, f"Expected 1 delivery, got {len(deliveries)}"
+    delivered_chat_id, delivered_lines = deliveries[0]
+    assert delivered_chat_id == 1234, (
+        f"Digest delivered to wrong chat_id: expected 1234, got {delivered_chat_id}"
+    )
+    assert any("digest line" in line for line in delivered_lines), (
+        f"Expected formatted digest content in delivered lines; got: {delivered_lines}"
+    )
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,9 @@ import pytest
 
 MIGRATION = Path(__file__).resolve().parents[3] / "db/migrations/087_pulse_models_user_id_index.sql"
 
+# Module-level constant — text tests share one read instead of reading per-test.
+_SQL = MIGRATION.read_text(encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # Text-based correctness — always runs (no DB dependency).
@@ -35,25 +38,21 @@ def _executable(sql: str) -> str:
     return "\n".join(ln for ln in sql.splitlines() if not ln.lstrip().startswith("--"))
 
 
-def test_migration_087_file_exists() -> None:
-    assert MIGRATION.is_file(), f"Missing migration file: {MIGRATION}"
-
-
 def test_migration_087_creates_index_idempotently() -> None:
-    sql = _executable(MIGRATION.read_text(encoding="utf-8"))
+    sql = _executable(_SQL)
     assert "CREATE INDEX IF NOT EXISTS idx_pulse_models_user_id" in sql
     assert "ON pulse_models(user_id)" in sql
 
 
 def test_migration_087_does_not_touch_journal_entries() -> None:
     """DB-F03 is verified FALSE — 087 must not add a journal_entries index."""
-    sql = _executable(MIGRATION.read_text(encoding="utf-8"))
+    sql = _executable(_SQL)
     assert "journal_entries" not in sql
 
 
 def test_migration_087_no_outer_transaction() -> None:
     """Runner wraps each migration; migration must not BEGIN/COMMIT itself."""
-    for line in MIGRATION.read_text(encoding="utf-8").splitlines():
+    for line in _executable(_SQL).splitlines():
         stripped = line.strip().upper()
         assert not stripped.startswith(("BEGIN;", "COMMIT;", "ROLLBACK;"))
 
@@ -62,13 +61,7 @@ def test_migration_087_no_outer_transaction() -> None:
 # Live-PG: opt-in via JARVIS_RUN_LIVE_PG=1 (Docker-backed fixture).
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_INIT_SQL = _REPO_ROOT / "db" / "init.sql"
-
-
-async def _apply_fresh_init(pool: asyncpg.Pool) -> None:
-    async with pool.acquire() as conn:
-        await conn.execute(_INIT_SQL.read_text(encoding="utf-8"))
+from tests.migration_helpers import apply_fresh_init as _apply_fresh_init
 
 
 @pytest.mark.live_pg

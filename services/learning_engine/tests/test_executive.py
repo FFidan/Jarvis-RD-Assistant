@@ -8,8 +8,6 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import httpx
 import pytest
 from httpx import ASGITransport
@@ -296,26 +294,28 @@ async def test_focus_log_task_not_found(exec_app):
 
 @pytest.mark.asyncio
 async def test_focus_log_with_paper_id(exec_app):
-    """POST /api/executive/focus/log with paper_id returns 200 and uses new ON CONFLICT (paper_id, user_id) clause."""
-    from unittest.mock import patch
+    """POST /api/executive/focus/log with paper_id returns 200 and uses new ON CONFLICT (paper_id, user_id) clause.
 
+    The exec_app fixture pins user_id=1 via dependency_overrides.  A previous
+    version also patched the module-level ``current_user_id_strict_with_owner_override``
+    name to return user_id=5, but that patch was dead-on-arrival: FastAPI's
+    ``dependency_overrides`` wins over a raw name-patch on the module, so the
+    patch never changed the resolved user_id.  The real assertion (ON CONFLICT
+    composite key) is independent of the caller's user_id value.
+    """
     app, conn = exec_app
 
     # fetchrow (SELECT FOR UPDATE) returns a row — paper exists
     conn.fetchrow.return_value = FakeRecord(id=7)
     conn.execute.return_value = "INSERT 1"
 
-    with patch(
-        "learning_engine.routers.executive.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=5),
-    ):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.post(
-                "/api/executive/focus/log",
-                json={"duration_hours": 0.5, "paper_id": 7},
-            )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/executive/focus/log",
+            json={"duration_hours": 0.5, "paper_id": 7},
+        )
 
     assert resp.status_code == 200
     data = resp.json()
@@ -691,18 +691,23 @@ async def test_focus_log_task_not_found_no_side_effects(exec_app):
 
 
 # ---------------------------------------------------------------------------
-# LE-009 concurrency regression — SELECT FOR UPDATE prevents double rows
+# LE-009 — SELECT FOR UPDATE contract (mock-level; real PG coverage is live)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_focus_log_concurrent_requests_no_duplicate_rows(exec_app):
-    """LE-009: Two concurrent log_focus_session calls must not produce duplicate daily_log rows.
+async def test_focus_log_uses_select_for_update_on_task(exec_app):
+    """LE-009: log_focus_session issues SELECT … FOR UPDATE before task DML.
 
-    The mock verifies that each request uses a transaction + fetchrow (SELECT FOR UPDATE)
-    before its DML, ensuring the serialised upsert path is exercised.  In production,
-    PostgreSQL row-locking prevents concurrent INSERTs; here we assert the correct call
-    sequence (fetchrow → execute) occurs for both concurrent requests.
+    This mock-level test verifies two things:
+    1. Each invocation succeeds and returns {status: success}.
+    2. The handler's fetchrow call uses SELECT … FOR UPDATE SQL, which is the
+       mechanism that prevents TOCTOU races in production.
+
+    It does NOT verify that PostgreSQL actually serialises concurrent writes —
+    that requires a live database.  Real concurrency prevention is covered by
+    the live-PG suite in ``test_review_sync_live.py``
+    (``test_concurrent_duplicate_insert_conflict_does_not_double_advance``).
     """
     import asyncio
 

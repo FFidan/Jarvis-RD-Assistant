@@ -129,8 +129,12 @@ async def test_api_failure_sends_diagnostic(caplog):
         await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
 
     bot.send_message.assert_awaited()
-    # Must not raise; the scheduler wraps but a thin delivery layer should
-    # degrade gracefully on its own.
+    sent_text = bot.send_message.await_args.kwargs["text"]
+    # The diagnostic message must mention the failure so the user knows what went wrong.
+    assert any(
+        phrase in sent_text
+        for phrase in ("error", "Error", "failed", "Failed", "unavailable", "Unavailable")
+    ), f"Diagnostic message must mention the failure; got: {sent_text!r}"
 
 
 @pytest.mark.asyncio

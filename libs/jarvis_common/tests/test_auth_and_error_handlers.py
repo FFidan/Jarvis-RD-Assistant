@@ -180,3 +180,132 @@ class TestRequestIdInErrors:
             assert body["request_id"] == "req-422-xyz"
         finally:
             request_id_ctx.reset(token)
+
+
+# ---------------------------------------------------------------------------
+# SEC-107 — validation_exception_handler redacts loc in production
+# (migrated from test_sprint4_1a.py)
+# ---------------------------------------------------------------------------
+
+
+class TestValidationErrorResponseRedaction:
+    def _make_request(self):
+        from unittest.mock import MagicMock
+
+        req = MagicMock()
+        req.method = "GET"
+        req.url.path = "/api/test"
+        return req
+
+    def _make_validation_exc(self):  # returns RequestValidationError
+        from fastapi.exceptions import RequestValidationError
+        from pydantic import BaseModel, ValidationError
+
+        class _M(BaseModel):
+            secret_field: int
+
+        try:
+            _M(secret_field="not-an-int")  # type: ignore[arg-type]
+        except ValidationError as ve:
+            return RequestValidationError(ve.errors())
+        raise AssertionError("Expected ValidationError was not raised")
+
+    @pytest.mark.asyncio
+    async def test_validation_error_response_redacts_loc_in_production(self, monkeypatch) -> None:
+        """SEC-107: In production (DEV_MODE=false), response body must NOT contain 'errors'."""
+        import json
+
+        import jarvis_common.error_handlers as eh
+
+        monkeypatch.setenv("DEV_MODE", "false")
+        exc = self._make_validation_exc()
+        response = await eh.validation_exception_handler(self._make_request(), exc)
+        body = json.loads(response.body)
+
+        assert response.status_code == 422
+        assert body["detail"] == "Validation error"
+        # 'errors' key must be absent in production
+        assert "errors" not in body
+
+    @pytest.mark.asyncio
+    async def test_validation_error_response_includes_errors_in_dev(self, monkeypatch) -> None:
+        """In DEV_MODE=true, the 'errors' key should be present for debugging."""
+        import json
+
+        import jarvis_common.error_handlers as eh
+
+        monkeypatch.setenv("DEV_MODE", "true")
+        exc = self._make_validation_exc()
+        response = await eh.validation_exception_handler(self._make_request(), exc)
+        body = json.loads(response.body)
+
+        assert response.status_code == 422
+        assert body["detail"] == "Validation error"
+        assert "errors" in body
+
+    @pytest.mark.asyncio
+    async def test_production_handler_logs_full_errors(self, monkeypatch, caplog) -> None:
+        """SEC-107: server-side log must contain field error details in production."""
+        import logging
+
+        import jarvis_common.error_handlers as eh
+
+        monkeypatch.setenv("DEV_MODE", "false")
+        exc = self._make_validation_exc()
+
+        with caplog.at_level(logging.WARNING, logger="jarvis_common.error_handlers"):
+            await eh.validation_exception_handler(self._make_request(), exc)
+
+        # The warning should contain something from the pydantic errors list
+        assert any(
+            "secret_field" in record.message or "Validation error" in record.message
+            for record in caplog.records
+        )
+
+
+# ---------------------------------------------------------------------------
+# SEC-108 — current_user_id_or_none still returns None; guard raises
+# (migrated from test_sprint4_1a.py)
+# ---------------------------------------------------------------------------
+
+
+class TestCurrentUserIdSec108:
+    def _make_request(self, *, user_id: int | None = None):
+        from types import SimpleNamespace
+
+        # Phase 2 WS-2A: helpers now read request.state.user_id populated by
+        # the session middleware, so the test fixture builds a real
+        # SimpleNamespace with the desired state instead of a MagicMock
+        # (whose attribute auto-vivification returns a Mock, not None).
+        state = SimpleNamespace()
+        if user_id is not None:
+            state.user_id = user_id
+        return SimpleNamespace(method="GET", url=SimpleNamespace(path="/api/test"), state=state)
+
+    @pytest.mark.asyncio
+    async def test_current_user_id_or_none_returns_none_without_session(self) -> None:
+        """current_user_id_or_none returns None when no session middleware ran."""
+        from jarvis_common.auth import current_user_id_or_none
+
+        result = await current_user_id_or_none(self._make_request())
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_current_user_id_returns_none_without_session(self) -> None:
+        """current_user_id returns None when no session middleware ran."""
+        from jarvis_common.auth import current_user_id
+
+        result = await current_user_id(self._make_request())
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_current_user_id_or_none_returns_state_value_when_session_present(self) -> None:
+        """WS-2A contract: helpers expose request.state.user_id when middleware set it."""
+        from jarvis_common.auth import current_user_id_or_none
+
+        result = await current_user_id_or_none(self._make_request(user_id=42))
+        assert result == 42
+
+    def test_current_user_id_or_none_exported_from_top_level(self) -> None:
+        """current_user_id_or_none must be importable from jarvis_common."""
+        from jarvis_common import current_user_id_or_none  # noqa: F401

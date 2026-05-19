@@ -34,46 +34,32 @@ def sql_text() -> str:
 
 
 # ---------------------------------------------------------------------------
-# File existence
-# ---------------------------------------------------------------------------
-
-
-def test_migration_file_exists():
-    """Migration 018 SQL file must exist."""
-    assert _MIGRATION_FILE.exists(), f"Missing: {_MIGRATION_FILE}"
-
-
-# ---------------------------------------------------------------------------
 # Table definitions
 # ---------------------------------------------------------------------------
 
 
 def test_pulse_decks_table_created(sql_text):
-    """pulse_decks table DDL must be present with IF NOT EXISTS."""
+    """pulse_decks table DDL must be present with correct columns."""
     assert re.search(r"CREATE TABLE IF NOT EXISTS\s+pulse_decks", sql_text, re.IGNORECASE), (
         "pulse_decks CREATE TABLE IF NOT EXISTS not found"
     )
-
-
-def test_pulse_decks_columns(sql_text):
-    """pulse_decks must have deck_date UNIQUE, card_count, generated_at, stats."""
-    assert "deck_date" in sql_text
-    assert "card_count" in sql_text
-    assert "generated_at" in sql_text
-    assert "stats" in sql_text
+    # Column definitions — match name followed by type keyword, not just presence in text.
+    for col in ("deck_date", "card_count", "generated_at", "stats"):
+        assert re.search(rf"\b{col}\b\s+\w+", sql_text, re.IGNORECASE), (
+            f"pulse_decks column '{col}' definition not found"
+        )
 
 
 def test_pulse_cards_table_created(sql_text):
-    """pulse_cards table DDL must be present with IF NOT EXISTS."""
+    """pulse_cards table DDL must be present with correct columns."""
     assert re.search(r"CREATE TABLE IF NOT EXISTS\s+pulse_cards", sql_text, re.IGNORECASE), (
         "pulse_cards CREATE TABLE IF NOT EXISTS not found"
     )
-
-
-def test_pulse_cards_columns(sql_text):
-    """pulse_cards must have rank, score, llm_relevance, llm_novelty, reasoning, signals."""
+    # Column definitions — match name followed by type keyword, not just presence in text.
     for col in ("rank", "score", "llm_relevance", "llm_novelty", "reasoning", "signals"):
-        assert col in sql_text, f"pulse_cards column '{col}' not found"
+        assert re.search(rf"\b{col}\b\s+\w+", sql_text, re.IGNORECASE), (
+            f"pulse_cards column '{col}' definition not found"
+        )
 
 
 def test_pulse_cards_fk_cascade(sql_text):
@@ -124,16 +110,15 @@ def test_pulse_ratings_indexes(sql_text):
 
 
 def test_pdf_resolutions_table_created(sql_text):
-    """pdf_resolutions table DDL must be present with IF NOT EXISTS."""
+    """pdf_resolutions table DDL must be present with correct columns."""
     assert re.search(r"CREATE TABLE IF NOT EXISTS\s+pdf_resolutions", sql_text, re.IGNORECASE), (
         "pdf_resolutions CREATE TABLE IF NOT EXISTS not found"
     )
-
-
-def test_pdf_resolutions_columns(sql_text):
-    """pdf_resolutions must have doi, arxiv_id, resolved_url, resolver_name, resolved_at."""
+    # Column definitions — match name followed by type keyword, not just presence in text.
     for col in ("doi", "arxiv_id", "resolved_url", "resolver_name", "resolved_at"):
-        assert col in sql_text, f"pdf_resolutions column '{col}' not found"
+        assert re.search(rf"\b{col}\b\s+\w+", sql_text, re.IGNORECASE), (
+            f"pdf_resolutions column '{col}' definition not found"
+        )
 
 
 def test_pdf_resolutions_unique_doi_arxiv(sql_text):
@@ -172,25 +157,12 @@ def test_topics_description_column(sql_text):
 # ---------------------------------------------------------------------------
 
 
-def test_paper_sources_openalex_row(sql_text):
-    """Migration must insert openalex row into paper_sources."""
-    assert "'openalex'" in sql_text or '"openalex"' in sql_text, (
-        "openalex source_type not found in INSERT"
-    )
-
-
-def test_paper_sources_pubmed_row(sql_text):
-    """Migration must insert pubmed row into paper_sources."""
-    assert "'pubmed'" in sql_text or '"pubmed"' in sql_text, (
-        "pubmed source_type not found in INSERT"
-    )
-
-
-def test_paper_sources_on_conflict_do_nothing(sql_text):
-    """paper_sources INSERT must use ON CONFLICT DO NOTHING."""
-    # There should be at least one ON CONFLICT DO NOTHING after the INSERT INTO paper_sources
-    paper_sources_block = sql_text[sql_text.lower().find("insert into paper_sources") :]
-    assert "ON CONFLICT" in paper_sources_block.upper(), (
+def test_paper_sources_rows_and_conflict(sql_text):
+    """Migration must insert openalex and pubmed rows with ON CONFLICT DO NOTHING."""
+    insert_block = sql_text[sql_text.lower().find("insert into paper_sources") :]
+    assert "'openalex'" in insert_block, "openalex source_type not found in INSERT block"
+    assert "'pubmed'" in insert_block, "pubmed source_type not found in INSERT block"
+    assert "ON CONFLICT" in insert_block.upper(), (
         "ON CONFLICT DO NOTHING missing from paper_sources INSERT"
     )
 
@@ -200,37 +172,18 @@ def test_paper_sources_on_conflict_do_nothing(sql_text):
 # ---------------------------------------------------------------------------
 
 
-def test_user_config_pulse_enabled(sql_text):
-    """pulse.enabled must be seeded in user_config."""
-    assert "'pulse.enabled'" in sql_text, "pulse.enabled key not found in user_config INSERT"
-
-
-def test_user_config_pulse_cron(sql_text):
-    """pulse.cron must be seeded in user_config."""
-    assert "'pulse.cron'" in sql_text, "pulse.cron key not found in user_config INSERT"
-
-
-def test_user_config_pulse_deck_size(sql_text):
-    """pulse.deck_size must be seeded in user_config."""
-    assert "'pulse.deck_size'" in sql_text, "pulse.deck_size key not found in user_config INSERT"
-
-
-def test_user_config_pulse_stage2_top_k(sql_text):
-    """pulse.stage2_top_k must be seeded in user_config."""
-    assert "'pulse.stage2_top_k'" in sql_text, (
-        "pulse.stage2_top_k key not found in user_config INSERT"
-    )
-
-
-def test_user_config_pulse_weights(sql_text):
-    """pulse.weights must be seeded in user_config."""
-    assert "'pulse.weights'" in sql_text, "pulse.weights key not found in user_config INSERT"
-
-
-def test_user_config_on_conflict_do_nothing(sql_text):
-    """user_config INSERT must use ON CONFLICT DO NOTHING."""
-    user_config_block = sql_text[sql_text.lower().find("insert into user_config") :]
-    assert "ON CONFLICT" in user_config_block.upper(), (
+def test_user_config_pulse_keys_and_conflict(sql_text):
+    """All five pulse.* keys must be seeded in user_config with ON CONFLICT DO NOTHING."""
+    insert_block = sql_text[sql_text.lower().find("insert into user_config") :]
+    for key in (
+        "'pulse.enabled'",
+        "'pulse.cron'",
+        "'pulse.deck_size'",
+        "'pulse.stage2_top_k'",
+        "'pulse.weights'",
+    ):
+        assert key in insert_block, f"{key} not found in user_config INSERT block"
+    assert "ON CONFLICT" in insert_block.upper(), (
         "ON CONFLICT DO NOTHING missing from user_config INSERT"
     )
 

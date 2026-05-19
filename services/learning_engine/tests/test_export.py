@@ -7,11 +7,13 @@ owned by a different user and returns a valid .apkg for the owner.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
 from learning_engine.routers.export import export_anki
+
+from tests.conftest import _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -23,19 +25,6 @@ def _fake_request(user_id: int | None = None) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(user_id=user_id))
 
 
-def _make_pool_conn(*, fetchrow_return=None, fetch_return=None):
-    """Build a mock asyncpg pool whose conn returns the given values."""
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value=fetchrow_return)
-    conn.fetch = AsyncMock(return_value=fetch_return or [])
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
-
-
 # ---------------------------------------------------------------------------
 # H6: ownership enforcement
 # ---------------------------------------------------------------------------
@@ -45,7 +34,7 @@ def _make_pool_conn(*, fetchrow_return=None, fetch_return=None):
 async def test_export_anki_returns_404_for_other_users_deck() -> None:
     """A user requesting another user's deck must receive 404, not the apkg."""
     # Simulate DB returning no row because user_id does not match.
-    pool, _conn = _make_pool_conn(fetchrow_return=None)
+    pool, _conn = _make_pool_and_conn(fetchrow_return=None)
     fake_anki = MagicMock()
 
     with pytest.raises(HTTPException) as exc_info:
@@ -65,7 +54,7 @@ async def test_export_anki_returns_404_for_other_users_deck() -> None:
 @pytest.mark.asyncio
 async def test_export_anki_passes_user_id_to_deck_query() -> None:
     """The deck SELECT must bind the caller's user_id as the second parameter."""
-    pool, conn = _make_pool_conn(fetchrow_return=None)
+    pool, conn = _make_pool_and_conn(fetchrow_return=None)
     fake_anki = MagicMock()
 
     with pytest.raises(HTTPException):
@@ -101,7 +90,7 @@ async def test_export_anki_returns_apkg_for_owner() -> None:
             "created_at": "2026-01-01",
         }
     ]
-    pool, _conn = _make_pool_conn(fetchrow_return=fake_deck, fetch_return=fake_cards)
+    pool, _conn = _make_pool_and_conn(fetchrow_return=fake_deck, fetch_return=fake_cards)
 
     fake_anki = MagicMock()
     fake_anki.export_deck.return_value = b"APKG_BYTES"
@@ -126,7 +115,7 @@ async def test_export_anki_returns_apkg_for_owner() -> None:
 async def test_export_anki_returns_404_for_empty_deck_when_no_cards() -> None:
     """A deck with no cards returns 400 (existing contract), not 200."""
     fake_deck = {"id": 2, "name": "Empty Deck", "user_id": 5}
-    pool, _conn = _make_pool_conn(fetchrow_return=fake_deck, fetch_return=[])
+    pool, _conn = _make_pool_and_conn(fetchrow_return=fake_deck, fetch_return=[])
 
     fake_anki = MagicMock()
 

@@ -7,7 +7,7 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse, JobCreateResponse, assert_paper_ownership, escape_like
+from jarvis_common import ErrorResponse, JobCreateResponse, escape_like
 from jarvis_common.auth import get_current_user_id
 from jarvis_common.library import add_to_library
 from jarvis_common.paper_state import (  # noqa: I001
@@ -17,13 +17,13 @@ from jarvis_common.paper_state import (  # noqa: I001
     upsert_paper_user_state as _upsert_paper_user_state,
 )
 
+from paper_ingestion import papers_service
 from paper_ingestion.converters import (
     row_to_chunk_response,
     row_to_paper_response,
     row_to_summary_response,
 )
 from paper_ingestion.deps import get_db_pool, get_optional_embedder, limiter
-from paper_ingestion.ingestion.embedder import delete_paper_vectors
 from paper_ingestion.models import (
     AnnotationsRequest,
     BulkActionRequest,
@@ -38,7 +38,6 @@ from paper_ingestion.models import (
     ProcessBatchRequest,
     RecentFeedback,
     SourceType,
-    TopicFacetCount,
     UserStateResponse,
 )
 from paper_ingestion.queries.predicates import VIEW_PREDICATES
@@ -46,7 +45,6 @@ from paper_ingestion.routers._paper_helpers import (
     _upsert_recommendation_feedback,
     _upsert_state_and_starred,
 )
-from paper_ingestion.services.feed_query import fetch_feed_facet_counts
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
@@ -253,7 +251,7 @@ async def get_paper_detail(
         recommendation feedback (if any).
     """
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
         if not paper_row:
             raise HTTPException(status_code=404, detail="Paper not found")
@@ -411,7 +409,7 @@ async def submit_feedback(
     the atomic trash plus negative feedback path.
     """
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
 
         origin_row = await conn.fetchrow(
             "SELECT discovery_origin FROM papers WHERE id = $1",
@@ -489,87 +487,9 @@ async def get_feed_counts(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
 ):
-    """Return per-bucket paper counts for the current user (10 named views)."""
-    # Normalise sentinel: .__wrapped__ callers bypass FastAPI DI so `scope`
-    # may arrive as the Query(…) FieldInfo object rather than a plain str.
-    if not isinstance(scope, str):
-        scope = "library"
-    if scope not in {"library", "corpus"}:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unknown scope {scope!r}. Valid values: ['corpus', 'library']",
-        )
-
-    def _sum(view_key: str, alias: str) -> str:
-        return (
-            f"COALESCE(SUM(CASE WHEN {VIEW_PREDICATES[view_key]} "
-            f"THEN 1 ELSE 0 END), 0)::int AS {alias}"
-        )
-
-    # Sprint B: scope feed counts via the caller's user_library; single-user
-    # mode (user_id=None) falls back to the canonical corpus.
-    if user_id is not None:
-        sql = f"""
-            SELECT
-                {_sum("inbox", "inbox")},
-                {_sum("library", "library")},
-                {_sum("reading_list", "reading_list")},
-                {_sum("reading", "reading")},
-                {_sum("done", "done")},
-                {_sum("starred", "starred")},
-                {_sum("trash", "trash")},
-                {_sum("active", "active")},
-                {_sum("kept", "kept")},
-                {_sum("all_non_trash", "all_non_trash")}
-              FROM papers p
-              JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
-              LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
-                AND pus.user_id = $1
-        """
-    else:
-        sql = f"""
-            SELECT
-                {_sum("inbox", "inbox")},
-                {_sum("library", "library")},
-                {_sum("reading_list", "reading_list")},
-                {_sum("reading", "reading")},
-                {_sum("done", "done")},
-                {_sum("starred", "starred")},
-                {_sum("trash", "trash")},
-                {_sum("active", "active")},
-                {_sum("kept", "kept")},
-                {_sum("all_non_trash", "all_non_trash")}
-              FROM papers p
-              LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
-                AND pus.user_id IS NULL
-        """
-    async with db_pool.acquire() as conn:
-        if user_id is not None:
-            row = await conn.fetchrow(sql, user_id)
-        else:
-            row = await conn.fetchrow(sql)
-        assert row is not None  # aggregate query always returns one row
-
-        # UI v3 facet rail: by_source / by_topic / untagged — honour requested scope.
-        by_source, by_topic_rows, untagged = await fetch_feed_facet_counts(
-            conn, user_id, scope=scope
-        )
-
-    return FeedCountsResponse(
-        inbox=row["inbox"],
-        library=row["library"],
-        reading_list=row["reading_list"],
-        reading=row["reading"],
-        done=row["done"],
-        starred=row["starred"],
-        trash=row["trash"],
-        active=row["active"],
-        kept=row["kept"],
-        all_non_trash=row["all_non_trash"],
-        by_source=by_source,
-        by_topic=[TopicFacetCount(**t) for t in by_topic_rows],
-        untagged=untagged,
-    )
+    """Return per-bucket paper counts (C3: delegates to papers_service)."""
+    _ = request  # required by @limiter.limit; not used in body
+    return await papers_service.get_feed_counts(scope, db_pool, user_id)
 
 
 async def _apply_bulk_action(
@@ -580,49 +500,10 @@ async def _apply_bulk_action(
     *,
     _hard_deleted_ids: list[int] | None = None,
 ) -> None:
-    """Dispatch a single bulk action to the appropriate state mutation."""
-    if action == "save":
-        await _upsert_state_and_starred(conn, paper_id, user_id, state="to_read")
-    elif action == "skip":
-        await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
-    elif action == "trash":
-        await _trash_paper(conn, paper_id, user_id)
-    elif action == "mark_reading":
-        await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
-    elif action == "mark_done":
-        await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
-    elif action == "restore":
-        await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
-        await _restore_paper(conn, paper_id, user_id)
-    elif action == "star":
-        await _upsert_state_and_starred(conn, paper_id, user_id, starred=True)
-    elif action == "unstar":
-        await _upsert_state_and_starred(conn, paper_id, user_id, starred=False)
-    elif action == "feedback_positive":
-        await _upsert_recommendation_feedback(conn, paper_id, user_id, "positive", "feed_thumbs")
-    elif action == "feedback_negative":
-        await _upsert_recommendation_feedback(conn, paper_id, user_id, "negative", "feed_thumbs")
-    elif action == "hard_delete":
-        await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
-        # Caller (bulk_action_papers) already wraps each paper in a per-paper
-        # SAVEPOINT (async with conn.transaction()), so no inner txn is needed.
-        await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
-        # Collect the ID for Qdrant cleanup OUTSIDE the transaction.
-        # Callers that do not pass _hard_deleted_ids get the legacy inline
-        # behaviour as a fallback (e.g. tests that call this directly).
-        if _hard_deleted_ids is not None:
-            _hard_deleted_ids.append(paper_id)
-        else:
-            try:
-                await delete_paper_vectors(paper_id)
-            except Exception:  # noqa: BLE001 — best-effort cleanup; orphan vectors are harmless
-                logger.exception(
-                    "Qdrant cleanup failed for paper %d in bulk hard_delete; "
-                    "vectors are now orphans",
-                    paper_id,
-                )
-    else:
-        raise ValueError(f"Unknown bulk action: {action}")
+    """Dispatch a single bulk action (C3: delegates to papers_service)."""
+    await papers_service._apply_bulk_action(
+        conn, paper_id, user_id, action, _hard_deleted_ids=_hard_deleted_ids
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -640,7 +521,7 @@ async def save_paper(
 ):
     """Save a paper to the Reading List (``state := 'to_read'``)."""
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(
             conn, paper_id, user_id, allowed=("inbox", "done", "to_read", "reading")
         )
@@ -666,7 +547,7 @@ async def unsave_paper(
     Requires the paper to be in ``to_read`` state; raises 409 otherwise.
     """
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("to_read",))
         await _upsert_state_and_starred(conn, paper_id, user_id, state="inbox")
     return {"status": "ok", "paper_id": paper_id}
@@ -687,7 +568,7 @@ async def skip_paper(
 ):
     """Skip a paper from the Inbox (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("inbox",))
         await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
     return {"status": "ok", "paper_id": paper_id}
@@ -708,7 +589,7 @@ async def reading_paper(
 ):
     """Mark a paper as currently being read (``state := 'reading'``)."""
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(
             conn, paper_id, user_id, allowed=("to_read", "reading", "done")
         )
@@ -731,7 +612,7 @@ async def done_paper(
 ):
     """Mark a paper as done (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
     return {"status": "ok", "paper_id": paper_id}
 
@@ -769,7 +650,7 @@ async def star_paper(
     project_link_count = 0
     auto_push_on_star = False
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         # Atomically upsert starred=TRUE and detect the off→on transition.
         # A CTE snapshots the previous starred value before the upsert so we
         # can determine whether this is a genuine transition without a separate
@@ -825,7 +706,7 @@ async def unstar_paper(
 ):
     """Set ``starred = FALSE``. Does not change reading state."""
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _upsert_state_and_starred(conn, paper_id, user_id, starred=False)
     return {"status": "ok", "paper_id": paper_id}
 
@@ -845,7 +726,7 @@ async def trash_paper(
 ):
     """Move paper to Trash. Atomic: ``state_before_trash := state; state := 'trash'``."""
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _trash_paper(conn, paper_id, user_id)
     return {"status": "ok", "paper_id": paper_id}
 
@@ -865,7 +746,7 @@ async def restore_paper(
 ):
     """Restore a paper from Trash to its prior state."""
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
         await _restore_paper(conn, paper_id, user_id)
     return {"status": "ok", "paper_id": paper_id}
@@ -889,7 +770,7 @@ async def trash_and_reject_paper(
     Single transaction. The only combined action in the system per spec §4.4.
     """
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         async with conn.transaction():
             await _trash_paper(conn, paper_id, user_id)
             await _upsert_recommendation_feedback(
@@ -923,7 +804,7 @@ async def annotate_paper(
     refresh its local cache without a follow-up GET.
     """
     async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         try:
             row = await _upsert_paper_user_state(
                 conn,
@@ -962,23 +843,13 @@ async def hard_delete_paper(
     SQL succeeds and Qdrant fails, vectors are orphaned (recoverable). The
     reverse order is data-loss-prone — do not collapse the inside-txn
     DELETE and outside-txn Qdrant cleanup into a single try/except.
+
+    C3: business logic lives in ``papers_service.hard_delete_paper``; the
+    router passes its own ``logger`` so the orphan-vector ``logger.exception``
+    keeps the ``paper_ingestion.routers.papers`` logger name.
     """
-    async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
-        await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
-        async with conn.transaction():
-            await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
-        # Qdrant cleanup OUTSIDE the transaction — Qdrant is non-transactional;
-        # we prefer the row to commit first so a Qdrant failure leaves orphan
-        # vectors (recoverable) rather than a missing-vectors row (data loss).
-        try:
-            await delete_paper_vectors(paper_id)
-        except Exception:  # noqa: BLE001 — best-effort cleanup
-            logger.exception(
-                "Qdrant cleanup failed for paper %d after DB delete; vectors are now orphans",
-                paper_id,
-            )
-    return {"deleted": paper_id}
+    _ = request  # required by @limiter.limit; not used in body
+    return await papers_service.hard_delete_paper(paper_id, db_pool, user_id, router_logger=logger)
 
 
 # ---------------------------------------------------------------------------
@@ -1043,7 +914,7 @@ async def bulk_action_papers(
                 # alive so subsequent papers can still commit.
                 try:
                     async with conn.transaction():
-                        await assert_paper_ownership(conn, paper_id, user_id)
+                        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
                         await _apply_bulk_action(
                             conn,
                             paper_id,
@@ -1064,7 +935,7 @@ async def bulk_action_papers(
     # SAVEPOINT bloat.  Failures are logged but do not affect the HTTP response.
     for pid in hard_deleted_ids:
         try:
-            await delete_paper_vectors(pid)
+            await papers_service.delete_paper_vectors(pid)
         except Exception:  # noqa: BLE001
             logger.exception(
                 "Qdrant cleanup failed for paper %d after bulk hard_delete; "
@@ -1103,7 +974,7 @@ async def process_batch(
     # batch-processing another user's papers.
     async with db_pool.acquire() as conn:
         for paper_id in body.paper_ids:
-            await assert_paper_ownership(conn, paper_id, user_id)
+            await papers_service.assert_paper_ownership(conn, paper_id, user_id)
 
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["papers.batch_process"].defer_async(

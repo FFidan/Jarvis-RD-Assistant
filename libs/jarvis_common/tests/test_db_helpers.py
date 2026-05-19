@@ -206,3 +206,69 @@ async def test_assert_ownership_null_discovered_by_is_free_pass():
     await assert_paper_ownership(conn, paper_id=1, user_id=42)
     # fetchval (library check) must NOT have been called — early return.
     conn.fetchval.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# JC-005 — validated_model_with_reason surfaces fallback reason
+# (migrated from test_sprint4_1a.py)
+# ---------------------------------------------------------------------------
+
+
+class TestValidatedModelWithReason:
+    def test_valid_alias_returns_none_reason(self) -> None:
+        """Valid LiteLLM aliases should return (alias, None)."""
+        from jarvis_common.db_helpers import validated_model_with_reason
+
+        alias, reason = validated_model_with_reason("smart")
+        assert alias == "smart"
+        assert reason is None
+
+    def test_fast_alias_returns_none_reason(self) -> None:
+        from jarvis_common.db_helpers import validated_model_with_reason
+
+        alias, reason = validated_model_with_reason("fast")
+        assert alias == "fast"
+        assert reason is None
+
+    def test_embed_alias_returns_none_reason(self) -> None:
+        from jarvis_common.db_helpers import validated_model_with_reason
+
+        alias, reason = validated_model_with_reason("embed")
+        assert alias == "embed"
+        assert reason is None
+
+    def test_invalid_model_returns_smart_with_reason(self) -> None:
+        """Invalid model name should fall back to 'smart' and report why."""
+        from jarvis_common.db_helpers import validated_model_with_reason
+
+        alias, reason = validated_model_with_reason("mistral-nemo:latest")
+        assert alias == "smart"
+        assert reason is not None
+        assert "mistral-nemo:latest" in reason
+
+    def test_validated_model_returns_fallback_reason_on_invalid_input(self) -> None:
+        """The original validated_model() still returns a plain str (no regression)."""
+        from jarvis_common.db_helpers import validated_model, validated_model_with_reason
+
+        # Plain function still returns str
+        result = validated_model("some-unknown-model")
+        assert result == "smart"
+        assert isinstance(result, str)
+
+        # Sibling returns tuple with non-None reason
+        alias, reason = validated_model_with_reason("some-unknown-model")
+        assert alias == "smart"
+        assert reason is not None and len(reason) > 0
+
+    def test_reason_contains_original_model_name(self) -> None:
+        """Fallback reason message must contain the original model name."""
+        from jarvis_common.db_helpers import validated_model_with_reason
+
+        alias, reason = validated_model_with_reason("gpt-4-turbo")
+        assert alias == "smart"
+        assert reason is not None
+        assert "gpt-4-turbo" in reason
+
+    def test_exported_from_jarvis_common_top_level(self) -> None:
+        """validated_model_with_reason must be importable from jarvis_common directly."""
+        from jarvis_common import validated_model_with_reason  # noqa: F401

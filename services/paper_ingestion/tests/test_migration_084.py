@@ -22,10 +22,6 @@ MIGRATION = Path(__file__).resolve().parents[3] / "db/migrations/084_project_que
 # ---------------------------------------------------------------------------
 
 
-def test_migration_084_file_exists() -> None:
-    assert MIGRATION.is_file(), f"Missing migration file: {MIGRATION}"
-
-
 def test_migration_084_is_idempotent() -> None:
     """Table + indexes must use IF NOT EXISTS so a re-apply is harmless."""
     sql = MIGRATION.read_text(encoding="utf-8")
@@ -62,13 +58,7 @@ def test_migration_084_no_outer_transaction() -> None:
 # Live-PG: opt-in via JARVIS_RUN_LIVE_PG=1 (Docker-backed fixture).
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_INIT_SQL = _REPO_ROOT / "db" / "init.sql"
-
-
-async def _apply_fresh_init(pool: asyncpg.Pool) -> None:
-    async with pool.acquire() as conn:
-        await conn.execute(_INIT_SQL.read_text(encoding="utf-8"))
+from tests.migration_helpers import apply_fresh_init as _apply_fresh_init
 
 
 @pytest.mark.live_pg

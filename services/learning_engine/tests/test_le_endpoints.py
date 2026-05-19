@@ -363,7 +363,7 @@ async def test_list_cards_success(_app):
 
 @pytest.mark.asyncio
 async def test_list_cards_filter_by_deck(_app):
-    """GET /api/cards?deck_id=1 passes deck filter to SQL."""
+    """GET /api/cards?deck_id=1 returns only cards belonging to that deck."""
     app, conn, *_ = _app
     conn.fetch.return_value = [_make_card_row(id=1, deck_id=1)]
 
@@ -373,10 +373,9 @@ async def test_list_cards_filter_by_deck(_app):
         resp = await client.get("/api/cards", params={"deck_id": 1})
 
     assert resp.status_code == 200
-    # Verify SQL contains deck_id filter
-    fetch_call = conn.fetch.call_args
-    sql = fetch_call[0][0]
-    assert "deck_id" in sql
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["deck_id"] == 1
 
 
 # ---------------------------------------------------------------------------

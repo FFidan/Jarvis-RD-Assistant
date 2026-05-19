@@ -10,37 +10,31 @@ import pytest
 from paper_ingestion.routers.settings import _validate_cron
 
 
-def test_pulse_cron_rejects_sub_hourly_schedule():
-    """H17: _validate_cron must raise ValueError for cron that fires every 30 min."""
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "*/30 * * * *",  # every 30 minutes
+        "* * * * *",  # every minute
+        "*/15 * * * *",  # every 15 minutes
+    ],
+)
+def test_pulse_cron_rejects_sub_hourly_schedule(expr: str):
+    """H17: _validate_cron rejects cron expressions that fire more than once per hour (D5-10)."""
     with pytest.raises(ValueError, match="no more than once per hour"):
-        _validate_cron("*/30 * * * *")  # every 30 minutes — too frequent
+        _validate_cron(expr)
 
 
-def test_pulse_cron_rejects_every_minute():
-    """H17: _validate_cron must reject * * * * * (fires every minute)."""
-    with pytest.raises(ValueError, match="no more than once per hour"):
-        _validate_cron("* * * * *")
-
-
-def test_pulse_cron_rejects_every_15_minutes():
-    """H17: _validate_cron must reject */15 cron schedule."""
-    with pytest.raises(ValueError, match="no more than once per hour"):
-        _validate_cron("*/15 * * * *")
-
-
-def test_pulse_cron_accepts_hourly():
-    """H17 positive path: exactly-hourly cron must be accepted."""
-    _validate_cron("0 * * * *")  # every hour on the hour — must not raise
-
-
-def test_pulse_cron_accepts_daily():
-    """H17 positive path: daily cron must be accepted."""
-    _validate_cron("0 4 * * *")  # daily at 4am — must not raise
-
-
-def test_pulse_cron_accepts_every_two_hours():
-    """H17 positive path: every 2 hours must be accepted."""
-    _validate_cron("0 */2 * * *")  # every 2 hours — must not raise
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "0 * * * *",  # every hour on the hour
+        "0 4 * * *",  # daily at 4am
+        "0 */2 * * *",  # every 2 hours
+    ],
+)
+def test_pulse_cron_accepts_valid_schedule(expr: str):
+    """H17 positive path: hourly-or-longer cron expressions must be accepted (D5-11)."""
+    _validate_cron(expr)  # must not raise
 
 
 def test_pulse_cron_rejects_invalid_expression():

@@ -127,21 +127,21 @@ async def test_zotero_library_type_group(_app):
 
 
 @pytest.mark.asyncio
-async def test_zotero_poll_enabled_true(_app):
-    """zotero.poll_enabled accepts True."""
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("zotero.poll_enabled", True),
+        ("zotero.poll_enabled", False),
+        ("zotero.auto_push_on_star", True),
+        ("zotero.auto_push_on_star", False),
+    ],
+)
+async def test_zotero_bool_key_accepts_bool(_app, key: str, value: bool):
+    """Boolean zotero keys accept True and False; round-trip value is preserved (D5-07)."""
     app, _conn = _app
-    resp = await _put_config(app, "zotero.poll_enabled", True)
+    resp = await _put_config(app, key, value)
     assert resp.status_code == 200
-    assert resp.json()["value"] is True
-
-
-@pytest.mark.asyncio
-async def test_zotero_poll_enabled_false(_app):
-    """zotero.poll_enabled accepts False."""
-    app, _conn = _app
-    resp = await _put_config(app, "zotero.poll_enabled", False)
-    assert resp.status_code == 200
-    assert resp.json()["value"] is False
+    assert resp.json()["value"] is value
 
 
 @pytest.mark.asyncio
@@ -151,24 +151,6 @@ async def test_zotero_poll_cron_valid(_app):
     resp = await _put_config(app, "zotero.poll_cron", "0 * * * *")
     assert resp.status_code == 200
     assert resp.json()["value"] == "0 * * * *"
-
-
-@pytest.mark.asyncio
-async def test_zotero_auto_push_on_star_true(_app):
-    """zotero.auto_push_on_star accepts True."""
-    app, _conn = _app
-    resp = await _put_config(app, "zotero.auto_push_on_star", True)
-    assert resp.status_code == 200
-    assert resp.json()["value"] is True
-
-
-@pytest.mark.asyncio
-async def test_zotero_auto_push_on_star_false(_app):
-    """zotero.auto_push_on_star accepts False."""
-    app, _conn = _app
-    resp = await _put_config(app, "zotero.auto_push_on_star", False)
-    assert resp.status_code == 200
-    assert resp.json()["value"] is False
 
 
 # ---------------------------------------------------------------------------

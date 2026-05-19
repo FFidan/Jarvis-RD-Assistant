@@ -74,10 +74,9 @@ async def test_migration_046_live_pg(live_pg_dsn: str) -> None:
     pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
     try:
         await _apply_pre_046(pool)
-        await pool.execute(MIGRATION.read_text(encoding="utf-8"))
 
+        # Seed rows in the PRE-046 schema (no saved column yet) BEFORE migration.
         async with pool.acquire() as conn:
-            # Insert a dependency paper row.
             await conn.execute(
                 """
                 INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -89,23 +88,23 @@ async def test_migration_046_live_pg(live_pg_dsn: str) -> None:
                 "SELECT id FROM papers WHERE external_id = $1",
                 "live-pg-046",
             )
-
-            # Insert three test rows using pre-046 status values.
-            # (Migration 046 was already applied directly above via
-            # pool.execute(MIGRATION.read_text()); we backfill manually to
-            # simulate what the migration would do on a live DB that had
-            # legacy rows.)
+            # Pre-migration rows: two with starred=TRUE, one plain reading row.
+            # Migration backfill: UPDATE paper_user_state SET saved = TRUE WHERE starred = TRUE.
             await conn.execute(
                 """
-                INSERT INTO paper_user_state (paper_id, user_id, status, starred, archived, saved)
+                INSERT INTO paper_user_state (paper_id, user_id, status, starred, archived)
                 VALUES
-                    ($1, 1, 'read', TRUE,  FALSE, TRUE),
-                    ($1, 2, 'read', FALSE, TRUE,  TRUE),
-                    ($1, 3, 'reading', FALSE, FALSE, TRUE)
+                    ($1, 1, 'read',    TRUE,  FALSE),
+                    ($1, 2, 'read',    FALSE, TRUE),
+                    ($1, 3, 'reading', FALSE, FALSE)
                 """,
                 paper_id,
             )
 
+        # Apply migration — must add saved column AND backfill starred/archived rows.
+        await pool.execute(MIGRATION.read_text(encoding="utf-8"))
+
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT user_id, status, starred, archived, saved
@@ -116,8 +115,10 @@ async def test_migration_046_live_pg(live_pg_dsn: str) -> None:
                 paper_id,
             )
 
-            # All three rows must have saved=TRUE (backfill rule).
-            assert all(r["saved"] is True for r in rows), "All rows must have saved=TRUE"
+            # All three rows must have saved=TRUE (migration backfill).
+            assert all(r["saved"] is True for r in rows), (
+                "Migration backfill must set saved=TRUE for all pre-existing rows"
+            )
 
             # Row 1: status='read', starred=TRUE — starred row correctly saved.
             assert rows[0]["starred"] is True
@@ -127,7 +128,7 @@ async def test_migration_046_live_pg(live_pg_dsn: str) -> None:
             assert rows[1]["archived"] is True
             assert rows[1]["status"] == "read"
 
-            # Row 3: status='reading', flags remain FALSE, saved=TRUE.
+            # Row 3: status='reading', flags remain FALSE — saved via DEFAULT backfill.
             assert rows[2]["starred"] is False
             assert rows[2]["archived"] is False
             assert rows[2]["status"] == "reading"

@@ -34,10 +34,6 @@ CASCADE_TABLES: tuple[str, ...] = (
 )
 
 
-def test_migration_080_file_exists() -> None:
-    assert MIGRATION.is_file(), f"Missing migration file: {MIGRATION}"
-
-
 def test_migration_080_cascades_all_17_tables() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
     for table in CASCADE_TABLES:

@@ -13,7 +13,6 @@ should be excluded.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import respx
@@ -75,8 +74,7 @@ async def test_undated_paper_both_fields_absent_is_retained():
     )
 
     source = _make_source()
-    with patch("paper_ingestion.sources.semantic_scholar_source.log_event", new_callable=AsyncMock):
-        papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
+    papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
 
     paper_ids = [p.external_id for p in papers]
     assert "s2:undated_both" in paper_ids, (
@@ -98,8 +96,7 @@ async def test_year_only_paper_is_retained():
     )
 
     source = _make_source()
-    with patch("paper_ingestion.sources.semantic_scholar_source.log_event", new_callable=AsyncMock):
-        papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
+    papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
 
     paper_ids = [p.external_id for p in papers]
     assert "s2:year_only" in paper_ids, (
@@ -117,8 +114,7 @@ async def test_old_dated_paper_is_dropped():
     )
 
     source = _make_source()
-    with patch("paper_ingestion.sources.semantic_scholar_source.log_event", new_callable=AsyncMock):
-        papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
+    papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
 
     paper_ids = [p.external_id for p in papers]
     assert "s2:old_precise" not in paper_ids, (
@@ -135,8 +131,7 @@ async def test_recent_dated_paper_is_retained():
     )
 
     source = _make_source()
-    with patch("paper_ingestion.sources.semantic_scholar_source.log_event", new_callable=AsyncMock):
-        papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
+    papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
 
     paper_ids = [p.external_id for p in papers]
     assert "s2:recent_precise" in paper_ids, (
@@ -158,8 +153,7 @@ async def test_mixed_batch_filters_correctly():
     )
 
     source = _make_source()
-    with patch("paper_ingestion.sources.semantic_scholar_source.log_event", new_callable=AsyncMock):
-        papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
+    papers = await source.fetch_new_since(since=_SINCE, topics=[_make_topic("ML")], limit=10)
 
     paper_ids = {p.external_id for p in papers}
     assert "s2:keep_undated" in paper_ids

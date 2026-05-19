@@ -12,6 +12,23 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # ---------------------------------------------------------------------------
+# Reusable skip markers (D5-12) — avoids silent-skip trap of bare pytest.skip()
+# inside test bodies, which counts as "passed" in some reporters.
+# ---------------------------------------------------------------------------
+_requires_bash = pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="bash not available on this host",
+)
+_requires_openssl = pytest.mark.skipif(
+    shutil.which("openssl") is None,
+    reason="openssl not available on this host",
+)
+_requires_docker = pytest.mark.skipif(
+    shutil.which("docker") is None,
+    reason="docker CLI not available on this host",
+)
+
+# ---------------------------------------------------------------------------
 # Canonical set of auto-generated secret files the compose stack requires.
 # Derived from docker-compose.yml top-level ``secrets:`` block.
 # ``telegram_bot_token`` and ``cloudflare_tunnel_token`` are excluded because
@@ -35,11 +52,9 @@ _AUTO_SECRET_FILES = {
 }
 
 
+@_requires_docker
 def test_default_compose_config_renders_without_profile_env():
     """Profile-gated services must not require env vars during default config rendering."""
-    if shutil.which("docker") is None:
-        pytest.skip("docker CLI not installed")
-
     result = subprocess.run(
         ["docker", "compose", "config", "--format", "json"],
         cwd=REPO_ROOT,
@@ -52,11 +67,9 @@ def test_default_compose_config_renders_without_profile_env():
     assert result.returncode == 0, result.stderr
 
 
+@_requires_docker
 def test_versions_env_compose_config_renders_without_letsencrypt_env():
     """Loading image pins must not require LetsEncrypt variables unless the profile runs."""
-    if shutil.which("docker") is None:
-        pytest.skip("docker CLI not installed")
-
     result = subprocess.run(
         ["docker", "compose", "--env-file", "versions.env", "config", "--format", "json"],
         cwd=REPO_ROOT,
@@ -91,6 +104,7 @@ def test_bootstrap_scripts_probe_direct_http_dashboard_url():
     assert "https://localhost:3001/healthz" not in ps_text
 
 
+@_requires_openssl
 def test_init_secrets_generates_all_required_secret_files():
     """H-4 regression: init-secrets.sh must create every auto-generable secret
     file that docker-compose.yml mounts.
@@ -100,9 +114,6 @@ def test_init_secrets_generates_all_required_secret_files():
     exists, is non-empty, and has mode 600.
     """
     import shutil as _shutil
-
-    if shutil.which("openssl") is None:
-        pytest.skip("openssl not available")
 
     init_sh = REPO_ROOT / "scripts" / "init-secrets.sh"
     if not init_sh.exists():
@@ -153,10 +164,9 @@ def test_init_secrets_generates_all_required_secret_files():
         assert not bad_mode, f"Secret files with wrong mode (want 0o600): {bad_mode}"
 
 
+@_requires_bash
 def test_setup_check_is_side_effect_free():
     """--check (doctor mode) must print a PREFLIGHT: line and must NOT create .env."""
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -202,6 +212,8 @@ def _stage_setup_tmpdir(tmp: Path) -> None:
         shutil.copytree(str(scripts_src), str(tmp / "scripts"))
 
 
+@_requires_bash
+@_requires_openssl
 def test_setup_preserves_existing_secrets_on_rerun():
     """INST-1: a re-run with an existing .env must NOT rotate secrets.
 
@@ -209,10 +221,6 @@ def test_setup_preserves_existing_secrets_on_rerun():
     JARVIS_CONFIG_KEY makes every Fernet-encrypted user_config row unreadable.
     The sentinel values written below must survive the .env regeneration.
     """
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
-    if shutil.which("openssl") is None:
-        pytest.skip("openssl required for secret generation in setup.sh")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -249,13 +257,11 @@ def test_setup_preserves_existing_secrets_on_rerun():
         )
 
 
+@_requires_bash
+@_requires_openssl
 def test_setup_generates_missing_secret_but_preserves_present_one():
     """INST-1: a key absent from an existing .env is freshly generated, while
     a present key is preserved verbatim."""
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
-    if shutil.which("openssl") is None:
-        pytest.skip("openssl required for secret generation in setup.sh")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -295,14 +301,12 @@ def test_setup_generates_missing_secret_but_preserves_present_one():
         )
 
 
+@_requires_bash
+@_requires_openssl
 def test_setup_creates_secrets_dir_and_writes_telegram_token():
     """INST-2: setup.sh must `mkdir -p secrets` early so a Telegram token from
     the environment is persisted even on a fresh checkout where secrets/ does
     not yet exist. This test deliberately does NOT pre-create secrets/."""
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
-    if shutil.which("openssl") is None:
-        pytest.skip("openssl required for secret generation in setup.sh")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -340,11 +344,10 @@ def test_setup_creates_secrets_dir_and_writes_telegram_token():
         assert mode == "0o600", f"telegram token file has wrong mode: {mode}"
 
 
+@_requires_bash
 def test_setup_check_subnet_probe_is_non_fatal():
     """RB4-2: the --check host-route collision probe must never make --check
     exit non-zero by itself and must never write files."""
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -372,11 +375,9 @@ def test_setup_check_subnet_probe_is_non_fatal():
         )
 
 
+@_requires_bash
 def test_gen_langfuse_keys_generates_non_empty_mode_600_files():
     """A0-2: gen-langfuse-keys.sh must create non-empty pk-lf-/sk-lf- files with mode 600."""
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
-
     gen_sh = REPO_ROOT / "scripts" / "gen-langfuse-keys.sh"
     if not gen_sh.exists():
         pytest.skip("scripts/gen-langfuse-keys.sh not found")
@@ -427,15 +428,13 @@ def test_gen_langfuse_keys_generates_non_empty_mode_600_files():
         )
 
 
+@_requires_bash
 def test_gen_langfuse_keys_is_idempotent():
     """A0-2: running gen-langfuse-keys.sh twice must not change file content.
 
     The script uses ``[ -s file ] || generate`` semantics, so an existing
     non-empty file is preserved verbatim on the second run.
     """
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
-
     gen_sh = REPO_ROOT / "scripts" / "gen-langfuse-keys.sh"
     if not gen_sh.exists():
         pytest.skip("scripts/gen-langfuse-keys.sh not found")
@@ -513,15 +512,13 @@ def test_init_secrets_guard_uses_posix_ere_not_gnu_bre():
     )
 
 
+@_requires_openssl
 def test_init_secrets_rerun_produces_no_duplicate_env_keys():
     """INST-1 idempotency: running init-secrets.sh twice must NOT produce
     duplicate KEY= lines in .env, and secrets/*.txt files must be stable
     (second run must not change their content).
     """
     import shutil as _shutil
-
-    if shutil.which("openssl") is None:
-        pytest.skip("openssl not available")
 
     init_sh = REPO_ROOT / "scripts" / "init-secrets.sh"
     if not init_sh.exists():
@@ -586,12 +583,11 @@ def test_init_secrets_rerun_produces_no_duplicate_env_keys():
         assert not unstable, f"Secret files changed on second run (not stable): {unstable}"
 
 
+@_requires_bash
 def test_setup_check_nondefault_subnet_emits_coupling_warning():
     """SEC-NET-1: when JARVIS_NET_SUBNET is set to a non-default value, --check
     must emit a non-fatal warning about the gateway and nginx set_real_ip_from
     coupling. The run must still exit 0 or 1 and still print 'PREFLIGHT:'."""
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -628,12 +624,10 @@ def test_setup_check_nondefault_subnet_emits_coupling_warning():
         assert not (tmp / ".env").exists(), "--check must not write a .env file"
 
 
+@_requires_bash
 def test_setup_check_default_subnet_no_coupling_warning():
     """SEC-NET-1: with default/unset JARVIS_NET_SUBNET the gateway/nginx
     coupling warning must NOT appear — only the standard PREFLIGHT output."""
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
-
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         _stage_setup_tmpdir(tmp)
@@ -663,6 +657,8 @@ def test_setup_check_default_subnet_no_coupling_warning():
         assert not (tmp / ".env").exists(), "--check must not write a .env file"
 
 
+@_requires_bash
+@_requires_openssl
 @pytest.mark.parametrize(
     "mode,expected_login",
     [
@@ -679,10 +675,6 @@ def test_setup_mode_written_to_env(mode: str, expected_login: str):
     die() before producing .env — in that case the test is skipped (rather
     than failed) because the behaviour under test has not been reached.
     """
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
-    if shutil.which("openssl") is None:
-        pytest.skip("openssl required for secret generation in setup.sh")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -730,6 +722,7 @@ def test_setup_mode_written_to_env(mode: str, expected_login: str):
 # ---------------------------------------------------------------------------
 
 
+@_requires_bash
 def test_setup_check_hardware_recommendation_no_gpu_is_fail_safe():
     """--check must not crash or block when no GPU is present.
 
@@ -737,8 +730,6 @@ def test_setup_check_hardware_recommendation_no_gpu_is_fail_safe():
     advisory — no GPU path falls through to a static info line and the
     doctor still prints PREFLIGHT: and exits 0 or 1.
     """
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -777,6 +768,7 @@ def test_setup_check_hardware_recommendation_no_gpu_is_fail_safe():
         assert not (tmp / ".env").exists(), "--check must not write a .env file"
 
 
+@_requires_bash
 def test_setup_check_hardware_recommendation_static_pointer_when_python_unavailable():
     """--check prints a static info pointer when python3 is not available in PATH.
 
@@ -784,8 +776,6 @@ def test_setup_check_hardware_recommendation_static_pointer_when_python_unavaila
     python3/hardware_fit not importable → static 'see Settings → System/Models'
     line is printed, no crash, exit 0 or 1, PREFLIGHT: present.
     """
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
 
     # Create a fake nvidia-smi that reports a fixed VRAM value and a fake
     # python3 that always exits non-zero (simulates import failure).

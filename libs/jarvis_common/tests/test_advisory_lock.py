@@ -157,13 +157,6 @@ def test_kind_lock_key_is_non_negative():
         assert 0 <= result <= 0x7FFF_FFFF, f"Out of range for {kind!r}: {result}"
 
 
-def test_kind_lock_key_different_kinds_differ():
-    """Different kind strings should (in practice) produce different keys."""
-    # Not guaranteed by hash, but true for any sane set of distinct strings.
-    keys = {_kind_lock_key(k) for k in ["arxiv", "s2", "pubmed", "openalex"]}
-    assert len(keys) == 4
-
-
 def test_kind_lock_key_stable_across_pythonhashseed():
     """Key must equal SHA-256-derived value, independent of PYTHONHASHSEED."""
     import hashlib

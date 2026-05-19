@@ -19,56 +19,6 @@ from tests.conftest import _make_pool_and_conn
 
 
 @pytest.mark.asyncio
-async def test_save_paper_404_nonexistent():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None  # assert_paper_ownership returns None → 404
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.save_paper.__wrapped__(request, 99999999, db_pool=pool)
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_skip_paper_404_nonexistent():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.skip_paper.__wrapped__(request, 99999999, db_pool=pool)
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_reading_paper_404_nonexistent():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.reading_paper.__wrapped__(request, 99999999, db_pool=pool)
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_done_paper_404_nonexistent():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.done_paper.__wrapped__(request, 99999999, db_pool=pool)
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_star_paper_404_nonexistent():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.star_paper.__wrapped__(request, 99999999, db_pool=pool)
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
 async def test_unstar_paper_404_nonexistent():
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = None

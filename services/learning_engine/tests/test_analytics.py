@@ -7,27 +7,15 @@ get_llm_cost) must only return rows belonging to the calling user.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-from tests.conftest import FakeRecord
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_pool(rows: list) -> tuple[MagicMock, AsyncMock]:
-    """Return (pool, conn) mocks where conn.fetch returns *rows*."""
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=rows)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
 
 
 _TODAY = datetime.now(UTC).date()
@@ -87,7 +75,7 @@ async def test_analytics_user_scope_isolation(handler_name, user_a_rows, user_b_
     handler = getattr(analytics, handler_name).__wrapped__
 
     # --- User A call: DB returns their rows ---
-    pool_a, conn_a = _make_pool(user_a_rows)
+    pool_a, conn_a = _make_pool_and_conn(fetch_return=user_a_rows)
     result_a = await handler(MagicMock(), days=30, db_pool=pool_a, user_id=1)
 
     assert len(result_a) == len(user_a_rows), (
@@ -98,7 +86,7 @@ async def test_analytics_user_scope_isolation(handler_name, user_a_rows, user_b_
     assert conn_a.fetch.call_args[0][1] == 1, f"{handler_name}: first parameter must be user_id=1"
 
     # --- User B call: DB returns empty (simulates isolation at DB level) ---
-    pool_b, _ = _make_pool(user_b_rows)
+    pool_b, _ = _make_pool_and_conn(fetch_return=user_b_rows)
     result_b = await handler(MagicMock(), days=30, db_pool=pool_b, user_id=2)
 
     assert result_b == [], f"{handler_name}: user B should see no rows, got {result_b!r}"
@@ -119,7 +107,7 @@ async def test_analytics_user_id_is_first_sql_param(handler_name):
     from learning_engine.routers import analytics
 
     handler = getattr(analytics, handler_name).__wrapped__
-    pool, conn = _make_pool([])
+    pool, conn = _make_pool_and_conn(fetch_return=[])
 
     await handler(MagicMock(), days=7, db_pool=pool, user_id=42)
 

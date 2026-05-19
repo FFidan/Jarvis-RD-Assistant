@@ -15,11 +15,8 @@ from paper_ingestion.pulse.deck import (
     persist_deck,
 )
 from paper_ingestion.pulse.scoring import ScoredCandidate
-from tests.conftest import (
-    FakeRecord,
-    _make_pool_and_conn,
-    make_pulse_deck_row,
-)
+from tests.conftest import FakeRecord, _make_pool_and_conn
+from tests.pulse_helpers import make_pulse_deck_row
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -154,8 +151,13 @@ async def test_persist_deck_upsert_replaces_old_cards():
 
     await persist_deck(pool, deck_date, cards, stats={})
 
-    # execute should have been called at least once (for DELETE + INSERTs)
-    assert conn.execute.call_count > 0 or conn.fetchval.call_count > 0
+    # The DELETE FROM pulse_cards must have been issued (idempotent replace)
+    delete_calls = [
+        call for call in conn.execute.call_args_list if "DELETE FROM pulse_cards" in call.args[0]
+    ]
+    assert len(delete_calls) >= 1, (
+        "Expected at least one DELETE FROM pulse_cards call to clear old cards before re-insert"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -381,14 +383,22 @@ async def test_load_history_returns_sorted_newest_first():
 
 @pytest.mark.asyncio
 async def test_load_history_uses_days_parameter():
-    """load_history queries only the last `days` days of decks."""
+    """load_history passes `days` as $1 to the SQL query."""
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []
 
     await load_history(pool, days=7)
 
-    # Verify a DB call was made (with some parameters)
     conn.fetch.assert_called_once()
+    call_args = conn.fetch.call_args
+    assert call_args is not None
+    sql: str = call_args.args[0]
+    assert "$1" in sql, f"Expected $1 placeholder in load_history SQL, got: {sql!r}"
+    # days=7 must be bound as the first positional parameter after the SQL string
+    positional_params = list(call_args.args[1:])
+    assert positional_params[0] == 7, (
+        f"Expected days=7 as first SQL param, got: {positional_params}"
+    )
 
 
 # ---------------------------------------------------------------------------
