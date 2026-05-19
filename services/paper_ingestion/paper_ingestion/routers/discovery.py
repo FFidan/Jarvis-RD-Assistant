@@ -170,6 +170,7 @@ async def discover_papers(
         db_pool=db_pool,
         limit=body.limit,
         score_threshold=body.score_threshold,
+        user_id=user_id,
     )
 
     if not results:

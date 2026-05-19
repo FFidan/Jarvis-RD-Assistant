@@ -506,6 +506,7 @@ class EmbeddingSearchMixin:
         limit: int = 10,
         score_threshold: float = 0.5,
         max_points_per_seed: int = 10,
+        user_id: int | None = None,
     ) -> list[dict]:
         """Discover papers similar to seed papers via Qdrant RecommendQuery.
 
@@ -525,6 +526,10 @@ class EmbeddingSearchMixin:
             Minimum similarity score (0.0-1.0).
         max_points_per_seed : int
             Maximum Qdrant point IDs to sample per seed paper.
+        user_id : int | None
+            When provided, restricts Qdrant results to chunks owned by this
+            user (or chunks with no user_id for legacy single-tenant data).
+            Prevents cross-user vector data leakage in multi-tenant deployments.
 
         Returns
         -------
@@ -596,6 +601,16 @@ class EmbeddingSearchMixin:
         # Request extra results so dedup still yields enough papers
         raw_limit = limit * 5
 
+        # Build the query filter: always exclude seed papers (must_not),
+        # and additionally scope to the requesting user's chunks when user_id
+        # is supplied (_user_scope_filter returns None for single-tenant path).
+        seed_exclusion = FieldCondition(key="paper_id", match=MatchAny(any=seed_paper_ids))
+        user_scope = _user_scope_filter(user_id)
+        if user_scope is not None:
+            query_filter = Filter(must=[user_scope], must_not=[seed_exclusion])
+        else:
+            query_filter = Filter(must_not=[seed_exclusion])
+
         response = await self.qdrant.query_points(
             collection_name=COLLECTION_NAME,
             query=RecommendQuery(
@@ -604,9 +619,7 @@ class EmbeddingSearchMixin:
                     strategy=RecommendStrategy.AVERAGE_VECTOR,
                 ),
             ),
-            query_filter=Filter(
-                must_not=[FieldCondition(key="paper_id", match=MatchAny(any=seed_paper_ids))]
-            ),
+            query_filter=query_filter,
             limit=raw_limit,
             score_threshold=score_threshold,
             with_payload=True,

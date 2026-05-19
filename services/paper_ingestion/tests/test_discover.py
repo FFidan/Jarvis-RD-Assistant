@@ -25,8 +25,10 @@ def _stub_qdrant_models(monkeypatch):
         "Distance",
         "FieldCondition",
         "Filter",
+        "IsNullCondition",
         "MatchAny",
         "MatchValue",
+        "PayloadField",
         "PointIdsList",
         "PointStruct",
         "VectorParams",
@@ -350,3 +352,57 @@ async def test_discover_forwards_params():
     assert qp_call.kwargs["limit"] == 35
     assert qp_call.kwargs["collection_name"] == COLLECTION_NAME
     assert qp_call.kwargs["with_payload"] is True
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Security — user_id scoping prevents cross-user vector leak (B-DISCOVER)
+# ---------------------------------------------------------------------------
+
+
+async def test_discover_passes_user_id_to_qdrant_filter():
+    """Security: discover_from_seeds must pass user_id so Qdrant query is scoped.
+
+    Pre-fix: calling with user_id= raises TypeError (param doesn't exist).
+    Post-fix: user_id is accepted and _user_scope_filter is called, producing
+    a Filter whose should-clauses include a FieldCondition on 'user_id'.
+    """
+    embedder = _make_embedder()
+    seed_ids = [1]
+
+    records = [_make_scroll_record("pt-1")]
+    embedder.qdrant.scroll = AsyncMock(return_value=(records, None))
+
+    qp_response = MagicMock()
+    qp_response.points = []
+    embedder.qdrant.query_points = AsyncMock(return_value=qp_response)
+
+    pool = _make_pool_with_fetchrow([])
+
+    # This call must NOT raise TypeError — user_id is an accepted parameter.
+    await embedder.discover_from_seeds(seed_ids, pool, limit=5, user_id=42)
+
+    # query_points must have been called with a query_filter that incorporates
+    # the user scope.  _user_scope_filter(42) produces a Filter with should=[...].
+    # In tests qdrant_client.models.Filter is a MagicMock, so inspect call_args.
+    filter_mock = sys.modules["qdrant_client.models"].Filter
+    # Filter is called at least twice: once for seed scroll, once for the
+    # combined query filter.  The final call (query_filter) must have been
+    # constructed with a 'must' list that includes the user-scope sub-filter.
+    #
+    # _user_scope_filter returns Filter(should=[...]).  The combined filter is:
+    #   Filter(must=[<user_scope_filter>, ...], must_not=[...])
+    # Verify that Filter was called with keyword 'must' containing at least one
+    # element (the user_scope result) — proving the scope was wired in.
+    query_filter_call = embedder.qdrant.query_points.call_args.kwargs["query_filter"]
+    # The query_filter object was produced by a Filter(must=...) call.
+    # Since Filter is a MagicMock, every call returns a new MagicMock instance.
+    # We verify the combined filter was passed (not None).
+    assert query_filter_call is not None
+
+    # Additionally verify Filter was invoked with 'must' kwarg for the combined
+    # filter (seed-exclusion only used must_not before; post-fix uses must too).
+    filter_calls_kwargs = [c.kwargs for c in filter_mock.call_args_list]
+    combined_calls = [kw for kw in filter_calls_kwargs if "must" in kw]
+    assert combined_calls, (
+        "Filter was never called with 'must' kwarg — user scope not wired into query_filter"
+    )
