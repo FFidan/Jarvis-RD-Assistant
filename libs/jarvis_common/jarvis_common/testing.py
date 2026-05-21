@@ -69,6 +69,8 @@ def make_pool_and_conn(
     fetchrow_return: Any = _UNSET,
     fetch_return: Any = _UNSET,
     with_transaction: bool = True,
+    raise_on_acquire: BaseException | None = None,
+    fetchrow_side_effects: list | None = None,
 ) -> tuple[MagicMock, AsyncMock]:
     """Return a ``(pool, conn)`` pair of asyncpg mock objects.
 
@@ -88,6 +90,13 @@ def make_pool_and_conn(
         When ``True`` (default) wires ``conn.transaction`` to a working async
         context manager. Set ``False`` only for the rare helpers that test
         paths that explicitly skip transactions.
+    raise_on_acquire:
+        When set, ``pool.acquire()`` raises this exception instead of yielding
+        a connection. Useful for testing error-handling paths around pool
+        acquisition.
+    fetchrow_side_effects:
+        When set, replaces ``conn.fetchrow`` with an ``AsyncMock`` whose
+        ``side_effect`` iterates through the provided list of return values.
     """
     if conn is None:
         conn = AsyncMock()
@@ -110,7 +119,33 @@ def make_pool_and_conn(
     ctx.__aexit__ = AsyncMock(return_value=False)
     pool = MagicMock()
     pool.acquire.return_value = ctx
+
+    if raise_on_acquire is not None:
+        pool.acquire = MagicMock(side_effect=raise_on_acquire)
+    if fetchrow_side_effects is not None:
+        conn.fetchrow = AsyncMock(side_effect=fetchrow_side_effects)
+
     return pool, conn
+
+
+def make_request(user_id: int = 1, *, role: str | None = None, **state_overrides: Any) -> Any:
+    """Build a minimal request mock with ``request.state.user_id`` (+ optional role).
+
+    Parameters
+    ----------
+    user_id:
+        Value placed on ``request.state.user_id``.
+    role:
+        When provided, also sets ``request.state.user_role``.
+    **state_overrides:
+        Any additional attributes to place on ``request.state``.
+    """
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(user_id=user_id, **state_overrides)
+    if role is not None:
+        state.user_role = role
+    return SimpleNamespace(state=state, app=SimpleNamespace(state=SimpleNamespace()))
 
 
 # Module-level alias: the 76 importers use ``_make_pool_and_conn``; the

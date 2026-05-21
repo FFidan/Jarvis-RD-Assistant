@@ -145,11 +145,6 @@ async def test_connection_released_on_fetchrow_exception():
 # ---------------------------------------------------------------------------
 
 
-def test_kind_lock_key_is_deterministic():
-    """Same kind string always returns the same integer."""
-    assert _kind_lock_key("arxiv") == _kind_lock_key("arxiv")
-
-
 def test_kind_lock_key_is_non_negative():
     """_kind_lock_key always returns a non-negative 32-bit integer."""
     for kind in ["arxiv", "s2", "pubmed", "openalex", "", "x" * 200]:

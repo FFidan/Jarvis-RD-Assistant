@@ -242,139 +242,19 @@ async def teststream_rag_events_uses_shared_litellm_config_base_url(monkeypatch)
     )
 
 
-# ---------------------------------------------------------------------------
-# Test 4: Non-streaming endpoints still work (backward compat)
-# ---------------------------------------------------------------------------
+# D3-collapse: testprepare_single_paper_rag_returns_messages_and_sources deleted.
+# Superseded by contract/test_rag_contract.py::test_prepare_single_paper_rag_title_from_real_db,
+# which uses a real DB INSERT and asserts the same title-plumbing + source-shape properties
+# with strictly stronger coverage (real fetchrow, not mock_conn.fetchrow.return_value stub).
 
-
-async def testprepare_single_paper_rag_returns_messages_and_sources():
-    """prepare_single_paper_rag returns (messages, sources_list) tuple."""
-    from paper_ingestion.ingestion.embedder import Embedder
-    from paper_ingestion.models import AskRequest
-    from paper_ingestion.rag.streaming import prepare_single_paper_rag
-
-    mock_http = AsyncMock(spec=httpx.AsyncClient)
-    mock_qdrant = AsyncMock()
-    embedder = Embedder(mock_http, mock_qdrant)
-
-    # Stub embed_texts and search
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
-
-    hits = [
-        _make_hit(paper_id=1, chunk_index=0, content="chunk A", page_number=1, score=0.9),
-        _make_hit(paper_id=1, chunk_index=1, content="chunk B", page_number=2, score=0.8),
-    ]
-    mock_qdrant.query_points.return_value = _make_query_response(hits)
-
-    # Stub rerank to pass through
-    embedder.rerank_chunks = AsyncMock(side_effect=lambda q, chunks, top_k: chunks[:top_k])
-
-    # Mock db_pool with proper async context manager for acquire()
-    mock_conn = AsyncMock()
-    mock_conn.fetchrow.return_value = {"id": 1, "title": "Test Paper"}
-
-    mock_cm = AsyncMock()
-    mock_cm.__aenter__.return_value = mock_conn
-    mock_cm.__aexit__.return_value = False
-
-    mock_pool = MagicMock()
-    mock_pool.acquire.return_value = mock_cm
-
-    body = AskRequest(question="What is the main finding?", max_chunks=5)
-
-    messages, sources = await prepare_single_paper_rag(
-        embedder, mock_pool, paper_id=1, body=body, http_client=mock_http
-    )
-
-    # Messages should be a list with a single user message
-    assert isinstance(messages, list)
-    assert len(messages) == 1
-    assert messages[0]["role"] == "user"
-    assert "Test Paper" in messages[0]["content"]
-    assert "What is the main finding" in messages[0]["content"]
-
-    # Sources should contain the chunks
-    assert isinstance(sources, list)
-    assert len(sources) == 2
-    assert sources[0]["content"] == "chunk A"
-    assert sources[0]["page_number"] == 1
-    assert sources[0]["score"] == 0.9
-
-
-# ---------------------------------------------------------------------------
-# Test 5: prepare_cross_paper_rag returns messages and sources
-# ---------------------------------------------------------------------------
-
-
-async def testprepare_cross_paper_rag_returns_messages_and_sources():
-    """prepare_cross_paper_rag returns (messages, sources) with paper attribution."""
-    from paper_ingestion.ingestion.embedder import Embedder
-    from paper_ingestion.models import CrossPaperAskRequest
-    from paper_ingestion.rag.streaming import prepare_cross_paper_rag
-
-    mock_http = AsyncMock(spec=httpx.AsyncClient)
-    mock_qdrant = AsyncMock()
-    embedder = Embedder(mock_http, mock_qdrant)
-
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
-    embedder.search_chunks_global = AsyncMock(
-        return_value=[
-            {
-                "paper_id": 10,
-                "chunk_index": 0,
-                "content": "Finding about transformers.",
-                "page_number": 2,
-                "score": 0.88,
-            },
-            {
-                "paper_id": 20,
-                "chunk_index": 1,
-                "content": "Evidence about attention.",
-                "page_number": 5,
-                "score": 0.75,
-            },
-        ]
-    )
-    embedder.rerank_chunks = AsyncMock(side_effect=lambda q, chunks, top_k: chunks[:top_k])
-
-    # Mock db_pool with proper async context manager for acquire()
-    mock_conn = AsyncMock()
-    mock_conn.fetch.return_value = [
-        {"id": 10, "title": "Transformer Paper", "authors": "A", "url": "http://a"},
-        {"id": 20, "title": "Attention Paper", "authors": "B", "url": "http://b"},
-    ]
-
-    mock_cm = AsyncMock()
-    mock_cm.__aenter__.return_value = mock_conn
-    mock_cm.__aexit__.return_value = False
-
-    mock_pool = MagicMock()
-    mock_pool.acquire.return_value = mock_cm
-
-    body = CrossPaperAskRequest(question="How do transformers work?", decompose=False)
-
-    result = await prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
-
-    # Should return a CrossPaperRagPrep dataclass (since chunks were found)
-    from paper_ingestion.rag.streaming import CrossPaperRagPrep
-
-    assert isinstance(result, CrossPaperRagPrep)
-    messages = result.messages
-    sources = result.sources
-
-    assert isinstance(messages, list)
-    assert len(messages) == 1
-    assert "Transformer Paper" in messages[0]["content"]
-    assert "Attention Paper" in messages[0]["content"]
-
-    assert isinstance(sources, list)
-    assert len(sources) == 2
-    assert sources[0]["paper_id"] == 10
-    assert sources[0]["paper_title"] == "Transformer Paper"
-
+# D3-collapse: testprepare_cross_paper_rag_returns_messages_and_sources deleted.
+# Superseded by contract/test_rag_contract.py::test_prepare_cross_paper_rag_titles_from_real_db,
+# which uses real DB INSERTs and asserts the same messages/sources shape properties
+# with strictly stronger coverage (real conn.fetch, not mock_conn.fetch.return_value stub).
 
 # ---------------------------------------------------------------------------
 # Test 6: prepare_cross_paper_rag returns dict when no chunks found
+# (KEPT: no DB interaction; Qdrant returns empty — idiomatic mock path)
 # ---------------------------------------------------------------------------
 
 

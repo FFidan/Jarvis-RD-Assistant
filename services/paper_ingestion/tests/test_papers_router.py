@@ -68,28 +68,7 @@ def _paper_response(id=1):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_list_papers_with_view_inbox_uses_state_predicate():
-    """``view='inbox'`` should LEFT JOIN paper_user_state and apply the
-    COALESCE-based state predicate from VIEW_PREDICATES['inbox']."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [_paper_row()]
-
-    rows = await papers.list_papers.__wrapped__(
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
-        view="inbox",
-        source_type=None,
-        topic_id=None,
-        q=None,
-        limit=20,
-        offset=0,
-        db_pool=pool,
-    )
-
-    assert len(rows) == 1
-    sql = conn.fetch.await_args.args[0]
-    assert "LEFT JOIN paper_user_state pus" in sql
-    assert "COALESCE(pus.state, 'inbox') = 'inbox'" in sql
+# W4-followup: collapsed to contract/test_papers_contract.py::test_list_papers_view_inbox_returns_real_inbox_papers
 
 
 @pytest.mark.asyncio
@@ -111,27 +90,7 @@ async def test_list_papers_unknown_view_raises_422():
     assert exc_info.value.status_code == 422
 
 
-@pytest.mark.asyncio
-async def test_list_papers_search_query_uses_bm25_clause():
-    """list_papers should add the search_vector clause on BM25 fallback queries."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [_paper_row()]
-
-    rows = await papers.list_papers.__wrapped__(
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
-        view=None,
-        source_type=None,
-        topic_id=None,
-        q="attention",
-        limit=10,
-        offset=0,
-        db_pool=pool,
-        embedder=None,
-    )
-
-    assert len(rows) == 1
-    sql = conn.fetch.await_args.args[0]
-    assert "search_vector @@ plainto_tsquery" in sql
+# W4-followup: collapsed to contract/test_papers_contract.py::test_list_papers_bm25_search_returns_matching_papers
 
 
 # ---------------------------------------------------------------------------
@@ -314,12 +273,8 @@ async def test_get_paper_detail_processing_failed_true_when_last_job_failed():
         )
 
     assert result.processing_failed is True
-    # The status query targets the same procrastinate_jobs source jobs polling
-    # uses (task_name IN paper.process/paper.analyze).
-    status_sql = conn.fetchval.await_args_list[1].args[0]
-    assert "procrastinate_jobs" in status_sql
-    assert "paper.process" in status_sql
-    assert "paper.analyze" in status_sql
+    # W4-followup: SQL-text assertions on procrastinate_jobs task_name substrings stripped (B1-09).
+    # Behavioral outcome (processing_failed=True/False) is what the UI consumes.
 
 
 @pytest.mark.asyncio
@@ -556,149 +511,20 @@ async def test_submit_feedback_rejects_user_initiated_papers():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_list_papers_no_filters_uses_limit_offset():
-    """list_papers with no filters scopes to user_library then LIMIT/OFFSET.
-
-    RB-1: user_id is unconditionally bound ($1) so library scoping fires even
-    when no view/topic/source/q filters are active.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [_paper_row()]
-
-    await papers.list_papers.__wrapped__(
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
-        view=None,
-        source_type=None,
-        topic_id=None,
-        q=None,
-        limit=5,
-        offset=10,
-        db_pool=pool,
-        embedder=None,
-        user_id=1,
-    )
-
-    fetch_call = conn.fetch.await_args
-    sql, *positional = fetch_call.args
-    assert "JOIN user_library ul" in sql
-    assert "ul.user_id = $1" in sql
-    assert "LIMIT $2" in sql
-    assert "OFFSET $3" in sql
-    assert positional == [1, 5, 10]
+# W4-followup: collapsed to contract/test_papers_contract.py::test_list_papers_scoped_to_user_library
+# SQL-text + param-binding assertions (B1-09); behavioral scoping covered by contract test.
 
 
-@pytest.mark.asyncio
-async def test_list_papers_topic_filter_correct_param_indices():
-    """list_papers with topic_id: $1=topic_id, $2=user_id (library join), $3/$4 LIMIT/OFFSET.
-
-    RB-1: user_library join is inserted after topic_id in param order.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [_paper_row()]
-
-    await papers.list_papers.__wrapped__(
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
-        view=None,
-        source_type=None,
-        topic_id=42,
-        q=None,
-        limit=20,
-        offset=0,
-        db_pool=pool,
-        embedder=None,
-        user_id=1,
-    )
-
-    fetch_call = conn.fetch.await_args
-    sql, *positional = fetch_call.args
-    assert "pt.topic_id = $1" in sql
-    assert "JOIN user_library ul" in sql
-    assert "ul.user_id = $2" in sql
-    assert "LIMIT $3" in sql
-    assert "OFFSET $4" in sql
-    assert positional == [42, 1, 20, 0]
+# W4-followup: collapsed to contract/test_papers_contract.py::test_list_papers_topic_filter_scopes_to_topic
+# Pure parameter-binding assertions ($1=topic_id, $2=user_id, etc.) — B1-09 class.
 
 
-@pytest.mark.asyncio
-async def test_list_papers_view_and_source_type_correct_param_indices():
-    """list_papers with view + source_type:
-    $1=user_id (library join), $2=user_id (pus LEFT JOIN), $3=source_type,
-    $4/$5 LIMIT/OFFSET.
-
-    RB-1: user_library join is unconditionally added before the view's
-    paper_user_state join, so user_id is bound twice (once per join).
-    ``view`` itself is a literal predicate from VIEW_PREDICATES — no extra param.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [_paper_row()]
-
-    await papers.list_papers.__wrapped__(
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
-        view="reading",
-        source_type=SourceType.ARXIV,
-        topic_id=None,
-        q=None,
-        limit=10,
-        offset=5,
-        db_pool=pool,
-        embedder=None,
-        user_id=1,
-    )
-
-    fetch_call = conn.fetch.await_args
-    sql, *positional = fetch_call.args
-    assert "IS NOT DISTINCT FROM" not in sql
-    assert "JOIN user_library ul" in sql
-    assert "ul.user_id = $1" in sql
-    assert "LEFT JOIN paper_user_state pus" in sql
-    assert "pus.user_id = $2" in sql
-    assert "p.source_type = $3" in sql
-    assert "LIMIT $4" in sql
-    assert "OFFSET $5" in sql
-    assert "COALESCE(pus.state, 'inbox') = 'reading'" in sql
-    assert positional == [1, 1, "arxiv", 10, 5]
+# W4-followup: collapsed to contract/test_papers_contract.py::test_list_papers_view_source_type_combined_filter
+# Pure SQL-text + parameter-binding assertions ($1/$2 user_id, $3 source_type, etc.) — B1-09 class.
 
 
-@pytest.mark.asyncio
-async def test_list_papers_all_filters_correct_param_indices():
-    """list_papers with topic_id + view + source_type + q binds in order:
-
-    $1=topic_id, $2=user_id (library join), $3=user_id (pus LEFT JOIN),
-    $4=source_type.value, $5=q, $6=LIMIT, $7=OFFSET.
-    ``view`` is a literal predicate from VIEW_PREDICATES — no extra param.
-
-    RB-1: user_library join ($2) is added unconditionally between topic_id
-    and the view's paper_user_state join ($3).
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [_paper_row()]
-
-    await papers.list_papers.__wrapped__(
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
-        view="reading",
-        source_type=SourceType.ARXIV,
-        topic_id=7,
-        q="neural",
-        limit=15,
-        offset=3,
-        db_pool=pool,
-        embedder=None,
-        user_id=1,
-    )
-
-    fetch_call = conn.fetch.await_args
-    sql, *positional = fetch_call.args
-    assert "pt.topic_id = $1" in sql
-    assert "IS NOT DISTINCT FROM" not in sql
-    assert "JOIN user_library ul" in sql
-    assert "ul.user_id = $2" in sql
-    assert "pus.user_id = $3" in sql
-    assert "p.source_type = $4" in sql
-    assert "plainto_tsquery" in sql and "$5" in sql
-    assert "LIMIT $6" in sql
-    assert "OFFSET $7" in sql
-    assert positional == [7, 1, 1, "arxiv", "neural", 15, 3]
+# W4-followup: collapsed to contract/test_papers_contract.py::test_list_papers_all_filters_combined
+# Pure SQL-text + parameter-binding assertions ($1 topic, $2/$3 user_id, $4 source, $5 q, etc.) — B1-09 class.
 
 
 # ---------------------------------------------------------------------------
@@ -801,64 +627,24 @@ async def test_get_paper_detail_403_for_other_user():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_save_paper_sets_state_to_read():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)  # paper-exists check
-    conn.fetchval.return_value = "inbox"  # _assert_paper_in_states precondition (W1.7-B)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.save_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"status": "ok", "paper_id": 42}
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    assert any("INSERT INTO paper_user_state" in sql and "state" in sql for sql in sql_calls), (
-        f"Expected an INSERT writing state; got: {sql_calls}"
-    )
-    # The state value 'to_read' is bound positionally — assert via execute args.
-    assert any(
-        "to_read" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list
-    ), f"Expected 'to_read' in execute args; got: {conn.execute.await_args_list!r}"
+# W4-followup: collapsed to contract/test_papers_contract.py::test_save_paper_state_transition
+# Behavioral subset of test_save_paper_idempotent_recall below; SQL assertions are B1-09 class.
+# Survivor: test_save_paper_idempotent_recall (line ~1381)
 
 
-@pytest.mark.asyncio
-async def test_skip_paper_sets_state_done():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)
-    conn.fetchval.return_value = "inbox"  # _assert_paper_in_states precondition (W1.7-B)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.skip_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"status": "ok", "paper_id": 42}
-    assert any("done" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list)
+# W4-followup: collapsed to contract/test_papers_contract.py::test_skip_paper_state_transition
+# Behavioral subset of test_skip_paper_idempotent_recall below; SQL arg assertion is B1-09 class.
+# Survivor: test_skip_paper_idempotent_recall (line ~1409)
 
 
-@pytest.mark.asyncio
-async def test_reading_paper_sets_state_reading():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)
-    conn.fetchval.return_value = "to_read"  # _assert_paper_in_states precondition (W1.7-B)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.reading_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"status": "ok", "paper_id": 42}
-    assert any(
-        "reading" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list
-    )
+# W4-followup: collapsed to contract/test_papers_contract.py::test_reading_paper_state_transition
+# Behavioral subset of test_reading_paper_idempotent_recall below; SQL arg assertion is B1-09 class.
+# Survivor: test_reading_paper_idempotent_recall (line ~1436)
 
 
-@pytest.mark.asyncio
-async def test_done_paper_sets_state_done():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.done_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"status": "ok", "paper_id": 42}
-    assert any("done" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list)
+# W4-followup: collapsed to contract/test_papers_contract.py::test_done_paper_state_transition
+# Behavioral subset of test_done_paper_idempotent_recall below; SQL arg assertion is B1-09 class.
+# Survivor: test_done_paper_idempotent_recall (line ~1458)
 
 
 @pytest.mark.asyncio
@@ -901,79 +687,19 @@ async def test_star_paper_sets_starred_true_does_not_change_state():
     )
 
 
-@pytest.mark.asyncio
-async def test_unstar_paper_sets_starred_false():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.unstar_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"status": "ok", "paper_id": 42}
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    upsert_sql = next((sql for sql in sql_calls if "INSERT INTO paper_user_state" in sql), None)
-    assert upsert_sql is not None
-    assert "starred" in upsert_sql
-    assert any(False in call.args for call in conn.execute.await_args_list)
+# W4-followup: collapsed to contract/test_papers_contract.py::test_unstar_paper_state_transition
+# Behavioral subset of test_unstar_paper_idempotent_recall below; SQL assertions are B1-09 class.
+# Survivor: test_unstar_paper_idempotent_recall (line ~1521)
 
 
-@pytest.mark.asyncio
-async def test_trash_paper_sets_state_trash_and_records_state_before_trash():
-    """The atomic UPDATE branch sets state_before_trash via a CASE expression
-    (preserves prior value on re-trash, otherwise records current state) while
-    writing state := 'trash' in a single statement — no read-then-write race."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.trash_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"status": "ok", "paper_id": 42}
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    trash_sql = next(
-        (sql for sql in sql_calls if "state_before_trash" in sql and "'trash'" in sql),
-        None,
-    )
-    assert trash_sql is not None, f"Expected atomic trash SQL; got {sql_calls}"
-    # W1.7-B: re-trash guard via CASE expression — preserves prior
-    # state_before_trash when already in 'trash'; otherwise records current state.
-    assert "CASE" in trash_sql
-    assert (
-        "WHEN paper_user_state.state = 'trash' THEN paper_user_state.state_before_trash"
-        in trash_sql
-    )
-    assert "ELSE paper_user_state.state" in trash_sql
-    assert "state = 'trash'" in trash_sql
+# W4-followup: collapsed to contract/test_papers_contract.py::test_trash_paper_state_transition
+# Primary assertions were SQL-text checks on CASE expression internals (B1-09 class).
+# Behavioral outcome (state→trash, state_before_trash preservation) verified by contract test.
 
 
-@pytest.mark.asyncio
-async def test_restore_paper_returns_state_before_trash_to_state():
-    """Restore: ``state := COALESCE(state_before_trash, 'inbox')`` and
-    ``state_before_trash := NULL`` — the COALESCE handles the
-    null-state_before_trash case implicitly (defensive default).
-    Group B: _restore_paper checks asyncpg's status string ("UPDATE N") to
-    detect 0-row updates; conn.execute.return_value must be "UPDATE 1".
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)
-    conn.fetchval.return_value = "trash"  # _assert_paper_in_state: paper is in trash
-    # Group B: _restore_paper parses conn.execute return value as "UPDATE N"
-    conn.execute.return_value = "UPDATE 1"
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.restore_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"status": "ok", "paper_id": 42}
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    restore_sql = next(
-        (
-            sql
-            for sql in sql_calls
-            if "COALESCE(state_before_trash, 'inbox')" in sql and "state_before_trash = NULL" in sql
-        ),
-        None,
-    )
-    assert restore_sql is not None, f"Expected restore SQL with COALESCE; got {sql_calls}"
+# W4-followup: collapsed to contract/test_papers_contract.py::test_restore_paper_state_transition
+# Primary assertion was SQL-text COALESCE substring match (B1-09 class).
+# Survivor: test_restore_paper_non_trash_returns_409 covers the guard; contract covers the transition.
 
 
 @pytest.mark.asyncio
@@ -1077,34 +803,9 @@ async def test_annotate_paper_writes_rating_user_notes_flagged():
         assert col in sql, f"Expected column {col!r} in RETURNING clause"
 
 
-@pytest.mark.asyncio
-async def test_annotate_paper_partial_update_only_rating():
-    """Partial update: rating set, user_notes/flagged omitted → COALESCE
-    preservation via ``COALESCE($N, paper_user_state.<col>)``."""
-    pool, conn = _make_pool_and_conn()
-    now = datetime.now(UTC)
-    conn.fetchrow.return_value = FakeRecord(
-        state="inbox",
-        state_before_trash=None,
-        starred=False,
-        rating=5,
-        user_notes=None,
-        flagged=False,
-        updated_at=now,
-    )
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.annotate_paper.__wrapped__(
-        request,
-        42,
-        body=AnnotationsRequest(rating=5),
-        db_pool=pool,
-    )
-
-    assert result.rating == 5
-    sql = conn.fetchrow.await_args.args[0]
-    assert "COALESCE($4, paper_user_state.user_notes)" in sql
-    assert "COALESCE($5, paper_user_state.flagged)" in sql
+# W4-followup: collapsed to contract/test_papers_contract.py::test_annotations_partial_update_preserves_other_fields
+# Primary assertions were COALESCE($4) / COALESCE($5) parameter-index SQL checks (B1-09 class).
+# Survivor: test_annotations_owner_gets_200_with_correct_shape covers the behavioral outcome.
 
 
 def test_annotate_paper_validates_rating_range():
@@ -1586,30 +1287,10 @@ async def test_annotate_paper_maps_fk_violation_to_404():
     assert "99999" in exc_info.value.detail
 
 
-@pytest.mark.asyncio
-async def test_annotate_paper_unauthorized_user():
-    """PUT /annotations with a caller who does not own the paper returns 403.
-
-    Mirrors the pattern in test_get_paper_detail_403_for_other_user: the paper
-    is owned by user 42, the caller is user 99 → assert_paper_ownership raises 403.
-    """
-    pool, conn = _make_pool_and_conn()
-    # Sprint B: assert_paper_ownership reads discovered_by (with legacy
-    # user_id fallback for fixtures), then checks user_library membership.
-    conn.fetchrow.return_value = FakeRecord(user_id=42)
-    conn.fetchval = AsyncMock(return_value=None)  # not in caller's library
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.annotate_paper.__wrapped__(
-            request,
-            1,
-            body=AnnotationsRequest(rating=3),
-            db_pool=pool,
-            user_id=99,
-        )
-
-    assert exc_info.value.status_code == 403
+# test_annotate_paper_unauthorized_user DELETED (wave4.4.D1):
+# Superseded by libs/jarvis_common/tests/contract/test_idor_contract.py
+# quadruple: ("PUT", "/api/papers/{paper_id_a}/annotations", "paper_id_a", "mutate")
+# which asserts user B → 403/404 and user A → 200/204/409 against a real DB.
 
 
 @pytest.mark.asyncio
@@ -1729,8 +1410,7 @@ async def test_delete_recommendation_feedback_returns_zero_for_nonexistent_topic
 async def test_delete_paper_feedback_returns_204_for_existing_row():
     """DELETE /api/papers/{id}/feedback?source=pulse_thumbs deletes the matching row.
 
-    Returns 204 No Content regardless of row count.  We verify the DELETE SQL
-    is called with the correct paper_id, user_id, and source.
+    Returns 204 No Content regardless of row count.
     """
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 1"
@@ -1745,19 +1425,11 @@ async def test_delete_paper_feedback_returns_204_for_existing_row():
 
     # 204 handler returns None
     assert result is None
-    # Verify the DELETE SQL was called with the right args
     conn.execute.assert_awaited_once()
-    call_args = conn.execute.await_args
-    sql = call_args.args[0]
-    assert "DELETE FROM recommendation_feedback" in sql
-    assert "paper_id = $1" in sql
-    assert "IS NOT DISTINCT FROM" not in sql
-    assert "user_id = $2" in sql
-    assert "source = $3" in sql
-    positional = list(call_args.args[1:])
-    assert positional[0] == 42
-    assert positional[1] == 7  # exact user scope (no NULL-shared rows)
-    assert positional[2] == "pulse_thumbs"
+
+
+# W4-followup: SQL-text/param-index assertions ($1 paper_id, $2 user_id, $3 source) moved to
+# contract/test_papers_contract.py::test_delete_paper_feedback_removes_row_scoped_to_user
 
 
 @pytest.mark.asyncio
@@ -1778,57 +1450,13 @@ async def test_delete_paper_feedback_returns_204_for_nonexistent_row():
     conn.execute.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_delete_paper_feedback_scoped_to_exact_user():
-    """WS-CROSS-USER: DELETE scopes recommendation_feedback by exact user_id.
+# W4-followup: collapsed to contract/test_papers_contract.py::test_delete_paper_feedback_removes_row_scoped_to_user
+# test_delete_paper_feedback_scoped_to_exact_user: primary assertions were
+# "IS NOT DISTINCT FROM" not in sql + "user_id = $2" in sql + positional[1]==13 (B1-09 class).
 
-    The pre-WS-CROSS-USER behaviour matched NULL-owner rows via
-    ``IS NOT DISTINCT FROM`` — a cross-user deletion vector for API-key-only
-    callers. The resolver now always yields a real user and the DELETE binds
-    that user with an exact ``user_id = $2`` predicate.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.execute.return_value = "DELETE 1"
-
-    await papers.delete_paper_feedback.__wrapped__(
-        request=MagicMock(),
-        paper_id=7,
-        source="feed_thumbs",
-        db_pool=pool,
-        user_id=13,
-    )
-
-    call_args = conn.execute.await_args
-    sql = call_args.args[0]
-    assert "IS NOT DISTINCT FROM" not in sql
-    assert "user_id = $2" in sql
-    positional = list(call_args.args[1:])
-    assert positional[1] == 13
-
-
-@pytest.mark.asyncio
-async def test_delete_paper_feedback_different_user_id_not_deleted():
-    """DELETE is scoped to the caller's user_id — a different user's row is untouched.
-
-    This test verifies that the SQL parameters carry the caller's user_id.
-    A row owned by user 42 is NOT deleted when the caller is user 99.
-    (The DB enforces scoping; we verify we pass the correct user_id arg.)
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.execute.return_value = "DELETE 0"  # user 99 has no row for paper 42
-
-    await papers.delete_paper_feedback.__wrapped__(
-        request=MagicMock(),
-        paper_id=42,
-        source="pulse_thumbs",
-        db_pool=pool,
-        user_id=99,
-    )
-
-    call_args = conn.execute.await_args
-    positional = list(call_args.args[1:])
-    # The SQL must be parameterised with user_id=99, not 42
-    assert positional[1] == 99
+# W4-followup: collapsed to contract/test_papers_contract.py::test_delete_paper_feedback_removes_row_scoped_to_user
+# test_delete_paper_feedback_different_user_id_not_deleted: primary assertion was
+# positional[1] == 99 (param-binding check, B1-09 class); behavioral scoping proved by contract test.
 
 
 # ---------------------------------------------------------------------------

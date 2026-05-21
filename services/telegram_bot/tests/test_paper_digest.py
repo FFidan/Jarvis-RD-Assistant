@@ -77,6 +77,10 @@ async def test_send_chunked_sends_single_message_when_short():
     _, kwargs = bot.send_message.await_args
     assert kwargs["chat_id"] == 1234
     assert kwargs["parse_mode"] == "HTML"
+    # §D8-02: text payload must include both lines (not just a vacuous send check)
+    text = kwargs["text"]
+    assert "line one" in text, f"Expected 'line one' in sent text; got: {text!r}"
+    assert "line two" in text, f"Expected 'line two' in sent text; got: {text!r}"
 
 
 @pytest.mark.asyncio

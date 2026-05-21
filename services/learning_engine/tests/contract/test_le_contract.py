@@ -1,0 +1,320 @@
+"""Learning Engine domain contract tests — D6 collapse.
+
+Exercises real SQL against the contract DB (session-scoped Postgres +
+per-test asyncpg transaction rollback via ``contract_conn``).
+
+IDOR / ownership claims tested here are the behavioral contracts that
+the mock-pool unit tests can only approximate.  Each test comments on
+which old SQL-text assertion or mock-short-circuit it replaces.
+
+Idiomatic-mock carve-out (KEPT, not contract-tested):
+- app.state.http_client — outbound HTTP to LiteLLM / paper_ingestion
+- app.state.fsrs_manager / app.state.card_generator — algorithmic logic
+- app.state.anki_exporter — file-generation logic
+"""
+
+from __future__ import annotations
+
+import httpx
+import pytest
+import pytest_asyncio
+from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime, timedelta
+
+from jarvis_common.testing import SharedConnPool
+
+pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+
+_TEST_API_KEY = "le-contract-test-key-do-not-use-in-prod"
+
+
+# ---------------------------------------------------------------------------
+# App fixture — wires LE app to the contract connection
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _le_app(contract_conn):
+    """learning_engine app with db_pool wired to the contract connection.
+
+    The limiter is disabled so rate-limit 429s never interfere with ownership /
+    IDOR assertions.  The FSRSManager, AnkiExporter, and http_client are
+    idiomatic mocks (algorithmic / outbound-HTTP boundaries kept as mocks per
+    idiomatic-mock carve-out).
+    """
+    from learning_engine.deps import get_db_pool, get_fsrs_manager, get_anki_exporter
+    from learning_engine.main import app
+
+    shared = SharedConnPool(contract_conn)
+    original_pool = getattr(app.state, "db_pool", None)
+    original_http = getattr(app.state, "http_client", None)
+    original_fsrs = getattr(app.state, "fsrs_manager", None)
+    original_exporter = getattr(app.state, "anki_exporter", None)
+    original_generator = getattr(app.state, "card_generator", None)
+
+    # Idiomatic mocks for non-DB state
+    mock_fsrs = MagicMock()
+    _now = datetime.now(UTC)
+    mock_fsrs.create_new_card.return_value = ({}, _now)
+    mock_fsrs.schedule_review.return_value = ({}, {}, _now + timedelta(days=1))
+
+    app.state.db_pool = shared
+    app.state.http_client = AsyncMock()
+    app.state.fsrs_manager = mock_fsrs
+    app.state.anki_exporter = MagicMock()
+    app.state.card_generator = AsyncMock()
+    app.dependency_overrides[get_db_pool] = lambda: shared
+    app.dependency_overrides[get_fsrs_manager] = lambda: mock_fsrs
+    app.dependency_overrides[get_anki_exporter] = lambda: MagicMock()
+
+    from learning_engine.deps import limiter
+
+    limiter_was_enabled = limiter.enabled
+    limiter.enabled = False
+
+    try:
+        yield app
+    finally:
+        limiter.enabled = limiter_was_enabled
+        if original_pool is None:
+            if hasattr(app.state, "db_pool"):
+                del app.state.db_pool
+        else:
+            app.state.db_pool = original_pool
+        if original_http is None:
+            if hasattr(app.state, "http_client"):
+                del app.state.http_client
+        else:
+            app.state.http_client = original_http
+        if original_fsrs is None:
+            if hasattr(app.state, "fsrs_manager"):
+                del app.state.fsrs_manager
+        else:
+            app.state.fsrs_manager = original_fsrs
+        if original_exporter is None:
+            if hasattr(app.state, "anki_exporter"):
+                del app.state.anki_exporter
+        else:
+            app.state.anki_exporter = original_exporter
+        if original_generator is None:
+            if hasattr(app.state, "card_generator"):
+                del app.state.card_generator
+        else:
+            app.state.card_generator = original_generator
+        app.dependency_overrides.pop(get_db_pool, None)
+        app.dependency_overrides.pop(get_fsrs_manager, None)
+        app.dependency_overrides.pop(get_anki_exporter, None)
+
+
+@pytest.fixture(scope="function")
+def _configure_api_key(monkeypatch):
+    """Configure the JARVIS_API_KEY in the test environment."""
+    from jarvis_common import auth as _auth
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
+    get_secrets_settings.cache_clear()
+    _auth.refresh_api_key_cache()
+    yield
+    get_secrets_settings.cache_clear()
+    _auth.refresh_api_key_cache()
+
+
+def _client(app, cookie: str) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-API-Key": _TEST_API_KEY},
+        cookies={"jarvis_session": cookie},
+    )
+
+
+# ---------------------------------------------------------------------------
+# §D6-01 — Card IDOR: PUT /api/cards/{id} — user B cannot update user A's card
+# ---------------------------------------------------------------------------
+
+
+async def test_update_card_owner_gets_200(contract_two_users, _le_app, _configure_api_key):
+    """User A can update their own card (owner → 200).
+
+    Collapses test_le_endpoints.py::test_update_card_returns_200 from a mock
+    (fetchrow returns fake row, no user_id scoping exercised) to a real DB
+    query that exercises ``WHERE id = $1 AND user_id = $2 FOR UPDATE``.
+    """
+    card_id = contract_two_users.card_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.put(f"/api/cards/{card_id}", json={"front": "Updated question?"})
+
+    assert resp.status_code == 200, (
+        f"Owner expected 200 updating their own card {card_id}; "
+        f"got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["id"] == card_id
+    assert body["front"] == "Updated question?"
+
+
+async def test_update_card_user_b_gets_404(contract_two_users, _le_app, _configure_api_key):
+    """User B cannot update User A's card — must get 404 (IDOR guard).
+
+    Exercises the real ``SELECT * FROM cards WHERE id = $1 AND user_id = $2
+    FOR UPDATE`` ownership check rather than mock fetchrow SQL-text assertions.
+    Stronger than test_cards_scoping.py which only tests the unit-level layer
+    with a mock fetchrow returning None (not a real DB isolation claim).
+    """
+    card_id = contract_two_users.card_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.put(f"/api/cards/{card_id}", json={"front": "Hijacked!"})
+
+    assert resp.status_code != 401, (
+        f"PUT /api/cards/{card_id}: got 401 — session wiring bug; "
+        f"user B must authenticate before the ownership check fires"
+    )
+    assert resp.status_code == 404, (
+        f"IDOR: user B got {resp.status_code} trying to update user A's card {card_id} "
+        f"(expected 404). Body: {resp.text[:300]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §D6-01 — Card IDOR: DELETE /api/cards/{id} — user B cannot delete user A's card
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_card_owner_gets_204(contract_two_users, _le_app, _configure_api_key):
+    """User A can delete their own card (owner → 204).
+
+    The ``DELETE FROM cards WHERE id = $1 AND user_id = $2`` path is exercised
+    against the real seeded row.
+    """
+    card_id = contract_two_users.card_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.delete(f"/api/cards/{card_id}")
+
+    assert resp.status_code == 204, (
+        f"Owner expected 204 deleting their own card {card_id}; "
+        f"got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+async def test_delete_card_user_b_gets_404(contract_two_users, _le_app, _configure_api_key):
+    """User B cannot delete User A's card — must get 404 (IDOR guard).
+
+    Exercises the real ``DELETE FROM cards WHERE id = $1 AND user_id = $2``
+    ownership filter: when no row matches the DELETE returns "DELETE 0", and
+    the handler must raise 404.
+    """
+    card_id = contract_two_users.card_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.delete(f"/api/cards/{card_id}")
+
+    assert resp.status_code != 401, (
+        f"DELETE /api/cards/{card_id}: got 401 — session wiring bug; "
+        f"user B must authenticate before the ownership check fires"
+    )
+    assert resp.status_code == 404, (
+        f"IDOR: user B got {resp.status_code} trying to delete user A's card {card_id} "
+        f"(expected 404). Body: {resp.text[:300]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §D6-01 — Deck scoping: GET /api/decks — user B does not see user A's decks
+# ---------------------------------------------------------------------------
+
+
+async def test_list_decks_user_b_cannot_see_user_a_deck(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """GET /api/decks as user B returns only B's decks, not A's.
+
+    Exercises the real ``WHERE d.user_id = $1`` filter in the SQL:
+    ``SELECT … FROM decks d WHERE d.user_id = $1``.
+    This replaces the isolation pattern in test_decks_router.py which uses
+    two separate mock pools (``pool_a``, ``pool_b``) and never proves real
+    row-level filtering.
+    """
+    deck_id_a = contract_two_users.deck_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/decks")
+
+    assert resp.status_code == 200, (
+        f"GET /api/decks for user B failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    deck_ids = [d["id"] for d in body]
+    assert deck_id_a not in deck_ids, (
+        f"IDOR: user B's deck list contains user A's deck {deck_id_a}. Full list: {deck_ids}"
+    )
+
+
+async def test_list_decks_user_a_sees_own_deck(contract_two_users, _le_app, _configure_api_key):
+    """GET /api/decks as user A includes A's own deck.
+
+    Positive control: confirms the WHERE user_id = $1 filter scopes
+    correctly to the requesting user rather than returning nothing.
+    """
+    deck_id_a = contract_two_users.deck_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/decks")
+
+    assert resp.status_code == 200, (
+        f"GET /api/decks for user A failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    deck_ids = [d["id"] for d in body]
+    assert deck_id_a in deck_ids, f"User A expected to see their own deck {deck_id_a} in {deck_ids}"
+
+
+# ---------------------------------------------------------------------------
+# §D6-01 — Review IDOR: POST /api/review/{card_id} — user B cannot review user A's card
+# ---------------------------------------------------------------------------
+
+
+async def test_review_submit_user_b_gets_404(contract_two_users, _le_app, _configure_api_key):
+    """User B cannot submit a review for User A's card — must get 404 (IDOR guard).
+
+    Exercises the real ``SELECT * FROM cards WHERE id = $1 AND user_id = $2
+    FOR UPDATE`` ownership check in submit_review rather than the mock-fetchrow
+    SQL-substring assertion in test_review_sync.py::test_cross_user_isolation.
+    """
+    card_id = contract_two_users.card_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.post(
+            f"/api/review/{card_id}",
+            json={"rating": 3, "review_duration_ms": 1000},
+        )
+
+    assert resp.status_code != 401, (
+        f"POST /api/review/{card_id}: got 401 — session wiring bug; "
+        f"user B must authenticate before the ownership check fires"
+    )
+    assert resp.status_code == 404, (
+        f"IDOR: user B got {resp.status_code} trying to review user A's card {card_id} "
+        f"(expected 404). Body: {resp.text[:300]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §D6-05 — Cards list pagination: real DB query uses LIMIT/OFFSET
+# ---------------------------------------------------------------------------
+
+
+async def test_list_cards_pagination_response_shape(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """GET /api/cards with limit=1 returns at most 1 card.
+
+    Replaces test_le_endpoints.py::test_list_cards_with_pagination which
+    asserts SQL-text ``"LIMIT" in sql`` against mock call_args (a
+    whitebox implementation check).  Here we assert the observable contract:
+    response contains at most ``limit`` items.
+    """
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/cards", params={"limit": 1})
+
+    assert resp.status_code == 200, (
+        f"GET /api/cards?limit=1 failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert len(body) <= 1, f"Expected at most 1 card with limit=1, got {len(body)}: {body}"

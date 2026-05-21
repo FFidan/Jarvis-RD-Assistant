@@ -129,6 +129,53 @@ jobs:
             exit 1
           fi
 
+  contract-tests:
+    name: Contract layer (DB-backed)
+    runs-on: ubuntu-latest
+    # The contract_pg_dsn fixture provisions ONE postgres:16.8 container per
+    # pytest session and applies db/init.sql + run_migrations() once. Per-test
+    # isolation is via asyncpg transaction rollback (zero per-test container
+    # cost). The fixture owns the container lifecycle — no `services:` block.
+    env:
+      JARVIS_RUN_LIVE_PG: "1"
+      PYTHONPATH: >-
+        services/paper_ingestion:services/learning_engine:services/telegram_bot:libs/jarvis_common
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Contract suite
+        run: >-
+          uv run pytest
+          --override-ini="addopts=--import-mode=importlib"
+          -m contract
+          -v
+
+      - name: Guard — non-zero contract tests collected
+        if: always()
+        run: |
+          # Re-run --collect-only to confirm >0 contract tests were collected.
+          # Exit code 5 (no tests) or zero count would otherwise let the job
+          # silently pass with no assertions.
+          OUTPUT=$(uv run pytest \
+            --override-ini="addopts=--import-mode=importlib" \
+            -m contract --collect-only -q 2>&1 || true)
+          echo "$OUTPUT" | tail -5
+          # Extract collected count from pytest's "N/M tests collected" footer
+          N=$(echo "$OUTPUT" | grep -oE '[0-9]+/[0-9]+ tests collected' | head -1 | cut -d/ -f1)
+          echo "Contract tests collected: ${N:-0}"
+          if [ -z "$N" ] || [ "$N" -eq 0 ]; then
+            echo "ERROR: zero contract tests collected — gate would pass vacuously"
+            exit 1
+          fi
+
   frontend:
     name: Frontend lint + test + build
     runs-on: ubuntu-latest
@@ -157,7 +204,7 @@ jobs:
   gate:
     name: CI gate (required status check)
     runs-on: ubuntu-latest
-    needs: [lint-test, cross-user-isolation, frontend]
+    needs: [lint-test, cross-user-isolation, contract-tests, frontend]
     steps:
       - name: All required jobs passed
         run: echo "lint-test + cross-user-isolation + frontend all green"
