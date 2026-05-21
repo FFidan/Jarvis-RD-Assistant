@@ -25,10 +25,35 @@ from jarvis_common.testing import (  # noqa: F401
     make_pool_and_conn,
 )
 
+# Seed helpers used by the two_users fixture (now canonical in jarvis_common.testing).
+from jarvis_common.testing import (  # noqa: F401
+    A_CARD_FRONT,
+    A_NOTE_TEXT,
+    A_PAPER_TITLE,
+    A_PROJECT_NAME,
+    A_TASK_TITLE,
+    TwoUsers,
+    _seed_resources,
+    _seed_user,
+)
+
 # live_pg_dsn fixture for this service uses the "jarvis-rd" container prefix.
 from jarvis_common.testing import make_live_pg_dsn as _make_live_pg_dsn
 
 live_pg_dsn = _make_live_pg_dsn("jarvis-rd")
+
+# Contract-layer fixtures (Wave 4): session-scoped Postgres + per-test txn rollback
+from jarvis_common.testing import (  # noqa: E402, F401
+    _make_contract_conn_fixture,
+    _make_contract_pool_fixture,
+    _make_contract_two_users_fixture,
+)
+from jarvis_common.testing import make_contract_pg_dsn as _make_contract_pg_dsn  # noqa: E402
+
+contract_pg_dsn = _make_contract_pg_dsn("jarvis-rd-contract")
+_contract_pool = _make_contract_pool_fixture()
+contract_conn = _make_contract_conn_fixture()
+contract_two_users = _make_contract_two_users_fixture()
 
 
 # ---------------------------------------------------------------------------
@@ -166,249 +191,50 @@ from tests.pulse_helpers import (  # noqa: F401
 
 @pytest.fixture()
 async def test_db_pool(live_pg_dsn):
-    """Provide a real asyncpg pool connected to the live PostgreSQL fixture.
+    """Provide a real asyncpg pool against the live PostgreSQL fixture.
 
-    Runs migrations and creates all schema tables before each test,
-    then clears them afterward.
+    Applies db/init.sql (the full single-baseline schema post-Wave-1)
+    + run_migrations() (no-op against the empty db/migrations/ today;
+    future-proofs for 0089+).
     """
+    import asyncio
     from pathlib import Path
 
     import asyncpg
+    from jarvis_common.db_helpers import init_pg_connection
+    from jarvis_common.migrations import run_migrations
 
-    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=5)
-    assert pool is not None
-
-    # Apply initial schema
-    # db/init.sql is at repo root, not under services/
     db_dir = Path(__file__).parent.parent.parent.parent / "db"
-    init_sql = (db_dir / "init.sql").read_text()
+    init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
+    migrations_dir = db_dir / "migrations"
 
-    async with pool.acquire() as conn:
-        # Split init.sql by semicolons and execute statement by statement
-        # This prevents transaction abort if one statement fails
-        if init_sql.strip():
-            statements = [s.strip() for s in init_sql.split(";") if s.strip()]
-            for stmt in statements:
-                try:
-                    await conn.execute(stmt)
-                except Exception:
-                    # Some statements may fail if objects already exist
-                    pass
-
-        # Apply migrations to set up schema
-        migrations_dir = db_dir / "migrations"
-        migration_files = sorted(migrations_dir.glob("*.sql"))
-
-        for mig_file in migration_files:
-            sql = mig_file.read_text()
-            statements = [s.strip() for s in sql.split(";") if s.strip()]
-            for stmt in statements:
-                try:
-                    await conn.execute(stmt)
-                except Exception:
-                    # Migrations may have already been applied; skip on error
-                    pass
-
-    yield pool
-
-    # Clean up: drop all tables (reverse order to respect FKs)
-    tables_to_drop = [
-        "recommendations",
-        "recommendation_feedback",
-        "pulse_ratings",
-        "pulse_cards",
-        "pulse_decks",
-        "pdf_resolutions",
-        "paper_embedding_chunks",
-        "entity_mentions",
-        "entity_types",
-        "entities",
-        "citations",
-        "paper_user_state",
-        "papers",
-        "learning_jobs",
-        "learning_job_batches",
-        "user_config",
-        "projects",
-        "topics",
-        "telegram_conversations",
-    ]
-
-    async with pool.acquire() as conn:
-        for table in tables_to_drop:
-            await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
-
-    await pool.close()
+    pool = None
+    for attempt in range(10):
+        try:
+            pool = await asyncpg.create_pool(
+                live_pg_dsn, min_size=1, max_size=5, init=init_pg_connection
+            )
+            break
+        except (OSError, asyncpg.PostgresError):
+            if attempt == 9:
+                raise
+            await asyncio.sleep(0.5)
+    assert pool is not None
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(init_sql)
+        await run_migrations(pool, migrations_dir=migrations_dir)
+        yield pool
+    finally:
+        await pool.close()
 
 
 # ---------------------------------------------------------------------------
 # 6. Two-user cross-isolation fixture (WS-NEGATIVE-TESTS)
+#
+# TwoUsers, A_* constants, _seed_user, _seed_resources are imported from
+# jarvis_common.testing (D5 — moved in Wave 4).
 # ---------------------------------------------------------------------------
-
-
-class TwoUsers:
-    """Handle exposing two real DB users plus their seeded, owned resources.
-
-    Every ``*_a`` attribute is owned by ``user_a_id``; the negative test acts
-    as user B (``cookie_b``) and asserts it can neither read nor mutate any
-    of A's rows. ``cookie_*`` are ready-to-use ``jarvis_session`` cookie
-    values (the session row's UUID id).
-    """
-
-    def __init__(self, **kw: object) -> None:
-        self.__dict__.update(kw)
-
-    user_a_id: int
-    user_b_id: int
-    cookie_a: str
-    cookie_b: str
-    paper_id_a: int
-    note_id_a: int
-    card_id_a: int
-    deck_id_a: int
-    project_id_a: int
-    task_id_a: int
-    journal_id_a: int
-    topic_id_a: int
-    pulse_deck_id_a: int
-    pulse_card_id_a: int
-    pool: object  # asyncpg.Pool — live schema, used for app wiring + re-checks
-
-
-# Marker strings the test asserts are NEVER visible to user B.
-A_PAPER_TITLE = "ZZZ-ISOLATION-A-PAPER Quantum Entanglement of Owls"
-A_NOTE_TEXT = "ZZZ-ISOLATION-A-NOTE private annotation alpha"
-A_PROJECT_NAME = "ZZZ-ISOLATION-A-PROJECT secret roadmap"
-A_TASK_TITLE = "ZZZ-ISOLATION-A-TASK confidential milestone"
-A_CARD_FRONT = "ZZZ-ISOLATION-A-CARD front side alpha"
-
-
-async def _seed_user(conn, email: str) -> tuple[int, str]:
-    """Insert one active user + one valid session; return (user_id, cookie)."""
-    user_id = await conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
-        email,
-    )
-    session_id = await conn.fetchval(
-        """INSERT INTO sessions (user_id, expires_at)
-           VALUES ($1, NOW() + INTERVAL '1 day')
-           RETURNING id""",
-        user_id,
-    )
-    return int(user_id), str(session_id)
-
-
-async def _seed_resources(conn, user_id: int, tag: str) -> dict:
-    """Seed one owned row per DB-backed table the endpoints read."""
-    # Sprint-B canonical-corpus model (migration 072): papers are global;
-    # ownership = `papers.discovered_by` OR `user_library` membership
-    # (see jarvis_common.db_helpers.assert_paper_ownership). So the paper is
-    # owned by this user via discovered_by, and we also record explicit
-    # library membership for realism.
-    paper_id = await conn.fetchval(
-        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
-           VALUES ($1, 'arxiv', $2, ARRAY['A. Author'], 'https://example.test/a', $3)
-           RETURNING id""",
-        f"iso-ext-{tag}",
-        A_PAPER_TITLE if tag == "a" else f"paper-{tag}",
-        user_id,
-    )
-    await conn.execute(
-        """INSERT INTO user_library (user_id, paper_id, added_via)
-           VALUES ($1, $2, 'manual_save')""",
-        user_id,
-        paper_id,
-    )
-    await conn.execute(
-        """INSERT INTO paper_user_state (paper_id, user_id, state, starred)
-           VALUES ($1, $2, 'to_read', TRUE)""",
-        paper_id,
-        user_id,
-    )
-    note_id = await conn.fetchval(
-        """INSERT INTO paper_notes (paper_id, user_note, user_id)
-           VALUES ($1, $2, $3) RETURNING id""",
-        paper_id,
-        A_NOTE_TEXT if tag == "a" else f"note-{tag}",
-        user_id,
-    )
-    # decks/cards carry a user_id column (migration 070). Ownership is
-    # router-enforced by that column: decks.py:53 `WHERE d.user_id = $1`
-    # and cards.py:119 `SELECT * FROM cards WHERE id = $1 AND user_id = $2`.
-    # Seed the owning user_id so cross-user access is genuinely denied
-    # (NULL would let both users read the rows -> false-green).
-    deck_id = await conn.fetchval(
-        "INSERT INTO decks (name, user_id) VALUES ($1, $2) RETURNING id",
-        f"deck-{tag}",
-        user_id,
-    )
-    card_id = await conn.fetchval(
-        """INSERT INTO cards (deck_id, paper_id, card_type, front, back, user_id)
-           VALUES ($1, $2, 'concept', $3, 'back', $4) RETURNING id""",
-        deck_id,
-        paper_id,
-        A_CARD_FRONT if tag == "a" else f"card-{tag}",
-        user_id,
-    )
-    project_id = await conn.fetchval(
-        """INSERT INTO projects (name, user_id) VALUES ($1, $2) RETURNING id""",
-        A_PROJECT_NAME if tag == "a" else f"project-{tag}",
-        user_id,
-    )
-    task_id = await conn.fetchval(
-        """INSERT INTO tasks (project_id, title, user_id)
-           VALUES ($1, $2, $3) RETURNING id""",
-        project_id,
-        A_TASK_TITLE if tag == "a" else f"task-{tag}",
-        user_id,
-    )
-    journal_id = await conn.fetchval(
-        """INSERT INTO journal_entries (user_id, date, prompts)
-           VALUES ($1, CURRENT_DATE, '{"win": "secret"}'::jsonb)
-           RETURNING id""",
-        user_id,
-    )
-    topic_id = await conn.fetchval(
-        """INSERT INTO topics (name, query_terms) VALUES ($1, ARRAY['q'])
-           RETURNING id""",
-        f"topic-{tag}",
-    )
-    await conn.execute(
-        """INSERT INTO user_topic_subscriptions (user_id, topic_id)
-           VALUES ($1, $2)""",
-        user_id,
-        topic_id,
-    )
-    await conn.execute(
-        """INSERT INTO paper_recommendations (paper_id, score, user_id)
-           VALUES ($1, 0.9, $2)""",
-        paper_id,
-        user_id,
-    )
-    pulse_deck_id = await conn.fetchval(
-        """INSERT INTO pulse_decks (deck_date, card_count, user_id)
-           VALUES (CURRENT_DATE, 1, $1) RETURNING id""",
-        user_id,
-    )
-    pulse_card_id = await conn.fetchval(
-        """INSERT INTO pulse_cards (deck_id, paper_id, rank, score, user_id)
-           VALUES ($1, $2, 1, 0.9, $3) RETURNING id""",
-        pulse_deck_id,
-        paper_id,
-        user_id,
-    )
-    return {
-        "paper_id": paper_id,
-        "note_id": note_id,
-        "card_id": card_id,
-        "deck_id": deck_id,
-        "project_id": project_id,
-        "task_id": task_id,
-        "journal_id": journal_id,
-        "topic_id": topic_id,
-        "pulse_deck_id": pulse_deck_id,
-        "pulse_card_id": pulse_card_id,
-    }
 
 
 @pytest.fixture()

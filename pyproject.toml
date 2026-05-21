@@ -134,6 +134,7 @@ markers = [
     "integration: integration tests that may need explicit opt-in dependencies",
     "slow: slower tests excluded from ordinary host runs",
     "real_auth: opt out of the autouse user-id stub; exercise the real session resolver",
+    "contract: DB-backed contract test (session container + per-test txn rollback); requires JARVIS_RUN_LIVE_PG=1",
 ]
 # Service + library roots on sys.path so each package resolves by its unique
 # name (paper_ingestion, learning_engine, telegram_bot, jarvis_common).

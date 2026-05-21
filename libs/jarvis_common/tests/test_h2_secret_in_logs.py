@@ -326,13 +326,8 @@ class TestValidateProductionConfigLitellmMasterKey:
         with pytest.raises(RuntimeError, match="LITELLM_MASTER_KEY"):
             validate_production_config()
 
-    def test_non_production_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Non-production environments are not subject to the LITELLM gate."""
-        _clear_env(monkeypatch)
-        monkeypatch.setenv("ENVIRONMENT", "development")
-        monkeypatch.setenv("DEV_MODE", "true")
-
-        validate_production_config()
+    # B2-12: test_non_production_unaffected (LITELLM class copy) removed — merged into
+    #   parametrized test_non_production_unaffected_parametrized below.
 
 
 class TestValidateProductionConfigPostgresPassword:
@@ -375,12 +370,8 @@ class TestValidateProductionConfigPostgresPassword:
         with pytest.raises(RuntimeError, match="POSTGRES_PASSWORD"):
             validate_production_config()
 
-    def test_non_production_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _clear_env(monkeypatch)
-        monkeypatch.setenv("ENVIRONMENT", "staging")
-        monkeypatch.setenv("DEV_MODE", "true")
-
-        validate_production_config()
+    # B2-12: test_non_production_unaffected (POSTGRES class copy) removed — merged into
+    #   parametrized test_non_production_unaffected_parametrized below.
 
 
 class TestValidateProductionConfigAppBaseUrl:
@@ -407,9 +398,37 @@ class TestValidateProductionConfigAppBaseUrl:
 
         validate_production_config()
 
-    def test_non_production_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _clear_env(monkeypatch)
-        monkeypatch.setenv("ENVIRONMENT", "development")
-        monkeypatch.setenv("DEV_MODE", "true")
+    # B2-12: test_non_production_unaffected (APP_BASE_URL class copy) removed — merged into
+    #   parametrized test_non_production_unaffected_parametrized below.
 
-        validate_production_config()
+
+# ---------------------------------------------------------------------------
+# B2-12: three test_non_production_unaffected triplicates → one parametrized test
+# (originally one copy per class: LITELLM gate, POSTGRES gate, APP_BASE_URL gate)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "env,dev_mode",
+    [
+        ("development", "true"),  # was TestValidateProductionConfigLitellmMasterKey
+        ("staging", "true"),  # was TestValidateProductionConfigPostgresPassword
+        ("development", "true"),  # was TestValidateProductionConfigAppBaseUrl (same env value)
+    ],
+    ids=["litellm-gate-dev", "postgres-gate-staging", "app-base-url-gate-dev"],
+)
+def test_non_production_unaffected_parametrized(
+    env: str, dev_mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-production environments are not subject to any validate_production_config gate.
+
+    Replaces three identical test_non_production_unaffected methods that were
+    copy-pasted across TestValidateProductionConfigLitellmMasterKey,
+    TestValidateProductionConfigPostgresPassword, and TestValidateProductionConfigAppBaseUrl.
+    All three original env-value pairs are preserved as parametrize cases.
+    """
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENVIRONMENT", env)
+    monkeypatch.setenv("DEV_MODE", dev_mode)
+
+    validate_production_config()

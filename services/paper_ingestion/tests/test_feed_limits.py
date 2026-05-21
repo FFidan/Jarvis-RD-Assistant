@@ -104,76 +104,53 @@ def _setup_conn(mock_pool: MagicMock, n: int = 3):
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Parametrized status-code regression (B1-04)
+# ---------------------------------------------------------------------------
+
+_LIMIT_CASES = [
+    # (limit_param,  n_papers_in_db,  expected_status,  test_id)
+    (None, 3, 200, "default"),
+    (1, 1, 200, "min_allowed"),
+    (100, 5, 200, "max_allowed"),
+    (50, 3, 200, "mid_range"),
+    (101, 0, 422, "over_max"),
+    (0, 0, 422, "zero"),
+    (-1, 0, 422, "negative"),
+]
+
+
+@pytest.mark.parametrize(
+    "limit_param,n_papers,expected_status",
+    [(lp, n, s) for lp, n, s, _ in _LIMIT_CASES],
+    ids=[tid for *_, tid in _LIMIT_CASES],
+)
+def test_feed_limit_status_code(client, limit_param, n_papers, expected_status):
+    """GET /api/papers/feed returns correct HTTP status for each limit value."""
+    test_client, mock_pool = client
+    if expected_status == 200:
+        _setup_conn(mock_pool, n=n_papers)
+    params = {} if limit_param is None else {"limit": limit_param}
+    resp = test_client.get("/api/papers/feed", params=params)
+    assert resp.status_code == expected_status, (
+        f"limit={limit_param!r}: expected {expected_status}, got {resp.status_code}: {resp.text}"
+    )
+    if expected_status != 200:
+        assert resp.status_code != 500
+
+
+# ---------------------------------------------------------------------------
+# Structure test (kept separate — different assertion domain)
 # ---------------------------------------------------------------------------
 
 
-class TestFeedLimitsRegression:
-    """Regression: /api/papers/feed must never return 500 for valid limit values."""
-
-    def test_feed_default_limit_returns_200(self, client):
-        """Default limit (20) → 200."""
-        test_client, mock_pool = client
-        _setup_conn(mock_pool)
-        resp = test_client.get("/api/papers/feed")
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-
-    def test_feed_limit_1_returns_200(self, client):
-        """Minimum allowed limit (1) → 200."""
-        test_client, mock_pool = client
-        _setup_conn(mock_pool, n=1)
-        resp = test_client.get("/api/papers/feed", params={"limit": 1})
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-
-    def test_feed_limit_max_returns_200(self, client):
-        """Maximum allowed limit (100) → 200."""
-        test_client, mock_pool = client
-        _setup_conn(mock_pool, n=5)
-        resp = test_client.get("/api/papers/feed", params={"limit": 100})
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-
-    def test_feed_limit_mid_range_returns_200(self, client):
-        """Mid-range limit (50) → 200."""
-        test_client, mock_pool = client
-        _setup_conn(mock_pool)
-        resp = test_client.get("/api/papers/feed", params={"limit": 50})
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-
-    def test_feed_limit_over_max_returns_422_not_500(self, client):
-        """Over-max limit (101) → 422 from FastAPI Query validation, never 500."""
-        test_client, mock_pool = client
-        resp = test_client.get("/api/papers/feed", params={"limit": 101})
-        assert resp.status_code == 422, (
-            f"Expected 422 for limit=101 (exceeds le=100), got {resp.status_code}: {resp.text}"
-        )
-        assert resp.status_code != 500
-
-    def test_feed_limit_zero_returns_422_not_500(self, client):
-        """Zero limit → 422 from FastAPI Query validation (ge=1), never 500."""
-        test_client, mock_pool = client
-        resp = test_client.get("/api/papers/feed", params={"limit": 0})
-        assert resp.status_code == 422, (
-            f"Expected 422 for limit=0 (below ge=1), got {resp.status_code}: {resp.text}"
-        )
-        assert resp.status_code != 500
-
-    def test_feed_limit_negative_returns_422_not_500(self, client):
-        """Negative limit → 422 from FastAPI Query validation (ge=1), never 500."""
-        test_client, mock_pool = client
-        resp = test_client.get("/api/papers/feed", params={"limit": -1})
-        assert resp.status_code == 422, (
-            f"Expected 422 for limit=-1 (below ge=1), got {resp.status_code}: {resp.text}"
-        )
-        assert resp.status_code != 500
-
-    def test_feed_response_structure_with_limit(self, client):
-        """Feed returns well-formed FeedResponse for limit=5."""
-        test_client, mock_pool = client
-        _setup_conn(mock_pool, n=3)
-        resp = test_client.get("/api/papers/feed", params={"limit": 5})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "papers" in body
-        assert "total" in body
-        assert isinstance(body["papers"], list)
-        assert isinstance(body["total"], int)
+def test_feed_response_structure_with_limit(client):
+    """Feed returns well-formed FeedResponse for limit=5."""
+    test_client, mock_pool = client
+    _setup_conn(mock_pool, n=3)
+    resp = test_client.get("/api/papers/feed", params={"limit": 5})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "papers" in body
+    assert "total" in body
+    assert isinstance(body["papers"], list)
+    assert isinstance(body["total"], int)

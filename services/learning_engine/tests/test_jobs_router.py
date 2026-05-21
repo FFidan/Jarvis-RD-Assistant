@@ -32,8 +32,15 @@ def test_create_job_request_accepts_valid_kind():
 
 
 @pytest.mark.asyncio
-async def test_create_job_rejects_disallowed_kind(monkeypatch):
-    """POST /api/jobs with an unknown kind raises 400."""
+@pytest.mark.parametrize("bad_kind", ["secret.internal", "totally.unknown.kind"])
+async def test_create_job_rejects_disallowed_kind(bad_kind, monkeypatch):
+    """POST /api/jobs with an unknown kind raises 400.
+
+    Parametrized over two distinct unknown-kind strings to confirm the guard is
+    generic (not a hard-coded string match).
+    B2-18: test_create_job_unsupported_kind_returns_400 collapsed into this parametrize;
+    both original kind values are preserved as cases.
+    """
     monkeypatch.delenv("DEV_MODE", raising=False)
 
     mock_request = MagicMock()
@@ -42,13 +49,13 @@ async def test_create_job_rejects_disallowed_kind(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         await jobs_router.create_job.__wrapped__(
             mock_request,
-            body=CreateJobRequest(kind="secret.internal"),
+            body=CreateJobRequest(kind=bad_kind),
             user_id=None,
             db_pool=mock_pool,
         )
 
     assert exc_info.value.status_code == 400
-    assert "secret.internal" in exc_info.value.detail
+    assert bad_kind in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -297,26 +304,6 @@ async def test_cancel_job_str_user_id_row_rejects_wrong_int_caller():
     assert exc_info.value.status_code == 404
 
 
-# ---------------------------------------------------------------------------
-# LE-002 (Sprint 4): unsupported job kind returns 400 (not 422)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_create_job_unsupported_kind_returns_400(monkeypatch):
-    """POST /api/jobs with an unsupported kind must return 400, not 422 (LE-002)."""
-    monkeypatch.delenv("DEV_MODE", raising=False)
-
-    mock_request = MagicMock()
-    mock_pool = MagicMock()
-
-    with pytest.raises(HTTPException) as exc_info:
-        await jobs_router.create_job.__wrapped__(
-            mock_request,
-            body=CreateJobRequest(kind="totally.unknown.kind"),
-            user_id=None,
-            db_pool=mock_pool,
-        )
-
-    assert exc_info.value.status_code == 400
-    assert "totally.unknown.kind" in exc_info.value.detail
+# B2-18: test_create_job_unsupported_kind_returns_400 removed — collapsed into
+#   test_create_job_rejects_disallowed_kind parametrized above; "totally.unknown.kind"
+#   is preserved as the second parametrize case.

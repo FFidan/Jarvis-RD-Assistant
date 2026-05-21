@@ -47,13 +47,9 @@ def _make_ctx(job_id="test-job-001"):
 
 
 def test_get_smart_model_returns_alias():
-    """get_smart_model always returns the 'smart' LiteLLM alias."""
+    """get_smart_model always returns the 'smart' LiteLLM alias (conn param removed)."""
     assert get_smart_model() == "smart"
-
-
-def test_get_smart_model_no_conn_param():
-    """get_smart_model requires no arguments (conn was removed)."""
-    assert get_smart_model() == "smart"
+    # B2-05: test_get_smart_model_no_conn_param removed — identical assertion, same call site.
 
 
 # ---------------------------------------------------------------------------
@@ -359,28 +355,9 @@ async def test_generate_cards_core_deck_not_found_raises_job_error():
     assert "404" not in str(exc)
 
 
-@pytest.mark.asyncio
-async def test_generate_cards_core_deck_not_found_no_404_prefix():
-    """str(JobError) is exactly 'Deck not found' — no '404:' prefix."""
-    pool, conn = _make_pool_and_conn()
-    http_client = AsyncMock()
-    conn.fetchval.return_value = None  # deck missing
-
-    card_generator = AsyncMock()
-    fsrs_manager = MagicMock()
-
-    with pytest.raises(JobError) as exc_info:
-        await generation.generate_cards_core(
-            pool=pool,
-            http_client=http_client,
-            paper_id=1,
-            deck_id=999999,
-            max_cards=5,
-            fsrs_manager=fsrs_manager,
-            card_generator=card_generator,
-        )
-
-    assert str(exc_info.value) == "Deck not found"
+# B2-04: test_generate_cards_core_deck_not_found_no_404_prefix removed —
+#   identical behaviour asserted by test_generate_cards_core_deck_not_found_raises_job_error
+#   above (which already checks both str(exc)=="Deck not found" and "404" not in str(exc)).
 
 
 @pytest.mark.asyncio

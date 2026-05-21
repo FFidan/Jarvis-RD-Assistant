@@ -208,6 +208,381 @@ def make_live_pg_dsn(container_prefix: str):  # -> pytest fixture
 
 
 # ---------------------------------------------------------------------------
+# Contract-layer fixture factories (Wave 4)
+#
+# Idiomatic-mock carve-out: the following external boundaries MUST keep
+# AsyncMock / @patch and must NOT be collapsed into contract_conn:
+#   - Ollama embed (httpx call in embed_texts)
+#   - Qdrant query (qdrant_client)
+#   - Telegram Bot API (python-telegram-bot Application)
+#   - OpenAI / Instructor (openai.AsyncOpenAI)
+#   - Langfuse trace/span (langfuse SDK)
+#   - task_registry._TASK_MAP (module-level mutable dict)
+# These boundaries own their own I/O contract; only asyncpg pool mocks
+# collapse into contract_conn. This carve-out registry is the load-bearing
+# rule for Sub-wave 4.4 test migrations.
+# ---------------------------------------------------------------------------
+
+
+def make_contract_pg_dsn(container_prefix: str):  # -> pytest fixture (session scope)
+    """Return a session-scoped contract_pg_dsn pytest fixture for *container_prefix*.
+
+    Spawns ONE postgres:16.8 container per pytest session, applies the
+    canonical schema (db/init.sql) + run_migrations() once, yields the DSN
+    for the lifetime of the session. The per-test rollback isolation is
+    provided by the function-scoped contract_conn fixture below.
+    """
+
+    @pytest.fixture(scope="session")
+    def contract_pg_dsn() -> str:  # type: ignore[return]
+        if os.environ.get("JARVIS_RUN_LIVE_PG") != "1":
+            pytest.skip(
+                "set JARVIS_RUN_LIVE_PG=1 to run contract-layer tests "
+                "(DB-backed; session-scoped postgres container)"
+            )
+        if shutil.which("docker") is None:
+            pytest.fail("Docker CLI is required for contract-layer tests")
+
+        container = f"{container_prefix}-contract-{uuid.uuid4().hex[:12]}"
+        password = f"jarvis-contract-{uuid.uuid4().hex}"
+        image = os.environ.get("JARVIS_LIVE_PG_IMAGE", "postgres:16.8")
+        _docker_cli(
+            [
+                "run",
+                "--rm",
+                "-d",
+                "--name",
+                container,
+                "-e",
+                "POSTGRES_DB=jarvis",
+                "-e",
+                "POSTGRES_USER=jarvis",
+                "-e",
+                f"POSTGRES_PASSWORD={password}",
+                "-p",
+                "127.0.0.1::5432",
+                image,
+            ]
+        )
+        try:
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                ready = _docker_cli(
+                    ["exec", container, "pg_isready", "-U", "jarvis", "-d", "jarvis"],
+                    check=False,
+                    timeout=5,
+                )
+                if ready.returncode == 0:
+                    break
+                time.sleep(0.5)
+            else:
+                logs = _docker_cli(["logs", container], check=False, timeout=10)
+                pytest.fail(
+                    f"PostgreSQL container did not become ready:\n{logs.stdout}{logs.stderr}"
+                )
+            port_result = _docker_cli(["port", container, "5432/tcp"])
+            host_port = port_result.stdout.strip().rsplit(":", maxsplit=1)[-1]
+            dsn = f"postgresql://jarvis:{password}@127.0.0.1:{host_port}/jarvis"
+            yield dsn
+        finally:
+            _docker_cli(["rm", "-f", container], check=False, timeout=10)
+
+    return contract_pg_dsn
+
+
+def _make_contract_pool_fixture():
+    """Return a session-scoped fixture providing an asyncpg pool against
+    contract_pg_dsn. Applies db/init.sql + run_migrations() once per session."""
+    import pytest_asyncio
+
+    @pytest_asyncio.fixture(scope="session", loop_scope="session")
+    async def _contract_pool(contract_pg_dsn: str):
+        import asyncio
+        from pathlib import Path
+
+        import asyncpg
+
+        from jarvis_common.db_helpers import init_pg_connection  # noqa: PLC0415
+        from jarvis_common.migrations import run_migrations  # noqa: PLC0415
+
+        db_dir = Path(__file__).resolve().parents[3] / "db"
+        init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
+        migrations_dir = db_dir / "migrations"
+
+        pool = None
+        for attempt in range(10):
+            try:
+                pool = await asyncpg.create_pool(
+                    contract_pg_dsn,
+                    min_size=1,
+                    max_size=5,
+                    init=init_pg_connection,
+                )
+                break
+            except (OSError, asyncpg.PostgresError):
+                if attempt == 9:
+                    raise
+                await asyncio.sleep(0.5)
+        assert pool is not None
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(init_sql)
+            await run_migrations(pool, migrations_dir=migrations_dir)
+            yield pool
+        finally:
+            await pool.close()
+
+    return _contract_pool
+
+
+def _make_contract_conn_fixture():
+    """Return a function-scoped fixture wrapping each test in a transaction
+    rolled back at teardown. asyncpg's savepoint semantics let app code's own
+    conn.transaction() nest correctly inside this outer transaction."""
+    import pytest_asyncio
+
+    @pytest_asyncio.fixture(scope="function", loop_scope="session")
+    async def contract_conn(_contract_pool):
+        async with _contract_pool.acquire() as conn:
+            txn = conn.transaction()
+            await txn.start()
+            try:
+                yield conn
+            finally:
+                await txn.rollback()
+
+    return contract_conn
+
+
+# ---------------------------------------------------------------------------
+# SharedConnPool / SharedAcquireCM
+# ---------------------------------------------------------------------------
+
+
+class SharedAcquireCM:
+    """Async CM returned by SharedConnPool.acquire(); always yields the same conn."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> Any:
+        return self._conn
+
+    async def __aexit__(self, *_: Any) -> None:
+        return None
+
+
+class SharedConnPool:
+    """Pool-shaped object that always returns a single shared connection from acquire().
+
+    Lets a service's FastAPI app see the SAME asyncpg connection (and therefore
+    the same outer transaction) as the test's contract_conn fixture, so writes
+    from both ends share one rollback boundary.
+    """
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def acquire(self) -> SharedAcquireCM:  # not async — returns an async-CM
+        return SharedAcquireCM(self._conn)
+
+    async def close(self) -> None:  # idempotent; the real pool's lifecycle is the fixture's
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Seed helpers (moved from paper_ingestion conftest, D5)
+# ---------------------------------------------------------------------------
+
+
+class TwoUsers:
+    """Handle exposing two real DB users plus their seeded, owned resources.
+
+    Every ``*_a`` attribute is owned by ``user_a_id``; the negative test acts
+    as user B (``cookie_b``) and asserts it can neither read nor mutate any
+    of A's rows. ``cookie_*`` are ready-to-use ``jarvis_session`` cookie
+    values (the session row's UUID id).
+    """
+
+    def __init__(self, **kw: object) -> None:
+        self.__dict__.update(kw)
+
+    user_a_id: int
+    user_b_id: int
+    cookie_a: str
+    cookie_b: str
+    paper_id_a: int
+    note_id_a: int
+    card_id_a: int
+    deck_id_a: int
+    project_id_a: int
+    task_id_a: int
+    journal_id_a: int
+    topic_id_a: int
+    pulse_deck_id_a: int
+    pulse_card_id_a: int
+    pool: object  # asyncpg.Pool — live schema, used for app wiring + re-checks
+
+
+# Marker strings the test asserts are NEVER visible to user B.
+A_PAPER_TITLE = "ZZZ-ISOLATION-A-PAPER Quantum Entanglement of Owls"
+A_NOTE_TEXT = "ZZZ-ISOLATION-A-NOTE private annotation alpha"
+A_PROJECT_NAME = "ZZZ-ISOLATION-A-PROJECT secret roadmap"
+A_TASK_TITLE = "ZZZ-ISOLATION-A-TASK confidential milestone"
+A_CARD_FRONT = "ZZZ-ISOLATION-A-CARD front side alpha"
+
+
+async def _seed_user(conn, email: str) -> tuple[int, str]:
+    """Insert one active user + one valid session; return (user_id, cookie)."""
+    user_id = await conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        email,
+    )
+    session_id = await conn.fetchval(
+        """INSERT INTO sessions (user_id, expires_at)
+           VALUES ($1, NOW() + INTERVAL '1 day')
+           RETURNING id""",
+        user_id,
+    )
+    return int(user_id), str(session_id)
+
+
+async def _seed_resources(conn, user_id: int, tag: str) -> dict:
+    """Seed one owned row per DB-backed table the endpoints read."""
+    paper_id = await conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ($1, 'arxiv', $2, ARRAY['A. Author'], 'https://example.test/a', $3)
+           RETURNING id""",
+        f"iso-ext-{tag}",
+        A_PAPER_TITLE if tag == "a" else f"paper-{tag}",
+        user_id,
+    )
+    await conn.execute(
+        """INSERT INTO user_library (user_id, paper_id, added_via)
+           VALUES ($1, $2, 'manual_save')""",
+        user_id,
+        paper_id,
+    )
+    await conn.execute(
+        """INSERT INTO paper_user_state (paper_id, user_id, state, starred)
+           VALUES ($1, $2, 'to_read', TRUE)""",
+        paper_id,
+        user_id,
+    )
+    note_id = await conn.fetchval(
+        """INSERT INTO paper_notes (paper_id, user_note, user_id)
+           VALUES ($1, $2, $3) RETURNING id""",
+        paper_id,
+        A_NOTE_TEXT if tag == "a" else f"note-{tag}",
+        user_id,
+    )
+    deck_id = await conn.fetchval(
+        "INSERT INTO decks (name, user_id) VALUES ($1, $2) RETURNING id",
+        f"deck-{tag}",
+        user_id,
+    )
+    card_id = await conn.fetchval(
+        """INSERT INTO cards (deck_id, paper_id, card_type, front, back, user_id)
+           VALUES ($1, $2, 'concept', $3, 'back', $4) RETURNING id""",
+        deck_id,
+        paper_id,
+        A_CARD_FRONT if tag == "a" else f"card-{tag}",
+        user_id,
+    )
+    project_id = await conn.fetchval(
+        """INSERT INTO projects (name, user_id) VALUES ($1, $2) RETURNING id""",
+        A_PROJECT_NAME if tag == "a" else f"project-{tag}",
+        user_id,
+    )
+    task_id = await conn.fetchval(
+        """INSERT INTO tasks (project_id, title, user_id)
+           VALUES ($1, $2, $3) RETURNING id""",
+        project_id,
+        A_TASK_TITLE if tag == "a" else f"task-{tag}",
+        user_id,
+    )
+    journal_id = await conn.fetchval(
+        """INSERT INTO journal_entries (user_id, date, prompts)
+           VALUES ($1, CURRENT_DATE, '{"win": "secret"}'::jsonb)
+           RETURNING id""",
+        user_id,
+    )
+    topic_id = await conn.fetchval(
+        """INSERT INTO topics (name, query_terms) VALUES ($1, ARRAY['q'])
+           RETURNING id""",
+        f"topic-{tag}",
+    )
+    await conn.execute(
+        """INSERT INTO user_topic_subscriptions (user_id, topic_id)
+           VALUES ($1, $2)""",
+        user_id,
+        topic_id,
+    )
+    await conn.execute(
+        """INSERT INTO paper_recommendations (paper_id, score, user_id)
+           VALUES ($1, 0.9, $2)""",
+        paper_id,
+        user_id,
+    )
+    pulse_deck_id = await conn.fetchval(
+        """INSERT INTO pulse_decks (deck_date, card_count, user_id)
+           VALUES (CURRENT_DATE, 1, $1) RETURNING id""",
+        user_id,
+    )
+    pulse_card_id = await conn.fetchval(
+        """INSERT INTO pulse_cards (deck_id, paper_id, rank, score, user_id)
+           VALUES ($1, $2, 1, 0.9, $3) RETURNING id""",
+        pulse_deck_id,
+        paper_id,
+        user_id,
+    )
+    return {
+        "paper_id": paper_id,
+        "note_id": note_id,
+        "card_id": card_id,
+        "deck_id": deck_id,
+        "project_id": project_id,
+        "task_id": task_id,
+        "journal_id": journal_id,
+        "topic_id": topic_id,
+        "pulse_deck_id": pulse_deck_id,
+        "pulse_card_id": pulse_card_id,
+    }
+
+
+def _make_contract_two_users_fixture():
+    """Return a function-scoped fixture seeding two users + resources under the
+    contract_conn transaction so the seed is contained by per-test rollback."""
+    import pytest_asyncio
+
+    @pytest_asyncio.fixture(scope="function", loop_scope="session")
+    async def contract_two_users(contract_conn) -> TwoUsers:
+        user_a_id, cookie_a = await _seed_user(contract_conn, "iso-user-a@contract.test")
+        user_b_id, cookie_b = await _seed_user(contract_conn, "iso-user-b@contract.test")
+        res_a = await _seed_resources(contract_conn, user_a_id, "a")
+        await _seed_resources(contract_conn, user_b_id, "b")
+        return TwoUsers(
+            user_a_id=user_a_id,
+            user_b_id=user_b_id,
+            cookie_a=cookie_a,
+            cookie_b=cookie_b,
+            paper_id_a=res_a["paper_id"],
+            note_id_a=res_a["note_id"],
+            card_id_a=res_a["card_id"],
+            deck_id_a=res_a["deck_id"],
+            project_id_a=res_a["project_id"],
+            task_id_a=res_a["task_id"],
+            journal_id_a=res_a["journal_id"],
+            topic_id_a=res_a["topic_id"],
+            pulse_deck_id_a=res_a["pulse_deck_id"],
+            pulse_card_id_a=res_a["pulse_card_id"],
+            pool=None,  # contract layer uses contract_conn directly
+        )
+
+    return contract_two_users
+
+
+# ---------------------------------------------------------------------------
 # RoleMiddleware
 # ---------------------------------------------------------------------------
 

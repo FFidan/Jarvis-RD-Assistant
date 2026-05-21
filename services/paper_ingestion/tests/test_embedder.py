@@ -1,6 +1,5 @@
 """Tests for the Embedder text chunking logic."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
@@ -68,77 +67,14 @@ async def test_embed_texts_uses_shared_litellm_config_base_url(monkeypatch):
 # Superseded by test_embedder_behavior.py::test_search_chunks_global_empty_on_qdrant_error (line 529).
 
 
-async def test_search_chunks_global_filters_by_user_id():
-    """user_id kwarg produces a Filter(should=[user_id==N OR is_null])."""
-    from qdrant_client.models import FieldCondition, IsNullCondition, MatchValue
+# B1-06 deleted: test_search_chunks_global_filters_by_user_id
+# Superseded by test_rag_isolation.py::test_search_chunks_global_user_scope_passes_filter_to_qdrant (line 45)
 
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    mock_qdrant.query_points.return_value = SimpleNamespace(points=[])
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2]])
+# B1-06 deleted: test_search_similar_filters_user_and_excludes_paper
+# Superseded by test_rag_isolation.py::test_search_similar_excludes_seed_paper_and_scopes_to_user (line 73)
 
-    await embedder.search_chunks_global("query", limit=10, user_id=42)
-
-    qf = mock_qdrant.query_points.call_args.kwargs["query_filter"]
-    assert qf is not None
-    assert len(qf.should) == 2
-    assert any(
-        isinstance(c, FieldCondition)
-        and c.key == "user_id"
-        and isinstance(c.match, MatchValue)
-        and c.match.value == 42
-        for c in qf.should
-    )
-    assert any(isinstance(c, IsNullCondition) for c in qf.should)
-
-
-async def test_search_similar_filters_user_and_excludes_paper():
-    """search_similar composes must_not[paper_id] AND should[user_id OR null]."""
-    from qdrant_client.models import FieldCondition, IsNullCondition, MatchValue
-
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    mock_qdrant.query_points.return_value = SimpleNamespace(points=[])
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2]])
-
-    await embedder.search_similar("q", limit=5, paper_id_filter=11, user_id=7)
-
-    qf = mock_qdrant.query_points.call_args.kwargs["query_filter"]
-    assert qf is not None
-    assert qf.must_not is not None and len(qf.must_not) == 1
-    paper_clause = qf.must_not[0]
-    assert isinstance(paper_clause, FieldCondition)
-    assert paper_clause.key == "paper_id"
-    assert isinstance(paper_clause.match, MatchValue)
-    assert paper_clause.match.value == 11
-    assert qf.should is not None and len(qf.should) == 2
-    assert any(
-        isinstance(c, FieldCondition)
-        and c.key == "user_id"
-        and isinstance(c.match, MatchValue)
-        and c.match.value == 7
-        for c in qf.should
-    )
-    assert any(isinstance(c, IsNullCondition) for c in qf.should)
-
-
-async def test_hybrid_search_threads_user_id_to_semantic_leg():
-    """hybrid_search forwards user_id to search_chunks_global only."""
-    mock_http = AsyncMock()
-    mock_qdrant = AsyncMock()
-    embedder = Embedder(mock_http, mock_qdrant)
-    embedder.search_chunks_global = AsyncMock(return_value=[])
-
-    db_pool = MagicMock()
-    conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=[])
-    db_pool.acquire.return_value.__aenter__.return_value = conn
-
-    await embedder.hybrid_search("q", db_pool=db_pool, limit=5, user_id=42)
-
-    assert embedder.search_chunks_global.call_args.kwargs["user_id"] == 42
+# B1-06 deleted: test_hybrid_search_threads_user_id_to_semantic_leg
+# Superseded by test_rag_isolation.py::test_hybrid_search_threads_user_id_to_semantic_leg_only (line 95)
 
 
 # D3-07 deleted: test_compute_relevance_uses_max_cosine_similarity

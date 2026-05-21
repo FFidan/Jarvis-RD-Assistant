@@ -1121,101 +1121,18 @@ def test_annotate_paper_validates_rating_range():
 # Hard delete — WS-AH2 NEW-H2 regression triple (spec §13 row 10)
 # ---------------------------------------------------------------------------
 
+# B1-03 deleted: test_hard_delete_409_when_paper_not_in_trash
+# Superseded by test_papers_lifecycle.py::test_hard_delete_requires_trash_state (line 37)
 
-@pytest.mark.asyncio
-async def test_hard_delete_409_when_paper_not_in_trash():
-    """Hard delete must refuse to operate on papers not in state='trash'."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchval = AsyncMock(return_value="reading")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+# B1-03 deleted: test_hard_delete_aborts_qdrant_when_sql_delete_fails
+# Superseded by test_papers_lifecycle.py::test_hard_delete_db_rollback_does_not_call_qdrant (line 389)
 
-    with patch(
-        "paper_ingestion.papers_service.delete_paper_vectors",
-        new_callable=AsyncMock,
-    ) as mock_qdrant:
-        with pytest.raises(HTTPException) as exc_info:
-            await papers.hard_delete_paper.__wrapped__(request, 42, db_pool=pool)
-    assert exc_info.value.status_code == 409
-    assert "trash" in exc_info.value.detail
-    # State precondition fires before Qdrant — mock must never be reached
-    mock_qdrant.assert_not_called()
+# B1-03 deleted: test_hard_delete_logs_qdrant_failure_after_sql_success
+# Superseded by test_papers_lifecycle.py::test_hard_delete_qdrant_failure_logs_orphan (line 413)
 
-
-@pytest.mark.asyncio
-async def test_hard_delete_aborts_qdrant_when_sql_delete_fails():
-    """WS-AH2 NEW-H2: SQL DELETE failure aborts before Qdrant is touched.
-
-    If the inside-txn DELETE raises, the txn rolls back and the outside
-    Qdrant cleanup must never run — otherwise we'd orphan Qdrant vectors
-    while the row remains, the data-loss-prone direction.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetchval = AsyncMock(return_value="trash")  # state precondition passes
-    conn.execute.side_effect = asyncpg.PostgresError("FK violation")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with patch(
-        "paper_ingestion.papers_service.delete_paper_vectors",
-        new_callable=AsyncMock,
-    ) as mock_qdrant:
-        with pytest.raises(asyncpg.PostgresError):
-            await papers.hard_delete_paper.__wrapped__(request, 42, db_pool=pool)
-        # CRITICAL: Qdrant must NOT be called when SQL DELETE failed.
-        mock_qdrant.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_hard_delete_logs_qdrant_failure_after_sql_success(caplog):
-    """WS-AH2 NEW-H2: Qdrant failure after SQL commit is logged but does
-    not propagate — orphan vectors are recoverable, but propagating would
-    surface a 500 to a user whose row was already deleted."""
-    import logging as _logging
-
-    pool, conn = _make_pool_and_conn()
-    conn.fetchval = AsyncMock(return_value="trash")
-    conn.execute.return_value = None  # SQL DELETE succeeds.
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with caplog.at_level(_logging.ERROR, logger="paper_ingestion.routers.papers"):
-        with patch(
-            "paper_ingestion.papers_service.delete_paper_vectors",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("qdrant down"),
-        ) as mock_qdrant:
-            result = await papers.hard_delete_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"deleted": 42}
-    mock_qdrant.assert_called_once_with(42)
-    # The exception is logged via logger.exception with a recognisable message.
-    assert any("Qdrant cleanup failed" in r.message for r in caplog.records), (
-        f"Expected 'Qdrant cleanup failed' in caplog records; got "
-        f"{[r.message for r in caplog.records]!r}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_hard_delete_calls_qdrant_after_sql_succeeds():
-    """WS-AH2 NEW-H2: the happy path — SQL DELETE commits, then Qdrant is
-    called exactly once. The DELETE FROM papers SQL must appear before
-    the Qdrant call returns."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchval = AsyncMock(return_value="trash")
-    conn.execute.return_value = None
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with patch(
-        "paper_ingestion.papers_service.delete_paper_vectors",
-        new_callable=AsyncMock,
-    ) as mock_qdrant:
-        result = await papers.hard_delete_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"deleted": 42}
-    mock_qdrant.assert_called_once_with(42)
-    # Verify SQL DELETE appears in the execute call sequence.
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    assert any("DELETE FROM papers" in sql for sql in sql_calls), (
-        f"Expected DELETE FROM papers; got {sql_calls}"
-    )
+# B1-03 deleted: test_hard_delete_calls_qdrant_after_sql_succeeds
+# Superseded by test_papers_lifecycle.py::test_hard_delete_with_trash_state_succeeds (line 63)
+# and test_papers_lifecycle.py::test_hard_delete_reorders_qdrant_after_db_commit (line 353)
 
 
 # ---------------------------------------------------------------------------
@@ -1484,17 +1401,8 @@ async def test_save_paper_idempotent_recall():
     )
 
 
-@pytest.mark.asyncio
-async def test_save_paper_404_when_paper_missing():
-    """PUT /save/{paper_id} with no matching row raises HTTPException 404."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None  # paper-exists check fails
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.save_paper.__wrapped__(request, 99999, db_pool=pool)
-
-    assert exc_info.value.status_code == 404
+# B1-01 deleted: test_save_paper_404_when_paper_missing
+# Superseded by libs/jarvis_common/tests/test_ownership.py::test_assert_paper_ownership_404_for_missing_paper (line 47)
 
 
 @pytest.mark.asyncio
@@ -1521,17 +1429,8 @@ async def test_skip_paper_idempotent_recall():
     )
 
 
-@pytest.mark.asyncio
-async def test_skip_paper_404():
-    """PUT /skip/{paper_id} with no matching row raises HTTPException 404."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.skip_paper.__wrapped__(request, 99999, db_pool=pool)
-
-    assert exc_info.value.status_code == 404
+# B1-01 deleted: test_skip_paper_404
+# Superseded by libs/jarvis_common/tests/test_ownership.py::test_assert_paper_ownership_404_for_missing_paper (line 47)
 
 
 @pytest.mark.asyncio
@@ -1552,17 +1451,8 @@ async def test_reading_paper_idempotent_recall():
     )
 
 
-@pytest.mark.asyncio
-async def test_reading_paper_404():
-    """PUT /reading/{paper_id} with no matching row raises HTTPException 404."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.reading_paper.__wrapped__(request, 99999, db_pool=pool)
-
-    assert exc_info.value.status_code == 404
+# B1-01 deleted: test_reading_paper_404
+# Superseded by libs/jarvis_common/tests/test_ownership.py::test_assert_paper_ownership_404_for_missing_paper (line 47)
 
 
 @pytest.mark.asyncio
@@ -1580,17 +1470,8 @@ async def test_done_paper_idempotent_recall():
     assert any("done" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list)
 
 
-@pytest.mark.asyncio
-async def test_done_paper_404():
-    """PUT /done/{paper_id} with no matching row raises HTTPException 404."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.done_paper.__wrapped__(request, 99999, db_pool=pool)
-
-    assert exc_info.value.status_code == 404
+# B1-01 deleted: test_done_paper_404
+# Superseded by libs/jarvis_common/tests/test_ownership.py::test_assert_paper_ownership_404_for_missing_paper (line 47)
 
 
 @pytest.mark.asyncio
@@ -1633,18 +1514,8 @@ async def test_star_paper_idempotent_recall():
     assert "state =" not in do_update_clause
 
 
-@pytest.mark.asyncio
-async def test_star_paper_404():
-    """PUT /star/{paper_id} with no matching row raises HTTPException 404."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None
-    conn.fetchval.return_value = 0
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.star_paper.__wrapped__(request, 99999, db_pool=pool)
-
-    assert exc_info.value.status_code == 404
+# B1-01 deleted: test_star_paper_404
+# Superseded by libs/jarvis_common/tests/test_ownership.py::test_assert_paper_ownership_404_for_missing_paper (line 47)
 
 
 @pytest.mark.asyncio
@@ -1665,34 +1536,41 @@ async def test_unstar_paper_idempotent_recall():
     assert any(False in call.args for call in conn.execute.await_args_list)
 
 
-@pytest.mark.asyncio
-async def test_unstar_paper_404():
-    """PUT /unstar/{paper_id} with no matching row raises HTTPException 404."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = None
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+# B1-01 deleted: test_unstar_paper_404
+# Superseded by libs/jarvis_common/tests/test_ownership.py::test_assert_paper_ownership_404_for_missing_paper (line 47)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.unstar_paper.__wrapped__(request, 99999, db_pool=pool)
 
-    assert exc_info.value.status_code == 404
+# B1-01 deleted: test_annotate_paper_404_when_paper_missing
+# Superseded by libs/jarvis_common/tests/test_ownership.py::test_assert_paper_ownership_404_for_missing_paper (line 47)
+# W3-B1d RESTORED: the original deletion was a misclassification — this test
+# covers a DIFFERENT 404 path: FK violation from _upsert_paper_user_state, not
+# the ownership check.  The ownership test above only covers assert_paper_ownership→404.
 
 
 @pytest.mark.asyncio
-async def test_annotate_paper_404_when_paper_missing():
-    """PUT /annotations/{paper_id} raises 404 when paper FK constraint fires.
+async def test_annotate_paper_maps_fk_violation_to_404():
+    """PUT /annotations/{paper_id} maps ForeignKeyViolationError → HTTP 404.
 
-    Ownership is covered elsewhere; here it is a pass-through so the INSERT
-    into paper_user_state raises ForeignKeyViolationError which is mapped
-    to 404.
+    Ownership passes (assert_paper_ownership is mocked to return None), but the
+    subsequent INSERT into paper_user_state raises a ForeignKeyViolationError
+    (papers row missing at the DB level after the ownership check).  The handler
+    must catch it and raise HTTPException(404).
+
+    This test would fail if the ``except asyncpg.ForeignKeyViolationError``
+    clause in annotate_paper (papers.py ~line 818) were removed — the exception
+    would propagate uncaught instead of becoming a 404.
     """
     pool, conn = _make_pool_and_conn()
-    conn.fetchrow.side_effect = asyncpg.ForeignKeyViolationError("missing paper")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     with (
         patch(
-            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
+            "paper_ingestion.papers_service.assert_paper_ownership",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "paper_ingestion.routers.papers._upsert_paper_user_state",
+            AsyncMock(side_effect=asyncpg.ForeignKeyViolationError("missing paper")),
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
@@ -1701,9 +1579,11 @@ async def test_annotate_paper_404_when_paper_missing():
             99999,
             body=AnnotationsRequest(rating=3),
             db_pool=pool,
+            user_id=1,
         )
 
     assert exc_info.value.status_code == 404
+    assert "99999" in exc_info.value.detail
 
 
 @pytest.mark.asyncio

@@ -320,30 +320,7 @@ async def test_summary_streaks_are_independent():
     assert result.cards_review_streak_days == 2
 
 
-# ---------------------------------------------------------------------------
-# Response model field names (regression guard against typos)
-# ---------------------------------------------------------------------------
-
-
-def test_analytics_summary_response_fields():
-    """AnalyticsSummaryResponse must expose all required field names."""
-    from learning_engine.models import AnalyticsSummaryResponse
-
-    r = AnalyticsSummaryResponse(
-        papers_read_total=1,
-        focus_hours_total=2.0,
-        cards_reviewed_total=3,
-        papers_read_prev=0,
-        focus_hours_prev=0.0,
-        cards_reviewed_prev=0,
-        focus_streak_days=4,
-        cards_review_streak_days=5,
-    )
-    assert r.papers_read_total == 1
-    assert r.focus_hours_total == 2.0
-    assert r.cards_reviewed_total == 3
-    assert r.papers_read_prev == 0
-    assert r.focus_hours_prev == 0.0
-    assert r.cards_reviewed_prev == 0
-    assert r.focus_streak_days == 4
-    assert r.cards_review_streak_days == 5
+# B2-13: test_analytics_summary_response_fields deleted — characterization test of a
+#   settled Pydantic model; AnalyticsSummaryResponse construction + field access is
+#   already exercised by test_summary_per_user_isolation, test_summary_period_delta_correctness,
+#   test_summary_streaks_are_independent, and test_summary_empty_daily_log_returns_zeros above.

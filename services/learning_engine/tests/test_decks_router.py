@@ -95,14 +95,6 @@ async def test_list_decks_scopes_to_caller():
     assert params_b == [2]
 
 
-@pytest.mark.asyncio
-async def test_list_decks_scopes_to_integer_user_id():
-    """list_decks passes the authenticated user's integer id as $1."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = []
-    req = SimpleNamespace(state=SimpleNamespace(user_id=3))
-    await decks.list_decks.__wrapped__(req, db_pool=pool, user_id=3)
-
-    sql, *params = conn.fetch.await_args.args
-    assert "user_id = $1" in sql
-    assert params == [3]
+# B2-06: test_list_decks_scopes_to_integer_user_id removed — redundant fixture-value variant
+#   (user_id=3 vs 1/2) asserting the same SQL contract already covered by
+#   test_list_decks_scopes_to_caller above (which exercises two distinct user_ids).
