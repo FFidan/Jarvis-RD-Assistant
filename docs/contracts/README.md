@@ -27,6 +27,7 @@ contract-bound surface MUST update the contract in the same commit.
 | 04 | [Observability](04-observability.md) | Trace boundary policy, span types, privacy, sampling (forward-looking; B.2 not yet integrated) |
 | 05 | [Model Lifecycle](05-model-lifecycle.md) | Curated model catalog, hardware-aware recommendations, pull/delete lifecycle, and active model defaults |
 | 06 | [Hardware-Aware Settings](06-hardware-aware-settings.md) | Per-machine VRAM fit indicators, context-size controls, and model runtime safety UX |
+| 07 | [Testing](07-testing.md) | The four legitimate test shapes (pure unit / contract / boundary-adapter / E2E), the four prohibited anti-patterns, carve-out registry, rot-on-touch policy |
 
 ## How to read a contract
 

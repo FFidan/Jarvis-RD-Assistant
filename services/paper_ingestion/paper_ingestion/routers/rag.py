@@ -18,6 +18,7 @@ from jarvis_common.llm_client import (
     ChatCompletionOptions,
     get_litellm_config,
     request_chat_completion_content,
+    strip_think_blocks,
 )
 from jarvis_common.sse import SSE_DONE, sse_event
 from jarvis_common.verify import QuoteVerifier
@@ -58,6 +59,8 @@ router = APIRouter(
 # Allows bench to exempt itself without application code risk; default preserves
 # the production rate limit (10/minute per user/IP).
 _ASK_RATE_LIMIT = os.getenv("ASK_RATE_LIMIT", "10/minute")
+
+_strip_think_blocks = strip_think_blocks
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +361,8 @@ async def ask_cross_paper(
     except Exception as exc:
         logger.error("Cross-paper RAG LLM call failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc
+
+    answer = _strip_think_blocks(answer)
 
     confidence: str | None = None
     verified_fraction: float | None = None
