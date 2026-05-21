@@ -787,20 +787,8 @@ async def test_annotate_paper_writes_rating_user_notes_flagged():
     assert result.rating == 4
     assert result.user_notes == "test"
     assert result.flagged is True
-    sql = conn.fetchrow.await_args.args[0]
-    assert "INSERT INTO paper_user_state" in sql
-    assert "RETURNING" in sql
-    # RETURNING projects the new shape per spec §9.1.
-    for col in (
-        "state",
-        "state_before_trash",
-        "starred",
-        "rating",
-        "user_notes",
-        "flagged",
-        "updated_at",
-    ):
-        assert col in sql, f"Expected column {col!r} in RETURNING clause"
+    # Response shape completeness covered by contract:
+    # test_papers_contract.py::test_annotations_owner_gets_200_with_correct_shape
 
 
 # W4-followup: collapsed to contract/test_papers_contract.py::test_annotations_partial_update_preserves_other_fields
@@ -850,8 +838,6 @@ async def test_bulk_save_action_sets_state_to_read():
     result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
 
     assert result == {"succeeded": [1, 2], "failed": []}
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    assert any("INSERT INTO paper_user_state" in sql for sql in sql_calls)
     assert any(
         "to_read" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list
     )
@@ -907,10 +893,8 @@ async def test_bulk_restore_action_uses_coalesce_state_before_trash():
     result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
 
     assert result["succeeded"] == [1]
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    assert any("COALESCE(state_before_trash, 'inbox')" in sql for sql in sql_calls), (
-        f"Expected restore SQL pattern; got {sql_calls}"
-    )
+    # SQL COALESCE structure covered by contract:
+    # test_papers_contract.py::test_restore_paper_state_transition
 
 
 @pytest.mark.asyncio
@@ -965,8 +949,10 @@ async def test_bulk_unstar_action_writes_starred_false():
     result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
 
     assert result["succeeded"] == [1]
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    assert any("INSERT INTO paper_user_state" in sql and "starred" in sql for sql in sql_calls)
+    # Verify starred=False was written (not starred=True)
+    assert any(False in call.args for call in conn.execute.await_args_list), (
+        "Expected starred=False in execute args for unstar action"
+    )
 
 
 @pytest.mark.asyncio
@@ -978,12 +964,8 @@ async def test_bulk_trash_action_sets_state_before_trash_atomically():
     result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
 
     assert result == {"succeeded": [1, 2], "failed": []}
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    # W1.7-B: re-trash CASE expression preserves prior state_before_trash
-    # when already in 'trash'; otherwise records current state.
-    assert any(
-        "ELSE paper_user_state.state" in sql and "state = 'trash'" in sql for sql in sql_calls
-    ), f"Expected atomic trash SQL with CASE expression; got {sql_calls}"
+    # CASE expression atomicity covered by contract:
+    # test_papers_contract.py::test_trash_paper_state_transition
 
 
 @pytest.mark.asyncio
@@ -1232,8 +1214,6 @@ async def test_unstar_paper_idempotent_recall():
     assert result1 == {"status": "ok", "paper_id": 1}
     assert result2 == {"status": "ok", "paper_id": 1}
     # Both calls should write starred = FALSE.
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    assert any("INSERT INTO paper_user_state" in sql and "starred" in sql for sql in sql_calls)
     assert any(False in call.args for call in conn.execute.await_args_list)
 
 
@@ -1479,10 +1459,6 @@ async def test_unsave_paper_from_to_read_returns_200():
     result = await papers.unsave_paper.__wrapped__(request, 42, db_pool=pool)
 
     assert result == {"status": "ok", "paper_id": 42}
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    assert any("INSERT INTO paper_user_state" in sql and "state" in sql for sql in sql_calls), (
-        f"Expected an INSERT writing state; got: {sql_calls}"
-    )
     assert any(
         "inbox" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list
     ), f"Expected 'inbox' in execute args; got: {conn.execute.await_args_list!r}"

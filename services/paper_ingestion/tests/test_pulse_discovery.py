@@ -31,6 +31,7 @@ def _make_profile() -> UserProfile:
     )
 
 
+# Keep local: discovery-specific kwargs (doi/arxiv_id metadata composition, source param) not covered by pulse_helpers.make_pulse_paper.
 def _paper(
     external_id: str,
     title: str = "Paper title",

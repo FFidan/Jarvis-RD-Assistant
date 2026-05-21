@@ -6,7 +6,7 @@ TDD: tests written before implementation.
 from datetime import date
 
 import pytest
-from paper_ingestion.models import PaperCreate, SourceType
+from paper_ingestion.models import PaperCreate
 from paper_ingestion.pulse.deck import (
     _persist_deck_inner,
     assemble_deck,
@@ -16,23 +16,7 @@ from paper_ingestion.pulse.deck import (
 )
 from paper_ingestion.pulse.scoring import ScoredCandidate
 from tests.conftest import FakeRecord, _make_pool_and_conn
-from tests.pulse_helpers import make_pulse_deck_row
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_paper(idx: int = 0, title: str | None = None) -> PaperCreate:
-    return PaperCreate(
-        external_id=f"arxiv:{idx:04d}",
-        source_type=SourceType.ARXIV,
-        title=title or f"Paper {idx}",
-        authors=["Author A"],
-        abstract=f"Abstract {idx}",
-        published_date=date.today(),
-        url=f"https://arxiv.org/abs/{idx:04d}",
-    )
+from tests.pulse_helpers import make_pulse_deck_row, make_pulse_paper as _make_paper
 
 
 def _make_scored(paper: PaperCreate, score: float = 0.5) -> ScoredCandidate:
@@ -140,24 +124,8 @@ async def test_persist_deck_returns_insert_count():
     assert insert_count == 1
 
 
-@pytest.mark.asyncio
-async def test_persist_deck_upsert_replaces_old_cards():
-    """Idempotent: if deck_date exists, old cards are deleted before new ones inserted."""
-    pool, conn = _make_pool_and_conn()
-    deck_date = date(2024, 1, 15)
-    conn.fetchval.return_value = 1  # deck_id
-
-    cards = [_make_scored(_make_paper(i)) for i in range(2)]
-
-    await persist_deck(pool, deck_date, cards, stats={})
-
-    # The DELETE FROM pulse_cards must have been issued (idempotent replace)
-    delete_calls = [
-        call for call in conn.execute.call_args_list if "DELETE FROM pulse_cards" in call.args[0]
-    ]
-    assert len(delete_calls) >= 1, (
-        "Expected at least one DELETE FROM pulse_cards call to clear old cards before re-insert"
-    )
+# test_persist_deck_upsert_replaces_old_cards: DELETED (W4-followup; vacuous residual after B1-09 collapse)
+# Behavioral verification lives in test_pulse_contract.py::test_persist_deck_idempotent_replaces_cards (real schema).
 
 
 # ---------------------------------------------------------------------------
@@ -182,19 +150,8 @@ async def test_persist_deck_inner_threads_user_id_in_deck_insert():
     assert args[3] == 42, f"Expected user_id=42 at position 4 (index 3), got {args[3]}"
 
 
-@pytest.mark.asyncio
-async def test_persist_deck_inner_includes_user_id_column_in_sql():
-    """A2.1: The deck INSERT SQL contains 'user_id' in the column list."""
-    pool, conn = _make_pool_and_conn()
-    deck_date = date(2024, 6, 2)
-    conn.fetchval.return_value = 77
-
-    await _persist_deck_inner(conn, deck_date, cards=[], stats={}, user_id=None)
-
-    first_call = conn.fetchval.call_args_list[0]
-    sql = first_call.args[0]
-    assert "INSERT INTO pulse_decks" in sql, f"Deck INSERT SQL must target pulse_decks: {sql!r}"
-    assert "user_id" in sql, f"Deck INSERT SQL does not contain 'user_id' column: {sql!r}"
+# test_persist_deck_inner_includes_user_id_column_in_sql: DELETED (W4-followup; vacuous residual).
+# Stronger param-binding survivor: test_persist_deck_inner_threads_user_id_in_deck_insert (above).
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +192,12 @@ async def test_persist_deck_inner_uses_pulse_candidate_exclude_sql():
 
 @pytest.mark.asyncio
 async def test_persist_deck_inner_threads_user_id_to_card_insert():
-    """pulse_cards rows must be attributable to the deck owner."""
+    """pulse_cards rows must be attributable to the deck owner.
+
+    SQL-substring assertions collapsed (B1-09): "INSERT INTO pulse_cards" and
+    "user_id" in sql removed — param binding assert args[-1] == 42 is the
+    strictly stronger survivor.
+    """
     pool, conn = _make_pool_and_conn()
     deck_date = date(2026, 5, 11)
     conn.fetchval.side_effect = [55, 25, 1]
@@ -249,9 +211,6 @@ async def test_persist_deck_inner_threads_user_id_to_card_insert():
     )
 
     card_call = conn.fetchval.call_args_list[2]
-    sql = card_call.args[0]
-    assert "INSERT INTO pulse_cards" in sql
-    assert "user_id" in sql
     assert card_call.args[-1] == 42
 
 
@@ -383,7 +342,11 @@ async def test_load_history_returns_sorted_newest_first():
 
 @pytest.mark.asyncio
 async def test_load_history_uses_days_parameter():
-    """load_history passes `days` as $1 to the SQL query."""
+    """load_history passes `days` as the first SQL parameter.
+
+    SQL-substring assertion ("$1" in sql) collapsed (B1-09). Survivor: param binding
+    check that days=7 is the first positional parameter after the SQL string.
+    """
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []
 
@@ -392,8 +355,6 @@ async def test_load_history_uses_days_parameter():
     conn.fetch.assert_called_once()
     call_args = conn.fetch.call_args
     assert call_args is not None
-    sql: str = call_args.args[0]
-    assert "$1" in sql, f"Expected $1 placeholder in load_history SQL, got: {sql!r}"
     # days=7 must be bound as the first positional parameter after the SQL string
     positional_params = list(call_args.args[1:])
     assert positional_params[0] == 7, (
@@ -487,29 +448,7 @@ async def test_persist_deck_empty_cards_writes_zero_count_row():
 
 # ---------------------------------------------------------------------------
 # load_today — W1.8-A: trashed cards excluded from deck SQL
+# (SQL-substring assertion COLLAPSED — B1-09)
+# Behavioral contract verification lives in:
+#   test_pulse_contract.py::test_load_today_excludes_trashed_cards
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_load_today_sql_excludes_trash_in_where_clause():
-    """The card fetch SQL in load_today must contain the trash-exclusion predicate.
-
-    W1.8-A Change A2: ``AND COALESCE(pus.state, 'inbox') != 'trash'`` must be
-    present in the WHERE clause so the DB never returns trashed cards in the
-    pulse deck response.
-    """
-    pool, conn = _make_pool_and_conn()
-    deck_row = make_pulse_deck_row(deck_date="2026-05-02", card_count=0)
-    conn.fetchrow.return_value = deck_row
-    conn.fetch.return_value = []
-
-    await load_today(pool)
-
-    assert conn.fetch.call_count == 1, "Expected exactly one conn.fetch call for card rows"
-    card_sql: str = conn.fetch.call_args.args[0]
-    assert "COALESCE(pus.state" in card_sql, (
-        f"Card SQL must contain COALESCE(pus.state ...) predicate.\nSQL: {card_sql!r}"
-    )
-    assert "'trash'" in card_sql, (
-        f"Card SQL must contain the 'trash' exclusion value.\nSQL: {card_sql!r}"
-    )

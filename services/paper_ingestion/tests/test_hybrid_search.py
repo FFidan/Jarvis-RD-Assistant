@@ -8,8 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-# D3-05/09: shared fakes — replaces _make_embedder/_dict_to_record duplicated 3×.
-from tests._embedder_fakes import _dict_to_record, _make_embedder
+from jarvis_common.testing_embedder import _dict_to_record, _make_embedder
 
 # ---------------------------------------------------------------------------
 # Pure RRF formula tests (no I/O)

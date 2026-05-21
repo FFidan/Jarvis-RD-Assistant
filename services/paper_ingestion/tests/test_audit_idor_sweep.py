@@ -172,52 +172,10 @@ def test_system_models_does_not_leak_provider_keys():
 # B.2 — papers/brief: SQL must carry user_id ownership filter
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_papers_brief_idor_user_id_filter_no_search():
-    """GET /api/papers/brief (no search) must scope to the caller's user_library.
-
-    WS-CROSS-USER: the previous unscoped canonical-corpus fallback (served
-    when user_id was None) leaked every user's papers to API-key-only
-    callers and has been removed; the endpoint now hard-401s sessionless
-    callers and always JOINs user_library for an authenticated one.
-    """
-    import httpx
-    from httpx import ASGITransport
-    from jarvis_common import current_user_id_strict_with_owner_override, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = []
-
-    old_limiter = app.state.limiter.enabled
-    app.state.limiter.enabled = False
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    # CC-03: list_papers_brief now resolves identity via
-    # Depends(get_current_user_id) -> Depends(current_user_id_strict_with_owner_override);
-    # override the inner resolver so the caller is user 42 (FastAPI resolves the
-    # override recursively through the wrapper). Same attacker id, same assertions.
-    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 42
-
-    try:
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.get("/api/papers/brief")
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = old_limiter
-
-    assert resp.status_code == 200
-    sql: str = conn.fetch.call_args.args[0]
-    assert "JOIN user_library" in sql, (
-        f"brief SQL must JOIN user_library for IDOR guard; got:\n{sql!r}"
-    )
-    assert "p.user_id" not in sql, f"legacy p.user_id leaked into brief SQL: {sql!r}"
-    args = conn.fetch.call_args.args
-    assert 42 in args, f"user_id=42 must be bound in query params; got: {args}"
+# Collapsed (B1-09): test_papers_brief_idor_user_id_filter_no_search
+# All assertions were SQL-substring + param-binding (JOIN user_library / p.user_id not in sql / 42 in args).
+# Behavioral survivor: test_papers_contract.py::test_papers_brief_user_b_does_not_see_user_a_paper (line 124)
+# — user B cannot enumerate user A's papers via /api/papers/brief (real-DB cross-user isolation).
 
 
 @pytest.mark.asyncio

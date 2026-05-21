@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.models import (
     EntityCreate,
     EntityDetailResponse,
@@ -19,16 +20,6 @@ from paper_ingestion.models import (
     RelationshipCreate,
     RelationshipResponse,
 )
-
-
-def _make_pool(conn: AsyncMock):
-    """Create a mock pool whose acquire() returns the provided connection."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
 
 
 class _FakeVectorParams:
@@ -48,17 +39,26 @@ def _collection_info(dim: int) -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 
 
-def test_entity_create_valid():
-    """EntityCreate accepts valid data."""
-    e = EntityCreate(name="BERT", entity_type="method", description="A language model")
-    assert e.name == "BERT"
-    assert e.entity_type == "method"
-
-
-def test_entity_create_no_description():
-    """EntityCreate works without description."""
-    e = EntityCreate(name="ImageNet", entity_type="dataset")
-    assert e.description is None
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param(
+            {"name": "BERT", "entity_type": "method", "description": "A language model"},
+            {"name": "BERT", "entity_type": "method"},
+            id="valid_with_description",
+        ),
+        pytest.param(
+            {"name": "ImageNet", "entity_type": "dataset"},
+            {"description": None},
+            id="no_description",
+        ),
+    ],
+)
+def test_entity_create(kwargs, expected) -> None:
+    """EntityCreate field values match expected for full and minimal inputs."""
+    e = EntityCreate(**kwargs)
+    for attr, val in expected.items():
+        assert getattr(e, attr) == val
 
 
 def test_entity_response():
@@ -103,11 +103,29 @@ def test_relationship_response():
     assert resp.confidence == 0.9
 
 
-def test_entity_extraction_response():
-    """EntityExtractionResponse validates correctly."""
-    resp = EntityExtractionResponse(entities_added=5, relationships_added=3, entities_merged=2)
-    assert resp.entities_added == 5
-    assert resp.entities_merged == 2
+@pytest.mark.parametrize(
+    ("model_cls", "kwargs", "attr", "expected_val"),
+    [
+        pytest.param(
+            EntityExtractionResponse,
+            {"entities_added": 5, "relationships_added": 3, "entities_merged": 2},
+            "entities_merged",
+            2,
+            id="entity_extraction_response",
+        ),
+        pytest.param(
+            KGQueryResponse,
+            {"results": [{"method": "BERT"}], "query": "What methods?"},
+            "query",
+            "What methods?",
+            id="kg_query_response",
+        ),
+    ],
+)
+def test_simple_response_models(model_cls, kwargs, attr, expected_val) -> None:
+    """Simple flat response models accept valid data and expose expected fields."""
+    obj = model_cls(**kwargs)
+    assert getattr(obj, attr) == expected_val
 
 
 def test_knowledge_graph_response():
@@ -133,12 +151,6 @@ def test_entity_detail_response():
         papers=[{"id": 1, "title": "Paper A", "mention_count": 3}],
     )
     assert len(detail.papers) == 1
-
-
-def test_kg_query_response():
-    """KGQueryResponse validates correctly."""
-    resp = KGQueryResponse(results=[{"method": "BERT"}], query="What methods?")
-    assert resp.query == "What methods?"
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +530,7 @@ async def test_extract_entities_for_paper_returns_counts():
     ]
     mock_conn.execute = AsyncMock(return_value="UPDATE 1")
     mock_conn.fetchval = AsyncMock(return_value=1)
-    pool = _make_pool(mock_conn)
+    pool, _ = make_pool_and_conn(conn=mock_conn, with_transaction=False)
     http_client = AsyncMock()
 
     from paper_ingestion.extraction.kg_models import (
@@ -586,7 +598,7 @@ async def test_extract_entities_for_paper_requires_existing_chunks():
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 1, "title": "Paper A"}
     mock_conn.fetch.return_value = []
-    pool = _make_pool(mock_conn)
+    pool, _ = make_pool_and_conn(conn=mock_conn, with_transaction=False)
 
     with pytest.raises(ValueError, match="No chunks found for paper 1"):
         await extract_entities_for_paper(AsyncMock(), pool, paper_id=1)
@@ -623,7 +635,7 @@ async def test_extract_entities_for_paper_skips_unlinked_relationships():
         }
     ]
     mock_conn.execute = AsyncMock(return_value="INSERT 0 1")
-    pool = _make_pool(mock_conn)
+    pool, _ = make_pool_and_conn(conn=mock_conn, with_transaction=False)
 
     # Only "BERT" entity is extracted; relationship references "GLUE" which is
     # not in entity_map — the relationship should be silently skipped.
@@ -669,7 +681,7 @@ async def test_extract_entities_for_paper_requires_existing_paper():
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = None
-    pool = _make_pool(mock_conn)
+    pool, _ = make_pool_and_conn(conn=mock_conn, with_transaction=False)
 
     with pytest.raises(ValueError, match="Paper 999 not found"):
         await extract_entities_for_paper(AsyncMock(), pool, paper_id=999)
@@ -737,7 +749,7 @@ async def test_extract_entities_rejects_unowned_paper(monkeypatch):
     from fastapi import HTTPException
 
     conn = AsyncMock()
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     monkeypatch.setattr(
         kg_router,
@@ -800,7 +812,7 @@ def _make_batch_extract_client(*, user_role: str | None):
 
     conn = AsyncMock()
     conn.fetch.return_value = []  # no papers needing extraction → fast path
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     app.include_router(kg_router.router)
     app.dependency_overrides[get_db_pool] = lambda: pool
@@ -910,7 +922,7 @@ async def test_get_graph_scopes_entities_to_user(monkeypatch):
         ),
     )
 
-    pool = _make_pool(AsyncMock())
+    pool, _ = make_pool_and_conn(with_transaction=False)
     result = await kg_router.get_graph.__wrapped__(
         MagicMock(),
         entity_type=None,
@@ -990,7 +1002,7 @@ async def test_list_entities_scopes_to_user(monkeypatch):
             "created_at": None,
         }
     ]
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     result = await kg_router.list_entities.__wrapped__(
         MagicMock(),
@@ -1031,7 +1043,7 @@ async def test_list_entities_unscoped_when_no_user(monkeypatch):
             "created_at": None,
         }
     ]
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     result = await kg_router.list_entities.__wrapped__(
         MagicMock(),
@@ -1080,7 +1092,7 @@ async def test_get_entity_detail_rejects_entity_not_owned_by_user(monkeypatch):
     }
     # But user B has no paper_entities row for entity 1
     conn.fetchval.return_value = None
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     with pytest.raises(HTTPException) as exc_info:
         await kg_router.get_entity_detail.__wrapped__(
@@ -1124,7 +1136,7 @@ async def test_get_entity_detail_papers_scoped_to_user(monkeypatch):
         [],  # rels
         [{"id": 2, "title": "Paper B", "mention_count": 1}],  # papers for user B
     ]
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     result = await kg_router.get_entity_detail.__wrapped__(
         MagicMock(),
@@ -1163,7 +1175,7 @@ async def test_kg_query_scopes_generic_search_to_user(monkeypatch):
         AsyncMock(return_value=[{"name": "GLUE", "paper_id": 2}]),
     )
 
-    pool = _make_pool(AsyncMock())
+    pool, _ = make_pool_and_conn(with_transaction=False)
     result = await kg_router.kg_query.__wrapped__(
         MagicMock(),
         q="GLUE",

@@ -19,6 +19,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from tests.le_helpers import make_card_row
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
@@ -41,31 +42,6 @@ def _make_deck_row(**overrides):
     }
     values.update(overrides)
     values["created_at"] = _now()
-    return FakeRecord(**values)
-
-
-def _make_card_row(**overrides):
-    values = {
-        "id": 1,
-        "deck_id": 1,
-        "paper_id": None,
-        "card_type": "concept",
-        "front": "Q?",
-        "back": "A.",
-        "evidence": None,
-        "fsrs_state": None,
-        "due_at": None,
-    }
-    values.update(overrides)
-    values.update(
-        {
-            "evidence": values["evidence"] or {},
-            "fsrs_state": values["fsrs_state"] or {},
-            "due_at": values["due_at"] or _now(),
-            "created_at": _now(),
-            "updated_at": _now(),
-        }
-    )
     return FakeRecord(**values)
 
 
@@ -312,7 +288,7 @@ async def test_create_card_success(_app):
     """POST /api/cards creates a new card and returns 201."""
     app, conn, _, mock_fsrs, *_ = _app
     mock_fsrs.create_new_card.return_value = ({"state": "new"}, _now())
-    conn.fetchrow.return_value = _make_card_row(id=10, deck_id=1, front="Q?", back="A.")
+    conn.fetchrow.return_value = make_card_row(id=10, deck_id=1, front="Q?", back="A.")
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -342,8 +318,8 @@ async def test_list_cards_success(_app):
     """GET /api/cards returns a list of cards."""
     app, conn, *_ = _app
     conn.fetch.return_value = [
-        _make_card_row(id=1, front="Q1?", back="A1"),
-        _make_card_row(id=2, front="Q2?", back="A2"),
+        make_card_row(id=1, front="Q1?", back="A1"),
+        make_card_row(id=2, front="Q2?", back="A2"),
     ]
 
     async with httpx.AsyncClient(
@@ -360,7 +336,7 @@ async def test_list_cards_success(_app):
 async def test_list_cards_filter_by_deck(_app):
     """GET /api/cards?deck_id=1 returns only cards belonging to that deck."""
     app, conn, *_ = _app
-    conn.fetch.return_value = [_make_card_row(id=1, deck_id=1)]
+    conn.fetch.return_value = [make_card_row(id=1, deck_id=1)]
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -382,8 +358,8 @@ async def test_list_cards_filter_by_deck(_app):
 async def test_update_card_success(_app):
     """PUT /api/cards/{id} updates card content."""
     app, conn, *_ = _app
-    existing = _make_card_row(id=5, front="Old Q", back="Old A")
-    updated = _make_card_row(id=5, front="New Q", back="Old A")
+    existing = make_card_row(id=5, front="Old Q", back="Old A")
+    updated = make_card_row(id=5, front="New Q", back="Old A")
 
     # First fetchrow for existing, second for update
     conn.fetchrow.side_effect = [existing, updated]
@@ -455,7 +431,7 @@ async def test_get_next_review_due_cards(_app):
     """GET /api/review/next returns due cards when they exist."""
     app, conn, *_ = _app
     conn.fetch.return_value = [
-        _make_card_row(id=1, due_at=_now() - timedelta(hours=1)),
+        make_card_row(id=1, due_at=_now() - timedelta(hours=1)),
     ]
 
     async with httpx.AsyncClient(
@@ -493,7 +469,7 @@ async def test_get_next_review_none_due(_app):
 async def test_submit_review_success(_app):
     """POST /api/review/{card_id} returns review response."""
     app, conn, _, mock_fsrs, *_ = _app
-    card = _make_card_row(id=1, fsrs_state={"stability": 1.0})
+    card = make_card_row(id=1, fsrs_state={"stability": 1.0})
     next_due = _now() + timedelta(days=3)
     mock_fsrs.schedule_review.return_value = (
         {"stability": 2.5},
@@ -718,7 +694,7 @@ async def test_export_no_cards_returns_400(_app):
 async def test_get_next_review_respects_limit(_app):
     """GET /api/review/next?limit=5 passes limit to SQL query."""
     app, conn, *_ = _app
-    conn.fetch.return_value = [_make_card_row(id=i) for i in range(5)]
+    conn.fetch.return_value = [make_card_row(id=i) for i in range(5)]
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -740,7 +716,7 @@ async def test_create_card_with_evidence(_app):
     app, conn, _, mock_fsrs, *_ = _app
     mock_fsrs.create_new_card.return_value = ({}, _now())
     evidence = {"quote": "Some text", "page_number": 3, "chunk_id": 10}
-    conn.fetchrow.return_value = _make_card_row(
+    conn.fetchrow.return_value = make_card_row(
         id=20,
         deck_id=1,
         front="Q?",
@@ -804,23 +780,11 @@ async def test_create_deck_with_description(_app):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_list_cards_with_pagination(_app):
-    """GET /api/cards with limit and offset returns correct subset."""
-    app, conn, *_ = _app
-    conn.fetch.return_value = [_make_card_row(id=3)]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/cards", params={"limit": 1, "offset": 2})
-
-    assert resp.status_code == 200
-    # Verify LIMIT and OFFSET are in the SQL
-    fetch_call = conn.fetch.call_args
-    sql = fetch_call[0][0]
-    assert "LIMIT" in sql
-    assert "OFFSET" in sql
+# test_list_cards_with_pagination deleted — D6-05 contract test
+# test_le_contract.py::test_list_cards_pagination_response_shape is the survivor:
+# it asserts len(body) <= 1 against the real schema (behavioural contract).
+# The SQL-text "LIMIT in sql" / "OFFSET in sql" assertions were B1-09 whitebox
+# checks with no additional coverage beyond what the contract test provides.
 
 
 # ---------------------------------------------------------------------------

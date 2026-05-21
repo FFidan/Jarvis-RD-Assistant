@@ -22,26 +22,32 @@ from tests.conftest import FakeRecord, _make_pool_and_conn
 # ---------------------------------------------------------------------------
 
 
-def test_citation_relation_valid():
-    """CitationRelation accepts valid data."""
-    rel = CitationRelation(
-        source_paper_id=1,
-        cited_paper_id=2,
-        citation_context="This paper extends...",
-        is_influential=True,
-        intent=["methodology"],
-    )
-    assert rel.source_paper_id == 1
-    assert rel.cited_paper_id == 2
-    assert rel.is_influential is True
-
-
-def test_citation_relation_defaults():
-    """CitationRelation has correct defaults."""
-    rel = CitationRelation(source_paper_id=1, cited_paper_id=2)
-    assert rel.citation_context is None
-    assert rel.is_influential is None
-    assert rel.intent == []
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param(
+            {
+                "source_paper_id": 1,
+                "cited_paper_id": 2,
+                "citation_context": "This paper extends...",
+                "is_influential": True,
+                "intent": ["methodology"],
+            },
+            {"source_paper_id": 1, "cited_paper_id": 2, "is_influential": True},
+            id="valid_full",
+        ),
+        pytest.param(
+            {"source_paper_id": 1, "cited_paper_id": 2},
+            {"citation_context": None, "is_influential": None, "intent": []},
+            id="defaults",
+        ),
+    ],
+)
+def test_citation_relation(kwargs, expected) -> None:
+    """CitationRelation field values match expected for valid and default inputs."""
+    rel = CitationRelation(**kwargs)
+    for attr, val in expected.items():
+        assert getattr(rel, attr) == val
 
 
 def test_citation_fetch_response():
@@ -51,39 +57,53 @@ def test_citation_fetch_response():
     assert resp.stubs_created == 8
 
 
-def test_graph_node_valid():
-    """GraphNode accepts valid data."""
-    node = GraphNode(id=1, title="Test Paper", citation_count=42, is_stub=False)
-    assert node.title == "Test Paper"
-    assert node.is_stub is False
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param(
+            {"id": 1, "title": "Test Paper", "citation_count": 42, "is_stub": False},
+            {"title": "Test Paper", "is_stub": False},
+            id="valid_full",
+        ),
+        pytest.param(
+            {"id": 1, "title": "Test"},
+            {"citation_count": 0, "published_date": None, "is_stub": False},
+            id="defaults",
+        ),
+        pytest.param(
+            {"id": 1, "title": "Test", "published_date": date(2024, 1, 15)},
+            {"published_date": date(2024, 1, 15)},
+            id="with_date",
+        ),
+    ],
+)
+def test_graph_node(kwargs, expected) -> None:
+    """GraphNode field values match expected across valid, default, and date cases."""
+    node = GraphNode(**kwargs)
+    for attr, val in expected.items():
+        assert getattr(node, attr) == val
 
 
-def test_graph_node_defaults():
-    """GraphNode has correct defaults."""
-    node = GraphNode(id=1, title="Test")
-    assert node.citation_count == 0
-    assert node.published_date is None
-    assert node.is_stub is False
-
-
-def test_graph_node_with_date():
-    """GraphNode handles published_date."""
-    node = GraphNode(id=1, title="Test", published_date=date(2024, 1, 15))
-    assert node.published_date == date(2024, 1, 15)
-
-
-def test_graph_edge_valid():
-    """GraphEdge accepts valid data."""
-    edge = GraphEdge(source=1, target=2, is_influential=True, context="extends")
-    assert edge.source == 1
-    assert edge.target == 2
-
-
-def test_graph_edge_defaults():
-    """GraphEdge has correct defaults."""
-    edge = GraphEdge(source=1, target=2)
-    assert edge.is_influential is None
-    assert edge.context is None
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param(
+            {"source": 1, "target": 2, "is_influential": True, "context": "extends"},
+            {"source": 1, "target": 2},
+            id="valid_full",
+        ),
+        pytest.param(
+            {"source": 1, "target": 2},
+            {"is_influential": None, "context": None},
+            id="defaults",
+        ),
+    ],
+)
+def test_graph_edge(kwargs, expected) -> None:
+    """GraphEdge field values match expected for valid and default inputs."""
+    edge = GraphEdge(**kwargs)
+    for attr, val in expected.items():
+        assert getattr(edge, attr) == val
 
 
 def test_citation_graph_response():

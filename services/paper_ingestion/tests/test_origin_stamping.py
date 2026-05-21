@@ -69,6 +69,8 @@ def _make_pool(conn: AsyncMock) -> MagicMock:
     return pool
 
 
+# Keep local: multi-conn side_effect semantics (successive acquire() calls yield different
+# connections) are not covered by jarvis_common.make_pool_and_conn.
 def _make_pool_multi(*conns: AsyncMock) -> MagicMock:
     """Pool that returns a different conn for each successive acquire() call."""
     pool = MagicMock()

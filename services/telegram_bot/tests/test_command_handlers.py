@@ -218,7 +218,6 @@ async def test_papers_no_args_lists_library_via_api():
     call = mock_http.get.await_args
     assert "/api/papers/feed" in call.args[0]
     assert call.kwargs.get("params", {}).get("view") == "library"
-    update.message.reply_text.assert_awaited()
     text = update.message.reply_text.call_args_list[0][0][0]
     assert "Paper A" in text
 
@@ -245,7 +244,6 @@ async def test_papers_with_query_searches_api():
     mock_http.post.return_value = mock_resp
     await papers_command(update, context)
     mock_http.post.assert_awaited_once()
-    update.message.reply_text.assert_awaited()
     text = update.message.reply_text.call_args[0][0]
     assert "Transformers Paper" in text
 
@@ -256,7 +254,6 @@ async def test_papers_api_failure_sends_error():
     update, context, _, mock_http = _make_update_and_context(args=["test"])
     mock_http.post.side_effect = Exception("Connection failed")
     await papers_command(update, context)
-    update.message.reply_text.assert_awaited()
     text = update.message.reply_text.call_args[0][0]
     assert "Failed" in text or "failed" in text.lower()
 
@@ -370,7 +367,6 @@ async def test_projects_with_data():
         },
     ]
     await projects_command(update, context)
-    update.message.reply_text.assert_awaited()
     text = update.message.reply_text.call_args_list[0][0][0]
     assert "Project Alpha" in text
 
@@ -388,7 +384,6 @@ async def test_tasks_no_project_id():
         {"id": 1, "title": "Fix bug", "status": "in_progress", "project_name": "Proj"},
     ]
     await tasks_command(update, context)
-    update.message.reply_text.assert_awaited()
     text = update.message.reply_text.call_args[0][0]
     assert "Fix bug" in text
 
@@ -401,7 +396,6 @@ async def test_tasks_with_project_id():
         {"id": 2, "title": "Write tests", "status": "in_progress", "project_name": "Proj"},
     ]
     await tasks_command(update, context)
-    update.message.reply_text.assert_awaited()
     text = update.message.reply_text.call_args[0][0]
     assert "Write tests" in text
 

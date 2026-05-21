@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.logging_config import correlation_id_var
+from jarvis_common.testing import make_telegram_update
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
@@ -62,16 +63,6 @@ def _make_pool():
     return pool
 
 
-def _make_update(chat_id: int = _TEST_CHAT_ID):
-    update = MagicMock()
-    update.effective_chat = MagicMock()
-    update.effective_chat.id = chat_id
-    update.message = MagicMock()
-    update.message.reply_text = AsyncMock()
-    update.callback_query = None
-    return update
-
-
 def _make_context(pool, config):
     context = MagicMock()
     context.application = MagicMock()
@@ -106,7 +97,7 @@ async def test_dispatcher_sets_correlation_id_per_command():
         captured.append(correlation_id_var.get())
 
     pool = _make_pool()
-    update = _make_update()
+    update = make_telegram_update(chat_id=_TEST_CHAT_ID)
     context = _make_context(pool, _make_config())
     context.user_data = {"jarvis_user_id": _TEST_CHAT_ID}
 

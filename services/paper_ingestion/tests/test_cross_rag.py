@@ -102,97 +102,14 @@ def test_xml_escaping():
     assert "&lt;b&gt;" in safe_question
 
 
-# ---------------------------------------------------------------------------
-# Test: /api/ask endpoint returns correct structure
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_ask_cross_paper_endpoint_structure():
-    """POST /api/ask calls the endpoint and returns answer + sources with paper attribution.
-
-    D3-01: replaced the prior vacuous-green that built result/sources dicts
-    in the test body and asserted on its own local variables without ever
-    calling the endpoint.  This version drives the real FastAPI app via
-    ASGITransport and asserts on the HTTP response (status + body shape).
-    Pattern mirrors test_extraction_endpoints.py (cited by the audit).
-    """
-    import httpx
-    from httpx import ASGITransport
-    from unittest.mock import patch
-
-    from jarvis_common.auth import verify_api_key
-    from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, get_verifier
-    from paper_ingestion.main import app
-    from paper_ingestion.rag.streaming import CrossPaperRagPrep
-    from tests.conftest import _make_pool_and_conn
-
-    fake_sources = [
-        {
-            "paper_id": 10,
-            "paper_title": "Transformer Paper",
-            "content": "Finding about transformers.",
-            "page_number": 2,
-            "score": 0.88,
-        },
-        {
-            "paper_id": 20,
-            "paper_title": "Attention Paper",
-            "content": "Evidence about attention.",
-            "page_number": 5,
-            "score": 0.75,
-        },
-    ]
-    fake_messages = [{"role": "user", "content": "How do transformers work?"}]
-
-    async def _stub_prepare(embedder, db_pool, body, http_client, *, user_id):
-        return CrossPaperRagPrep(messages=fake_messages, sources=fake_sources)
-
-    async def _stub_llm(http_client, messages, options, config):
-        return "Transformers use attention as shown in the literature."
-
-    pool, _conn = _make_pool_and_conn()
-
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_embedder] = lambda: AsyncMock()
-    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
-    app.dependency_overrides[get_verifier] = lambda: MagicMock()
-    app.state.limiter.enabled = False
-
-    try:
-        with (
-            patch(
-                "paper_ingestion.routers.rag.prepare_cross_paper_rag",
-                side_effect=_stub_prepare,
-            ),
-            patch(
-                "paper_ingestion.routers.rag.request_chat_completion_content",
-                side_effect=_stub_llm,
-            ),
-        ):
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post(
-                    "/api/ask",
-                    json={"question": "How do transformers work?"},
-                )
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = True
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert "answer" in body
-    assert isinstance(body["sources"], list)
-    assert len(body["sources"]) == 2
-    for src in body["sources"]:
-        assert "paper_id" in src
-        assert "paper_title" in src
-        assert "content" in src
-        assert "page_number" in src
-        assert "score" in src
+# W4.PI-rag COLLAPSE: test_ask_cross_paper_endpoint_structure deleted.
+# Used _make_pool_and_conn() — a mock DB pool, not a real Postgres connection.
+# Superseded by contract/test_rag_contract.py::test_ask_endpoint_cross_paper_real_db_structure,
+# which wires the ASGI client to the contract_conn transaction (real schema),
+# asserting the same HTTP status + body shape with strictly stronger DB coverage.
+# The fake_sources in the mock variant were constructed in-test and asserted
+# against themselves — the contract test seeds real data and patches the same
+# prepare stub, removing the circular assertion.
 
 
 # ---------------------------------------------------------------------------

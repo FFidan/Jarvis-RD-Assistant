@@ -8,6 +8,11 @@ Infrastructure helpers (FakeRecord, _make_pool_and_conn, live_pg_dsn) are
 re-exported from jarvis_common.testing so that ``from tests.conftest import
 <symbol>`` resolves identically regardless of which conftest pytest loads
 first (--import-mode=importlib + shared tests namespace invariant).
+
+NOTE: LE-specific row factories (make_card_row, make_job_ctx) live in
+le_helpers.py — NOT here — because tests.conftest symbols must exist in both
+the paper_ingestion and learning_engine conftest files (shared ``tests``
+namespace under --import-mode=importlib).
 """
 
 import pytest

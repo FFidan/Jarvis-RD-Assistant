@@ -14,13 +14,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarvis_common.session_middleware import (
     SESSION_GRACE,
     _populate_state_from_cookie,
 )
+from jarvis_common.testing import make_pool_and_conn
 from starlette.requests import Request
 
 _SESSION_ID = "550e8400-e29b-41d4-a716-446655440000"
@@ -30,17 +30,6 @@ def _make_request(pool: object) -> Request:
     """Starlette Request whose ``app.state.db_pool`` is *pool* (read from scope)."""
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
     return Request({"type": "http", "method": "GET", "path": "/", "headers": [], "app": app})
-
-
-def _make_pool(row: dict | None):
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value=row)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
 
 
 def _row(
@@ -70,7 +59,7 @@ async def test_grace_constant_is_24h() -> None:
 
 @pytest.mark.asyncio
 async def test_non_expired_session_resolves() -> None:
-    pool = _make_pool(_row(expires_at=_now() + timedelta(hours=1)))
+    pool, _ = make_pool_and_conn(fetchrow_return=_row(expires_at=_now() + timedelta(hours=1)))
     request = _make_request(pool)
     await _populate_state_from_cookie(request, _SESSION_ID)
     assert request.state.user_id == 7
@@ -81,7 +70,7 @@ async def test_non_expired_session_resolves() -> None:
 @pytest.mark.asyncio
 async def test_expired_within_grace_resolves() -> None:
     """Expired 1h ago — inside the 24h grace — still resolves identity."""
-    pool = _make_pool(_row(expires_at=_now() - timedelta(hours=1)))
+    pool, _ = make_pool_and_conn(fetchrow_return=_row(expires_at=_now() - timedelta(hours=1)))
     request = _make_request(pool)
     await _populate_state_from_cookie(request, _SESSION_ID)
     assert request.state.user_id == 7
@@ -91,7 +80,9 @@ async def test_expired_within_grace_resolves() -> None:
 @pytest.mark.asyncio
 async def test_expired_at_grace_edge_resolves() -> None:
     """Just inside the grace boundary still resolves (<= now - GRACE rejects)."""
-    pool = _make_pool(_row(expires_at=_now() - SESSION_GRACE + timedelta(minutes=1)))
+    pool, _ = make_pool_and_conn(
+        fetchrow_return=_row(expires_at=_now() - SESSION_GRACE + timedelta(minutes=1))
+    )
     request = _make_request(pool)
     await _populate_state_from_cookie(request, _SESSION_ID)
     assert request.state.user_id == 7
@@ -100,7 +91,7 @@ async def test_expired_at_grace_edge_resolves() -> None:
 @pytest.mark.asyncio
 async def test_expired_beyond_grace_does_not_resolve() -> None:
     """Expired 25h ago — outside the 24h grace — leaves request.state unset."""
-    pool = _make_pool(_row(expires_at=_now() - timedelta(hours=25)))
+    pool, _ = make_pool_and_conn(fetchrow_return=_row(expires_at=_now() - timedelta(hours=25)))
     request = _make_request(pool)
     await _populate_state_from_cookie(request, _SESSION_ID)
     assert not hasattr(request.state, "user_id")
@@ -109,8 +100,10 @@ async def test_expired_beyond_grace_does_not_resolve() -> None:
 @pytest.mark.asyncio
 async def test_revoked_within_grace_hard_fails() -> None:
     """revoked_at set hard-fails even when expiry is within grace."""
-    pool = _make_pool(
-        _row(expires_at=_now() - timedelta(hours=1), revoked_at=_now() - timedelta(hours=2))
+    pool, _ = make_pool_and_conn(
+        fetchrow_return=_row(
+            expires_at=_now() - timedelta(hours=1), revoked_at=_now() - timedelta(hours=2)
+        )
     )
     request = _make_request(pool)
     await _populate_state_from_cookie(request, _SESSION_ID)
@@ -120,8 +113,10 @@ async def test_revoked_within_grace_hard_fails() -> None:
 @pytest.mark.asyncio
 async def test_deleted_user_within_grace_hard_fails() -> None:
     """deleted_at set hard-fails even when expiry is within grace."""
-    pool = _make_pool(
-        _row(expires_at=_now() - timedelta(hours=1), deleted_at=_now() - timedelta(days=1))
+    pool, _ = make_pool_and_conn(
+        fetchrow_return=_row(
+            expires_at=_now() - timedelta(hours=1), deleted_at=_now() - timedelta(days=1)
+        )
     )
     request = _make_request(pool)
     await _populate_state_from_cookie(request, _SESSION_ID)
@@ -131,9 +126,8 @@ async def test_deleted_user_within_grace_hard_fails() -> None:
 @pytest.mark.asyncio
 async def test_grace_does_not_renew_expires_at() -> None:
     """Grace resolves identity but performs no write (no UPDATE/execute)."""
-    pool = _make_pool(_row(expires_at=_now() - timedelta(hours=1)))
+    pool, conn = make_pool_and_conn(fetchrow_return=_row(expires_at=_now() - timedelta(hours=1)))
     request = _make_request(pool)
-    conn = await pool.acquire().__aenter__()
     await _populate_state_from_cookie(request, _SESSION_ID)
     assert request.state.user_id == 7
     conn.execute.assert_not_called()
@@ -142,7 +136,7 @@ async def test_grace_does_not_renew_expires_at() -> None:
 @pytest.mark.asyncio
 async def test_null_expiry_resolves() -> None:
     """A session with NULL expires_at is non-expiring — still resolves."""
-    pool = _make_pool(_row(expires_at=None))
+    pool, _ = make_pool_and_conn(fetchrow_return=_row(expires_at=None))
     request = _make_request(pool)
     await _populate_state_from_cookie(request, _SESSION_ID)
     assert request.state.user_id == 7

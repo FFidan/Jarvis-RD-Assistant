@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import types
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 from learning_engine.models import ProjectQuestionCreate
 from learning_engine.routers import project_questions
 from learning_engine.routers.projects import get_project, list_projects
+
+from tests.conftest import make_pool_and_conn
 
 _NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=UTC)
 
@@ -25,15 +27,8 @@ def _request(user_id: int = 7):
 
 
 def _pool(conn):
-    txn = MagicMock()
-    txn.__aenter__ = AsyncMock(return_value=None)
-    txn.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
+    """Wrap an existing conn in a pool mock with transaction support."""
+    pool, _ = make_pool_and_conn(conn=conn)
     return pool
 
 
@@ -56,13 +51,9 @@ async def test_list_questions_owner_scoped_returns_rows() -> None:
         _request(7), project_id=1, db_pool=_pool(conn), user_id=7
     )
     assert [r["body"] for r in out] == ["Q one", "Q two"]
-    # owner guard fired with the caller's user_id
-    owner_sql, *owner_args = conn.fetchval.call_args.args
-    assert "WHERE id = $1 AND user_id = $2" in owner_sql
+    # owner guard fired with the caller's user_id (predicate exercised by contract suite)
+    _, *owner_args = conn.fetchval.call_args.args
     assert owner_args == [1, 7]
-    # list query also filters by user_id
-    list_sql = conn.fetch.call_args.args[0]
-    assert "project_id = $1 AND user_id = $2" in list_sql
 
 
 @pytest.mark.asyncio
@@ -92,8 +83,7 @@ async def test_create_question_owner_scoped() -> None:
         user_id=7,
     )
     assert out["id"] == 5
-    insert_sql, *args = conn.fetchrow.call_args.args
-    assert "INSERT INTO project_questions (project_id, user_id, body)" in insert_sql
+    _, *args = conn.fetchrow.call_args.args
     assert args == [1, 7, "New Q"]
 
 
@@ -121,8 +111,7 @@ async def test_delete_question_scoped_by_user_id(monkeypatch) -> None:
     await project_questions.delete_project_question.__wrapped__(
         _request(7), question_id=5, db_pool=_pool(conn), user_id=7
     )
-    del_sql, *args = conn.execute.call_args.args
-    assert "DELETE FROM project_questions WHERE id = $1 AND user_id = $2" in del_sql
+    _, *args = conn.execute.call_args.args
     assert args == [5, 7]
 
 

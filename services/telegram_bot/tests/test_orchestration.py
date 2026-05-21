@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import author_alerts as author_alerts_mod
@@ -43,13 +44,6 @@ def _async_cm(return_value):
     cm.__aenter__ = AsyncMock(return_value=return_value)
     cm.__aexit__ = AsyncMock(return_value=False)
     return cm
-
-
-def _make_pool(conn):
-    """Wrap a connection mock in a pool mock."""
-    pool = MagicMock()
-    pool.acquire.return_value = _async_cm(conn)
-    return pool
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +194,7 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
         [milestone_row],  # upcoming milestones
     ]
 
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     # Mock the learning engine /api/stats call
     http_client = AsyncMock(spec=httpx.AsyncClient)
@@ -239,7 +233,7 @@ async def test_daily_briefing_stats_call_includes_api_key_header():
     conn.fetchrow.return_value = count_row
     conn.fetch.side_effect = [[], []]  # tasks, milestones
 
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     http_client = AsyncMock(spec=httpx.AsyncClient)
     stats_resp = MagicMock()

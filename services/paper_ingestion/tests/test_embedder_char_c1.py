@@ -36,8 +36,7 @@ from paper_ingestion.ingestion.embedder import (
 ShimEmbedder = Embedder
 from paper_ingestion.models import ChunkForEmbedding
 
-# D3-05: shared fake — replaces the local _FakeEncoding duplicated 3×.
-from tests._embedder_fakes import _FakeEncoding
+from jarvis_common.testing_embedder import _FakeEncoding
 
 
 def _make_embedder() -> Embedder:

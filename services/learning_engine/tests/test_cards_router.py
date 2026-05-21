@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +10,7 @@ from fastapi import HTTPException
 from learning_engine.models import CardCreate, CardType, CardUpdate, Evidence  # noqa: E402
 from learning_engine.routers import cards  # noqa: E402
 
+from tests.le_helpers import make_card_row
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
@@ -19,24 +19,9 @@ from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _now():
+    from datetime import UTC, datetime
+
     return datetime.now(UTC)
-
-
-def _make_card_row(id=1, deck_id=1, paper_id=1):
-    """Return a fake row compatible with row_to_card_response."""
-    return FakeRecord(
-        id=id,
-        deck_id=deck_id,
-        paper_id=paper_id,
-        card_type="concept",
-        front="What changed?",
-        back="The method improved retrieval.",
-        evidence={"quote": "Improved retrieval", "page_number": 2},
-        fsrs_state={},
-        due_at=_now(),
-        created_at=_now(),
-        updated_at=_now(),
-    )
 
 
 @pytest.mark.asyncio
@@ -47,7 +32,7 @@ async def test_create_card_success_uses_evidence_payload():
     fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
 
     with patch.object(
-        cards, "insert_card", AsyncMock(return_value=_make_card_row(id=5, paper_id=7))
+        cards, "insert_card", AsyncMock(return_value=make_card_row(id=5, paper_id=7))
     ) as mock_insert:
         response = await cards.create_card.__wrapped__(
             MagicMock(),
@@ -84,7 +69,7 @@ async def test_list_cards_builds_query_with_filters():
     """
     pool, conn = _make_pool_and_conn()
     due_before = _now()
-    conn.fetch.return_value = [_make_card_row()]
+    conn.fetch.return_value = [make_card_row()]
 
     req = SimpleNamespace(state=SimpleNamespace(user_id=1))
     rows = await cards.list_cards.__wrapped__(
@@ -112,7 +97,7 @@ async def test_update_card_returns_existing_row_when_body_is_empty():
     """update_card is a no-op when no fields change: one fetchrow FOR UPDATE returns
     the full row, which is returned directly without a second query."""
     pool, conn = _make_pool_and_conn()
-    card_row = _make_card_row(id=9)
+    card_row = make_card_row(id=9)
     # Single call: SELECT * ... FOR UPDATE (existence check + full row)
     conn.fetchrow.return_value = card_row
 
@@ -150,7 +135,7 @@ async def test_update_card_uses_dynamic_update():
     """update_card delegates to dynamic_update and returns the updated row."""
     pool, conn = _make_pool_and_conn()
     existing = FakeRecord(id=7)
-    updated_row = _make_card_row(id=7)
+    updated_row = make_card_row(id=7)
     # fetchrow calls: existence check, then dynamic_update internally calls fetchrow
     conn.fetchrow.side_effect = [existing, updated_row]
 
@@ -297,7 +282,7 @@ async def test_create_card_skips_ownership_check_when_no_paper():
 
     with (
         patch.object(cards, "assert_paper_ownership", AsyncMock()) as mock_ownership,
-        patch.object(cards, "insert_card", AsyncMock(return_value=_make_card_row())),
+        patch.object(cards, "insert_card", AsyncMock(return_value=make_card_row())),
     ):
         await cards.create_card.__wrapped__(
             SimpleNamespace(state=SimpleNamespace(user_id=1)),

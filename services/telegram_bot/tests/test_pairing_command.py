@@ -47,10 +47,6 @@ def _make_pool(conn, *, fetchval_return=None):
     return pool
 
 
-def _make_update(text: str, chat_id: int = _OWNER_CHAT_ID):
-    return make_telegram_update(chat_id=chat_id, text=text)
-
-
 def _make_context(pool, config):
     context = MagicMock()
     context.application = MagicMock()
@@ -73,7 +69,7 @@ async def test_start_with_valid_pair_code_stores_chat_id():
     future = datetime.now(UTC) + timedelta(minutes=5)
     conn = _make_conn(fetchrow_return={"expires_at": future})
     pool = _make_pool(conn)
-    update = _make_update("/start PAIR_ABC123", chat_id=42)
+    update = make_telegram_update(chat_id=42, text="/start PAIR_ABC123")
     context = _make_context(pool, _make_config(telegram_chat_id=None))
 
     await start_command(update, context)
@@ -105,7 +101,7 @@ async def test_start_with_expired_pair_code_replies_error():
     past = datetime.now(UTC) - timedelta(minutes=5)
     conn = _make_conn(fetchrow_return={"expires_at": past})
     pool = _make_pool(conn)
-    update = _make_update("/start PAIR_STALE", chat_id=42)
+    update = make_telegram_update(chat_id=42, text="/start PAIR_STALE")
     context = _make_context(pool, _make_config(telegram_chat_id=None))
 
     await start_command(update, context)
@@ -126,7 +122,7 @@ async def test_start_with_unknown_pair_code_replies_error():
     """Unknown pairing code yields the same error, no DB writes."""
     conn = _make_conn(fetchrow_return=None)
     pool = _make_pool(conn)
-    update = _make_update("/start PAIR_NOPE", chat_id=42)
+    update = make_telegram_update(chat_id=42, text="/start PAIR_NOPE")
     context = _make_context(pool, _make_config(telegram_chat_id=None))
 
     await start_command(update, context)
@@ -141,7 +137,7 @@ async def test_start_with_unknown_pair_code_replies_error():
 async def test_start_without_payload_requires_auth():
     """Plain /start from an unauthorised chat sends no reply."""
     pool = _make_pool(_make_conn(), fetchval_return=None)  # DB null
-    update = _make_update("/start", chat_id=999)  # not owner, not in DB
+    update = make_telegram_update(chat_id=999, text="/start")  # not owner, not in DB
     context = _make_context(pool, _make_config(telegram_chat_id=_OWNER_CHAT_ID))
 
     await start_command(update, context)
@@ -153,7 +149,7 @@ async def test_start_without_payload_requires_auth():
 async def test_start_without_payload_authed_sends_welcome():
     """Plain /start from the authorised chat sends the welcome message."""
     pool = _make_pool(_make_conn(), fetchval_return=None)
-    update = _make_update("/start", chat_id=_OWNER_CHAT_ID)
+    update = make_telegram_update(chat_id=_OWNER_CHAT_ID, text="/start")
     context = _make_context(pool, _make_config(telegram_chat_id=_OWNER_CHAT_ID))
 
     await start_command(update, context)
@@ -178,7 +174,7 @@ def _attach_pairing_fetchrow(pool, *, return_value=None):
 async def test_auth_check_env_var_priority():
     """Env var match returns (True, None) even when DB has no paired chat."""
     pool = _make_pool(_make_conn(), fetchval_return=None)
-    update = _make_update("irrelevant", chat_id=_OWNER_CHAT_ID)
+    update = make_telegram_update(chat_id=_OWNER_CHAT_ID, text="irrelevant")
     config = _make_config(telegram_chat_id=_OWNER_CHAT_ID)
 
     assert await _auth_check(update, config, pool) == (True, None)
@@ -190,7 +186,7 @@ async def test_auth_check_env_var_priority():
 async def test_auth_check_db_fallback():
     """When env var is missing, DB-stored chat id grants access as owner."""
     pool = _attach_pairing_fetchrow(_make_pool(_make_conn(), fetchval_return=555))
-    update = _make_update("irrelevant", chat_id=555)
+    update = make_telegram_update(chat_id=555, text="irrelevant")
     config = _make_config(telegram_chat_id=None)
 
     assert await _auth_check(update, config, pool) == (True, None)
@@ -201,7 +197,7 @@ async def test_auth_check_db_fallback():
 async def test_auth_check_db_null():
     """Env var missing + DB null + no pairing row -> unauthorised."""
     pool = _attach_pairing_fetchrow(_make_pool(_make_conn(), fetchval_return=None))
-    update = _make_update("irrelevant", chat_id=555)
+    update = make_telegram_update(chat_id=555, text="irrelevant")
     config = _make_config(telegram_chat_id=None)
 
     assert await _auth_check(update, config, pool) == (False, None)
@@ -211,7 +207,7 @@ async def test_auth_check_db_null():
 async def test_auth_check_db_string_coerced():
     """DB value stored as a string is still coerced to int for comparison."""
     pool = _attach_pairing_fetchrow(_make_pool(_make_conn(), fetchval_return="555"))
-    update = _make_update("irrelevant", chat_id=555)
+    update = make_telegram_update(chat_id=555, text="irrelevant")
     config = _make_config(telegram_chat_id=None)
 
     assert await _auth_check(update, config, pool) == (True, None)
@@ -233,7 +229,7 @@ async def test_telegram_pairing_inserts_on_fresh_install():
     future = datetime.now(UTC) + timedelta(minutes=5)
     conn = _make_conn(fetchrow_return={"expires_at": future})
     pool = _make_pool(conn)
-    update = _make_update("/start PAIR_FRESHDB", chat_id=99)
+    update = make_telegram_update(chat_id=99, text="/start PAIR_FRESHDB")
     # fresh install: no env-var TELEGRAM_CHAT_ID configured
     context = _make_context(pool, _make_config(telegram_chat_id=None))
 
@@ -275,7 +271,7 @@ async def test_pairing_stores_chat_id_as_native_int_not_json_string():
     future = datetime.now(UTC) + timedelta(minutes=5)
     conn = _make_conn(fetchrow_return={"expires_at": future})
     pool = _make_pool(conn)
-    update = _make_update("/start PAIR_H4TEST", chat_id=123456789)
+    update = make_telegram_update(chat_id=123456789, text="/start PAIR_H4TEST")
     context = _make_context(pool, _make_config(telegram_chat_id=None))
 
     await start_command(update, context)
@@ -325,7 +321,7 @@ async def test_pair_command_rate_limited_after_five_calls() -> None:
     chat_id = 555_001
     results: list = []
     for _ in range(6):
-        update = _make_update("/pair abc123", chat_id=chat_id)
+        update = make_telegram_update(chat_id=chat_id, text="/pair abc123")
         context = _make_context(pool, config)
         context.args = ["abc123"]
         result = await pair_command(update, context)
@@ -369,7 +365,7 @@ async def test_start_pair_rate_limited_after_five_calls() -> None:
 
     chat_id = 555_002
     for _ in range(5):
-        update = _make_update("/start PAIR_TESTCODE", chat_id=chat_id)
+        update = make_telegram_update(chat_id=chat_id, text="/start PAIR_TESTCODE")
         context = _make_context(pool, config)
         await start_command(update, context)
 
@@ -378,7 +374,7 @@ async def test_start_pair_rate_limited_after_five_calls() -> None:
     )
 
     # 6th call must be rate-limited — DB acquire must not increase.
-    last_update = _make_update("/start PAIR_TESTCODE", chat_id=chat_id)
+    last_update = make_telegram_update(chat_id=chat_id, text="/start PAIR_TESTCODE")
     last_context = _make_context(pool, config)
     await start_command(last_update, last_context)
 

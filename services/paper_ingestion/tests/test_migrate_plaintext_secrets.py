@@ -20,6 +20,8 @@ def fernet_key(monkeypatch):
     refresh_fernet_cache()
 
 
+# Keep local: returns (pool, conn) and exposes conn.execute for assertion — extra
+# semantics not covered by jarvis_common.make_pool_and_conn's fetch_return kwarg.
 def _make_pool_with_rows(rows: list[dict]):
     """Build a mock asyncpg pool whose fetch() returns *rows*.
 

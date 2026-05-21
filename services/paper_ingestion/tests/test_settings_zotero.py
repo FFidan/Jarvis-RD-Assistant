@@ -128,12 +128,12 @@ async def test_zotero_library_type_group(_app):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "key,value",
+    ("key", "value"),
     [
-        ("zotero.poll_enabled", True),
-        ("zotero.poll_enabled", False),
-        ("zotero.auto_push_on_star", True),
-        ("zotero.auto_push_on_star", False),
+        pytest.param("zotero.poll_enabled", True, id="poll_enabled_true"),
+        pytest.param("zotero.poll_enabled", False, id="poll_enabled_false"),
+        pytest.param("zotero.auto_push_on_star", True, id="auto_push_on_star_true"),
+        pytest.param("zotero.auto_push_on_star", False, id="auto_push_on_star_false"),
     ],
 )
 async def test_zotero_bool_key_accepts_bool(_app, key: str, value: bool):
@@ -178,19 +178,17 @@ async def test_zotero_poll_cron_invalid(_app):
 
 
 @pytest.mark.asyncio
-async def test_zotero_poll_enabled_rejects_string(_app):
-    """zotero.poll_enabled rejects string values."""
+@pytest.mark.parametrize(
+    "key,bad_value",
+    [
+        pytest.param("zotero.poll_enabled", "true", id="poll_enabled"),
+        pytest.param("zotero.auto_push_on_star", "yes", id="auto_push_on_star"),
+    ],
+)
+async def test_zotero_bool_key_rejects_string(_app, key: str, bad_value: str):
+    """Boolean zotero keys reject string values with 400 (D5-10)."""
     app, _conn = _app
-    resp = await _put_config(app, "zotero.poll_enabled", "true")
-    assert resp.status_code == 400
-    assert "boolean" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_zotero_auto_push_on_star_rejects_string(_app):
-    """zotero.auto_push_on_star rejects string values."""
-    app, _conn = _app
-    resp = await _put_config(app, "zotero.auto_push_on_star", "yes")
+    resp = await _put_config(app, key, bad_value)
     assert resp.status_code == 400
     assert "boolean" in resp.json()["detail"]
 

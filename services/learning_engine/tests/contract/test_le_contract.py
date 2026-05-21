@@ -318,3 +318,146 @@ async def test_list_cards_pagination_response_shape(
     )
     body = resp.json()
     assert len(body) <= 1, f"Expected at most 1 card with limit=1, got {len(body)}: {body}"
+
+
+# ---------------------------------------------------------------------------
+# §D6-PQ — Project question CRUD: ownership scoping against real schema
+#
+# Replaces the SQL-substring asserts in test_project_questions.py:
+#   - "WHERE id = $1 AND user_id = $2" (lines 56, 120)
+#   - "project_id = $1 AND user_id = $2" (line 60)
+#   - "INSERT INTO project_questions (project_id, user_id, body)" (line 91)
+#   - "DELETE FROM project_questions WHERE id = $1 AND user_id = $2" (line 120)
+# Each contract test here exercises the real predicate against seeded rows.
+# ---------------------------------------------------------------------------
+
+
+async def test_list_project_questions_owner_sees_own(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """User A can list questions for their own project.
+
+    Collapses the SQL-text ownership-guard check in
+    test_project_questions.py::test_list_questions_owner_scoped_returns_rows.
+    Against a real DB, user_id scoping is exercised by the query itself.
+    """
+    project_id = contract_two_users.project_id_a
+    # First seed a question for user A inside the transaction
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        create_resp = await c.post(
+            f"/api/projects/{project_id}/questions",
+            json={"body": "Contract question alpha"},
+        )
+    assert create_resp.status_code == 201, (
+        f"POST /api/projects/{project_id}/questions failed: "
+        f"{create_resp.status_code}: {create_resp.text[:300]}"
+    )
+    # Owner should see their question in the list
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        list_resp = await c.get(f"/api/projects/{project_id}/questions")
+    assert list_resp.status_code == 200, (
+        f"GET questions as owner failed: {list_resp.status_code}: {list_resp.text[:300]}"
+    )
+    bodies = [q["body"] for q in list_resp.json()]
+    assert "Contract question alpha" in bodies, (
+        f"Owner expected to see their question; got: {bodies}"
+    )
+
+
+async def test_list_project_questions_user_b_gets_404(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """User B cannot list questions for User A's project — must get 404.
+
+    Exercises the real ``WHERE id = $1 AND user_id = $2`` owner-guard in
+    list_project_questions._assert_project_owner rather than the mock-level
+    SQL-substring check in test_project_questions.py::test_list_questions_404_for_other_users_project.
+    """
+    project_id = contract_two_users.project_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.get(f"/api/projects/{project_id}/questions")
+    assert resp.status_code == 404, (
+        f"IDOR: user B got {resp.status_code} listing user A's project {project_id} questions "
+        f"(expected 404). Body: {resp.text[:300]}"
+    )
+
+
+async def test_create_project_question_user_b_gets_404(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """User B cannot create a question for User A's project — must get 404.
+
+    Collapses test_project_questions.py::test_create_question_404_for_other_users_project
+    which only mocks fetchval returning None (no real predicate exercised).
+    """
+    project_id = contract_two_users.project_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.post(
+            f"/api/projects/{project_id}/questions",
+            json={"body": "Injected question"},
+        )
+    assert resp.status_code == 404, (
+        f"IDOR: user B got {resp.status_code} trying to create a question on user A's project "
+        f"{project_id} (expected 404). Body: {resp.text[:300]}"
+    )
+
+
+async def test_list_projects_user_b_cannot_see_user_a_project(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """GET /api/projects as user B does not return user A's project.
+
+    Collapses the SQL-column-presence check in
+    test_project_questions.py::test_list_projects_counts_present_in_both_branches
+    (``assert "paper_count" in unfiltered_sql``).  Here we assert the
+    behavioural contract: user B's project list excludes A's rows.
+    """
+    project_id_a = contract_two_users.project_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/projects")
+    assert resp.status_code == 200, (
+        f"GET /api/projects for user B failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    ids = [p["id"] for p in resp.json()]
+    assert project_id_a not in ids, (
+        f"IDOR: user B sees user A's project {project_id_a} in project list {ids}"
+    )
+
+
+async def test_get_project_detail_user_b_gets_404(contract_two_users, _le_app, _configure_api_key):
+    """GET /api/projects/{id} as user B for user A's project returns 404.
+
+    Collapses test_project_questions.py::test_get_project_detail_includes_counts
+    which only mock-verifies ``"project_papers" in counts_sql``.  This contract
+    test exercises the real ownership check against the seeded row.
+    """
+    project_id_a = contract_two_users.project_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.get(f"/api/projects/{project_id_a}")
+    assert resp.status_code == 404, (
+        f"IDOR: user B got {resp.status_code} fetching user A's project detail "
+        f"{project_id_a} (expected 404). Body: {resp.text[:300]}"
+    )
+
+
+async def test_get_project_detail_owner_sees_counts(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """GET /api/projects/{id} for owner includes paper_count and open_question_count.
+
+    Positive contract: confirms the counts subquery columns reach the response.
+    Collapses the ``assert "project_papers" in counts_sql`` whitebox check in
+    test_project_questions.py::test_get_project_detail_includes_counts.
+    """
+    project_id_a = contract_two_users.project_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get(f"/api/projects/{project_id_a}")
+    assert resp.status_code == 200, (
+        f"GET /api/projects/{project_id_a} for owner failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert "paper_count" in body, f"Response missing paper_count field: {body}"
+    assert "open_question_count" in body, f"Response missing open_question_count field: {body}"
+    # Counts are non-negative integers (type contract)
+    assert isinstance(body["paper_count"], int) and body["paper_count"] >= 0
+    assert isinstance(body["open_question_count"], int) and body["open_question_count"] >= 0

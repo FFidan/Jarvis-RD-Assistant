@@ -153,13 +153,16 @@ def test_kind_lock_key_is_non_negative():
 
 
 def test_kind_lock_key_stable_across_pythonhashseed():
-    """Key must equal SHA-256-derived value, independent of PYTHONHASHSEED."""
+    """Key matches the SHA-256-derived formula — not Python's hash(), so PYTHONHASHSEED has no effect.
+
+    This verifies the algorithm is SHA-256-based (which is deterministic by definition).
+    True cross-seed independence is structural: the implementation never calls hash().
+    """
     import hashlib
 
     kind = "pulse"
     expected = int.from_bytes(hashlib.sha256(kind.encode()).digest()[:4], "big") & 0x7FFF_FFFF
     assert _kind_lock_key(kind) == expected
-    assert _kind_lock_key(kind) == expected  # second call confirms determinism
 
 
 def test_kind_lock_key_known_value_digest():

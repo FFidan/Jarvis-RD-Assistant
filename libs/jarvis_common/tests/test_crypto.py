@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 from jarvis_common.crypto import (
@@ -15,21 +13,7 @@ from jarvis_common.crypto import (
     rotate_key,
     validate_encrypted_config_rows,
 )
-
-
-class FakeRecord(dict):
-    """Small asyncpg.Record stand-in for crypto tests."""
-
-
-def _make_pool(rows: list[FakeRecord]):
-    conn = AsyncMock()
-    conn.fetch.return_value = rows
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool, conn
+from jarvis_common.testing import FakeRecord, make_pool_and_conn
 
 
 @pytest.fixture()
@@ -200,8 +184,8 @@ def test_mask_secret_does_not_leak_prefix() -> None:
 @pytest.mark.asyncio
 async def test_validate_encrypted_config_rows_accepts_decryptable_rows(valid_key) -> None:
     ciphertext = Fernet(valid_key).encrypt(b"secret")
-    pool, conn = _make_pool(
-        [FakeRecord({"key": "llm.openai.api_key", "encrypted_value": ciphertext})]
+    pool, conn = make_pool_and_conn(
+        fetch_return=[FakeRecord({"key": "llm.openai.api_key", "encrypted_value": ciphertext})]
     )
 
     checked = await validate_encrypted_config_rows(pool, dev_mode=False)
@@ -215,7 +199,9 @@ async def test_validate_encrypted_config_rows_fails_non_dev_on_missing_key(monke
     monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
     monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
     refresh_fernet_cache()
-    pool, _conn = _make_pool([FakeRecord({"key": "zotero.api_key", "encrypted_value": b"abc"})])
+    pool, _conn = make_pool_and_conn(
+        fetch_return=[FakeRecord({"key": "zotero.api_key", "encrypted_value": b"abc"})]
+    )
 
     with pytest.raises(RuntimeError, match="Encrypted user_config rows exist"):
         await validate_encrypted_config_rows(pool, dev_mode=False)
@@ -226,7 +212,9 @@ async def test_validate_encrypted_config_rows_warns_in_dev_on_bad_key(monkeypatc
     monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
     monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
     refresh_fernet_cache()
-    pool, _conn = _make_pool([FakeRecord({"key": "zotero.api_key", "encrypted_value": b"abc"})])
+    pool, _conn = make_pool_and_conn(
+        fetch_return=[FakeRecord({"key": "zotero.api_key", "encrypted_value": b"abc"})]
+    )
 
     checked = await validate_encrypted_config_rows(pool, dev_mode=True)
 

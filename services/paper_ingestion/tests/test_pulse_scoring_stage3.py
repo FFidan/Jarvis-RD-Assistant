@@ -4,27 +4,9 @@ TDD: tests written before implementation.
 Pure arithmetic — no I/O mocking needed.
 """
 
-from datetime import date
-
 import pytest
-from paper_ingestion.models import PaperCreate, SourceType
 from paper_ingestion.pulse.scoring import ScoredCandidate, stage3_combine
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_paper(idx: int = 0) -> PaperCreate:
-    return PaperCreate(
-        external_id=f"arxiv:{idx:04d}",
-        source_type=SourceType.ARXIV,
-        title=f"Paper {idx}",
-        authors=["A"],
-        abstract="abs",
-        published_date=date.today(),
-        url=f"https://arxiv.org/abs/{idx:04d}",
-    )
+from tests.pulse_helpers import make_pulse_paper as _make_paper
 
 
 _WEIGHTS = {

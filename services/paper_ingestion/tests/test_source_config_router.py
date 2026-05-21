@@ -11,24 +11,14 @@ All DB calls are mocked via the project's _make_pool_and_conn() pattern from con
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import paper_ingestion.routers.source_config as sc_router
 import pytest
 from fastapi import HTTPException
+from jarvis_common.testing import make_request
 
 from tests.conftest import _make_pool_and_conn
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _build_request(*, user_id: int | None = 1, user_role: str = "admin") -> SimpleNamespace:
-    """Build a minimal fake FastAPI Request with state."""
-    state = SimpleNamespace(user_id=user_id, user_role=user_role)
-    return SimpleNamespace(state=state)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +182,7 @@ async def test_update_source_config_insert_fallback_jsonb_arg_is_dict():
 @pytest.mark.asyncio
 async def test_update_source_config_admin_required():
     """require_admin raises 403 for non-admin callers."""
-    request = _build_request(user_role="user")
+    request = make_request(role="user")
     with pytest.raises(HTTPException) as exc_info:
         await sc_router.require_admin(request)
     assert exc_info.value.status_code == 403
@@ -208,7 +198,7 @@ async def test_clear_cooldown_resets_source_health():
     """POST clear-cooldown issues UPDATE with ok status and NULL cooldown_until."""
     pool, conn = _make_pool_and_conn()
     conn.execute = AsyncMock(return_value=None)
-    request = _build_request(user_id=1)
+    request = make_request(1)
 
     with patch.object(sc_router, "get_source_class", return_value=object()):
         result = await sc_router.clear_source_cooldown("arxiv", request, db_pool=pool)
@@ -227,7 +217,7 @@ async def test_clear_cooldown_resets_source_health():
 async def test_clear_cooldown_unknown_type_raises_404():
     """POST clear-cooldown returns 404 for an unregistered source_type."""
     pool, _conn = _make_pool_and_conn()
-    request = _build_request(user_id=1)
+    request = make_request(1)
 
     with (
         patch.object(sc_router, "get_source_class", return_value=None),
@@ -241,7 +231,7 @@ async def test_clear_cooldown_unknown_type_raises_404():
 @pytest.mark.asyncio
 async def test_clear_cooldown_admin_required():
     """require_admin raises 403 for non-admin callers."""
-    request = _build_request(user_role="user")
+    request = make_request(role="user")
     with pytest.raises(HTTPException) as exc_info:
         await sc_router.require_admin(request)
     assert exc_info.value.status_code == 403
@@ -252,7 +242,7 @@ async def test_clear_cooldown_all_source_health_rows_targeted():
     """UPDATE targets all rows for source_type (global + per-user) via WHERE source_type=$1."""
     pool, conn = _make_pool_and_conn()
     conn.execute = AsyncMock(return_value=None)
-    request = _build_request(user_id=99)
+    request = make_request(99)
 
     with patch.object(sc_router, "get_source_class", return_value=object()):
         await sc_router.clear_source_cooldown("pubmed", request, db_pool=pool)

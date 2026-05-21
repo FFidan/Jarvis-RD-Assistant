@@ -15,31 +15,12 @@ from fastapi import HTTPException
 from learning_engine.models import CardCreate, CardType
 from learning_engine.routers import cards
 
-from tests.conftest import FakeRecord, _make_pool_and_conn
-
-# ---------------------------------------------------------------------------
-# Helpers (mirrors test_cards_router.py pattern)
-# ---------------------------------------------------------------------------
+from tests.le_helpers import make_card_row
+from tests.conftest import _make_pool_and_conn
 
 
 def _now():
     return datetime.now(UTC)
-
-
-def _make_card_row(id=1, deck_id=1, paper_id=None):
-    return FakeRecord(
-        id=id,
-        deck_id=deck_id,
-        paper_id=paper_id,
-        card_type="concept",
-        front="Q?",
-        back="A.",
-        evidence={},
-        fsrs_state={},
-        due_at=_now(),
-        created_at=_now(),
-        updated_at=_now(),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +43,7 @@ async def test_create_card_rejects_other_users_deck() -> None:
 
     with (
         patch.object(cards, "assert_paper_ownership", AsyncMock(return_value=None)),
-        patch.object(cards, "insert_card", AsyncMock(return_value=_make_card_row())) as mock_insert,
+        patch.object(cards, "insert_card", AsyncMock(return_value=make_card_row())) as mock_insert,
     ):
         with pytest.raises(HTTPException) as exc_info:
             await cards.create_card.__wrapped__(
@@ -102,7 +83,7 @@ async def test_create_card_passes_for_own_deck() -> None:
     with (
         patch.object(cards, "assert_paper_ownership", AsyncMock(return_value=None)),
         patch.object(
-            cards, "insert_card", AsyncMock(return_value=_make_card_row(deck_id=5))
+            cards, "insert_card", AsyncMock(return_value=make_card_row(deck_id=5))
         ) as mock_insert,
     ):
         response = await cards.create_card.__wrapped__(

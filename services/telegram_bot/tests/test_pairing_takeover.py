@@ -42,10 +42,6 @@ def _make_pool(conn):
     return pool
 
 
-def _make_update(chat_id: int = _OWNER_CHAT_ID):
-    return make_telegram_update(chat_id=chat_id)
-
-
 def _make_context(pool, config):
     context = MagicMock()
     context.application = MagicMock()
@@ -77,7 +73,7 @@ async def test_already_paired_rejected():
     existing_owner_json = '"999"'
     conn = _make_conn(fetchval_return=existing_owner_json)
     pool = _make_pool(conn)
-    update = _make_update(chat_id=42)
+    update = make_telegram_update(chat_id=42)
     context = _make_context(pool, _make_config())
 
     await _handle_pairing(update, context, "VALID_CODE")
@@ -97,7 +93,7 @@ async def test_already_paired_integer_owner_rejected():
     """Owner stored as bare integer string is also treated as already-paired."""
     conn = _make_conn(fetchval_return="777")
     pool = _make_pool(conn)
-    update = _make_update(chat_id=42)
+    update = make_telegram_update(chat_id=42)
     context = _make_context(pool, _make_config())
 
     await _handle_pairing(update, context, "SOME_CODE")
@@ -116,7 +112,7 @@ async def test_no_existing_owner_allows_pairing():
         fetchrow_return={"expires_at": future},
     )
     pool = _make_pool(conn)
-    update = _make_update(chat_id=42)
+    update = make_telegram_update(chat_id=42)
     context = _make_context(pool, _make_config())
 
     await _handle_pairing(update, context, "GOODCODE")
@@ -143,7 +139,7 @@ async def test_pairing_logs_hash_not_raw_code(caplog):
     conn = _make_conn()
     conn.fetchval = AsyncMock(side_effect=RuntimeError("db exploded"))
     pool = _make_pool(conn)
-    update = _make_update(chat_id=42)
+    update = make_telegram_update(chat_id=42)
     context = _make_context(pool, _make_config())
 
     raw_code = "SUPERSECRETCODE123"
@@ -182,7 +178,7 @@ async def test_pairing_rate_limit_triggers():
     # and doesn't try to actually write. conn.fetchrow returns None (unknown code).
     conn = _make_conn(fetchval_return=None, fetchrow_return=None)
     pool = _make_pool(conn)
-    update = _make_update(chat_id=42)
+    update = make_telegram_update(chat_id=42)
     context = _make_context(pool, _make_config())
 
     # First 5 calls should reach DB (get "Invalid or expired" reply)
@@ -217,12 +213,12 @@ async def test_pairing_rate_limit_different_chats_independent():
     context = _make_context(pool, _make_config())
 
     # Exhaust limit for chat_id=10
-    update_a = _make_update(chat_id=10)
+    update_a = make_telegram_update(chat_id=10)
     for _ in range(5):
         await _handle_pairing(update_a, context, "CODE_A")
 
     # chat_id=20 should still be under the limit
-    update_b = _make_update(chat_id=20)
+    update_b = make_telegram_update(chat_id=20)
     update_b.message.reply_text.reset_mock()
     await _handle_pairing(update_b, context, "CODE_B")
 

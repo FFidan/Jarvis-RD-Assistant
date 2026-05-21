@@ -11,6 +11,13 @@ Collapses the following mock-unit DB stubs:
     (mock_conn.fetch.return_value = [...])
   - test_cross_rag.py::test_ask_cross_paper_endpoint_structure
     (_make_pool_and_conn() for DB layer)
+
+Wave 4.PI-rag additions:
+  - test_cross_rag.py::test_ask_cross_paper_endpoint_structure collapsed here
+    (W4.PI-rag; see test_ask_endpoint_cross_paper_real_db_structure)
+  - test_filter_unread_starred_paper_remains_eligible (new): real schema exercise
+    of Phase-A starred-boolean non-exclusion; strengthens the SQL-substring mock-unit
+    in test_recommender.py::TestFilterUnread::test_starred_papers_remain_eligible_for_recommendation.
 """
 
 from __future__ import annotations
@@ -420,3 +427,49 @@ async def test_ask_endpoint_cross_paper_real_db_structure(contract_conn, pi_test
         assert "content" in src
         assert "page_number" in src
         assert "score" in src
+
+
+# ---------------------------------------------------------------------------
+# 4. _filter_unread: starred=TRUE papers remain eligible (real schema exercise)
+#
+# Strengthens: test_recommender.py::TestFilterUnread::test_starred_papers_remain_eligible_for_recommendation
+#   (currently a SQL-substring mock-unit; real schema proves the predicate is absent).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
+    """_filter_unread must NOT exclude papers whose user_state has starred=TRUE.
+
+    Phase-A: the starred boolean in paper_user_state drives _get_starred_ids
+    (a signal source), but is NOT an exclusion predicate in _filter_unread.
+    This contract test exercises the real SQL: a starred paper inserted with
+    starred=TRUE must still appear in the _filter_unread result set.
+
+    Strictly stronger than test_recommender.py::test_starred_papers_remain_eligible_for_recommendation
+    (which only inspects the SQL text via a mock; this exercises the real schema).
+    """
+    from paper_ingestion.ingestion.recommender import _filter_unread
+
+    # Seed user and paper
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('starred-elig@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url)"
+        " VALUES ('contract-starred-elig-01', 'arxiv', 'Starred Eligible Paper', '{}', 'http://se1')"
+        " RETURNING id"
+    )
+    # Mark this paper as starred for the user (starred=TRUE must NOT gate _filter_unread).
+    await contract_conn.execute(
+        "INSERT INTO paper_user_state (paper_id, user_id, starred) VALUES ($1, $2, TRUE)",
+        paper_id,
+        user_id,
+    )
+
+    result = await _filter_unread(contract_conn, [paper_id], user_id=user_id)
+    assert paper_id in result, (
+        "Paper with starred=TRUE must remain eligible for recommendation "
+        "(starred is a signal source, not an exclusion predicate)"
+    )

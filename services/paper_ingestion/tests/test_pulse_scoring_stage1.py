@@ -17,6 +17,7 @@ from paper_ingestion.pulse.scoring import stage1_embedding_filter
 # ---------------------------------------------------------------------------
 
 
+# Keep local: richer kwargs signature (abstract/authors/external_id/published_date) not covered by pulse_helpers.make_pulse_paper.
 def _make_paper(
     title: str = "Test Paper",
     abstract: str = "Test abstract",
@@ -35,6 +36,7 @@ def _make_paper(
     )
 
 
+# Keep local: stage1-specific weights/recent-titles structure not shared by other pulse tests.
 def _make_profile(
     centroid: list[float] | None = None,
     topics: list[TopicRef] | None = None,
@@ -102,29 +104,54 @@ async def test_stage1_returns_sorted_top_k():
     assert result[0].signals["embedding"] > result[1].signals["embedding"]
 
 
+@pytest.mark.parametrize(
+    ("papers_arg", "profile_kwargs", "embedder_vecs", "expected_len", "signal_checks"),
+    [
+        pytest.param(
+            [],
+            {},
+            [],
+            0,
+            {},
+            id="empty_candidates",
+        ),
+        pytest.param(
+            "single",
+            {"centroid": None},
+            [[0.5, 0.5, 0.5, 0.5]],
+            1,
+            {"embedding": 0.0},
+            id="centroid_none_embedding_sim_zero",
+        ),
+        pytest.param(
+            "single",
+            {"centroid": None, "negative_centroid": None},
+            [[1.0, 0.0, 0.0, 0.0]],
+            1,
+            {"__absent__": "l2_penalty"},
+            id="no_negative_centroid_no_penalty",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_stage1_empty_candidates_returns_empty():
-    """Empty input returns empty list without calling embedder."""
-    profile = _make_profile()
-    embedder = _make_embedder([])
-
-    result = await stage1_embedding_filter([], profile, embedder, top_k=10)
-
-    assert result == []
-    embedder.embed_texts.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_stage1_centroid_none_embedding_sim_zero():
-    """When library_centroid is None, embedding_sim signal is 0.0 for all candidates."""
-    papers = [_make_paper(title="P1", external_id="arxiv:1")]
-    profile = _make_profile(centroid=None)
-    embedder = _make_embedder([[0.5, 0.5, 0.5, 0.5]])
+async def test_stage1_zero_signal_cluster(
+    papers_arg, profile_kwargs, embedder_vecs, expected_len, signal_checks
+):
+    """Zero/null/absent inputs produce zero or absent output signals."""
+    papers = [] if papers_arg == [] else [_make_paper(title="P1", external_id="arxiv:1")]
+    profile = _make_profile(**profile_kwargs)
+    embedder = _make_embedder(embedder_vecs)
 
     result = await stage1_embedding_filter(papers, profile, embedder, top_k=10)
 
-    assert len(result) == 1
-    assert result[0].signals["embedding"] == 0.0
+    assert len(result) == expected_len
+    if expected_len == 0:
+        embedder.embed_texts.assert_not_called()
+    for key, val in signal_checks.items():
+        if key == "__absent__":
+            assert val not in result[0].signals
+        else:
+            assert result[0].signals[key] == val
 
 
 @pytest.mark.asyncio

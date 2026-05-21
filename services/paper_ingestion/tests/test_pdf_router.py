@@ -31,6 +31,8 @@ def _make_conn(fetchrow_return=None):
     return conn
 
 
+# Keep local: multi-conn side_effect semantics (successive acquire() yields different
+# connections) are not covered by jarvis_common.make_pool_and_conn.
 def _make_pool_multi_conn(*conns):
     """Return a pool mock that yields each connection in order on successive acquire() calls."""
     pool = MagicMock()

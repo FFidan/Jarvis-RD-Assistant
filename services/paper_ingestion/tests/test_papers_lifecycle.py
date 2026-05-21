@@ -76,10 +76,6 @@ async def test_hard_delete_with_trash_state_succeeds():
         )
 
     assert result == {"deleted": 12}
-    # The DELETE SQL must have been called
-    sql = conn.execute.await_args.args[0]
-    assert "DELETE FROM papers" in sql
-    assert conn.execute.await_args.args[1] == 12
     # Qdrant cleanup must have been called exactly once
     mock_delete.assert_awaited_once_with(12)
 

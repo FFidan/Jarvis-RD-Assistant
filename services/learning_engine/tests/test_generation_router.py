@@ -2,48 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.db_helpers import get_smart_model  # noqa: E402
-from jarvis_common.jobs import JobContext, JobError  # noqa: E402
+from jarvis_common.jobs import JobError  # noqa: E402
 from learning_engine import _state as le_state  # noqa: E402
 from learning_engine.models import BatchGenerateRequest, GenerateCardsRequest  # noqa: E402
 from learning_engine.routers import generation  # noqa: E402
 
+from tests.le_helpers import make_card_row, make_job_ctx
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _now():
+    from datetime import UTC, datetime
+
     return datetime.now(UTC)
-
-
-def _make_card_row(id=1, deck_id=1, paper_id=1):
-    """Return a fake row compatible with row_to_card_response."""
-    return FakeRecord(
-        id=id,
-        deck_id=deck_id,
-        paper_id=paper_id,
-        card_type="concept",
-        front="What changed?",
-        back="The method improved retrieval.",
-        evidence={"quote": "Improved retrieval", "page_number": 2},
-        fsrs_state={},
-        due_at=_now(),
-        created_at=_now(),
-        updated_at=_now(),
-    )
-
-
-def _make_ctx(job_id="test-job-001"):
-    """Return a minimal JobContext stub."""
-    ctx = MagicMock(spec=JobContext)
-    ctx.job_id = job_id
-    ctx.update_progress = AsyncMock()
-    ctx.is_cancelled = AsyncMock(return_value=False)
-    return ctx
 
 
 def test_get_smart_model_returns_alias():
@@ -89,7 +65,7 @@ async def test_generate_cards_core_success():
     with (
         patch.object(generation, "get_smart_model", MagicMock(return_value="smart")),
         patch.object(
-            generation, "insert_card", AsyncMock(return_value=_make_card_row(id=501, paper_id=101))
+            generation, "insert_card", AsyncMock(return_value=make_card_row(id=501, paper_id=101))
         ),
         patch.object(le_state.svc, "openai_client", MagicMock()),
     ):
@@ -146,7 +122,7 @@ async def test_generate_cards_core_propagates_progress():
     """generate_cards_core calls ctx.update_progress at each stage."""
     pool, conn = _make_pool_and_conn()
     http_client = AsyncMock()
-    ctx = _make_ctx()
+    ctx = make_job_ctx()
 
     fsrs_manager = MagicMock()
     fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
@@ -160,7 +136,7 @@ async def test_generate_cards_core_propagates_progress():
 
     with (
         patch.object(generation, "get_smart_model", MagicMock(return_value="smart")),
-        patch.object(generation, "insert_card", AsyncMock(return_value=_make_card_row())),
+        patch.object(generation, "insert_card", AsyncMock(return_value=make_card_row())),
         patch.object(le_state.svc, "openai_client", MagicMock()),
     ):
         await generation.generate_cards_core(
@@ -292,7 +268,7 @@ async def test_batch_job_handler_records_missing_chunks_error():
     """_card_generate_batch_job records a JobError per paper and continues."""
     pool, conn = _make_pool_and_conn()
     http_client = AsyncMock()
-    ctx = _make_ctx()
+    ctx = make_job_ctx()
 
     # Paper list query returns one paper
     conn.fetch.return_value = [FakeRecord(id=99)]

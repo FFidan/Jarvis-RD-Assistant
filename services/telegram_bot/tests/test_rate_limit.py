@@ -15,20 +15,12 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jarvis_common.testing import make_telegram_update
 from telegram_bot.handlers.rate_limit import _locks, _timestamps, rate_limit
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_update(chat_id: int = 12345) -> MagicMock:
-    update = MagicMock()
-    update.effective_chat = MagicMock()
-    update.effective_chat.id = chat_id
-    update.message = MagicMock()
-    update.message.reply_text = AsyncMock()
-    return update
 
 
 def _make_context() -> MagicMock:
@@ -68,7 +60,7 @@ async def test_rate_limit_gc_always_prunes_stale_timestamps():
     key = f"{chat_id}:{_noop_handler.__module__}.{_noop_handler.__qualname__}"
     _timestamps[key] = [far_past] * stale_count
 
-    update = _make_update(chat_id=chat_id)
+    update = make_telegram_update(chat_id=chat_id)
     context = _make_context()
 
     # Should succeed (stale stamps must be pruned before the window check)
@@ -93,7 +85,7 @@ async def test_rate_limit_sliding_window_blocks_excess_calls():
     async def _guarded(update, context):  # type: ignore[no-untyped-def]
         return "ok"
 
-    update = _make_update(chat_id=chat_id)
+    update = make_telegram_update(chat_id=chat_id)
     context = _make_context()
 
     assert await _guarded(update, context) == "ok"
@@ -115,7 +107,7 @@ async def test_rate_limit_cooldown_blocks_rapid_repeat():
     async def _heavy(update, context):  # type: ignore[no-untyped-def]
         return "ok"
 
-    update = _make_update(chat_id=chat_id)
+    update = make_telegram_update(chat_id=chat_id)
     context = _make_context()
 
     first = await _heavy(update, context)
@@ -275,7 +267,7 @@ async def test_rate_limiter_no_toctou_under_concurrency():
 
     async def _call() -> None:
         nonlocal reject_count
-        update = _make_update(chat_id=chat_id)
+        update = make_telegram_update(chat_id=chat_id)
         result = await _guarded(update, context)
         if result is None:
             reject_count += 1
@@ -332,7 +324,7 @@ async def test_rate_limit_fires_before_silent_drop_auth():
     flood_size = max_calls + 3  # enough to trigger rate-limit
 
     for _ in range(flood_size):
-        update = _make_update(chat_id=chat_id)
+        update = make_telegram_update(chat_id=chat_id)
         update.message.reply_text = AsyncMock(
             side_effect=lambda text, **kw: reply_text_calls.append(text)
         )

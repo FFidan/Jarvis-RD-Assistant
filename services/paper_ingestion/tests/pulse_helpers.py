@@ -16,8 +16,31 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import date
 
 from jarvis_common.testing import FakeRecord
+from paper_ingestion.models import PaperCreate, SourceType
+
+
+def make_pulse_paper(idx: int = 0, title: str | None = None) -> PaperCreate:
+    """Return a minimal PaperCreate for pulse scoring tests.
+
+    Parameters
+    ----------
+    idx:
+        Numeric index used to produce unique external_id / title.
+    title:
+        Override title; defaults to ``f"Paper {idx}"``.
+    """
+    return PaperCreate(
+        external_id=f"arxiv:{idx:04d}",
+        source_type=SourceType.ARXIV,
+        title=title if title is not None else f"Paper {idx}",
+        authors=["Author A"],
+        abstract=f"Abstract {idx}",
+        published_date=date.today(),
+        url=f"https://arxiv.org/abs/{idx:04d}",
+    )
 
 
 def make_pulse_deck_row(

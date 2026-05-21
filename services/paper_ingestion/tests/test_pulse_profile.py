@@ -964,7 +964,13 @@ async def test_load_profile_warns_on_out_of_range_weights(caplog):
 
 @pytest.mark.asyncio
 async def test_load_profile_with_user_id_filters_ratings():
-    """When user_id=42 is passed, rating SQL must include IS NOT DISTINCT FROM and bind 42."""
+    """When user_id=42 is passed, all rating queries bind 42 as the user_id param.
+
+    SQL-substring assertions ("IS NOT DISTINCT FROM" in sql) collapsed (B1-09).
+    Survivor: param binding checks confirm user_id=42 is bound to engaged,
+    positive, and negative rating queries. Behavioral isolation verified in
+    test_pulse_contract.py::test_load_profile_user_id_isolates_ratings.
+    """
     phase1_conn = AsyncMock()
     phase1_conn.fetch.side_effect = [[], [], []]
 
@@ -995,30 +1001,23 @@ async def test_load_profile_with_user_id_filters_ratings():
 
     assert isinstance(profile, UserProfile)
 
-    engaged_sql = phase1_conn.fetch.call_args_list[2][0][0]
+    # Engaged papers query binds user_id=42
     engaged_params = list(phase1_conn.fetch.call_args_list[2][0][1:])
-    assert "pus.user_id IS NOT DISTINCT FROM" in engaged_sql
-    assert 42 in engaged_params
+    assert 42 in engaged_params, (
+        f"Expected user_id=42 in engaged-papers query params, got: {engaged_params}"
+    )
 
     fetch_calls = phase3_conn.fetch.call_args_list
     assert len(fetch_calls) >= 3
 
-    positive_call = fetch_calls[1]
-    positive_sql = positive_call[0][0]
-    positive_params = list(positive_call[0][1:])
-    assert "IS NOT DISTINCT FROM" in positive_sql, (
-        f"Expected 'IS NOT DISTINCT FROM' in positive-rating SQL, got: {positive_sql!r}"
-    )
+    # Positive rating query binds user_id=42
+    positive_params = list(fetch_calls[1][0][1:])
     assert 42 in positive_params, (
         f"Expected user_id=42 in positive-rating query params, got: {positive_params}"
     )
 
-    negative_call = fetch_calls[2]
-    negative_sql = negative_call[0][0]
-    negative_params = list(negative_call[0][1:])
-    assert "IS NOT DISTINCT FROM" in negative_sql, (
-        f"Expected 'IS NOT DISTINCT FROM' in negative-rating SQL, got: {negative_sql!r}"
-    )
+    # Negative rating query binds user_id=42
+    negative_params = list(fetch_calls[2][0][1:])
     assert 42 in negative_params, (
         f"Expected user_id=42 in negative-rating query params, got: {negative_params}"
     )
@@ -1026,7 +1025,11 @@ async def test_load_profile_with_user_id_filters_ratings():
 
 @pytest.mark.asyncio
 async def test_load_profile_without_user_id_no_filter():
-    """When user_id=None (default), rating SQL must use IS NOT DISTINCT FROM with None."""
+    """When user_id=None (default), rating queries bind None as the user_id param.
+
+    SQL-substring assertions ("IS NOT DISTINCT FROM" in sql) collapsed (B1-09).
+    Survivor: param binding check that user_id arg is None in the null-user path.
+    """
     phase1_conn = AsyncMock()
     phase1_conn.fetch.side_effect = [[], [], []]
 
@@ -1060,14 +1063,6 @@ async def test_load_profile_without_user_id_no_filter():
     fetch_calls = phase3_conn.fetch.call_args_list
     assert len(fetch_calls) >= 3
 
-    positive_sql = fetch_calls[1][0][0]
-    assert "IS NOT DISTINCT FROM" in positive_sql, (
-        "positive-rating SQL must use IS NOT DISTINCT FROM for user_id filtering"
-    )
-    assert fetch_calls[1][0][1] is None, "user_id arg must be None in stub mode"
-
-    negative_sql = fetch_calls[2][0][0]
-    assert "IS NOT DISTINCT FROM" in negative_sql, (
-        "negative-rating SQL must use IS NOT DISTINCT FROM for user_id filtering"
-    )
-    assert fetch_calls[2][0][1] is None
+    # user_id=None must be passed as the first positional param to positive/negative queries
+    assert fetch_calls[1][0][1] is None, "user_id arg must be None in positive-rating query"
+    assert fetch_calls[2][0][1] is None, "user_id arg must be None in negative-rating query"

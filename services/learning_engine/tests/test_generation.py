@@ -12,41 +12,15 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from jarvis_common.jobs import JobContext
 from learning_engine import _state as le_state
 from learning_engine.routers import generation
 
+from tests.le_helpers import make_card_row, make_job_ctx
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 def _now():
     return datetime.now(UTC)
-
-
-def _make_card_row(id=1, deck_id=1, paper_id=1, user_id=None):
-    """Return a fake row compatible with row_to_card_response."""
-    return FakeRecord(
-        id=id,
-        deck_id=deck_id,
-        paper_id=paper_id,
-        card_type="concept",
-        front="What is X?",
-        back="X is Y.",
-        evidence={"quote": "X is Y", "page_number": 1},
-        fsrs_state={},
-        due_at=_now(),
-        created_at=_now(),
-        updated_at=_now(),
-        user_id=user_id,
-    )
-
-
-def _make_ctx(job_id="test-job-h7"):
-    ctx = MagicMock(spec=JobContext)
-    ctx.job_id = job_id
-    ctx.update_progress = AsyncMock()
-    ctx.is_cancelled = AsyncMock(return_value=False)
-    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +64,8 @@ async def test_generate_cards_writes_user_id():
 
     mock_insert = AsyncMock(
         side_effect=[
-            _make_card_row(id=1, user_id=42),
-            _make_card_row(id=2, user_id=42),
+            make_card_row(id=1, user_id=42),
+            make_card_row(id=2, user_id=42),
         ]
     )
 
@@ -129,7 +103,7 @@ async def test_batch_paper_pool_scopes_to_user_library():
     """_card_generate_batch_job uses user_library EXISTS clause when user_id is set."""
     pool, conn = _make_pool_and_conn()
     http_client = AsyncMock()
-    ctx = _make_ctx()
+    ctx = make_job_ctx()
 
     # Pool query returns 2 papers (simulating only user A's library papers)
     conn.fetch.return_value = [FakeRecord(id=10), FakeRecord(id=20)]
@@ -171,7 +145,7 @@ async def test_batch_paper_pool_no_user_id_uses_unscoped_query():
     """_card_generate_batch_job uses the unscoped query when user_id is None."""
     pool, conn = _make_pool_and_conn()
     http_client = AsyncMock()
-    ctx = _make_ctx()
+    ctx = make_job_ctx()
 
     conn.fetch.return_value = [FakeRecord(id=99)]
 

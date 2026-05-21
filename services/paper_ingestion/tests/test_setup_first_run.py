@@ -16,6 +16,7 @@ import paper_ingestion.routers.setup as setup_router
 import pytest
 from fastapi import HTTPException, Response
 from httpx import ASGITransport
+from jarvis_common.testing import make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # Module-wide: disable the SlowAPI limiter so direct-call (non-ASGI) tests
@@ -46,20 +47,8 @@ def _disable_limiter_for_direct_call_tests():
 # ---------------------------------------------------------------------------
 
 
-def _build_mock_pool(conn: AsyncMock) -> MagicMock:
-    txn = MagicMock()
-    txn.__aenter__ = AsyncMock(return_value=txn)
-    txn.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
-
-
+# Keep local: setup router accesses request.app.state.db_pool/qdrant_client/http_client
+# which jarvis_common.make_request does not populate on app.state.
 def _build_request(
     pool: MagicMock,
     *,
@@ -92,7 +81,7 @@ def _build_request(
 async def test_status_returns_unconfigured_when_no_admins() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     res = await setup_router.get_status(request)
@@ -103,7 +92,7 @@ async def test_status_returns_unconfigured_when_no_admins() -> None:
 async def test_status_returns_configured_when_admin_exists() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     res = await setup_router.get_status(request)
@@ -116,7 +105,7 @@ async def test_status_fail_open_when_db_explodes() -> None:
     operator can recover via the wizard / system-check endpoint."""
     conn = AsyncMock()
     conn.fetchval = AsyncMock(side_effect=RuntimeError("pool dead"))
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     res = await setup_router.get_status(request)
@@ -132,7 +121,7 @@ async def test_status_fail_open_when_db_explodes() -> None:
 async def test_require_dep_allows_when_no_admins() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     # No exception means "allowed".
@@ -143,7 +132,7 @@ async def test_require_dep_allows_when_no_admins() -> None:
 async def test_require_dep_allows_admin_when_configured() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool, user_role="admin")
 
     await setup_router.require_unconfigured_or_admin(request)
@@ -153,7 +142,7 @@ async def test_require_dep_allows_admin_when_configured() -> None:
 async def test_require_dep_rejects_non_admin_when_configured() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool, user_role="user")
 
     with pytest.raises(HTTPException) as exc_info:
@@ -165,7 +154,7 @@ async def test_require_dep_rejects_non_admin_when_configured() -> None:
 async def test_require_dep_rejects_anon_when_configured() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)  # no user_role on state
 
     with pytest.raises(HTTPException) as exc_info:
@@ -192,7 +181,7 @@ async def test_create_first_admin_inserts_user_and_session_and_sets_cookie() -> 
             {"id": 42, "email": "owner@example.com", "role": "admin"},
         ]
     )
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
     response = Response()
 
@@ -212,7 +201,7 @@ async def test_create_first_admin_inserts_user_and_session_and_sets_cookie() -> 
 async def test_create_first_admin_rejects_when_admin_already_exists() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)  # admin count > 0
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
     response = Response()
 
@@ -227,7 +216,7 @@ async def test_create_first_admin_rejects_existing_email() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
     conn.fetchrow = AsyncMock(return_value={"id": 1, "deleted_at": None})
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
     response = Response()
 
@@ -253,7 +242,7 @@ async def test_smtp_save_persists_config_rows(monkeypatch) -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)  # no admins yet → bypass auth
     conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     body = setup_router.SmtpBody(
@@ -282,7 +271,7 @@ async def test_smtp_test_send_invokes_aiosmtplib(monkeypatch) -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
     conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     sent_calls: list[dict] = []
@@ -321,7 +310,7 @@ async def test_smtp_test_send_failure_returns_error_string(monkeypatch) -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
     conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     async def _boom(*args, **kw):
@@ -368,7 +357,7 @@ async def test_get_smtp_config_returns_masked_shape_when_unconfigured() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)  # no admins → bootstrap, gate open
     conn.fetch = AsyncMock(return_value=_smtp_rows(with_password=True))
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     res = await setup_router.get_smtp_config(request)
@@ -400,7 +389,7 @@ async def test_get_smtp_config_has_password_false_when_no_pass_row() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
     conn.fetch = AsyncMock(return_value=_smtp_rows(with_password=False))
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     res = await setup_router.get_smtp_config(request)
@@ -414,7 +403,7 @@ async def test_get_smtp_config_empty_when_nothing_persisted() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
     conn.fetch = AsyncMock(return_value=[])
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     res = await setup_router.get_smtp_config(request)
@@ -426,40 +415,30 @@ async def test_get_smtp_config_empty_when_nothing_persisted() -> None:
     assert res.has_password is False
 
 
+@pytest.mark.parametrize(
+    ("user_role", "expected_status"),
+    [
+        pytest.param("admin", 200, id="admin_200"),
+        pytest.param("user", 403, id="non_admin_403"),
+        pytest.param(None, 403, id="anon_403"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_get_smtp_config_allows_admin_when_configured() -> None:
+async def test_get_smtp_config_by_role(user_role, expected_status) -> None:
+    """get_smtp_config enforces auth-tier: admin allowed, non-admin and anon rejected."""
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)  # admin exists → gate locked down
     conn.fetch = AsyncMock(return_value=_smtp_rows(with_password=True))
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool, user_role="admin")
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool, user_role=user_role)
 
-    res = await setup_router.get_smtp_config(request)
-    assert res.has_password is True
-
-
-@pytest.mark.asyncio
-async def test_get_smtp_config_rejects_non_admin_when_configured() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=1)  # admins exist
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool, user_role="user")
-
-    with pytest.raises(HTTPException) as exc_info:
-        await setup_router.get_smtp_config(request)
-    assert exc_info.value.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_get_smtp_config_rejects_anon_when_configured() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=1)
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool)  # no user_role on state
-
-    with pytest.raises(HTTPException) as exc_info:
-        await setup_router.get_smtp_config(request)
-    assert exc_info.value.status_code == 403
+    if expected_status == 200:
+        res = await setup_router.get_smtp_config(request)
+        assert res.has_password is True
+    else:
+        with pytest.raises(HTTPException) as exc_info:
+            await setup_router.get_smtp_config(request)
+        assert exc_info.value.status_code == expected_status
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +456,7 @@ async def test_cloud_llm_keys_persists_only_provided(monkeypatch) -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
     conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     body = setup_router.CloudLlmKeysBody(openai="sk-x", gemini=None, anthropic="   ")
@@ -491,7 +470,7 @@ async def test_cloud_llm_keys_persists_only_provided(monkeypatch) -> None:
 async def test_cloud_llm_keys_rejected_for_non_admin_when_configured() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)  # admins exist
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool, user_role="user")
 
     body = setup_router.CloudLlmKeysBody(openai="sk-x")
@@ -516,7 +495,7 @@ async def test_persist_config_passes_value_directly_not_json_string() -> None:
     """
     conn = AsyncMock()
     conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     dict_value = {"smtp_host": "mail.example.com", "port": 587}
 
@@ -692,7 +671,7 @@ async def test_cloud_llm_keys_repushes_active_cloud_alias(monkeypatch) -> None:
             {"value": "anthropic/claude-sonnet-4-5"} if a[1] == "llm.smart_model" else None
         )
     )
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     called: list[tuple] = []
@@ -738,7 +717,7 @@ async def test_cloud_llm_keys_repush_failure_sets_restart_required(monkeypatch) 
             {"value": "anthropic/claude-sonnet-4-5"} if a[1] == "llm.smart_model" else None
         )
     )
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     async def _boom(alias_key, model_id, db_pool=None):
@@ -770,7 +749,7 @@ async def test_cloud_llm_keys_no_repush_when_no_active_cloud_alias(monkeypatch) 
     conn.execute = AsyncMock()
     # All aliases are local Ollama models — no cloud prefix.
     conn.fetchrow = AsyncMock(return_value={"value": "mistral-nemo"})
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     import paper_ingestion.services.litellm_config as llc  # noqa: PLC0415
@@ -805,7 +784,7 @@ async def test_telegram_token_persists_encrypted(monkeypatch) -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
     conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     body = setup_router.TelegramBotTokenBody(token=_VALID_TG_TOKEN)
@@ -833,7 +812,7 @@ async def test_telegram_token_status_masked_true_false() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
     conn.fetchrow = AsyncMock(return_value={"value": None, "encrypted_value": b"gAAA-cipher"})
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     res = await setup_router.get_telegram_bot_token_status(request)
@@ -852,7 +831,7 @@ async def test_telegram_token_status_masked_true_false() -> None:
 async def test_telegram_token_rejected_for_non_admin_when_configured() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)  # admins exist
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool, user_role="user")
 
     body = setup_router.TelegramBotTokenBody(token=_VALID_TG_TOKEN)
@@ -871,7 +850,7 @@ async def test_setup_mode_persists() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=0)
     conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool)
 
     body = setup_router.SetupModeBody(mode="multi")
@@ -896,7 +875,7 @@ async def test_setup_mode_enum_violation_rejected() -> None:
 async def test_setup_mode_rejected_for_non_admin_when_configured() -> None:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)  # admins exist
-    pool = _build_mock_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _build_request(pool, user_role="user")
 
     body = setup_router.SetupModeBody(mode="single")

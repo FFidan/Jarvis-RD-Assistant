@@ -15,11 +15,10 @@ import pytest
 from fastapi import HTTPException  # noqa: E402
 from learning_engine.routers.milestones import update_milestone  # noqa: E402
 from learning_engine.routers.projects import (  # noqa: E402
-    _VALID_STATUSES,
     list_projects,
     update_project,
 )
-from learning_engine.routers.tasks import _VALID_TASK_STATUSES, list_tasks  # noqa: E402
+from learning_engine.routers.tasks import list_tasks  # noqa: E402
 
 from tests.conftest import _make_pool_and_conn
 
@@ -34,32 +33,29 @@ def _fake_request():
 # ---------------------------------------------------------------------------
 
 
-async def test_list_projects_rejects_invalid_status() -> None:
-    """list_projects raises 400 for a status value outside the valid set."""
-    fake_pool = AsyncMock()
-
-    with pytest.raises(HTTPException) as exc_info:
-        await list_projects.__wrapped__(_fake_request(), status="nonexistent", db_pool=fake_pool)
-
-    assert exc_info.value.status_code == 400
-    assert "nonexistent" in exc_info.value.detail
-
-
-async def test_list_projects_accepts_valid_statuses() -> None:
-    """list_projects does not raise for each valid status value."""
-    fake_pool, _ = _make_pool_and_conn(fetch_return=[])
-
-    for status in sorted(_VALID_STATUSES):
+@pytest.mark.parametrize(
+    ("status", "expect_error"),
+    [
+        pytest.param("nonexistent", True, id="invalid"),
+        pytest.param("active", False, id="active"),
+        pytest.param("archived", False, id="archived"),
+        pytest.param("completed", False, id="completed"),
+        pytest.param("paused", False, id="paused"),
+        pytest.param(None, False, id="none"),
+    ],
+)
+async def test_list_projects_status_filter(status: str | None, expect_error: bool) -> None:
+    """list_projects enforces status validation and passes valid/None values through."""
+    if expect_error:
+        fake_pool = AsyncMock()
+        with pytest.raises(HTTPException) as exc_info:
+            await list_projects.__wrapped__(_fake_request(), status=status, db_pool=fake_pool)
+        assert exc_info.value.status_code == 400
+        assert status in exc_info.value.detail
+    else:
+        fake_pool, _ = _make_pool_and_conn(fetch_return=[])
         rows = await list_projects.__wrapped__(_fake_request(), status=status, db_pool=fake_pool)
         assert rows == []
-
-
-async def test_list_projects_accepts_none_status() -> None:
-    """list_projects returns results when status is None (no filter)."""
-    fake_pool, _ = _make_pool_and_conn(fetch_return=[])
-
-    rows = await list_projects.__wrapped__(_fake_request(), status=None, db_pool=fake_pool)
-    assert rows == []
 
 
 # ---------------------------------------------------------------------------
@@ -67,55 +63,44 @@ async def test_list_projects_accepts_none_status() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_list_tasks_rejects_invalid_status() -> None:
-    """list_tasks raises 400 for a status value outside the valid set."""
-    fake_pool = AsyncMock()
+@pytest.mark.parametrize(
+    ("status", "expect_error"),
+    [
+        pytest.param("nonexistent", True, id="invalid"),
+        pytest.param("todo", False, id="todo"),
+        pytest.param("in_progress", False, id="in_progress"),
+        pytest.param("done", False, id="done"),
+        pytest.param("blocked", False, id="blocked"),
+        pytest.param(None, False, id="none"),
+    ],
+)
+async def test_list_tasks_status_filter(status: str | None, expect_error: bool) -> None:
+    """list_tasks enforces status validation and passes valid/None values through."""
+    if expect_error:
+        fake_pool = AsyncMock()
+        with pytest.raises(HTTPException) as exc_info:
+            await list_tasks.__wrapped__(
+                _fake_request(),
+                project_id=1,
+                status=status,
+                db_pool=fake_pool,
+            )
+        assert exc_info.value.status_code == 400
+        assert status in exc_info.value.detail
+    else:
+        fake_conn = AsyncMock()
+        fake_conn.fetchval = AsyncMock(return_value=1)  # project exists
+        fake_conn.fetch = AsyncMock(return_value=[])
 
-    with pytest.raises(HTTPException) as exc_info:
-        await list_tasks.__wrapped__(
-            _fake_request(),
-            project_id=1,
-            status="nonexistent",
-            db_pool=fake_pool,
-        )
+        fake_pool = AsyncMock()
+        fake_pool.acquire = MagicMock(return_value=AsyncMock())
+        fake_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=fake_conn)
+        fake_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
 
-    assert exc_info.value.status_code == 400
-    assert "nonexistent" in exc_info.value.detail
-
-
-async def test_list_tasks_accepts_valid_statuses() -> None:
-    """list_tasks does not raise for each valid task status value."""
-    fake_conn = AsyncMock()
-    fake_conn.fetchval = AsyncMock(return_value=1)  # project exists
-    fake_conn.fetch = AsyncMock(return_value=[])
-
-    fake_pool = AsyncMock()
-    fake_pool.acquire = MagicMock(return_value=AsyncMock())
-    fake_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=fake_conn)
-    fake_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-    for status in sorted(_VALID_TASK_STATUSES):
         rows = await list_tasks.__wrapped__(
             _fake_request(), project_id=1, status=status, db_pool=fake_pool
         )
         assert rows == []
-
-
-async def test_list_tasks_accepts_none_status() -> None:
-    """list_tasks returns results when status is None (no filter)."""
-    fake_conn = AsyncMock()
-    fake_conn.fetchval = AsyncMock(return_value=1)  # project exists
-    fake_conn.fetch = AsyncMock(return_value=[])
-
-    fake_pool = AsyncMock()
-    fake_pool.acquire = MagicMock(return_value=AsyncMock())
-    fake_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=fake_conn)
-    fake_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-    rows = await list_tasks.__wrapped__(
-        _fake_request(), project_id=1, status=None, db_pool=fake_pool
-    )
-    assert rows == []
 
 
 # ---------------------------------------------------------------------------

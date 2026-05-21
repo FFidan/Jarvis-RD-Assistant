@@ -58,14 +58,6 @@ def _make_pool(conn, *, fetchrow_return=None, fetchval_return=None, fetch_return
     return pool
 
 
-def _make_update(
-    text: str = "",
-    chat_id: int = 42,
-    username: str | None = "testuser",
-):
-    return make_telegram_update(chat_id=chat_id, text=text, username=username)
-
-
 def _make_context(pool, config=None, args=None):
     context = MagicMock()
     context.args = args or []
@@ -88,7 +80,7 @@ async def test_pair_no_args_replies_usage():
     """Calling /pair without a token replies with usage instructions."""
     conn = _make_conn()
     pool = _make_pool(conn)
-    update = _make_update()
+    update = make_telegram_update()
     context = _make_context(pool, args=[])
 
     await pair_command(update, context)
@@ -103,7 +95,7 @@ async def test_pair_unknown_token_replies_error():
     """Unknown token triggers an informative error reply."""
     conn = _make_conn(fetchrow_return=None)
     pool = _make_pool(conn)
-    update = _make_update()
+    update = make_telegram_update()
     context = _make_context(pool, args=["unknowntoken"])
 
     await pair_command(update, context)
@@ -124,7 +116,7 @@ async def test_pair_already_consumed_token_replies_error():
         }
     )
     pool = _make_pool(conn)
-    update = _make_update()
+    update = make_telegram_update()
     context = _make_context(pool, args=["alreadyused"])
 
     await pair_command(update, context)
@@ -145,7 +137,7 @@ async def test_pair_expired_token_deletes_and_replies_error():
         }
     )
     pool = _make_pool(conn)
-    update = _make_update()
+    update = make_telegram_update()
     context = _make_context(pool, args=["expiredtoken"])
 
     await pair_command(update, context)
@@ -173,7 +165,7 @@ async def test_pair_valid_token_upserts_pairing_and_marks_consumed():
         ]
     )
     pool = _make_pool(conn)
-    update = _make_update(chat_id=12345, username="alice")
+    update = make_telegram_update(chat_id=12345, username="alice")
     context = _make_context(pool, args=["validtoken123"])
 
     await pair_command(update, context)
@@ -205,7 +197,7 @@ async def test_unpair_paired_chat_removes_pairing():
     """Unpair deletes the pairing row and confirms success."""
     conn = _make_conn(fetchval_return=42, execute_return="DELETE 1")
     pool = _make_pool(conn)
-    update = _make_update(chat_id=12345)
+    update = make_telegram_update(chat_id=12345)
     config = _make_config(telegram_chat_id=12345)
     context = _make_context(pool, config=config, args=[])
     context.user_data = {"jarvis_user_id": 12345}
@@ -231,7 +223,7 @@ async def test_unpair_not_paired_chat_replies_informational():
     """Unpair with no active pairing gives an informational reply."""
     conn = _make_conn(fetchval_return=None, execute_return="DELETE 0")
     pool = _make_pool(conn)
-    update = _make_update(chat_id=777)
+    update = make_telegram_update(chat_id=777)
     config = _make_config(telegram_chat_id=777)
     context = _make_context(pool, config=config, args=[])
 
@@ -259,7 +251,7 @@ async def test_whoami_paired_chat_shows_paired_since():
     }
 
     pool = _make_pool(_make_conn(), fetchrow_return=row)
-    update = _make_update(chat_id=12345)
+    update = make_telegram_update(chat_id=12345)
     context = _make_context(pool, args=[])
 
     await whoami_command(update, context)
@@ -277,7 +269,7 @@ async def test_whoami_paired_chat_shows_paired_since():
 async def test_whoami_unpaired_chat_shows_instructions():
     """Unpaired chat shows how to pair."""
     pool = _make_pool(_make_conn(), fetchrow_return=None)
-    update = _make_update(chat_id=99999)
+    update = make_telegram_update(chat_id=99999)
     config = _make_config(telegram_chat_id=777)  # different chat → not legacy owner
     context = _make_context(pool, config=config, args=[])
 
@@ -292,7 +284,7 @@ async def test_whoami_unpaired_chat_shows_instructions():
 async def test_whoami_legacy_owner_shows_system_owner_message():
     """Chat matching config.telegram_chat_id but no per-user pairing gets legacy-owner message."""
     pool = _make_pool(_make_conn(), fetchrow_return=None)
-    update = _make_update(chat_id=777)
+    update = make_telegram_update(chat_id=777)
     config = _make_config(telegram_chat_id=777)
     context = _make_context(pool, config=config, args=[])
 
@@ -332,7 +324,7 @@ async def test_pair_rebound_emits_system_event_and_notifies_prior_chat():
     )
     pool = _make_pool(conn)
     # New pairing comes from chat 2002 (displaces 1001)
-    update = _make_update(chat_id=2002, username="bob")
+    update = make_telegram_update(chat_id=2002, username="bob")
     context = _make_context(pool, args=["newtoken"])
     context.bot = MagicMock()
     context.bot.send_message = AsyncMock()
@@ -379,7 +371,7 @@ async def test_pair_rebound_stale_prior_chat_does_not_fail_new_pairing():
         ]
     )
     pool = _make_pool(conn)
-    update = _make_update(chat_id=3003, username="carol")
+    update = make_telegram_update(chat_id=3003, username="carol")
     context = _make_context(pool, args=["token77"])
     context.bot = MagicMock()
     # Simulate blocked/stale prior chat raising
@@ -418,7 +410,7 @@ async def test_pair_upsert_sql_uses_cte_for_prior_chat_id():
         ]
     )
     pool = _make_pool(conn)
-    update = _make_update(chat_id=9999, username="user1")
+    update = make_telegram_update(chat_id=9999, username="user1")
     context = _make_context(pool, args=["ctetoken"])
 
     await pair_command(update, context)
@@ -454,7 +446,7 @@ async def test_pair_chat_already_paired_to_another_account():
         ]
     )
     pool = _make_pool(conn)
-    update = _make_update(chat_id=5555, username="userB")
+    update = make_telegram_update(chat_id=5555, username="userB")
     context = _make_context(pool, args=["tokenB"])
 
     await pair_command(update, context)
@@ -481,7 +473,7 @@ async def test_whoami_does_not_leak_db_user_id():
         "paired_at": paired_at,
     }
     pool = _make_pool(_make_conn(), fetchrow_return=row)
-    update = _make_update(chat_id=99)
+    update = make_telegram_update(chat_id=99)
     context = _make_context(pool, args=[])
 
     await whoami_command(update, context)
@@ -521,7 +513,7 @@ async def test_whoami_rate_limited_after_five_calls() -> None:
     chat_id = 888_001
     results: list = []
     for _ in range(6):
-        update = _make_update(chat_id=chat_id)
+        update = make_telegram_update(chat_id=chat_id)
         context = _make_context(pool)
         result = await whoami_command(update, context)
         results.append(result)

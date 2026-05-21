@@ -16,29 +16,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from tests.conftest import _make_pool_and_conn
-
-# ---------------------------------------------------------------------------
-# Shared helpers (mirror existing test patterns)
-# ---------------------------------------------------------------------------
-
-
-class _Acquire:
-    """Async context manager returning a fake DB connection."""
-
-    def __init__(self, conn: AsyncMock) -> None:
-        self.conn = conn
-
-    async def __aenter__(self) -> AsyncMock:
-        return self.conn
-
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
-        return False
+from tests.conftest import _make_pool_and_conn, make_pool_and_conn
 
 
 def _pool_with_conn(conn: AsyncMock) -> MagicMock:
-    pool = MagicMock()
-    pool.acquire.return_value = _Acquire(conn)
+    """Wrap an existing conn in a pool mock (no transaction needed for these tests)."""
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
     return pool
 
 

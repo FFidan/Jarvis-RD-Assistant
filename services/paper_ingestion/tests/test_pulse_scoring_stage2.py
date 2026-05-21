@@ -5,7 +5,6 @@ Uses mocked call_llm_structured (Instructor-based structured output).
 """
 
 import asyncio
-from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,35 +17,19 @@ except Exception:
     _HAS_RESPX = False
 
 from jarvis_common.verify import QuoteVerifier
-from paper_ingestion.models import PaperCreate, SourceType, TopicRef
+from paper_ingestion.models import PaperCreate, TopicRef
 from paper_ingestion.pulse.models import PulseScoringOutput
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.scoring import (
     ScoredCandidate,
     stage2_llm_rerank,
 )
+from tests.pulse_helpers import make_pulse_paper as _make_paper
 
 
 def _make_verifier() -> QuoteVerifier:
     """Return a real QuoteVerifier for tests that need mandatory verifier."""
     return QuoteVerifier()
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_paper(idx: int = 0) -> PaperCreate:
-    return PaperCreate(
-        external_id=f"arxiv:{idx:04d}",
-        source_type=SourceType.ARXIV,
-        title=f"Test Paper {idx}",
-        authors=["Author A"],
-        abstract=f"Abstract for paper {idx}.",
-        published_date=date.today(),
-        url=f"https://arxiv.org/abs/{idx:04d}",
-    )
 
 
 def _make_scored(paper: PaperCreate, embedding: float = 0.5) -> ScoredCandidate:

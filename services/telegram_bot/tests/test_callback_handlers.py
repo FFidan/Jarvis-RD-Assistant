@@ -1046,8 +1046,4 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
         await start_review_callback(update, context)
 
     mock_review_start.assert_not_awaited()
-    query.answer.assert_awaited()
-    answer_kwargs = query.answer.await_args[1] if query.answer.await_args[1] else {}
-    assert answer_kwargs.get("show_alert") is True, (
-        "query.answer must be called with show_alert=True for inaccessible message"
-    )
+    query.answer.assert_awaited_once_with("This message is no longer accessible", show_alert=True)
