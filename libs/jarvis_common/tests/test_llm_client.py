@@ -76,6 +76,23 @@ def test_strip_think_blocks_removes_multiple_sections():
     assert cleaned == '{"step":1}\n\n{"answer":"ok"}'
 
 
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # Unclosed <think> at end-of-string (Qwen3 truncated mid-CoT by max_tokens cap)
+        ("<think>truncated reasoning never completes", ""),
+        # Visible prefix + unclosed <think>
+        ("The answer is 42.<think>now let me explain why", "The answer is 42."),
+        # Mixed: one closed block then one unclosed block (mid-stream truncation)
+        ("<think>first</think>visible<think>unclosed", "visible"),
+    ],
+)
+def test_strip_think_blocks_unclosed_tag_truncation(raw, expected):
+    from jarvis_common.llm_client import strip_think_blocks
+
+    assert strip_think_blocks(raw) == expected
+
+
 def test_chat_completion_options_with_response_format_preserves_other_fields():
     """with_response_format should only swap the response format field."""
     options = llm_client.ChatCompletionOptions(

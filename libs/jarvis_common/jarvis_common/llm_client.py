@@ -153,7 +153,7 @@ def build_litellm_headers(config: LiteLLMConfig) -> dict[str, str]:  # noqa: ARG
 
 def strip_think_blocks(raw: str) -> str:
     """Strip thinking-model markup before downstream JSON parsing."""
-    return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    return re.sub(r"<think>.*?(?:</think>|$)", "", raw, flags=re.DOTALL).strip()
 
 
 def strip_think_streaming(chunk: str, in_think: bool, carry: str = "") -> tuple[str, bool, str]:
