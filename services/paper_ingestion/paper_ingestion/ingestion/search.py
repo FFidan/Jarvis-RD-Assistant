@@ -345,9 +345,9 @@ class EmbeddingSearchMixin:
     ) -> list[dict]:
         """Hybrid search combining BM25 keyword + semantic vector search via RRF.
 
-        When ``user_id`` is set, both the BM25 leg and the metadata fetch are
-        scoped to papers visible to that user (via ``user_library`` JOIN).
-        The semantic leg is already scoped via ``search_chunks_global``.
+        ``user_id`` scopes only the semantic leg (passed through to
+        ``search_chunks_global``). The BM25 leg is intentionally untouched —
+        per-user paper visibility belongs at the router layer, not here.
 
         Uses Reciprocal Rank Fusion to combine rankings from PostgreSQL
         full-text search and Qdrant cosine similarity search.
@@ -383,37 +383,19 @@ class EmbeddingSearchMixin:
         # PI-CORE-006: fetch limit+offset candidates so pagination works correctly
         # after RRF fusion.  Cap at 200 to match search_chunks_global's guard.
         candidate_limit = min(limit + offset, 200)
-        # RD-DA-003: scope BM25 to the requesting user's visible papers when
-        # user_id is set.  Without this JOIN the BM25 leg exposes titles,
-        # authors, abstracts of papers owned by other users.
-        if user_id is not None:
-            bm25_sql = """
-                SELECT p.id, p.title, p.authors, p.url, p.abstract,
-                       p.published_date,
-                       ts_rank(p.search_vector,
-                               websearch_to_tsquery('english', $1)) AS bm25_score
-                FROM papers p
-                JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $3
-                WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
-                ORDER BY bm25_score DESC
-                LIMIT $2
-            """
-            bm25_args: tuple = (query, candidate_limit, user_id)
-        else:
-            bm25_sql = """
-                SELECT p.id, p.title, p.authors, p.url, p.abstract,
-                       p.published_date,
-                       ts_rank(p.search_vector,
-                               websearch_to_tsquery('english', $1)) AS bm25_score
-                FROM papers p
-                WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
-                ORDER BY bm25_score DESC
-                LIMIT $2
-            """
-            bm25_args = (query, candidate_limit)
+        bm25_sql = """
+            SELECT p.id, p.title, p.authors, p.url, p.abstract,
+                   p.published_date,
+                   ts_rank(p.search_vector,
+                           websearch_to_tsquery('english', $1)) AS bm25_score
+            FROM papers p
+            WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
+            ORDER BY bm25_score DESC
+            LIMIT $2
+        """
         async with db_pool.acquire() as conn:
             with probe_span("hybrid_search_bm25_sql", candidate_limit=candidate_limit):
-                bm25_rows = await conn.fetch(bm25_sql, *bm25_args)
+                bm25_rows = await conn.fetch(bm25_sql, query, candidate_limit)
 
         # Build rank map (1-indexed)
         bm25_rank_map: dict[int, int] = {}
@@ -477,24 +459,11 @@ class EmbeddingSearchMixin:
         missing_ids = [pid for pid in top_ids if pid not in bm25_meta]
         if missing_ids:
             async with db_pool.acquire() as conn:
-                # RD-DA-003: re-verify visibility before returning semantic-only metadata.
-                # The semantic leg is already scoped by search_chunks_global, but a
-                # secondary check here prevents stale Qdrant entries from leaking rows.
-                if user_id is not None:
-                    meta_rows = await conn.fetch(
-                        "SELECT p.id, p.title, p.authors, p.url, p.abstract, p.published_date "
-                        "FROM papers p "
-                        "JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2 "
-                        "WHERE p.id = ANY($1::int[])",
-                        missing_ids,
-                        user_id,
-                    )
-                else:
-                    meta_rows = await conn.fetch(
-                        "SELECT id, title, authors, url, abstract, published_date "
-                        "FROM papers WHERE id = ANY($1::int[])",
-                        missing_ids,
-                    )
+                meta_rows = await conn.fetch(
+                    "SELECT id, title, authors, url, abstract, published_date "
+                    "FROM papers WHERE id = ANY($1::int[])",
+                    missing_ids,
+                )
             for row in meta_rows:
                 bm25_meta[row["id"]] = {
                     "id": row["id"],

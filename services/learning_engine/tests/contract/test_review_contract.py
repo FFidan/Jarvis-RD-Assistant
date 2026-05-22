@@ -259,6 +259,53 @@ async def test_sync_reviews_user_b_event_skipped_for_user_a_card(
 # ---------------------------------------------------------------------------
 
 
+async def test_get_next_review_deck_scoped(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """GET /api/review/next?deck_id=D1 returns ONLY cards from D1, not from D2.
+
+    User A has deck D1 (seeded by fixture) and a second deck D2 created here.
+    Both decks have a due card.  Calling with deck_id=D1 must exclude D2's card.
+    """
+    user_a_id = contract_two_users.user_a_id
+    deck_id_1 = contract_two_users.deck_id_a
+    card_id_1 = contract_two_users.card_id_a
+
+    # Force card in D1 to be due
+    await contract_conn.execute(
+        "UPDATE cards SET due_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
+        card_id_1,
+    )
+
+    # Seed a second deck (D2) and a due card in it, same user
+    deck_id_2 = await contract_conn.fetchval(
+        "INSERT INTO decks (name, user_id) VALUES ('deck-scope-d2', $1) RETURNING id",
+        user_a_id,
+    )
+    card_id_2 = await contract_conn.fetchval(
+        """INSERT INTO cards (deck_id, card_type, front, back, user_id, due_at)
+           VALUES ($1, 'concept', 'D2 front', 'D2 back', $2, NOW() - INTERVAL '2 hours')
+           RETURNING id""",
+        deck_id_2,
+        user_a_id,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/review/next", params={"deck_id": deck_id_1, "limit": 50})
+
+    assert resp.status_code == 200, (
+        f"GET /api/review/next?deck_id={deck_id_1} failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    returned_ids = [card["id"] for card in resp.json()]
+    assert card_id_1 in returned_ids, (
+        f"Deck-scoped query missing D1 card {card_id_1}; got {returned_ids}"
+    )
+    assert card_id_2 not in returned_ids, (
+        f"Deck-scope bleed: D2 card {card_id_2} appeared in D1-scoped query. "
+        f"Full list: {returned_ids}"
+    )
+
+
 async def test_get_stats_scoped_to_caller(contract_two_users, _le_app, _configure_api_key):
     """GET /api/stats returns correct totals for caller's cards and review_logs.
 

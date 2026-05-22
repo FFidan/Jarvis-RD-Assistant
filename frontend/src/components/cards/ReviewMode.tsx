@@ -68,7 +68,7 @@ export function ReviewMode({
 
   const { data: cards = [], isLoading, isError, refetch } = useQuery({
     queryKey: reviewQueryKey,
-    queryFn: () => getNextReview(1),
+    queryFn: () => getNextReview(1, deckId ?? undefined),
   });
 
   // Pre-fetch decks to resolve deck name for the eyebrow.
