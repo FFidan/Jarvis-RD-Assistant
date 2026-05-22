@@ -413,6 +413,11 @@ class SharedConnPool:
     Lets a service's FastAPI app see the SAME asyncpg connection (and therefore
     the same outer transaction) as the test's contract_conn fixture, so writes
     from both ends share one rollback boundary.
+
+    Mirrors asyncpg.Pool's convenience methods (``fetch``/``fetchrow``/``fetchval``/
+    ``execute``/``executemany``) by delegating to the shared connection, so service
+    code that calls ``db_pool.fetchrow(...)`` directly (without ``acquire()``) works
+    against the contract DB.
     """
 
     def __init__(self, conn: Any) -> None:
@@ -423,6 +428,21 @@ class SharedConnPool:
 
     async def close(self) -> None:  # idempotent; the real pool's lifecycle is the fixture's
         return None
+
+    async def fetch(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._conn.fetch(*args, **kwargs)
+
+    async def fetchrow(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._conn.fetchrow(*args, **kwargs)
+
+    async def fetchval(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._conn.fetchval(*args, **kwargs)
+
+    async def execute(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._conn.execute(*args, **kwargs)
+
+    async def executemany(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._conn.executemany(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------

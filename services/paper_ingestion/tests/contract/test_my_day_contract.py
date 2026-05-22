@@ -26,7 +26,11 @@ import pytest
 import pytest_asyncio
 import httpx
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 _TEST_API_KEY = "my-day-contract-key-phase-b-do-not-use-in-prod"
 
@@ -203,7 +207,7 @@ async def test_a59_get_yesterday_returns_scoped_summary(
     body = resp.json()
     for field in ("date", "focused_hours", "cards_reviewed", "tasks_done", "completed", "deferred"):
         assert field in body, f"Missing field {field!r} in YesterdaySummary: {body}"
-    assert isinstance(body["focused_hours"], (int, float)) and body["focused_hours"] >= 0
+    assert isinstance(body["focused_hours"], int | float) and body["focused_hours"] >= 0
     assert isinstance(body["tasks_done"], int) and body["tasks_done"] >= 0
     assert isinstance(body["completed"], list)
     assert isinstance(body["deferred"], list)

@@ -35,7 +35,11 @@ import pytest_asyncio
 import httpx
 from jarvis_common.testing import SharedConnPool
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +47,7 @@ pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def setup_client(contract_conn):
     """ASGI client for setup.py endpoints.
 
@@ -383,3 +387,119 @@ async def test_a139_setup_mode_persisted_to_db(setup_client, contract_conn):
     )
     assert row is not None, "setup.mode row must exist in user_config"
     assert row["value"] == "multi", f"Expected setup.mode='multi' in DB; got {row['value']!r}"
+
+
+# ---------------------------------------------------------------------------
+# E1.PI extensions — setup state multi-step progression + idempotency
+#
+# Verified: setup.py:246-261 (get_status — configured flag from users table)
+# Verified: setup.py:494-578 (create_first_admin — users + sessions rows)
+# Verified: setup.py:464-491 (configure_smtp — user_config UPSERT)
+# ---------------------------------------------------------------------------
+
+
+async def test_e1_setup_state_advances_after_admin_creation(setup_client, contract_conn):
+    """GET /api/setup/status → configured=false; POST /api/setup/admin → status advances to true.
+
+    Tests the multi-step operator-bootstrap flow: status reports false before an
+    admin exists, and true immediately after the admin is created (same transaction scope).
+    Verified: setup.py:246-261 (get_status) + setup.py:494-578 (create_first_admin).
+    Survivor-of (Phase E2): test_setup_first_run.py multi-step state mock assertions.
+    """
+    # Pre-condition: no admin → configured=False
+    resp_before = await setup_client.get("/api/setup/status")
+    assert resp_before.status_code == 200
+    assert resp_before.json()["configured"] is False
+
+    # Create the first admin
+    resp_admin = await setup_client.post(
+        "/api/setup/admin",
+        json={"email": "flow-admin@example.test"},
+    )
+    assert resp_admin.status_code == 200, f"Admin creation failed: {resp_admin.text[:200]}"
+
+    # Post-condition: admin exists → configured=True
+    resp_after = await setup_client.get("/api/setup/status")
+    assert resp_after.status_code == 200
+    assert resp_after.json()["configured"] is True, (
+        "GET /api/setup/status must return configured=true after admin creation"
+    )
+
+
+async def test_e1_setup_smtp_idempotent_update(setup_client, contract_conn):
+    """POST /api/setup/smtp twice updates the same row (UPSERT idempotency).
+
+    The second POST must overwrite smtp.host without creating a duplicate row.
+    Verified: setup.py:464-491 (configure_smtp — ON CONFLICT DO UPDATE UPSERT path).
+    Survivor-of (Phase E2): test_setup_first_run.py smtp idempotency tests.
+    """
+    await setup_client.post(
+        "/api/setup/smtp",
+        json={
+            "host": "smtp-first.test",
+            "port": 587,
+            "from_email": "a@test.test",
+            "test_send": False,
+        },
+    )
+    await setup_client.post(
+        "/api/setup/smtp",
+        json={
+            "host": "smtp-second.test",
+            "port": 465,
+            "from_email": "b@test.test",
+            "test_send": False,
+        },
+    )
+
+    # Only one row per key (UPSERT, not INSERT)
+    count = await contract_conn.fetchval(
+        "SELECT count(*) FROM user_config WHERE key = 'smtp.host' AND user_id IS NULL",
+    )
+    assert count == 1, f"Expected exactly 1 smtp.host row after two POSTs; got {count}"
+
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'smtp.host' AND user_id IS NULL",
+    )
+    assert row["value"] == "smtp-second.test", (
+        f"Second POST must overwrite smtp.host; got {row['value']!r}"
+    )
+
+
+async def test_e1_setup_status_contains_setup_mode(setup_client, contract_conn):
+    """GET /api/setup/status includes setup_mode field (required by frontend wizard).
+
+    Verified: setup.py:246-261 (get_status response shape includes setup_mode).
+    Survivor-of (Phase E2): test_setup_first_run.py status response-shape assertions.
+    """
+    resp = await setup_client.get("/api/setup/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "setup_mode" in body, (
+        f"GET /api/setup/status must include 'setup_mode' field; got keys={list(body.keys())}"
+    )
+
+
+async def test_e1_setup_admin_creates_session_and_user(setup_client, contract_conn):
+    """POST /api/setup/admin creates both a users row AND a sessions row atomically.
+
+    Duplicate of the positive path in test_a135_*, but independently verifies
+    that both rows are committed atomically (no partial state on success).
+    Verified: setup.py:540-570 (create_first_admin — INSERT sessions after INSERT users).
+    Survivor-of (Phase E2): test_setup_first_run.py session-creation assertion.
+    """
+    resp = await setup_client.post(
+        "/api/setup/admin",
+        json={"email": "atomic-admin@example.test"},
+    )
+    assert resp.status_code == 200
+    user_id = resp.json()["id"]
+
+    user_count = await contract_conn.fetchval(
+        "SELECT count(*) FROM users WHERE id = $1 AND role = 'admin'", user_id
+    )
+    session_count = await contract_conn.fetchval(
+        "SELECT count(*) FROM sessions WHERE user_id = $1", user_id
+    )
+    assert user_count == 1, "users row must exist after admin creation"
+    assert session_count == 1, "sessions row must be created atomically with the users row"

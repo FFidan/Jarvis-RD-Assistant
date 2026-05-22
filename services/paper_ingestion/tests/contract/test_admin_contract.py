@@ -30,7 +30,11 @@ import httpx
 from unittest.mock import AsyncMock, patch
 from jarvis_common.testing import SharedConnPool
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +70,7 @@ async def _seed_plain_user(conn, email: str) -> tuple[int, str]:
     return int(user_id), str(session_id)
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def admin_client(contract_conn):
     """ASGI client authenticated as an admin via a real session cookie.
 
@@ -108,7 +112,7 @@ async def admin_client(contract_conn):
             app.state.limiter.enabled = True
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def plain_client(contract_conn):
     """ASGI client authenticated as a non-admin user (role='user').
 
@@ -153,7 +157,7 @@ async def plain_client(contract_conn):
         app.state.limiter.enabled = True
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def audit_admin_client(contract_conn):
     """ASGI client for audit_admin.py endpoints.
 

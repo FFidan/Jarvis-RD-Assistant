@@ -26,8 +26,13 @@ def _dev_mode_for_validation_assertions(monkeypatch):
 
 @pytest.fixture()
 def app_with_pool():
-    """Create the paper_ingestion app with DB/auth dependencies overridden."""
-    from jarvis_common.auth import verify_api_key
+    """Create the paper_ingestion app with DB/auth dependencies overridden.
+
+    RD-DA-002: create_job now uses current_user_id_strict (was nullable).
+    Override it alongside verify_api_key so validation tests reach the
+    discriminator/allowlist logic instead of getting a 401 first.
+    """
+    from jarvis_common.auth import current_user_id_strict, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -36,6 +41,7 @@ def app_with_pool():
     app.state.limiter.enabled = False
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict] = lambda: 42
     yield app, pool
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True

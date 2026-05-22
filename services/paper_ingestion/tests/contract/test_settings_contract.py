@@ -21,10 +21,14 @@ import pytest_asyncio
 from unittest.mock import AsyncMock
 from jarvis_common.testing import SharedConnPool
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def pi_settings_client(contract_conn):
     """ASGI client wired to the real per-test transaction via SharedConnPool.
 
@@ -157,3 +161,161 @@ async def test_put_config_ghost_key_does_not_write_db(contract_conn, pi_settings
     )
     row = await contract_conn.fetchrow("SELECT 1 FROM user_config WHERE key = 'ui.page_size'")
     assert row is None, "Ghost key must not write to user_config"
+
+
+# ---------------------------------------------------------------------------
+# E1.PI extensions — FSRS / L2 / weights / setup.completed / telegram.owner_chat_id
+#
+# Verified: settings_service.py:56-107 (_ALLOWED_CONFIG_KEYS, PERSONAL_KEYS, SYSTEM_KEYS)
+# Verified: settings_service.py:415-468 (_CONFIG_VALIDATORS)
+# Verified: settings_service.py:520-547 (_write_config_row — UPSERT)
+# Verified: settings_service.py:477-517 (_fetch_effective_config_row — scoped GET)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# fsrs.desired_retention — personal key, per-user UPSERT
+# ---------------------------------------------------------------------------
+
+
+async def test_put_fsrs_desired_retention_round_trip(contract_conn, pi_settings_client):
+    """PUT /api/config/fsrs.desired_retention persists; GET reads it back.
+
+    Verified: settings_service.py:436 (_validate_fsrs_retention),
+              settings_service.py:520-547 (_write_config_row UPSERT path).
+    Survivor-of (Phase E2): test_settings.py fsrs key round-trip mock-unit tests.
+    """
+    resp = await pi_settings_client.put(
+        "/api/config/fsrs.desired_retention",
+        json={"key": "fsrs.desired_retention", "value": 0.85},
+    )
+    assert resp.status_code == 200, f"PUT failed: {resp.json()}"
+    body = resp.json()
+    assert body["key"] == "fsrs.desired_retention"
+    assert body["value"] == 0.85
+
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'fsrs.desired_retention'",
+    )
+    assert row is not None, "fsrs.desired_retention row must be written to user_config"
+    assert abs(float(row["value"]) - 0.85) < 1e-9, (
+        f"Persisted value must be 0.85; got {row['value']!r}"
+    )
+
+
+async def test_put_fsrs_desired_retention_invalid_value_returns_400(pi_settings_client):
+    """PUT fsrs.desired_retention with value ≥ 1.0 returns 400 (validator guard).
+
+    Verified: settings_service.py:416-421 (_validate_fsrs_retention out-of-range).
+    Survivor-of (Phase E2): test_settings.py invalid-value parametrize cases.
+    """
+    resp = await pi_settings_client.put(
+        "/api/config/fsrs.desired_retention",
+        json={"key": "fsrs.desired_retention", "value": 1.0},
+    )
+    assert resp.status_code == 400, (
+        f"Expected 400 for out-of-range fsrs.desired_retention; got {resp.status_code}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# pulse.l2_lambda — system key, numeric range [0, 2]
+# ---------------------------------------------------------------------------
+
+
+async def test_put_pulse_l2_lambda_round_trip(contract_conn, pi_settings_client):
+    """PUT /api/config/pulse.l2_lambda persists in user_config (user_id IS NULL).
+
+    Verified: settings_service.py:329-337 (_validate_l2_lambda),
+              settings_service.py:520-547 (_write_config_row NULL-scoped UPSERT).
+    Survivor-of (Phase E2): test_settings.py l2_lambda round-trip mock-unit tests.
+    """
+    resp = await pi_settings_client.put(
+        "/api/config/pulse.l2_lambda",
+        json={"key": "pulse.l2_lambda", "value": 1.5},
+    )
+    assert resp.status_code == 200, f"PUT pulse.l2_lambda failed: {resp.json()}"
+    assert resp.json()["value"] == 1.5
+
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'pulse.l2_lambda' AND user_id IS NULL",
+    )
+    assert row is not None, "pulse.l2_lambda must be written to user_config with user_id IS NULL"
+    assert abs(float(row["value"]) - 1.5) < 1e-9, f"Expected 1.5; got {row['value']!r}"
+
+
+async def test_put_pulse_l2_lambda_out_of_range_returns_400(pi_settings_client):
+    """PUT pulse.l2_lambda > 2.0 returns 400.
+
+    Verified: settings_service.py:335-337 (_validate_l2_lambda range guard).
+    """
+    resp = await pi_settings_client.put(
+        "/api/config/pulse.l2_lambda",
+        json={"key": "pulse.l2_lambda", "value": 3.0},
+    )
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# setup.completed — boolean system key
+# ---------------------------------------------------------------------------
+
+
+async def test_put_setup_completed_persists_true(contract_conn, pi_settings_client):
+    """PUT /api/config/setup.completed stores True in user_config.
+
+    Verified: settings_service.py:447 (_validate_bool guard),
+              settings_service.py:520-547 (_write_config_row UPSERT).
+    Survivor-of (Phase E2): test_settings.py setup.completed round-trip tests.
+    """
+    resp = await pi_settings_client.put(
+        "/api/config/setup.completed",
+        json={"key": "setup.completed", "value": True},
+    )
+    assert resp.status_code == 200, f"PUT setup.completed failed: {resp.json()}"
+    assert resp.json()["value"] is True
+
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'setup.completed' AND user_id IS NULL",
+    )
+    assert row is not None, "setup.completed row must exist in user_config"
+    assert row["value"] is True, f"Expected True; got {row['value']!r}"
+
+
+# ---------------------------------------------------------------------------
+# telegram.owner_chat_id — optional int system key
+# ---------------------------------------------------------------------------
+
+
+async def test_put_telegram_owner_chat_id_round_trip(contract_conn, pi_settings_client):
+    """PUT /api/config/telegram.owner_chat_id stores integer; GET reads it back.
+
+    Verified: settings_service.py:448 (telegram.owner_chat_id → _validate_optional_int),
+              settings_service.py:512-517 (_fetch_effective_config_row system path).
+    Survivor-of (Phase E2): test_settings.py telegram.owner_chat_id round-trip tests.
+    """
+    resp = await pi_settings_client.put(
+        "/api/config/telegram.owner_chat_id",
+        json={"key": "telegram.owner_chat_id", "value": 123456789},
+    )
+    assert resp.status_code == 200, f"PUT telegram.owner_chat_id failed: {resp.json()}"
+    assert resp.json()["value"] == 123456789
+
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL",
+    )
+    assert row is not None, "telegram.owner_chat_id row must exist in user_config"
+    assert int(row["value"]) == 123456789
+
+
+async def test_put_telegram_owner_chat_id_null_clears(contract_conn, pi_settings_client):
+    """PUT /api/config/telegram.owner_chat_id with null clears the stored integer.
+
+    Verified: settings_service.py:313-317 (_validate_optional_int null branch).
+    """
+    resp = await pi_settings_client.put(
+        "/api/config/telegram.owner_chat_id",
+        json={"key": "telegram.owner_chat_id", "value": None},
+    )
+    assert resp.status_code == 200, f"PUT telegram null failed: {resp.json()}"
+    assert resp.json()["value"] is None

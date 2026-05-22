@@ -23,7 +23,11 @@ from datetime import UTC, datetime, timedelta
 
 from jarvis_common.testing import SharedConnPool
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 _TEST_API_KEY = "le-contract-test-key-do-not-use-in-prod"
 

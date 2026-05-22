@@ -32,7 +32,11 @@ from jarvis_common.session_middleware import SessionMiddleware
 from jarvis_common.settings import get_secrets_settings
 from jarvis_common.testing import SharedConnPool, _seed_user
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 _TEST_KEY = "contract-suite-key-do-not-use-in-prod"
 

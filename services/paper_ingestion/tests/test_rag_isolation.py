@@ -108,14 +108,17 @@ async def test_hybrid_search_threads_user_id_to_semantic_leg_only():
     assert embedder.search_chunks_global.call_args.kwargs["user_id"] == 7
 
 
-async def test_hybrid_search_bm25_leg_does_not_filter_by_user_id():
-    """BM25 leg's SQL string must not reference user_id (Decision 6, 2026-05-14 sweep).
+async def test_hybrid_search_bm25_leg_filters_by_user_id():
+    """BM25 leg's SQL must scope results to the calling user when user_id is provided.
 
-    Per-user paper visibility is enforced at the router layer (papers/feed
-    endpoint joins paper_user_state); the BM25 leg of hybrid_search
-    intentionally surfaces cross-corpus matches so that searches against
-    not-yet-claimed papers still work. Regression guard: if someone adds
-    a WHERE user_id = $N to the BM25 SQL, this test fails.
+    Codex audit RD-DA-003 (2026-05-21) reversed Decision 6 (2026-05-14 sweep):
+    the previous decision to skip user_id in the BM25 leg created a cross-user
+    paper-title information-leak.  The BM25 query now JOINs ``user_library`` so
+    only papers in the caller's library are returned.
+
+    Survivor contract: test_list_papers_bm25_no_cross_user_leak in
+    services/paper_ingestion/tests/contract/test_papers_contract.py
+    covers the same invariant at the integration level.
     """
     embedder, _mock_qdrant = _make_embedder([])
     embedder.search_chunks_global = AsyncMock(return_value=[])
@@ -135,11 +138,11 @@ async def test_hybrid_search_bm25_leg_does_not_filter_by_user_id():
 
     assert captured_sql, "BM25 SQL should have been captured"
     sql_text = " ".join(captured_sql).lower()
-    assert "user_id" not in sql_text, (
-        "BM25 SQL must not reference user_id (Decision 6, 2026-05-14 sweep). "
+    assert "user_id" in sql_text, (
+        "BM25 SQL must scope by user_id (RD-DA-003 — cross-user leak fix). "
         f"Captured SQL: {captured_sql}"
     )
-    assert "$3" not in sql_text, "BM25 SQL should only have $1 and $2 parameters"
+    assert "$3" in sql_text, "BM25 SQL must bind user_id as $3 parameter"
 
 
 async def test_prepare_cross_paper_rag_threads_user_id():

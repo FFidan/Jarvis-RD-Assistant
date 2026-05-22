@@ -11,7 +11,11 @@ import pytest
 import pytest_asyncio
 import httpx
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 _TEST_API_KEY = "priority-contract-key-phase-b-do-not-use-in-prod"
 

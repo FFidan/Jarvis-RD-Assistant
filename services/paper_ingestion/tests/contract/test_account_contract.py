@@ -11,7 +11,11 @@ import pytest
 import pytest_asyncio
 import httpx
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 _TEST_API_KEY = "account-contract-key-phase-b-do-not-use-in-prod"
 
@@ -174,4 +178,129 @@ async def test_a2_patch_account_email_clash_returns_409(
 
     assert resp.status_code == 409, (
         f"Expected 409 for duplicate email, got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E1.PI extensions — magic-link token race conditions
+#
+# The verify endpoint lives in routers/auth.py; we reuse _pi_app_with_pool
+# (it wires db_pool + removes the autouse auth stub) and hit /api/auth/verify
+# which is registered without verify_api_key (auth_exempt).
+#
+# Verified: auth.py:184-295 (verify — used_at guard + expires_at guard + pending_email guard)
+# ---------------------------------------------------------------------------
+
+
+async def test_e1_magic_link_token_consumed_twice_second_fails(
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """POST /api/auth/verify: consuming the same valid token twice — second attempt returns 400.
+
+    The first verify marks used_at = NOW(); the second call hits the
+    `token_row["used_at"] is not None` guard and must return 400.
+    Verified: auth.py:219-220 (used_at guard → HTTPException 400).
+    Survivor-of (Phase E2): test_auth_magic_link.py token-consumed-twice mock tests.
+    """
+    import hashlib
+    import secrets
+    from datetime import UTC, datetime, timedelta
+
+    # Seed a real user + valid magic-link token
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('ml-race-1@contract.test', 'user') RETURNING id"
+    )
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    expires_at = datetime.now(UTC) + timedelta(minutes=15)
+    await contract_conn.execute(
+        "INSERT INTO magic_link_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
+        token_hash,
+        user_id,
+        expires_at,
+    )
+
+    # First consume — must succeed
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        base_url="http://test",
+    ) as c:
+        resp1 = await c.post("/api/auth/verify", json={"token": raw_token})
+
+    assert resp1.status_code == 200, (
+        f"First verify must succeed; got {resp1.status_code}: {resp1.text[:200]}"
+    )
+
+    # Second consume — same token, now used_at is set → must return 400
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        base_url="http://test",
+    ) as c:
+        resp2 = await c.post("/api/auth/verify", json={"token": raw_token})
+
+    assert resp2.status_code == 400, (
+        f"Second verify of already-used token must return 400; got {resp2.status_code}: {resp2.text[:200]}"
+    )
+
+
+async def test_e1_magic_link_expired_token_returns_400(
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """POST /api/auth/verify: expired token (expires_at in the past) returns 400.
+
+    Verified: auth.py:221-222 (expires_at <= now guard → HTTPException 400).
+    Survivor-of (Phase E2): test_auth_magic_link.py expired-token mock tests.
+    """
+    import hashlib
+    import secrets
+    from datetime import UTC, datetime, timedelta
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('ml-expired@contract.test', 'user') RETURNING id"
+    )
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    # Set expires_at to 1 second in the past
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    await contract_conn.execute(
+        "INSERT INTO magic_link_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
+        token_hash,
+        user_id,
+        expired_at,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        base_url="http://test",
+    ) as c:
+        resp = await c.post("/api/auth/verify", json={"token": raw_token})
+
+    assert resp.status_code == 400, (
+        f"Expired token must return 400; got {resp.status_code}: {resp.text[:200]}"
+    )
+
+
+async def test_e1_magic_link_invalid_token_returns_400(
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """POST /api/auth/verify: completely unknown token returns 400 (no row found).
+
+    Verified: auth.py:217-218 (token_row is None guard → HTTPException 400).
+    Survivor-of (Phase E2): test_auth_magic_link.py invalid-token mock tests.
+    """
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_pi_app_with_pool),
+        base_url="http://test",
+    ) as c:
+        resp = await c.post(
+            "/api/auth/verify", json={"token": "nonexistent-token-xyz-1234567890ab"}
+        )
+
+    assert resp.status_code == 400, (
+        f"Unknown token must return 400; got {resp.status_code}: {resp.text[:200]}"
     )

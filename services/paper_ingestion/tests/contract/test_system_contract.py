@@ -35,10 +35,14 @@ import pytest_asyncio
 import httpx
 from jarvis_common.testing import SharedConnPool
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def pi_test_client(contract_conn):
     """Hardened ASGI client for system.py bypass routes.
 

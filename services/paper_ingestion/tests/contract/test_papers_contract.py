@@ -24,7 +24,11 @@ import pytest
 import pytest_asyncio
 import httpx
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 _TEST_API_KEY = "papers-contract-key-d1-do-not-use-in-prod"
 
@@ -999,4 +1003,221 @@ async def test_a92_recompute_all_priorities_returns_updated_count(
     )
     assert body["updated"] >= 1, (
         f"Expected updated >= 1 (at least 1 paper seeded by fixture); got {body['updated']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# RD-DA-003: BM25 user_id scope leak — hybrid search cross-user isolation
+# ---------------------------------------------------------------------------
+
+
+async def test_list_papers_bm25_no_cross_user_leak(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """RD-DA-003: POST /api/papers/search-hybrid — BM25 leg must not expose another user's paper.
+
+    Seeds a paper with a unique sentinel title owned ONLY by user A.  User B
+    searches for the sentinel term.  Without the user_library JOIN fix the BM25
+    leg would return user A's paper; with the fix user B must get an empty list.
+
+    The test mocks the embedder so it is Qdrant-free (no GPU required); only
+    the SQL path is under test.
+
+    Verified: services/paper_ingestion/paper_ingestion/ingestion/search.py:386
+    — hybrid_search BM25 SQL now JOIN user_library ul ON ul.user_id = $3.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from paper_ingestion.ingestion.embedder import Embedder
+
+    sentinel = "xq7bm25leaktest2026unique"
+
+    # Seed a paper owned ONLY by user A with the sentinel term in the title.
+    leak_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers
+               (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ($1, 'arxiv', $2, ARRAY['Author'], 'https://bm25leak.test/1', $3)
+           RETURNING id""",
+        "bm25-leak-test-ext-rdd-da-003",
+        f"Hybrid Search {sentinel} Paper",
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        contract_two_users.user_a_id,
+        leak_paper_id,
+    )
+    # Update the search_vector so BM25 can match it
+    await contract_conn.execute(
+        "UPDATE papers SET search_vector = to_tsvector('english', title) WHERE id = $1",
+        leak_paper_id,
+    )
+
+    # Build a minimal app-level embedder mock: Qdrant available but returns no chunks.
+    # This isolates the BM25 leg (semantic leg returns empty).
+    mock_embedder = AsyncMock(spec=Embedder)
+    mock_embedder.qdrant = object()  # truthy — passes the qdrant is None guard
+    mock_embedder.search_chunks_global = AsyncMock(return_value=[])
+    # hybrid_search must run real code, not be fully mocked; use the real method
+    # bound to the mock so self.search_chunks_global is patched but BM25 SQL runs.
+    from paper_ingestion.ingestion.search import EmbeddingSearchMixin
+
+    mock_embedder.hybrid_search = lambda *a, **kw: EmbeddingSearchMixin.hybrid_search(
+        mock_embedder, *a, **kw
+    )
+
+    from paper_ingestion.routers.search import get_embedder
+
+    with patch.dict(
+        _pi_app_with_pool.dependency_overrides,
+        {get_embedder: lambda: mock_embedder},
+    ):
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+            resp = await c.post(
+                "/api/papers/search-hybrid",
+                json={"query": sentinel, "max_results": 10},
+            )
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
+    ids = [p["id"] for p in resp.json()]
+    assert leak_paper_id not in ids, (
+        f"RD-DA-003 FAIL: user B's hybrid search returned user A's paper "
+        f"(paper_id={leak_paper_id}) — BM25 scope leak. ids={ids}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E1.PI extensions — bulk partial-failure isolation + idempotent annotation
+#
+# Verified: papers.py:889-946 (bulk_action_papers — per-paper SAVEPOINT isolation)
+# Verified: papers.py:807 (annotate_paper — assert_paper_ownership + RETURNING)
+# ---------------------------------------------------------------------------
+
+
+async def test_e1_bulk_action_partial_failure_isolation(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """POST /api/papers/bulk: user A bulk-deletes 3 papers; 1 belongs to user B → B's untouched.
+
+    This is the per-paper SAVEPOINT isolation guarantee: a 403/404 on one paper
+    must not roll back the outer transaction, and must not affect an unrelated paper.
+    Verified: papers.py:889-946 bulk_action_papers (SAVEPOINT per iteration).
+    Survivor-of (Phase E2): test_papers_lifecycle.py bulk IDOR mock-unit tests.
+    """
+    user_a_id = contract_two_users.user_a_id
+    user_b_id = contract_two_users.user_b_id
+
+    # Seed two papers for user A
+    pid_a1 = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('e1-bulk-a1', 'arxiv', 'Bulk Paper A1', ARRAY['Au'], 'https://e1.t/a1', $1)
+           RETURNING id""",
+        user_a_id,
+    )
+    pid_a2 = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('e1-bulk-a2', 'arxiv', 'Bulk Paper A2', ARRAY['Au'], 'https://e1.t/a2', $1)
+           RETURNING id""",
+        user_a_id,
+    )
+    for pid in (pid_a1, pid_a2):
+        await contract_conn.execute(
+            "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+            user_a_id,
+            pid,
+        )
+
+    # Seed a fresh paper owned by user B — user A must not be able to act on it
+    pid_b_own = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('e1-bulk-b-own', 'arxiv', 'B Own Paper', ARRAY['Au'], 'https://e1.t/b', $1)
+           RETURNING id""",
+        user_b_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_b_id,
+        pid_b_own,
+    )
+
+    # User A bulk-saves [pid_a1, pid_b_own (owned by B), pid_a2]
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/papers/bulk",
+            json={"paper_ids": [pid_a1, pid_b_own, pid_a2], "action": "save"},
+        )
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    succeeded = body.get("succeeded", [])
+    failed = body.get("failed", [])
+
+    # A's own papers should succeed
+    assert pid_a1 in succeeded, f"pid_a1 should succeed; succeeded={succeeded}"
+    assert pid_a2 in succeeded, f"pid_a2 should succeed; succeeded={succeeded}"
+    # B's paper should fail (not_found or forbidden) and NOT appear in succeeded
+    assert pid_b_own not in succeeded, (
+        f"User B's paper must not be in succeeded — IDOR isolation failure: {succeeded}"
+    )
+    failed_ids = [f["paper_id"] for f in failed]
+    assert pid_b_own in failed_ids, (
+        f"User B's paper must appear in failed list; failed_ids={failed_ids}"
+    )
+
+    # B's paper_user_state must remain untouched (no state row created for A's action)
+    b_row = await contract_conn.fetchrow(
+        "SELECT state FROM paper_user_state WHERE paper_id=$1 AND user_id=$2",
+        pid_b_own,
+        user_a_id,
+    )
+    assert b_row is None, (
+        "User A's bulk action must not create a paper_user_state row for user B's paper"
+    )
+
+
+async def test_e1_annotations_idempotent_double_put(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """PUT /api/papers/{id}/annotations twice yields the last write's state (idempotent UPSERT).
+
+    Verified: papers.py:807 (annotate_paper — ON CONFLICT DO UPDATE path via assert_paper_ownership).
+    Survivor-of (Phase E2): test_papers_lifecycle.py annotations idempotency tests.
+    """
+    paper_id = contract_two_users.paper_id_a
+    user_a_id = contract_two_users.user_a_id
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp1 = await c.put(
+            f"/api/papers/{paper_id}/annotations",
+            json={"rating": 3, "user_notes": "first-write"},
+        )
+    assert resp1.status_code == 200, f"First PUT failed: {resp1.text[:200]}"
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp2 = await c.put(
+            f"/api/papers/{paper_id}/annotations",
+            json={"rating": 5, "user_notes": "second-write"},
+        )
+    assert resp2.status_code == 200, f"Second PUT failed: {resp2.text[:200]}"
+    body = resp2.json()
+    assert body["rating"] == 5, f"Expected last-write rating=5; got {body['rating']!r}"
+    assert body["user_notes"] == "second-write"
+
+    # Verify exactly one row in DB (idempotent UPSERT, not insert-per-call)
+    count = await contract_conn.fetchval(
+        "SELECT count(*) FROM paper_user_state WHERE paper_id=$1 AND user_id=$2",
+        paper_id,
+        user_a_id,
+    )
+    assert count == 1, (
+        f"Exactly one paper_user_state row must exist after double PUT; got count={count}"
     )

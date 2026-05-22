@@ -32,7 +32,11 @@ import pytest
 import pytest_asyncio
 from jarvis_common.testing import SharedConnPool, _seed_user
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 _TEST_KEY = "session-contract-key-do-not-use-in-prod"
 

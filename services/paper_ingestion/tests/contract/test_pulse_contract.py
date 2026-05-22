@@ -671,3 +671,125 @@ async def test_rate_card_up_writes_positive_feedback(
     )
     assert row is not None, "recommendation_feedback row must exist after 'up' rating"
     assert row["signal"] == "positive", f"Expected signal='positive'; got {row['signal']!r}"
+
+
+# ---------------------------------------------------------------------------
+# E1.PI extensions — degraded_reason persists, rate down writes negative feedback
+#
+# Verified: pulse/deck.py:70-92 (_persist_deck_inner — degraded_reason column)
+# Verified: routers/pulse.py:264-270 (rate_card — 'down' path)
+# ---------------------------------------------------------------------------
+
+
+async def test_e1_persist_deck_degraded_reason_stored(contract_conn, contract_two_users):
+    """persist_deck stores degraded_reason='no_candidates' in pulse_decks row.
+
+    Exercises the degraded_reason column write (spec §7.3).  An empty card list
+    simulates the stage2-timeout-degraded path where no candidates pass scoring.
+    Verified: pulse/deck.py:70-92 (_persist_deck_inner INSERT degraded_reason=$3).
+    Survivor-of (Phase E2): test_pulse_deck.py::test_degraded_reason_persisted mock tests.
+    """
+    from datetime import date
+
+    from paper_ingestion.pulse.deck import persist_deck
+    from jarvis_common.testing import SharedConnPool
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+    deck_date = date(2099, 3, 1)
+
+    await persist_deck(
+        pool,
+        deck_date,
+        cards=[],  # no candidates — degraded path
+        stats={"candidate_count": 0},
+        degraded_reason="no_candidates",
+        user_id=user_id,
+    )
+
+    row = await contract_conn.fetchrow(
+        "SELECT degraded_reason FROM pulse_decks WHERE deck_date = $1 AND user_id = $2",
+        deck_date,
+        user_id,
+    )
+    assert row is not None, "pulse_decks row must exist after persist_deck with empty cards"
+    assert row["degraded_reason"] == "no_candidates", (
+        f"degraded_reason must be 'no_candidates'; got {row['degraded_reason']!r}"
+    )
+
+
+async def test_e1_persist_deck_second_call_updates_degraded_reason(
+    contract_conn, contract_two_users
+):
+    """persist_deck called twice for same date + user overwrites degraded_reason on conflict.
+
+    This proves the ON CONFLICT DO UPDATE path sets degraded_reason from EXCLUDED.
+    Verified: pulse/deck.py:73-89 ON CONFLICT (deck_date, user_id) DO UPDATE SET degraded_reason.
+    Survivor-of (Phase E2): test_pulse_deck.py savepoint-isolation mock tests.
+    """
+    from datetime import date
+
+    from paper_ingestion.pulse.deck import persist_deck
+    from jarvis_common.testing import SharedConnPool
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+    deck_date = date(2099, 3, 2)
+
+    await persist_deck(
+        pool,
+        deck_date,
+        cards=[],
+        stats={"candidate_count": 0},
+        degraded_reason="no_candidates",
+        user_id=user_id,
+    )
+    # Second call overwrites degraded_reason to None (normal generation recovered)
+    await persist_deck(
+        pool,
+        deck_date,
+        cards=[],
+        stats={"candidate_count": 0},
+        degraded_reason=None,
+        user_id=user_id,
+    )
+
+    row = await contract_conn.fetchrow(
+        "SELECT degraded_reason FROM pulse_decks WHERE deck_date = $1 AND user_id = $2",
+        deck_date,
+        user_id,
+    )
+    assert row is not None
+    assert row["degraded_reason"] is None, (
+        f"Second persist_deck must overwrite degraded_reason to None; got {row['degraded_reason']!r}"
+    )
+
+
+async def test_e1_rate_card_down_writes_negative_feedback(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """POST /api/pulse/rate with rating='down' inserts recommendation_feedback signal='negative'.
+
+    Verified: routers/pulse.py:271-277 (rate_card 'down' path → _upsert_recommendation_feedback).
+    Survivor-of (Phase E2): test_pulse_router.py rate_card down-signal mock tests.
+    """
+    paper_id = contract_two_users.paper_id_a
+    user_id = contract_two_users.user_a_id
+
+    async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/pulse/rate", json={"paper_id": paper_id, "rating": "down"})
+
+    assert resp.status_code == 200, (
+        f"Expected 200 for 'down' rating; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+    row = await contract_conn.fetchrow(
+        """SELECT signal FROM recommendation_feedback
+           WHERE paper_id = $1 AND user_id = $2 AND source = 'pulse_thumbs'""",
+        paper_id,
+        user_id,
+    )
+    assert row is not None, "recommendation_feedback row must exist after 'down' rating"
+    assert row["signal"] == "negative", (
+        f"Expected signal='negative' after 'down' rating; got {row['signal']!r}"
+    )

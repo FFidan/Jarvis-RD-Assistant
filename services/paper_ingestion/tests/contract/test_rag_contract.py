@@ -25,14 +25,18 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 # ---------------------------------------------------------------------------
 # pi_test_client — shares the contract_conn transaction with the app
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def pi_test_client(contract_conn):
     """paper_ingestion ASGI client wired to the contract_conn transaction."""
     import httpx

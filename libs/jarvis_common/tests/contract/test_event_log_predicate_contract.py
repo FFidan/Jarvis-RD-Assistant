@@ -16,7 +16,11 @@ import uuid
 import pytest
 from jarvis_common.testing import SharedConnPool
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 
 async def test_a254_log_event_inserts_row_with_correct_fields(contract_conn):

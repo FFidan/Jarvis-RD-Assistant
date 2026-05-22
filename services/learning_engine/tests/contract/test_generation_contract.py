@@ -20,7 +20,11 @@ from datetime import UTC, datetime, timedelta
 
 from jarvis_common.testing import SharedConnPool
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 _TEST_API_KEY = "le-contract-generation-test-key"
 
@@ -168,15 +172,17 @@ async def test_generate_cards_non_owner_deck_gets_404(
                 json={"paper_id": paper_id_a, "deck_id": deck_id_a, "max_cards": 3},
             )
 
-    assert resp.status_code == 404, (
+    # RD-DA-001 fix: paper-ownership extractor now fires before deck-ownership,
+    # so non-owner paper returns 403 instead of 404. Both are valid IDOR rejections.
+    assert resp.status_code in (403, 404), (
         f"IDOR: user B got {resp.status_code} generating cards for user A's deck "
-        f"{deck_id_a} (expected 404). Body: {resp.text[:300]}"
+        f"{deck_id_a} (expected 403 or 404). Body: {resp.text[:300]}"
     )
     mock_task.defer_async.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
-# §A200 — POST /api/generate/batch — 404 for non-owner deck (task_registry mocked)
+# §A200 — POST /api/generate/batch — IDOR rejection for non-owner deck
 # ---------------------------------------------------------------------------
 
 
@@ -202,8 +208,62 @@ async def test_batch_generate_non_owner_deck_gets_404(
                 json={"deck_id": deck_id_a, "max_per_paper": 5},
             )
 
-    assert resp.status_code == 404, (
+    # RD-DA-001 fix: ownership-related rejection may be 403 (paper-ownership)
+    # or 404 (deck-ownership); both are valid IDOR rejections.
+    assert resp.status_code in (403, 404), (
         f"IDOR: user B got {resp.status_code} batch-generating for user A's deck "
-        f"{deck_id_a} (expected 404). Body: {resp.text[:300]}"
+        f"{deck_id_a} (expected 403 or 404). Body: {resp.text[:300]}"
     )
     mock_task.defer_async.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# §A201 — generate_cards_core re-validates paper ownership (RD-DA-001 depth)
+# ---------------------------------------------------------------------------
+
+
+async def test_generate_cards_core_revalidates_paper_ownership(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """RD-DA-001 defense-in-depth: generate_cards_core raises 403 when the
+    caller's user_id does not own the requested paper_id.
+
+    This guards the worker entry point directly: even if a job were somehow
+    enqueued with a mismatched paper_id, the core helper must re-validate
+    ownership before reading paper data.
+
+    Setup: seed a deck owned by user B so the deck check passes, then supply
+    user A's paper_id so the paper ownership check fires and returns 403.
+    """
+    from fastapi import HTTPException
+
+    from learning_engine.routers.generation import generate_cards_core
+
+    paper_id_a = contract_two_users.paper_id_a
+    user_b_id = contract_two_users.user_b_id
+
+    # Seed a deck owned by user B within the contract transaction.
+    deck_id_b = await contract_conn.fetchval(
+        "INSERT INTO decks (user_id, name, description) VALUES ($1, $2, $3) RETURNING id",
+        user_b_id,
+        "contract-test-deck-b",
+        "temp deck for RD-DA-001 test",
+    )
+
+    # Reach into the _le_app fixture to get the SharedConnPool already wired.
+    shared = _le_app.state.db_pool
+
+    with pytest.raises(HTTPException) as exc_info:
+        await generate_cards_core(
+            pool=shared,
+            http_client=_le_app.state.http_client,
+            paper_id=paper_id_a,
+            deck_id=deck_id_b,
+            max_cards=3,
+            user_id=user_b_id,
+        )
+
+    assert exc_info.value.status_code == 403, (
+        f"RD-DA-001 depth: generate_cards_core returned {exc_info.value.status_code} "
+        f"instead of 403 for user_b accessing paper_a. Detail: {exc_info.value.detail}"
+    )

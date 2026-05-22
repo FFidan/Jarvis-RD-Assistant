@@ -429,3 +429,100 @@ async def test_dismiss_recommendation_404_for_nonexistent(
     assert resp.status_code == 404, (
         f"Expected 404 for non-existent recommendation; got {resp.status_code}"
     )
+
+
+# ---------------------------------------------------------------------------
+# E1.PI extensions — owner-scope isolation, starred eligibility
+#
+# Verified: recommender.py:220-245 (_filter_unread SQL predicates)
+# Verified: recommendations.py:22-39 (list_recommendations WHERE user_id = $1)
+# ---------------------------------------------------------------------------
+
+
+async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
+    """_filter_unread must return papers whose state = 'starred' (NOT in exclusion set).
+
+    The exclusion predicate is: COALESCE(pus.state, 'inbox') IN ('trash', 'done').
+    'starred' is NOT excluded — starred papers remain recommendable.
+    Verified: recommender.py:220-245 (_filter_unread exclusion set).
+    Survivor-of (Phase E2): test_recommender.py::TestFilterUnread::test_starred_papers_remain_eligible_for_recommendation.
+    """
+    from paper_ingestion.ingestion.recommender import _filter_unread
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('recs-starred@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('recs-starred-01', 'arxiv', 'Starred Paper', '{}', 'https://t.test/starred')
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_user_state (paper_id, user_id, state)
+           VALUES ($1, $2, 'starred')
+           ON CONFLICT (paper_id, user_id) DO UPDATE SET state = 'starred'""",
+        paper_id,
+        user_id,
+    )
+
+    result = await _filter_unread(contract_conn, [paper_id], user_id=user_id)
+    assert paper_id in result, (
+        "Paper with state='starred' must remain eligible for recommendations "
+        "('starred' is not in the COALESCE(...) IN ('trash', 'done') exclusion set)"
+    )
+
+
+async def test_list_recommendations_owner_scope_excludes_other_user_rows(
+    contract_conn, contract_two_users, _pi_app, _configure_api_key
+):
+    """GET /api/recommendations only returns the caller's own rows (strict user_id scope).
+
+    Seeds a fresh recommendation row for user B and verifies user A cannot see it.
+    Verified: recommendations.py:22-39 (list_recommendations WHERE pr.user_id = $1).
+    Survivor-of (Phase E2): test_recommender.py owner-scope isolation tests.
+    """
+    user_b_id = contract_two_users.user_b_id
+
+    # Seed a paper and recommendation row owned only by user B
+    b_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('recs-scope-b-01', 'arxiv', 'Scope B Paper', ARRAY['Au'],
+                   'https://scope-b.test/1', $1)
+           RETURNING id""",
+        user_b_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_recommendations (paper_id, user_id, score, dismissed)
+           VALUES ($1, $2, 0.9, FALSE)
+           ON CONFLICT (paper_id, user_id) DO UPDATE SET score = 0.9""",
+        b_paper_id,
+        user_b_id,
+    )
+
+    # User A's request must NOT include user B's recommendation row
+    async with _client(_pi_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/recommendations")
+
+    assert resp.status_code == 200
+    returned_ids = [r["paper_id"] for r in resp.json()]
+    assert b_paper_id not in returned_ids, (
+        f"User A must not see user B's recommendation row (paper_id={b_paper_id}); "
+        f"got returned_ids={returned_ids}"
+    )
+
+
+async def test_filter_unread_empty_candidate_list_returns_empty(contract_conn):
+    """_filter_unread with an empty candidate list returns an empty set immediately.
+
+    Guards against SQL errors from empty ANY($1::int[]) bindings.
+    Verified: recommender.py:220-245 (_filter_unread edge-case guard).
+    """
+    from paper_ingestion.ingestion.recommender import _filter_unread
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('recs-empty@contract.test', 'user') RETURNING id"
+    )
+    result = await _filter_unread(contract_conn, [], user_id=user_id)
+    assert result == set() or len(result) == 0, (
+        "Empty candidate list must return empty set from _filter_unread"
+    )

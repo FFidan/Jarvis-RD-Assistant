@@ -53,6 +53,7 @@ from jarvis_common import (
     assert_paper_ownership,
     assert_papers_ownership,
     current_user_id,
+    current_user_id_strict,
 )
 from jarvis_common import jobs as jobs_lib
 from jarvis_common.settings import get_jobs_settings
@@ -133,9 +134,10 @@ def build_jobs_router(
         returns an ``int``, ``create_job`` calls
         :func:`jarvis_common.db_helpers.assert_paper_ownership` before enqueue
         so users cannot enqueue paper-scoped jobs against papers they do not
-        own.  In single-tenant mode (``user_id=None``) the helper short-circuits
-        and the call is a no-op.  ``None`` means the service has no paper-scoped
-        jobs (e.g. ``learning_engine``).
+        own.  ``create_job`` requires a resolved user identity
+        (``current_user_id_strict``), so ``user_id=None`` is never reached via
+        the public API.  ``None`` means the service has no paper-scoped
+        jobs (e.g. ``learning_engine`` — which wires its own extractor).
     task_lookup:
         Optional callable returning the current kind→task mapping.  Defaults to
         the compatibility ``jarvis_common.task_registry.KIND_TO_TASK`` mapping.
@@ -176,7 +178,7 @@ def build_jobs_router(
         request: Request,
         body: CreateJobRequest,  # type: ignore[valid-type]
         db_pool: asyncpg.Pool = Depends(get_db_pool),
-        user_id: int | None = Depends(current_user_id),
+        user_id: int = Depends(current_user_id_strict),
     ) -> JobCreateResponse:
         """Enqueue a new background job and return its ID."""
         import uuid as _uuid
@@ -197,10 +199,9 @@ def build_jobs_router(
                 detail=f"Job kind {body.kind!r} is not allowed. "
                 f"Permitted kinds: {sorted(kinds_now)}",
             )
-        # WS-6B-α: paper-scoped ownership check before enqueue.  In
-        # single-tenant mode (user_id=None) ``assert_paper_ownership``
-        # short-circuits without acquiring a connection.
-        if paper_ownership_extractor is not None and user_id is not None:
+        # RD-DA-001/002: paper-scoped ownership check before enqueue.
+        # user_id is always an int here (current_user_id_strict enforces it).
+        if paper_ownership_extractor is not None:
             paper_id_for_check = paper_ownership_extractor(body.payload)
             if isinstance(paper_id_for_check, int):
                 async with db_pool.acquire() as conn:

@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 
 async def test_a251_assert_paper_ownership_owner_no_exception(contract_two_users, contract_conn):

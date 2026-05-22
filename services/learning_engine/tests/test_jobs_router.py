@@ -16,14 +16,17 @@ from pydantic import ValidationError
 
 
 def test_create_job_request_rejects_blank_kind():
-    with pytest.raises(ValidationError, match="kind must be a non-empty string"):
+    # In discriminated mode (card.generate schema) an unknown/blank kind tag
+    # is rejected by the Pydantic model_validator with a union_tag_invalid error.
+    with pytest.raises(ValidationError):
         CreateJobRequest(kind="   ")
 
 
 def test_create_job_request_accepts_valid_kind():
-    req = CreateJobRequest(kind="card.generate", payload={"paper_id": 1})
+    # RD-DA-001: card.generate now requires paper_id + deck_id in payload.
+    req = CreateJobRequest(kind="card.generate", payload={"paper_id": 1, "deck_id": 1})
     assert req.kind == "card.generate"
-    assert req.payload == {"paper_id": 1}
+    assert req.payload == {"paper_id": 1, "deck_id": 1}
 
 
 # ---------------------------------------------------------------------------
@@ -31,31 +34,22 @@ def test_create_job_request_accepts_valid_kind():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("bad_kind", ["secret.internal", "totally.unknown.kind"])
-async def test_create_job_rejects_disallowed_kind(bad_kind, monkeypatch):
-    """POST /api/jobs with an unknown kind raises 400.
+def test_create_job_rejects_disallowed_kind(bad_kind):
+    """Unknown kinds are rejected before the handler runs.
+
+    With discriminated-union validation (RD-DA-001), ``CreateJobRequest`` only
+    accepts ``kind="card.generate"``; any other kind tag raises ``ValidationError``
+    at parse time (HTTP 422 via FastAPI) — the handler's 400 allowlist guard is
+    never reached.
 
     Parametrized over two distinct unknown-kind strings to confirm the guard is
     generic (not a hard-coded string match).
     B2-18: test_create_job_unsupported_kind_returns_400 collapsed into this parametrize;
     both original kind values are preserved as cases.
     """
-    monkeypatch.delenv("DEV_MODE", raising=False)
-
-    mock_request = MagicMock()
-    mock_pool = MagicMock()
-
-    with pytest.raises(HTTPException) as exc_info:
-        await jobs_router.create_job.__wrapped__(
-            mock_request,
-            body=CreateJobRequest(kind=bad_kind),
-            user_id=None,
-            db_pool=mock_pool,
-        )
-
-    assert exc_info.value.status_code == 400
-    assert bad_kind in exc_info.value.detail
+    with pytest.raises(ValidationError):
+        CreateJobRequest(kind=bad_kind)
 
 
 @pytest.mark.asyncio
@@ -66,11 +60,24 @@ async def test_create_job_enqueues_allowed_kind(monkeypatch):
     ``KIND_TO_TASK.defer_async`` for all 19 registered kinds (including
     ``card.generate``).  The test patches ``defer_async`` on the task object
     to avoid a live procrastinate connection.
+
+    RD-DA-001: card.generate now requires paper_id + deck_id.  The pool mock
+    returns a row with discovered_by=None (system/shared paper) so the
+    ownership check passes without a live database.
     """
     monkeypatch.delenv("DEV_MODE", raising=False)
 
     mock_request = MagicMock()
+
+    # Pool mock that satisfies the ownership check (assert_paper_ownership
+    # calls conn.fetchrow; discovered_by=None means shared system paper).
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"discovered_by": None})
+    conn_cm = MagicMock()
+    conn_cm.__aenter__ = AsyncMock(return_value=conn)
+    conn_cm.__aexit__ = AsyncMock(return_value=False)
     mock_pool = MagicMock()
+    mock_pool.acquire.return_value = conn_cm
 
     fake_task = AsyncMock()
     fake_task.defer_async = AsyncMock(return_value=None)
@@ -79,7 +86,7 @@ async def test_create_job_enqueues_allowed_kind(monkeypatch):
     with patch.dict("jarvis_common.task_registry._TASK_MAP", fake_kind_to_task, clear=True):
         result = await jobs_router.create_job.__wrapped__(
             mock_request,
-            body=CreateJobRequest(kind="card.generate"),
+            body=CreateJobRequest(kind="card.generate", payload={"paper_id": 1, "deck_id": 1}),
             user_id=42,
             db_pool=mock_pool,
         )
@@ -170,15 +177,24 @@ async def test_list_jobs_passes_status_filter_to_lib():
 
 
 def test_create_job_request_default_payload_is_empty_dict():
-    """Default payload must be {} and not shared across instances."""
-    req = CreateJobRequest(kind="card.generate")
-    assert req.payload == {}
+    """Payload is stored as given and no shared mutable state exists.
+
+    RD-DA-001: discriminated mode requires paper_id + deck_id for card.generate,
+    so there is no longer a zero-argument constructor.  The test verifies that
+    the explicit payload passed at construction is stored correctly on the
+    instance (SYM-002 mutable-default invariant remains; see companion test).
+    """
+    req = CreateJobRequest(kind="card.generate", payload={"paper_id": 1, "deck_id": 2})
+    assert req.payload == {"paper_id": 1, "deck_id": 2}
 
 
 def test_create_job_request_payload_not_shared_between_instances():
-    """Mutating one instance's payload must not affect another (no mutable default)."""
-    req_a = CreateJobRequest(kind="card.generate")
-    req_b = CreateJobRequest(kind="card.generate")
+    """Mutating one instance's payload must not affect another (SYM-002 — no mutable default).
+
+    RD-DA-001: card.generate requires paper_id + deck_id; use explicit payloads.
+    """
+    req_a = CreateJobRequest(kind="card.generate", payload={"paper_id": 1, "deck_id": 1})
+    req_b = CreateJobRequest(kind="card.generate", payload={"paper_id": 2, "deck_id": 2})
     req_a.payload["injected"] = True
     assert "injected" not in req_b.payload, (
         "Mutable default detected: req_b.payload was mutated via req_a"

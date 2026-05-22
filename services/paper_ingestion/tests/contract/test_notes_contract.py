@@ -26,7 +26,11 @@ import pytest
 import pytest_asyncio
 import httpx
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 _TEST_API_KEY = "notes-contract-key-d1-do-not-use-in-prod"
 
@@ -281,3 +285,115 @@ async def test_a64_delete_note_user_b_gets_404(
     assert resp.status_code == 404, (
         f"Non-owner should get 404; got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# E1.PI extensions — highlight idempotency, note list IDOR (user B empty), create DB persistence
+#
+# Verified: notes.py:56 (GET scopes by paper_id + user_id)
+# Verified: notes.py:105 (POST 201 + NoteResponse RETURNING shape)
+# Verified: notes.py:155-165 (PUT WHERE id AND user_id — 404 non-owner)
+# ---------------------------------------------------------------------------
+
+
+async def test_e1_notes_user_b_sees_empty_list_for_user_a_paper(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """GET /api/papers/{paper_id}/notes: user B's list is empty for user A's paper.
+
+    Behavioral assertion: even if user B's paper_id happens to match user A's
+    paper, no notes cross the user_id boundary.
+    Verified: notes.py:56 WHERE paper_id = $1 AND user_id = $2 scope.
+    Survivor-of (Phase E2): test_notes.py IDOR cross-user list mock tests.
+    """
+    paper_id = contract_two_users.paper_id_a
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp = await c.get(f"/api/papers/{paper_id}/notes")
+
+    assert resp.status_code in (200, 403, 404), (
+        f"Unexpected status {resp.status_code}: {resp.text[:200]}"
+    )
+    if resp.status_code == 200:
+        notes = resp.json()
+        assert isinstance(notes, list)
+        # User B must see no notes for user A's paper (user_id scoping)
+        assert len(notes) == 0, (
+            f"User B must see empty list for user A's paper; got {len(notes)} notes"
+        )
+
+
+async def test_e1_notes_create_persists_to_db(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """POST /api/papers/{id}/notes: created note is retrievable from DB with correct user_id.
+
+    Stronger than mock-unit: verifies the DB row exists after the POST.
+    Verified: notes.py:105 INSERT INTO paper_notes ... RETURNING id, paper_id, user_note, source, created_at.
+    Survivor-of (Phase E2): test_notes.py create-note mock-unit DB-side assertions.
+    """
+    paper_id = contract_two_users.paper_id_a
+    user_a_id = contract_two_users.user_a_id
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            f"/api/papers/{paper_id}/notes",
+            json={"user_note": "e1-db-persistence-test-note"},
+        )
+    assert resp.status_code == 201, f"Expected 201; got {resp.status_code}: {resp.text[:200]}"
+    note_id = resp.json()["id"]
+
+    row = await contract_conn.fetchrow(
+        "SELECT user_id, user_note, source FROM paper_notes WHERE id = $1",
+        note_id,
+    )
+    assert row is not None, f"Note row {note_id} must exist in paper_notes after POST"
+    assert row["user_id"] == user_a_id, (
+        f"Note must be owned by user_a_id={user_a_id}; got user_id={row['user_id']}"
+    )
+    assert row["user_note"] == "e1-db-persistence-test-note"
+    assert row["source"] == "user"
+
+
+async def test_e1_notes_highlight_source_idempotency(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """POST /api/papers/{id}/notes twice with source='highlight' creates 2 distinct rows.
+
+    Highlights are NOT idempotent at the endpoint level — each POST creates a new
+    row. This verifies the schema allows multiple highlight rows per (paper, user).
+    Verified: notes.py:105 (no UNIQUE constraint on highlight rows — unlimited inserts).
+    Survivor-of (Phase E2): test_notes.py highlight source mock tests.
+    """
+    paper_id = contract_two_users.paper_id_a
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        r1 = await c.post(
+            f"/api/papers/{paper_id}/notes",
+            json={"user_note": "highlight-dup-test", "source": "highlight"},
+        )
+    assert r1.status_code == 201, f"First highlight POST failed: {r1.text[:200]}"
+    id1 = r1.json()["id"]
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        r2 = await c.post(
+            f"/api/papers/{paper_id}/notes",
+            json={"user_note": "highlight-dup-test", "source": "highlight"},
+        )
+    assert r2.status_code == 201, f"Second highlight POST failed: {r2.text[:200]}"
+    id2 = r2.json()["id"]
+
+    assert id1 != id2, (
+        "Two highlight POSTs with same text must create two distinct note rows (no idempotency guard)"
+    )
+    count = await contract_conn.fetchval(
+        "SELECT count(*) FROM paper_notes WHERE id = ANY($1::int[])",
+        [id1, id2],
+    )
+    assert count == 2, f"Both rows must exist in DB; got count={count}"

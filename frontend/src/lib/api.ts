@@ -751,8 +751,11 @@ export const deleteCard = (id: number) =>
   apiFetch<void>(`/api/cards/${id}`, { method: 'DELETE' });
 
 // --- Review ---
-export const getNextReview = (limit = 1) =>
-  apiFetch<Card[]>(`/api/review/next?limit=${limit}`);
+export const getNextReview = (limit = 1, deckId?: number) => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (deckId != null) params.append('deck_id', String(deckId));
+  return apiFetch<Card[]>(`/api/review/next?${params.toString()}`);
+};
 export const submitReview = (cardId: number, rating: number, durationMs?: number) =>
   apiFetch<ReviewResponse>(`/api/review/${cardId}`, {
     method: 'POST',

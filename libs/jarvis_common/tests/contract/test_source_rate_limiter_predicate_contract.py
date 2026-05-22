@@ -17,7 +17,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from jarvis_common.testing import SharedConnPool
 
-pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
 
 
 def _make_limiter(conn, source_type: str, min_interval_seconds: float = 0.0):
