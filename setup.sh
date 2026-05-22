@@ -86,11 +86,21 @@ detect_hw_tier() {  # echoes: cpu | lt-8 | 8-16 | 16-24 | 24-48 | ge-48
 }
 
 _default_model_for_tier() {
-  # $1 = tier, $2 = backend; reads config/llm-tier-candidates.yaml
+  # $1 = tier, $2 = backend; reads config/llm-tier-candidates.yaml when present
   python3 - "$1" "$2" <<'PY'
 import sys, yaml
 tier, backend = sys.argv[1:3]
-data = yaml.safe_load(open("config/llm-tier-candidates.yaml"))
+_OLLAMA_FALLBACK = {
+    "cpu": "qwen3:1.7b", "lt-8": "qwen3:1.7b",
+    "8-16": "qwen2.5:7b-instruct", "16-24": "qwen2.5:7b-instruct",
+    "24-48": "qwen3:8b", "ge-48": "qwen3:14b",
+}
+try:
+    with open("config/llm-tier-candidates.yaml") as f:
+        data = yaml.safe_load(f)
+except FileNotFoundError:
+    print(_OLLAMA_FALLBACK.get(tier, "qwen3:1.7b"))
+    sys.exit(0)
 for c in data["tiers"].get(tier, {}).get("candidates", []):
     if c["backend"] == backend:
         print(c["model"])

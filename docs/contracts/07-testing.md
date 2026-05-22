@@ -419,7 +419,7 @@ It does NOT defer the rules. As of 2026-05-22, no new PR may add a §2 anti-patt
 - [docs/audit/2026-05-22-recomposition-closeout.md](../audit/2026-05-22-recomposition-closeout.md) — why this contract exists (the structural ceiling proof)
 - [docs/audit/2026-05-22-recomposition-evidence.md](../audit/2026-05-22-recomposition-evidence.md) — carve-out floor calculation
 - [docs/audit/2026-05-21-coverage-map.md](../audit/2026-05-21-coverage-map.md) — 280 rows of endpoint × coverage (Phase A foundation)
-- [docs/audit/2026-05-21-deep-audit-dry-kiss-yagni-codex.md](../audit/2026-05-21-deep-audit-dry-kiss-yagni-codex.md) — codex audit findings (5 high-severity bypasses closed by recomposition E0)
+- codex audit findings — 5 high-severity bypasses closed by recomposition E0 (audit doc kept local, not committed)
 
 ---
 
