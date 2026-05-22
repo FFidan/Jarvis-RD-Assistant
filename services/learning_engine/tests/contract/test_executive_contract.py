@@ -330,7 +330,7 @@ async def test_log_focus_session_non_owned_task_gets_404(
     async with _client(_le_app, contract_two_users.cookie_b) as c:
         resp = await c.post(
             "/api/executive/focus/log",
-            json={"duration_minutes": 25, "task_id": task_id_a},
+            json={"duration_hours": 25 / 60, "task_id": task_id_a},
         )
 
     assert resp.status_code == 404, (
@@ -350,7 +350,7 @@ async def test_log_focus_session_persists_to_daily_log(
     async with _client(_le_app, contract_two_users.cookie_a) as c:
         resp = await c.post(
             "/api/executive/focus/log",
-            json={"duration_minutes": 30},
+            json={"duration_hours": 0.5},
         )
 
     assert resp.status_code == 200, f"POST focus/log failed: {resp.status_code}: {resp.text[:300]}"

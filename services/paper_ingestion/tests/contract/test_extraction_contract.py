@@ -153,7 +153,14 @@ async def test_a36_create_template_admin_persists_to_db(
             json={
                 "name": template_name,
                 "description": "Phase B contract test template",
-                "fields": [{"name": "field1", "description": "test field", "field_type": "text"}],
+                "fields": [
+                    {
+                        "name": "field1",
+                        "label": "Field 1",
+                        "description": "test field",
+                        "type": "text",
+                    }
+                ],
                 "is_default": False,
             },
         )
@@ -195,7 +202,14 @@ async def test_a36_create_template_duplicate_name_returns_409(
             json={
                 "name": dup_name,
                 "description": "dup",
-                "fields": [],
+                "fields": [
+                    {
+                        "name": "field1",
+                        "label": "Field 1",
+                        "description": "duplicate field",
+                        "type": "text",
+                    }
+                ],
                 "is_default": False,
             },
         )

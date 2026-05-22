@@ -24,7 +24,7 @@ Row deferred:
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -88,19 +88,16 @@ def _make_client(app, cookie: str) -> httpx.AsyncClient:
     )
 
 
-async def _insert_jarvis_job(conn, user_id: int, status: str = "pending") -> str:
-    """Insert a row directly into the jarvis_jobs legacy table.
-
-    get_job / list_jobs / cancel_job call jobs_lib.get_unified which falls
-    through to jarvis_jobs when the procrastinate lookup misses.
-    """
+async def _insert_jarvis_job(conn, user_id: int, status: str = "todo") -> str:
+    """Insert a minimal procrastinate-backed job row owned by *user_id*."""
     job_id = str(uuid.uuid4())
     await conn.execute(
-        """INSERT INTO jarvis_jobs (job_id, kind, status, user_id)
-           VALUES ($1, 'noop.test', $2, $3)""",
-        job_id,
+        """
+        INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
+        VALUES ('paper_ingestion', 'noop.test', $1::jsonb, $2)
+        """,
+        {"job_id": job_id, "user_id": user_id},
         status,
-        str(user_id),
     )
     return job_id
 
@@ -190,7 +187,7 @@ async def test_a177_get_job_owner_gets_row_non_owner_gets_404(
 
     assert resp_a.status_code == 200, resp_a.text[:300]
     body = resp_a.json()
-    assert body["job_id"] == job_id
+    assert body["id"] == job_id
 
     # Non-owner gets 404 (not 403, to avoid leaking job existence)
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
@@ -223,7 +220,7 @@ async def test_a178_list_jobs_returns_only_own_jobs(
     jobs = resp.json()
     assert isinstance(jobs, list), f"Expected list, got {type(jobs)}"
 
-    job_ids = [j["job_id"] for j in jobs]
+    job_ids = [j["id"] for j in jobs]
     assert job_id_a in job_ids, f"User A's job {job_id_a} missing from list"
     assert job_id_b not in job_ids, f"User B's job {job_id_b} leaked into User A's job list — IDOR"
 
@@ -247,16 +244,23 @@ async def test_a180_cancel_job_owner_ok_non_owner_404(
     row for a directly-inserted jarvis_jobs row), so the endpoint returns {"ok": True}
     without touching the live broker.
     """
-    job_id = await _insert_jarvis_job(contract_conn, contract_two_users.user_a_id, status="pending")
+    job_id = await _insert_jarvis_job(contract_conn, contract_two_users.user_a_id, status="todo")
 
     # Non-owner gets 404
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
         resp_b = await c.post(f"/api/jobs/{job_id}/cancel")
     assert resp_b.status_code == 404, f"Expected 404 for non-owner cancel, got {resp_b.status_code}"
 
-    # Owner can cancel
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp_a = await c.post(f"/api/jobs/{job_id}/cancel")
+    mock_manager = MagicMock()
+    mock_manager.cancel_job_by_id_async = AsyncMock()
+    mock_app = MagicMock()
+    mock_app.job_manager = mock_manager
+
+    # Owner can cancel; task_registry.app is the declared external boundary.
+    with patch("jarvis_common.task_registry.app", mock_app):
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+            resp_a = await c.post(f"/api/jobs/{job_id}/cancel")
     assert resp_a.status_code == 200, resp_a.text[:300]
     body = resp_a.json()
     assert body.get("ok") is True, f'Expected {{"ok": true}}, got {body}'
+    mock_manager.cancel_job_by_id_async.assert_awaited_once()

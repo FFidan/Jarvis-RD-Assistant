@@ -86,7 +86,7 @@ async def upsert_journal_entry(
             RETURNING id, date, prompts, created_at, updated_at
             """,
             user_id,
-            str(body.date),
+            body.date,
             prompts_dict,
         )
     return JournalEntryResponse(

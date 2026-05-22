@@ -74,7 +74,7 @@ async def test_baseline_paper_user_state_unique_nulls_not_distinct(
         await apply_fresh_init(pool)
         async with pool.acquire() as conn:
             paper_id = await _seed_paper(conn, "baseline-043-pus")
-            await conn.execute("INSERT INTO users (id, email) VALUES (43, 'b043@example.test')")
+            await conn.execute("INSERT INTO users (id, email) VALUES (43, 'b043@example.com')")
             await conn.execute(
                 "INSERT INTO paper_user_state (paper_id, user_id, state) "
                 "VALUES ($1, NULL, 'inbox')",
@@ -104,7 +104,7 @@ async def test_baseline_paper_summaries_unique_nulls_not_distinct(
         await apply_fresh_init(pool)
         async with pool.acquire() as conn:
             paper_id = await _seed_paper(conn, "baseline-043-sum")
-            await conn.execute("INSERT INTO users (id, email) VALUES (43, 'b043s@example.test')")
+            await conn.execute("INSERT INTO users (id, email) VALUES (43, 'b043s@example.com')")
             await conn.execute(
                 """
                 INSERT INTO paper_summaries
@@ -143,7 +143,7 @@ async def test_baseline_pulse_decks_unique_nulls_not_distinct(
     try:
         await apply_fresh_init(pool)
         async with pool.acquire() as conn:
-            await conn.execute("INSERT INTO users (id, email) VALUES (43, 'b043d@example.test')")
+            await conn.execute("INSERT INTO users (id, email) VALUES (43, 'b043d@example.com')")
             await conn.execute(
                 "INSERT INTO pulse_decks (deck_date, user_id) VALUES ('2026-04-28', NULL)"
             )
@@ -318,7 +318,7 @@ async def test_baseline_paper_user_state_state_check_rejects_invalid(
                 await conn.execute(
                     "INSERT INTO users (id, email) VALUES ($1, $2)",
                     uid,
-                    f"b047-{idx}@example.test",
+                    f"b047-{idx}@example.com",
                 )
                 await conn.execute(
                     "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, $2, $3)",
@@ -348,7 +348,7 @@ async def test_baseline_paper_user_state_trash_restore_round_trip(
         async with pool.acquire() as conn:
             paper_id = await _seed_paper(conn, "baseline-047-trash")
             # paper_user_state.user_id FK→users CASCADE: seed a real owner.
-            await conn.execute("INSERT INTO users (id, email) VALUES (1, 'b047t@example.test')")
+            await conn.execute("INSERT INTO users (id, email) VALUES (1, 'b047t@example.com')")
             await conn.execute(
                 "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 1, 'to_read')",
                 paper_id,
@@ -652,7 +652,7 @@ async def test_baseline_thread_cascades_on_user_delete(live_pg_dsn: str) -> None
         async with pool.acquire() as conn:
             uid = await conn.fetchval(
                 "INSERT INTO users (email, role) "
-                "VALUES ('baseline-083@example.test', 'user') RETURNING id"
+                "VALUES ('baseline-083@example.com', 'user') RETURNING id"
             )
             thread_id = await conn.fetchval(
                 "INSERT INTO thread (user_id, title, progress) VALUES ($1, 'kept', 0.5) RETURNING id",
@@ -709,7 +709,7 @@ async def test_baseline_project_questions_cascades_on_user_delete(live_pg_dsn: s
         async with pool.acquire() as conn:
             uid = await conn.fetchval(
                 "INSERT INTO users (email, role) "
-                "VALUES ('baseline-084@example.test', 'user') RETURNING id"
+                "VALUES ('baseline-084@example.com', 'user') RETURNING id"
             )
             proj_id = await conn.fetchval(
                 "INSERT INTO projects (user_id, name) VALUES ($1, 'Baseline084Project') RETURNING id",

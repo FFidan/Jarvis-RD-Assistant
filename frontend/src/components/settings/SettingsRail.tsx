@@ -62,7 +62,6 @@ export const ALL_SECTIONS: RailSection[] = [
     items: [
       { section: 'models', item: 'llm', label: 'LLM Models' },
       { section: 'models', item: 'providers', label: 'Cloud Providers' },
-      { section: 'models', item: 'ai', label: 'AI Backend' },
     ],
   },
   {

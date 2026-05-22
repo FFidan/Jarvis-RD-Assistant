@@ -22,6 +22,7 @@ make_bot_config         build a minimal BotConfig for telegram_bot tests
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
@@ -394,16 +395,46 @@ def _make_contract_conn_fixture():
 # ---------------------------------------------------------------------------
 
 
+class _TaskReentrantAsyncLock:
+    """Serialize shared asyncpg access while allowing same-task nested acquires."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: asyncio.Task[Any] | None = None
+        self._depth = 0
+
+    async def acquire(self) -> None:
+        task = asyncio.current_task()
+        if task is not None and task is self._owner:
+            self._depth += 1
+            return
+        await self._lock.acquire()
+        self._owner = task
+        self._depth = 1
+
+    def release(self) -> None:
+        task = asyncio.current_task()
+        if task is not self._owner:
+            raise RuntimeError("SharedConnPool lock released by non-owner task")
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._lock.release()
+
+
 class SharedAcquireCM:
     """Async CM returned by SharedConnPool.acquire(); always yields the same conn."""
 
-    def __init__(self, conn: Any) -> None:
+    def __init__(self, conn: Any, lock: _TaskReentrantAsyncLock) -> None:
         self._conn = conn
+        self._lock = lock
 
     async def __aenter__(self) -> Any:
+        await self._lock.acquire()
         return self._conn
 
     async def __aexit__(self, *_: Any) -> None:
+        self._lock.release()
         return None
 
 
@@ -422,27 +453,33 @@ class SharedConnPool:
 
     def __init__(self, conn: Any) -> None:
         self._conn = conn
+        self._lock = _TaskReentrantAsyncLock()
 
     def acquire(self) -> SharedAcquireCM:  # not async — returns an async-CM
-        return SharedAcquireCM(self._conn)
+        return SharedAcquireCM(self._conn, self._lock)
 
     async def close(self) -> None:  # idempotent; the real pool's lifecycle is the fixture's
         return None
 
     async def fetch(self, *args: Any, **kwargs: Any) -> Any:
-        return await self._conn.fetch(*args, **kwargs)
+        async with self.acquire() as conn:
+            return await conn.fetch(*args, **kwargs)
 
     async def fetchrow(self, *args: Any, **kwargs: Any) -> Any:
-        return await self._conn.fetchrow(*args, **kwargs)
+        async with self.acquire() as conn:
+            return await conn.fetchrow(*args, **kwargs)
 
     async def fetchval(self, *args: Any, **kwargs: Any) -> Any:
-        return await self._conn.fetchval(*args, **kwargs)
+        async with self.acquire() as conn:
+            return await conn.fetchval(*args, **kwargs)
 
     async def execute(self, *args: Any, **kwargs: Any) -> Any:
-        return await self._conn.execute(*args, **kwargs)
+        async with self.acquire() as conn:
+            return await conn.execute(*args, **kwargs)
 
     async def executemany(self, *args: Any, **kwargs: Any) -> Any:
-        return await self._conn.executemany(*args, **kwargs)
+        async with self.acquire() as conn:
+            return await conn.executemany(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -612,8 +649,8 @@ def _make_contract_two_users_fixture():
 
     @pytest_asyncio.fixture(scope="function", loop_scope="session")
     async def contract_two_users(contract_conn) -> TwoUsers:
-        user_a_id, cookie_a = await _seed_user(contract_conn, "iso-user-a@contract.test")
-        user_b_id, cookie_b = await _seed_user(contract_conn, "iso-user-b@contract.test")
+        user_a_id, cookie_a = await _seed_user(contract_conn, "iso-user-a@contract.example.com")
+        user_b_id, cookie_b = await _seed_user(contract_conn, "iso-user-b@contract.example.com")
         res_a = await _seed_resources(contract_conn, user_a_id, "a")
         await _seed_resources(contract_conn, user_b_id, "b")
         return TwoUsers(

@@ -116,7 +116,7 @@ async def get_next_review(
     return [row_to_card_response(row) for row in rows]
 
 
-@router.post("/review/{card_id}", response_model=ReviewResponse)
+@router.post("/review/{card_id:int}", response_model=ReviewResponse)
 @limiter.limit("60/minute")
 async def submit_review(
     request: Request,

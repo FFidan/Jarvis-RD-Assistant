@@ -4,7 +4,6 @@ Includes single-paper ask, cross-paper ask, streaming SSE variants,
 summarization, and weekly digest.
 """
 
-import json
 import logging
 import os
 
@@ -14,13 +13,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, get_smart_model
 from jarvis_common.auth import get_current_user_id
 from jarvis_common.db_helpers import assert_paper_ownership
-from jarvis_common.litellm_observer import observed_share
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
     get_litellm_config,
     request_chat_completion_content,
-    strip_think_blocks,
 )
 from jarvis_common.sse import SSE_DONE, sse_event
 from jarvis_common.verify import QuoteVerifier
@@ -61,15 +58,6 @@ router = APIRouter(
 # Allows bench to exempt itself without application code risk; default preserves
 # the production rate limit (10/minute per user/IP).
 _ASK_RATE_LIMIT = os.getenv("ASK_RATE_LIMIT", "10/minute")
-
-
-def _strip_think_blocks(text: str) -> str:
-    """Strip <think>…</think> blocks from final RAG answer text.
-
-    Thin wrapper around jarvis_common.llm_client.strip_think_blocks so Pyright
-    can resolve the symbol on import.
-    """
-    return strip_think_blocks(text)
 
 
 # ---------------------------------------------------------------------------
@@ -213,8 +201,6 @@ async def ask_paper(
         logger.error("RAG LLM call failed for paper %d: %s", paper_id, exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc
 
-    answer = _strip_think_blocks(answer)
-
     # Enrich sources with paper_id for verification
     sources = [{**s, "paper_id": paper_id} for s in raw_sources]
 
@@ -293,24 +279,15 @@ async def ask_paper_stream(
 
     smart_model = get_smart_model()
 
-    async def _stream_with_backend_badge():
-        served, _ = observed_share("smart")
-        configured = os.getenv("JARVIS_LLM_BACKEND", "ollama")
-        is_fallback = bool(served and configured == "vllm" and served.startswith("ollama/"))
-        payload = json.dumps({"served_by": served, "fallback": is_fallback})
-        yield f"event: backend\ndata: {payload}\n\n"
-        async for event in stream_rag_events(
+    return StreamingResponse(
+        stream_rag_events(
             http_client,
             messages,
             sources,
             model=smart_model,
             verifier=verifier,
             db_pool=db_pool,
-        ):
-            yield event
-
-    return StreamingResponse(
-        _stream_with_backend_badge(),
+        ),
         media_type="text/event-stream",
     )
 
@@ -382,8 +359,6 @@ async def ask_cross_paper(
         logger.error("Cross-paper RAG LLM call failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc
 
-    answer = _strip_think_blocks(answer)
-
     confidence: str | None = None
     verified_fraction: float | None = None
     per_sentence: list[dict[str, object]] = []
@@ -447,19 +422,11 @@ async def ask_cross_paper_stream(
             media_type="text/event-stream",
         )
 
-    served, _ = observed_share("smart")
-    configured = os.getenv("JARVIS_LLM_BACKEND", "ollama")
-    is_fallback = bool(served and configured == "vllm" and served.startswith("ollama/"))
-    _backend_event = (
-        f"event: backend\ndata: {json.dumps({'served_by': served, 'fallback': is_fallback})}\n\n"
-    )
-
     # Short-circuit when no chunks were found -- return canned answer as SSE
     if isinstance(result, CrossPaperRagNoResults):
         no_result = result
 
         async def _no_results_stream():
-            yield _backend_event
             yield sse_event({"type": "token", "content": no_result.answer})
             yield sse_event({"type": "sources", "sources": no_result.sources})
             yield sse_event({"type": "done", "full_answer": no_result.answer})
@@ -474,20 +441,15 @@ async def ask_cross_paper_stream(
 
     smart_model = get_smart_model()
 
-    async def _cross_paper_stream_with_backend_badge():
-        yield _backend_event
-        async for event in stream_rag_events(
+    return StreamingResponse(
+        stream_rag_events(
             http_client,
             messages,
             sources,
             model=smart_model,
             verifier=verifier,
             db_pool=db_pool,
-        ):
-            yield event
-
-    return StreamingResponse(
-        _cross_paper_stream_with_backend_badge(),
+        ),
         media_type="text/event-stream",
     )
 

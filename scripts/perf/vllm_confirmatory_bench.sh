@@ -59,41 +59,6 @@ PAIR_A_OLLAMA_MODEL="${PAIR_A_OLLAMA_MODEL:-qwen2.5:7b-instruct}"
 PAIR_B_VLLM_MODEL="${PAIR_B_VLLM_MODEL:-Qwen/Qwen3-8B-AWQ}"
 PAIR_B_OLLAMA_MODEL="${PAIR_B_OLLAMA_MODEL:-qwen3:8b}"
 
-# --- candidate file (optional; TSV on disk: tier<TAB>backend<TAB>model_id<TAB>vram_sim_mb<TAB>notes;
-#     _iter_candidates converts to pipe-separated internally to preserve empty fields) ---
-BENCH_CANDIDATES_FILE="${BENCH_CANDIDATES_FILE:-}"
-
-_iter_candidates() {
-  # Emits one line per candidate: tier|backend|model|vram_sim_mb|notes
-  # (pipe-delimited internally to avoid bash IFS-whitespace tab-collapse on
-  # empty fields; the on-disk TSV format stays tab-separated for human authoring.)
-  if [ -n "${BENCH_CANDIDATES_FILE}" ]; then
-    [ -f "${BENCH_CANDIDATES_FILE}" ] || die "BENCH_CANDIDATES_FILE not found: ${BENCH_CANDIDATES_FILE}" \
-      "Try: scripts/perf/candidates.example.tsv"
-    grep -vE '^[[:space:]]*(#|$)' "${BENCH_CANDIDATES_FILE}" \
-      | awk -F'\t' 'NF>=3 {
-          for (i=NF+1; i<=5; i++) $i=""
-          print $1 "|" $2 "|" $3 "|" $4 "|" $5
-        }'
-  else
-    # Back-compat: emit the existing PAIR_A/PAIR_B rows as candidates, filtered by BENCH_PAIRS
-    for pair in ${BENCH_PAIRS}; do
-      local p
-      p="${pair,,}"   # normalise A→a, B→b
-      case "${p}" in
-        a|pair-a)
-          printf 'pair-a|vllm|%s||\n'   "${PAIR_A_VLLM_MODEL}"
-          printf 'pair-a|ollama|%s||\n' "${PAIR_A_OLLAMA_MODEL}"
-          ;;
-        b|pair-b)
-          printf 'pair-b|vllm|%s||\n'   "${PAIR_B_VLLM_MODEL}"
-          printf 'pair-b|ollama|%s||\n' "${PAIR_B_OLLAMA_MODEL}"
-          ;;
-      esac
-    done
-  fi
-}
-
 # v0.6.6 was pinned for sm_89/Ada reproducibility but is TWO ways too old:
 # (a) Pair B Qwen3-8B-AWQ → bundled Transformers raises KeyError:'qwen3'
 #     ("architecture not recognized"); (b) documented earlier: v0.6.6 ships
@@ -168,8 +133,6 @@ qdrant_container() { _svc_container qdrant; }
 
 ABORTED=0
 _FINALIZED=0
-# Populated by stage_preflight from nvidia-smi; used by per-candidate VRAM check.
-vram_total_mb=0
 
 # --- EXIT/INT/TERM trap: ALWAYS restore + bundle, exactly once ------------
 finalize() {
@@ -220,11 +183,9 @@ stage_preflight() {
     local vram
     vram="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
     if [[ "${vram}" =~ ^[0-9]+$ ]]; then
-      vram_total_mb="${vram}"
       echo "gpu_vram_total_mb=${vram}" >> "${OUT_DIR}/env.txt"
-      # Soft floor: warn but do NOT hard-die; per-candidate VRAM check handles skips.
       (( vram < MIN_VRAM_MB )) && \
-        bench_warn "VRAM ${vram}MB < soft floor ${MIN_VRAM_MB}MB — candidates requiring more will be skipped per-row"
+        die "VRAM ${vram}MB < required ${MIN_VRAM_MB}MB (wrong box? set MIN_VRAM_MB=0 only for harness self-test)"
     else
       # Defensive: a valid box can report an odd format. Don't hard-die on a
       # parse miss — record + warn + continue (only a CONFIRMED integer below
@@ -484,7 +445,7 @@ stage_seed() {
   # NOTE structured arXiv syntax — NL queries hit the ArxivSource
   # literal-phrase bug and return 0 results.
   local sc
-  sc="$(curl -s -o "${OUT_DIR}/.seed_search.json" -w '%{http_code}' --max-time "${BENCH_SEED_MAX_TIME:-60}" \
+  sc="$(curl -s -o "${OUT_DIR}/.seed_search.json" -w '%{http_code}' --max-time 60 \
           -X POST "${BASE}/api/search" -b "${COOKIE_JAR}" \
           -H "Content-Type: application/json" \
           -d "{\"query\":\"${BENCH_SEED_QUERY}\",\"source_types\":[\"arxiv\"],\"max_results\":${BENCH_SEED_MAX}}" \
@@ -711,20 +672,18 @@ quality_capture() {
   local pair="$1" engine="$2"
   local qd="${OUT_DIR}/quality/${pair}/${engine}"
   mkdir -p "${qd}"
-  local prompts_file="${REPO_ROOT}/scripts/perf/quality/prompts.jsonl"
-  [ -f "${prompts_file}" ] || { bench_warn "prompts.jsonl missing: ${prompts_file}"; return 0; }
-
+  local prompts=(
+    '{"question":"Summarize the core contribution of one seeded paper.","decompose":false}'
+    '{"question":"What methods and results recur across the seeded papers?","decompose":true}'
+    '{"question":"What are the stated limitations or open problems?","decompose":true}'
+    '{"question":"Explain the main evaluation setup in plain terms.","decompose":false}'
+  )
   local n=0
-  while IFS= read -r line; do
-    [ -z "${line}" ] && continue
+  for body in "${prompts[@]}"; do
     n=$((n+1))
-    local id body
-    id=$(printf '%s' "${line}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-    body=$(printf '%s' "${line}" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({"question":d["question"],"decompose":d.get("decompose",False)}))')
-    sse_drain "${BASE}" "${COOKIE_JAR}" "${body}" "${qd}/q$(printf '%02d' "${id}").txt" || true
-  done < "${prompts_file}"
-
-  bench_log "  quality captured (${engine}) → ${qd} (${n} prompts)"
+    sse_drain "${BASE}" "${COOKIE_JAR}" "${body}" "${qd}/q${n}.txt" || true
+  done
+  bench_log "  quality captured (${engine}) → ${qd}"
 }
 
 write_quality_diff() {
@@ -797,31 +756,6 @@ for pair, ccs in data.items():
     res["pairs"][pair] = pr
 
 json.dump(res, sys.stdout, indent=2)
-PY
-}
-
-emit_tier_rankings_skeleton() {
-  bench_log "emit tier-rankings.json skeleton (judge populates)"
-  python3 - "${OUT_DIR}" <<'PY' > "${OUT_DIR}/tier-rankings.json"
-import json, os, sys, glob
-out = sys.argv[1]
-tiers = {}
-for tc in glob.glob(os.path.join(out, "*/tier-context.json")):
-    with open(tc) as f:
-        ctx = json.load(f)
-    tier = ctx["tier_label"]
-    entry = {
-        "model": ctx["model"],
-        "backend": ctx["backend"],
-        "sim_or_native": "sim" if ctx["sim_tier_flag"] else "native",
-        "judge_score": None,
-        "throughput_p95_at_c4": None,
-        "throughput_p95_at_c8": None,
-        "fits_at_sim_vram": ctx["sim_tier_flag"] or True,
-        "tier_context_path": os.path.relpath(tc, out),
-    }
-    tiers.setdefault(tier, []).append(entry)
-print(json.dumps({"tiers": tiers, "judge_run_at": None}, indent=2))
 PY
 }
 
@@ -932,87 +866,44 @@ main() {
   stage_seed
   record_vram_budget
 
-  while IFS='|' read -r CAND_TIER CAND_BACKEND CAND_MODEL CAND_SIM_VRAM_MB CAND_NOTES; do
-    bench_log "candidate: tier=${CAND_TIER} backend=${CAND_BACKEND} model=${CAND_MODEL} sim_vram=${CAND_SIM_VRAM_MB:-native}"
-    # Sanitize model id for filesystem-safe pair names (avoid collisions
-    # when multiple candidates share the same tier+backend).
-    _safe_model="${CAND_MODEL//\//_}"
-    _safe_model="${_safe_model//:/_}"
-    pair="${CAND_TIER}_${CAND_BACKEND}_${_safe_model}"
-    cand_dir="${OUT_DIR}/${pair}"
+  for pair in ${BENCH_PAIRS}; do
+    local vm om
+    if [[ "${pair}" == "A" ]]; then vm="${PAIR_A_VLLM_MODEL}"; om="${PAIR_A_OLLAMA_MODEL}"
+    elif [[ "${pair}" == "B" ]]; then vm="${PAIR_B_VLLM_MODEL}"; om="${PAIR_B_OLLAMA_MODEL}"
+    else bench_warn "unknown pair ${pair} — skipping"; continue; fi
+    bench_log "=== Pair ${pair}: vLLM=${vm}  Ollama=${om} ==="
 
-    # Per-candidate VRAM check
-    if [ "${CAND_BACKEND}" = "vllm" ]; then
-      required_mb="${CAND_SIM_VRAM_MB:-${vram_total_mb}}"
-      if [ "${required_mb}" -gt "${vram_total_mb}" ]; then
-        bench_warn "skip ${CAND_MODEL}: requires ${required_mb} MB, box has ${vram_total_mb} MB"
-        continue
-      fi
-    fi
-
-    # Compute GPU memory utilization fraction for vLLM candidates.
-    util=""
-    if [ "${CAND_BACKEND}" = "vllm" ]; then
-      if [ -n "${CAND_SIM_VRAM_MB}" ]; then
-        util=$(awk -v sim="${CAND_SIM_VRAM_MB}" -v total="${vram_total_mb}" 'BEGIN{printf "%.2f", sim/total}')
-      else
-        util="${VLLM_GPU_MEMORY_UTILIZATION:-0.75}"
-      fi
-      export VLLM_GPU_MEMORY_UTILIZATION="${util}"
-    fi
-
-    # Emit per-candidate tier-context.json for downstream judge labeling.
-    mkdir -p "${cand_dir}"
-    util_json="null"
-    [ -n "${util}" ] && util_json="\"${util}\""
-    cat > "${cand_dir}/tier-context.json" <<JSON
-{
-  "tier_label": "${CAND_TIER}",
-  "backend": "${CAND_BACKEND}",
-  "model": "${CAND_MODEL}",
-  "native_vram_mb": ${vram_total_mb},
-  "sim_vram_mb": ${CAND_SIM_VRAM_MB:-null},
-  "sim_tier_flag": $([ -n "${CAND_SIM_VRAM_MB}" ] && echo true || echo false),
-  "gpu_memory_utilization": ${util_json}
-}
-JSON
-
-    if [[ "${CAND_BACKEND}" == "vllm" ]]; then
-      # vLLM leg (container stays up for the sweep → consistent GPU residency).
-      # vllm_up failure → record + skip this candidate (no sweep possible without
-      # the vLLM container); compute_verdict still verdicts completed candidates.
-      if ! vllm_up "${CAND_MODEL}"; then
-        skip_pair "${pair}" "vLLM could not serve ${CAND_MODEL} (see pair-${pair}-vllm-boot-fail.log)"
-        continue
-      fi
-      run_or_die litellm_smart_to_vllm "${CAND_MODEL}"
-      ( cd "${REPO_ROOT}" && ${COMPOSE} restart litellm ) || die "litellm restart failed"
-      assert_ask_200          # polls until litellm settles (no fixed sleep)
-      assert_routing vllm
-      warmup_path vllm        # kill first-sweep cold-start contamination
-      for c in ${BENCH_CONCURRENCY}; do do_sweep "${pair}" vllm "${c}" "${CAND_MODEL}"; done
-      quality_capture "${pair}" vllm
-      write_quality_diff "${pair}"
-      ( cd "${REPO_ROOT}" && ${COMPOSE} --profile vllm stop vllm ) || true
-    elif [[ "${CAND_BACKEND}" == "ollama" ]]; then
-      # Ollama leg
-      ollama_ensure "${CAND_MODEL}"
-      run_or_die litellm_smart_to_ollama "${CAND_MODEL}"
-      ( cd "${REPO_ROOT}" && ${COMPOSE} restart litellm ) || die "litellm restart failed"
-      assert_ask_200          # polls until litellm settles (no fixed sleep)
-      assert_routing ollama
-      warmup_path ollama      # symmetric warm-up (fairness: neither engine cold)
-      for c in ${BENCH_CONCURRENCY}; do do_sweep "${pair}" ollama "${c}" "${CAND_MODEL}"; done
-      quality_capture "${pair}" ollama
-      write_quality_diff "${pair}"
-    else
-      bench_warn "unknown backend '${CAND_BACKEND}' for candidate ${CAND_TIER}/${CAND_MODEL} — skipping"
+    # vLLM leg (container stays up across both legs → identical GPU residency).
+    # vllm_up failure → record + skip the WHOLE pair (no comparison possible
+    # without the vLLM leg) and continue; compute_verdict still verdicts the
+    # pairs that completed.
+    if ! vllm_up "${vm}"; then
+      skip_pair "${pair}" "vLLM could not serve ${vm} (see pair-${pair}-vllm-boot-fail.log)"
       continue
     fi
-  done < <(_iter_candidates)
+    run_or_die litellm_smart_to_vllm "${vm}"
+    ( cd "${REPO_ROOT}" && ${COMPOSE} restart litellm ) || die "litellm restart failed"
+    assert_ask_200          # polls until litellm settles (no fixed sleep)
+    assert_routing vllm
+    warmup_path vllm        # kill first-sweep cold-start contamination
+    for c in ${BENCH_CONCURRENCY}; do do_sweep "${pair}" vllm "${c}" "${vm}"; done
+    quality_capture "${pair}" vllm
+
+    # Ollama leg (same model family; vLLM container left up)
+    ollama_ensure "${om}"
+    run_or_die litellm_smart_to_ollama "${om}"
+    ( cd "${REPO_ROOT}" && ${COMPOSE} restart litellm ) || die "litellm restart failed"
+    assert_ask_200          # polls until litellm settles (no fixed sleep)
+    assert_routing ollama
+    warmup_path ollama      # symmetric warm-up (fairness: neither engine cold)
+    for c in ${BENCH_CONCURRENCY}; do do_sweep "${pair}" ollama "${c}" "${om}"; done
+    quality_capture "${pair}" ollama
+    write_quality_diff "${pair}"
+
+    ( cd "${REPO_ROOT}" && ${COMPOSE} --profile vllm stop vllm ) || true
+  done
 
   compute_verdict
-  emit_tier_rankings_skeleton
   bench_log "DONE — bundle will be emitted by the finalize trap"
 }
 

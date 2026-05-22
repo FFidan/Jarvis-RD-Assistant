@@ -156,26 +156,24 @@ async def test_a58_upsert_journal_creates_and_idempotent(
 
     Verified: my_day.py:71-98 upsert_journal_entry — ON CONFLICT DO UPDATE.
     """
-    test_date = (
-        date.today() + timedelta(days=30)
-    ).isoformat()  # far future to avoid seed collision
-    payload = {"date": test_date, "prompts": {"win": "contract test win"}}
+    test_date = date.today() + timedelta(days=30)  # far future to avoid seed collision
+    payload = {"date": test_date.isoformat(), "prompts": {"first_move": "contract test win"}}
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp1 = await c.post("/api/my-day/journal", json=payload)
 
     assert resp1.status_code == 200, resp1.text[:300]
     body1 = resp1.json()
-    assert body1["prompts"]["win"] == "contract test win"
+    assert body1["prompts"]["first_move"] == "contract test win"
 
     # Upsert with updated content
-    payload2 = {"date": test_date, "prompts": {"win": "updated win"}}
+    payload2 = {"date": test_date.isoformat(), "prompts": {"first_move": "updated win"}}
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp2 = await c.post("/api/my-day/journal", json=payload2)
 
     assert resp2.status_code == 200, resp2.text[:300]
     body2 = resp2.json()
-    assert body2["prompts"]["win"] == "updated win", "Upsert did not update prompts"
+    assert body2["prompts"]["first_move"] == "updated win", "Upsert did not update prompts"
 
     # Exactly one row in DB for this user+date
     count = await contract_conn.fetchval(
@@ -299,7 +297,7 @@ async def test_a158_create_thread_inserts_row_with_correct_user_id(
 
     Verified: threads.py:120-145 create_thread — INSERT with user_id=$1.
     """
-    payload = {"title": "New Contract Thread", "anchor": None, "progress": None}
+    payload = {"title": "New Contract Thread", "anchor": None}
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.post("/api/my-day/threads", json=payload)

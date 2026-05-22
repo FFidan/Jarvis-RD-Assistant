@@ -192,21 +192,21 @@ async def test_discover_owner_gets_200_with_empty_results(
 
 
 # ---------------------------------------------------------------------------
-# §A-DISC-04 — POST /api/discover: paper_ids > 200 returns 400
-# Verified: discovery.py:148-149 (paper_ids > 200 → 400)
+# §A-DISC-04 — POST /api/discover: paper_ids > schema max returns 422
+# Verified: models/papers.py:341-344 (DiscoverRequest max_length=10)
 # ---------------------------------------------------------------------------
 
 
-async def test_discover_400_for_too_many_seed_ids(contract_two_users, _pi_app, _configure_api_key):
-    """POST /api/discover returns 400 when paper_ids exceeds 200 items."""
+async def test_discover_422_for_too_many_seed_ids(contract_two_users, _pi_app, _configure_api_key):
+    """POST /api/discover returns 422 when paper_ids exceeds the request schema limit."""
     async with _client(_pi_app, contract_two_users.cookie_a) as c:
         resp = await c.post(
             "/api/discover",
-            json={"paper_ids": list(range(1, 202)), "limit": 5},
+            json={"paper_ids": list(range(1, 12)), "limit": 5},
         )
 
-    assert resp.status_code == 400, (
-        f"Expected 400 for > 200 seed IDs; got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 422, (
+        f"Expected 422 for request-schema seed ID overflow; got {resp.status_code}: {resp.text}"
     )
 
 

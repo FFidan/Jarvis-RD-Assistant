@@ -73,13 +73,69 @@ probe_collect() {
 # copy currently contains. python3 is a hard preflight dependency.
 _litellm_path() { echo "${BENCH_REPO_ROOT}/litellm/config.yaml"; }
 
-# _litellm_rewrite_smart <engine> <model> : delegates to render-litellm-config.sh.
+# _litellm_rewrite_smart <engine> <model> : regenerate config.yaml with the
+# single active `smart` entry pointed at <engine>/<model>. Replaces the
+# contiguous active smart block (first uncommented `- model_name: "smart"` up
+# to the next `# --- ` divider or next uncommented `- model_name:`).
 _litellm_rewrite_smart() {
-  local backend="$1" model="$2"
-  JARVIS_LLM_BACKEND="${backend}" \
-  JARVIS_SMART_MODEL="${model}" \
-  JARVIS_HW_TIER="${JARVIS_HW_TIER:-ge-48}" \
-    bash "${BENCH_REPO_ROOT:-${REPO_ROOT}}/scripts/render-litellm-config.sh"
+  local engine="$1" model="$2"
+  python3 - "$(_litellm_path)" "${engine}" "${model}" <<'PY'
+import sys, subprocess, re
+cfg_path, engine, model = sys.argv[1], sys.argv[2], sys.argv[3]
+# Pristine baseline from git (HEAD), never the possibly-mutated working copy.
+pristine = subprocess.check_output(
+    ["git", "-C", __import__("os").path.dirname(cfg_path) + "/..",
+     "show", "HEAD:litellm/config.yaml"], text=True
+).splitlines()
+
+start = None
+for i, ln in enumerate(pristine):
+    if re.match(r'^\s*-\s+model_name:\s*"smart"\s*$', ln) and not ln.lstrip().startswith("#"):
+        start = i
+        break
+if start is None:
+    sys.exit("FATAL: no active smart block in pristine config")
+
+end = len(pristine)
+for j in range(start + 1, len(pristine)):
+    s = pristine[j]
+    if re.match(r'^\s*#\s*---\s', s) or (
+        re.match(r'^\s*-\s+model_name:', s) and not s.lstrip().startswith("#")
+    ):
+        end = j
+        break
+
+if engine == "vllm":
+    block = [
+        '  - model_name: "smart"',
+        '    litellm_params:',
+        f'      model: "openai/{model}"',
+        '      api_base: "http://vllm:8080/v1"',
+        '      api_key: "vllm-no-key"',
+        '      temperature: 0.2',
+        '      max_tokens: 4096',
+        '',
+    ]
+elif engine == "ollama":
+    block = [
+        '  - model_name: "smart"',
+        '    litellm_params:',
+        f'      model: "ollama/{model}"',
+        '      api_base: "http://ollama:11434"',
+        '      temperature: 0.2',
+        '      num_ctx: 8192',
+        '      extra_body:',
+        '        think: false',
+        '',
+    ]
+else:
+    sys.exit(f"FATAL: unknown engine {engine}")
+
+out = pristine[:start] + block + pristine[end:]
+with open(cfg_path, "w") as fh:
+    fh.write("\n".join(out) + "\n")
+print(f"litellm smart -> {engine}/{model}")
+PY
 }
 
 litellm_smart_to_vllm()   { _litellm_rewrite_smart vllm   "$1"; }

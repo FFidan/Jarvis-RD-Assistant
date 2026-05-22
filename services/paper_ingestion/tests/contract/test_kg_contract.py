@@ -271,7 +271,11 @@ async def test_a49_get_entity_detail_owner_gets_200(
 
     assert resp.status_code == 200, f"Owner expected 200, got {resp.status_code}: {resp.text[:300]}"
     body = resp.json()
-    assert "name" in body or "id" in body, f"Unexpected entity detail shape: {list(body.keys())}"
+    assert set(body) >= {"entity", "relationships", "papers"}, (
+        f"Unexpected entity detail shape: {list(body.keys())}"
+    )
+    assert body["entity"]["id"] == entity_id
+    assert body["entity"]["name"] == "detail-ent-owner"
 
 
 # ---------------------------------------------------------------------------
@@ -316,11 +320,13 @@ async def test_e1_kg_relationship_visible_in_graph(
         )
     # Seed a relationship between them
     await contract_conn.execute(
-        """INSERT INTO entity_relationships (entity_id_1, entity_id_2, relationship_type, weight)
-           VALUES ($1, $2, 'related', 1.0)
+        """INSERT INTO entity_relationships
+              (source_entity_id, target_entity_id, relationship_type, paper_id, confidence)
+           VALUES ($1, $2, 'related', $3, 1.0)
            ON CONFLICT DO NOTHING""",
         eid1,
         eid2,
+        contract_two_users.paper_id_a,
     )
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
@@ -330,12 +336,10 @@ async def test_e1_kg_relationship_visible_in_graph(
     body = resp.json()
     rel_entity_ids = set()
     for rel in body.get("relationships", []):
-        rel_entity_ids.add(rel.get("entity_id_1") or rel.get("source"))
-        rel_entity_ids.add(rel.get("entity_id_2") or rel.get("target"))
-    # At minimum the entities must appear in the entities list
-    entity_names = {e.get("name") for e in body.get("entities", [])}
-    assert "kg-rel-source" in entity_names or "kg-rel-target" in entity_names, (
-        "Seeded entities must appear in the knowledge graph response"
+        rel_entity_ids.add(rel.get("source_entity_id"))
+        rel_entity_ids.add(rel.get("target_entity_id"))
+    assert {eid1, eid2}.issubset(rel_entity_ids), (
+        f"Seeded relationship must appear in graph response; got ids={rel_entity_ids}"
     )
 
 
@@ -348,7 +352,7 @@ async def test_e1_kg_duplicate_entity_merge_does_not_double_count(
     """GET /api/knowledge-graph/entities: inserting the same entity twice via
     ON CONFLICT yields only one row in the list (no duplicate rows).
 
-    Verifies the unique constraint on entities (name, entity_type) and that
+    Verifies the unique constraint on entities (canonical_name, entity_type) and that
     the endpoint does not return duplicate entity names.
     Verified: knowledge_graph.py:188-265 (list_entities — SELECT DISTINCT or GROUP BY).
     Survivor-of (Phase E2): test_knowledge_graph.py duplicate-entity mock tests.
@@ -357,14 +361,16 @@ async def test_e1_kg_duplicate_entity_merge_does_not_double_count(
     eid = await contract_conn.fetchval(
         """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
            VALUES ('kg-dedup-test', 'kg-dedup-test', 'method', 1)
-           ON CONFLICT (name, entity_type) DO UPDATE SET paper_count = entities.paper_count + 1
+           ON CONFLICT (canonical_name, entity_type)
+           DO UPDATE SET paper_count = entities.paper_count + 1
            RETURNING id"""
     )
     # Second insert — same name/type, triggers ON CONFLICT
     eid2 = await contract_conn.fetchval(
         """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
            VALUES ('kg-dedup-test', 'kg-dedup-test', 'method', 1)
-           ON CONFLICT (name, entity_type) DO UPDATE SET paper_count = entities.paper_count + 1
+           ON CONFLICT (canonical_name, entity_type)
+           DO UPDATE SET paper_count = entities.paper_count + 1
            RETURNING id"""
     )
     assert eid == eid2, "ON CONFLICT must return the same entity id — no new row"

@@ -28,7 +28,7 @@ def test_iter_local_links_ignores_images_external_urls_and_mailto(tmp_path: Path
                 "[local](docs/page.md)",
                 "![image](img.png)",
                 "[external](https://example.test)",
-                "[mail](mailto:test@example.test)",
+                "[mail](mailto:test@example.com)",
                 "[anchored](docs/page.md#section)",
             ]
         ),

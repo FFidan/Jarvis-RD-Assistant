@@ -290,7 +290,7 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
 
     # Seed a user to own the paper exclusively (user_library requires FK to users).
     owner_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('owner@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('owner@contract.example.com', 'user') RETURNING id"
     )
     # Seed a paper owned exclusively by that user.
     pid_owned = await contract_conn.fetchval(
@@ -355,7 +355,9 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_ask_endpoint_cross_paper_real_db_structure(contract_conn, pi_test_client):
+async def test_ask_endpoint_cross_paper_real_db_structure(
+    contract_conn, contract_two_users, pi_test_client
+):
     """POST /api/ask: real DB for paper metadata; prepare_cross_paper_rag and LLM stay mocked.
 
     Verifies the HTTP response shape (status, answer, sources) and confirms the
@@ -392,6 +394,7 @@ async def test_ask_endpoint_cross_paper_real_db_structure(contract_conn, pi_test
     async def _stub_llm(http_client, messages, options, config):
         return "Transformers use self-attention."
 
+    pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_embedder] = lambda: AsyncMock()
     app.dependency_overrides[get_http_client] = lambda: AsyncMock()
@@ -419,6 +422,7 @@ async def test_ask_endpoint_cross_paper_real_db_structure(contract_conn, pi_test
         app.dependency_overrides.pop(get_http_client, None)
         app.dependency_overrides.pop(get_verifier, None)
         app.state.limiter.enabled = True
+        pi_test_client.cookies.clear()
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -458,7 +462,7 @@ async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
 
     # Seed user and paper
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('starred-elig@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('starred-elig@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         "INSERT INTO papers (external_id, source_type, title, authors, url)"
@@ -506,7 +510,7 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
 
     # Seed a user + paper owned by that user.
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('a104-owner@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('a104-owner@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
@@ -587,7 +591,7 @@ async def test_a104_per_paper_ask_non_owner_gets_403(contract_conn, pi_test_clie
 
     # Seed owner + paper.
     owner_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('a104-owner2@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('a104-owner2@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
@@ -599,7 +603,7 @@ async def test_a104_per_paper_ask_non_owner_gets_403(contract_conn, pi_test_clie
     # Seed a second user who does NOT own the paper.
     intruder_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role)"
-        " VALUES ('a104-intruder@contract.test', 'user') RETURNING id"
+        " VALUES ('a104-intruder@contract.example.com', 'user') RETURNING id"
     )
 
     app.dependency_overrides[verify_api_key] = lambda: None
@@ -652,7 +656,7 @@ async def test_a105_ask_stream_owner_gets_sse_response(contract_conn, pi_test_cl
     from paper_ingestion.main import app
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('a105-owner@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('a105-owner@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
@@ -726,7 +730,7 @@ async def test_a105_ask_stream_non_owner_gets_403(contract_conn, pi_test_client)
     from paper_ingestion.main import app
 
     owner_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('a105-owner2@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('a105-owner2@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
@@ -737,7 +741,7 @@ async def test_a105_ask_stream_non_owner_gets_403(contract_conn, pi_test_client)
     )
     intruder_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role)"
-        " VALUES ('a105-intruder@contract.test', 'user') RETURNING id"
+        " VALUES ('a105-intruder@contract.example.com', 'user') RETURNING id"
     )
 
     app.dependency_overrides[verify_api_key] = lambda: None

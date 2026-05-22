@@ -68,7 +68,7 @@ async def _init_conn(conn: asyncpg.Connection) -> None:
 
 async def _seed_user_and_card(conn: asyncpg.pool.PoolConnectionProxy) -> tuple[int, int]:
     """Insert a user + card; return (user_id, card_id)."""
-    email = f"rb1-live-{uuid.uuid4().hex[:8]}@example.test"
+    email = f"rb1-live-{uuid.uuid4().hex[:8]}@example.com"
     user_id: int = await conn.fetchval("INSERT INTO users (email) VALUES ($1) RETURNING id", email)
     card_id: int = await conn.fetchval(
         """

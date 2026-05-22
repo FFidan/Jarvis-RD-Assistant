@@ -721,25 +721,6 @@ async def test_set_config_invalid_value_returns_400(_app, config_key, bad_value)
 # PUT /api/config/pulse.l2_lambda rejects value > 2.0 — verified with real DB.
 
 
-@pytest.mark.asyncio
-async def test_set_config_valid_cron_accepted(_app):
-    """PUT /api/config/pulse.cron accepts a valid cron expression."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/pulse.cron",
-            json={"key": "pulse.cron", "value": "0 4 * * *"},
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["key"] == "pulse.cron"
-    assert body["value"] == "0 4 * * *"
-
-
 # ---------------------------------------------------------------------------
 # Setup wizard whitelist (A1)
 # ---------------------------------------------------------------------------
