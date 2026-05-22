@@ -1,0 +1,153 @@
+# Per-tier LLM candidates — source-of-truth for /api/settings/ai
+#
+# Generated from the 2026-05-22 hardware-aware-LLM-backend eval bench.
+# See docs/perf/2026-05-22-tier-defaults-report.md for the narrative.
+# See ObsidianVault/projects/JARVIS_RD_Assistant/bench-candidate-ids.md for
+# why some HF model ids failed (Phi-4-AWQ, deepseek-ai/...-AWQ, Qwen3-30B-A3B-AWQ).
+#
+# Re-generate by running scripts/perf/aggregate_judge.py over a bench bundle,
+# then hand-translating its tier-rankings.json into this schema.
+#
+# Schema:
+#   tiers.<tier>.fallback_for_tier: { backend, model }  # always Ollama, always-resident
+#   tiers.<tier>.candidates: list of { backend, model, rank, score, reasoning, evidence }
+#   evidence: "bench" | "sim-bench" | "static-benchmark" | "pending-bench"
+
+generated_from: docs/perf/2026-05-22-tier-defaults-report.md
+generated_at: 2026-05-22
+
+tiers:
+
+  cpu:
+    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    candidates:
+      - backend: ollama
+        model: qwen3:1.7b
+        rank: 1
+        score: null
+        evidence: static-benchmark
+        reasoning: "CPU-only inference; smallest Qwen3 variant. ~1.3 GB RAM. No bench evidence — chosen by reasoning size + family consistency with higher tiers."
+
+  lt-8:
+    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    candidates:
+      - backend: ollama
+        model: qwen3:1.7b
+        rank: 1
+        score: null
+        evidence: static-benchmark
+        reasoning: "<8 GB VRAM; small thinking-mode model. No bench evidence; conservative pick."
+      - backend: ollama
+        model: llama3.2:3b
+        rank: 2
+        score: null
+        evidence: static-benchmark
+        reasoning: "Llama 3.2 3B alternative — non-thinking, fits comfortably under 8 GB."
+
+  8-16:
+    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    candidates:
+      - backend: ollama
+        model: qwen2.5:7b-instruct
+        rank: 1
+        score: 67
+        evidence: bench
+        reasoning: "Bench-validated on 5060 Ti 16 GB. Stable, no think-block leak (not a thinking model), beat qwen3:7b in judge score by 38 pts on the 12-prompt science-RAG eval. P95 throughput at c=4 from local sweep."
+      - backend: ollama
+        model: qwen3:7b
+        rank: 2
+        score: 29
+        evidence: bench
+        reasoning: "Bench-validated but underperforms: P0 _strip_think_blocks bypassed on Ollama streaming path, leaving raw <think> traces in answers + truncation issues. Re-evaluate once the strip-streaming pipeline is fixed."
+
+  16-24:
+    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    candidates:
+      - backend: ollama
+        model: qwen2.5:7b-instruct
+        rank: 1
+        score: null
+        evidence: static-benchmark
+        reasoning: "No native 16-24 bench. Inferred default — same Ollama model as 8-16 winner, scales fine to this VRAM range. Pair A finding from 2026-05-18 (Ollama wins single-user latency at c=4 in 16-24 band) supports this."
+      - backend: vllm
+        model: Qwen/Qwen2.5-7B-Instruct-AWQ
+        rank: 2
+        score: null
+        evidence: static-benchmark
+        reasoning: "Advanced opt-in for users who want concurrent-load handling. vLLM-7B-AWQ fits comfortably in 16-24 GB; gains under concurrency, slower at c=1-4."
+
+  24-48:
+    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    candidates:
+      - backend: vllm
+        model: Qwen/Qwen2.5-7B-Instruct-AWQ
+        rank: 1
+        score: 119
+        evidence: sim-bench
+        sim_vram_mb: 24576
+        sim_or_native: sim
+        reasoning: "Sim-tier bench winner at util=0.53 (24576 / 46068). 119/144 judge score — HIGHEST across all candidates judged. Non-thinking model (no <think> bypass issue); 4 perfect 12/12 prompts (methodology, critique, synthesis, loss-function math). Caveats: q07 gradient-derivation refusal scored 5/12; q12 interpreted limitations as checklist-style rather than research limits. Sim-tier latency is upper-bound optimistic vs real 24 GB cards (3090/4090 etc.) — relative ranking valid; absolute numbers directional."
+      - backend: vllm
+        model: Qwen/Qwen3-8B-AWQ
+        rank: 2
+        score: 67
+        evidence: sim-bench
+        sim_vram_mb: 24576
+        sim_or_native: sim
+        reasoning: "Sim-tier bench at util=0.53. 67/144 — held back by P0 _strip_think_blocks bypass on 4 of 12 streaming responses + truncation on 3 more. Same architectural fix needed as ge-48 Qwen3-8B-AWQ. Worth re-evaluating once the streaming-path think-strip is fixed."
+      - backend: ollama
+        model: qwen2.5:7b-instruct
+        rank: 3
+        score: null
+        evidence: static-benchmark
+        reasoning: "Conservative Ollama fallback for users who don't want vLLM weight pulls. Inferred from 8-16 winner; comfortable in 24-48 VRAM."
+
+  ge-48:
+    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    candidates:
+      - backend: vllm
+        model: Qwen/Qwen3-14B-AWQ
+        rank: 1
+        score: 105
+        evidence: bench
+        reasoning: "Bench-validated winner on 5880 Ada 48 GB. 105/144 judge score — strong synthesis + citation grounding. Caveats: (a) think-block strip P0 fix bypassed on streaming path in 3 of 12 answers; (b) 3 of 12 truncated mid-sentence (max-tokens cap). Recommended default once both issues are fixed; should improve further."
+      - backend: vllm
+        model: Qwen/Qwen3-8B-AWQ
+        rank: 2
+        score: 63
+        evidence: bench
+        reasoning: "Bench-validated baseline. 63/144 judge score — same think-block + truncation issues as 14B, lower reasoning depth. Use when 14B too slow or unavailable."
+
+# Candidates that were specified but failed to bench (invalid HF model ids).
+# See vault/projects/JARVIS_RD_Assistant/bench-candidate-ids.md for validated
+# community-AWQ replacements:
+#   deepseek-ai/DeepSeek-R1-Distill-Qwen-14B-AWQ → casperhansen/deepseek-r1-distill-qwen-14b-awq
+#   microsoft/Phi-4-AWQ → (no published AWQ; use microsoft/phi-4 BF16, ~28 GB)
+#   Qwen/Qwen3-30B-A3B-AWQ → ELVISIO/Qwen3-30B-A3B-AWQ (879 K downloads)
+#
+# Opt-in next-cycle bench rerun would extend the ge-48 candidate pool with
+# these community-AWQ replacements once decided.
+
+# Known issues surfaced during the 2026-05-22 eval (must be addressed before
+# Phase 2 / Settings UI consumes this yaml meaningfully):
+#
+# 1. P0 think-block strip (_strip_think_blocks in services/paper_ingestion/
+#    paper_ingestion/routers/rag.py) is NOT firing on the streaming RAG path
+#    despite passing unit tests. Multiple bench candidates show <think>...</think>
+#    in final answers. The strip applies in ask_paper + ask_cross_paper (non-
+#    streaming) but the streaming wrapper (stream_rag_events) relies on
+#    strip_think_streaming chunk-wise. Empirical bench evidence shows that
+#    chunk-wise stripping leaks blocks when chunk boundaries split a <think>
+#    open/close tag.
+#
+# 2. /api/ask rate limit hit during sim-tier bench despite the bench setting
+#    ASK_RATE_LIMIT=1000/minute. The variable IS in the container env (verified
+#    via `docker exec env`), so the limit hit is from a different slowapi
+#    decorator (per-IP global? per-route burst?). Needs investigation before
+#    24-48 sim-tier rerun.
+#
+# 3. Qdrant volume not wiped on the REDACTED-HOST bench, causing corpus pollution
+#    (older "cat:cs.CL AND abs:transformer" papers accumulated from past
+#    bench runs). The bench's stage_boot DID wipe qdrant locally but may have
+#    been skipped on the remote — investigate the qdrant_container detection
+#    on different compose project names.

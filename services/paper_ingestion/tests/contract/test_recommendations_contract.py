@@ -125,7 +125,7 @@ async def test_filter_unread_excludes_trash_papers(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-trash@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-trash@contract.test', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -159,7 +159,7 @@ async def test_filter_unread_excludes_done_papers(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-done@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-done@contract.test', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -190,7 +190,7 @@ async def test_filter_unread_includes_paper_with_no_state_row(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-nostate@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-nostate@contract.test', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -218,7 +218,7 @@ async def test_filter_unread_excludes_recent_negative_feedback(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-negfb@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-negfb@contract.test', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -253,7 +253,7 @@ async def test_filter_unread_includes_old_negative_feedback(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-oldfb@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-oldfb@contract.test', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -292,10 +292,10 @@ async def test_filter_unread_cross_user_isolation(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_a_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-isoa@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-isoa@contract.test', 'user') RETURNING id"
     )
     user_b_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-isob@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-isob@contract.test', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -440,17 +440,17 @@ async def test_dismiss_recommendation_404_for_nonexistent(
 
 
 async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
-    """_filter_unread must return papers whose starred flag is TRUE.
+    """_filter_unread must return papers whose state = 'starred' (NOT in exclusion set).
 
     The exclusion predicate is: COALESCE(pus.state, 'inbox') IN ('trash', 'done').
-    The starred boolean is NOT an exclusion predicate — starred papers remain recommendable.
+    'starred' is NOT excluded — starred papers remain recommendable.
     Verified: recommender.py:220-245 (_filter_unread exclusion set).
     Survivor-of (Phase E2): test_recommender.py::TestFilterUnread::test_starred_papers_remain_eligible_for_recommendation.
     """
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-starred@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-starred@contract.test', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -458,18 +458,17 @@ async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
            RETURNING id"""
     )
     await contract_conn.execute(
-        """INSERT INTO paper_user_state (paper_id, user_id, state, starred)
-           VALUES ($1, $2, 'to_read', TRUE)
-           ON CONFLICT (paper_id, user_id)
-           DO UPDATE SET state = 'to_read', starred = TRUE""",
+        """INSERT INTO paper_user_state (paper_id, user_id, state)
+           VALUES ($1, $2, 'starred')
+           ON CONFLICT (paper_id, user_id) DO UPDATE SET state = 'starred'""",
         paper_id,
         user_id,
     )
 
     result = await _filter_unread(contract_conn, [paper_id], user_id=user_id)
     assert paper_id in result, (
-        "Paper with starred=TRUE must remain eligible for recommendations "
-        "(starred is not in the COALESCE(...) IN ('trash', 'done') exclusion set)"
+        "Paper with state='starred' must remain eligible for recommendations "
+        "('starred' is not in the COALESCE(...) IN ('trash', 'done') exclusion set)"
     )
 
 
@@ -521,7 +520,7 @@ async def test_filter_unread_empty_candidate_list_returns_empty(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-empty@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-empty@contract.test', 'user') RETURNING id"
     )
     result = await _filter_unread(contract_conn, [], user_id=user_id)
     assert result == set() or len(result) == 0, (

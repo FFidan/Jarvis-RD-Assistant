@@ -325,6 +325,7 @@ services:
       - ./shared/snapshots:/data/snapshots
       - ${LOCAL_PDF_PATH:-./shared/local_pdfs}:/data/local_pdfs:ro
       - ./db/migrations:/app/db/migrations:ro
+      - ./config:/app/config:ro  # llm-tier-candidates.yaml for /api/settings/ai
       - marker_models:/tmp/appuser  # Persist Marker/Surya model cache across restarts
       - hf_cache:/tmp/hf_cache  # Persist HuggingFace cache across container recreation
       - ./litellm:/app/litellm_config:ro  # shared config for model updates (SEC-002: ro)

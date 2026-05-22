@@ -480,7 +480,18 @@ export const getSetupStatus = () =>
 // --- WS-2F first-run wizard (pre-auth bootstrap) ---
 // These call /api/setup/* which is unauthenticated until the first admin exists.
 // Distinct surface from /api/system/setup-status above (post-login bootstrap).
-export interface FirstRunStatus { configured: boolean; setup_mode?: 'single' | 'multi' }
+export interface FirstRunStatus {
+  configured: boolean;
+  setup_mode?: 'single' | 'multi';
+  /** True when JARVIS_HW_TIER in .env differs from the baseline recorded at last boot. */
+  hw_tier_changed?: boolean;
+  hw_tier_baseline?: string | null;
+  hw_tier_current?: string | null;
+  recommended_backend?: string | null;
+  current_backend?: string | null;
+  observed_backend?: string | null;
+  observed_recent_share?: number;
+}
 export interface FirstRunServiceStatus { name: string; ok: boolean; detail: string | null }
 export interface FirstRunSystemCheck { services: FirstRunServiceStatus[]; all_ok: boolean }
 export interface FirstRunSmtpBody {
@@ -513,6 +524,12 @@ export interface FirstRunCloudKeysResponse {
 
 export const getFirstRunStatus = () =>
   apiFetch<FirstRunStatus>('/api/setup/status');
+
+export const dismissBanner = (banner_kind: string) =>
+  apiFetch<void>('/api/settings/ai/dismiss-banner', {
+    method: 'POST',
+    body: JSON.stringify({ banner_kind }),
+  });
 
 export const runFirstRunSystemCheck = () =>
   apiFetch<FirstRunSystemCheck>('/api/setup/system-check', { method: 'POST' });
@@ -1621,6 +1638,40 @@ export const getSystemCapabilities = () =>
 
 export const getMyDayBundle = () =>
   apiFetch<MyDayBundle>('/api/executive/my-day-bundle');
+
+// --- Settings: AI backend ---
+
+export interface AIBackendCandidate {
+  backend: 'ollama' | 'vllm';
+  model: string;
+  rank: number;
+  score?: number;
+  reasoning?: string;
+}
+
+export interface AISettings {
+  hw_tier: string;
+  recommended_backend: string;
+  recommended_model: string;
+  configured_backend: string | null;
+  configured_model: string | null;
+  observed_backend: string | null;
+  observed_recent_share: number;
+  candidates_for_tier: AIBackendCandidate[];
+  eval_report_date: string | null;
+}
+
+export function getAISettings() {
+  return apiFetch<AISettings>('/api/settings/ai');
+}
+
+export function postAISettings(body: { backend: string; model: string }) {
+  return apiFetch<AISettings>('/api/settings/ai', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function redetectHW() {
+  return apiFetch<AISettings>('/api/settings/ai/redetect', { method: 'POST' });
+}
 
 // --- Settings: Telegram bot token (UI-4) ---
 

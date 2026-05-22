@@ -110,7 +110,7 @@ async def test_request_link_creates_token_row(
     Grounding: auth.py:163-170 — ``INSERT INTO magic_link_tokens (token_hash, user_id, expires_at)``.
     This is the DB write the mock tests skip entirely.
     """
-    user_id, _ = await _seed_user(contract_conn, "ml-req@contract.example.com")
+    user_id, _ = await _seed_user(contract_conn, "ml-req@contract.test")
 
     intercepted: list[str] = []
 
@@ -129,7 +129,7 @@ async def test_request_link_creates_token_row(
         ) as c:
             resp = await c.post(
                 "/api/auth/request-link",
-                json={"email": "ml-req@contract.example.com"},
+                json={"email": "ml-req@contract.test"},
             )
 
     assert resp.status_code == 200, f"request-link failed: {resp.status_code}: {resp.text[:300]}"
@@ -162,7 +162,7 @@ async def test_verify_token_creates_session_row(
     Grounding: auth.py:249-257 — ``INSERT INTO sessions (user_id, expires_at) RETURNING id``.
     Covers the full creation-flow contract including token → session atomicity.
     """
-    user_id, _ = await _seed_user(contract_conn, "ml-verify@contract.example.com")
+    user_id, _ = await _seed_user(contract_conn, "ml-verify@contract.test")
     raw_token = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw_token)
     expires_at = datetime.now(UTC) + timedelta(minutes=15)
@@ -216,7 +216,7 @@ async def test_verify_token_replay_returns_400(
     This is the replay-prevention contract; mock tests assert the branch exists
     but don't execute it against a real DB update.
     """
-    user_id, _ = await _seed_user(contract_conn, "ml-replay@contract.example.com")
+    user_id, _ = await _seed_user(contract_conn, "ml-replay@contract.test")
     raw_token = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw_token)
 

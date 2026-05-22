@@ -285,8 +285,8 @@ async def two_users(live_pg_dsn):
         await run_migrations(pool, migrations_dir=migrations_dir)
 
         async with pool.acquire() as conn:
-            user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.com")
-            user_b_id, cookie_b = await _seed_user(conn, "iso-user-b@example.com")
+            user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.test")
+            user_b_id, cookie_b = await _seed_user(conn, "iso-user-b@example.test")
             res_a = await _seed_resources(conn, user_a_id, "a")
             await _seed_resources(conn, user_b_id, "b")
 

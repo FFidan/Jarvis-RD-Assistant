@@ -507,13 +507,13 @@ async def test_pulse_stats_user_isolation(
 
     # User A must NOT see user B's deck in their stats
     async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
-        resp_a = await c.get("/api/pulse/stats?days=365")
+        resp_a = await c.get("/api/pulse/stats?days=36500")
 
     assert resp_a.status_code == 200
     body_a = resp_a.json()
 
     async with _client(_pi_pulse_app, contract_two_users.cookie_b) as c:
-        resp_b = await c.get("/api/pulse/stats?days=365")
+        resp_b = await c.get("/api/pulse/stats?days=36500")
 
     assert resp_b.status_code == 200
     body_b = resp_b.json()
@@ -529,16 +529,9 @@ async def test_pulse_stats_user_isolation(
 
 
 async def test_pulse_history_returns_seeded_deck(
-    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+    contract_two_users, _pi_pulse_app, _configure_api_key
 ):
-    """GET /api/pulse/history returns a list that includes a historical deck for user A."""
-    history_deck_id = await contract_conn.fetchval(
-        """INSERT INTO pulse_decks (deck_date, card_count, user_id)
-           VALUES (CURRENT_DATE - INTERVAL '1 day', 0, $1)
-           RETURNING id""",
-        contract_two_users.user_a_id,
-    )
-
+    """GET /api/pulse/history returns a list that includes the seeded deck for user A."""
     async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/pulse/history?days=365")
 
@@ -549,8 +542,8 @@ async def test_pulse_history_returns_seeded_deck(
     assert isinstance(body, list), "History response must be a list"
     assert len(body) >= 1, "History must contain at least the seeded deck"
     deck_ids = [d["deck_id"] for d in body]
-    assert history_deck_id in deck_ids, (
-        f"Seeded historical deck {history_deck_id} must appear in /api/pulse/history"
+    assert contract_two_users.pulse_deck_id_a in deck_ids, (
+        f"Seeded deck {contract_two_users.pulse_deck_id_a} must appear in /api/pulse/history"
     )
 
 
@@ -558,25 +551,16 @@ async def test_pulse_history_returns_seeded_deck(
 # Verified: routers/pulse.py:210-219 (get_history — load_history with user_id)
 
 
-async def test_pulse_history_user_isolation(
-    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
-):
+async def test_pulse_history_user_isolation(contract_two_users, _pi_pulse_app, _configure_api_key):
     """GET /api/pulse/history for user B must NOT include user A's deck_id."""
-    history_deck_id = await contract_conn.fetchval(
-        """INSERT INTO pulse_decks (deck_date, card_count, user_id)
-           VALUES (CURRENT_DATE - INTERVAL '1 day', 0, $1)
-           RETURNING id""",
-        contract_two_users.user_a_id,
-    )
-
     async with _client(_pi_pulse_app, contract_two_users.cookie_b) as c:
         resp = await c.get("/api/pulse/history?days=365")
 
     assert resp.status_code == 200
     body = resp.json()
     deck_ids = [d["deck_id"] for d in body]
-    assert history_deck_id not in deck_ids, (
-        f"User B must not see user A's deck {history_deck_id} in their history"
+    assert contract_two_users.pulse_deck_id_a not in deck_ids, (
+        f"User B must not see user A's deck {contract_two_users.pulse_deck_id_a} in their history"
     )
 
 
@@ -589,7 +573,7 @@ async def test_pulse_today_404_for_user_with_no_deck(
 ):
     """GET /api/pulse/today returns 404 for a user who has never generated a deck."""
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('pulse-nodeck@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('pulse-nodeck@contract.test', 'user') RETURNING id"
     )
     session_id = await contract_conn.fetchval(
         """INSERT INTO sessions (user_id, expires_at)

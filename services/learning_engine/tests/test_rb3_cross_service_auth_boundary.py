@@ -15,7 +15,7 @@ is *by design*, not a gap — this file pins that intent.
 Telegram→LE call sites (grounded at HEAD 2026-05-17):
 - ``GET  /api/review/next``         -> review.get_next_review
   (services/telegram_bot/.../handlers/review_handler.py)
-- ``POST /api/review/{card_id:int}`` -> review.submit_review
+- ``POST /api/review/{card_id}``    -> review.submit_review
   (services/telegram_bot/.../handlers/review_handler.py)
 - ``GET  /api/stats``               -> review.get_stats
   (services/telegram_bot/.../handlers/commands/paper_commands.py,
@@ -64,7 +64,7 @@ def test_get_next_review_uses_owner_override_resolver() -> None:
 
 
 def test_submit_review_uses_owner_override_resolver() -> None:
-    """POST /api/review/{card_id:int} is reached by the Telegram bot per-user."""
+    """POST /api/review/{card_id} is reached by the Telegram bot per-user."""
     assert (
         _user_id_dep(review.submit_review).dependency is current_user_id_strict_with_owner_override
     )
@@ -98,7 +98,7 @@ def test_telegram_reachable_le_routes_registered() -> None:
         if isinstance(r, APIRoute) and r.methods is not None
     }
     assert ("/api/review/next", ("GET",)) in review_paths
-    assert ("/api/review/{card_id:int}", ("POST",)) in review_paths
+    assert ("/api/review/{card_id}", ("POST",)) in review_paths
     assert ("/api/stats", ("GET",)) in review_paths
     assert ("/api/executive/focus/log", ("POST",)) in exec_paths
 

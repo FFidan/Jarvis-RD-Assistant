@@ -81,7 +81,7 @@ async def _admin_cookie(contract_conn) -> str:
     the real middleware path grants access.
     """
     admin_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('admin@contract.example.com', 'admin') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('admin@contract.test', 'admin') RETURNING id"
     )
     session_id = await contract_conn.fetchval(
         """INSERT INTO sessions (user_id, expires_at)

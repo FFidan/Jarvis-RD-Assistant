@@ -128,7 +128,7 @@ Real cookie, real route, real DB, real assertion.
 
 **When to use.** When adding or changing an adapter for Ollama / Qdrant / Zotero / OpenAlex / Semantic Scholar / arXiv / LiteLLM / OpenAI / Telegram Bot API / FSRS library / anki exporter.
 
-**Location.** Service-local `tests/test_<adapter>.py` or shared sidecar tests (e.g., `test_zotero_client.py`, `test_testing_sidecars.py`).
+**Location.** Service-local `tests/test_<adapter>.py` (e.g., `test_embedder_behavior.py`, `test_zotero_client.py`).
 
 **Fixtures.** Boundary-specific. `respx.mock` for HTTP. `MagicMock`/`AsyncMock` for libraries we wrap (FSRS, anki). `patch.dict(task_registry._TASK_MAP, ...)` for procrastinate.
 
@@ -342,9 +342,9 @@ These boundaries MAY be mocked in test code at the carve-out edge (typically in 
 
 | Boundary | Mock mechanism | Test population guarded |
 |---|---|---|
-| Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP; superseded where possible by faux-Ollama/LiteLLM sidecar (LIVE) | ~150 legacy tests, shrinking as sidecar survivors replace them |
+| Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP | ~150 tests |
 | Cross-encoder reranker (`rerank_chunks`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) | `AsyncMock` on `EmbeddingSearchMixin.rerank_chunks` | ~80 tests |
-| Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant`; superseded where possible by faux-Qdrant sidecar (LIVE) | ~120 legacy tests, shrinking as sidecar survivors replace them |
+| Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant` | ~120 tests |
 | `respx.mock` / `httpx_mock` for source HTTP | respx routes | ~200 tests (Zotero, S2, OpenAlex, arXiv, PubMed) |
 | `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client` | ~80 tests |
 | Telegram Bot API (`bot.send_message`, `reply_text`, `Update`) | `make_telegram_update` + `AsyncMock` | ~120 tests |
@@ -394,9 +394,9 @@ The codebase has ~2,000 pre-existing tests that violate §2 (mostly handler-bypa
 - 6 months at typical PR churn: ~2,500 default-collected
 - 12 months: ~2,000 default-collected (approaching the ~700-900 healthy target as the boundary-adapter sidecars come online)
 
-### 6.2 Faux-Ollama / faux-Qdrant sidecars (LIVE replacement path)
+### 6.2 Faux-Ollama / faux-Qdrant sidecars (not in scope of this contract)
 
-The recomposition closeout (§"What WOULD actually move the needle") identified that replacing mocked Ollama / Qdrant with deterministic sidecars would unlock ~100-200 more deletions per boundary. That replacement path is now LIVE for the shared `testing_sidecars` infrastructure: new adapter/contract coverage should prefer faux-Ollama/LiteLLM and faux-Qdrant sidecars when the behavior under test is our HTTP/vector integration, while keeping the §5.1 carve-outs for legacy tests and for boundary failures the sidecars do not model yet.
+The recomposition closeout (§"What WOULD actually move the needle") identified that replacing mocked Ollama / Qdrant with in-process fakes would unlock ~100-200 more deletions per boundary. This is a multi-week infrastructure project tracked separately; this contract is silent on it. When/if those sidecars land, §5.1 entries gain a `superseded by faux-X (LIVE)` note and the carve-out edges move outward.
 
 ### 6.3 What this contract does NOT defer
 
@@ -419,6 +419,7 @@ It does NOT defer the rules. As of 2026-05-22, no new PR may add a §2 anti-patt
 - [docs/audit/2026-05-22-recomposition-closeout.md](../audit/2026-05-22-recomposition-closeout.md) — why this contract exists (the structural ceiling proof)
 - [docs/audit/2026-05-22-recomposition-evidence.md](../audit/2026-05-22-recomposition-evidence.md) — carve-out floor calculation
 - [docs/audit/2026-05-21-coverage-map.md](../audit/2026-05-21-coverage-map.md) — 280 rows of endpoint × coverage (Phase A foundation)
+- codex audit findings — 5 high-severity bypasses closed by recomposition E0 (audit doc kept local, not committed)
 
 ---
 

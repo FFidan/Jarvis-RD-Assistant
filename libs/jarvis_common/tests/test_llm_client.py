@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -74,6 +75,23 @@ def test_strip_think_blocks_removes_multiple_sections():
 
     assert "<think>" not in cleaned
     assert cleaned == '{"step":1}\n\n{"answer":"ok"}'
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # Unclosed <think> at end-of-string (Qwen3 truncated mid-CoT by max_tokens cap)
+        ("<think>truncated reasoning never completes", ""),
+        # Visible prefix + unclosed <think>
+        ("The answer is 42.<think>now let me explain why", "The answer is 42."),
+        # Mixed: one closed block then one unclosed block (mid-stream truncation)
+        ("<think>first</think>visible<think>unclosed", "visible"),
+    ],
+)
+def test_strip_think_blocks_unclosed_tag_truncation(raw, expected):
+    from jarvis_common.llm_client import strip_think_blocks
+
+    assert strip_think_blocks(raw) == expected
 
 
 def test_chat_completion_options_with_response_format_preserves_other_fields():
@@ -422,3 +440,36 @@ def test_strip_think_streaming_token_by_token():
     # Visible segments must be present.
     assert "Hello" in result
     assert "World" in result
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "<think>at-start</think>visible",
+        "visible<think>middle</think>",
+        "<think>only-think-block</think>",
+        "<think>a</think>mid<think>b</think>end",
+        "no tag at all",
+        "",
+        "<think>multi\nline\nthought</think>after",
+        "before <think>x</think> between <think>y</think> after",
+    ],
+)
+def test_strip_think_streaming_every_byte_boundary(src):
+    """Regression guard: streaming filter handles every chunk-boundary split correctly.
+
+    For each input, feed it as two chunks split at every possible byte offset; the
+    accumulated visible text (out1 + out2 + non-think carry) must equal the canonical
+    regex-stripped result. A1 of Phase 3 confirmed streaming is sound; this test
+    locks that in against future refactors.
+    """
+    expected = re.sub(r"<think>.*?</think>", "", src, flags=re.DOTALL)
+    for split_at in range(len(src) + 1):
+        a, b = src[:split_at], src[split_at:]
+        out1, st1, carry1 = strip_think_streaming(a, False, "")
+        out2, st2, carry2 = strip_think_streaming(b, st1, carry1)
+        tail = carry2 if not st2 else ""
+        result = out1 + out2 + tail
+        assert result == expected, (
+            f"split_at={split_at}: src={src!r} got={result!r} expected={expected!r}"
+        )

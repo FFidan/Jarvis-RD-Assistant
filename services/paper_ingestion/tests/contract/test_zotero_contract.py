@@ -261,7 +261,7 @@ async def test_a170_push_to_zotero_owner_gets_202(contract_conn):
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
-        email="a170-owner@contract.example.com",
+        email="a170-owner@contract.test",
         title="ZZZ-A170-PUSH Zotero Contract",
     )
 
@@ -321,12 +321,12 @@ async def test_a170_push_to_zotero_non_owner_gets_403(contract_conn):
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
-        email="a170-owner2@contract.example.com",
+        email="a170-owner2@contract.test",
         title="ZZZ-A170-PUSH-IDOR Zotero Contract",
     )
     intruder_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role)"
-        " VALUES ('a170-intruder@contract.example.com', 'user') RETURNING id"
+        " VALUES ('a170-intruder@contract.test', 'user') RETURNING id"
     )
 
     shared = SharedConnPool(contract_conn)
@@ -384,7 +384,7 @@ async def test_a172_resync_owner_gets_202(contract_conn):
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
-        email="a172-owner@contract.example.com",
+        email="a172-owner@contract.test",
         title="ZZZ-A172-RESYNC Zotero Contract",
     )
 
@@ -440,12 +440,12 @@ async def test_a172_resync_non_owner_gets_403(contract_conn):
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
-        email="a172-owner2@contract.example.com",
+        email="a172-owner2@contract.test",
         title="ZZZ-A172-RESYNC-IDOR Zotero Contract",
     )
     intruder_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role)"
-        " VALUES ('a172-intruder@contract.example.com', 'user') RETURNING id"
+        " VALUES ('a172-intruder@contract.test', 'user') RETURNING id"
     )
 
     shared = SharedConnPool(contract_conn)

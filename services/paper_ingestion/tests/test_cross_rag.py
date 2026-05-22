@@ -6,9 +6,9 @@ import pytest
 from paper_ingestion.models import CrossPaperAskRequest
 
 # D3-12 deleted: test_search_chunks_global_no_filter
-# Superseded by contract/test_embedder_sidecar_contract.py, which exercises the
-# real Embedder against faux LiteLLM + faux Qdrant and proves scoped global
-# search returns only vectors visible to the caller.
+# Superseded by test_rag_isolation.py::test_search_chunks_global_no_user_id_no_filter,
+# which covers the same "no user_id → no Qdrant filter" contract with a more
+# complete assertion (also checks result count and len). Canonical per audit D3-12.
 
 # ---------------------------------------------------------------------------
 # Test: deduplication logic (max 2 chunks per paper, respects max_papers)

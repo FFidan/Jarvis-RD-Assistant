@@ -209,7 +209,7 @@ async def _seed_pj(conn, *, user_id: int, job_id: str) -> None:
         INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
         VALUES ('contract_test', 'card.generate', $1::jsonb, 'todo')
         """,
-        {"job_id": job_id, "user_id": user_id},
+        f'{{"job_id": "{job_id}", "user_id": {user_id}}}',
     )
 
 
@@ -300,18 +300,26 @@ async def test_cancel_job_owner_ok_non_owner_404(contract_two_users, _jobs_app, 
     Supersedes: mock-unit test_jobs_router.py::test_cancel_job_non_owner.
     """
     import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     job_id = str(uuid.uuid4())
     shared = _jobs_app.state.db_pool
     await _seed_pj(shared._conn, user_id=contract_two_users.user_a_id, job_id=job_id)
 
-    # Non-owner must get 404 before the router imports/calls the broker app.
-    async with _authed_client(_jobs_app, contract_two_users.cookie_b) as c:
-        resp_b = await c.post(f"/api/jobs/{job_id}/cancel")
+    # Non-owner must get 404; no cancellation should occur
+    mock_manager = MagicMock()
+    mock_manager.cancel_job_by_id_async = AsyncMock()
+    mock_app = MagicMock()
+    mock_app.job_manager = mock_manager
+
+    with patch("jarvis_common.jobs_router.procrastinate_app", mock_app):
+        async with _authed_client(_jobs_app, contract_two_users.cookie_b) as c:
+            resp_b = await c.post(f"/api/jobs/{job_id}/cancel")
 
     assert resp_b.status_code == 404, (
         f"Non-owner got {resp_b.status_code} (expected 404). Body: {resp_b.text[:300]}"
     )
+    mock_manager.cancel_job_by_id_async.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

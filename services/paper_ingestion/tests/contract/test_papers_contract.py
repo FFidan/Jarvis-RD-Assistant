@@ -62,13 +62,7 @@ async def _pi_app_with_pool(contract_conn):
 
     shared = SharedConnPool(contract_conn)
     original_pool = getattr(app.state, "db_pool", None)
-    original_embedder = getattr(app.state, "embedder", None)
-    had_embedder = hasattr(app.state, "embedder")
     app.state.db_pool = shared
-    # These contracts exercise the DB/BM25 path.  If another fixture or app
-    # startup leaves an embedder on app.state, list_papers takes the hybrid
-    # Qdrant path and can return an empty successful result instead.
-    app.state.embedder = None
 
     # Remove the autouse stub so session-cookie auth works in contract tests.
     removed_override = app.dependency_overrides.pop(
@@ -84,11 +78,6 @@ async def _pi_app_with_pool(contract_conn):
             del app.state.db_pool
     else:
         app.state.db_pool = original_pool
-
-    if had_embedder:
-        app.state.embedder = original_embedder
-    elif hasattr(app.state, "embedder"):
-        del app.state.embedder
 
     # Restore override exactly as found (so autouse fixture teardown doesn't fail)
     if had_override:
@@ -1001,17 +990,8 @@ async def test_a92_recompute_all_priorities_returns_updated_count(
     returns the count of updated rows. With at least the seeded paper in the DB,
     updated >= 1.
     """
-    from jarvis_common.auth import require_admin
-
-    async def _allow_admin():
-        return None
-
-    _pi_app_with_pool.dependency_overrides[require_admin] = _allow_admin
-    try:
-        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-            resp = await c.post("/api/papers/recompute-priorities")
-    finally:
-        _pi_app_with_pool.dependency_overrides.pop(require_admin, None)
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/papers/recompute-priorities")
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
     body = resp.json()

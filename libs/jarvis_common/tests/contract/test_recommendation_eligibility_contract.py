@@ -61,7 +61,7 @@ async def _setup_paper_and_user(conn) -> tuple[int, int]:
     """Seed a minimal paper + user pair; return (paper_id, user_id)."""
     user_id = await conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
-        f"eligib-{id(conn)}@contract.example.com",
+        f"eligib-{id(conn)}@contract.test",
     )
     paper_id = await conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)

@@ -60,6 +60,27 @@ async def test_hard_delete_requires_trash_state():
 
 
 @pytest.mark.asyncio
+async def test_hard_delete_with_trash_state_succeeds():
+    """DELETE /papers/{id} returns {"deleted": paper_id} when paper is in 'trash'."""
+    pool, conn = _make_pool_and_conn()
+    # _assert_paper_in_state: fetchval returns 'trash' → precondition satisfied
+    conn.fetchval.return_value = "trash"
+
+    with patch(
+        "paper_ingestion.papers_service.delete_paper_vectors", new_callable=AsyncMock
+    ) as mock_delete:
+        result = await papers.hard_delete_paper.__wrapped__(
+            _mock_request(),
+            paper_id=12,
+            db_pool=pool,
+        )
+
+    assert result == {"deleted": 12}
+    # Qdrant cleanup must have been called exactly once
+    mock_delete.assert_awaited_once_with(12)
+
+
+@pytest.mark.asyncio
 async def test_hard_delete_calls_qdrant():
     """DELETE /papers/{id} calls delete_paper_vectors with the correct paper_id."""
     pool, conn = _make_pool_and_conn()
@@ -113,6 +134,38 @@ async def test_bulk_action_mixed_validity():
     assert result["failed"][0]["paper_id"] == 999
     # Error must be a safe enum code, not a raw exception string
     assert result["failed"][0]["error"] == "invalid_action"
+
+
+@pytest.mark.asyncio
+async def test_bulk_action_savepoint_isolation():
+    """BULK-TXN-001: failure of paper at index 1 does NOT cascade-fail papers at index 0 or 2.
+
+    The nested asyncpg transaction (SAVEPOINT) must roll back only the failing
+    paper's work, leaving the outer transaction alive for subsequent papers.
+    """
+    pool = _make_pool_and_conn()[0]
+
+    failing_id = 200
+
+    async def _fail_at_200(c, paper_id, user_id, action, **_kwargs):
+        del c, user_id, action, _kwargs  # signature matches _apply_bulk_action; only paper_id used
+        if paper_id == failing_id:
+            raise RuntimeError("forced savepoint test failure")
+        # Success for others — just pass
+
+    with patch.object(papers, "_apply_bulk_action", side_effect=_fail_at_200):
+        result = await papers.bulk_action_papers.__wrapped__(
+            _mock_request(),
+            body=BulkActionRequest(paper_ids=[100, failing_id, 300], action="save"),
+            db_pool=pool,
+        )
+
+    # Papers at index 0 (100) and index 2 (300) must have succeeded
+    assert 100 in result["succeeded"], "paper 100 (index 0) must succeed"
+    assert 300 in result["succeeded"], "paper 300 (index 2) must succeed"
+    # The failing paper must appear in failed
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["paper_id"] == failing_id
 
 
 # ---------------------------------------------------------------------------

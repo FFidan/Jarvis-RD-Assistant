@@ -110,7 +110,7 @@ async def test_a51_list_events_returns_events_from_db(
     # Insert a known event row
     event_id = await contract_conn.fetchval(
         """INSERT INTO system_events (level, category, source, message)
-           VALUES ('info', 'source', 'contract-test-source', 'contract test event')
+           VALUES ('info', 'test', 'contract-test-source', 'contract test event')
            RETURNING id"""
     )
 
@@ -169,7 +169,7 @@ async def test_a52_get_event_returns_single_event_and_404_for_missing(
     """
     event_id = await contract_conn.fetchval(
         """INSERT INTO system_events (level, category, source, message)
-           VALUES ('error', 'error', 'contract-src', 'single event lookup')
+           VALUES ('error', 'test', 'contract-src', 'single event lookup')
            RETURNING id"""
     )
 
@@ -205,7 +205,7 @@ async def test_a53_get_summary_returns_non_negative_counts(
     # Insert a recent event to ensure summary is non-empty
     await contract_conn.execute(
         """INSERT INTO system_events (level, category, source, message)
-           VALUES ('warning', 'config', 'contract-summary-src', 'summary test')"""
+           VALUES ('warning', 'application', 'contract-summary-src', 'summary test')"""
     )
 
     async with _make_api_key_client(_pi_app_with_pool) as c:
@@ -247,18 +247,18 @@ async def test_a54_get_correlation_returns_matching_events(
     # Insert two events with this correlation_id
     id1 = await contract_conn.fetchval(
         """INSERT INTO system_events (level, category, source, message, correlation_id)
-           VALUES ('info', 'source', 'corr-src', 'event-1', $1) RETURNING id""",
+           VALUES ('info', 'test', 'corr-src', 'event-1', $1) RETURNING id""",
         correlation_id,
     )
     id2 = await contract_conn.fetchval(
         """INSERT INTO system_events (level, category, source, message, correlation_id)
-           VALUES ('info', 'source', 'corr-src', 'event-2', $1) RETURNING id""",
+           VALUES ('info', 'test', 'corr-src', 'event-2', $1) RETURNING id""",
         correlation_id,
     )
     # Insert unrelated event with different correlation_id
     await contract_conn.execute(
         """INSERT INTO system_events (level, category, source, message, correlation_id)
-           VALUES ('info', 'source', 'corr-src', 'unrelated', $1)""",
+           VALUES ('info', 'test', 'corr-src', 'unrelated', $1)""",
         uuid.uuid4(),
     )
 
@@ -316,7 +316,7 @@ async def test_a55_list_sources_returns_distinct_sources(
     unique_source = f"contract-src-{uuid.uuid4().hex[:8]}"
     await contract_conn.execute(
         """INSERT INTO system_events (level, category, source, message)
-           VALUES ('info', 'source', $1, 'source listing test')""",
+           VALUES ('info', 'test', $1, 'source listing test')""",
         unique_source,
     )
     # Reset cache again after insert to force re-query

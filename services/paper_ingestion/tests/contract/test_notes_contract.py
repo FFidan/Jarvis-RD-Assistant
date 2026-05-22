@@ -257,7 +257,7 @@ async def test_a64_delete_note_owner_gets_204(
     assert resp.status_code in (200, 204), (
         f"Owner expected 200/204, got {resp.status_code}: {resp.text[:300]}"
     )
-    row = await contract_conn.fetchrow("SELECT id FROM paper_notes WHERE id = $1", note_id)
+    row = await contract_conn.fetchrow("SELECT id FROM notes WHERE id = $1", note_id)
     assert row is None, f"Note {note_id} must be deleted from DB"
 
 

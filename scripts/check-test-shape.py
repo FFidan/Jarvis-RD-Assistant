@@ -85,21 +85,16 @@ _CONTRACT_PATH_RE = re.compile(
 _PI_CONTRACT_PATH_RE = re.compile(r"^services/paper_ingestion/tests/contract/.*\.py$")
 
 
-def _is_package_init(path: str) -> bool:
-    """`__init__.py` files are package markers, not test files."""
-    return path.endswith("/__init__.py")
-
-
 def _is_test_file(path: str) -> bool:
-    return bool(_TEST_PATH_RE.match(path)) and not _is_package_init(path)
+    return bool(_TEST_PATH_RE.match(path))
 
 
 def _is_contract_file(path: str) -> bool:
-    return bool(_CONTRACT_PATH_RE.match(path)) and not _is_package_init(path)
+    return bool(_CONTRACT_PATH_RE.match(path))
 
 
 def _is_pi_contract_file(path: str) -> bool:
-    return bool(_PI_CONTRACT_PATH_RE.match(path)) and not _is_package_init(path)
+    return bool(_PI_CONTRACT_PATH_RE.match(path))
 
 
 # ---------------------------------------------------------------------------

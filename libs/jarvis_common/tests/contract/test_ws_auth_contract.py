@@ -128,7 +128,7 @@ async def test_active_session_resolves_user_id(_pi_app, contract_conn, _configur
     Verified: session_middleware.py:102 — request.state.user_id = int(row["user_id"]).
     Supersedes: mock-unit tests that stub request.state.user_id = 1 directly.
     """
-    user_id, _ = await _seed_user(contract_conn, "ws-active@contract.example.com")
+    user_id, _ = await _seed_user(contract_conn, "ws-active@contract.test")
     expires_at = datetime.now(UTC) + timedelta(hours=1)
     cookie = await _seed_session(contract_conn, user_id, expires_at=expires_at)
 
@@ -153,7 +153,7 @@ async def test_grace_window_session_still_resolves(_pi_app, contract_conn, _conf
     A session expired 1 hour ago is within 24h grace → identity resolved → 200.
     Supersedes: mock-unit tests that test grace by stubbing datetime.now.
     """
-    user_id, _ = await _seed_user(contract_conn, "ws-grace@contract.example.com")
+    user_id, _ = await _seed_user(contract_conn, "ws-grace@contract.test")
     # Expired 1 hour ago — inside the 24h grace window
     expires_at = datetime.now(UTC) - timedelta(hours=1)
     cookie = await _seed_session(contract_conn, user_id, expires_at=expires_at)
@@ -181,7 +181,7 @@ async def test_hard_expired_session_does_not_resolve(_pi_app, contract_conn, _co
 
     Supersedes: mock-unit tests that test hard-expiry via datetime monkeypatch.
     """
-    user_id, _ = await _seed_user(contract_conn, "ws-hardexp@contract.example.com")
+    user_id, _ = await _seed_user(contract_conn, "ws-hardexp@contract.test")
     # Expired 25 hours ago — outside the 24h grace window
     expires_at = datetime.now(UTC) - timedelta(hours=25)
     cookie = await _seed_session(contract_conn, user_id, expires_at=expires_at)
@@ -217,7 +217,7 @@ async def test_revoked_session_does_not_resolve(_pi_app, contract_conn, _configu
     Verified: session_middleware.py:91-92 — if row["revoked_at"] is not None: return.
     Supersedes: mock-unit tests that assert the revoked branch.
     """
-    user_id, _ = await _seed_user(contract_conn, "ws-revoked@contract.example.com")
+    user_id, _ = await _seed_user(contract_conn, "ws-revoked@contract.test")
     expires_at = datetime.now(UTC) + timedelta(hours=24)  # would be valid except for revocation
     revoked_at = datetime.now(UTC) - timedelta(minutes=5)
     cookie = await _seed_session(

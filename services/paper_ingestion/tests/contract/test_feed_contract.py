@@ -230,7 +230,7 @@ async def test_feed_empty_library_returns_zero_total(contract_conn, _pi_app, _co
     """GET /api/papers/feed for a user with no library papers returns total=0."""
     # Seed a user with no papers
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('feed-empty@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('feed-empty@contract.test', 'user') RETURNING id"
     )
     session_id = await contract_conn.fetchval(
         """INSERT INTO sessions (user_id, expires_at)

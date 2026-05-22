@@ -210,7 +210,7 @@ async def test_e1_magic_link_token_consumed_twice_second_fails(
 
     # Seed a real user + valid magic-link token
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('ml-race-1@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('ml-race-1@contract.test', 'user') RETURNING id"
     )
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -260,7 +260,7 @@ async def test_e1_magic_link_expired_token_returns_400(
     from datetime import UTC, datetime, timedelta
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('ml-expired@contract.example.com', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('ml-expired@contract.test', 'user') RETURNING id"
     )
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()

@@ -303,8 +303,8 @@ async def get_paper_detail(
             ORDER BY pj.id DESC
             LIMIT 1
             """,
-            str(paper_id),
-            str(user_id),
+            paper_id,
+            user_id,
         )
 
     paper = row_to_paper_response(paper_row)

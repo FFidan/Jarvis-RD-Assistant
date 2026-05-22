@@ -13,7 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # We build the embedder fake here but scope its installation to each test via the
-# autouse fixture below so it cannot pollute other modules' qdrant_client stubs.
+# autouse fixture below — this prevents polluting test_embedder.py which needs its
+# own precise qdrant_client.models stubs.
 _fake_embedder_mod = types.ModuleType("paper_ingestion.embedder")
 _fake_embedder_mod.Embedder = MagicMock()  # type: ignore[attr-defined]
 _fake_embedder_mod.COLLECTION_NAME = "paper_chunks"  # type: ignore[attr-defined]
