@@ -340,6 +340,26 @@ def _build_factory_with_owner_hook(*, kinds=frozenset({"foo.bar"})):
 
 
 @pytest.mark.asyncio
+async def test_create_job_skips_ownership_check_in_single_tenant_mode():
+    """WS-6B-α: user_id=None → no DB acquire even when extractor would return an int."""
+    _r, request_model, pool, conn, handlers = _build_factory_with_owner_hook()
+
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"foo.bar": fake_task}, clear=True):
+        result = await handlers["create_job"](
+            request=MagicMock(),
+            body=request_model(kind="foo.bar", payload={"paper_id": 42}),
+            db_pool=pool,
+            user_id=None,
+        )
+    assert isinstance(result.job_id, str)
+    # Single-tenant mode must not even acquire a connection for the ownership probe.
+    pool.acquire.assert_not_called()
+    conn.fetchrow.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_create_job_403_when_paper_owned_by_other_user():
     """Sprint B: caller=99, paper.discovered_by=42 + caller not in library → 403."""
     _r, request_model, pool, conn, handlers = _build_factory_with_owner_hook()
@@ -363,6 +383,26 @@ async def test_create_job_403_when_paper_owned_by_other_user():
         )
     assert exc.value.status_code == 403
     fake_task.defer_async.assert_not_called()  # ownership failure must abort before defer
+
+
+@pytest.mark.asyncio
+async def test_create_job_skips_acquire_when_extractor_returns_none():
+    """WS-6B-α: batch payload with no single paper_id → extractor returns None → no acquire."""
+    _r, request_model, pool, conn, handlers = _build_factory_with_owner_hook()
+
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"foo.bar": fake_task}, clear=True):
+        result = await handlers["create_job"](
+            request=MagicMock(),
+            # no paper_id key → extractor returns None → no ownership probe
+            body=request_model(kind="foo.bar", payload={"paper_ids": [1, 2, 3]}),
+            db_pool=pool,
+            user_id=99,
+        )
+    assert isinstance(result.job_id, str)
+    pool.acquire.assert_not_called()
+    conn.fetchrow.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -98,11 +98,6 @@ async def generate_cards_core(
         if not deck:
             raise JobError("Deck not found")
 
-        # Defense-in-depth: re-validate paper ownership even when called from
-        # a job worker (RD-DA-001). assert_paper_ownership is a no-op when
-        # user_id is None (internal/system dispatch paths).
-        await assert_paper_ownership(conn, paper_id, user_id)  # type: ignore[arg-type]
-
         paper = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
         if not paper:
             raise JobError("Paper not found")
