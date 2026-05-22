@@ -299,3 +299,151 @@ async def test_a40_get_paper_extractions_user_b_gets_403_404(
     assert resp.status_code in (403, 404), (
         f"User B should get 403/404 for user A's extractions; got {resp.status_code}"
     )
+
+
+# ---------------------------------------------------------------------------
+# W2.4 — LLM-sidecar contracts: decomposition + extraction + verifier-mandatory
+#
+# These contracts replace mock-unit patches of call_llm_structured in:
+#   test_decomposition.py (~260 LOC)
+#   test_extraction.py (~895 LOC partial)
+#   test_entity_extractor_verification.py (~160 LOC)
+#   test_verifier_mandatory.py (366 LOC)
+# ---------------------------------------------------------------------------
+
+
+async def test_extraction_w2_decomposition_happy_path(
+    pi_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """decompose_query returns 2-4 sub-queries from the faux LLM response.
+
+    # Verified: services/paper_ingestion/paper_ingestion/rag/decomposition.py:25-102
+    # Survivor-of: test_decomposition.py mock-unit assertions patching call_llm_structured
+    """
+    import json
+    from paper_ingestion.rag.decomposition import decompose_query
+
+    app, faux = pi_contract_app_with_litellm_sidecar
+
+    sub_queries = ["What is attention?", "How do transformers scale?", "What are benchmarks used?"]
+    faux.add_response("fast", json.dumps(sub_queries))
+
+    result = await decompose_query(
+        "How does attention mechanism scale in transformer models across multiple benchmarks?",
+        model="fast",
+        openai_client=app.state.openai_client,
+    )
+
+    assert isinstance(result, list), "decompose_query must return a list"
+    assert 1 <= len(result) <= 4, f"Expected 1-4 sub-queries, got {len(result)}"
+    assert all(isinstance(q, str) and q.strip() for q in result), (
+        "All sub-queries must be non-empty strings"
+    )
+
+
+async def test_extraction_w2_nested_decomposition_recursive(
+    pi_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """decompose_query degrades gracefully to [original_question] when LLM errors.
+
+    # Verified: services/paper_ingestion/paper_ingestion/rag/decomposition.py:100-102
+    # Survivor-of: test_decomposition.py mock-unit fallback path assertions
+    """
+    from paper_ingestion.rag.decomposition import decompose_query
+
+    app, faux = pi_contract_app_with_litellm_sidecar
+
+    # Inject a 502 error — decompose_query must catch it and fall back.
+    faux.add_error("fast", 502, "upstream unavailable")
+
+    question = "What datasets are used in neural architecture search?"
+    result = await decompose_query(
+        question,
+        model="fast",
+        openai_client=app.state.openai_client,
+    )
+
+    # On any exception, decompose_query falls back to [original_question].
+    assert result == [question], (
+        f"decompose_query must degrade to [original_question] on LLM error; got {result}"
+    )
+
+
+async def test_extraction_w2_verifier_mandatory_blocks_unverified(
+    pi_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """extract_fields_for_paper discards field values whose quotes fail verification.
+
+    # Verified: services/paper_ingestion/paper_ingestion/extraction/core.py:211-231
+    # Survivor-of: test_extraction.py PI-CORE-007 mock-unit assertions on verifier discard
+    """
+    from paper_ingestion.extraction.core import extract_fields_for_paper
+
+    app, faux = pi_contract_app_with_litellm_sidecar
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('w2-extv-verify@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)"
+        " VALUES ('w2-extv-01', 'arxiv', 'W2 Verifier Paper', ARRAY['Author V'],"
+        " 'http://w2v', $1) RETURNING id",
+        user_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content)"
+        " VALUES ($1, 0, 'The model achieves 94.2% accuracy on GLUE.')",
+        paper_id,
+    )
+    template_id = await contract_conn.fetchval(
+        "INSERT INTO extraction_templates (name, fields) VALUES ($1, $2::jsonb) RETURNING id",
+        "w2-verifier-template",
+        [
+            {
+                "name": "accuracy",
+                "label": "Accuracy",
+                "type": "text",
+                "description": "Model accuracy",
+            }
+        ],
+    )
+
+    # LLM returns a quote that does NOT appear in the source text → verifier discards it.
+    import json
+
+    faux.add_response(
+        "smart",
+        json.dumps(
+            {
+                "accuracy": {
+                    "value": "95.0%",
+                    "quote": "This hallucinated quote is not in the source text at all.",
+                }
+            }
+        ),
+    )
+
+    from jarvis_common.verify import QuoteVerifier
+
+    result = await extract_fields_for_paper(
+        http_client=None,  # type: ignore[arg-type]
+        db_pool=app.state.db_pool,
+        paper_id=paper_id,
+        template_id=template_id,
+        embedder=None,
+        verifier=QuoteVerifier(),
+        openai_client=app.state.openai_client,
+    )
+
+    accuracy_field = result.extractions.get("accuracy")
+    assert accuracy_field is not None, "accuracy field must be present in extraction result"
+    assert accuracy_field.value is None, (
+        "Unverified quote must cause value to be discarded (confidence 0.0)"
+    )
+    assert accuracy_field.confidence == 0.0, (
+        f"Unverified extraction must have confidence=0.0; got {accuracy_field.confidence}"
+    )

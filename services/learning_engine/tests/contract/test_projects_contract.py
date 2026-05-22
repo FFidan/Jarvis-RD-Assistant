@@ -165,3 +165,124 @@ async def test_delete_project_owner_gets_204(
         new_id,
     )
     assert still_exists is None, f"Project {new_id} still exists in DB after DELETE 204"
+
+
+# ---------------------------------------------------------------------------
+# §A217 — project_papers CRUD — user-scoping + IDOR guards
+# ---------------------------------------------------------------------------
+
+
+async def test_project_papers_list_user_scoped(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """GET /api/projects/{id}/papers returns user A's linked paper; user B gets 404.
+
+    Verifies the ``WHERE id = $1 AND user_id = $2`` IDOR guard in
+    list_project_papers — accessing user A's project as user B must 404.
+    """
+    project_id = contract_two_users.project_id_a
+    paper_id = contract_two_users.paper_id_a
+
+    # Seed a project_papers link directly — avoids Zotero/library side-effects.
+    await contract_conn.execute(
+        "INSERT INTO project_papers (project_id, paper_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        project_id,
+        paper_id,
+    )
+
+    # User A sees their paper in the project list.
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp_a = await c.get(f"/api/projects/{project_id}/papers")
+    assert resp_a.status_code == 200, (
+        f"User A GET /api/projects/{project_id}/papers failed: {resp_a.status_code}: {resp_a.text[:200]}"
+    )
+    ids_a = [p["id"] for p in resp_a.json()]
+    assert paper_id in ids_a, (
+        f"User A's paper {paper_id} not found in project {project_id} list: {ids_a}"
+    )
+
+    # User B gets 404 on user A's project — IDOR guard.
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp_b = await c.get(f"/api/projects/{project_id}/papers")
+    assert resp_b.status_code != 401, (
+        f"GET /api/projects/{project_id}/papers as user B: got 401 — session wiring bug"
+    )
+    assert resp_b.status_code == 404, (
+        f"IDOR: user B got {resp_b.status_code} on user A's project {project_id} "
+        f"(expected 404). Body: {resp_b.text[:200]}"
+    )
+
+
+async def test_project_papers_attach_validates_paper_ownership(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/projects/{id}/papers/{paper_id} rejects cross-user paper attach.
+
+    User A tries to link user B's paper (discovered_by=user_b_id, not in A's
+    library) into user A's project.  assert_paper_ownership must raise 403.
+    """
+    project_id = contract_two_users.project_id_a
+
+    # Fetch user B's paper id — only *_a resources are on the fixture object.
+    paper_id_b = await contract_conn.fetchval(
+        "SELECT id FROM papers WHERE discovered_by = $1",
+        contract_two_users.user_b_id,
+    )
+    assert paper_id_b is not None, "Seed error: user B has no paper in DB"
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(f"/api/projects/{project_id}/papers/{paper_id_b}")
+
+    assert resp.status_code in (403, 404), (
+        f"Expected 403 or 404 when attaching user B's paper {paper_id_b} to user A's project "
+        f"{project_id}; got {resp.status_code}: {resp.text[:200]}"
+    )
+    # The link must NOT exist in DB.
+    linked = await contract_conn.fetchval(
+        "SELECT 1 FROM project_papers WHERE project_id = $1 AND paper_id = $2",
+        project_id,
+        paper_id_b,
+    )
+    assert linked is None, (
+        f"IDOR: cross-user paper {paper_id_b} was inserted into project {project_id} despite rejection"
+    )
+
+
+async def test_project_papers_detach_idor_rejected(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """DELETE /api/projects/{id}/papers/{paper_id} by user B on user A's link → 404.
+
+    Verifies the ``USING projects p … p.user_id = $3`` ownership guard in
+    unlink_paper prevents user B from removing a paper from user A's project.
+    """
+    project_id = contract_two_users.project_id_a
+    paper_id = contract_two_users.paper_id_a
+
+    # Seed the link so there is something to attempt to delete.
+    await contract_conn.execute(
+        "INSERT INTO project_papers (project_id, paper_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        project_id,
+        paper_id,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.delete(f"/api/projects/{project_id}/papers/{paper_id}")
+
+    assert resp.status_code != 401, (
+        f"DELETE /api/projects/{project_id}/papers/{paper_id} as user B: got 401 — session wiring bug"
+    )
+    assert resp.status_code == 404, (
+        f"IDOR: user B got {resp.status_code} deleting user A's project link "
+        f"(expected 404). Body: {resp.text[:200]}"
+    )
+    # Link must still exist in DB.
+    still_linked = await contract_conn.fetchval(
+        "SELECT 1 FROM project_papers WHERE project_id = $1 AND paper_id = $2",
+        project_id,
+        paper_id,
+    )
+    assert still_linked is not None, (
+        f"IDOR: user B successfully deleted project_papers link "
+        f"(project={project_id}, paper={paper_id}) — ownership guard failed"
+    )

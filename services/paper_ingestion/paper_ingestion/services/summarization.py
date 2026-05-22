@@ -278,6 +278,22 @@ async def generate_paper_summary(
         ) from None
     except httpx.HTTPStatusError:
         raise HTTPException(status_code=502, detail="LLM API error during summarization") from None
+    except Exception as exc:  # noqa: BLE001 — openai.APIStatusError / InstructorRetryException
+        import openai  # noqa: PLC0415
+
+        _is_instructor_retry = False
+        try:
+            from instructor.core.exceptions import InstructorRetryException  # noqa: PLC0415
+
+            _is_instructor_retry = isinstance(exc, InstructorRetryException)
+        except ImportError:
+            pass
+
+        if isinstance(exc, openai.APIStatusError) or _is_instructor_retry:
+            raise HTTPException(
+                status_code=502, detail="LLM API error during summarization"
+            ) from None
+        raise
 
     raw_content = parsed.model_dump_json()
     llm_model = llm_model_name
@@ -374,7 +390,8 @@ async def generate_paper_summary(
             parsed.methodology,
             parsed.limitations,
             parsed.relevance_notes,
-            report.confidence.value,
+            # DB constraint only allows HIGH|MEDIUM|LOW; map NONE (0 findings) to LOW
+            "LOW" if report.confidence.value == "NONE" else report.confidence.value,
             [r.model_dump() for r in cross_references],
             llm_model,
             prompt,

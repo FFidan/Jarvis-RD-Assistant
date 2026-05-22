@@ -92,6 +92,17 @@ async def _pi_app_with_pool(contract_conn):
         yield app
 
 
+# Composable contract-app fixture wiring the PI app to a FauxLiteLLMServer
+# sidecar. Yields (app, faux_server) for W1+ tests that need to script LLM
+# responses without touching real LiteLLM infrastructure. Defined as a
+# factory invocation so the canonical implementation lives in jarvis_common.
+from jarvis_common.testing import (  # noqa: E402, F401
+    _make_pi_contract_app_with_litellm_sidecar,
+)
+
+pi_contract_app_with_litellm_sidecar = _make_pi_contract_app_with_litellm_sidecar()
+
+
 # ---------------------------------------------------------------------------
 # Cache-isolation fixture
 #

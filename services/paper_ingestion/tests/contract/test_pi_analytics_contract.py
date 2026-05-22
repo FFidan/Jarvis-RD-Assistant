@@ -37,34 +37,17 @@ pytestmark = [
 async def _pi_app_with_pool(contract_conn):
     from jarvis_common import current_user_id_strict_with_owner_override
     from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
     from paper_ingestion.main import app
 
     shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    original_embedder = getattr(app.state, "embedder", None)
-    had_embedder = hasattr(app.state, "embedder")
-    app.state.db_pool = shared
-    app.state.embedder = None  # force BM25 path
-
-    removed_override = app.dependency_overrides.pop(
-        current_user_id_strict_with_owner_override, None
-    )
-    had_override = removed_override is not None
-
-    try:
+    with (
+        patch_app_state(app, {"db_pool": shared, "embedder": None}),
+        patch_dependency_overrides(
+            app, remove_overrides={current_user_id_strict_with_owner_override}
+        ),
+    ):
         yield app
-    finally:
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        if had_embedder:
-            app.state.embedder = original_embedder
-        elif hasattr(app.state, "embedder"):
-            del app.state.embedder
-        if had_override:
-            app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
 
 
 async def _seed_stub_cited_by(conn, user_paper_id: int, *, cited_by_count: int = 5) -> int:

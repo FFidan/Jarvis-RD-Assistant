@@ -40,42 +40,18 @@ async def _pi_app_with_pool(contract_conn):
 
     from jarvis_common import current_user_id_strict_with_owner_override
     from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
     from paper_ingestion.main import app
 
+    # search-preview reads http_client from app.state via get_http_client dep.
     shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    original_embedder = getattr(app.state, "embedder", None)
-    original_http = getattr(app.state, "http_client", None)
-    had_embedder = hasattr(app.state, "embedder")
-    had_http = hasattr(app.state, "http_client")
-    app.state.db_pool = shared
-    app.state.embedder = None
-    # search-preview reads http_client from app.state via get_http_client dep
-    app.state.http_client = MagicMock()
-
-    removed_override = app.dependency_overrides.pop(
-        current_user_id_strict_with_owner_override, None
-    )
-    had_override = removed_override is not None
-
-    try:
+    with (
+        patch_app_state(app, {"db_pool": shared, "embedder": None, "http_client": MagicMock()}),
+        patch_dependency_overrides(
+            app, remove_overrides={current_user_id_strict_with_owner_override}
+        ),
+    ):
         yield app
-    finally:
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        if had_embedder:
-            app.state.embedder = original_embedder
-        elif hasattr(app.state, "embedder"):
-            del app.state.embedder
-        if had_http:
-            app.state.http_client = original_http
-        elif hasattr(app.state, "http_client"):
-            del app.state.http_client
-        if had_override:
-            app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
 
 
 def _make_paper_create(external_id: str, title: str, source_type: str = "arxiv"):
@@ -292,3 +268,72 @@ async def test_sr05_all_sources_failed_to_load_returns_400(
     # SourceType.ARXIV exists; _stub_resolver returns no plugin for it → router 400 path
     assert resp.status_code == 400, resp.text[:300]
     assert "available" in resp.text.lower() or "source" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# SR-06: POST /api/search multi-source dedup across sources
+#
+# Verified: services/paper_ingestion/paper_ingestion/routers/search.py:146-263
+#   (search_papers: fan-out + _dedup_papers + upsert into DB)
+# Verified: services/paper_ingestion/paper_ingestion/routers/search_helpers.py
+#   (_dedup_papers: deduplicates by external_id)
+# Survivor-of: ~3-5 mock-units in test_search_multi_source.py that assert
+#   _dedup_papers call counts via @patch without a real DB round-trip
+# ---------------------------------------------------------------------------
+
+
+async def test_search_multi_source_post_dedupes_across_sources(
+    contract_two_users, _pi_app_with_pool, _configure_api_key, monkeypatch
+):
+    """POST /api/search fans out across sources, deduplicates by external_id,
+    and returns only unique papers (total == unique count, not sum of sources).
+
+    Two sources each return the same paper (same external_id / title) plus one
+    unique paper each. After dedup the total must be 3 (not 4), and DB upsert
+    must land exactly those 3 rows in papers.
+
+    # Verified: search.py:228-230 (_dedup_papers applied after round-robin merge)
+    # Verified: search.py:236-250 (upsert_paper + add_to_library for deduplicated list)
+    """
+    from paper_ingestion.models import SourceType
+
+    shared_paper = _make_paper_create("dedup-shared-01", "Shared Paper", "arxiv")
+    arxiv_unique = _make_paper_create("dedup-arxiv-only-01", "Arxiv Only Paper", "arxiv")
+    # Same external_id as shared_paper but different source — dedup collapses it
+    shared_s2 = _make_paper_create("dedup-shared-01", "Shared Paper", "semantic_scholar")
+    s2_unique = _make_paper_create("dedup-s2-only-01", "S2 Only Paper", "semantic_scholar")
+
+    async def _stub_resolver(source_types, db_pool, http_client, request):
+        return {
+            SourceType.ARXIV: _stub_plugin_returning([shared_paper, arxiv_unique]),
+            SourceType.SEMANTIC_SCHOLAR: _stub_plugin_returning([shared_s2, s2_unique]),
+        }, {}
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.search._resolve_sources_for_search",
+        _stub_resolver,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/search",
+            json={
+                "query": "dedup test",
+                "source_types": ["arxiv", "semantic_scholar"],
+                "max_results": 10,
+            },
+        )
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+
+    # _dedup_papers must collapse the two "dedup-shared-01" results into one
+    assert body["total"] == 3, (
+        f"Expected total=3 after cross-source dedup (shared+arxiv-only+s2-only); "
+        f"got total={body['total']}. "
+        "This means _dedup_papers did not collapse matching external_id across sources."
+    )
+    titles = {r["title"] for r in body["results"]}
+    assert "Shared Paper" in titles
+    assert "Arxiv Only Paper" in titles
+    assert "S2 Only Paper" in titles

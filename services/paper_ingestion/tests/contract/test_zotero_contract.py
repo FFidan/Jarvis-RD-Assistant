@@ -19,12 +19,36 @@ wrapped in a per-test rollback transaction).
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _zotero_app(contract_conn):
+    """PI app wired to the contract_conn transaction for Zotero router tests."""
+    from jarvis_common import verify_api_key
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_contract_apps import (
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    shared = SharedConnPool(contract_conn)
+    with (
+        patch_app_state(app, {"db_pool": shared}),
+        patch_dependency_overrides(
+            app,
+            set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None},
+        ),
+    ):
+        yield app
 
 
 # ---------------------------------------------------------------------------
@@ -121,46 +145,23 @@ async def test_ownership_check_passes_for_canonical_paper(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_get_zotero_state_404_for_nonexistent_paper(contract_conn):
+async def test_get_zotero_state_404_for_nonexistent_paper(_zotero_app):
     """get_paper_zotero_state returns 404 when paper_id does not exist in DB.
 
     Exercises the real papers SELECT (not a mock fetchrow return_value).
     """
-    import httpx
     from unittest.mock import AsyncMock, patch
-    from httpx import ASGITransport
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-    from jarvis_common import verify_api_key
-    from jarvis_common.testing import SharedConnPool
+
+    from jarvis_common.testing_contract_apps import make_contract_client
 
     # Use a very large ID that cannot exist in the rolled-back test transaction.
     nonexistent_paper_id = 999_999_999
 
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
+    import paper_ingestion.routers.zotero as zotero_mod
 
-    try:
-        import paper_ingestion.routers.zotero as zotero_mod
-
-        with patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=1)):
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get(
-                    f"/api/papers/{nonexistent_paper_id}/zotero",
-                    headers={"X-API-Key": "test"},
-                )
-    finally:
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
+    with patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=1)):
+        async with make_contract_client(_zotero_app, None) as client:
+            resp = await client.get(f"/api/papers/{nonexistent_paper_id}/zotero")
 
     # 403 (ownership guard fires before the SELECT) or 404 (paper not found) are
     # both acceptable — the key assertion is that the app doesn't 500 on a real
@@ -173,7 +174,7 @@ async def test_get_zotero_state_404_for_nonexistent_paper(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_get_zotero_state_403_for_non_owner(contract_conn):
+async def test_get_zotero_state_403_for_non_owner(contract_conn, _zotero_app):
     """get_paper_zotero_state returns 403 when caller does not own the paper.
 
     Collapses: test_get_paper_zotero_state_checks_ownership — the mock test
@@ -181,13 +182,9 @@ async def test_get_zotero_state_403_for_non_owner(contract_conn):
     a real paper owned by user A and calls as user B, letting the real ownership
     guard enforce the 403.
     """
-    import httpx
     from unittest.mock import AsyncMock, patch
-    from httpx import ASGITransport
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-    from jarvis_common import verify_api_key
-    from jarvis_common.testing import SharedConnPool
+
+    from jarvis_common.testing_contract_apps import make_contract_client
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -201,33 +198,12 @@ async def test_get_zotero_state_403_for_non_owner(contract_conn):
         "zotero-intruder-b@test.invalid",
     )
 
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
+    import paper_ingestion.routers.zotero as zotero_mod
 
-    try:
-        import paper_ingestion.routers.zotero as zotero_mod
-
-        # Call as intruder (user B), not the owner.
-        with patch.object(
-            zotero_mod, "current_user_id_strict", AsyncMock(return_value=intruder_id)
-        ):
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get(
-                    f"/api/papers/{paper_id}/zotero",
-                    headers={"X-API-Key": "test"},
-                )
-    finally:
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
+    # Call as intruder (user B), not the owner.
+    with patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=intruder_id)):
+        async with make_contract_client(_zotero_app, None) as client:
+            resp = await client.get(f"/api/papers/{paper_id}/zotero")
 
     assert resp.status_code == 403, (
         f"Non-owner must receive 403; got {resp.status_code}: {resp.text}"
@@ -241,23 +217,17 @@ async def test_get_zotero_state_403_for_non_owner(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_a170_push_to_zotero_owner_gets_202(contract_conn):
+async def test_a170_push_to_zotero_owner_gets_202(contract_conn, _zotero_app):
     """POST /api/papers/{paper_id}/zotero: owner gets 202 Accepted.
 
     The push endpoint checks paper existence + ownership from real DB before
     enqueueing the procrastinate job (KIND_TO_TASK["zotero.push"].defer_async
     is patched — procrastinate boundary is an idiomatic mock).
     """
-    import httpx
     from unittest.mock import AsyncMock, MagicMock, patch
-    from httpx import ASGITransport
 
     import jarvis_common.task_registry as task_registry
-
-    from jarvis_common import verify_api_key
-    from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from jarvis_common.testing_contract_apps import make_contract_client
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -268,30 +238,14 @@ async def test_a170_push_to_zotero_owner_gets_202(contract_conn):
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock(return_value=None)
 
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
+    import paper_ingestion.routers.zotero as zotero_mod
 
-    try:
-        import paper_ingestion.routers.zotero as zotero_mod
-
-        with (
-            patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=owner_id)),
-            patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
-        ):
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post(f"/api/papers/{paper_id}/zotero")
-    finally:
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
+    with (
+        patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=owner_id)),
+        patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
+    ):
+        async with make_contract_client(_zotero_app, None) as client:
+            resp = await client.post(f"/api/papers/{paper_id}/zotero")
 
     assert resp.status_code == 202, (
         f"Owner push must return 202; got {resp.status_code}: {resp.text}"
@@ -304,20 +258,15 @@ async def test_a170_push_to_zotero_owner_gets_202(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_a170_push_to_zotero_non_owner_gets_403(contract_conn):
+async def test_a170_push_to_zotero_non_owner_gets_403(contract_conn, _zotero_app):
     """POST /api/papers/{paper_id}/zotero: non-owner receives 403.
 
     assert_paper_ownership fires before the procrastinate enqueue.
     No mock for KIND_TO_TASK needed (guard raises before reaching it).
     """
-    import httpx
     from unittest.mock import AsyncMock, patch
-    from httpx import ASGITransport
 
-    from jarvis_common import verify_api_key
-    from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from jarvis_common.testing_contract_apps import make_contract_client
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -329,29 +278,11 @@ async def test_a170_push_to_zotero_non_owner_gets_403(contract_conn):
         " VALUES ('a170-intruder@contract.example.com', 'user') RETURNING id"
     )
 
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
+    import paper_ingestion.routers.zotero as zotero_mod
 
-    try:
-        import paper_ingestion.routers.zotero as zotero_mod
-
-        with patch.object(
-            zotero_mod, "current_user_id_strict", AsyncMock(return_value=intruder_id)
-        ):
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post(f"/api/papers/{paper_id}/zotero")
-    finally:
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
+    with patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=intruder_id)):
+        async with make_contract_client(_zotero_app, None) as client:
+            resp = await client.post(f"/api/papers/{paper_id}/zotero")
 
     assert resp.status_code == 403, (
         f"Non-owner must receive 403 on push; got {resp.status_code}: {resp.text}"
@@ -365,22 +296,16 @@ async def test_a170_push_to_zotero_non_owner_gets_403(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_a172_resync_owner_gets_202(contract_conn):
+async def test_a172_resync_owner_gets_202(contract_conn, _zotero_app):
     """POST /api/zotero/resync/{paper_id}: owner gets 202 Accepted.
 
     Existence check + ownership check run against real DB; procrastinate
     boundary (KIND_TO_TASK["zotero.resync"]) stays mocked.
     """
-    import httpx
     from unittest.mock import AsyncMock, MagicMock, patch
-    from httpx import ASGITransport
 
     import jarvis_common.task_registry as task_registry
-
-    from jarvis_common import verify_api_key
-    from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from jarvis_common.testing_contract_apps import make_contract_client
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -391,30 +316,14 @@ async def test_a172_resync_owner_gets_202(contract_conn):
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock(return_value=None)
 
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
+    import paper_ingestion.routers.zotero as zotero_mod
 
-    try:
-        import paper_ingestion.routers.zotero as zotero_mod
-
-        with (
-            patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=owner_id)),
-            patch.dict(task_registry._TASK_MAP, {"zotero.resync": mock_task}),
-        ):
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post(f"/api/zotero/resync/{paper_id}")
-    finally:
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
+    with (
+        patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=owner_id)),
+        patch.dict(task_registry._TASK_MAP, {"zotero.resync": mock_task}),
+    ):
+        async with make_contract_client(_zotero_app, None) as client:
+            resp = await client.post(f"/api/zotero/resync/{paper_id}")
 
     assert resp.status_code == 202, (
         f"Owner resync must return 202; got {resp.status_code}: {resp.text}"
@@ -424,19 +333,14 @@ async def test_a172_resync_owner_gets_202(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_a172_resync_non_owner_gets_403(contract_conn):
+async def test_a172_resync_non_owner_gets_403(contract_conn, _zotero_app):
     """POST /api/zotero/resync/{paper_id}: non-owner receives 403.
 
     assert_paper_ownership fires before the procrastinate enqueue.
     """
-    import httpx
     from unittest.mock import AsyncMock, patch
-    from httpx import ASGITransport
 
-    from jarvis_common import verify_api_key
-    from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
+    from jarvis_common.testing_contract_apps import make_contract_client
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -448,29 +352,11 @@ async def test_a172_resync_non_owner_gets_403(contract_conn):
         " VALUES ('a172-intruder@contract.example.com', 'user') RETURNING id"
     )
 
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
+    import paper_ingestion.routers.zotero as zotero_mod
 
-    try:
-        import paper_ingestion.routers.zotero as zotero_mod
-
-        with patch.object(
-            zotero_mod, "current_user_id_strict", AsyncMock(return_value=intruder_id)
-        ):
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.post(f"/api/zotero/resync/{paper_id}")
-    finally:
-        if original_pool is None:
-            app.state.__dict__.pop("db_pool", None)
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
+    with patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=intruder_id)):
+        async with make_contract_client(_zotero_app, None) as client:
+            resp = await client.post(f"/api/zotero/resync/{paper_id}")
 
     assert resp.status_code == 403, (
         f"Non-owner must receive 403 on resync; got {resp.status_code}: {resp.text}"

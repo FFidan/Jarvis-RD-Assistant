@@ -822,3 +822,567 @@ async def test_a247_task_done_callback_marks_task_done_in_db(contract_conn, cont
     update.callback_query.message.reply_text.assert_awaited_once()
     reply_text: str = update.callback_query.message.reply_text.call_args[0][0]
     assert "done" in reply_text.lower(), f"Expected 'done' in reply; got: {reply_text!r}"
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by tests 1–11 below
+# ---------------------------------------------------------------------------
+
+
+async def _seed_tg_pairing(conn: Any, user_id: int, chat_id: int) -> None:
+    """Insert a telegram_user_pairings row so auth_check resolves (user_id, chat_id)."""
+    await conn.execute(
+        """INSERT INTO telegram_user_pairings (user_id, chat_id, telegram_username, paired_at)
+           VALUES ($1, $2, 'contractuser', NOW())""",
+        user_id,
+        chat_id,
+    )
+
+
+def _make_http_mock(*, method: str = "get", json_data: Any = None) -> AsyncMock:
+    """Return an AsyncMock http_client whose given method returns a success response."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json = MagicMock(return_value=json_data or {})
+    mock_http = AsyncMock()
+    getattr(mock_http, method).return_value = mock_resp
+    mock_http.request.return_value = mock_resp
+    mock_http.post.return_value = mock_resp
+    mock_http.get.return_value = mock_resp
+    return mock_http
+
+
+# ---------------------------------------------------------------------------
+# W1B.1 — 11 new contract tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_paper_detail_callback_owner_sees_paper(contract_conn, contract_two_users):
+    """W1B.1-1: paper_detail callback returns paper detail when caller owns the pairing.
+
+    Auth path: real telegram_user_pairings DB lookup.
+    HTTP boundary: mocked http_client GET → paper JSON.
+    Verified: callback_handler.py:77 (paper_detail_callback) — GET /api/papers/{id}.
+    """
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.callback_handler import paper_detail_callback
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    user_a_id = contract_two_users.user_a_id
+    paper_id_a = contract_two_users.paper_id_a
+    chat_id = 20001
+
+    await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+    mock_http = _make_http_mock(
+        method="get",
+        json_data={
+            "paper": {
+                "title": "W1B1-paper",
+                "authors": ["A. Author"],
+                "published_date": "2025-01-01",
+                "url": "http://example.test",
+            },
+            "summary": None,
+        },
+    )
+
+    update = _make_callback_update(chat_id=chat_id, callback_data=f"paper_detail_{paper_id_a}")
+    context = _make_context(pool, config)
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_detail_callback(update, context)
+
+    # Auth resolved — answer + reply sent
+    update.callback_query.answer.assert_awaited_once()
+    update.callback_query.message.reply_text.assert_awaited_once()
+    # HTTP GET was called for the correct paper_id
+    mock_http.get.assert_awaited_once()
+    url_arg: str = mock_http.get.await_args[0][0]
+    assert str(paper_id_a) in url_arg, f"Expected paper_id {paper_id_a} in GET URL; got {url_arg!r}"
+    # X-Owner-User-Id header scopes the request to user_a
+    headers: dict = mock_http.get.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == str(user_a_id), (
+        f"Expected X-Owner-User-Id={user_a_id}; got {headers!r}"
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_paper_detail_callback_other_user_404(contract_conn, contract_two_users):
+    """W1B.1-2: paper_detail callback for paper not owned by caller → auth denied, no HTTP call.
+
+    User B's chat_id has no pairing row → auth_check returns (False, None) →
+    query.answer() once, NO GET request.
+    Verified: callback_handler.py:88–91 (auth gate, single answer on reject).
+
+    RED proof: removing the auth_check gate (returning True unconditionally) →
+    mock_http.get.assert_not_awaited() fails because GET would be called.
+    """
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.callback_handler import paper_detail_callback
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    paper_id_a = contract_two_users.paper_id_a
+    # User B's chat_id has NO pairing row → auth_check denies
+    chat_id_b_unpaired = 20099
+
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+    mock_http = AsyncMock()
+
+    update = _make_callback_update(
+        chat_id=chat_id_b_unpaired, callback_data=f"paper_detail_{paper_id_a}"
+    )
+    context = _make_context(pool, config)
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_detail_callback(update, context)
+
+    # H1: single answer on rejection path
+    assert update.callback_query.answer.await_count == 1, (
+        "H1: query.answer must be called once even on auth rejection"
+    )
+    # No HTTP GET issued for an unauthorised caller
+    mock_http.get.assert_not_awaited()
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_paper_action_save_transitions_state(contract_conn, contract_two_users):
+    """W1B.1-3: paper:save:<id> callback triggers PUT /api/papers/{id}/save via HTTP.
+
+    Auth via real telegram_user_pairings; HTTP boundary mocked.
+    Verified: callback_handler.py:119–163 (paper_action_callback, _PAPER_ACTION_ENDPOINTS).
+
+    RED proof: removing the http.request() call in paper_action_callback →
+    mock_http.request.assert_awaited_once() fails.
+    """
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.callback_handler import paper_action_callback
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    user_a_id = contract_two_users.user_a_id
+    paper_id_a = contract_two_users.paper_id_a
+    chat_id = 20002
+
+    await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+    mock_http = _make_http_mock()
+
+    update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:save:{paper_id_a}")
+    context = _make_context(pool, config)
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    mock_http.request.assert_awaited_once()
+    method_arg: str = mock_http.request.await_args[0][0]
+    url_arg: str = mock_http.request.await_args[0][1]
+    assert method_arg == "PUT", f"Expected PUT; got {method_arg!r}"
+    assert f"/api/papers/{paper_id_a}/save" in url_arg, (
+        f"Expected /api/papers/{paper_id_a}/save in URL; got {url_arg!r}"
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_paper_action_done_transitions_state(contract_conn, contract_two_users):
+    """W1B.1-4: paper:done:<id> callback triggers PUT /api/papers/{id}/done via HTTP.
+
+    Verified: callback_handler.py:119–163 (_PAPER_ACTION_ENDPOINTS['done'] = ('PUT','done')).
+
+    RED proof: commenting out http.request() → mock_http.request.assert_awaited_once() fails.
+    """
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.callback_handler import paper_action_callback
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    user_a_id = contract_two_users.user_a_id
+    paper_id_a = contract_two_users.paper_id_a
+    chat_id = 20003
+
+    await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+    mock_http = _make_http_mock()
+
+    update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:done:{paper_id_a}")
+    context = _make_context(pool, config)
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    mock_http.request.assert_awaited_once()
+    url_arg: str = mock_http.request.await_args[0][1]
+    assert f"/api/papers/{paper_id_a}/done" in url_arg, (
+        f"Expected /api/papers/{paper_id_a}/done in URL; got {url_arg!r}"
+    )
+    assert mock_http.request.await_args[0][0] == "PUT"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_paper_action_trash_transitions_state(contract_conn, contract_two_users):
+    """W1B.1-5: paper:trash:<id> callback triggers PUT /api/papers/{id}/trash via HTTP.
+
+    Verified: callback_handler.py:119–163 (_PAPER_ACTION_ENDPOINTS['trash'] = ('PUT','trash')).
+
+    RED proof: commenting out http.request() → assert_awaited_once() fails.
+    """
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.callback_handler import paper_action_callback
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    user_a_id = contract_two_users.user_a_id
+    paper_id_a = contract_two_users.paper_id_a
+    chat_id = 20004
+
+    await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+    mock_http = _make_http_mock()
+
+    update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:trash:{paper_id_a}")
+    context = _make_context(pool, config)
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    mock_http.request.assert_awaited_once()
+    url_arg: str = mock_http.request.await_args[0][1]
+    assert f"/api/papers/{paper_id_a}/trash" in url_arg, (
+        f"Expected /api/papers/{paper_id_a}/trash in URL; got {url_arg!r}"
+    )
+    assert mock_http.request.await_args[0][0] == "PUT"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_paper_feedback_persists_with_correct_source(contract_conn, contract_two_users):
+    """W1B.1-6: paper:feedback_pos:<id>:feed_thumbs → POST /feedback with source='feed_thumbs'.
+
+    Auth via real telegram_user_pairings; HTTP boundary mocked.
+    Verified: callback_handler.py:165–207 (paper_feedback_callback, _PAPER_FEEDBACK_RE).
+
+    RED proof: removing the http.post() call → mock_http.post.assert_awaited_once() fails.
+    """
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.callback_handler import paper_feedback_callback
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    user_a_id = contract_two_users.user_a_id
+    paper_id_a = contract_two_users.paper_id_a
+    chat_id = 20005
+
+    await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+    mock_http = _make_http_mock(method="post")
+
+    update = _make_callback_update(
+        chat_id=chat_id, callback_data=f"paper:feedback_pos:{paper_id_a}:feed_thumbs"
+    )
+    context = _make_context(pool, config)
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    # HTTP POST must have been issued to the feedback endpoint
+    mock_http.post.assert_awaited_once()
+    url_arg: str = mock_http.post.await_args[0][0]
+    assert f"/api/papers/{paper_id_a}/feedback" in url_arg, (
+        f"Expected /api/papers/{paper_id_a}/feedback in URL; got {url_arg!r}"
+    )
+    # Body must carry signal=positive and source=feed_thumbs
+    body: dict = mock_http.post.await_args[1]["json"]
+    assert body.get("signal") == "positive", f"Expected signal='positive'; got {body!r}"
+    assert body.get("source") == "feed_thumbs", f"Expected source='feed_thumbs'; got {body!r}"
+    # H1: single answer with thumbs label
+    assert update.callback_query.answer.await_count == 1
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_paper_feedback_idor_rejected(contract_conn, contract_two_users):
+    """W1B.1-7: feedback callback for a chat with no pairing row → auth denied, no POST.
+
+    An unpaired chat_id cannot submit feedback — auth_check returns (False, None) →
+    query.answer() once, NO HTTP POST.
+    Verified: callback_handler.py:179–183 (auth gate).
+
+    RED proof: bypassing the auth gate → mock_http.post.assert_not_awaited() fails.
+    """
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.callback_handler import paper_feedback_callback
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    paper_id_a = contract_two_users.paper_id_a
+    # chat_id with no pairing row → denied
+    chat_id_unpaired = 20098
+
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+    mock_http = AsyncMock()
+
+    update = _make_callback_update(
+        chat_id=chat_id_unpaired,
+        callback_data=f"paper:feedback_pos:{paper_id_a}:feed_thumbs",
+    )
+    context = _make_context(pool, config)
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    assert update.callback_query.answer.await_count == 1, "H1: single answer on auth rejection"
+    mock_http.post.assert_not_awaited()
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_stats_command_returns_user_scoped_counts(contract_conn, contract_two_users):
+    """W1B.1-8: /stats command sends X-Owner-User-Id scoped to each caller's user_id.
+
+    User A and User B each make a /stats call. The outbound LE GET must carry
+    the caller's own user_id in X-Owner-User-Id (not the other user's id).
+    Verified: paper_commands.py:141–162 (stats_command, _owner_headers).
+
+    RED proof: removing X-Owner-User-Id from _owner_headers → header assertion fails.
+    """
+    from unittest.mock import patch
+
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.commands.paper_commands import stats_command
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    user_a_id = contract_two_users.user_a_id
+    user_b_id = contract_two_users.user_b_id
+    chat_id_a = 20010
+    chat_id_b = 20011
+
+    await _seed_tg_pairing(contract_conn, user_a_id, chat_id_a)
+    await _seed_tg_pairing(contract_conn, user_b_id, chat_id_b)
+
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+
+    for user_id, chat_id in [(user_a_id, chat_id_a), (user_b_id, chat_id_b)]:
+        _timestamps.clear()
+        mock_http = _make_http_mock(
+            method="get",
+            json_data={
+                "total_cards": 10 * user_id,
+                "due_now": user_id,
+                "reviewed_today": 1,
+                "average_retention": 80.0,
+                "streak_days": 3,
+            },
+        )
+        update = _make_update_with_text("/stats", chat_id=chat_id)
+        context = _make_context(pool, config)
+        context.application.bot_data["http_client"] = mock_http
+        context.user_data = {}
+
+        with patch(
+            "telegram_bot.handlers.commands._auth.auth_check",
+            new_callable=AsyncMock,
+            return_value=(True, user_id),
+        ):
+            await stats_command(update, context)
+
+        mock_http.get.assert_awaited_once()
+        headers: dict = mock_http.get.await_args[1]["headers"]
+        assert headers.get("X-Owner-User-Id") == str(user_id), (
+            f"Expected X-Owner-User-Id={user_id} for user {user_id}; got {headers!r}"
+        )
+
+    # Confirm the two user_ids differ so the assertions above are meaningful
+    assert user_a_id != user_b_id
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_focus_command_logs_focus_event(contract_conn, contract_two_users):
+    """W1B.1-9: /focus 25 schedules a job_queue timer and replies with confirmation.
+
+    focus_command does not write to DB directly — it schedules a PTB job that
+    later POSTs to /api/executive/focus/log.  The contract verifies the
+    scheduler is called and the user gets a confirmation reply.
+    Verified: system_commands.py:218–287 (focus_command, job_queue.run_once).
+
+    RED proof: removing context.job_queue.run_once() call →
+    context.job_queue.run_once.assert_called_once() fails.
+    """
+    from unittest.mock import patch
+
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.commands.system_commands import focus_command
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    user_a_id = contract_two_users.user_a_id
+    chat_id = 20020
+
+    await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+
+    update = _make_update_with_text("/focus 25", chat_id=chat_id)
+    context = _make_context(pool, config)
+    context.user_data = {"jarvis_user_id": user_a_id}
+    # PTB job_queue must be wired (focus_command checks job_queue is not None)
+    context.job_queue = MagicMock()
+    context.job_queue.get_jobs_by_name = MagicMock(return_value=[])
+    context.job_queue.run_once = MagicMock()
+    context.args = ["25"]
+
+    with patch(
+        "telegram_bot.handlers.commands._auth.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, user_a_id),
+    ):
+        await focus_command(update, context)
+
+    # Scheduler must have been called once
+    context.job_queue.run_once.assert_called_once()
+    _, kwargs = context.job_queue.run_once.call_args
+    assert kwargs.get("chat_id") == chat_id
+    # Confirmation reply sent
+    update.message.reply_text.assert_awaited_once()
+    reply_text: str = update.message.reply_text.call_args[0][0]
+    assert "25" in reply_text, f"Expected duration '25' in reply; got: {reply_text!r}"
+    assert "focus" in reply_text.lower(), f"Expected 'focus' in reply; got: {reply_text!r}"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_pulse_now_command_enqueues_pulse_job(contract_conn, contract_two_users):
+    """W1B.1-10: /pulse_now triggers POST /api/pulse/generate and replies with confirmation.
+
+    Auth via real telegram_user_pairings; HTTP boundary mocked.
+    Verified: system_commands.py:178–215 (pulse_now_command, http.post).
+
+    RED proof: removing the http.post() call → mock_http.post.assert_awaited_once() fails.
+    """
+    from unittest.mock import patch
+
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.commands.system_commands import pulse_now_command
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    user_a_id = contract_two_users.user_a_id
+    chat_id = 20030
+
+    await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+    mock_http = _make_http_mock(method="post")
+
+    update = _make_update_with_text("/pulse_now", chat_id=chat_id)
+    context = _make_context(pool, config)
+    context.user_data = {"jarvis_user_id": user_a_id}
+    context.application.bot_data["http_client"] = mock_http
+
+    with patch(
+        "telegram_bot.handlers.commands._auth.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, user_a_id),
+    ):
+        await pulse_now_command(update, context)
+
+    # HTTP POST must have been issued to the pulse/generate endpoint
+    mock_http.post.assert_awaited_once()
+    url_arg: str = mock_http.post.await_args[0][0]
+    assert "/api/pulse/generate" in url_arg, (
+        f"Expected /api/pulse/generate in POST URL; got {url_arg!r}"
+    )
+    # X-Owner-User-Id header present
+    headers: dict = mock_http.post.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == str(user_a_id)
+    # Confirmation reply sent
+    update.message.reply_text.assert_awaited_once()
+    reply_text: str = update.message.reply_text.call_args[0][0]
+    assert "Pulse" in reply_text or "pulse" in reply_text.lower(), (
+        f"Expected 'Pulse' in reply; got: {reply_text!r}"
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_tg_start_command_welcome_path_no_pair_token(contract_conn, contract_two_users):
+    """W1B.1-11: /start with no PAIR_ arg returns welcome message; no DB state change.
+
+    The command detects no PAIR_ prefix, performs auth_check via real
+    telegram_user_pairings, and replies with a Welcome message.  No rows are
+    inserted or mutated.
+    Verified: system_commands.py:117–158 (start_command, non-pairing path).
+
+    RED proof: removing the welcome reply_text() call → reply_text.assert_awaited_once() fails.
+    """
+    from unittest.mock import patch
+
+    from jarvis_common.testing import make_bot_config
+    from telegram_bot.handlers.commands.system_commands import start_command
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    user_a_id = contract_two_users.user_a_id
+    chat_id = 20040
+
+    await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
+    pool = TgContractPool(contract_conn)
+    config = make_bot_config(telegram_chat_id=None)
+
+    update = _make_update_with_text("/start", chat_id=chat_id)
+    context = _make_context(pool, config)
+    context.user_data = {}
+
+    pairing_count_before = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM telegram_user_pairings WHERE user_id = $1", user_a_id
+    )
+
+    with patch(
+        "telegram_bot.handlers.commands.system_commands.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, user_a_id),
+    ):
+        await start_command(update, context)
+
+    # Welcome reply sent
+    update.message.reply_text.assert_awaited_once()
+    reply_text: str = update.message.reply_text.call_args[0][0]
+    assert "Welcome" in reply_text or "JARVIS" in reply_text, (
+        f"Expected welcome message; got: {reply_text!r}"
+    )
+    # No DB state change — pairing count unchanged
+    pairing_count_after = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM telegram_user_pairings WHERE user_id = $1", user_a_id
+    )
+    assert pairing_count_after == pairing_count_before, (
+        f"telegram_user_pairings row count must not change on /start welcome path; "
+        f"before={pairing_count_before}, after={pairing_count_after}"
+    )

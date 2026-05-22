@@ -43,42 +43,21 @@ async def _pi_app_with_pool_and_verifier(contract_conn):
     """PI app wired to contract conn + real QuoteVerifier on app.state.verifier."""
     from jarvis_common import current_user_id_strict_with_owner_override
     from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_contract_apps import patch_app_state, patch_dependency_overrides
     from jarvis_common.verify import QuoteVerifier
     from paper_ingestion.main import app
 
     shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    original_embedder = getattr(app.state, "embedder", None)
-    original_verifier = getattr(app.state, "verifier", None)
-    had_embedder = hasattr(app.state, "embedder")
-    had_verifier = hasattr(app.state, "verifier")
-    app.state.db_pool = shared
-    app.state.embedder = None
-    app.state.verifier = QuoteVerifier()
-
-    removed_override = app.dependency_overrides.pop(
-        current_user_id_strict_with_owner_override, None
-    )
-    had_override = removed_override is not None
-
-    try:
+    with (
+        patch_app_state(
+            app,
+            {"db_pool": shared, "embedder": None, "verifier": QuoteVerifier()},
+        ),
+        patch_dependency_overrides(
+            app, remove_overrides={current_user_id_strict_with_owner_override}
+        ),
+    ):
         yield app
-    finally:
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        if had_embedder:
-            app.state.embedder = original_embedder
-        elif hasattr(app.state, "embedder"):
-            del app.state.embedder
-        if had_verifier:
-            app.state.verifier = original_verifier
-        elif hasattr(app.state, "verifier"):
-            del app.state.verifier
-        if had_override:
-            app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
 
 
 async def _seed_zotero_note_with_chunk(

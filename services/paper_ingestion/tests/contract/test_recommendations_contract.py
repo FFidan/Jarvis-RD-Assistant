@@ -556,3 +556,94 @@ async def test_c9_03_read_weights_user_row_wins_over_global(contract_two_users, 
     assert liked_b == 0.3, (
         f"User B with no per-user row should see global liked_weight=0.3; got {liked_b}"
     )
+
+
+# ---------------------------------------------------------------------------
+# §W1A.4-RECS-01 — POST /api/recommendations/refresh persists scores user-scoped
+#
+# Verified: services/paper_ingestion/paper_ingestion/routers/recommendations.py:42-48
+#   (trigger_refresh: calls refresh_recommendations(app, user_id=user_id))
+# Verified: services/paper_ingestion/paper_ingestion/ingestion/recommender.py:132-144
+#   (upsert into paper_recommendations with user_id column)
+# Survivor-of: ~3-5 mock-units in test_recommender.py that stub the upsert SQL
+# ---------------------------------------------------------------------------
+
+
+async def test_recommendations_refresh_endpoint_persists_scores_user_scoped(
+    contract_conn, contract_two_users, _pi_app, _configure_api_key, monkeypatch
+):
+    """POST /api/recommendations/refresh persists recommendation rows for the
+    calling user and does NOT write rows for other users.
+
+    The embedder.discover_from_seeds and embedder.search_similar paths are
+    the §5.1 carve-out boundary (Qdrant/embed). We inject one seeded
+    starred paper, stub the embedder to return one score for a candidate
+    paper, and assert the DB row is written with the correct user_id.
+    # Verified: recommendations.py:42-48 (trigger_refresh)
+    # Verified: recommender.py:71-88 (embedder calls + score merge)
+    # Verified: recommender.py:132-144 (paper_recommendations UPSERT)
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    user_a_id = contract_two_users.user_a_id
+    user_b_id = contract_two_users.user_b_id
+
+    # Seed two candidate papers
+    paper_candidate_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('refresh-cand-01', 'arxiv', 'Candidate Paper', '{}', 'https://r.test/1')
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('refresh-cand-02', 'arxiv', 'Other User Paper', '{}', 'https://r.test/2')""",
+    )
+
+    # Seed starred paper for user A
+    starred_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('refresh-starred-01', 'arxiv', 'Starred Paper', '{}', 'https://r.test/s')
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_user_state (paper_id, user_id, state, starred)
+           VALUES ($1, $2, 'to_read', TRUE)
+           ON CONFLICT (paper_id, user_id) DO UPDATE SET starred = TRUE""",
+        starred_paper_id,
+        user_a_id,
+    )
+
+    # Stub embedder: discover_from_seeds returns score for candidate paper
+    stub_embedder = MagicMock()
+    stub_embedder.discover_from_seeds = AsyncMock(
+        return_value=[{"paper_id": paper_candidate_id, "score": 0.85}]
+    )
+    stub_embedder.search_similar = AsyncMock(return_value=[])
+    _pi_app.state.embedder = stub_embedder
+
+    async with _client(_pi_app, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/recommendations/refresh")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from refresh; got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    assert body.get("refreshed", 0) >= 1, f"Expected at least 1 refreshed; got {body}"
+
+    # DB must have a row for user A with the candidate paper
+    row = await contract_conn.fetchrow(
+        "SELECT score, user_id FROM paper_recommendations WHERE paper_id = $1 AND user_id = $2",
+        paper_candidate_id,
+        user_a_id,
+    )
+    assert row is not None, "paper_recommendations must have a row for user_a after refresh"
+    assert row["score"] >= 0.25, f"Score must be >= _MIN_SCORE=0.25; got {row['score']}"
+    assert row["user_id"] == user_a_id, "Row must be scoped to user A"
+
+    # User B must have NO row for this paper
+    other = await contract_conn.fetchrow(
+        "SELECT 1 FROM paper_recommendations WHERE paper_id = $1 AND user_id = $2",
+        paper_candidate_id,
+        user_b_id,
+    )
+    assert other is None, "User B must not have a recommendation row seeded by user A's refresh"

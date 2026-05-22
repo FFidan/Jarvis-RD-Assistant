@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-import httpx
 from unittest.mock import AsyncMock, patch
 from jarvis_common.testing import SharedConnPool
 
@@ -78,38 +77,35 @@ async def admin_client(contract_conn):
     reach the shared transactional connection.  Disables the rate limiter.
     Patches send_magic_link to avoid SMTP boundary.
     """
-    from paper_ingestion.main import app
-    from paper_ingestion.deps import get_db_pool
     from jarvis_common import verify_api_key
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     admin_user_id, admin_cookie = await _seed_admin_user(contract_conn)
-
     shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
     app.state.limiter.enabled = False
-
-    with patch("paper_ingestion.routers.admin.send_magic_link", new=AsyncMock(return_value=None)):
-        try:
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app),
-                base_url="http://test",
-                cookies={"jarvis_session": admin_cookie},
-            ) as client:
+    try:
+        with (
+            patch_app_state(app, {"db_pool": shared}),
+            patch_dependency_overrides(
+                app,
+                set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None},
+            ),
+            patch(
+                "paper_ingestion.routers.admin.send_magic_link",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            async with make_contract_client(app, admin_cookie) as client:
                 client.admin_user_id = admin_user_id  # type: ignore[attr-defined]
                 yield client
-        finally:
-            if original_pool is None:
-                if hasattr(app.state, "db_pool"):
-                    del app.state.db_pool
-            else:
-                app.state.db_pool = original_pool
-            app.dependency_overrides.pop(get_db_pool, None)
-            app.dependency_overrides.pop(verify_api_key, None)
-            app.state.limiter.enabled = True
+    finally:
+        app.state.limiter.enabled = True
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
@@ -121,37 +117,31 @@ async def plain_client(contract_conn):
     doesn't short-circuit on 'no admins' — but for admin.py endpoints that
     guard is not present; the 403 comes purely from role != 'admin'.
     """
-    from paper_ingestion.main import app
-    from paper_ingestion.deps import get_db_pool
     from jarvis_common import verify_api_key
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     # Seed admin so the users table is not empty (session middleware needs it).
     await _seed_admin_user(contract_conn)
     _user_id, user_cookie = await _seed_plain_user(contract_conn, "plain-user-contract@example.com")
-
     shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
     app.state.limiter.enabled = False
-
     try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://test",
-            cookies={"jarvis_session": user_cookie},
-        ) as client:
-            yield client
+        with (
+            patch_app_state(app, {"db_pool": shared}),
+            patch_dependency_overrides(
+                app,
+                set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None},
+            ),
+        ):
+            async with make_contract_client(app, user_cookie) as client:
+                yield client
     finally:
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
         app.state.limiter.enabled = True
 
 
@@ -163,38 +153,36 @@ async def audit_admin_client(contract_conn):
     router-level ``dependencies=[Depends(verify_api_key), Depends(require_admin)]``.
     We override require_admin via dependency_overrides and pass X-API-Key.
     """
-    from paper_ingestion.main import app
-    from paper_ingestion.deps import get_db_pool
     from jarvis_common import verify_api_key
     from jarvis_common.auth import require_admin
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     async def _allow_all() -> None:
         return None
 
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[require_admin] = _allow_all
+    shared = SharedConnPool(contract_conn)
     app.state.limiter.enabled = False
-
     try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://test",
-        ) as client:
-            yield client
+        with (
+            patch_app_state(app, {"db_pool": shared}),
+            patch_dependency_overrides(
+                app,
+                set_overrides={
+                    get_db_pool: lambda: shared,
+                    verify_api_key: lambda: None,
+                    require_admin: _allow_all,
+                },
+            ),
+        ):
+            async with make_contract_client(app, None) as client:
+                yield client
     finally:
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
-        app.dependency_overrides.pop(require_admin, None)
         app.state.limiter.enabled = True
 
 

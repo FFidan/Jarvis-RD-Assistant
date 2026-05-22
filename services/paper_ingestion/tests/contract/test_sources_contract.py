@@ -15,12 +15,21 @@ wrapped in a per-test rollback transaction).
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _sources_pool(contract_conn):
+    """SharedConnPool wrapping the per-test contract connection."""
+    from jarvis_common.testing import SharedConnPool
+
+    return SharedConnPool(contract_conn)
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +52,7 @@ def _build_admin_request(user_id: int = 1):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_source_config_update_inserts_new_row(contract_conn):
+async def test_source_config_update_inserts_new_row(contract_conn, _sources_pool):
     """update_source_config inserts a new paper_sources row when none exists.
 
     Collapses: test_update_source_config_upserts_when_row_absent (mock SQL
@@ -52,13 +61,12 @@ async def test_source_config_update_inserts_new_row(contract_conn):
     from unittest.mock import patch
 
     import paper_ingestion.routers.source_config as sc_router
-    from jarvis_common.testing import SharedConnPool
-
-    pool = SharedConnPool(contract_conn)
 
     with patch.object(sc_router, "get_source_class", return_value=object()):
         body = sc_router.SourceConfigBody(api_key="contract-key-001")
-        result = await sc_router.update_source_config("arxiv_contract_test_001", body, db_pool=pool)
+        result = await sc_router.update_source_config(
+            "arxiv_contract_test_001", body, db_pool=_sources_pool
+        )
 
     assert result == {"ok": True}
     row = await contract_conn.fetchrow(
@@ -71,7 +79,7 @@ async def test_source_config_update_inserts_new_row(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_source_config_update_merges_existing_row(contract_conn):
+async def test_source_config_update_merges_existing_row(contract_conn, _sources_pool):
     """update_source_config merges into an existing paper_sources row.
 
     The JSONB || operator must preserve pre-existing keys not mentioned in
@@ -82,9 +90,6 @@ async def test_source_config_update_merges_existing_row(contract_conn):
     from unittest.mock import patch
 
     import paper_ingestion.routers.source_config as sc_router
-    from jarvis_common.testing import SharedConnPool
-
-    pool = SharedConnPool(contract_conn)
 
     # Seed a row with a pre-existing key that must survive the merge.
     # Pass config as a native Python dict — asyncpg's JSONB codec auto-encodes it.
@@ -100,7 +105,9 @@ async def test_source_config_update_merges_existing_row(contract_conn):
 
     with patch.object(sc_router, "get_source_class", return_value=object()):
         body = sc_router.SourceConfigBody(api_key="new-s2-key")
-        result = await sc_router.update_source_config("s2_contract_test_002", body, db_pool=pool)
+        result = await sc_router.update_source_config(
+            "s2_contract_test_002", body, db_pool=_sources_pool
+        )
 
     assert result == {"ok": True}
     row = await contract_conn.fetchrow(
@@ -118,7 +125,7 @@ async def test_source_config_update_merges_existing_row(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_source_config_jsonb_is_stored_as_object_not_string(contract_conn):
+async def test_source_config_jsonb_is_stored_as_object_not_string(contract_conn, _sources_pool):
     """B-1b regression: JSONB arg must be a native dict to prevent double-encoding.
 
     Passes a real UPDATE through asyncpg. If the router were passing a
@@ -131,9 +138,6 @@ async def test_source_config_jsonb_is_stored_as_object_not_string(contract_conn)
     from unittest.mock import patch
 
     import paper_ingestion.routers.source_config as sc_router
-    from jarvis_common.testing import SharedConnPool
-
-    pool = SharedConnPool(contract_conn)
 
     # Seed a row first so the UPDATE path runs (not the INSERT fallback).
     await contract_conn.execute(
@@ -143,7 +147,7 @@ async def test_source_config_jsonb_is_stored_as_object_not_string(contract_conn)
 
     with patch.object(sc_router, "get_source_class", return_value=object()):
         body = sc_router.SourceConfigBody(api_key="double-encode-check", email="b@example.com")
-        await sc_router.update_source_config("oa_contract_test_003", body, db_pool=pool)
+        await sc_router.update_source_config("oa_contract_test_003", body, db_pool=_sources_pool)
 
     row = await contract_conn.fetchrow(
         "SELECT config FROM paper_sources WHERE source_type = $1",
@@ -167,7 +171,7 @@ async def test_source_config_jsonb_is_stored_as_object_not_string(contract_conn)
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_clear_cooldown_resets_source_health_row(contract_conn):
+async def test_clear_cooldown_resets_source_health_row(contract_conn, _sources_pool):
     """clear_source_cooldown UPDATE sets last_status=ok and clears cooldown_until.
 
     Collapses: test_clear_cooldown_resets_source_health (mock SQL assertion
@@ -176,9 +180,6 @@ async def test_clear_cooldown_resets_source_health_row(contract_conn):
     from unittest.mock import patch
 
     import paper_ingestion.routers.source_config as sc_router
-    from jarvis_common.testing import SharedConnPool
-
-    pool = SharedConnPool(contract_conn)
 
     # Seed a source_health row in "rate_limit" state with a future cooldown.
     await contract_conn.execute(
@@ -192,7 +193,7 @@ async def test_clear_cooldown_resets_source_health_row(contract_conn):
     request = _build_admin_request(user_id=1)
     with patch.object(sc_router, "get_source_class", return_value=object()):
         result = await sc_router.clear_source_cooldown(
-            "arxiv_contract_cooldown_004", request, db_pool=pool
+            "arxiv_contract_cooldown_004", request, db_pool=_sources_pool
         )
 
     assert result == {"ok": True}
@@ -218,7 +219,7 @@ async def test_clear_cooldown_resets_source_health_row(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_arxiv_run_history_inserted_on_success(contract_conn):
+async def test_arxiv_run_history_inserted_on_success(contract_conn, _sources_pool):
     """ArxivSource._insert_run_history writes a status='ok' row to source_run_history.
 
     Collapses: test_fetch_new_since_writes_run_history_on_success
@@ -233,17 +234,14 @@ async def test_arxiv_run_history_inserted_on_success(contract_conn):
     import respx
     from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
     from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ArxivSource
-    from jarvis_common.testing import SharedConnPool
 
     fixture = (
         __import__("pathlib").Path(__file__).parent.parent / "fixtures" / "arxiv_new_since.xml"
     ).read_bytes()
 
-    pool = SharedConnPool(contract_conn)
-
     config = PaperSourceConfig(id=1, source_type=SourceType.ARXIV, enabled=True, config={})
     client = httpx.AsyncClient()
-    source = ArxivSource(config, client, db_pool=pool)
+    source = ArxivSource(config, client, db_pool=_sources_pool)
 
     mock_limiter = AsyncMock()
     mock_limiter.acquire = AsyncMock()
@@ -276,7 +274,7 @@ async def test_arxiv_run_history_inserted_on_success(contract_conn):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_arxiv_run_history_inserted_on_rate_limit(contract_conn):
+async def test_arxiv_run_history_inserted_on_rate_limit(contract_conn, _sources_pool):
     """ArxivSource._insert_run_history writes a status='rate_limit' row on 429.
 
     Collapses: test_fetch_new_since_writes_run_history_on_429_with_cooldown
@@ -292,13 +290,10 @@ async def test_arxiv_run_history_inserted_on_rate_limit(contract_conn):
     import respx
     from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
     from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ArxivSource
-    from jarvis_common.testing import SharedConnPool
-
-    pool = SharedConnPool(contract_conn)
 
     config = PaperSourceConfig(id=1, source_type=SourceType.ARXIV, enabled=True, config={})
     client = httpx.AsyncClient()
-    source = ArxivSource(config, client, db_pool=pool)
+    source = ArxivSource(config, client, db_pool=_sources_pool)
 
     mock_limiter = AsyncMock()
     mock_limiter.acquire = AsyncMock()

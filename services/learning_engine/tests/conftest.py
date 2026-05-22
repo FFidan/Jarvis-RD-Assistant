@@ -110,6 +110,16 @@ async def _le_app(contract_conn):
         limiter.enabled = limiter_was_enabled
 
 
+# Composable contract-app fixture wiring the LE app to a FauxLiteLLMServer
+# sidecar. Yields (app, faux_server) for W2+ tests that need to script LLM
+# responses without touching real LiteLLM infrastructure.
+from jarvis_common.testing import (  # noqa: E402, F401
+    _make_le_contract_app_with_litellm_sidecar,
+)
+
+le_contract_app_with_litellm_sidecar = _make_le_contract_app_with_litellm_sidecar()
+
+
 @pytest.fixture()
 def mock_db():
     """Yield (pool, conn) tuple with mocked asyncpg pool."""

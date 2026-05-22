@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -794,3 +795,171 @@ def make_bot_config(**overrides: Any) -> Any:
     )
     defaults.update(overrides)
     return BotConfig(**defaults)
+
+
+# ---------------------------------------------------------------------------
+# ScriptedReranker — in-process DI seam replacing CrossEncoder (W0.3)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ScriptedReranker:
+    """In-process callable replacing CrossEncoder for test determinism.
+
+    Provides two interfaces so it can be injected at either layer:
+
+    1. **Async wrapper** (``rerank_chunks``) — drop-in for
+       ``EmbeddingSearchMixin.rerank_chunks`` via ``app.state.reranker``::
+
+           scripted = ScriptedReranker(scores=[0.9, 0.5, 0.1])
+           with patch_app_state(app, {"reranker": scripted}):
+               ...
+
+    2. **Sync CrossEncoder interface** (``predict``) — for patching the
+       underlying model via ``patch.object(reranker_module, "get_reranker",
+       return_value=scripted)``.
+
+    ``scores`` lists one float per chunk position.  Any chunk index beyond
+    the list length is scored ``0.0`` rather than raising ``IndexError``.
+    """
+
+    scores: list[float] = field(default_factory=list)
+
+    async def rerank_chunks(
+        self,
+        query: str,
+        chunks: list[dict],
+        top_k: int = 5,
+    ) -> list[dict]:
+        """Async wrapper mirroring ``EmbeddingSearchMixin.rerank_chunks``.
+
+        Verified signature at search.py:189 (query, chunks: list[dict], top_k).
+        Returns the top_k chunks sorted by their scripted score, descending.
+        """
+        ranked = sorted(
+            range(len(chunks)),
+            key=lambda i: self._score_at(i),
+            reverse=True,
+        )
+        return [chunks[i] for i in ranked[:top_k]]
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        """Sync interface mirroring ``sentence_transformers.CrossEncoder.predict``.
+
+        Returns one float per pair, in input order.
+        """
+        return [self._score_at(i) for i in range(len(pairs))]
+
+    def _score_at(self, i: int) -> float:
+        return self.scores[i] if 0 <= i < len(self.scores) else 0.0
+
+
+# ---------------------------------------------------------------------------
+# FauxLiteLLM fixtures  (W0.2 — unblock conversion of ~250 mock-unit tests
+#                        that currently patch("call_llm_structured"))
+# ---------------------------------------------------------------------------
+
+
+def _make_pi_contract_app_with_litellm_sidecar():
+    """Return a session-scoped fixture that wires the PI app to a FauxLiteLLMServer.
+
+    Yields ``(app, faux_server)`` so contract tests can both drive the HTTP API
+    and script LLM responses without touching real LiteLLM infrastructure.
+
+    Depends on ``_pi_app_with_pool`` (defined in
+    ``services/paper_ingestion/tests/conftest.py``) which wires the real DB
+    connection.  The faux server overrides ``LITELLM_BASE_URL`` so every call
+    to ``get_litellm_config()`` inside the app routes to the sidecar.
+
+    Future extension: a parallel ``_make_le_contract_app_with_litellm_sidecar``
+    can be added here with the same pattern once the LE app fixture is stable.
+    See §6.2 of docs/contracts/07-testing.md for the full rollout plan.
+    """
+    import pytest_asyncio
+
+    @pytest_asyncio.fixture(scope="function", loop_scope="session")
+    async def pi_contract_app_with_litellm_sidecar(_pi_app_with_pool, monkeypatch):
+        """Yield (app, faux_litellm_server) with LITELLM_BASE_URL pointed at the sidecar.
+
+        Usage in a contract test::
+
+            async def test_rag_answer(pi_contract_app_with_litellm_sidecar, contract_two_users):
+                app, faux = pi_contract_app_with_litellm_sidecar
+                faux.add_pydantic_response("smart", MyAnswer(text="hi", citations=[]))
+                async with make_contract_client(app, contract_two_users.cookie_a) as c:
+                    resp = await c.post("/api/ask", json={"question": "test"})
+                assert resp.status_code == 200
+        """
+        import instructor
+        import openai
+
+        from jarvis_common.testing_contract_apps import patch_app_state
+        from jarvis_common.testing_sidecars import FauxLiteLLMServer
+
+        async with FauxLiteLLMServer() as srv:
+            monkeypatch.setenv("LITELLM_BASE_URL", srv.url)
+            # Build an Instructor-patched AsyncOpenAI pointed at the faux server
+            # (mirrors app_factory.py:401 construction so Instructor mode is identical)
+            oc = instructor.from_openai(
+                openai.AsyncOpenAI(base_url=f"{srv.url}/v1", api_key="dummy"),
+                mode=instructor.Mode.JSON,
+            )
+            with patch_app_state(_pi_app_with_pool, {"openai_client": oc}):
+                yield _pi_app_with_pool, srv
+
+    return pi_contract_app_with_litellm_sidecar
+
+
+def _make_le_contract_app_with_litellm_sidecar():
+    """Same shape as _make_pi_contract_app_with_litellm_sidecar but for LE app.
+
+    Yields ``(app, faux_server)`` so LE contract tests can script LLM responses
+    via the FauxLiteLLMServer without touching real LiteLLM infrastructure.
+
+    Depends on ``_le_app`` (defined in
+    ``services/learning_engine/tests/conftest.py``) which wires the real DB
+    connection and standard LE collaborators.  The faux server overrides
+    ``LITELLM_BASE_URL`` so every call to ``get_litellm_config()`` inside the
+    app routes to the sidecar.
+    """
+    import pytest_asyncio
+
+    @pytest_asyncio.fixture(scope="function", loop_scope="session")
+    async def le_contract_app_with_litellm_sidecar(_le_app, monkeypatch):
+        """Yield (app, faux_litellm_server) with LITELLM_BASE_URL pointed at the sidecar.
+
+        Usage in a contract test::
+
+            async def test_card_gen(le_contract_app_with_litellm_sidecar, contract_two_users):
+                app, faux = le_contract_app_with_litellm_sidecar
+                faux.add_pydantic_response("smart", CardGenerationOutput(...))
+                async with make_contract_client(app, contract_two_users.cookie_a) as c:
+                    resp = await c.post("/api/generate", json={...})
+                assert resp.status_code == 202
+        """
+        import instructor
+        import openai
+
+        from jarvis_common.testing_contract_apps import patch_app_state
+        from jarvis_common.testing_sidecars import FauxLiteLLMServer
+
+        async with FauxLiteLLMServer() as srv:
+            monkeypatch.setenv("LITELLM_BASE_URL", srv.url)
+            oc = instructor.from_openai(
+                openai.AsyncOpenAI(base_url=f"{srv.url}/v1", api_key="dummy"),
+                mode=instructor.Mode.JSON,
+            )
+            # Patch both app.state.openai_client (for router deps) and
+            # learning_engine._state.svc.openai_client (for generate_cards_core
+            # which calls get_services().openai_client directly).
+            from learning_engine._state import reset_services as _le_reset_services  # noqa: PLC0415
+            from learning_engine._state import set_services as _le_set_services  # noqa: PLC0415
+
+            _le_set_services(openai_client=oc)
+            try:
+                with patch_app_state(_le_app, {"openai_client": oc}):
+                    yield _le_app, srv
+            finally:
+                _le_reset_services()
+
+    return le_contract_app_with_litellm_sidecar

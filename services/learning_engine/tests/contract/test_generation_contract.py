@@ -241,3 +241,231 @@ async def test_generate_endpoint_missing_paper_id_returns_422(
         f"Expected 422 for missing paper_id; got {resp.status_code}: {resp.text[:300]}"
     )
     mock_task.defer_async.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# W2.4 — LLM-sidecar contracts: card generation + anki export
+#
+# These contracts replace mock-unit patches of call_llm_structured in:
+#   test_card_generator.py (291 LOC)
+#   test_generation.py (5.9K)
+# ---------------------------------------------------------------------------
+
+
+async def test_generation_w2_card_gen_happy_path_via_faux_litellm(
+    le_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """CardGenerator.generate_cards produces cards when faux LiteLLM returns valid output.
+
+    # Verified: services/learning_engine/learning_engine/card_generator.py:252-313
+    # Survivor-of: test_card_generator.py mock-unit assertions patching call_llm_structured
+    """
+    from learning_engine.card_generator import CardGenerator
+    from learning_engine.card_models import CardGenerationOutput, CardOutput
+    from jarvis_common.llm_client import LiteLLMConfig
+
+    import httpx
+
+    app, faux = le_contract_app_with_litellm_sidecar
+
+    chunks = [
+        {
+            "id": 1,
+            "content": "Neural networks improve retrieval quality significantly.",
+            "page_number": 1,
+        }
+    ]
+    scripted = CardGenerationOutput(
+        cards=[
+            CardOutput(
+                card_type="concept",
+                front="What improves retrieval quality?",
+                back="Neural networks improve retrieval quality.",
+                evidence_quote="Neural networks improve retrieval quality significantly.",
+                page_number=1,
+            )
+        ]
+    )
+    faux.add_pydantic_response("smart", scripted)
+
+    cg = CardGenerator(
+        http_client=httpx.AsyncClient(),
+        litellm_config=LiteLLMConfig(base_url=faux.url),
+    )
+    result = await cg.generate_cards(
+        title="Retrieval Paper",
+        authors=["Author X"],
+        chunks=chunks,
+        openai_client=app.state.openai_client,
+        paper_id=None,
+        max_cards=1,
+        model="smart",
+    )
+
+    assert result["total_count"] >= 1, "LLM returned at least 1 card"
+    assert result["verified_count"] >= 1, "Evidence quote is in source text — must verify"
+    assert result["cards"][0]["card_type"] == "concept"
+    assert result["confidence"] in ("HIGH", "MEDIUM")
+
+
+async def test_generation_w2_card_gen_instructor_retry_exception_handled(
+    le_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """CardGenerator._call_llm_for_cards returns None when the LLM returns malformed JSON.
+
+    # Verified: services/learning_engine/learning_engine/card_generator.py:108-121
+    # Survivor-of: test_card_generator.py mock-unit InstructorRetryException tests
+    """
+    from learning_engine.card_generator import CardGenerator
+    from jarvis_common.llm_client import LiteLLMConfig
+    import httpx
+
+    app, faux = le_contract_app_with_litellm_sidecar
+
+    # Enqueue malformed JSON — Instructor will fail to parse it and raise
+    # InstructorRetryException (or ValidationError), which _call_llm_for_cards catches.
+    faux.add_response("smart", '{"cards": "this-is-wrong-not-a-list"}')
+
+    cg = CardGenerator(
+        http_client=httpx.AsyncClient(),
+        litellm_config=LiteLLMConfig(base_url=faux.url),
+    )
+    result = await cg.generate_cards(
+        title="Error Paper",
+        authors=["Author Y"],
+        chunks=[{"id": 1, "content": "Some content.", "page_number": 1}],
+        openai_client=app.state.openai_client,
+        paper_id=None,
+        max_cards=3,
+        model="smart",
+    )
+
+    # _call_llm_for_cards returned None → _empty_result() → 0 cards, LOW confidence
+    assert result["total_count"] == 0, "Malformed LLM output must produce empty result"
+    assert result["confidence"] == "LOW"
+
+
+async def test_generation_w2_anki_export_shape_correct(
+    le_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """GET /api/export/anki/{deck_id} returns .apkg bytes for a deck with cards.
+
+    # Verified: services/learning_engine/learning_engine/routers/export.py:17-80
+    # Survivor-of: test_export.py mock-unit assertions on AnkiExporter.export_deck
+    """
+    from jarvis_common.testing_contract_apps import make_contract_client
+
+    app, faux = le_contract_app_with_litellm_sidecar
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('w2-anki@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)"
+        " VALUES ('w2-anki-01', 'arxiv', 'W2 Anki Paper', ARRAY['Author Z'], 'http://w2a', $1)"
+        " RETURNING id",
+        user_id,
+    )
+    deck_id = await contract_conn.fetchval(
+        "INSERT INTO decks (user_id, name) VALUES ($1, 'Anki Export Test Deck') RETURNING id",
+        user_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO cards (deck_id, paper_id, card_type, front, back, user_id)"
+        " VALUES ($1, $2, 'concept', 'What is BERT?', 'A bidirectional encoder.', $3)",
+        deck_id,
+        paper_id,
+        user_id,
+    )
+
+    session_id = await contract_conn.fetchval(
+        "INSERT INTO sessions (user_id, expires_at) VALUES ($1, NOW() + INTERVAL '1 hour') RETURNING id",
+        user_id,
+    )
+    cookie = str(session_id)
+
+    async with make_contract_client(app, cookie) as c:
+        resp = await c.get(f"/api/export/anki/{deck_id}")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 for anki export, got {resp.status_code}: {resp.text[:300]}"
+    )
+    content_type = resp.headers.get("content-type", "")
+    assert "octet-stream" in content_type or "zip" in content_type, (
+        f"Expected binary content-type for .apkg; got {content_type}"
+    )
+    assert len(resp.content) > 0, ".apkg response must have non-zero bytes"
+
+
+async def test_generation_w2_deck_create_persists_cards(
+    le_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """generate_cards_core persists LLM-generated cards to DB under real transaction.
+
+    # Verified: services/learning_engine/learning_engine/routers/generation.py:43-192
+    # Survivor-of: test_generation.py mock-unit assertions on generate_cards_core DB inserts
+    """
+    from learning_engine.routers.generation import generate_cards_core
+    from learning_engine.card_models import CardGenerationOutput, CardOutput
+    from jarvis_common.llm_client import LiteLLMConfig
+    from learning_engine.card_generator import CardGenerator
+    import httpx
+
+    app, faux = le_contract_app_with_litellm_sidecar
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('w2-deck-persist@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)"
+        " VALUES ('w2-deck-01', 'arxiv', 'W2 Deck Paper', ARRAY['Author Q'], 'http://w2d', $1)"
+        " RETURNING id",
+        user_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content)"
+        " VALUES ($1, 0, 'Attention mechanism enables parallel processing in transformers.')",
+        paper_id,
+    )
+    deck_id = await contract_conn.fetchval(
+        "INSERT INTO decks (user_id, name) VALUES ($1, 'W2 Persist Deck') RETURNING id",
+        user_id,
+    )
+
+    scripted = CardGenerationOutput(
+        cards=[
+            CardOutput(
+                card_type="concept",
+                front="What enables parallel processing in transformers?",
+                back="The attention mechanism.",
+                evidence_quote="Attention mechanism enables parallel processing in transformers.",
+                page_number=1,
+            )
+        ]
+    )
+    faux.add_pydantic_response("smart", scripted)
+
+    cg = CardGenerator(
+        http_client=httpx.AsyncClient(),
+        litellm_config=LiteLLMConfig(base_url=faux.url),
+    )
+    result = await generate_cards_core(
+        pool=app.state.db_pool,
+        http_client=httpx.AsyncClient(),
+        paper_id=paper_id,
+        deck_id=deck_id,
+        max_cards=1,
+        card_generator=cg,
+        user_id=user_id,
+    )
+
+    assert result["cards_created"] >= 1, "At least one card must be persisted to DB"
+    count = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM cards WHERE deck_id = $1 AND paper_id = $2", deck_id, paper_id
+    )
+    assert count >= 1, "Card row must exist in DB after generate_cards_core"

@@ -16,7 +16,6 @@ and that the scoping SQL correctly filters by user_id.
 from __future__ import annotations
 
 import pytest
-import httpx
 import pytest_asyncio
 from unittest.mock import AsyncMock
 from jarvis_common.testing import SharedConnPool
@@ -40,53 +39,42 @@ async def pi_settings_client(contract_conn, contract_two_users):
     ``set_config`` calls it directly (not via Depends), so dependency_overrides
     cannot intercept it — same technique as the mock-unit _app fixture.
     """
-    from paper_ingestion.main import app
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.routers import settings as _settings_mod
     from jarvis_common import verify_api_key
     from jarvis_common.auth import require_admin
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+    from paper_ingestion.routers import settings as _settings_mod
 
     async def _allow_all(request=None) -> None:  # noqa: ARG001
         return None
 
     shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    _orig_require_admin = _settings_mod.require_admin
-
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[require_admin] = _allow_all
-    _settings_mod.require_admin = _allow_all
     # Idiomatic mock carve-out: set_config reads request.app.state.http_client for
     # the LiteLLM model-validation probe (outbound HTTP — never touches the DB).
-    original_http = getattr(app.state, "http_client", None)
-    app.state.http_client = AsyncMock()
-    # Disable rate limiter for contract tests.
+    _orig_require_admin = _settings_mod.require_admin
+    _settings_mod.require_admin = _allow_all
     app.state.limiter.enabled = False
-
     try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://test",
-            cookies={"jarvis_session": contract_two_users.cookie_a},
-        ) as client:
-            yield client
+        with (
+            patch_app_state(app, {"db_pool": shared, "http_client": AsyncMock()}),
+            patch_dependency_overrides(
+                app,
+                set_overrides={
+                    get_db_pool: lambda: shared,
+                    verify_api_key: lambda: None,
+                    require_admin: _allow_all,
+                },
+            ),
+        ):
+            async with make_contract_client(app, contract_two_users.cookie_a) as client:
+                yield client
     finally:
         _settings_mod.require_admin = _orig_require_admin
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        if original_http is None:
-            if hasattr(app.state, "http_client"):
-                del app.state.http_client
-        else:
-            app.state.http_client = original_http
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
-        app.dependency_overrides.pop(require_admin, None)
         app.state.limiter.enabled = True
 
 
@@ -325,3 +313,240 @@ async def test_put_telegram_owner_chat_id_null_clears(contract_conn, pi_settings
     )
     assert resp.status_code == 200, f"PUT telegram null failed: {resp.json()}"
     assert resp.json()["value"] is None
+
+
+# ---------------------------------------------------------------------------
+# W1A.4 — settings/ai contract tests
+#
+# Verified: routers/settings_ai.py:60-77   (GET /api/settings/ai)
+# Verified: routers/settings_ai.py:80-99   (POST /api/settings/ai)
+# Verified: routers/settings_ai.py:102-104 (POST /api/settings/ai/redetect)
+# Verified: routers/settings_ai.py:107-127 (POST /api/settings/ai/dismiss-banner)
+# Verified: services/ai_settings.py:140-220 (resolve_candidates_for_tier)
+# Verified: services/ai_settings.py:229-238 (candidate_is_allowed)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _ai_settings_client(contract_conn, tmp_path_factory):
+    """ASGI client wired for /api/settings/ai endpoints.
+
+    - SharedConnPool for dismiss-banner DB writes (within per-test txn).
+    - require_admin patched in the settings_ai module namespace (it is a *local*
+      function from paper_ingestion.routers.admin, not jarvis_common.auth, so
+      dependency_overrides cannot intercept it; direct attribute patch required).
+    - A minimal llm-tier-candidates.yaml with one valid ge-48 ollama candidate
+      (qwen3:14b — tier=2, assignable=True, smart role — present in catalog).
+    - observed_share stubbed to avoid Langfuse/LiteLLM HTTP calls.
+    """
+    from unittest.mock import MagicMock
+
+    from jarvis_common import verify_api_key
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+    from paper_ingestion.routers import settings_ai as _sai_mod
+
+    # Minimal candidates overlay: one valid ge-48 catalog-backed ollama entry.
+    tmp_path = tmp_path_factory.mktemp("ai_settings_contract")
+    config_path = tmp_path / "llm-tier-candidates.yaml"
+    config_path.write_text(
+        "generated_from: test-bench.md\n"
+        "tiers:\n"
+        "  ge-48:\n"
+        "    candidates:\n"
+        "      - backend: ollama\n"
+        "        model: qwen3:14b\n"
+        "        rank: 1\n"
+        "        score: 90\n"
+        "        evidence: bench\n"
+        "        reasoning: catalog-backed contract test candidate\n"
+    )
+
+    async def _allow_admin(request=None) -> None:  # noqa: ARG001
+        return None
+
+    # require_admin in settings_ai.py is imported from paper_ingestion.routers.admin
+    # (not jarvis_common.auth), so we must override that specific function object.
+    from paper_ingestion.routers.admin import require_admin as _pi_require_admin
+
+    shared = SharedConnPool(contract_conn)
+    _orig_config_path = _sai_mod._CONFIG_PATH
+    _orig_observed_share = _sai_mod.observed_share
+    _sai_mod._CONFIG_PATH = config_path
+    _sai_mod.observed_share = lambda _role: ("ollama/qwen3:14b", 0.95)
+    app.state.limiter.enabled = False
+    try:
+        with (
+            patch_app_state(app, {"db_pool": shared, "http_client": MagicMock()}),
+            patch_dependency_overrides(
+                app,
+                set_overrides={
+                    get_db_pool: lambda: shared,
+                    verify_api_key: lambda: None,
+                    _pi_require_admin: _allow_admin,
+                },
+            ),
+        ):
+            async with make_contract_client(app, None) as client:
+                yield client
+    finally:
+        _sai_mod._CONFIG_PATH = _orig_config_path
+        _sai_mod.observed_share = _orig_observed_share
+        app.state.limiter.enabled = True
+
+
+# ---------------------------------------------------------------------------
+# test_settings_ai_get_returns_resolved_candidates
+# Verified: routers/settings_ai.py:60-77 (get_ai_settings)
+# Verified: services/ai_settings.py:140-220 (resolve_candidates_for_tier)
+# Survivor-of: test_settings_ai.py::test_get_settings_ai_returns_catalog_backed_candidates
+# ---------------------------------------------------------------------------
+
+
+async def test_settings_ai_get_returns_resolved_candidates(_ai_settings_client, monkeypatch):
+    """GET /api/settings/ai returns the resolved candidates list for the hw tier.
+
+    Exercises the real resolve_candidates_for_tier path against the catalog.
+    The response must include hw_tier, recommended_backend/model, and at least
+    one candidate with catalog_id populated.
+
+    # Verified: routers/settings_ai.py:60-77
+    # Verified: services/ai_settings.py:195-220 (catalog-backed candidate assembly)
+    """
+    monkeypatch.setenv("JARVIS_HW_TIER", "ge-48")
+
+    resp = await _ai_settings_client.get("/api/settings/ai")
+
+    assert resp.status_code == 200, f"GET /api/settings/ai failed: {resp.text}"
+    body = resp.json()
+    assert body["hw_tier"] == "ge-48"
+    assert body["recommended_backend"] == "ollama"
+    assert body["recommended_model"] == "qwen3:14b"
+    candidates = body["candidates_for_tier"]
+    assert len(candidates) >= 1, "Must return at least one resolved candidate"
+    top = candidates[0]
+    assert top["catalog_id"] == "qwen3:14b", (
+        f"First candidate must be catalog-backed with catalog_id='qwen3:14b'; got {top!r}"
+    )
+    assert top["source"] == "catalog"
+
+
+# ---------------------------------------------------------------------------
+# test_settings_ai_post_rejects_non_candidate_model
+# Verified: routers/settings_ai.py:80-99 (apply_ai_settings 422 branch)
+# Verified: services/ai_settings.py:229-238 (candidate_is_allowed)
+# Survivor-of: test_settings_ai.py::test_post_settings_ai_rejects_random_non_candidate_model
+# ---------------------------------------------------------------------------
+
+
+async def test_settings_ai_post_rejects_non_candidate_model(_ai_settings_client, monkeypatch):
+    """POST /api/settings/ai with a model not in candidates_for_tier returns 422.
+
+    candidate_is_allowed (services/ai_settings.py:229-238) must reject the
+    request before _APPLIER.apply is called.  The detail message must reference
+    'candidates_for_tier'.
+
+    # Verified: routers/settings_ai.py:87-93 (HTTPException 422 branch)
+    # Verified: services/ai_settings.py:229-238 (candidate_is_allowed returns False)
+    """
+    monkeypatch.setenv("JARVIS_HW_TIER", "ge-48")
+
+    resp = await _ai_settings_client.post(
+        "/api/settings/ai",
+        json={"backend": "ollama", "model": "not-in-catalog:latest"},
+    )
+
+    assert resp.status_code == 422, (
+        f"Expected 422 for non-candidate model; got {resp.status_code}: {resp.text}"
+    )
+    detail = resp.json().get("detail", "")
+    assert "candidates_for_tier" in detail, (
+        f"422 detail must mention 'candidates_for_tier'; got: {detail!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_settings_ai_redetect_refreshes_overlay
+# Verified: routers/settings_ai.py:102-104 (redetect_hw → get_ai_settings)
+# Survivor-of: test_settings_ai.py::test_redetect_returns_settings
+# ---------------------------------------------------------------------------
+
+
+async def test_settings_ai_redetect_refreshes_overlay(_ai_settings_client, monkeypatch):
+    """POST /api/settings/ai/redetect returns AISettingsResponse with the active tier.
+
+    Confirms the redetect route delegates to get_ai_settings() and reflects the
+    current JARVIS_HW_TIER without requiring the caller to hit GET first.
+
+    # Verified: routers/settings_ai.py:102-104 (redetect_hw)
+    # Verified: routers/settings_ai.py:55-57 (_effective_tier reads JARVIS_HW_TIER env)
+    """
+    monkeypatch.setenv("JARVIS_HW_TIER", "ge-48")
+
+    resp = await _ai_settings_client.post("/api/settings/ai/redetect")
+
+    assert resp.status_code == 200, f"POST /api/settings/ai/redetect failed: {resp.text}"
+    body = resp.json()
+    assert body["hw_tier"] == "ge-48"
+    candidates = body["candidates_for_tier"]
+    assert any(c["model"] == "qwen3:14b" for c in candidates), (
+        f"Redetect must return the ge-48 overlay candidate 'qwen3:14b'; got {candidates!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_settings_ai_dismiss_banner_persists_per_user
+# Verified: routers/settings_ai.py:107-127 (dismiss_banner)
+# Verified: db/init.sql:1222-1233 (system_events schema, category='config')
+# Survivor-of: test_settings_ai.py::test_dismiss_banner_inserts_event (mock-unit)
+# ---------------------------------------------------------------------------
+
+
+async def test_settings_ai_dismiss_banner_persists_per_user(contract_conn, _ai_settings_client):
+    """POST /api/settings/ai/dismiss-banner inserts a real system_events row.
+
+    Exercises the INSERT INTO system_events path against the live DB schema.
+    The contract layer is the only place that can verify the row actually landed
+    in system_events (test_settings_ai.py mocks conn.execute and checks args).
+
+    # Verified: routers/settings_ai.py:115-127 (pool.acquire + conn.execute INSERT)
+    # Verified: db/init.sql:1222-1233 (system_events: level, category, source, message, context)
+    """
+    banner_kind = "hw-upgrade-available"
+
+    resp = await _ai_settings_client.post(
+        "/api/settings/ai/dismiss-banner",
+        json={"banner_kind": banner_kind},
+    )
+
+    assert resp.status_code == 200, f"dismiss-banner failed: {resp.text}"
+    assert resp.json() == {"ok": True}
+
+    row = await contract_conn.fetchrow(
+        """SELECT level, category, source, message, context
+           FROM system_events
+           WHERE source = 'settings_ai'
+           ORDER BY id DESC
+           LIMIT 1"""
+    )
+    assert row is not None, "dismiss-banner must INSERT a row into system_events"
+    assert row["level"] == "info"
+    assert row["category"] == "config"
+    assert row["source"] == "settings_ai"
+    assert banner_kind in row["message"], (
+        f"message must contain the banner_kind '{banner_kind}'; got {row['message']!r}"
+    )
+    # asyncpg may return JSONB as a dict or as a JSON string depending on codec
+    # registration; normalise to dict before asserting.
+    import json as _json
+
+    ctx = row["context"]
+    ctx_dict = ctx if isinstance(ctx, dict) else _json.loads(ctx)
+    assert ctx_dict.get("banner_kind") == banner_kind, (
+        f"context jsonb must include banner_kind='{banner_kind}'; got {ctx_dict!r}"
+    )

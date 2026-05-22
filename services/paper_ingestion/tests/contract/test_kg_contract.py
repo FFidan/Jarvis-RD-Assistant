@@ -361,3 +361,525 @@ async def test_e1_kg_nonexistent_entity_detail_returns_404(
     assert resp.status_code in (403, 404), (
         f"Expected 403/404 for non-existent entity; got {resp.status_code}"
     )
+
+
+# ---------------------------------------------------------------------------
+# W1A.2 extensions — extract-entities endpoint + kg_query user-scoping
+#
+# Contract 1: POST /api/extract-entities/{paper_id} triggers Qdrant collection
+#             creation with the configured embedding dimension (FauxQdrant).
+# Contract 2: POST /api/extract-entities/{paper_id} persists paper_entities
+#             scoped to the calling user (two-user IDOR proof).
+# Contract 3: GET /api/knowledge-graph/query?q=... returns only caller-scoped
+#             entities (SQL user-scoped generic branch).
+#
+# Verified: knowledge_graph.py:91-130 extract_entities handler
+# Verified: extraction/entities.py:88-112 _ensure_kg_collection
+# Verified: extraction/entities.py:272-492 extract_entities_for_paper
+# Verified: knowledge_graph.py:379-390 kg_query handler
+# Verified: extraction/entities.py:637-783 query_knowledge_graph
+# ---------------------------------------------------------------------------
+
+
+async def test_kg_build_collection_created_with_correct_dimension():
+    """_ensure_kg_collection creates the kg_entities Qdrant collection with the
+    embedding dimension from PaperIngestionSettings (default 2560).
+
+    Exercises the Qdrant boundary adapter directly — no HTTP endpoint needed.
+    The session-scoped Postgres contract pool is intentionally NOT required here
+    because the collection-creation path is purely an in-memory Qdrant operation.
+
+    # Verified: extraction/entities.py:88-112 _ensure_kg_collection
+    # Verified: config.py:95-98 embedding_dimension default = 2560
+    """
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion.config import get_paper_ingestion_settings
+    from paper_ingestion.extraction.entities import KG_COLLECTION, _ensure_kg_collection
+
+    faux_qdrant = FauxQdrantClient()
+    expected_dim = get_paper_ingestion_settings().embedding_dimension
+
+    # PRE-condition: collection does not exist yet
+    assert not await faux_qdrant.collection_exists(KG_COLLECTION), (
+        "FauxQdrantClient must start empty"
+    )
+
+    await _ensure_kg_collection(faux_qdrant)
+
+    # ASSERT: collection created with correct dimension
+    assert await faux_qdrant.collection_exists(KG_COLLECTION), (
+        f"_ensure_kg_collection must create '{KG_COLLECTION}'"
+    )
+    col_info = await faux_qdrant.get_collection(collection_name=KG_COLLECTION)
+    actual_dim = col_info.config.params.vectors.size
+    assert actual_dim == expected_dim, (
+        f"Collection dimension must equal settings.embedding_dimension={expected_dim}; "
+        f"got {actual_dim}"
+    )
+
+    # IDEMPOTENCY: calling again on existing collection with correct dim must not raise
+    await _ensure_kg_collection(faux_qdrant)
+
+
+async def test_kg_extract_entities_persists_user_scoped(
+    contract_two_users,
+    contract_conn,
+    pi_contract_app_with_litellm_sidecar,
+    _configure_api_key,
+):
+    """POST /api/extract-entities/{paper_id} stamps paper_entities rows with the
+    calling user's user_id; user B cannot see those rows.
+
+    # Verified: knowledge_graph.py:102-114 extract_entities passes user_id to helper
+    # Verified: extraction/entities.py:398-410 paper_entities INSERT with user_id=$4
+    """
+    from paper_ingestion._state import set_services
+    from jarvis_common.testing_contract_apps import patch_app_state
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion.extraction.kg_models import (
+        KGEntityCandidate,
+        KGExtractionOutput,
+    )
+
+    app, faux_litellm = pi_contract_app_with_litellm_sidecar
+
+    # Seed paper + chunks owned by user A
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('kg-w1a2-extract', 'arxiv', 'Entity Extraction Test', ARRAY['Author'],
+                   'https://kg-w1a2.test/paper', $1)
+           RETURNING id""",
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_chunks
+               (paper_id, chunk_index, content, page_number, start_char, end_char)
+           VALUES ($1, 0, 'Transformer method improves GLUE dataset results.', 1, 0, 49)""",
+        paper_id,
+    )
+
+    # Script a response with one entity
+    faux_litellm.add_pydantic_response(
+        "fast",
+        KGExtractionOutput(
+            entities=[KGEntityCandidate(name="Transformer", type="method")],
+            relationships=[],
+        ),
+    )
+
+    import httpx
+
+    faux_qdrant = FauxQdrantClient()
+    set_services(openai_client=app.state.openai_client)
+    try:
+        async with httpx.AsyncClient() as http_client:
+            with patch_app_state(app, {"qdrant_client": faux_qdrant, "http_client": http_client}):
+                async with _make_client(app, contract_two_users.cookie_a) as c:
+                    resp = await c.post(f"/api/extract-entities/{paper_id}")
+    finally:
+        set_services(openai_client=None)
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from extract-entities; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+    # ASSERT: paper_entities row stamped with user_a_id
+    row_a = await contract_conn.fetchrow(
+        "SELECT user_id FROM paper_entities WHERE paper_id = $1 LIMIT 1",
+        paper_id,
+    )
+    assert row_a is not None, "paper_entities row must exist after extraction"
+    assert row_a["user_id"] == contract_two_users.user_a_id, (
+        f"paper_entities.user_id must equal caller's user_a_id={contract_two_users.user_a_id}; "
+        f"got {row_a['user_id']}"
+    )
+
+    # ASSERT: user B has no paper_entities rows for this paper (user-scoping invariant)
+    row_b = await contract_conn.fetchrow(
+        "SELECT 1 FROM paper_entities WHERE paper_id = $1 AND user_id = $2",
+        paper_id,
+        contract_two_users.user_b_id,
+    )
+    assert row_b is None, "User B must not have paper_entities rows for user A's extraction"
+
+
+async def test_kg_query_search_returns_user_scoped_entities(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """GET /api/knowledge-graph/query?q=... returns only entities from caller's KG.
+
+    Seeds one entity for user A and one for user B; queries as user A and verifies
+    user B's entity is absent.
+
+    # Verified: knowledge_graph.py:379-390 kg_query passes user_id to query_knowledge_graph
+    # Verified: extraction/entities.py:755-769 generic branch user_id IS NOT DISTINCT FROM
+    """
+    # Seed two entities — one per user
+    eid_a = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('kg-query-user-a-entity', 'kg-query-user-a-entity', 'concept', 1)
+           RETURNING id"""
+    )
+    eid_b = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('kg-query-user-b-entity', 'kg-query-user-b-entity', 'concept', 1)
+           RETURNING id"""
+    )
+    b_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('kg-query-b-paper', 'arxiv', 'B Query Paper', ARRAY['Author'],
+                   'https://kg-q-b.test/paper', $1)
+           RETURNING id""",
+        contract_two_users.user_b_id,
+    )
+    # Link entity A to user A's existing paper, entity B to user B's paper
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
+        contract_two_users.paper_id_a,
+        eid_a,
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
+        b_paper_id,
+        eid_b,
+        contract_two_users.user_b_id,
+    )
+
+    # Query as user A using the generic branch ("kg-query-user" matches both names)
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/knowledge-graph/query?q=kg-query-user")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from kg_query; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    names = [r.get("name") for r in body.get("results", [])]
+
+    assert "kg-query-user-a-entity" in names, (
+        f"User A's entity must appear in their query results; got names={names}"
+    )
+    assert "kg-query-user-b-entity" not in names, (
+        f"User B's entity must NOT appear in user A's query results; got names={names}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# W2.1 sidecar-backed KG boundary contracts
+#
+# Contract 1: _ensure_kg_collection creates kg_entities collection with correct
+#             dimension via FauxQdrant; paper_entities table populates correctly.
+# Contract 2: _embed_entity_text + _store_entity_embedding persist a vector
+#             via FauxOllamaServer(dimension=EMBEDDING_DIMENSION) into FauxQdrant.
+# Contract 3: FauxQdrant with wrong-dimension pre-seeded collection raises a
+#             clear RuntimeError (not a crash) from _ensure_kg_collection.
+# Contract 4: Two-user seeded entities — query_knowledge_graph returns only
+#             caller-scoped neighbors (SQL user_id scoping invariant).
+# Contract 5: extract_entities_for_paper LLM boundary via faux_litellm sidecar:
+#             pydantic response scripted, entities persisted in paper_entities.
+#
+# Verified: extraction/entities.py:88-112 _ensure_kg_collection
+# Verified: extraction/entities.py:115-129 _embed_entity_text
+# Verified: extraction/entities.py:167-203 _store_entity_embedding
+# Verified: extraction/entities.py:637-783 query_knowledge_graph
+# Verified: extraction/entities.py:272-492 extract_entities_for_paper
+# ---------------------------------------------------------------------------
+
+
+# Verified: extraction/entities.py:88-112 _ensure_kg_collection
+async def test_kg_w2_collection_setup_creates_with_correct_dimension_via_sidecar(
+    contract_conn,
+):
+    """FauxQdrant receives the correct embedding dimension; paper_entities row populates.
+
+    Combines two assertions:
+      (a) _ensure_kg_collection creates kg_entities at EMBEDDING_DIMENSION (2560)
+      (b) paper_entities schema accepts a seeded row — exercising the full table contract.
+    """
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion.extraction.entities import KG_COLLECTION, _ensure_kg_collection
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
+    faux_qdrant = FauxQdrantClient()
+
+    # PRE: collection must not exist
+    assert not await faux_qdrant.collection_exists(KG_COLLECTION)
+
+    await _ensure_kg_collection(faux_qdrant)
+
+    # ASSERT (a): correct dimension
+    col_info = await faux_qdrant.get_collection(collection_name=KG_COLLECTION)
+    assert col_info.config.params.vectors.size == EMBEDDING_DIMENSION, (
+        f"kg_entities must be created with dim={EMBEDDING_DIMENSION}; "
+        f"got {col_info.config.params.vectors.size}"
+    )
+
+    # ASSERT (b): paper_entities schema: seed a row and read it back within the txn
+    entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('w2-dim-test-entity', 'w2-dim-test-entity', 'concept', 1)
+           RETURNING id"""
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('kg-w2-dim-paper', 'arxiv', 'W2 Dim Test Paper', ARRAY['A'],
+                   'https://w2-dim.test/paper')
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_entities (paper_id, entity_id) VALUES ($1, $2)",
+        paper_id,
+        entity_id,
+    )
+    row = await contract_conn.fetchrow(
+        "SELECT entity_id FROM paper_entities WHERE paper_id = $1",
+        paper_id,
+    )
+    assert row is not None, "paper_entities row must be readable after insert"
+    assert row["entity_id"] == entity_id
+
+
+# Verified: extraction/entities.py:115-129 _embed_entity_text
+# Verified: extraction/entities.py:167-203 _store_entity_embedding
+async def test_kg_w2_entity_embed_through_faux_ollama_persists_vector(
+    contract_conn,
+    monkeypatch,
+):
+    """_embed_entity_text calls embed_texts; _store_entity_embedding persists to Qdrant.
+
+    Full boundary: FauxOllamaServer returns a deterministic 2560-dim vector;
+    _store_entity_embedding upserts it to FauxQdrant and records embedding_id in DB.
+    """
+    import httpx
+
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.extraction.entities import KG_COLLECTION, _store_entity_embedding
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
+
+    # Seed an entity row inside the per-test transaction
+    entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('w2-embed-entity', 'w2-embed-entity', 'method', 1)
+           RETURNING id"""
+    )
+
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+        async with httpx.AsyncClient() as http_client:
+            faux_qdrant = FauxQdrantClient()
+            embedder = Embedder(http_client, faux_qdrant)
+            await embedder.ensure_collection()
+
+            # Produce embedding for the entity text
+            vectors = await embedder.embed_texts(["method: w2-embed-entity"])
+            assert len(vectors) == 1 and len(vectors[0]) == EMBEDDING_DIMENSION, (
+                f"embed_texts must return one {EMBEDDING_DIMENSION}-dim vector; "
+                f"got {len(vectors)} vectors of dim {len(vectors[0]) if vectors else 'N/A'}"
+            )
+            embedding = vectors[0]
+
+            # Pre-create kg_entities collection so _store_entity_embedding can upsert
+            from qdrant_client.models import Distance, VectorParams  # noqa: PLC0415
+
+            await faux_qdrant.create_collection(
+                collection_name=KG_COLLECTION,
+                vectors_config=VectorParams(size=EMBEDDING_DIMENSION, distance=Distance.COSINE),
+            )
+
+            await _store_entity_embedding(
+                contract_conn, faux_qdrant, entity_id, "w2-embed-entity", "method", embedding
+            )
+
+    # ASSERT: vector was persisted in FauxQdrant (at least 1 point in kg_entities)
+    count_result = await faux_qdrant.count(collection_name=KG_COLLECTION)
+    assert count_result.count == 1, (
+        f"FauxQdrant kg_entities must have 1 point after _store_entity_embedding; "
+        f"got {count_result.count}"
+    )
+
+    # ASSERT: embedding_id was written to the entities row in Postgres
+    row = await contract_conn.fetchrow("SELECT embedding_id FROM entities WHERE id = $1", entity_id)
+    assert row is not None and row["embedding_id"] is not None, (
+        f"entities.embedding_id must be populated after _store_entity_embedding; got {row!r}"
+    )
+
+
+# Verified: extraction/entities.py:88-112 _ensure_kg_collection
+# Verified: ingestion/embedding_config.py:90-106 raise_for_collection_dimension_mismatch
+async def test_kg_w2_dimension_mismatch_returns_graceful_error():
+    """_ensure_kg_collection raises RuntimeError (not crash) for wrong-dimension collection.
+
+    FauxQdrant pre-seeded with dim=1024 collection; prod expects EMBEDDING_DIMENSION=2560.
+    Verifies the graceful error path (raise_for_collection_dimension_mismatch) fires.
+    """
+    import pytest as _pytest
+
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion.extraction.entities import KG_COLLECTION, _ensure_kg_collection
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
+    faux_qdrant = FauxQdrantClient()
+
+    # Pre-seed a collection at the WRONG dimension (1024 != 2560)
+    wrong_dim = 1024
+    assert wrong_dim != EMBEDDING_DIMENSION, "test pre-condition: 1024 must differ from prod dim"
+
+    from qdrant_client.models import Distance, VectorParams  # noqa: PLC0415
+
+    await faux_qdrant.create_collection(
+        collection_name=KG_COLLECTION,
+        vectors_config=VectorParams(size=wrong_dim, distance=Distance.COSINE),
+    )
+
+    # ACT + ASSERT: must raise RuntimeError, not any other exception / crash
+    with _pytest.raises(RuntimeError, match="has dimension 1024"):
+        await _ensure_kg_collection(faux_qdrant)
+
+
+# Verified: extraction/entities.py:637-783 query_knowledge_graph generic branch
+async def test_kg_w2_similarity_lookup_returns_user_scoped_neighbors(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """GET /api/knowledge-graph/query returns only caller-user's entities.
+
+    Seeds a neighbor entity for user A and a separate entity for user B
+    (via paper_entities user_id); queries as user A and verifies user B's
+    entity is absent from the neighbors list (SQL user_id IS NOT DISTINCT FROM).
+    """
+    # Seed user A entity + paper_entities row
+    eid_a = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('w2-neighbor-a', 'w2-neighbor-a', 'method', 1)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
+        contract_two_users.paper_id_a,
+        eid_a,
+        contract_two_users.user_a_id,
+    )
+
+    # Seed user B entity + own paper
+    eid_b = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('w2-neighbor-b', 'w2-neighbor-b', 'method', 1)
+           RETURNING id"""
+    )
+    b_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('kg-w2-neighbor-b', 'arxiv', 'W2 B Neighbor Paper', ARRAY['B'],
+                   'https://w2-nb.test/paper', $1)
+           RETURNING id""",
+        contract_two_users.user_b_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
+        b_paper_id,
+        eid_b,
+        contract_two_users.user_b_id,
+    )
+
+    # Query as user A — "w2-neighbor" matches both, but only user A's should appear
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/knowledge-graph/query?q=w2-neighbor")
+
+    assert resp.status_code == 200, f"Expected 200; got {resp.status_code}: {resp.text[:300]}"
+    names = [r.get("name") for r in resp.json().get("results", [])]
+    assert "w2-neighbor-a" in names, (
+        f"User A's entity must appear in their neighbors; got names={names}"
+    )
+    assert "w2-neighbor-b" not in names, (
+        f"User B's entity must NOT appear in user A's neighbors; got names={names}"
+    )
+
+
+# Verified: extraction/entities.py:272-492 extract_entities_for_paper
+# Verified: extraction/entities.py:398-410 paper_entities INSERT with user_id=$4
+async def test_kg_w2_extract_entities_llm_boundary_via_faux_litellm(
+    contract_two_users,
+    contract_conn,
+    pi_contract_app_with_litellm_sidecar,
+    _configure_api_key,
+):
+    """POST /api/extract-entities/{paper_id} via faux LiteLLM sidecar persists entities.
+
+    The LLM boundary is exercised: faux_litellm.add_pydantic_response scripts a
+    KGExtractionOutput with one entity. After the call, asserts:
+      (a) paper_entities row exists with user_a_id
+      (b) entities table row exists for the scripted entity name
+    """
+    import httpx
+
+    from jarvis_common.testing_contract_apps import patch_app_state
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion._state import set_services
+    from paper_ingestion.extraction.kg_models import KGEntityCandidate, KGExtractionOutput
+
+    app, faux_litellm = pi_contract_app_with_litellm_sidecar
+
+    # Seed paper + chunk owned by user A
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('kg-w2-llm-bdy', 'arxiv', 'LLM Boundary Test W2', ARRAY['Author'],
+                   'https://kg-w2-llm.test/paper', $1)
+           RETURNING id""",
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_chunks
+               (paper_id, chunk_index, content, page_number, start_char, end_char)
+           VALUES ($1, 0, 'Transformer architecture was used for classification.', 1, 0, 52)""",
+        paper_id,
+    )
+
+    # Script LLM response: one entity named "Transformer"
+    faux_litellm.add_pydantic_response(
+        "fast",
+        KGExtractionOutput(
+            entities=[KGEntityCandidate(name="Transformer", type="method")],
+            relationships=[],
+        ),
+    )
+
+    faux_qdrant = FauxQdrantClient()
+    set_services(openai_client=app.state.openai_client)
+    try:
+        async with httpx.AsyncClient() as http_client:
+            with patch_app_state(app, {"qdrant_client": faux_qdrant, "http_client": http_client}):
+                async with _make_client(app, contract_two_users.cookie_a) as c:
+                    resp = await c.post(f"/api/extract-entities/{paper_id}")
+    finally:
+        set_services(openai_client=None)
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from extract-entities; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+    # ASSERT (a): paper_entities row with user_a_id
+    pe_row = await contract_conn.fetchrow(
+        "SELECT user_id FROM paper_entities WHERE paper_id = $1 LIMIT 1",
+        paper_id,
+    )
+    assert pe_row is not None, "paper_entities row must exist after extraction"
+    assert pe_row["user_id"] == contract_two_users.user_a_id, (
+        f"paper_entities.user_id must equal user_a_id={contract_two_users.user_a_id}; "
+        f"got {pe_row['user_id']}"
+    )
+
+    # ASSERT (b): entities table has the scripted entity
+    entity_row = await contract_conn.fetchrow(
+        "SELECT id FROM entities WHERE canonical_name = 'transformer' AND entity_type = 'method'"
+    )
+    assert entity_row is not None, (
+        "entities table must have a 'transformer'/'method' row after LLM boundary extraction"
+    )

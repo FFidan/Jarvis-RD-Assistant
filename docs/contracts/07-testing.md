@@ -344,10 +344,10 @@ These boundaries MAY be mocked in test code at the carve-out edge (typically in 
 | Boundary | Mock mechanism | Test population guarded |
 |---|---|---|
 | Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP; superseded where possible by faux-Ollama/LiteLLM sidecar (LIVE) | ~150 legacy tests, shrinking as sidecar survivors replace them |
-| Cross-encoder reranker (`rerank_chunks`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) | `AsyncMock` on `EmbeddingSearchMixin.rerank_chunks` | ~80 tests |
+| Cross-encoder reranker (`rerank_chunks`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) | **DI-seam'd via `ScriptedReranker`** (`jarvis_common.testing`) — deterministic in-process stand-in with scripted scores; legacy `AsyncMock` on `EmbeddingSearchMixin.rerank_chunks` still present, migrate on rot-on-touch | ~80 tests (shrinking as `ScriptedReranker` replaces per-test `AsyncMock`) |
 | Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant`; superseded where possible by faux-Qdrant sidecar (LIVE) | ~120 legacy tests, shrinking as sidecar survivors replace them |
 | `respx.mock` / `httpx_mock` for source HTTP | respx routes | ~200 tests (Zotero, S2, OpenAlex, arXiv, PubMed) |
-| `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client` | ~80 tests |
+| `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client` (LIVE — superseded by `FauxLiteLLMServer` sidecar for new non-streaming and Instructor-patched tests; legacy `MagicMock` path retained for error-path and Langfuse-specific tests) | ~80 tests |
 | Telegram Bot API (`bot.send_message`, `reply_text`, `Update`) | `make_telegram_update` + `AsyncMock` | ~120 tests |
 
 ### 5.2 Library boundaries
@@ -392,9 +392,28 @@ The codebase has ~2,000 pre-existing tests that violate §2 (mostly handler-bypa
 
 **Health metrics over time:** brittle implementation-coupled tests should trend down in touched files; survivor-cited recompositions should trend up; default collected count is an observation, not an acceptance gate.
 
-### 6.2 Faux-Ollama / faux-Qdrant sidecars (LIVE replacement path)
+### 6.2 Faux-Ollama / faux-Qdrant / faux-LiteLLM sidecars (LIVE replacement path)
 
 The recomposition closeout (§"What WOULD actually move the needle") identified that replacing mocked Ollama / Qdrant with deterministic sidecars would unlock cleaner coverage for those boundaries. That replacement path is now LIVE for the shared `testing_sidecars` infrastructure: new success-path Ollama/LiteLLM and Qdrant integration coverage MUST use the faux sidecars when the behavior under test is our HTTP/vector integration. Keep the §5.1 carve-outs for legacy tests and for boundary failures the sidecars do not model yet.
+
+**Available sidecars (as of W0.2, 2026-05-22):**
+
+| Sidecar | Module | Endpoints | Primary use |
+|---|---|---|---|
+| `FauxOllamaServer` | `jarvis_common.testing_sidecars.faux_ollama` | `POST /api/embed`, `POST /api/embeddings`, `POST /api/chat`, `POST /v1/embeddings`, `POST /v1/chat/completions` | Ollama-native embed + legacy chat tests |
+| `FauxQdrantClient` | `jarvis_common.testing_sidecars.faux_qdrant` | In-process Qdrant client shim | Vector search boundary tests |
+| `FauxLiteLLMServer` | `jarvis_common.testing_sidecars.faux_litellm` | `POST /v1/chat/completions` (streaming + non-streaming), `POST /v1/embeddings`, `GET /v1/models` | Instructor-patched `call_llm_structured` + `request_chat_completion_content` + `embed_texts` tests |
+
+**`FauxLiteLLMServer` scripting API:**
+- `add_response(model, content)` — enqueue a raw JSON string as `choices[0].message.content`
+- `add_pydantic_response(model, instance)` — serialize a Pydantic instance and enqueue
+- `add_error(model, status_code, detail)` — enqueue an HTTP error response
+- `add_stream_tokens(model, tokens)` — enqueue SSE streaming token list
+- `reset()` — clear all queues between tests
+
+**Fixture `pi_contract_app_with_litellm_sidecar`** (defined in `jarvis_common.testing`, exported via PI conftest) yields `(app, faux_server)` with `LITELLM_BASE_URL` pointed at the sidecar and `app.state.openai_client` replaced with an Instructor-patched client. Unblocks conversion of ~250 legacy `patch("call_llm_structured")` mock-units.
+
+A parallel `le_contract_app_with_litellm_sidecar` for the Learning Engine is a future extension — add via `_make_le_contract_app_with_litellm_sidecar()` following the same pattern in `jarvis_common.testing` once the LE app fixture stabilises.
 
 ### 6.3 What this contract does NOT defer
 

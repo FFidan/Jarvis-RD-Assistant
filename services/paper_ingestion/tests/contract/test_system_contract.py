@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-import httpx
 from jarvis_common.testing import SharedConnPool
 
 pytestmark = [
@@ -57,32 +56,28 @@ async def pi_test_client(contract_conn):
 
     Also bypasses verify_api_key and disables the rate limiter.
     """
-    from paper_ingestion.main import app
-    from paper_ingestion.deps import get_db_pool
     from jarvis_common import verify_api_key
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-
-    # BOTH overrides — mandatory for D5 system.py bypass routes:
-    app.state.db_pool = shared
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[verify_api_key] = lambda: None
     app.state.limiter.enabled = False
-
     try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            yield client
+        with (
+            patch_app_state(app, {"db_pool": shared}),
+            patch_dependency_overrides(
+                app,
+                set_overrides={get_db_pool: lambda: shared, verify_api_key: lambda: None},
+            ),
+        ):
+            async with make_contract_client(app, None) as client:
+                yield client
     finally:
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(verify_api_key, None)
         app.state.limiter.enabled = True
 
 

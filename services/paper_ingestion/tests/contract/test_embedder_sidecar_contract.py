@@ -83,3 +83,415 @@ async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatc
 
     assert {row["chunk_index"] for row in in_paper} == {0, 1}
     assert {row["paper_id"] for row in scoped_global} == {10}
+
+
+# ---------------------------------------------------------------------------
+# §W1A.4-REEMBED-01 — reembed_paper Qdrant failure rolls back DB
+#
+# Verified: scripts/reembed.py:622-667 (reembed_paper: Qdrant upsert first,
+#   DB update last; stale-point delete failure raises ScriptError before step 5)
+# Survivor-of: ~3-4 mock-units in test_reembed.py that patch DB/Qdrant with
+#   MagicMock and check call order
+# ---------------------------------------------------------------------------
+
+
+async def test_reembed_swap_atomicity_qdrant_failure_rolls_back_db(contract_conn, monkeypatch):
+    """reembed_paper must NOT update DB embedding_id when Qdrant delete fails.
+
+    The atomicity invariant (scripts/reembed.py:622-667):
+      step 3 upsert new Qdrant points → step 4 delete old Qdrant points →
+      step 5 update DB embedding_id + embedding_model (in a transaction).
+    If step 4 raises ScriptError (REEMBED_CONTINUE_ON_ERROR=false),
+    the exception propagates before step 5 executes.
+    DB row retains original embedding_id, so a retry can re-process the same
+    stale IDs deterministically.
+
+    SharedConnPool wraps the per-test txn connection so all DB reads and writes
+    are within the rollback boundary — no persistent state leak.
+
+    # Verified: scripts/reembed.py:631-645 (stale-point delete + ScriptError raise)
+    # Verified: scripts/reembed.py:648-668 (DB UPDATE in transaction — step 5)
+    """
+    import sys
+    from pathlib import Path
+
+    import httpx
+    import pytest as _pytest
+
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
+    # Seed paper + chunk with a known old embedding_id (within the test txn)
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('reembed-atom-01', 'arxiv', 'Atomicity Paper', '{}',
+                   'https://reembed.test/1')
+           RETURNING id"""
+    )
+    old_embed_id = "aaaaaaaa-0000-0000-0000-000000000001"
+    chunk_db_id = await contract_conn.fetchval(
+        """INSERT INTO paper_chunks
+           (paper_id, chunk_index, content, page_number, start_char, end_char,
+            embedding_id, embedding_model)
+           VALUES ($1, 0, 'atomicity test content', 1, 0, 22, $2, 'old-model')
+           RETURNING id""",
+        paper_id,
+        old_embed_id,
+    )
+
+    # Faux Qdrant whose delete() always raises — simulates a Qdrant failure
+    # mid-swap (new points already upserted, old-point cleanup fails)
+    faux_qdrant = FauxQdrantClient()
+
+    async def _failing_delete(**_kwargs):
+        raise RuntimeError("Qdrant delete unavailable")
+
+    faux_qdrant.delete = _failing_delete  # type: ignore[method-assign]
+
+    # Add repo root to sys.path so `import scripts.reembed` resolves.
+    # File is services/paper_ingestion/tests/contract/test_*.py → parents[4] is repo root.
+    _repo_root = str(Path(__file__).resolve().parents[4])
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+        monkeypatch.setenv("REEMBED_CONTINUE_ON_ERROR", "false")
+
+        import importlib
+
+        import scripts.reembed as reembed_mod
+
+        importlib.reload(reembed_mod)
+        from scripts.reembed import ScriptError, reembed_paper  # noqa: PLC0415
+
+        # Ensure the faux Qdrant collection exists with the correct dimension
+        await faux_qdrant.create_collection(
+            collection_name="paper_chunks",
+            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
+        )
+
+        shared_pool = SharedConnPool(contract_conn)
+        async with httpx.AsyncClient() as http_client:
+            # Act: ScriptError must be raised because Qdrant delete fails (step 4)
+            with _pytest.raises(ScriptError, match="Failed to delete old Qdrant"):
+                await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+
+    # Assert: DB embedding_id must still be the old value — step 5 was never reached
+    row = await contract_conn.fetchrow(
+        "SELECT embedding_id, embedding_model FROM paper_chunks WHERE id = $1",
+        chunk_db_id,
+    )
+    assert row["embedding_id"] == old_embed_id, (
+        f"DB embedding_id must remain '{old_embed_id}' when Qdrant delete raises; "
+        f"got {row['embedding_id']!r}. This means step 5 executed despite step 4 failing — "
+        "the atomicity invariant (scripts/reembed.py:631-668) is broken."
+    )
+    assert row["embedding_model"] == "old-model", (
+        f"DB embedding_model must remain 'old-model'; got {row['embedding_model']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §W2.2-REEMBED-01 — happy-path: FauxOllama + FauxQdrant end-to-end
+#
+# Verified: scripts/reembed.py:594-668 (reembed_paper: embed → upsert → delete → DB)
+# Survivor-of: test_old_qdrant_points_deleted, test_db_embedding_model_updated,
+#   test_reembed_qdrant_writes_wait_for_completion_before_db_update (mock-units)
+# ---------------------------------------------------------------------------
+
+
+# Verified: scripts/reembed.py:576-668
+async def test_reembed_w2_happy_path_with_faux_ollama_and_faux_qdrant(contract_conn, monkeypatch):
+    """reembed_paper embeds via FauxOllama, stores in FauxQdrant, updates DB embedding_model."""
+    import sys
+    from pathlib import Path
+
+    import httpx
+
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
+    _repo_root = str(Path(__file__).resolve().parents[4])
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('reembed-w2-hp-01', 'arxiv', 'Happy Path Paper', '{}',
+                   'https://reembed.test/hp1')
+           RETURNING id"""
+    )
+    chunk_id = await contract_conn.fetchval(
+        """INSERT INTO paper_chunks
+           (paper_id, chunk_index, content, page_number, start_char, end_char,
+            embedding_id, embedding_model)
+           VALUES ($1, 0, 'happy path content', 1, 0, 18, 'old-uuid-hp', 'old-model')
+           RETURNING id""",
+        paper_id,
+    )
+
+    faux_qdrant = FauxQdrantClient()
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+
+        import importlib
+
+        import scripts.reembed as reembed_mod
+
+        importlib.reload(reembed_mod)
+        from scripts.reembed import reembed_paper  # noqa: PLC0415
+
+        await faux_qdrant.create_collection(
+            collection_name="paper_chunks",
+            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
+        )
+        shared_pool = SharedConnPool(contract_conn)
+        async with httpx.AsyncClient() as http_client:
+            count = await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+
+    assert count == 1
+    row = await contract_conn.fetchrow(
+        "SELECT embedding_id, embedding_model FROM paper_chunks WHERE id = $1", chunk_id
+    )
+    assert row["embedding_model"] == reembed_mod.EMBEDDING_MODEL_NAME
+    assert row["embedding_id"] != "old-uuid-hp", "embedding_id must be updated to new point id"
+    # New point must exist in FauxQdrant
+    coll_count = await faux_qdrant.count(collection_name="paper_chunks")
+    assert coll_count.count == 1
+
+
+# ---------------------------------------------------------------------------
+# §W2.2-REEMBED-02 — upsert failure rolls back DB
+#
+# Verified: scripts/reembed.py:614-619 (upsert loop raises before delete/DB step)
+# Survivor-of: test_reembed_partial_failure_preserves_old_points,
+#   test_reembed_old_qdrant_delete_failure_is_fatal_by_default (mock-units)
+# ---------------------------------------------------------------------------
+
+
+# Verified: scripts/reembed.py:614-619
+async def test_reembed_w2_rollback_semantics_on_qdrant_upsert_failure(contract_conn, monkeypatch):
+    """reembed_paper must NOT update DB when Qdrant upsert raises mid-batch."""
+    import sys
+    from pathlib import Path
+
+    import httpx
+    import pytest as _pytest
+
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
+    _repo_root = str(Path(__file__).resolve().parents[4])
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('reembed-w2-upsert-fail', 'arxiv', 'Upsert Fail Paper', '{}',
+                   'https://reembed.test/uf1')
+           RETURNING id"""
+    )
+    old_embed_id = "bbbbbbbb-0000-0000-0000-000000000002"
+    chunk_id = await contract_conn.fetchval(
+        """INSERT INTO paper_chunks
+           (paper_id, chunk_index, content, page_number, start_char, end_char,
+            embedding_id, embedding_model)
+           VALUES ($1, 0, 'upsert fail content', 1, 0, 19, $2, 'old-model')
+           RETURNING id""",
+        paper_id,
+        old_embed_id,
+    )
+
+    faux_qdrant = FauxQdrantClient()
+
+    async def _failing_upsert(**_kwargs):
+        raise RuntimeError("Qdrant upsert unavailable")
+
+    faux_qdrant.upsert = _failing_upsert  # type: ignore[method-assign]
+
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+
+        import importlib
+
+        import scripts.reembed as reembed_mod
+
+        importlib.reload(reembed_mod)
+        from scripts.reembed import reembed_paper  # noqa: PLC0415
+
+        await faux_qdrant.create_collection(
+            collection_name="paper_chunks",
+            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
+        )
+        shared_pool = SharedConnPool(contract_conn)
+        async with httpx.AsyncClient() as http_client:
+            with _pytest.raises(RuntimeError, match="Qdrant upsert unavailable"):
+                await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+
+    row = await contract_conn.fetchrow(
+        "SELECT embedding_id, embedding_model FROM paper_chunks WHERE id = $1", chunk_id
+    )
+    assert row["embedding_id"] == old_embed_id, (
+        "DB embedding_id must stay unchanged when upsert fails before step 5"
+    )
+    assert row["embedding_model"] == "old-model"
+
+
+# ---------------------------------------------------------------------------
+# §W2.2-REEMBED-03 — post-success Qdrant count == DB chunks count
+#
+# Verified: scripts/reembed.py:671-720 (verify_postconditions: DB count == Qdrant count)
+# Survivor-of: test_verify_postconditions_requires_db_target_count_and_qdrant_count_parity,
+#   test_main_runs_postcondition_after_successful_reembed (mock-units)
+# ---------------------------------------------------------------------------
+
+
+# Verified: scripts/reembed.py:671-720
+async def test_reembed_w2_qdrant_post_state_matches_db_invariant(contract_conn, monkeypatch):
+    """After reembed success, FauxQdrant collection size equals paper_chunks count for model."""
+    import sys
+    from pathlib import Path
+
+    import httpx
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
+    _repo_root = str(Path(__file__).resolve().parents[4])
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('reembed-w2-inv-01', 'arxiv', 'Invariant Paper', '{}',
+                   'https://reembed.test/inv1')
+           RETURNING id"""
+    )
+    for i in range(3):
+        await contract_conn.execute(
+            """INSERT INTO paper_chunks
+               (paper_id, chunk_index, content, page_number, start_char, end_char,
+                embedding_id, embedding_model)
+               VALUES ($1, $2, $3, 1, 0, 10, $4, 'old-model')""",
+            paper_id,
+            i,
+            f"chunk content {i}",
+            f"old-inv-{i}",
+        )
+
+    faux_qdrant = FauxQdrantClient()
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+
+        import importlib
+
+        import scripts.reembed as reembed_mod
+
+        importlib.reload(reembed_mod)
+        from scripts.reembed import reembed_paper  # noqa: PLC0415
+
+        await faux_qdrant.create_collection(
+            collection_name="paper_chunks",
+            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
+        )
+        shared_pool = SharedConnPool(contract_conn)
+        async with httpx.AsyncClient() as http_client:
+            count = await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+
+    assert count == 3
+    db_count = await contract_conn.fetchval(
+        "SELECT count(*) FROM paper_chunks WHERE paper_id = $1 AND embedding_model = $2",
+        paper_id,
+        reembed_mod.EMBEDDING_MODEL_NAME,
+    )
+    qdrant_count = await faux_qdrant.count(
+        collection_name="paper_chunks",
+        count_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="embedding_model", match=MatchValue(value=reembed_mod.EMBEDDING_MODEL_NAME)
+                )
+            ]
+        ),
+    )
+    assert int(db_count) == qdrant_count.count == 3, (
+        f"DB chunks ({db_count}) must equal Qdrant vectors ({qdrant_count.count}) after reembed"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §W2.2-REEMBED-04 — chunk shape preserved through pipeline
+#
+# Verified: scripts/reembed.py:594-612 (PointStruct payload keys + vector dim)
+# Survivor-of: test_old_qdrant_points_deleted (payload key assertions),
+#   test_embedder_payload_includes_model_name (mock-unit)
+# ---------------------------------------------------------------------------
+
+
+# Verified: scripts/reembed.py:594-612
+async def test_reembed_w2_chunk_shape_preserved_through_pipeline(contract_conn, monkeypatch):
+    """After reembed, Qdrant point has correct vector dim, payload keys, and chunk text."""
+    import sys
+    from pathlib import Path
+
+    import httpx
+
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
+    _repo_root = str(Path(__file__).resolve().parents[4])
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('reembed-w2-shape-01', 'arxiv', 'Shape Paper', '{}',
+                   'https://reembed.test/shape1')
+           RETURNING id"""
+    )
+    content = "the exact chunk text must survive"
+    await contract_conn.execute(
+        """INSERT INTO paper_chunks
+           (paper_id, chunk_index, content, page_number, start_char, end_char,
+            embedding_id, embedding_model)
+           VALUES ($1, 0, $2, 2, 4, 36, 'old-shape-id', 'old-model')""",
+        paper_id,
+        content,
+    )
+
+    faux_qdrant = FauxQdrantClient()
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+
+        import importlib
+
+        import scripts.reembed as reembed_mod
+
+        importlib.reload(reembed_mod)
+        from scripts.reembed import reembed_paper  # noqa: PLC0415
+
+        await faux_qdrant.create_collection(
+            collection_name="paper_chunks",
+            vectors_config=type("_VP", (), {"size": EMBEDDING_DIMENSION, "distance": "Cosine"})(),
+        )
+        shared_pool = SharedConnPool(contract_conn)
+        async with httpx.AsyncClient() as http_client:
+            await reembed_paper(paper_id, shared_pool, faux_qdrant, http_client)
+
+    points, _ = await faux_qdrant.scroll(collection_name="paper_chunks", with_vectors=True)
+    assert len(points) == 1
+    pt = points[0]
+    assert len(pt.vector) == EMBEDDING_DIMENSION, (
+        f"vector dim must be {EMBEDDING_DIMENSION}, got {len(pt.vector)}"
+    )
+    required_keys = {"paper_id", "chunk_index", "content", "embedding_model", "page_number"}
+    assert required_keys <= pt.payload.keys(), f"missing keys: {required_keys - pt.payload.keys()}"
+    assert pt.payload["content"] == content
+    assert pt.payload["paper_id"] == paper_id
