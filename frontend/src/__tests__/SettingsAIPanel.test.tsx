@@ -36,8 +36,20 @@ const baseSettings = {
   eval_report_date: 'docs/perf/2026-05-22-tier-defaults-report.md',
 };
 
+/** Baseline first-run status (hw_tier_changed false — banner hidden). */
+const baseSetupStatus = {
+  configured: true,
+  setup_mode: 'single' as const,
+  hw_tier_changed: false,
+};
+
 describe('SettingsAIPanel', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: no hw change, banner hidden
+    vi.mocked(api.getFirstRunStatus).mockResolvedValue(baseSetupStatus as any);
+    vi.mocked(api.dismissBanner).mockResolvedValue(undefined as any);
+  });
 
   it('renders configured state and candidate dropdown', async () => {
     vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
@@ -54,5 +66,31 @@ describe('SettingsAIPanel', () => {
     } as any);
     render(wrap(<SettingsAIPanel />));
     expect(await screen.findByRole('alert')).toHaveTextContent(/offline/i);
+  });
+
+  it('shows hw-change banner when hw_tier_changed is true', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
+    vi.mocked(api.getFirstRunStatus).mockResolvedValue({
+      ...baseSetupStatus,
+      hw_tier_changed: true,
+      hw_tier_baseline: 'lt-24',
+      hw_tier_current: 'ge-48',
+    } as any);
+    render(wrap(<SettingsAIPanel />));
+    const banner = await screen.findByTestId('hw-change-banner');
+    expect(banner).toBeInTheDocument();
+    expect(banner).toHaveTextContent(/hardware tier has changed/i);
+    expect(banner).toHaveTextContent(/lt-24/);
+    expect(banner).toHaveTextContent(/ge-48/);
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument();
+  });
+
+  it('does not show hw-change banner when hw_tier_changed is false', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
+    // hw_tier_changed defaults to false in baseSetupStatus
+    render(wrap(<SettingsAIPanel />));
+    // Wait for the settings to load so queries settle
+    await screen.findByText(/ge-48/);
+    expect(screen.queryByTestId('hw-change-banner')).not.toBeInTheDocument();
   });
 });

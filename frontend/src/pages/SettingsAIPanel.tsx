@@ -4,17 +4,27 @@
  * Shows hardware tier, configured vs observed backend, candidate list, and
  * allows the user to apply a new backend/model combination.
  *
- * GET  /api/settings/ai        → getAISettings()
- * POST /api/settings/ai        → postAISettings({ backend, model })
- * POST /api/settings/ai/redetect → redetectHW()
+ * GET  /api/settings/ai           → getAISettings()
+ * POST /api/settings/ai           → postAISettings({ backend, model })
+ * POST /api/settings/ai/redetect  → redetectHW()
+ * GET  /api/setup/status          → getFirstRunStatus() (for hw_tier_changed banner)
+ * POST /api/settings/ai/dismiss-banner → dismissBanner('hw_change')
+ *
+ * HW-change banner limitation (Phase-3): dismissing the banner writes a
+ * system_events row but does NOT update JARVIS_HW_TIER_BASELINE in .env.
+ * The banner will reappear on the next page refresh until someone manually
+ * updates JARVIS_HW_TIER in .env to match the current tier.  This is a
+ * known Phase-3 limitation; a future phase should persist the baseline in
+ * the DB and update it on dismiss.
  */
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAISettings, postAISettings, redetectHW } from '@/lib/api';
+import { getAISettings, postAISettings, redetectHW, getFirstRunStatus, dismissBanner } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 
 const QUERY_KEY = ['ai-settings'] as const;
+const SETUP_STATUS_KEY = ['setup-status'] as const;
 
 export function SettingsAIPanel() {
   const qc = useQueryClient();
@@ -23,6 +33,22 @@ export function SettingsAIPanel() {
     queryKey: QUERY_KEY,
     queryFn: getAISettings,
     staleTime: 30_000,
+  });
+
+  const { data: setupStatus } = useQuery({
+    queryKey: SETUP_STATUS_KEY,
+    queryFn: getFirstRunStatus,
+    staleTime: 60_000,
+  });
+
+  const dismissHWBannerMut = useMutation({
+    mutationFn: () => dismissBanner('hw_change'),
+    onSuccess: () => {
+      // Refetch so hw_tier_changed reflects the updated server state.
+      // Note: the banner may reappear on next refresh until JARVIS_HW_TIER
+      // is updated in .env — see file-level comment for the Phase-3 limitation.
+      void qc.invalidateQueries({ queryKey: SETUP_STATUS_KEY });
+    },
   });
 
   const redetectMut = useMutation({
@@ -84,6 +110,10 @@ export function SettingsAIPanel() {
     data?.configured_backend != null &&
     !data.observed_backend.startsWith(data.configured_backend);
 
+  // HW-change banner: shown when the detected hardware tier has changed
+  // since the baseline recorded at last boot.
+  const showHWChangeBanner = setupStatus?.hw_tier_changed === true;
+
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading AI settings…</p>;
   }
@@ -124,6 +154,35 @@ export function SettingsAIPanel() {
           </p>
         )}
       </section>
+
+      {/* HW-change banner — shown when the hardware tier has changed since baseline.
+          Amber/orange to distinguish from the yellow offline banner.
+          Dismiss writes a system_events row but does NOT update the baseline in .env;
+          see file-level comment for the Phase-3 limitation. */}
+      {showHWChangeBanner && (
+        <div
+          role="alert"
+          data-testid="hw-change-banner"
+          className="flex items-start justify-between gap-3 rounded-md border border-amber-500 bg-amber-50 dark:bg-amber-950/20 px-4 py-3 text-sm text-amber-900 dark:text-amber-300"
+        >
+          <span>
+            Hardware tier has changed
+            {setupStatus?.hw_tier_baseline && setupStatus?.hw_tier_current
+              ? ` from ${setupStatus.hw_tier_baseline} to ${setupStatus.hw_tier_current}`
+              : ''}
+            . Review the recommended backend and model below, then click Apply.
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0 text-amber-900 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+            onClick={() => dismissHWBannerMut.mutate()}
+            disabled={dismissHWBannerMut.isPending}
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
 
       {/* Offline banner */}
       {isOffline && (

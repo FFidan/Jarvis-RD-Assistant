@@ -480,7 +480,18 @@ export const getSetupStatus = () =>
 // --- WS-2F first-run wizard (pre-auth bootstrap) ---
 // These call /api/setup/* which is unauthenticated until the first admin exists.
 // Distinct surface from /api/system/setup-status above (post-login bootstrap).
-export interface FirstRunStatus { configured: boolean; setup_mode?: 'single' | 'multi' }
+export interface FirstRunStatus {
+  configured: boolean;
+  setup_mode?: 'single' | 'multi';
+  /** True when JARVIS_HW_TIER in .env differs from the baseline recorded at last boot. */
+  hw_tier_changed?: boolean;
+  hw_tier_baseline?: string | null;
+  hw_tier_current?: string | null;
+  recommended_backend?: string | null;
+  current_backend?: string | null;
+  observed_backend?: string | null;
+  observed_recent_share?: number;
+}
 export interface FirstRunServiceStatus { name: string; ok: boolean; detail: string | null }
 export interface FirstRunSystemCheck { services: FirstRunServiceStatus[]; all_ok: boolean }
 export interface FirstRunSmtpBody {
@@ -513,6 +524,12 @@ export interface FirstRunCloudKeysResponse {
 
 export const getFirstRunStatus = () =>
   apiFetch<FirstRunStatus>('/api/setup/status');
+
+export const dismissBanner = (banner_kind: string) =>
+  apiFetch<void>('/api/settings/ai/dismiss-banner', {
+    method: 'POST',
+    body: JSON.stringify({ banner_kind }),
+  });
 
 export const runFirstRunSystemCheck = () =>
   apiFetch<FirstRunSystemCheck>('/api/setup/system-check', { method: 'POST' });
