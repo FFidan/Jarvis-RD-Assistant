@@ -6,6 +6,7 @@
  *  2. Section heading (serif text-3xl)
  *  3. The mounted section component for the active (section, item) pair
  */
+import { SettingsAIPanel } from '@/pages/SettingsAIPanel';
 import { AccountSection } from './AccountSection';
 import { AppearanceSection } from './AppearanceSection';
 import { IngestionSection } from './IngestionSection';
@@ -52,6 +53,7 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
   models: {
     llm: 'LLM Models',
     providers: 'Cloud Providers',
+    ai: 'AI Backend',
   },
   system: {
     automation: 'Automation',
@@ -130,6 +132,7 @@ function DetailContent({
         </div>
       );
     }
+    if (item === 'ai') return <SettingsAIPanel />;
   }
 
   if (section === 'system') {

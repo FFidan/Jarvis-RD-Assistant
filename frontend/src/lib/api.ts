@@ -1622,6 +1622,40 @@ export const getSystemCapabilities = () =>
 export const getMyDayBundle = () =>
   apiFetch<MyDayBundle>('/api/executive/my-day-bundle');
 
+// --- Settings: AI backend ---
+
+export interface AIBackendCandidate {
+  backend: 'ollama' | 'vllm';
+  model: string;
+  rank: number;
+  score?: number;
+  reasoning?: string;
+}
+
+export interface AISettings {
+  hw_tier: string;
+  recommended_backend: string;
+  recommended_model: string;
+  configured_backend: string | null;
+  configured_model: string | null;
+  observed_backend: string | null;
+  observed_recent_share: number;
+  candidates_for_tier: AIBackendCandidate[];
+  eval_report_date: string | null;
+}
+
+export function getAISettings() {
+  return apiFetch<AISettings>('/api/settings/ai');
+}
+
+export function postAISettings(body: { backend: string; model: string }) {
+  return apiFetch<AISettings>('/api/settings/ai', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function redetectHW() {
+  return apiFetch<AISettings>('/api/settings/ai/redetect', { method: 'POST' });
+}
+
 // --- Settings: Telegram bot token (UI-4) ---
 
 /** Check whether a Telegram bot token is stored. Token value is never returned. */
