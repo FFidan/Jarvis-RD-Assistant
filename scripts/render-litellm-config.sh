@@ -27,25 +27,57 @@ PY
 fi
 
 python3 - "${CONFIG}" "${JARVIS_LLM_BACKEND}" "${JARVIS_SMART_MODEL}" "${JARVIS_SMART_FALLBACK_MODEL}" <<'PY'
-import sys, yaml, shutil, tempfile, os
+import os
+import shutil
+import sys
+import tempfile
+
+import yaml
+
 config_path, backend, smart_model, fallback_model = sys.argv[1:5]
 with open(config_path) as f:
     config = yaml.safe_load(f)
 
-def provider_prefix(b, m):
-    return f"{b}/{m}"
+
+def _alias_params(b: str, m: str, timeout: int) -> dict:
+    """Build litellm_params for a single (backend, model) alias.
+
+    Must include api_base — both ollama and vllm run as sibling containers in
+    docker-compose's `jarvis` network, so LiteLLM cannot fall back to
+    localhost defaults (would resolve inside the LiteLLM container itself).
+    For vllm the openai provider proxies to the OpenAI-compatible vLLM server.
+    """
+    if b == "ollama":
+        return {
+            "model": f"ollama/{m}",
+            "api_base": "http://ollama:11434",
+            "timeout": timeout,
+            "num_retries": 2,
+        }
+    if b == "vllm":
+        return {
+            "model": f"openai/{m}",
+            "api_base": "http://vllm:8080/v1",
+            "api_key": "vllm-no-key",
+            "timeout": timeout,
+            "num_retries": 2,
+        }
+    raise SystemExit(f"unknown JARVIS_LLM_BACKEND: {b!r}")
+
 
 ml = config.setdefault("model_list", [])
 
-def upsert(name, model_str, timeout):
+
+def upsert(name: str, params: dict) -> None:
     for entry in ml:
         if entry.get("model_name") == name:
-            entry["litellm_params"] = {"model": model_str, "timeout": timeout, "num_retries": 2}
+            entry["litellm_params"] = params
             return
-    ml.append({"model_name": name, "litellm_params": {"model": model_str, "timeout": timeout, "num_retries": 2}})
+    ml.append({"model_name": name, "litellm_params": params})
 
-upsert("smart", provider_prefix(backend, smart_model), 60)
-upsert("smart-fallback", provider_prefix("ollama", fallback_model), 120)
+
+upsert("smart", _alias_params(backend, smart_model, 60))
+upsert("smart-fallback", _alias_params("ollama", fallback_model, 120))
 
 rs = config.setdefault("router_settings", {})
 fbs = rs.setdefault("fallbacks", [])
@@ -59,5 +91,5 @@ fd, tmp = tempfile.mkstemp(dir=os.path.dirname(config_path), prefix=".config.yam
 with os.fdopen(fd, "w") as f:
     yaml.safe_dump(config, f, sort_keys=False)
 shutil.move(tmp, config_path)
-print(f"rendered: smart={provider_prefix(backend, smart_model)} fallback=ollama/{fallback_model}")
+print(f"rendered: smart={backend}/{smart_model} fallback=ollama/{fallback_model}")
 PY
