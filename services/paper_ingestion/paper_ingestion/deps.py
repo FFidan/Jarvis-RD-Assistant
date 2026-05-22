@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import os
+
 import asyncpg
 import httpx
 from fastapi import HTTPException, Request
 from jarvis_common import create_limiter
 
-# Shared rate limiter instance — imported by routers
-limiter = create_limiter()
+# Shared rate limiter instance — imported by routers.
+# GLOBAL_RATE_LIMIT lets the bench override the SlowAPIMiddleware-applied
+# global cap (default 600/min) without touching per-route @limiter.limit
+# decorators — required because the global cap fires before route-level
+# overrides and would otherwise dominate.
+_GLOBAL_RATE_LIMIT = os.getenv("GLOBAL_RATE_LIMIT", "600/minute")
+limiter = create_limiter(default_limits=[_GLOBAL_RATE_LIMIT])
 
 
 def get_db_pool(request: Request) -> asyncpg.Pool:

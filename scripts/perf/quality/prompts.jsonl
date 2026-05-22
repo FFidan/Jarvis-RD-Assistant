@@ -1,0 +1,12 @@
+{"id":1,"capability":"methodology","decompose":false,"question":"What experimental setup does the first seeded paper use for its main result?"}
+{"id":2,"capability":"methodology","decompose":false,"question":"Describe the model architecture in one of the seeded papers in 2-3 sentences."}
+{"id":3,"capability":"methodology_critique","decompose":false,"question":"Pick one seeded paper. What design choice in it most affects its claimed result, and why?"}
+{"id":4,"capability":"synthesis","decompose":true,"question":"What methods recur across the seeded papers and why?"}
+{"id":5,"capability":"synthesis","decompose":true,"question":"How do the seeded papers approach the central problem differently?"}
+{"id":6,"capability":"math","decompose":false,"question":"Restate the main loss function from one of the seeded papers and explain each term."}
+{"id":7,"capability":"math","decompose":false,"question":"Pick a key equation from one of the seeded papers and derive its gradient from first principles."}
+{"id":8,"capability":"citation_grounding","decompose":true,"question":"Which seeded papers cite each other or shared prior work, and what do they say about it?"}
+{"id":9,"capability":"contradiction","decompose":true,"question":"Do any seeded papers disagree about a key claim? Cite the conflicting statements."}
+{"id":10,"capability":"contradiction","decompose":true,"question":"Are there inconsistencies in how the seeded papers define or measure their key metric?"}
+{"id":11,"capability":"explanation","decompose":false,"question":"Explain one seeded paper's contribution to a graduate student who hasn't read it."}
+{"id":12,"capability":"limitations","decompose":false,"question":"What does one seeded paper explicitly state it doesn't address?"}

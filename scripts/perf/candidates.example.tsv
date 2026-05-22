@@ -1,0 +1,11 @@
+# tier	backend	model_id	vram_sim_mb	notes
+ge-48	vllm	Qwen/Qwen3-8B-AWQ		current baseline
+ge-48	vllm	Qwen/Qwen3-14B-AWQ		size-up test
+ge-48	vllm	deepseek-ai/DeepSeek-R1-Distill-Qwen-14B-AWQ		R1-distill
+ge-48	vllm	microsoft/Phi-4-AWQ		dense reasoning
+ge-48	vllm	Qwen/Qwen3-30B-A3B-AWQ		internal MoE
+24-48	vllm	Qwen/Qwen2.5-7B-Instruct-AWQ	24576	sim-tier 24G ceiling
+24-48	vllm	Qwen/Qwen3-8B-AWQ	24576	sim-tier 24G ceiling
+8-16	ollama	qwen2.5:7b-instruct		native dev box
+8-16	ollama	qwen3:7b		native dev box
+8-16	ollama	deepseek-r1-distill-qwen-7b		native dev box

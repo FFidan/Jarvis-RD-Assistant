@@ -60,7 +60,14 @@ router = APIRouter(
 # the production rate limit (10/minute per user/IP).
 _ASK_RATE_LIMIT = os.getenv("ASK_RATE_LIMIT", "10/minute")
 
-_strip_think_blocks = strip_think_blocks
+
+def _strip_think_blocks(text: str) -> str:
+    """Strip <think>…</think> blocks from final RAG answer text.
+
+    Thin wrapper around jarvis_common.llm_client.strip_think_blocks so Pyright
+    can resolve the symbol on import.
+    """
+    return strip_think_blocks(text)
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +210,8 @@ async def ask_paper(
     except Exception as exc:
         logger.error("RAG LLM call failed for paper %d: %s", paper_id, exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc
+
+    answer = _strip_think_blocks(answer)
 
     # Enrich sources with paper_id for verification
     sources = [{**s, "paper_id": paper_id} for s in raw_sources]
