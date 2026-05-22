@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel
 
 from jarvis_common.config import get_jarvis_common_settings
+from jarvis_common.litellm_observer import record_serve
 from jarvis_common.settings import get_secrets_settings
 
 if TYPE_CHECKING:
@@ -269,11 +270,19 @@ async def request_chat_completion_content(
     except httpx.RequestError as exc:
         raise RuntimeError(f"LiteLLM chat request failed: {exc}") from exc
     try:
-        raw = resp.json()["choices"][0]["message"]["content"]
+        body = resp.json()
+        raw = body["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError("Malformed LLM response") from exc
     if not isinstance(raw, str):
         raise ValueError("Malformed LLM response")
+    if options.model == "smart":
+        served = (
+            resp.headers.get("x-litellm-model-id")
+            or (body.get("model") if isinstance(body, dict) else None)
+            or options.model
+        )
+        record_serve(options.model, served)
     return strip_think_blocks(raw)
 
 
@@ -334,7 +343,7 @@ async def call_llm_structured(
     # openai_client is already instructor-patched (wrapped in the service lifespan).
     # Do NOT call instructor.from_openai() again — double-wrapping returns None on
     # some instructor versions, causing 'NoneType has no attribute chat'.
-    return await openai_client.chat.completions.create(
+    result = await openai_client.chat.completions.create(
         model=_options.model,
         response_model=response_model,
         messages=_messages,  # type: ignore[arg-type]
@@ -343,6 +352,12 @@ async def call_llm_structured(
         timeout=_options.timeout,
         max_retries=max_retries,
     )
+    if _options.model == "smart":
+        # Instructor attaches the raw ChatCompletion as _raw_response on the result.
+        raw_resp = getattr(result, "_raw_response", None)
+        served = getattr(raw_resp, "model", None) or _options.model
+        record_serve(_options.model, served)
+    return result
 
 
 def _langfuse_lifespan_hook() -> None:
