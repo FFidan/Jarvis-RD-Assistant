@@ -23,6 +23,11 @@
 #   --check                   Doctor / preflight check (read-only). Exits 0 if all
 #                             requirements are met, 1 if any are missing. Does NOT
 #                             generate .env or start services.
+#   --backend ollama|vllm|auto
+#                             Override AI backend selection. Default: auto (inferred
+#                             from GPU VRAM tier). Use vllm only on 24 GB+ cards.
+#   --smart-model <id>        Override the model id for the active backend
+#                             (Ollama tag or HuggingFace AWQ repo id).
 #   --smtp-host <host>        SMTP relay hostname.
 #   --smtp-user <user>        SMTP relay username.
 #   --smtp-pass-file <path>   Path to a file whose first line is the SMTP password.
@@ -66,6 +71,85 @@ os_install_hint() {  # $1 = tool name (informational)
   esac
 }
 
+detect_hw_tier() {  # echoes: cpu | lt-8 | 8-16 | 16-24 | 24-48 | ge-48
+  command -v nvidia-smi >/dev/null && nvidia-smi -L | grep -q . || { echo cpu; return; }
+  local mb
+  mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+  [ -z "$mb" ] && { echo cpu; return; }
+  case "$mb" in *[!0-9]*) echo cpu; return ;; esac
+  if   [ "$mb" -lt 8000  ]; then echo lt-8
+  elif [ "$mb" -lt 16000 ]; then echo 8-16
+  elif [ "$mb" -lt 24000 ]; then echo 16-24
+  elif [ "$mb" -lt 48000 ]; then echo 24-48
+  else                            echo ge-48
+  fi
+}
+
+_default_model_for_tier() {
+  # $1 = tier, $2 = backend; reads config/llm-tier-candidates.yaml
+  python3 - "$1" "$2" <<'PY'
+import sys, yaml
+tier, backend = sys.argv[1:3]
+data = yaml.safe_load(open("config/llm-tier-candidates.yaml"))
+for c in data["tiers"].get(tier, {}).get("candidates", []):
+    if c["backend"] == backend:
+        print(c["model"])
+        sys.exit(0)
+fb = data["tiers"][tier]["fallback_for_tier"]
+print(fb["model"])
+PY
+}
+
+prompt_ai_backend() {
+  local tier; tier=$(detect_hw_tier)
+  NI_HW_TIER="${tier}"
+
+  case "$tier" in
+    cpu|lt-8|8-16)
+      printf '%sDetected: %s. Configuring Ollama.%s\n' "$C_BOLD" "$tier" "$C_RESET"
+      NI_LLM_BACKEND="ollama"
+      NI_SMART_MODEL=$(_default_model_for_tier "$tier" ollama)
+      return
+      ;;
+    16-24)
+      printf '%sDetected: %s. Configuring Ollama (advanced users can switch to vLLM in Settings).%s\n' \
+        "$C_BOLD" "$tier" "$C_RESET"
+      NI_LLM_BACKEND="ollama"
+      NI_SMART_MODEL=$(_default_model_for_tier "$tier" ollama)
+      return
+      ;;
+  esac
+
+  # 24-48 or ge-48: show the wizard
+  local rec_model; rec_model=$(_default_model_for_tier "$tier" vllm)
+  cat <<EOF
+
+=== AI Backend ============================================
+Detected hardware tier: ${tier}
+
+Recommended:
+  Backend:    vLLM
+  Model:      ${rec_model}
+  Reasoning:  vLLM handles concurrent load cleanly at this VRAM;
+              Ollama with 8B-class models fails at conc>=4.
+
+This will:
+  * pull vLLM weights (~5-20 GB to HuggingFace cache, one-time)
+  * activate the docker-compose vllm profile
+  * set the LiteLLM 'smart' alias to vLLM
+
+  [1] Use recommended (vLLM)            <- default
+  [2] Stick with Ollama  (slower under concurrent load)
+  [3] Cancel -- I'll configure later in Settings
+EOF
+  read -rp "Choice [1]: " _choice
+  case "${_choice:-1}" in
+    2) NI_LLM_BACKEND="ollama"; NI_SMART_MODEL=$(_default_model_for_tier "$tier" ollama) ;;
+    3) die "AI backend setup cancelled" "Re-run setup.sh; current config remains untouched" ;;
+    *) NI_LLM_BACKEND="vllm";   NI_SMART_MODEL="${rec_model}" ;;
+  esac
+}
+
 run_doctor() {
   local fail=0
   printf '%s--- setup.sh --check (read-only) -------------------------------%s\n' "$C_BOLD" "$C_RESET"
@@ -78,6 +162,8 @@ run_doctor() {
   # of truth — no bash threshold duplication).  All paths are non-fatal: if
   # python3/the package are not importable in the host preflight environment, a
   # static pointer to Settings → System/Models is printed instead.
+  local tier; tier=$(detect_hw_tier)
+  info "HW tier: ${tier}"
   local _vram_mb=""
   if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
     ok "GPU detected"
@@ -207,6 +293,9 @@ RUN_DOCTOR=0
 NI_SMTP_HOST=""
 NI_SMTP_USER=""
 NI_SMTP_PASS=""
+NI_LLM_BACKEND=""     # ollama | vllm | auto (resolved at .env-write time)
+NI_SMART_MODEL=""     # model id; resolved by prompt_ai_backend or auto-resolve
+NI_HW_TIER=""         # populated by prompt_ai_backend or auto-resolve
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -268,6 +357,21 @@ while [ $# -gt 0 ]; do
       NI_MODE="${1#*=}"; NI_MODE_EXPLICIT=1; shift ;;
     --check)
       RUN_DOCTOR=1; shift ;;
+    --backend)
+      case "$2" in
+        ollama|vllm|auto) NI_LLM_BACKEND="$2"; shift 2 ;;
+        *) die "Invalid --backend '$2'. Expected: ollama|vllm|auto" "Run: $0 --help" ;;
+      esac ;;
+    --backend=*)
+      _v="${1#*=}"
+      case "$_v" in
+        ollama|vllm|auto) NI_LLM_BACKEND="$_v"; shift ;;
+        *) die "Invalid --backend '$_v'. Expected: ollama|vllm|auto" "Run: $0 --help" ;;
+      esac ;;
+    --smart-model)
+      NI_SMART_MODEL="$2"; shift 2 ;;
+    --smart-model=*)
+      NI_SMART_MODEL="${1#*=}"; shift ;;
     -h|--help)
       sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -40
       exit 0
@@ -447,6 +551,21 @@ if [ "$NON_INTERACTIVE" -eq 0 ] && [ "$NI_MODE_EXPLICIT" -eq 0 ]; then
 2) A team (multi-user — email/magic-link login, SMTP required)
 EOF
   read -rp "Choice [1]: " _m; case "${_m:-1}" in 2) NI_MODE="multi" ;; *) NI_MODE="single" ;; esac
+fi
+
+# Auto-resolve backend when non-interactive and --backend not specified.
+if [ "${NI_LLM_BACKEND:-auto}" = "auto" ] && [ "$NON_INTERACTIVE" -eq 1 ]; then
+  NI_HW_TIER=$(detect_hw_tier)
+  case "$NI_HW_TIER" in
+    24-48|ge-48) NI_LLM_BACKEND="vllm" ;;
+    *)           NI_LLM_BACKEND="ollama" ;;
+  esac
+  [ -z "${NI_SMART_MODEL:-}" ] && NI_SMART_MODEL=$(_default_model_for_tier "$NI_HW_TIER" "$NI_LLM_BACKEND")
+fi
+
+# Interactive: AI backend wizard (skipped when non-interactive or backend already set).
+if [ "$NON_INTERACTIVE" -eq 0 ] && [ -z "${NI_LLM_BACKEND:-}" ]; then
+  prompt_ai_backend
 fi
 
 CLOUDFLARE_TUNNEL_TOKEN=""
@@ -706,6 +825,14 @@ sub_value() {
       ;;
     JARVIS_SETUP_MODE) printf '%s' "$NI_MODE" ;;
     API_KEY_LOGIN_ENABLED) [ "$NI_MODE" = "single" ] && printf 'true' || printf 'false' ;;
+    JARVIS_HW_TIER)
+      printf '%s' "${NI_HW_TIER:-$(detect_hw_tier)}" ;;
+    JARVIS_LLM_BACKEND)
+      printf '%s' "${NI_LLM_BACKEND:-auto}" ;;
+    JARVIS_SMART_MODEL)
+      printf '%s' "${NI_SMART_MODEL:-}" ;;
+    COMPOSE_PROFILES)
+      [ "${NI_LLM_BACKEND:-}" = "vllm" ] && printf 'vllm' || printf '' ;;
     *) return 1 ;;
   esac
   return 0
@@ -752,6 +879,13 @@ ok ".env written (mode 600)."
 info "Writing Docker secret files via scripts/init-secrets.sh..."
 bash "${SCRIPT_DIR}/scripts/init-secrets.sh"
 ok "Docker secret files ready in secrets/ (mode 600)."
+
+if [ -n "${NI_LLM_BACKEND:-}" ] && [ -n "${NI_SMART_MODEL:-}" ]; then
+  JARVIS_LLM_BACKEND="${NI_LLM_BACKEND}" \
+  JARVIS_SMART_MODEL="${NI_SMART_MODEL}" \
+  JARVIS_HW_TIER="${NI_HW_TIER}" \
+    bash scripts/render-litellm-config.sh || warn "litellm render failed (continuing)"
+fi
 
 # init-secrets.sh does NOT generate the Langfuse init keypair, yet the default
 # (no-profile) paper_ingestion/learning_engine services mount langfuse_init_pk
