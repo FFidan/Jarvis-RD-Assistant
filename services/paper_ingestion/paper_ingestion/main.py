@@ -117,6 +117,13 @@ async def _run_migrations_hook(app: FastAPI) -> None:
     await run_migrations(app.state.db_pool)
 
 
+async def _run_hw_probe_hook(app: FastAPI) -> None:
+    """Re-probe hardware tier at boot and record any tier change to system_events."""
+    from paper_ingestion.hw_probe import run_boot_probe  # noqa: PLC0415
+
+    await run_boot_probe(app.state.db_pool)
+
+
 async def _migrate_plaintext_secrets_hook(app: FastAPI) -> None:
     """Eagerly re-encrypt any legacy plaintext secret rows in user_config.
 
@@ -390,6 +397,7 @@ _lifespan_config = ServiceLifespanConfig(
         make_init_langfuse_hook(_set_openai_client),
         _validate_bbt_url_hook,
         _run_migrations_hook,
+        _run_hw_probe_hook,
         _migrate_plaintext_secrets_hook,
         _init_qdrant_and_pdf_pipeline,
         _init_source_singletons,
@@ -403,6 +411,7 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # init_langfuse_hook (Langfuse SDK auto-flushes on process exit)
         None,  # _validate_bbt_url_hook
         None,  # _run_migrations_hook
+        None,  # _run_hw_probe_hook
         None,  # _migrate_plaintext_secrets_hook
         _shutdown_qdrant,  # _init_qdrant_and_pdf_pipeline
         None,  # _init_source_singletons
