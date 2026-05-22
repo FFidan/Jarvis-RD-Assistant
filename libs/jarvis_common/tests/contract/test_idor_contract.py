@@ -95,6 +95,63 @@ IDOR_QUADRUPLES: list[tuple[str, str, str, str]] = [
     ("GET", "/api/citations/{paper_id_a}", "paper_id_a", "byid"),
 ]
 
+# ---------------------------------------------------------------------------
+# LE IDOR quadruples: projects / tasks / milestones  (A266, A274 — UNCOVERED)
+#
+# Grounding evidence (routes verified against HEAD):
+#
+# projects.py:128 — WHERE id = $1 AND user_id = $2 (GET /api/projects/{id})
+# projects.py:195 — WHERE id = $1 AND user_id = $2 FOR UPDATE (PUT /api/projects/{id})
+# projects.py:234 — DELETE FROM projects WHERE id = $1 AND user_id = $2 (DELETE)
+# tasks.py:57 — SELECT id FROM projects WHERE id = $1 AND user_id = $2 (GET tasks list)
+# tasks.py:104 — SELECT id FROM projects WHERE id = $1 AND user_id = $2 (POST task)
+# tasks.py:157 — WHERE id = $1 AND user_id = $2 FOR UPDATE (PUT /api/tasks/{id})
+# tasks.py:203 — DELETE FROM tasks WHERE id = $1 AND user_id = $2 (DELETE)
+# milestones.py:31 — SELECT id FROM projects WHERE id = $1 AND user_id = $2 (GET list)
+# milestones.py:70 — SELECT id FROM projects WHERE id = $1 AND user_id = $2 (POST)
+# milestones.py:110 — WHERE id = $1 AND user_id = $2 FOR UPDATE (PUT /api/milestones/{id})
+# milestones.py:156 — DELETE FROM milestones WHERE id = $1 AND user_id = $2 (DELETE)
+#
+# NOTE: All LE routes use user_id-scoped SQL rather than assert_paper_ownership.
+# The ownership predicate is: WHERE id = $1 AND user_id = $2 (or project ownership
+# for nested routes). A non-owner gets 404 (no matching row) for all of them.
+#
+# Excluded routes:
+#   GET /api/projects/{id}/tasks — nested under project; project owner check fires
+#     first and returns 404; no task_id_a in contract quadruple (path uses project_id).
+#     Covered by test_le_contract.py::test_get_project_detail_user_b_gets_404.
+#   GET /api/projects/{id}/milestones — same pattern; covered via project ownership.
+#   POST /api/projects/{id}/tasks — project check gates it (no task creation possible).
+#   PUT /api/tasks/{task_id_a}/papers — requires paper_id in body + task AND paper
+#     ownership check; complex seed outside TwoUsers. Covered in test_le_contract.
+# ---------------------------------------------------------------------------
+
+LE_IDOR_QUADRUPLES: list[tuple[str, str, str, str]] = [
+    # projects.py:128 — WHERE id = $1 AND user_id = $2
+    ("GET", "/api/projects/{project_id_a}", "project_id_a", "byid"),
+    # projects.py:195 — WHERE id = $1 AND user_id = $2 FOR UPDATE
+    ("PUT", "/api/projects/{project_id_a}", "project_id_a", "mutate"),
+    # projects.py:234 — DELETE FROM projects WHERE id = $1 AND user_id = $2
+    ("DELETE", "/api/projects/{project_id_a}", "project_id_a", "mutate"),
+    # tasks.py:157 — WHERE id = $1 AND user_id = $2 FOR UPDATE
+    ("PUT", "/api/tasks/{task_id_a}", "task_id_a", "mutate"),
+    # tasks.py:203 — DELETE FROM tasks WHERE id = $1 AND user_id = $2
+    ("DELETE", "/api/tasks/{task_id_a}", "task_id_a", "mutate"),
+]
+
+# Minimal valid JSON bodies for LE write verbs — must reach the ownership guard
+# without triggering 422 schema rejection.
+_LE_BODIES: dict[str, dict] = {
+    "/api/projects/{project_id_a}": {"name": "hijacked-project"},
+    "/api/tasks/{task_id_a}": {"title": "hijacked-task"},
+}
+
+
+def _le_ids() -> list[str]:
+    return [f"{m}:{p}:{k}" for m, p, _, k in LE_IDOR_QUADRUPLES]
+
+
+# ---------------------------------------------------------------------------
 # Minimal valid-ish JSON bodies for write verbs (schema-shaped so the request
 # reaches the auth/ownership guard, not a 422 short-circuit).
 _BODIES: dict[str, dict] = {
@@ -108,6 +165,13 @@ def _resolve(template: str, tu) -> str:
     return template.format(
         paper_id_a=tu.paper_id_a,
         note_id_a=tu.note_id_a,
+    )
+
+
+def _le_resolve(template: str, tu) -> str:
+    return template.format(
+        project_id_a=tu.project_id_a,
+        task_id_a=tu.task_id_a,
     )
 
 
@@ -208,6 +272,133 @@ async def test_user_a_can_access_own_resource(
     # ownership check passes and only the state guard fires a 409). This is the
     # correct ownership-allowed path: the resource was found and belonged to A.
     assert resp.status_code in {200, 201, 204, 409}, (
+        f"{method} {path}: user A got {resp.status_code} on their own {owned_attr}. "
+        f"Body: {resp.text[:300]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# LE IDOR — projects / tasks / milestones (A266, A274)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _le_app_with_pool(contract_conn):
+    """learning_engine app with db_pool + mocked non-DB state wired to the contract conn."""
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock
+
+    from jarvis_common.testing import SharedConnPool
+    from learning_engine.deps import get_anki_exporter, get_db_pool, get_fsrs_manager, limiter
+    from learning_engine.main import app
+
+    shared = SharedConnPool(contract_conn)
+
+    mock_fsrs = MagicMock()
+    _now = datetime.now(UTC)
+    mock_fsrs.create_new_card.return_value = ({}, _now)
+    mock_fsrs.schedule_review.return_value = ({}, {}, _now + timedelta(days=1))
+
+    originals = {
+        k: getattr(app.state, k, None)
+        for k in ("db_pool", "http_client", "fsrs_manager", "anki_exporter", "card_generator")
+    }
+    app.state.db_pool = shared
+    app.state.http_client = AsyncMock()
+    app.state.fsrs_manager = mock_fsrs
+    app.state.anki_exporter = MagicMock()
+    app.state.card_generator = AsyncMock()
+    app.dependency_overrides[get_db_pool] = lambda: shared
+    app.dependency_overrides[get_fsrs_manager] = lambda: mock_fsrs
+    app.dependency_overrides[get_anki_exporter] = lambda: MagicMock()
+
+    limiter_was_enabled = limiter.enabled
+    limiter.enabled = False
+
+    try:
+        yield app
+    finally:
+        limiter.enabled = limiter_was_enabled
+        for attr, val in originals.items():
+            if val is None:
+                if hasattr(app.state, attr):
+                    delattr(app.state, attr)
+            else:
+                setattr(app.state, attr, val)
+        app.dependency_overrides.pop(get_db_pool, None)
+        app.dependency_overrides.pop(get_fsrs_manager, None)
+        app.dependency_overrides.pop(get_anki_exporter, None)
+
+
+def _make_le_client(app, cookie: str) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-API-Key": _TEST_API_KEY},
+        cookies={"jarvis_session": cookie},
+    )
+
+
+@pytest.mark.parametrize("method,path_template,owned_attr,kind", LE_IDOR_QUADRUPLES, ids=_le_ids())
+async def test_le_user_b_cannot_access_user_a_resource(
+    method,
+    path_template,
+    owned_attr,
+    kind,
+    contract_two_users,
+    _le_app_with_pool,
+    _configure_api_key,
+):
+    """User B (attacker) gets 404 on user A's LE-owned resource.
+
+    LE ownership is enforced via ``WHERE id = $1 AND user_id = $2``; a
+    non-matching row yields 404 (not 403) for all LE routes.
+
+    Covers predicate rows A266 + A274 from the coverage map.
+    """
+    path = _le_resolve(path_template, contract_two_users)
+    body = _LE_BODIES.get(path_template)
+
+    async with _make_le_client(_le_app_with_pool, contract_two_users.cookie_b) as c:
+        resp = await c.request(method, path, json=body)
+
+    assert resp.status_code != 401, (
+        f"{method} {path}: got 401 — session cookie failed to authenticate user B "
+        f"(fixture/middleware wiring bug, not isolation)"
+    )
+    assert resp.status_code in {403, 404}, (
+        f"{method} {path}: user B got {resp.status_code} for user A's {owned_attr} "
+        f"(expected 403/404). Body: {resp.text[:300]}"
+    )
+
+
+@pytest.mark.parametrize("method,path_template,owned_attr,kind", LE_IDOR_QUADRUPLES, ids=_le_ids())
+async def test_le_user_a_can_access_own_resource(
+    method,
+    path_template,
+    owned_attr,
+    kind,
+    contract_two_users,
+    _le_app_with_pool,
+    _configure_api_key,
+):
+    """User A (owner) gets 200/204 on their own LE resource.
+
+    Positive control: confirms the user_id-scoped SQL accepts the owning user
+    (not just rejects the non-owner).
+    """
+    path = _le_resolve(path_template, contract_two_users)
+    body = _LE_BODIES.get(path_template)
+
+    async with _make_le_client(_le_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.request(method, path, json=body)
+
+    assert resp.status_code != 401, (
+        f"{method} {path}: got 401 — session cookie failed to authenticate user A "
+        f"(fixture/middleware wiring bug)"
+    )
+    # DELETE /api/projects/{id} cascades: 204. PUT variants: 200. GET: 200.
+    assert resp.status_code in {200, 201, 204}, (
         f"{method} {path}: user A got {resp.status_code} on their own {owned_attr}. "
         f"Body: {resp.text[:300]}"
     )

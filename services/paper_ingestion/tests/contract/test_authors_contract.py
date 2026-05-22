@@ -1,0 +1,280 @@
+"""Authors domain contract tests — Phase B target rows A19-A24.
+
+Survivor-of: (all NONE — no prior contract coverage).
+Carve-out: app.state.http_client is MagicMock (outbound HTTP).
+
+Rows covered:
+  A19 GET  /api/authors            — list returns only current user's rows
+  A20 POST /api/authors            — insert + 409 on duplicate
+  A21 PUT  /api/authors/{id}       — update persists; 404 for non-owner
+  A22 DELETE /api/authors/{id}     — delete scoped to user; 404 for non-owner
+  A23 POST /api/authors/auto-detect — detects from starred papers; count matches DB
+  A24 POST /api/authors/check       — returns only current-user matches
+"""
+
+from __future__ import annotations
+
+import pytest
+import pytest_asyncio
+import httpx
+
+pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+
+_TEST_API_KEY = "authors-contract-key-phase-b-do-not-use-in-prod"
+
+
+@pytest.fixture(scope="function")
+def _configure_api_key(monkeypatch):
+    from jarvis_common import auth as _auth
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
+    get_secrets_settings.cache_clear()
+    _auth.refresh_api_key_cache()
+    yield
+    get_secrets_settings.cache_clear()
+    _auth.refresh_api_key_cache()
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _pi_app_with_pool(contract_conn):
+    from jarvis_common import current_user_id_strict_with_owner_override
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.main import app
+
+    shared = SharedConnPool(contract_conn)
+    original_pool = getattr(app.state, "db_pool", None)
+    app.state.db_pool = shared
+
+    removed_override = app.dependency_overrides.pop(
+        current_user_id_strict_with_owner_override, None
+    )
+    had_override = removed_override is not None
+
+    yield app
+
+    if original_pool is None:
+        if hasattr(app.state, "db_pool"):
+            del app.state.db_pool
+    else:
+        app.state.db_pool = original_pool
+
+    if had_override:
+        app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
+
+
+def _make_client(app, cookie: str) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-API-Key": _TEST_API_KEY},
+        cookies={"jarvis_session": cookie},
+    )
+
+
+# ---------------------------------------------------------------------------
+# A19: GET /api/authors — list returns only current user's tracked_authors rows
+# ---------------------------------------------------------------------------
+
+
+async def test_a19_list_authors_returns_only_own_rows(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers map row A19: GET /api/authors scoped to current user.
+
+    Verified: authors.py:38-50 list_tracked_authors — WHERE user_id IS NOT DISTINCT FROM $1.
+    Survivor-of (future Phase C): no prior mock-unit tests for this endpoint.
+    """
+    # Seed one author for user A
+    author_a_id = await contract_conn.fetchval(
+        "INSERT INTO tracked_authors (author_name, user_id, source) "
+        "VALUES ('Author A', $1, 'manual') RETURNING id",
+        contract_two_users.user_a_id,
+    )
+    # Seed one author for user B (must not appear in A's response)
+    await contract_conn.execute(
+        "INSERT INTO tracked_authors (author_name, user_id, source) "
+        "VALUES ('Author B', $1, 'manual')",
+        contract_two_users.user_b_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/authors")
+
+    assert resp.status_code == 200, resp.text[:300]
+    items = resp.json()
+    ids = [item["id"] for item in items]
+    assert author_a_id in ids, f"User A's author {author_a_id} missing from list"
+    author_b_names = [item["author_name"] for item in items if item["author_name"] == "Author B"]
+    assert author_b_names == [], f"User B's author leaked into User A's response: {author_b_names}"
+
+
+# ---------------------------------------------------------------------------
+# A20: POST /api/authors — insert row; 409 on duplicate
+# ---------------------------------------------------------------------------
+
+
+async def test_a20_create_author_inserts_row_and_409_on_duplicate(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers map row A20: POST /api/authors inserts tracked_author for current user; 409 on dup.
+
+    Verified: authors.py:55-82 create_tracked_author — INSERT + 409 guard.
+    """
+    payload = {"author_name": "Unique Contract Author", "s2_author_id": None}
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/authors", json=payload)
+
+    assert resp.status_code == 201, resp.text[:300]
+    body = resp.json()
+    assert body["author_name"] == "Unique Contract Author"
+    inserted_id = body["id"]
+
+    # Verify row persisted in DB
+    row = await contract_conn.fetchrow("SELECT * FROM tracked_authors WHERE id = $1", inserted_id)
+    assert row is not None, "Row not found in DB after create"
+    assert row["user_id"] == contract_two_users.user_a_id
+
+    # Second identical call must return 409
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp2 = await c.post("/api/authors", json=payload)
+    assert resp2.status_code == 409, f"Expected 409 on duplicate, got {resp2.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# A21: PUT /api/authors/{id} — update persists; 404 for non-owner
+# ---------------------------------------------------------------------------
+
+
+async def test_a21_update_author_persists_and_404_for_non_owner(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers map row A21: PUT /api/authors/{id} updates fields; 404 for wrong user.
+
+    Verified: authors.py:87-115 update_tracked_author — ownership WHERE user_id.
+    """
+    author_id = await contract_conn.fetchval(
+        "INSERT INTO tracked_authors (author_name, user_id, source) "
+        "VALUES ('Update Test Author', $1, 'manual') RETURNING id",
+        contract_two_users.user_a_id,
+    )
+
+    # Owner can update
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.put(f"/api/authors/{author_id}", json={"enabled": False})
+
+    assert resp.status_code == 200, resp.text[:300]
+    updated = resp.json()
+    assert updated["enabled"] is False
+
+    # Non-owner gets 404
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp_b = await c.put(f"/api/authors/{author_id}", json={"enabled": True})
+
+    assert resp_b.status_code == 404, f"Expected 404 for non-owner, got {resp_b.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# A22: DELETE /api/authors/{id} — deletes scoped row; 404 for non-owner
+# ---------------------------------------------------------------------------
+
+
+async def test_a22_delete_author_removes_row_and_404_for_non_owner(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers map row A22: DELETE /api/authors/{id} deletes DB row; 404 for wrong user.
+
+    Verified: authors.py:120-139 delete_tracked_author — delete_or_404 with user_id check.
+    """
+    author_id = await contract_conn.fetchval(
+        "INSERT INTO tracked_authors (author_name, user_id, source) "
+        "VALUES ('Delete Test Author', $1, 'manual') RETURNING id",
+        contract_two_users.user_a_id,
+    )
+
+    # Non-owner attempt should 404 (not delete)
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp_b = await c.delete(f"/api/authors/{author_id}")
+    assert resp_b.status_code == 404, f"Expected 404 for non-owner, got {resp_b.status_code}"
+
+    # Row still present after non-owner attempt
+    still_exists = await contract_conn.fetchval(
+        "SELECT id FROM tracked_authors WHERE id = $1", author_id
+    )
+    assert still_exists is not None, "Row was incorrectly deleted by non-owner"
+
+    # Owner can delete
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_a = await c.delete(f"/api/authors/{author_id}")
+    assert resp_a.status_code == 204, resp_a.text[:300]
+
+    # Row gone from DB
+    gone = await contract_conn.fetchval("SELECT id FROM tracked_authors WHERE id = $1", author_id)
+    assert gone is None, "Row still present after owner delete"
+
+
+# ---------------------------------------------------------------------------
+# A23: POST /api/authors/auto-detect — detects from starred papers
+# ---------------------------------------------------------------------------
+
+
+async def test_a23_auto_detect_authors_returns_response_shape(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """Covers map row A23: POST /api/authors/auto-detect returns AutoDetectResponse shape.
+
+    Verified: authors.py:149-219 auto_detect_authors — scans starred/rated papers for user.
+    Note: contract_two_users seeds paper_user_state with starred=TRUE, so the endpoint
+    has material to detect from.
+    """
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/authors/auto-detect")
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    assert "added" in body, f"Missing 'added' key: {body}"
+    assert "already_tracked" in body, f"Missing 'already_tracked' key: {body}"
+    assert "authors" in body, f"Missing 'authors' key: {body}"
+    assert isinstance(body["added"], int) and body["added"] >= 0
+    assert isinstance(body["already_tracked"], int) and body["already_tracked"] >= 0
+    assert isinstance(body["authors"], list)
+
+
+# ---------------------------------------------------------------------------
+# A24: POST /api/authors/check — returns matches for current user only
+# ---------------------------------------------------------------------------
+
+
+async def test_a24_check_authors_returns_only_own_user_results(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """Covers map row A24: POST /api/authors/check scoped to current user.
+
+    Verified: authors.py:224-304 check_tracked_authors — WHERE enabled=TRUE AND user_id=$1.
+    """
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/authors/check")
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    assert "new_papers" in body, f"Missing 'new_papers' key: {body}"
+    assert "authors_checked" in body, f"Missing 'authors_checked' key: {body}"
+    assert isinstance(body["new_papers"], int) and body["new_papers"] >= 0
+    assert isinstance(body["authors_checked"], int) and body["authors_checked"] >= 0

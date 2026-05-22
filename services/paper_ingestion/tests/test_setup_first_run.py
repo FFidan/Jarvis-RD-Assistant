@@ -77,26 +77,11 @@ def _build_request(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_status_returns_unconfigured_when_no_admins() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=0)
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = _build_request(pool)
+# Collapsed (Phase C): test_status_returns_unconfigured_when_no_admins
+# Survivor: test_setup_contract.py::test_a131_status_unconfigured_when_no_admin
 
-    res = await setup_router.get_status(request)
-    assert res.configured is False
-
-
-@pytest.mark.asyncio
-async def test_status_returns_configured_when_admin_exists() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=1)
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = _build_request(pool)
-
-    res = await setup_router.get_status(request)
-    assert res.configured is True
+# Collapsed (Phase C): test_status_returns_configured_when_admin_exists
+# Survivor: test_setup_contract.py::test_a131_status_configured_when_admin_exists
 
 
 @pytest.mark.asyncio
@@ -167,48 +152,11 @@ async def test_require_dep_rejects_anon_when_configured() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_create_first_admin_inserts_user_and_session_and_sets_cookie() -> None:
-    conn = AsyncMock()
-    session_uuid = uuid.uuid4()
+# Collapsed (Phase C): test_create_first_admin_inserts_user_and_session_and_sets_cookie
+# Survivor: test_setup_contract.py::test_a135_create_first_admin_inserts_user_and_session
 
-    # fetchval: first call = admin count (0); second call = INSERT sessions RETURNING id.
-    conn.fetchval = AsyncMock(side_effect=[0, session_uuid])
-    # fetchrow: first = SELECT existing user (None); second = INSERT users RETURNING ...
-    conn.fetchrow = AsyncMock(
-        side_effect=[
-            None,
-            {"id": 42, "email": "owner@example.com", "role": "admin"},
-        ]
-    )
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = _build_request(pool)
-    response = Response()
-
-    body = setup_router.AdminBody(email="owner@example.com")
-    res = await setup_router.create_first_admin(body, request, response)
-
-    assert res.id == 42
-    assert res.email == "owner@example.com"
-    assert res.role == "admin"
-
-    # Cookie must be set on the response.
-    set_cookie_headers = [v for k, v in response.raw_headers if k.lower() == b"set-cookie"]
-    assert any(b"jarvis_session=" in h for h in set_cookie_headers)
-
-
-@pytest.mark.asyncio
-async def test_create_first_admin_rejects_when_admin_already_exists() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=1)  # admin count > 0
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = _build_request(pool)
-    response = Response()
-
-    body = setup_router.AdminBody(email="late@example.com")
-    with pytest.raises(HTTPException) as exc_info:
-        await setup_router.create_first_admin(body, request, response)
-    assert exc_info.value.status_code == 409
+# Collapsed (Phase C): test_create_first_admin_rejects_when_admin_already_exists
+# Survivor: test_setup_contract.py::test_a135_create_admin_409_when_admin_already_exists
 
 
 @pytest.mark.asyncio
@@ -231,34 +179,8 @@ async def test_create_first_admin_rejects_existing_email() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_smtp_save_persists_config_rows(monkeypatch) -> None:
-    monkeypatch.setenv("JARVIS_CONFIG_KEY", "pgyJ7t8w9KYMFgZ-9_M89P0VbyzqWj4Xz9LgSjlvKxs=")
-    # Clear the LRU cache so the new key is picked up.
-    from jarvis_common.crypto import _load_fernet  # noqa: PLC0415
-
-    _load_fernet.cache_clear()
-
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=0)  # no admins yet → bypass auth
-    conn.execute = AsyncMock()
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = _build_request(pool)
-
-    body = setup_router.SmtpBody(
-        host="smtp.example.com",
-        port=587,
-        user="user",
-        from_email="from@example.com",
-        test_send=False,
-        **{"pass": "p4ss"},
-    )
-    res = await setup_router.configure_smtp(body, request)
-    assert res.saved is True
-    assert res.test_sent is None
-
-    # 5 INSERTs: host, port, user, from, pass.
-    assert conn.execute.await_count == 5
+# Collapsed (Phase C): test_smtp_save_persists_config_rows
+# Survivor: test_setup_contract.py::test_a134_smtp_post_persists_to_db
 
 
 @pytest.mark.asyncio
@@ -845,24 +767,10 @@ async def test_telegram_token_rejected_for_non_admin_when_configured() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_setup_mode_persists() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=0)
-    conn.execute = AsyncMock()
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = _build_request(pool)
-
-    body = setup_router.SetupModeBody(mode="multi")
-    res = await setup_router.configure_setup_mode(body, request)
-
-    assert res.mode == "multi"
-    assert res.restart_required is True
-    assert conn.execute.await_count == 1
-    # Plaintext JSONB path → raw string passed as $2 (not double-encoded).
-    args = conn.execute.call_args.args
-    assert args[1] == "setup.mode"
-    assert args[2] == "multi"
+# Collapsed (Phase C): test_setup_mode_persists
+# Survivor: test_setup_contract.py::test_a139_setup_mode_persisted_to_db
+# SQL-arg assertions (args[1]=="setup.mode", args[2]=="multi") — B1-09 class.
+# Contract A139 verifies mode+restart_required in response and value in DB.
 
 
 @pytest.mark.asyncio

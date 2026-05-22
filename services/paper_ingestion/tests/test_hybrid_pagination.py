@@ -32,7 +32,8 @@ def _make_bm25_rows(n: int) -> list[dict]:
 
 
 def _make_pool_with_rows(rows: list[dict]) -> AsyncMock:
-    """Pool that returns the given rows for every fetch call."""
+    # Local helper — canonical make_pool_and_conn doesn't support rows-list factory semantics
+    # (needs _dict_to_record transform for BM25 record mocking).
     records = [_dict_to_record(r) for r in rows]
     conn = AsyncMock()
     conn.fetch = AsyncMock(return_value=records)

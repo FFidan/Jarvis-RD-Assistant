@@ -377,3 +377,53 @@ def test_connector_double_assign_requirement_documented() -> None:
         "(see main.py: procrastinate_app.connector = ...; "
         "procrastinate_app.job_manager.connector = procrastinate_app.connector)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Isolation + immutability (migrated from test_task_registry_xarch001.py)
+# ---------------------------------------------------------------------------
+
+
+def test_isolated_registrations_do_not_bleed() -> None:
+    """Two independent TaskRegistry instances maintain separate kind→task maps."""
+    import jarvis_common.task_registry as tr
+
+    class _FakeApp:
+        def __init__(self) -> None:
+            self.tasks: dict[str, object] = {}
+
+        def task(self, *, name: str, queue: str, pass_context: bool):
+            def _deco(fn):
+                fn.queue = queue
+                self.tasks[name] = fn
+                return fn
+
+            return _deco
+
+    async def _dummy(_pool, _http, _payload, _ctx):
+        return {}
+
+    app_a = _FakeApp()
+    app_b = _FakeApp()
+    registry_a = tr.TaskRegistry(app_a)  # type: ignore[arg-type]
+    registry_b = tr.TaskRegistry(app_b)  # type: ignore[arg-type]
+
+    registry_a.register_tasks({"only.in_a": _dummy}, queue="qa")
+    registry_b.register_tasks({"only.in_b": _dummy}, queue="qb")
+
+    assert "only.in_a" in registry_a.kind_to_task
+    assert "only.in_b" not in registry_a.kind_to_task
+    assert "only.in_b" in registry_b.kind_to_task
+    assert "only.in_a" not in registry_b.kind_to_task
+
+
+def test_kind_to_task_is_immutable() -> None:
+    """KIND_TO_TASK must not accept direct writes (MappingProxyType semantics).
+
+    Guard invariant: KIND_TO_TASK is a MappingProxyType backed by _TASK_MAP.
+    Direct writes raise TypeError; all mutations must go through register_tasks.
+    """
+    import jarvis_common.task_registry as tr
+
+    with pytest.raises(TypeError):
+        tr.KIND_TO_TASK["_should_not_write"] = object()  # type: ignore[index]

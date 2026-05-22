@@ -560,3 +560,85 @@ async def test_user_id_unknown_user_returns_empty():
     assert result["total_papers"] == 0
     assert result["topics"] == []
     assert "message" in result
+
+
+# ---------------------------------------------------------------------------
+# litellm_url env-override tests (migrated from test_weekly_summary_direct.py)
+# ---------------------------------------------------------------------------
+
+
+def _direct_make_pool(rows: list[dict]) -> MagicMock:
+    """Build a pool mock with fetch returning rows (no-arg acquire variant)."""
+    from contextlib import asynccontextmanager
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=rows)
+    pool = MagicMock()
+
+    @asynccontextmanager
+    async def _acquire():
+        yield conn
+
+    pool.acquire = _acquire
+    return pool
+
+
+def _direct_row(paper_id: int, topic_name: str) -> dict:
+    from datetime import UTC, datetime
+
+    return {
+        "id": paper_id,
+        "title": f"Paper {paper_id}",
+        "url": f"https://example.com/{paper_id}",
+        "published_date": datetime(2026, 3, 1, tzinfo=UTC),
+        "authors": ["Ada"],
+        "topic_name": topic_name,
+        "topic_id": 1,
+        "relevance_score": 0.9,
+        "summary_brief": f"Finding {paper_id}",
+        "confidence": "HIGH",
+    }
+
+
+async def test_generate_weekly_summary_honors_explicit_base_url_override(monkeypatch):
+    """litellm_url arg overrides LITELLM_BASE_URL env when explicitly passed."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://env-url:4000")
+    pool = _direct_make_pool([_direct_row(1, "NLP"), _direct_row(2, "NLP")])
+    digest = WeeklyDigestOutput(themes=[], summary="ok summary with enough words here")
+
+    with patch(
+        "paper_ingestion.weekly_summary.call_llm_structured",
+        new_callable=AsyncMock,
+        return_value=digest,
+    ) as mock_call:
+        await generate_weekly_summary(
+            pool,
+            litellm_url="http://arg-url:4000",
+            verifier=_VERIFIER,
+            openai_client=MagicMock(),
+        )
+
+    call_kwargs = mock_call.call_args.kwargs
+    assert call_kwargs["config"].base_url == "http://arg-url:4000"
+
+
+async def test_generate_weekly_summary_default_argument_still_overrides_env(monkeypatch):
+    """litellm_url default literal overrides env even when env has a different value."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://env-url:4000")
+    pool = _direct_make_pool([_direct_row(1, "NLP"), _direct_row(2, "NLP")])
+    digest = WeeklyDigestOutput(themes=[], summary="ok summary with enough words here")
+
+    with patch(
+        "paper_ingestion.weekly_summary.call_llm_structured",
+        new_callable=AsyncMock,
+        return_value=digest,
+    ) as mock_call:
+        await generate_weekly_summary(
+            pool,
+            litellm_url="http://litellm:4000",
+            verifier=_VERIFIER,
+            openai_client=MagicMock(),
+        )
+
+    call_kwargs = mock_call.call_args.kwargs
+    assert call_kwargs["config"].base_url == "http://litellm:4000"

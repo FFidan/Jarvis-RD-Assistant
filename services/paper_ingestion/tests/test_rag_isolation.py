@@ -34,7 +34,8 @@ def _hit(paper_id: int, user_id: int | None, score: float = 0.9) -> SimpleNamesp
 
 
 def _make_embedder(hits: list[SimpleNamespace]) -> tuple[Embedder, AsyncMock]:
-    """Return (embedder, mock_qdrant) so tests can inspect mock_qdrant.call_args."""
+    # Local helper — canonical testing_embedder._make_embedder doesn't support
+    # Qdrant hit injection or the (embedder, mock_qdrant) return tuple.
     mock_qdrant = AsyncMock()
     mock_qdrant.query_points.return_value = SimpleNamespace(points=hits)
     embedder = Embedder(AsyncMock(), mock_qdrant)

@@ -11,8 +11,11 @@ own validation.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs_router import build_jobs_router
+from pydantic import BaseModel
 
 from learning_engine.deps import get_db_pool, limiter
 
@@ -21,12 +24,32 @@ from learning_engine.deps import get_db_pool, limiter
 # ---------------------------------------------------------------------------
 LE_PUBLIC_JOB_KINDS: frozenset[str] = frozenset({"card.generate"})
 
+
+class _CardGeneratePayload(BaseModel):
+    """Strict payload schema for card.generate jobs.
+
+    Requiring paper_id enables the paper-ownership extractor to gate
+    cross-user paper access at enqueue time (RD-DA-001).
+    """
+
+    kind: Literal["card.generate"]
+    paper_id: int
+    deck_id: int
+    max_cards: int = 5
+
+
+def _card_generate_paper_extractor(payload: dict) -> int | None:
+    v = payload.get("paper_id")
+    return v if isinstance(v, int) else None
+
+
 router = build_jobs_router(
     service_name="learning_engine",
     public_kinds=LE_PUBLIC_JOB_KINDS,
     get_db_pool=get_db_pool,
     limiter=limiter,
-    payload_schemas=None,  # permissive mode: unknown kinds → 400 (LE-002)
+    payload_schemas={"card.generate": _CardGeneratePayload},
+    paper_ownership_extractor=_card_generate_paper_extractor,
 )
 
 # ---------------------------------------------------------------------------

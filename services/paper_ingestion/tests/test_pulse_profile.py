@@ -962,65 +962,11 @@ async def test_load_profile_warns_on_out_of_range_weights(caplog):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_load_profile_with_user_id_filters_ratings():
-    """When user_id=42 is passed, all rating queries bind 42 as the user_id param.
-
-    SQL-substring assertions ("IS NOT DISTINCT FROM" in sql) collapsed (B1-09).
-    Survivor: param binding checks confirm user_id=42 is bound to engaged,
-    positive, and negative rating queries. Behavioral isolation verified in
-    test_pulse_contract.py::test_load_profile_user_id_isolates_ratings.
-    """
-    phase1_conn = AsyncMock()
-    phase1_conn.fetch.side_effect = [[], [], []]
-
-    phase3_conn = AsyncMock()
-    phase3_conn.fetch.side_effect = [
-        [{"key": "pulse.deck_size", "value": 10}],  # user_config
-        [{"id": 1, "title": "Liked Paper"}],  # positive ratings
-        [{"title": "Disliked Paper"}],  # negative ratings
-        [],  # L1 negative topics
-        [],  # L1 negative authors
-        [],  # L3 dampened topics
-        [],  # L2 negative abstracts
-    ]
-
-    pool = MagicMock()
-    acquire_ctx_1 = MagicMock()
-    acquire_ctx_1.__aenter__ = AsyncMock(return_value=phase1_conn)
-    acquire_ctx_1.__aexit__ = AsyncMock(return_value=False)
-    acquire_ctx_2 = MagicMock()
-    acquire_ctx_2.__aenter__ = AsyncMock(return_value=phase3_conn)
-    acquire_ctx_2.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.side_effect = [acquire_ctx_1, acquire_ctx_2]
-
-    mock_embedder = AsyncMock()
-    mock_embedder.embed_texts.return_value = []
-
-    profile = await load_profile(pool, embedder=mock_embedder, user_id=42)
-
-    assert isinstance(profile, UserProfile)
-
-    # Engaged papers query binds user_id=42
-    engaged_params = list(phase1_conn.fetch.call_args_list[2][0][1:])
-    assert 42 in engaged_params, (
-        f"Expected user_id=42 in engaged-papers query params, got: {engaged_params}"
-    )
-
-    fetch_calls = phase3_conn.fetch.call_args_list
-    assert len(fetch_calls) >= 3
-
-    # Positive rating query binds user_id=42
-    positive_params = list(fetch_calls[1][0][1:])
-    assert 42 in positive_params, (
-        f"Expected user_id=42 in positive-rating query params, got: {positive_params}"
-    )
-
-    # Negative rating query binds user_id=42
-    negative_params = list(fetch_calls[2][0][1:])
-    assert 42 in negative_params, (
-        f"Expected user_id=42 in negative-rating query params, got: {negative_params}"
-    )
+# test_load_profile_with_user_id_filters_ratings: DELETED (Phase C collapse).
+# B1-09: SQL-substring "IS NOT DISTINCT FROM" assertions already removed; surviving
+# param-binding check replaced by strictly stronger behavioral contract:
+# test_pulse_contract.py::test_load_profile_user_id_isolates_ratings verifies that
+# load_profile(user_id=A) cannot see user B's data against real schema.
 
 
 @pytest.mark.asyncio

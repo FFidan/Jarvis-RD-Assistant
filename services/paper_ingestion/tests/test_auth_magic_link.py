@@ -197,95 +197,16 @@ async def test_verify_unknown_token_rejected(monkeypatch) -> None:
     assert exc.value.detail == "Invalid or expired token"
 
 
-@pytest.mark.asyncio
-async def test_verify_expired_token_rejected(monkeypatch) -> None:
-    monkeypatch.setenv("DEV_MODE", "true")
-    conn = AsyncMock()
-    expired_at = datetime.now(UTC) - timedelta(minutes=1)
-    conn.fetchrow = AsyncMock(
-        return_value={
-            "user_id": 7,
-            "expires_at": expired_at,
-            "used_at": None,
-        }
-    )
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool)
-
-    with pytest.raises(HTTPException) as exc:
-        await auth_router.verify.__wrapped__(
-            auth_router.VerifyBody(token="A" * 32),
-            request,
-            Response(),
-        )
-    assert exc.value.status_code == 400
+# Collapsed (Phase C): test_verify_expired_token_rejected
+# Survivor: test_auth_contract.py::test_a16_verify_expired_token_returns_400
 
 
-@pytest.mark.asyncio
-async def test_verify_reused_token_rejected(monkeypatch) -> None:
-    monkeypatch.setenv("DEV_MODE", "true")
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(
-        return_value={
-            "user_id": 7,
-            "expires_at": datetime.now(UTC) + timedelta(minutes=10),
-            "used_at": datetime.now(UTC) - timedelta(seconds=10),  # already used
-        }
-    )
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool)
-
-    with pytest.raises(HTTPException) as exc:
-        await auth_router.verify.__wrapped__(
-            auth_router.VerifyBody(token="A" * 32),
-            request,
-            Response(),
-        )
-    assert exc.value.status_code == 400
+# Collapsed (Phase C): test_verify_reused_token_rejected
+# Survivor: test_auth_contract.py::test_a16_verify_already_used_token_returns_400
 
 
-@pytest.mark.asyncio
-async def test_verify_happy_path_sets_cookie_and_returns_user(monkeypatch) -> None:
-    """Valid token: token marked used, session created, cookie set, user returned."""
-    monkeypatch.setenv("DEV_MODE", "true")
-    conn = AsyncMock()
-    # Sequence of fetchrow calls: token lookup → user lookup
-    conn.fetchrow = AsyncMock(
-        side_effect=[
-            {
-                "user_id": 7,
-                "expires_at": datetime.now(UTC) + timedelta(minutes=10),
-                "used_at": None,
-                "pending_email": None,
-            },
-            {"id": 7, "email": "ferhat@example.com", "role": "admin", "deleted_at": None},
-        ]
-    )
-    conn.execute = AsyncMock()
-    conn.fetchval = AsyncMock(return_value="00000000-0000-0000-0000-000000000099")
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool)
-    response = Response()
-
-    user = await auth_router.verify.__wrapped__(
-        auth_router.VerifyBody(token="A" * 32),
-        request,
-        response,
-    )
-
-    assert user.id == 7
-    assert user.email == "ferhat@example.com"
-    assert user.role == "admin"
-    # Cookie should be set on the response
-    set_cookie_headers = [v for k, v in response.raw_headers if k.lower() == b"set-cookie"]
-    assert any(b"jarvis_session=" in h for h in set_cookie_headers)
-    assert any(b"HttpOnly" in h for h in set_cookie_headers)
-    assert any(
-        b"SameSite=strict" in h.lower() or b"samesite=strict" in h.lower()
-        for h in set_cookie_headers
-    )
-    # In DEV_MODE Secure must NOT be set
-    assert not any(b"Secure" in h for h in set_cookie_headers)
+# Collapsed (Phase C): test_verify_happy_path_sets_cookie_and_returns_user
+# Survivor: test_auth_contract.py::test_a16_verify_valid_token_returns_session_cookie
 
 
 @pytest.mark.asyncio
@@ -435,37 +356,11 @@ async def test_verify_rejects_pending_email_token_no_session_minted(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_logout_revokes_session_and_clears_cookie(monkeypatch) -> None:
-    monkeypatch.setenv("DEV_MODE", "true")
-    conn = AsyncMock()
-    conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
-    request = _build_request(
-        pool, cookies={"jarvis_session": "00000000-0000-0000-0000-000000000099"}
-    )
-    response = Response()
+# Collapsed (Phase C): test_logout_revokes_session_and_clears_cookie
+# Survivor: test_auth_contract.py::test_a18_logout_revokes_session_row_in_db
 
-    await auth_router.logout.__wrapped__(request, response)
-
-    executed_sql = [c.args[0] for c in conn.execute.await_args_list]
-    assert any("UPDATE sessions SET revoked_at" in s for s in executed_sql)
-    set_cookie_headers = [v for k, v in response.raw_headers if k.lower() == b"set-cookie"]
-    assert any(b"jarvis_session=" in h for h in set_cookie_headers)
-
-
-@pytest.mark.asyncio
-async def test_logout_with_no_cookie_is_noop(monkeypatch) -> None:
-    monkeypatch.setenv("DEV_MODE", "true")
-    conn = AsyncMock()
-    conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool, cookies={})
-    response = Response()
-
-    await auth_router.logout.__wrapped__(request, response)
-
-    conn.execute.assert_not_called()
+# Collapsed (Phase C): test_logout_with_no_cookie_is_noop
+# Survivor: test_auth_contract.py::test_a18_logout_without_session_returns_204
 
 
 # ---------------------------------------------------------------------------

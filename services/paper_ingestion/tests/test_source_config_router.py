@@ -16,9 +16,7 @@ from unittest.mock import AsyncMock, patch
 import paper_ingestion.routers.source_config as sc_router
 import pytest
 from fastapi import HTTPException
-from jarvis_common.testing import make_request
-
-from tests.conftest import _make_pool_and_conn
+from jarvis_common.testing import make_pool_and_conn as _make_pool_and_conn, make_request
 
 
 # ---------------------------------------------------------------------------

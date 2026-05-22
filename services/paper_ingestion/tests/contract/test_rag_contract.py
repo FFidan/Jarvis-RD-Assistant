@@ -473,3 +473,289 @@ async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
         "Paper with starred=TRUE must remain eligible for recommendation "
         "(starred is a signal source, not an exclusion predicate)"
     )
+
+
+# ---------------------------------------------------------------------------
+# A104. POST /api/papers/{paper_id}/ask — per-paper ask ownership + response shape
+#
+# Behavioral semantics: ownership is enforced via real DB before RAG prep;
+# response carries answer + sources list with required keys.
+# LLM + Qdrant + Ollama HTTP kept mocked (idiomatic external boundaries).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test_client):
+    """POST /api/papers/{paper_id}/ask: owner path returns correct response envelope.
+
+    DB asserts: paper row exists (ownership check runs against real schema);
+    response shape carries {answer, sources, confidence, verified_fraction}.
+    prepare_single_paper_rag + LLM stay mocked — this is an endpoint-layer
+    DB-connectivity test, not a RAG correctness test.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    # Seed a user + paper owned by that user.
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('a104-owner@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('contract-a104-01', 'arxiv', 'A104 Ask Contract Paper', '{}',
+                   'http://a104', $1)
+           RETURNING id""",
+        user_id,
+    )
+
+    fake_sources = [
+        {
+            "paper_id": paper_id,
+            "content": "Key finding from the paper.",
+            "page_number": 1,
+            "score": 0.87,
+        }
+    ]
+    fake_messages = [{"role": "user", "content": "What is this paper about?"}]
+
+    async def _stub_prepare(embedder, db_pool, paper_id_, body, http_client):
+        return fake_messages, fake_sources
+
+    async def _stub_llm(http_client, messages, options, config):
+        return "This paper is about contract tests."
+
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_current_user_id] = lambda: user_id
+    app.dependency_overrides[get_embedder] = lambda: AsyncMock()
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_verifier] = lambda: MagicMock()
+    app.state.limiter.enabled = False
+
+    try:
+        with (
+            patch(
+                "paper_ingestion.routers.rag.prepare_single_paper_rag",
+                side_effect=_stub_prepare,
+            ),
+            patch(
+                "paper_ingestion.routers.rag.request_chat_completion_content",
+                side_effect=_stub_llm,
+            ),
+        ):
+            resp = await pi_test_client.post(
+                f"/api/papers/{paper_id}/ask",
+                json={"question": "What is this paper about?"},
+            )
+    finally:
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.dependency_overrides.pop(get_current_user_id, None)
+        app.dependency_overrides.pop(get_embedder, None)
+        app.dependency_overrides.pop(get_http_client, None)
+        app.dependency_overrides.pop(get_verifier, None)
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "answer" in body, "Response must carry 'answer'"
+    assert isinstance(body["sources"], list), "Response must carry 'sources' list"
+    # sources are enriched with paper_id by the router
+    if body["sources"]:
+        assert "paper_id" in body["sources"][0]
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a104_per_paper_ask_non_owner_gets_403(contract_conn, pi_test_client):
+    """POST /api/papers/{paper_id}/ask: non-owner receives 403.
+
+    Real DB ownership check (assert_paper_ownership) fires before RAG prep.
+    LLM + Qdrant mocks are irrelevant — the 403 is raised at the DB layer.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    # Seed owner + paper.
+    owner_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('a104-owner2@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('contract-a104-02', 'arxiv', 'A104 Non-Owner Paper', '{}',
+                   'http://a104-2', $1)
+           RETURNING id""",
+        owner_id,
+    )
+    # Seed a second user who does NOT own the paper.
+    intruder_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('a104-intruder@contract.test', 'user') RETURNING id"
+    )
+
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_current_user_id] = lambda: intruder_id
+    app.dependency_overrides[get_embedder] = lambda: AsyncMock()
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_verifier] = lambda: MagicMock()
+    app.state.limiter.enabled = False
+
+    try:
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask",
+            json={"question": "Snoop?"},
+        )
+    finally:
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.dependency_overrides.pop(get_current_user_id, None)
+        app.dependency_overrides.pop(get_embedder, None)
+        app.dependency_overrides.pop(get_http_client, None)
+        app.dependency_overrides.pop(get_verifier, None)
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 403, (
+        f"Non-owner must receive 403; got {resp.status_code}: {resp.text}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# A105. POST /api/papers/{paper_id}/ask/stream — streaming SSE shape + ownership
+#
+# Verifies: StreamingResponse with media_type text/event-stream is returned for
+# owner; ownership guard fires for non-owner BEFORE the stream is opened.
+# LLM streaming + Qdrant + Ollama HTTP kept mocked (idiomatic external boundaries).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a105_ask_stream_owner_gets_sse_response(contract_conn, pi_test_client):
+    """POST /api/papers/{paper_id}/ask/stream: owner receives SSE content-type.
+
+    The endpoint returns StreamingResponse(media_type='text/event-stream').
+    DB assertion: paper exists + ownership check passes (real schema).
+    Streaming LLM boundary stays mocked (stream_rag_events idiomatic mock).
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('a105-owner@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('contract-a105-01', 'arxiv', 'A105 Stream Paper', '{}',
+                   'http://a105', $1)
+           RETURNING id""",
+        user_id,
+    )
+
+    fake_sources = [{"paper_id": paper_id, "content": "chunk.", "page_number": 1, "score": 0.9}]
+    fake_messages = [{"role": "user", "content": "stream question?"}]
+
+    async def _stub_prepare(embedder, db_pool, paper_id_, body, http_client):
+        return fake_messages, fake_sources
+
+    async def _stub_stream(*args, **kwargs):
+        # Minimal SSE: one token event + done terminator
+        from jarvis_common.sse import SSE_DONE, sse_event
+
+        yield sse_event({"type": "token", "content": "Hello."})
+        yield sse_event({"type": "done", "full_answer": "Hello."})
+        yield SSE_DONE
+
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_current_user_id] = lambda: user_id
+    app.dependency_overrides[get_embedder] = lambda: AsyncMock()
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_verifier] = lambda: MagicMock()
+    app.state.limiter.enabled = False
+
+    try:
+        with (
+            patch(
+                "paper_ingestion.routers.rag.prepare_single_paper_rag",
+                side_effect=_stub_prepare,
+            ),
+            patch(
+                "paper_ingestion.routers.rag.stream_rag_events",
+                side_effect=_stub_stream,
+            ),
+        ):
+            resp = await pi_test_client.post(
+                f"/api/papers/{paper_id}/ask/stream",
+                json={"question": "stream question?"},
+            )
+    finally:
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.dependency_overrides.pop(get_current_user_id, None)
+        app.dependency_overrides.pop(get_embedder, None)
+        app.dependency_overrides.pop(get_http_client, None)
+        app.dependency_overrides.pop(get_verifier, None)
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 200, resp.text
+    assert "text/event-stream" in resp.headers.get("content-type", ""), (
+        "Streaming endpoint must return text/event-stream content-type"
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a105_ask_stream_non_owner_gets_403(contract_conn, pi_test_client):
+    """POST /api/papers/{paper_id}/ask/stream: non-owner receives 403.
+
+    Ownership guard fires before stream is opened (real DB check).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    owner_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('a105-owner2@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('contract-a105-02', 'arxiv', 'A105 Non-Owner Stream Paper', '{}',
+                   'http://a105-2', $1)
+           RETURNING id""",
+        owner_id,
+    )
+    intruder_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('a105-intruder@contract.test', 'user') RETURNING id"
+    )
+
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_current_user_id] = lambda: intruder_id
+    app.dependency_overrides[get_embedder] = lambda: AsyncMock()
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_verifier] = lambda: MagicMock()
+    app.state.limiter.enabled = False
+
+    try:
+        resp = await pi_test_client.post(
+            f"/api/papers/{paper_id}/ask/stream",
+            json={"question": "snoop?"},
+        )
+    finally:
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.dependency_overrides.pop(get_current_user_id, None)
+        app.dependency_overrides.pop(get_embedder, None)
+        app.dependency_overrides.pop(get_http_client, None)
+        app.dependency_overrides.pop(get_verifier, None)
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 403, (
+        f"Non-owner must receive 403 on stream endpoint; got {resp.status_code}: {resp.text}"
+    )

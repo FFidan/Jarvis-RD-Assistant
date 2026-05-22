@@ -320,24 +320,10 @@ async def test_upsert_happens_before_persist_deck(patch_pipeline):
     assert order[persist_idx] == "persist"
 
 
-@pytest.mark.asyncio
-async def test_stats_includes_last_error_on_partial_failure(patch_pipeline):
-    from paper_ingestion.pulse.job import run_pulse
-
-    async def boom(*_a, **_kw):
-        raise RuntimeError("stage2 exploded")
-
-    patch_pipeline["mocks"]["stage2_llm_rerank"].side_effect = boom
-
-    pool, _conn = _make_pool_and_conn()
-    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
-
-    # Deck should still be produced (from stage1 fallback)
-    patch_pipeline["mocks"]["persist_deck"].assert_awaited_once()
-    # B4: stage2 exception with fallback is degraded, not fatal
-    assert stats["last_error"] is None
-    assert stats.get("degraded_reason") is not None
-    assert "stage2 exploded" in stats["degraded_reason"]
+# test_stats_includes_last_error_on_partial_failure: DELETED (Phase C collapse).
+# Duplicate of test_stage2_exception_sets_degraded_reason_not_last_error (below):
+# same scenario (stage2 RuntimeError → degraded, not fatal), same assertions.
+# Survivor: test_stage2_exception_sets_degraded_reason_not_last_error.
 
 
 @pytest.mark.asyncio
@@ -480,24 +466,10 @@ async def test_stage2_exception_sets_degraded_reason_not_last_error(patch_pipeli
     patch_pipeline["mocks"]["persist_deck"].assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_stage1_exception_sets_last_error_not_degraded(patch_pipeline):
-    """Stage1 failure with empty output → last_error set, degraded_reason stays None."""
-    from paper_ingestion.pulse.job import run_pulse
-
-    async def boom(*_a, **_kw):
-        raise RuntimeError("embedding service down")
-
-    patch_pipeline["mocks"]["stage1_embedding_filter"].side_effect = boom
-
-    pool, _conn = _make_pool_and_conn()
-    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
-
-    # Stage1 failure: deck proceeds with empty stage1_out, so it IS recorded as last_error
-    # (the overall pipeline degrades but no dedicated degraded_reason is set here)
-    assert stats["last_error"] is not None
-    assert "stage1" in stats["last_error"]
-    assert stats.get("degraded_reason") is None
+# test_stage1_exception_sets_last_error_not_degraded: DELETED (Phase C collapse).
+# Subset of parametrized test_fatal_stage_errors_set_last_error_not_degraded
+# with stage_mock="stage1_embedding_filter", expected_fragment="stage1" (below).
+# Survivor: test_fatal_stage_errors_set_last_error_not_degraded[stage1_embedding_filter-stage1].
 
 
 @pytest.mark.asyncio

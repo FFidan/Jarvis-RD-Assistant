@@ -198,21 +198,11 @@ class TestFilterUnread:
     #     INSERTs feedback 61d ago and asserts paper_id in result (boundary inclusive).
     # Both survivors exercise the real SQL predicate via asyncpg.
 
-    # NOTE: test_starred_papers_remain_eligible_for_recommendation KEPT as SQL-substring
-    # (line below) pending a live contract test — no live test currently confirms that
-    # the starred boolean is absent from _filter_unread's exclusion predicate.
-
-    @pytest.mark.asyncio
-    async def test_starred_papers_remain_eligible_for_recommendation(self) -> None:
-        # Phase-A: starred boolean is in paper_user_state but does NOT gate eligibility
-        # (starred papers are still recommended). The SQL must NOT exclude on starred.
-        # KEPT: no live test currently exercises "starred=TRUE paper passes _filter_unread";
-        # test_filter_unread_state_predicate only covers state column, not starred column.
-        conn = AsyncMock()
-        conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [1], user_id=1)
-        sql = conn.fetch.await_args.args[0]
-        assert "starred" not in sql, "starred state must not gate recommendation eligibility"
+    # W4.PI-rag COLLAPSE: test_starred_papers_remain_eligible_for_recommendation deleted.
+    # SQL-substring mock-unit: conn.fetch.await_args.args[0] is never sent to a real DB.
+    # Survivor: test_rag_contract.py::test_filter_unread_starred_paper_remains_eligible —
+    #   INSERTs paper_user_state(starred=TRUE) and asserts paper_id IN _filter_unread result,
+    #   exercising the real SQL predicate (strictly stronger than the SQL-text assertion).
 
     # D3-02 deleted: test_negative_feedback_59d_excludes_paper,
     # test_negative_feedback_60d_boundary_exclusive, test_negative_feedback_61d_eligible.

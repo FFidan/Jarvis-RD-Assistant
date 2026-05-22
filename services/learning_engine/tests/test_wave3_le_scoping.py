@@ -11,7 +11,6 @@ Covers:
 
 from __future__ import annotations
 
-import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -30,26 +29,10 @@ def _pool_with_conn(conn: AsyncMock) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_get_today_query_does_not_use_null_or_clause() -> None:
-    """get_today must NOT include 'user_id IS NULL OR' in its WHERE clause.
-
-    The old query let ANY user read a NULL-owner row.  After the fix the
-    predicate is strictly 'WHERE user_id IS NOT DISTINCT FROM $1'.
-    """
-    from learning_engine.repos.intent_repo import get_today
-
-    conn = AsyncMock()
-    conn.fetchrow.return_value = None
-    pool = _pool_with_conn(conn)
-
-    await get_today(pool, user_id=42)
-
-    conn.fetchrow.assert_awaited_once()
-    sql: str = conn.fetchrow.call_args.args[0]
-    assert "IS NOT DISTINCT FROM" in sql, "predicate must use IS NOT DISTINCT FROM"
-    assert "IS NULL OR" not in sql, "NULL-owner bypass must not be present"
-    assert "user_id IS NULL OR" not in sql
+# test_get_today_query_does_not_use_null_or_clause deleted — SQL-text B1-09
+# ("IS NOT DISTINCT FROM" in sql, "IS NULL OR" not in sql);
+# survivor: test_executive_contract.py (A192) verifies intent scoping against
+# real PostgreSQL with real NULL-owner row isolation.
 
 
 @pytest.mark.asyncio
@@ -74,23 +57,9 @@ async def test_get_today_user_b_cannot_read_null_owner_row() -> None:
     assert bound_user_id == 2
 
 
-@pytest.mark.asyncio
-async def test_delete_today_query_does_not_use_null_or_clause() -> None:
-    """delete_today must NOT include 'user_id IS NULL OR' in its WHERE clause."""
-    from learning_engine.repos.intent_repo import delete_today
-
-    conn = AsyncMock()
-    conn.execute.return_value = "DELETE 0"
-    pool = _pool_with_conn(conn)
-
-    await delete_today(pool, user_id=7)
-
-    conn.execute.assert_awaited_once()
-    sql: str = conn.execute.call_args.args[0]
-    assert "IS NOT DISTINCT FROM" in sql
-    assert "IS NULL OR" not in sql
-    bound_user_id = conn.execute.call_args.args[1]
-    assert bound_user_id == 7
+# test_delete_today_query_does_not_use_null_or_clause deleted — SQL-text B1-09
+# ("IS NOT DISTINCT FROM" in sql, "IS NULL OR" not in sql);
+# survivor: test_executive_contract.py (A192/A193) verifies intent scoping.
 
 
 @pytest.mark.asyncio
@@ -113,76 +82,9 @@ async def test_delete_today_binds_caller_user_id() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_get_project_count_queries_include_user_id() -> None:
-    """The lateral subqueries for tasks/milestones must filter by user_id.
-
-    Previously the counts subqueries only filtered by project_id, so user B
-    could see counts for tasks/milestones owned by user A within the same
-    project.
-    """
-
-    from learning_engine.routers.projects import get_project
-
-    class _FakeRecord(dict):
-        def __getattr__(self, name):
-            try:
-                return self[name]
-            except KeyError as e:
-                raise AttributeError(name) from e
-
-        def keys(self):
-            return super().keys()
-
-    _now = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
-    project_row = _FakeRecord(
-        id=1,
-        user_id=5,
-        name="P",
-        description=None,
-        color="#fff",
-        status="active",
-        created_at=_now,
-        updated_at=_now,
-    )
-    counts_row = _FakeRecord(
-        total_tasks=3,
-        done_tasks=1,
-        total_milestones=2,
-        completed_milestones=0,
-        paper_count=0,
-        open_question_count=0,
-    )
-
-    conn = AsyncMock()
-    # First fetchrow → project ownership check; second → counts
-    conn.fetchrow.side_effect = [project_row, counts_row]
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-
-    import types
-
-    fake_request = types.SimpleNamespace(state=types.SimpleNamespace(user_id=5))
-
-    # Call the unwrapped handler (bypass limiter decorator)
-    await get_project.__wrapped__(
-        fake_request,
-        project_id=1,
-        db_pool=pool,
-        user_id=5,
-    )
-
-    # The second fetchrow call is the counts query — verify user_id is bound.
-    counts_call = conn.fetchrow.call_args_list[1]
-    counts_sql: str = counts_call.args[0]
-    counts_args = counts_call.args[1:]
-
-    assert "user_id = $2" in counts_sql, "counts subqueries must filter by user_id"
-    assert 5 in counts_args, "user_id value must be bound in counts query"
+# test_get_project_count_queries_include_user_id deleted — SQL-text B1-09
+# ("user_id = $2" in counts_sql); survivor: test_projects_contract.py verifies
+# task/milestone count scoping against real PostgreSQL.
 
 
 @pytest.mark.asyncio
@@ -248,54 +150,10 @@ async def test_get_my_day_milestone_laterals_include_user_id() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_unlink_paper_from_task_uses_single_connection() -> None:
-    """Ownership check and DELETE must share one connection (one acquire call).
-
-    The TOCTOU fix collapses the previously separate 'async with pool.acquire()'
-    calls for the check and the delete into a single context-manager block.
-    LE-OB3 also wraps them in conn.transaction() for durability — the pool/conn
-    mock must support async-CM transaction().
-    """
-    import types
-    from unittest.mock import patch
-
-    from learning_engine.routers.tasks import unlink_paper_from_task
-
-    fake_request = types.SimpleNamespace(state=types.SimpleNamespace(user_id=10))
-
-    # Use _make_pool_and_conn so conn.transaction() is a proper async CM.
-    pool, conn = _make_pool_and_conn()
-    conn.fetchval.return_value = 5  # task exists and is owned by user 10
-    conn.execute.return_value = "DELETE 1"
-
-    # log_audit uses pool too; patch it out.
-    with patch("learning_engine.routers.tasks.log_audit", new=AsyncMock()):
-        await unlink_paper_from_task.__wrapped__(
-            fake_request,
-            task_id=5,
-            paper_id=3,
-            db_pool=pool,
-            user_id=10,
-        )
-
-    # The TOCTOU fix means pool.acquire() is called only ONCE for both the
-    # ownership check and the DELETE (log_audit gets its own acquire, which is
-    # patched out above).
-    assert pool.acquire.call_count == 1, (
-        f"Expected 1 pool.acquire() call (single connection for check+delete), "
-        f"got {pool.acquire.call_count}"
-    )
-
-    # Verify both the ownership SELECT and the DELETE were issued on that conn.
-    conn.fetchval.assert_awaited_once()
-    ownership_sql: str = conn.fetchval.call_args.args[0]
-    assert "tasks" in ownership_sql
-    assert "user_id = $2" in ownership_sql
-
-    conn.execute.assert_awaited_once()
-    delete_sql: str = conn.execute.call_args.args[0]
-    assert "DELETE FROM task_paper_links" in delete_sql
+# test_unlink_paper_from_task_uses_single_connection deleted — SQL-text B1-09
+# ("user_id = $2" in ownership_sql, "DELETE FROM task_paper_links" in delete_sql);
+# survivor: test_tasks_contract.py verifies unlink TOCTOU fix + ownership against
+# real PostgreSQL.
 
 
 @pytest.mark.asyncio

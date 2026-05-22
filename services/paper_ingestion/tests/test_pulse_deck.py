@@ -8,14 +8,13 @@ from datetime import date
 import pytest
 from paper_ingestion.models import PaperCreate
 from paper_ingestion.pulse.deck import (
-    _persist_deck_inner,
     assemble_deck,
     load_history,
     load_today,
     persist_deck,
 )
 from paper_ingestion.pulse.scoring import ScoredCandidate
-from tests.conftest import FakeRecord, _make_pool_and_conn
+from jarvis_common.testing import FakeRecord, make_pool_and_conn as _make_pool_and_conn
 from tests.pulse_helpers import make_pulse_deck_row, make_pulse_paper as _make_paper
 
 
@@ -133,85 +132,19 @@ async def test_persist_deck_returns_insert_count():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_persist_deck_inner_threads_user_id_in_deck_insert():
-    """A2.1: _persist_deck_inner binds user_id at position 4 in the deck INSERT."""
-    pool, conn = _make_pool_and_conn()
-    deck_date = date(2024, 6, 1)
-    conn.fetchval.return_value = 99  # deck_id, then no cards so no further fetchval
-
-    await _persist_deck_inner(conn, deck_date, cards=[], stats={}, user_id=42)
-
-    # The first fetchval call is the deck INSERT
-    first_call = conn.fetchval.call_args_list[0]
-    sql, *args = first_call.args
-    # 4 positional args: deck_date, stats, degraded_reason, user_id
-    assert len(args) == 4, f"Expected 4 args to deck INSERT, got {len(args)}: {args}"
-    assert args[3] == 42, f"Expected user_id=42 at position 4 (index 3), got {args[3]}"
-
+# test_persist_deck_inner_threads_user_id_in_deck_insert: DELETED (W4-followup Phase C).
+# Behavioral contract survivor: test_pulse_contract.py::test_persist_deck_idempotent_replaces_cards
+# exercises real persist_deck with user_id and verifies card ownership via JOIN.
 
 # test_persist_deck_inner_includes_user_id_column_in_sql: DELETED (W4-followup; vacuous residual).
-# Stronger param-binding survivor: test_persist_deck_inner_threads_user_id_in_deck_insert (above).
+# Stronger param-binding survivor: (see above, contract).
 
+# test_persist_deck_inner_uses_pulse_candidate_exclude_sql: DELETED (B1-09 SQL-substring pattern).
+# Behavioral contract survivor: test_pulse_contract.py::test_load_today_excludes_trashed_cards
+# verifies the exclude predicate outcome against real schema.
 
-# ---------------------------------------------------------------------------
-# A2.2 — PULSE_CANDIDATE_EXCLUDE_SQL substitution in pulse_cards INSERT
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_persist_deck_inner_uses_pulse_candidate_exclude_sql():
-    """A2.2: The card INSERT SQL uses the PULSE_CANDIDATE_EXCLUDE_SQL predicate (not raw COALESCE)."""
-    from paper_ingestion.queries.predicates import PULSE_CANDIDATE_EXCLUDE_SQL
-
-    pool, conn = _make_pool_and_conn()
-    deck_date = date(2024, 6, 3)
-    # fetchval sequence:
-    #   1: deck upsert → deck_id=55
-    #   2: L3 count query → 25 candidates pass filter (≥ 20, L3 applies)
-    #   3: card INSERT → inserted_id=1 (success)
-    conn.fetchval.side_effect = [55, 25, 1]  # deck_id, l3_count, then one card success
-
-    paper = _make_paper(0)
-    cards = [_make_scored(paper)]
-
-    await _persist_deck_inner(conn, deck_date, cards=cards, stats={})
-
-    # Third fetchval call is the card INSERT (index 2; index 1 is L3 count query)
-    assert conn.fetchval.call_count >= 3, "Expected at least 3 fetchval calls"
-    card_call = conn.fetchval.call_args_list[2]
-    sql = card_call.args[0]
-    assert PULSE_CANDIDATE_EXCLUDE_SQL in sql, (
-        f"Card INSERT SQL must embed PULSE_CANDIDATE_EXCLUDE_SQL predicate.\n"
-        f"PULSE_CANDIDATE_EXCLUDE_SQL={PULSE_CANDIDATE_EXCLUDE_SQL!r}\nSQL={sql!r}"
-    )
-    assert "AND NOT (" in sql, (
-        "Card INSERT SQL must negate PULSE_CANDIDATE_EXCLUDE_SQL with 'AND NOT ('"
-    )
-
-
-@pytest.mark.asyncio
-async def test_persist_deck_inner_threads_user_id_to_card_insert():
-    """pulse_cards rows must be attributable to the deck owner.
-
-    SQL-substring assertions collapsed (B1-09): "INSERT INTO pulse_cards" and
-    "user_id" in sql removed — param binding assert args[-1] == 42 is the
-    strictly stronger survivor.
-    """
-    pool, conn = _make_pool_and_conn()
-    deck_date = date(2026, 5, 11)
-    conn.fetchval.side_effect = [55, 25, 1]
-
-    await _persist_deck_inner(
-        conn,
-        deck_date,
-        cards=[_make_scored(_make_paper(0))],
-        stats={},
-        user_id=42,
-    )
-
-    card_call = conn.fetchval.call_args_list[2]
-    assert card_call.args[-1] == 42
+# test_persist_deck_inner_threads_user_id_to_card_insert: DELETED (B1-09 param-binding residual).
+# Behavioral contract survivor: test_pulse_contract.py::test_persist_deck_idempotent_replaces_cards.
 
 
 # ---------------------------------------------------------------------------

@@ -69,25 +69,8 @@ def _account_row(**over):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_get_account_returns_current_user(monkeypatch) -> None:
-    monkeypatch.setenv("DEV_MODE", "true")
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value=_account_row(display_name="Ferhat"))
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool)
-
-    result = await account_router.get_account.__wrapped__(request)
-
-    assert result.id == 1
-    assert result.email == "old@example.com"
-    assert result.role == "admin"
-    assert result.display_name == "Ferhat"
-    # The SELECT must be parameterised on the resolved session user_id (1 via
-    # the autouse fixture), never a caller-supplied id.
-    select_sql, select_arg = conn.fetchrow.await_args_list[0].args
-    assert "WHERE id = $1" in select_sql
-    assert select_arg == 1
+# Collapsed (Phase C): test_get_account_returns_current_user
+# Survivor: test_account_contract.py::test_a1_get_account_returns_own_profile
 
 
 @pytest.mark.asyncio
@@ -130,26 +113,8 @@ async def test_get_account_self_scoped_no_path_param() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_patch_display_name_applies_immediately(monkeypatch) -> None:
-    monkeypatch.setenv("DEV_MODE", "true")
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(side_effect=[_account_row(), _account_row(display_name="New Name")])
-    conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool)
-
-    result = await account_router.update_account.__wrapped__(
-        account_router.AccountUpdate(display_name="New Name"), request
-    )
-
-    assert result.account.display_name == "New Name"
-    assert result.email_verification_sent is False
-    executed = [c.args[0] for c in conn.execute.await_args_list]
-    assert any("UPDATE users SET display_name" in s for s in executed)
-    # No email token issued, no users.email UPDATE.
-    assert not any("INSERT INTO magic_link_tokens" in s for s in executed)
-    assert not any("UPDATE users SET email" in s for s in executed)
+# Collapsed (Phase C): test_patch_display_name_applies_immediately
+# Survivor: test_account_contract.py::test_a2_patch_account_display_name_persists
 
 
 # ---------------------------------------------------------------------------
@@ -196,27 +161,8 @@ async def test_patch_email_issues_token_and_does_not_mutate_email(monkeypatch) -
     assert "token=" in sent[0][1]
 
 
-@pytest.mark.asyncio
-async def test_patch_email_duplicate_rejected_409(monkeypatch) -> None:
-    monkeypatch.setenv("DEV_MODE", "true")
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(
-        side_effect=[
-            _account_row(),  # current
-            {"id": 99},  # uniqueness clash → taken
-        ]
-    )
-    conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool)
-
-    with pytest.raises(HTTPException) as exc:
-        await account_router.update_account.__wrapped__(
-            account_router.AccountUpdate(email="taken@example.com"), request
-        )
-    assert exc.value.status_code == 409
-    executed = [c.args[0] for c in conn.execute.await_args_list]
-    assert not any("INSERT INTO magic_link_tokens" in s for s in executed)
+# Collapsed (Phase C): test_patch_email_duplicate_rejected_409
+# Survivor: test_account_contract.py::test_a2_patch_account_email_clash_returns_409
 
 
 @pytest.mark.asyncio

@@ -448,3 +448,226 @@ async def test_load_profile_user_id_isolates_ratings(contract_conn, contract_two
         f"User B must not see User A's liked paper {paper_id_a} in their profile. "
         f"Got liked_paper_ids={profile_b.liked_paper_ids} — user_id isolation failure."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase B additions — pulse stats, history, today, source-health
+# ---------------------------------------------------------------------------
+
+
+# §A-PULSE-01 — GET /api/pulse/stats: user-scoped deck count
+# Verified: routers/pulse.py:326-376 (get_stats — WHERE user_id = $2)
+
+
+async def test_pulse_stats_reflects_seeded_deck(
+    contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """GET /api/pulse/stats returns decks_generated >= 1 for user A's seeded deck.
+
+    The contract_two_users fixture seeds one pulse_deck row for user A.
+    The stats query uses WHERE user_id = $2 — confirms user-scoped aggregation.
+    """
+    async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/pulse/stats?days=365")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/stats; got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    assert "decks_generated" in body
+    assert "window_days" in body
+    assert body["decks_generated"] >= 1, (
+        f"Stats must reflect at least the seeded deck; got decks_generated={body['decks_generated']}"
+    )
+    assert body["window_days"] == 365
+
+
+# §A-PULSE-02 — GET /api/pulse/stats: user isolation (user B cannot see user A's decks)
+# Verified: routers/pulse.py:326-376 (get_stats — WHERE user_id = $2)
+
+
+async def test_pulse_stats_user_isolation(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """GET /api/pulse/stats for user B must NOT count user A's deck.
+
+    Inserts a second pulse deck for user B only, then compares counts.
+    Proves WHERE user_id = $2 actually scopes per-user.
+    """
+    user_b_id = contract_two_users.user_b_id
+    from datetime import date
+
+    # Seed an additional deck for user B with a recognisable far-future date
+    await contract_conn.execute(
+        """INSERT INTO pulse_decks (deck_date, card_count, user_id)
+           VALUES ($1, 0, $2)""",
+        date(2099, 12, 31),
+        user_b_id,
+    )
+
+    # User A must NOT see user B's deck in their stats
+    async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+        resp_a = await c.get("/api/pulse/stats?days=36500")
+
+    assert resp_a.status_code == 200
+    body_a = resp_a.json()
+
+    async with _client(_pi_pulse_app, contract_two_users.cookie_b) as c:
+        resp_b = await c.get("/api/pulse/stats?days=36500")
+
+    assert resp_b.status_code == 200
+    body_b = resp_b.json()
+
+    # B has more decks than A (seeded one extra above + own base)
+    assert body_b["decks_generated"] > body_a["decks_generated"], (
+        "User B's stats must reflect their own extra deck without contaminating user A's count"
+    )
+
+
+# §A-PULSE-03 — GET /api/pulse/history: returns seeded deck in list
+# Verified: routers/pulse.py:210-219 (get_history — load_history)
+
+
+async def test_pulse_history_returns_seeded_deck(
+    contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """GET /api/pulse/history returns a list that includes the seeded deck for user A."""
+    async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/pulse/history?days=365")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/history; got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    assert isinstance(body, list), "History response must be a list"
+    assert len(body) >= 1, "History must contain at least the seeded deck"
+    deck_ids = [d["deck_id"] for d in body]
+    assert contract_two_users.pulse_deck_id_a in deck_ids, (
+        f"Seeded deck {contract_two_users.pulse_deck_id_a} must appear in /api/pulse/history"
+    )
+
+
+# §A-PULSE-04 — GET /api/pulse/history: user isolation
+# Verified: routers/pulse.py:210-219 (get_history — load_history with user_id)
+
+
+async def test_pulse_history_user_isolation(contract_two_users, _pi_pulse_app, _configure_api_key):
+    """GET /api/pulse/history for user B must NOT include user A's deck_id."""
+    async with _client(_pi_pulse_app, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/pulse/history?days=365")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    deck_ids = [d["deck_id"] for d in body]
+    assert contract_two_users.pulse_deck_id_a not in deck_ids, (
+        f"User B must not see user A's deck {contract_two_users.pulse_deck_id_a} in their history"
+    )
+
+
+# §A-PULSE-05 — GET /api/pulse/today: 404 when no deck for today (fresh user)
+# Verified: routers/pulse.py:141-202 (get_today → 404 when load_today returns None)
+
+
+async def test_pulse_today_404_for_user_with_no_deck(
+    contract_conn, _pi_pulse_app, _configure_api_key
+):
+    """GET /api/pulse/today returns 404 for a user who has never generated a deck."""
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('pulse-nodeck@contract.test', 'user') RETURNING id"
+    )
+    session_id = await contract_conn.fetchval(
+        """INSERT INTO sessions (user_id, expires_at)
+           VALUES ($1, NOW() + INTERVAL '1 day')
+           RETURNING id""",
+        user_id,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_pi_pulse_app),
+        base_url="http://test",
+        headers={"X-API-Key": _TEST_API_KEY},
+        cookies={"jarvis_session": str(session_id)},
+    ) as c:
+        resp = await c.get("/api/pulse/today")
+
+    assert resp.status_code == 404, (
+        f"User with no deck must get 404 from /api/pulse/today; got {resp.status_code}: {resp.text}"
+    )
+
+
+# §A-PULSE-06 — GET /api/pulse/source-health: returns list (empty for fresh user)
+# Verified: routers/pulse.py:547-573 (get_source_health)
+
+
+async def test_pulse_source_health_returns_list(
+    contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """GET /api/pulse/source-health returns a list (possibly empty for a fresh user)."""
+    async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/pulse/source-health")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/source-health; got {resp.status_code}: {resp.text}"
+    )
+    assert isinstance(resp.json(), list), "source-health response must be a list"
+
+
+# §A-PULSE-07 — POST /api/pulse/rate: save rating upserts to_read state
+# Verified: routers/pulse.py:227-279 (rate_card — 'save' path → _upsert_state_and_starred)
+
+
+async def test_rate_card_save_upserts_to_read_state(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """POST /api/pulse/rate with rating='save' upserts paper_user_state.state='to_read'.
+
+    Strictly stronger than mock-unit test that only checks _upsert_state_and_starred
+    was called: this exercises the real DB write and verifies the state row.
+    """
+    paper_id = contract_two_users.paper_id_a
+    user_id = contract_two_users.user_a_id
+
+    async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/pulse/rate", json={"paper_id": paper_id, "rating": "save"})
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from /api/pulse/rate; got {resp.status_code}: {resp.text}"
+    )
+    assert resp.json().get("status") == "ok"
+
+    # Verify DB state
+    row = await contract_conn.fetchrow(
+        "SELECT state FROM paper_user_state WHERE paper_id = $1 AND user_id = $2",
+        paper_id,
+        user_id,
+    )
+    assert row is not None, "paper_user_state row must exist after save rating"
+    assert row["state"] == "to_read", (
+        f"save rating must set state='to_read'; got state={row['state']!r}"
+    )
+
+
+# §A-PULSE-08 — POST /api/pulse/rate: up rating inserts recommendation_feedback positive
+# Verified: routers/pulse.py:264-270 (rate_card — 'up' path → _upsert_recommendation_feedback)
+
+
+async def test_rate_card_up_writes_positive_feedback(
+    contract_conn, contract_two_users, _pi_pulse_app, _configure_api_key
+):
+    """POST /api/pulse/rate with rating='up' inserts recommendation_feedback signal='positive'."""
+    paper_id = contract_two_users.paper_id_a
+    user_id = contract_two_users.user_a_id
+
+    async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/pulse/rate", json={"paper_id": paper_id, "rating": "up"})
+
+    assert resp.status_code == 200
+
+    row = await contract_conn.fetchrow(
+        """SELECT signal FROM recommendation_feedback
+           WHERE paper_id = $1 AND user_id = $2 AND source = 'pulse_thumbs'""",
+        paper_id,
+        user_id,
+    )
+    assert row is not None, "recommendation_feedback row must exist after 'up' rating"
+    assert row["signal"] == "positive", f"Expected signal='positive'; got {row['signal']!r}"

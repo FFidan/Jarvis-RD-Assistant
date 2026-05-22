@@ -36,15 +36,7 @@ from paper_ingestion.ingestion.embedder import (
 ShimEmbedder = Embedder
 from paper_ingestion.models import ChunkForEmbedding
 
-from jarvis_common.testing_embedder import _FakeEncoding
-
-
-def _make_embedder() -> Embedder:
-    # Uses paper_ingestion.ingestion.embedder.Embedder (direct path, not shim)
-    # to validate both import surfaces stay in sync across the C3 split.
-    e = Embedder(AsyncMock(), AsyncMock())
-    e._encoding = _FakeEncoding()  # type: ignore[assignment]
-    return e
+from jarvis_common.testing_embedder import _make_embedder
 
 
 # ---------------------------------------------------------------------------

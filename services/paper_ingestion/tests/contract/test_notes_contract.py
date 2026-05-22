@@ -149,3 +149,135 @@ async def test_notes_create_owner_gets_201(
     assert body["paper_id"] == paper_id
     assert body["user_note"] == "contract-test-create-note"
     assert body["source"] == "user"
+
+
+# ---------------------------------------------------------------------------
+# A62: PUT /api/notes/{note_id} — update persists and 404 for non-owner
+# (Phase B extension — row A62 PARTIAL-IDOR)
+# ---------------------------------------------------------------------------
+
+
+async def test_a62_update_note_owner_gets_200(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """Covers map row A62: PUT /api/notes/{id} owner updates note text.
+
+    Verified: notes.py:127-165 update_note at HEAD d21aaea8.
+    Survivor-of (future Phase C): test_notes.py mock-unit tests.
+    """
+    # First create a note to update
+    paper_id = contract_two_users.paper_id_a
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        create_resp = await c.post(
+            f"/api/papers/{paper_id}/notes",
+            json={"user_note": "original-text-for-update", "page_number": 1},
+        )
+    assert create_resp.status_code == 201, f"Setup failed: {create_resp.text[:200]}"
+    note_id = create_resp.json()["id"]
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.put(
+            f"/api/notes/{note_id}",
+            json={"user_note": "updated-text-contract-test"},
+        )
+
+    assert resp.status_code == 200, f"Owner expected 200, got {resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    assert body["user_note"] == "updated-text-contract-test", (
+        f"Expected updated text, got: {body.get('user_note')!r}"
+    )
+
+
+async def test_a62_update_note_user_b_gets_404(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """Covers map row A62: PUT /api/notes/{id} non-owner gets 404.
+
+    Verified: notes.py:155-165 WHERE id AND user_id → 404 non-owner at HEAD d21aaea8.
+    """
+    # Create a note as user A
+    paper_id = contract_two_users.paper_id_a
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        create_resp = await c.post(
+            f"/api/papers/{paper_id}/notes",
+            json={"user_note": "note-for-b-update-test"},
+        )
+    assert create_resp.status_code == 201
+    note_id = create_resp.json()["id"]
+
+    # User B tries to update user A's note
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp = await c.put(
+            f"/api/notes/{note_id}",
+            json={"user_note": "b-overwrite-attempt"},
+        )
+
+    assert resp.status_code == 404, (
+        f"Non-owner should get 404; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# A64: DELETE /api/notes/{note_id} — deletes from DB and 404 for non-owner
+# (Phase B extension — row A64 PARTIAL-IDOR)
+# ---------------------------------------------------------------------------
+
+
+async def test_a64_delete_note_owner_gets_204(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers map row A64: DELETE /api/notes/{id} removes row from DB for owner.
+
+    Verified: notes.py:313-339 delete_note at HEAD d21aaea8.
+    Survivor-of (future Phase C): test_notes.py mock-unit tests.
+    """
+    paper_id = contract_two_users.paper_id_a
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        create_resp = await c.post(
+            f"/api/papers/{paper_id}/notes",
+            json={"user_note": "note-to-delete"},
+        )
+    assert create_resp.status_code == 201
+    note_id = create_resp.json()["id"]
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.delete(f"/api/notes/{note_id}")
+
+    assert resp.status_code in (200, 204), (
+        f"Owner expected 200/204, got {resp.status_code}: {resp.text[:300]}"
+    )
+    row = await contract_conn.fetchrow("SELECT id FROM notes WHERE id = $1", note_id)
+    assert row is None, f"Note {note_id} must be deleted from DB"
+
+
+async def test_a64_delete_note_user_b_gets_404(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """Covers map row A64: DELETE /api/notes/{id} non-owner gets 404.
+
+    Verified: notes.py:327-339 WHERE id AND user_id at HEAD d21aaea8.
+    """
+    paper_id = contract_two_users.paper_id_a
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        create_resp = await c.post(
+            f"/api/papers/{paper_id}/notes",
+            json={"user_note": "note-for-b-delete-test"},
+        )
+    assert create_resp.status_code == 201
+    note_id = create_resp.json()["id"]
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp = await c.delete(f"/api/notes/{note_id}")
+
+    assert resp.status_code == 404, (
+        f"Non-owner should get 404; got {resp.status_code}: {resp.text[:300]}"
+    )

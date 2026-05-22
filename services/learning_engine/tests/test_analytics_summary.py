@@ -133,56 +133,9 @@ def test_compute_streak_inner_gap():
     assert _compute_streak(rows, field="focus_hours") == 2
 
 
-# ---------------------------------------------------------------------------
-# get_analytics_summary — SQL param contract
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_summary_sql_param_contract():
-    """user_id must be first param ($1), days must be second ($2) for all DB calls."""
-    from learning_engine.routers.analytics import get_analytics_summary
-
-    handler = get_analytics_summary.__wrapped__
-
-    current_row = FakeRecord(
-        papers_read_total=0,
-        focus_hours_total=0.0,
-        cards_reviewed_total=0,
-    )
-    prev_row = FakeRecord(
-        papers_read_prev=0,
-        focus_hours_prev=0.0,
-        cards_reviewed_prev=0,
-    )
-
-    pool, conn = _make_pool_multi(
-        fetchrow_side_effects=[current_row, prev_row],
-        fetch_side_effects=[[], []],
-    )
-
-    await handler(MagicMock(), days=7, db_pool=pool, user_id=42)
-
-    # fetchrow call 1: current period  — user_id=$1=42, days=$2=7
-    cur_args = conn.fetchrow.call_args_list[0][0]
-    assert cur_args[1] == 42, (
-        f"current-period fetchrow: expected user_id=42 at $1, got {cur_args[1]!r}"
-    )
-    assert cur_args[2] == 7, f"current-period fetchrow: expected days=7 at $2, got {cur_args[2]!r}"
-
-    # fetchrow call 2: prior period — user_id=$1=42, days=$2=7
-    prev_args = conn.fetchrow.call_args_list[1][0]
-    assert prev_args[1] == 42, (
-        f"prior-period fetchrow: expected user_id=42 at $1, got {prev_args[1]!r}"
-    )
-    assert prev_args[2] == 7, f"prior-period fetchrow: expected days=7 at $2, got {prev_args[2]!r}"
-
-    # fetch calls (streaks) — user_id is $1=42
-    for i, fetch_call in enumerate(conn.fetch.call_args_list):
-        streak_args = fetch_call[0]
-        assert streak_args[1] == 42, (
-            f"streak fetch call {i}: expected user_id=42 at $1, got {streak_args[1]!r}"
-        )
+# test_summary_sql_param_contract deleted — B1-09 positional-arg binding assertions
+# (user_id=$1, days=$2 for all DB calls); survivor: test_analytics_contract.py
+# (A185) exercises the same scoping guarantee against real PostgreSQL.
 
 
 # ---------------------------------------------------------------------------

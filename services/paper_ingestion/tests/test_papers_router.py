@@ -725,33 +725,10 @@ async def test_restore_paper_non_trash_returns_409():
     )
 
 
-@pytest.mark.asyncio
-async def test_trash_and_reject_writes_both_lifecycle_and_feedback():
-    """trash_and_reject is the only combined action (spec §4.4): one txn
-    issues the atomic trash UPDATE *and* a recommendation_feedback row with
-    signal='negative' / source='dismiss_combined'."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    await papers.trash_and_reject_paper.__wrapped__(request, 42, db_pool=pool)
-
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    trash_sql = next((sql for sql in sql_calls if "state = 'trash'" in sql), None)
-    feedback_sql = next(
-        (sql for sql in sql_calls if "INSERT INTO recommendation_feedback" in sql),
-        None,
-    )
-    assert trash_sql is not None, f"Expected trash SQL; got {sql_calls}"
-    assert feedback_sql is not None, f"Expected feedback SQL; got {sql_calls}"
-    # Verify the feedback row had signal='negative' and source='dismiss_combined'.
-    feedback_call = next(
-        call
-        for call in conn.execute.await_args_list
-        if "INSERT INTO recommendation_feedback" in call.args[0]
-    )
-    assert "negative" in feedback_call.args
-    assert "dismiss_combined" in feedback_call.args
+# Collapsed (Phase C): test_trash_and_reject_writes_both_lifecycle_and_feedback
+# Survivor: test_papers_contract.py::test_a81_trash_and_reject_trashes_and_inserts_feedback
+# SQL-substring assertions (state='trash', INSERT INTO recommendation_feedback, signal='negative',
+# source='dismiss_combined') — B1-09 class. Contract A81 verifies behavioral atomicity with real DB.
 
 
 # ---------------------------------------------------------------------------
@@ -759,36 +736,9 @@ async def test_trash_and_reject_writes_both_lifecycle_and_feedback():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_annotate_paper_writes_rating_user_notes_flagged():
-    """annotate_paper upserts paper_user_state with all three annotation
-    fields and projects the new shape (state / state_before_trash /
-    starred / rating / user_notes / flagged / updated_at) via RETURNING."""
-    pool, conn = _make_pool_and_conn()
-    now = datetime.now(UTC)
-    conn.fetchrow.return_value = FakeRecord(
-        state="inbox",
-        state_before_trash=None,
-        starred=False,
-        rating=4,
-        user_notes="test",
-        flagged=True,
-        updated_at=now,
-    )
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.annotate_paper.__wrapped__(
-        request,
-        42,
-        body=AnnotationsRequest(rating=4, user_notes="test", flagged=True),
-        db_pool=pool,
-    )
-
-    assert result.rating == 4
-    assert result.user_notes == "test"
-    assert result.flagged is True
-    # Response shape completeness covered by contract:
-    # test_papers_contract.py::test_annotations_owner_gets_200_with_correct_shape
+# Collapsed (Phase C): test_annotate_paper_writes_rating_user_notes_flagged
+# Survivor: test_papers_contract.py::test_annotations_owner_gets_200_with_correct_shape
+# Response shape (rating, user_notes, flagged, state, starred) verified with real DB.
 
 
 # W4-followup: collapsed to contract/test_papers_contract.py::test_annotations_partial_update_preserves_other_fields
@@ -829,72 +779,18 @@ def test_annotate_paper_validates_rating_range():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_bulk_save_action_sets_state_to_read():
-    pool, conn = _make_pool_and_conn()
-    body = BulkActionRequest(paper_ids=[1, 2], action="save")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+# Collapsed (Phase C): test_bulk_save_action_sets_state_to_read
+# Survivor: test_papers_contract.py::test_a84_bulk_action_transitions_state_for_owner
+# SQL-arg assertion ("to_read" in args) — B1-09 class. Contract A84 verifies state='to_read' in DB.
 
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
-
-    assert result == {"succeeded": [1, 2], "failed": []}
-    assert any(
-        "to_read" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list
-    )
+# Collapsed (Phase C): test_bulk_skip_action_sets_state_done
+# Survivor: test_papers_contract.py::test_a74_skip_paper_transitions_state_to_done
+# SQL-arg assertion ("done" in args) — B1-09 class. Contract A74 verifies state='done' in DB.
 
 
-@pytest.mark.asyncio
-async def test_bulk_skip_action_sets_state_done():
-    pool, conn = _make_pool_and_conn()
-    body = BulkActionRequest(paper_ids=[1], action="skip")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
-
-    assert result["succeeded"] == [1]
-    assert any("done" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list)
-
-
-@pytest.mark.asyncio
-async def test_bulk_mark_reading_action_sets_state_reading():
-    pool, conn = _make_pool_and_conn()
-    body = BulkActionRequest(paper_ids=[1], action="mark_reading")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
-
-    assert result["succeeded"] == [1]
-    assert any(
-        "reading" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list
-    )
-
-
-@pytest.mark.asyncio
-async def test_bulk_mark_done_action_sets_state_done():
-    pool, conn = _make_pool_and_conn()
-    body = BulkActionRequest(paper_ids=[1], action="mark_done")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
-
-    assert result["succeeded"] == [1]
-    assert any("done" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list)
-
-
-@pytest.mark.asyncio
-async def test_bulk_restore_action_uses_coalesce_state_before_trash():
-    pool, conn = _make_pool_and_conn()
-    conn.fetchval.return_value = "trash"  # _assert_paper_in_state: paper is in trash
-    # Group B: _restore_paper parses conn.execute return value as "UPDATE N"
-    conn.execute.return_value = "UPDATE 1"
-    body = BulkActionRequest(paper_ids=[1], action="restore")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
-
-    assert result["succeeded"] == [1]
-    # SQL COALESCE structure covered by contract:
-    # test_papers_contract.py::test_restore_paper_state_transition
+# Collapsed (Phase C): test_bulk_restore_action_uses_coalesce_state_before_trash
+# Survivor: test_papers_contract.py::test_restore_paper_state_transition
+# Primary assertion was SQL COALESCE structure (B1-09 class); behavioral restore outcome covered by contract.
 
 
 @pytest.mark.asyncio
@@ -955,17 +851,9 @@ async def test_bulk_unstar_action_writes_starred_false():
     )
 
 
-@pytest.mark.asyncio
-async def test_bulk_trash_action_sets_state_before_trash_atomically():
-    pool, conn = _make_pool_and_conn()
-    body = BulkActionRequest(paper_ids=[1, 2], action="trash")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
-
-    assert result == {"succeeded": [1, 2], "failed": []}
-    # CASE expression atomicity covered by contract:
-    # test_papers_contract.py::test_trash_paper_state_transition
+# Collapsed (Phase C): test_bulk_trash_action_sets_state_before_trash_atomically
+# Survivor: test_papers_contract.py::test_trash_paper_state_transition
+# Primary assertions were CASE expression SQL structure (B1-09 class); behavioral trash covered by contract.
 
 
 @pytest.mark.asyncio
@@ -1386,26 +1274,10 @@ async def test_delete_recommendation_feedback_returns_zero_for_nonexistent_topic
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_delete_paper_feedback_returns_204_for_existing_row():
-    """DELETE /api/papers/{id}/feedback?source=pulse_thumbs deletes the matching row.
-
-    Returns 204 No Content regardless of row count.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.execute.return_value = "DELETE 1"
-
-    result = await papers.delete_paper_feedback.__wrapped__(
-        request=MagicMock(),
-        paper_id=42,
-        source="pulse_thumbs",
-        db_pool=pool,
-        user_id=7,
-    )
-
-    # 204 handler returns None
-    assert result is None
-    conn.execute.assert_awaited_once()
+# Collapsed (Phase C): test_delete_paper_feedback_returns_204_for_existing_row
+# Survivor: test_papers_contract.py::test_delete_paper_feedback_removes_row_scoped_to_user
+# Behavioral outcome (DELETE returns 204/None, execute called once) covered by contract.
+# SQL-text assertions for this test were already moved to contract in W4-followup (see line 1411).
 
 
 # W4-followup: SQL-text/param-index assertions ($1 paper_id, $2 user_id, $3 source) moved to

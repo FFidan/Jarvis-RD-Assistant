@@ -104,19 +104,9 @@ async def test_hard_delete_calls_qdrant():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_bulk_action_save_succeeds_for_all():
-    """POST /bulk with action=save succeeds for all 3 paper_ids."""
-    pool = _make_pool_and_conn()[0]
-
-    result = await papers.bulk_action_papers.__wrapped__(
-        _mock_request(),
-        body=BulkActionRequest(paper_ids=[1, 2, 3], action="save"),
-        db_pool=pool,
-    )
-
-    assert set(result["succeeded"]) == {1, 2, 3}
-    assert result["failed"] == []
+# Collapsed (Phase C): test_bulk_action_save_succeeds_for_all
+# Survivor: test_papers_contract.py::test_a84_bulk_action_transitions_state_for_owner
+# Behavioral outcome (succeeded=[1,2,3], failed=[]) covered by contract A84 with real DB.
 
 
 @pytest.mark.asyncio
@@ -295,49 +285,9 @@ async def test_bulk_action_error_returns_safe_code(exc, expected_code):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_feed_counts_basic():
-    """GET /feed/counts returns FeedCountsResponse with correct 10-bucket field names.
-
-    The handler also calls fetch_feed_facet_counts (UI v3 additive facets), which
-    issues two conn.fetch calls (by_source, by_topic) and one extra conn.fetchrow
-    (untagged).  We stub both to keep this test focused on the 10-bucket fields.
-    """
-    pool, conn = _make_pool_and_conn()
-    # First fetchrow → 10-bucket aggregate; second fetchrow → untagged count (facets).
-    conn.fetchrow.side_effect = [
-        {
-            "inbox": 3,
-            "library": 5,
-            "reading_list": 2,
-            "reading": 1,
-            "done": 2,
-            "starred": 2,
-            "trash": 1,
-            "active": 6,
-            "kept": 5,
-            "all_non_trash": 11,
-        },
-        {"cnt": 0},  # untagged — from fetch_feed_facet_counts
-    ]
-    # by_source and by_topic facet queries return empty lists for this test.
-    conn.fetch.return_value = []
-
-    result = await papers.get_feed_counts.__wrapped__(
-        _mock_request(),
-        db_pool=pool,
-    )
-
-    assert result.inbox == 3
-    assert result.library == 5
-    assert result.reading_list == 2
-    assert result.reading == 1
-    assert result.done == 2
-    assert result.starred == 2
-    assert result.trash == 1
-    assert result.active == 6
-    assert result.kept == 5
-    assert result.all_non_trash == 11
+# Collapsed (Phase C): test_feed_counts_basic
+# Survivor: test_papers_contract.py::test_a71_get_feed_counts_reflects_user_library
+# Contract A71 verifies all 10-bucket fields in the FeedCountsResponse with real DB data.
 
 
 # ---------------------------------------------------------------------------

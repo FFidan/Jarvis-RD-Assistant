@@ -787,33 +787,9 @@ async def test_create_deck_with_description(_app):
 # checks with no additional coverage beyond what the contract test provides.
 
 
-# ---------------------------------------------------------------------------
-# Tests: Health check
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_health_check_ok(_app):
-    """GET /health returns ok when all dependencies are healthy."""
-    app, conn, mock_http, *_ = _app
-    conn.fetchval.return_value = 1  # SELECT 1
-
-    class MockResp:
-        status_code = 200
-
-    mock_http.get.return_value = MockResp()
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/health")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    # Public /health no longer exposes service/checks — SEC-H09
-    assert "service" not in body
-    assert "checks" not in body
+# test_health_check_ok deleted — duplicate of shared health contract suite
+# (test_health.py::test_health_returns_200_when_ok was ALSO collapsed in Phase C).
+# Live survivor: libs/jarvis_common/tests/contract/test_health_contract.py::test_health_public_200_when_ok.
 
 
 # ---------------------------------------------------------------------------

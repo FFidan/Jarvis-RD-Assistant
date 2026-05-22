@@ -126,28 +126,6 @@ def test_pulse_generate_returns_409_when_lock_held(client):
     mock_task.defer_async.assert_not_awaited()
 
 
-def test_pulse_generate_succeeds_when_lock_free(client):
-    """POST /generate → 200 when the advisory lock is free."""
-    import jarvis_common.task_registry as task_registry
-
-    tc, pool, conn = client
-
-    # pg_try_advisory_lock returns true → lock is free; probe acquires then releases
-    conn.fetchrow.return_value = FakeRecord({"got": True})
-
-    mock_task = MagicMock()
-    mp = AsyncMock(return_value=None)
-    mock_task.defer_async = mp
-    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_task}):
-        resp = tc.post("/api/pulse/generate")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "queued"
-    assert body["job_id"]
-    mp.assert_awaited_once()
-
-
 def test_today_404_when_no_deck(client):
     tc, _pool, _conn = client
     with patch("paper_ingestion.routers.pulse.load_today", AsyncMock(return_value=None)):
@@ -201,48 +179,6 @@ def test_rate_open_writes_nothing(client):
     mock_fb.assert_not_called()
     mock_state.assert_not_called()
     mock_trash.assert_not_called()
-
-
-def test_rate_save_writes_state_only(client):
-    """rating='save' calls _upsert_state_and_starred(state='to_read') only."""
-    tc, pool, conn = client
-    conn.fetchval.return_value = 1
-
-    with (
-        patch(
-            "paper_ingestion.routers.pulse._upsert_state_and_starred", new_callable=AsyncMock
-        ) as mock_state,
-        patch(
-            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
-        ) as mock_fb,
-    ):
-        resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "save"})
-
-    assert resp.status_code == 200
-    mock_state.assert_awaited_once()
-    call_kwargs = mock_state.await_args
-    assert call_kwargs is not None
-    # Third positional arg is conn, then paper_id, then user_id; state is a kwarg
-    assert call_kwargs.kwargs.get("state") == "to_read"
-    mock_fb.assert_not_called()
-
-
-def test_rate_up_writes_recommendation_feedback_positive_pulse_thumbs(client):
-    """rating='up' calls _upsert_recommendation_feedback(signal='positive', source='pulse_thumbs')."""
-    tc, pool, conn = client
-    conn.fetchval.return_value = 1
-
-    with patch(
-        "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
-    ) as mock_fb:
-        resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "up"})
-
-    assert resp.status_code == 200
-    mock_fb.assert_awaited_once()
-    _conn_arg, paper_id_arg, user_id_arg, signal_arg, source_arg = mock_fb.await_args.args
-    assert paper_id_arg == 42
-    assert signal_arg == "positive"
-    assert source_arg == "pulse_thumbs"
 
 
 def test_rate_down_writes_recommendation_feedback_negative_pulse_thumbs(client):
@@ -595,21 +531,6 @@ def test_source_health_returns_per_source_rows(client):
     pool.fetch.assert_awaited_once()
 
 
-def test_source_health_requires_api_key(client):
-    """GET /source-health requires API key (verify_api_key dependency).
-
-    Note: In this test fixture, API key is mocked via dependency override,
-    so we test that the endpoint exists and returns data. Real API key
-    enforcement is tested at the integration level.
-    """
-    tc, pool, conn = client
-
-    pool.fetch = AsyncMock(return_value=[])
-    resp = tc.get("/api/pulse/source-health")
-    # With mocked verify_api_key, this should return 200
-    assert resp.status_code == 200
-
-
 # ---------------------------------------------------------------------------
 # GET /api/pulse/source-history
 # ---------------------------------------------------------------------------
@@ -702,17 +623,3 @@ def test_source_history_default_days_is_7(client):
         assert len(call_args.args) >= 3 or len(call_args.args) >= 2
     # Verify at least the fetch was called
     assert pool.fetch.await_count == 1  # days should be 7
-
-
-def test_source_history_custom_days_parameter(client):
-    """GET /source-history accepts custom days parameter."""
-    tc, pool, conn = client
-
-    pool.fetch = AsyncMock(return_value=[])
-    resp = tc.get("/api/pulse/source-history?days=30")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert isinstance(body, dict)
-
-    # Verify that pool.fetch was called once
-    pool.fetch.assert_awaited_once()

@@ -109,21 +109,13 @@ async def test_zotero_user_id_valid(_app):
 
 
 @pytest.mark.asyncio
-async def test_zotero_library_type_user(_app):
-    """zotero.library_type accepts 'user'."""
+@pytest.mark.parametrize("library_type", ["user", "group"])
+async def test_zotero_library_type_valid(_app, library_type: str):
+    """zotero.library_type accepts 'user' and 'group' (D5-10)."""
     app, _conn = _app
-    resp = await _put_config(app, "zotero.library_type", "user")
+    resp = await _put_config(app, "zotero.library_type", library_type)
     assert resp.status_code == 200
-    assert resp.json()["value"] == "user"
-
-
-@pytest.mark.asyncio
-async def test_zotero_library_type_group(_app):
-    """zotero.library_type accepts 'group'."""
-    app, _conn = _app
-    resp = await _put_config(app, "zotero.library_type", "group")
-    assert resp.status_code == 200
-    assert resp.json()["value"] == "group"
+    assert resp.json()["value"] == library_type
 
 
 @pytest.mark.asyncio

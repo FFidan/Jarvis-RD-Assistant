@@ -285,3 +285,150 @@ def test_build_feed_queries_params_align_with_placeholders_when_user_id_none():
         f"params list has N entries; unused params cause asyncpg "
         f"IndeterminateDatatypeError."
     )
+
+
+# ---------------------------------------------------------------------------
+# Canonical-corpus + user_library semantics (migrated from test_feed_query_canonical.py)
+# ---------------------------------------------------------------------------
+
+
+def _build_canonical(user_id: int | None):
+    return build_feed_queries(
+        unread_only=False,
+        sort="discovered_at",
+        limit=10,
+        offset=0,
+        q=None,
+        statuses=None,
+        source_types=None,
+        topic_names=None,
+        date_from=None,
+        date_to=None,
+        user_id=user_id,
+    )
+
+
+def test_user_id_present_uses_library_join():
+    parts = _build_canonical(user_id=42)
+    assert "JOIN user_library ul" in parts.data_query
+    assert "ul.user_id = $1" in parts.data_query
+    assert "p.user_id IS NULL" not in parts.data_query
+    assert "p.discovered_by" not in parts.data_query
+
+
+def test_user_id_none_falls_back_to_canonical_corpus():
+    parts = _build_canonical(user_id=None)
+    assert "JOIN user_library" not in parts.data_query
+    assert " FROM papers p" in parts.data_query
+
+
+def test_user_a_and_user_b_get_disjoint_param_lists():
+    """Two callers building queries produce same SQL but different bound user_id."""
+    a = _build_canonical(user_id=1)
+    b = _build_canonical(user_id=2)
+    assert a.data_query == b.data_query
+    assert a.params[0] == 1
+    assert b.params[0] == 2
+
+
+def test_count_query_also_uses_library_join_when_user_id_set():
+    parts = _build_canonical(user_id=99)
+    assert "JOIN user_library" in parts.count_query
+    assert "ul.user_id = $1" in parts.count_query
+
+
+@pytest.mark.parametrize("uid", [None, 42])
+def test_param_layout_starts_with_user_id_at_dollar1(uid):
+    """First parameter is always user_id so LEFT JOIN onto paper_user_state binds $1."""
+    parts = _build_canonical(user_id=uid)
+    assert parts.params[0] is uid
+
+
+# ---------------------------------------------------------------------------
+# SQL predicate fragments (migrated from test_queries_predicates.py)
+# ---------------------------------------------------------------------------
+
+
+def test_view_predicates_has_ten_named_views() -> None:
+    """The VIEW_PREDICATES dict must expose exactly the 10 spec §6 named views."""
+    from paper_ingestion.queries.predicates import VIEW_PREDICATES
+
+    assert set(VIEW_PREDICATES) == {
+        "inbox",
+        "library",
+        "reading_list",
+        "reading",
+        "done",
+        "starred",
+        "trash",
+        "active",
+        "kept",
+        "all_non_trash",
+    }
+
+
+def test_view_predicates_use_state_or_starred_column() -> None:
+    """Every VIEW_PREDICATES entry must reference pus.state or pus.starred."""
+    from paper_ingestion.queries.predicates import VIEW_PREDICATES
+
+    for name, sql in VIEW_PREDICATES.items():
+        assert ("pus.state" in sql) or ("pus.starred" in sql), (
+            f"VIEW_PREDICATES[{name!r}] does not reference pus.state or pus.starred"
+        )
+
+
+def test_view_predicates_inbox_uses_coalesce() -> None:
+    """Inbox view must default missing user_state rows to 'inbox'."""
+    from paper_ingestion.queries.predicates import VIEW_PREDICATES
+
+    assert VIEW_PREDICATES["inbox"] == "COALESCE(pus.state, 'inbox') = 'inbox'"
+
+
+def test_view_predicates_library_includes_three_states() -> None:
+    """Library view spans to_read / reading / done per spec §5.4."""
+    from paper_ingestion.queries.predicates import VIEW_PREDICATES
+
+    library_sql = VIEW_PREDICATES["library"]
+    assert "to_read" in library_sql
+    assert "reading" in library_sql
+    assert "done" in library_sql
+
+
+def test_view_predicates_starred_excludes_trash() -> None:
+    """Starred view must exclude trashed papers per spec §2.4."""
+    from paper_ingestion.queries.predicates import VIEW_PREDICATES
+
+    starred_sql = VIEW_PREDICATES["starred"]
+    assert "pus.starred = TRUE" in starred_sql
+    assert "trash" in starred_sql
+
+
+def test_view_predicates_trash_does_not_use_coalesce() -> None:
+    """Trash view targets state='trash' directly; COALESCE is unnecessary."""
+    from paper_ingestion.queries.predicates import VIEW_PREDICATES
+
+    assert VIEW_PREDICATES["trash"] == "pus.state = 'trash'"
+
+
+def test_recommender_exclude_sql_matches_spec() -> None:
+    """Spec §7.3.1 — papers in trash or done are excluded from recommender output."""
+    from paper_ingestion.queries.predicates import RECOMMENDER_EXCLUDE_SQL
+
+    assert RECOMMENDER_EXCLUDE_SQL == "COALESCE(pus.state, 'inbox') IN ('trash','done')"
+
+
+def test_pulse_candidate_exclude_sql_matches_spec() -> None:
+    """Spec §6 + §7.3.1 — pulse candidate filter excludes trash and done."""
+    from paper_ingestion.queries.predicates import PULSE_CANDIDATE_EXCLUDE_SQL
+
+    assert PULSE_CANDIDATE_EXCLUDE_SQL == "COALESCE(pus.state, 'inbox') IN ('trash','done')"
+
+
+def test_legacy_predicates_no_longer_importable() -> None:
+    """Legacy IS_ARCHIVED_SQL et al. must be deleted (spec §11 atomic cutover)."""
+    import paper_ingestion.queries.predicates as predicates_mod
+
+    assert not hasattr(predicates_mod, "IS_ARCHIVED_SQL")
+    assert not hasattr(predicates_mod, "IS_NOT_ARCHIVED_SQL")
+    assert not hasattr(predicates_mod, "IS_DISMISSED_SQL")
+    assert not hasattr(predicates_mod, "IS_SAVED_SQL")

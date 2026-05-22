@@ -222,12 +222,9 @@ def test_get_today_includes_source_diagnostics_in_stale_response(client):
     assert diag["pubmed"]["consecutive_failures"] == 0
 
 
-def test_get_today_404_when_no_deck_at_all(client):
-    """404 is raised when no deck exists for today (load_today returns None)."""
-    tc, _pool, _conn = client
-    with patch("paper_ingestion.routers.pulse.load_today", AsyncMock(return_value=None)):
-        resp = tc.get("/api/pulse/today")
-    assert resp.status_code == 404
+# test_get_today_404_when_no_deck_at_all: DELETED (Phase C collapse).
+# Duplicate of test_pulse_router.py::test_today_404_when_no_deck — identical
+# setup (patch load_today → None) and assertion (resp.status_code == 404).
 
 
 def test_load_last_nonempty_deck_not_called_when_today_has_cards(client):

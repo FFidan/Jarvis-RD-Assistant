@@ -129,18 +129,9 @@ async def test_get_config_found(_app):
     assert body["value"] == "mistral-nemo"
 
 
-@pytest.mark.asyncio
-async def test_get_config_not_found(_app):
-    """GET /api/config/{key} returns 404 when key does not exist."""
-    app, conn, _ = _app
-    conn.fetchrow.return_value = None
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/config/nonexistent.key")
-
-    assert resp.status_code == 404
+# Collapsed (Phase C): test_get_config_not_found
+# Survivor: test_settings_contract.py::test_get_config_key_not_found_returns_404
+# Exact same 404 assertion exercised with real DB — B1-09 class (fetchrow=None mock).
 
 
 @pytest.mark.asyncio

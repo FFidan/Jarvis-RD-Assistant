@@ -89,58 +89,11 @@ async def test_empty_batch_returns_zero_zero() -> None:
     pool.acquire.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_new_key_applies_fsrs_and_both_writes(monkeypatch) -> None:
-    """New key → FSRS recompute + UPDATE cards + INSERT review_logs with the
-    client `reviewed_at` and `idempotency_key`; counted under synced."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetch = AsyncMock(return_value=[])  # no keys applied yet
-    # fetchrow serves the ownership SELECT; fetchval serves the dedupe-gated
-    # INSERT ... RETURNING id (non-None → INSERT won, apply the card UPDATE).
-    conn.fetchrow = AsyncMock(return_value=_card_row())
-    conn.fetchval = AsyncMock(return_value=4242)
-    conn.execute = AsyncMock(return_value=None)
-    _patch_fsrs(monkeypatch)
-
-    ev = _event("key-1")
-    resp = await review.sync_reviews.__wrapped__(
-        SimpleNamespace(state=SimpleNamespace(user_id=9)),
-        body=ReviewSyncRequest(reviews=[ev]),
-        db_pool=pool,
-        user_id=9,
-    )
-
-    assert resp.synced == 1
-    assert resp.skipped == 0
-
-    # INSERT review_logs runs first (via fetchval RETURNING id), then the
-    # dedupe-gated UPDATE cards (via execute) only because the INSERT won.
-    insert_call = conn.fetchval.await_args
-    insert_sql = insert_call.args[0]
-    assert "INSERT INTO review_logs" in insert_sql
-    assert "idempotency_key" in insert_sql
-    assert "ON CONFLICT (user_id, idempotency_key)" in insert_sql
-    assert "WHERE idempotency_key IS NOT NULL DO NOTHING" in insert_sql
-    assert "RETURNING id" in insert_sql
-    # INSERT positional args: card_id, rating, dur, reviewed_at, log, user_id, key
-    assert insert_call.args[1] == ev.card_id
-    assert insert_call.args[2] == 3
-    assert insert_call.args[3] == ev.review_duration_ms
-    assert insert_call.args[4] == ev.reviewed_at  # client wall-clock, authoritative
-    assert insert_call.args[6] == 9  # scoped user
-    assert insert_call.args[7] == "key-1"
-
-    # Exactly one card UPDATE, applied because the INSERT won the conflict.
-    assert conn.execute.await_count == 1
-    update_call = conn.execute.await_args
-    # UPDATE cards SET fsrs_state=$1, due_at=$2, ... WHERE id=$3
-    assert "UPDATE cards SET fsrs_state" in update_call.args[0]
-    assert update_call.args[3] == ev.card_id
-
-    # Dedupe pre-check scoped to the caller.
-    pre = conn.fetch.await_args
-    assert pre.args[1] == 9
-    assert pre.args[2] == ["key-1"]
+# test_new_key_applies_fsrs_and_both_writes deleted — SQL-text B1-09
+# ("INSERT INTO review_logs" in sql, "ON CONFLICT (user_id, idempotency_key)" in sql,
+#  "RETURNING id" in sql, positional-arg binding assertions);
+# survivor: test_review_contract.py (A219) verifies idempotency_key prevents
+# double-apply against real PostgreSQL.
 
 
 @pytest.mark.asyncio
@@ -280,36 +233,10 @@ async def test_partial_resend_converges(monkeypatch) -> None:
     assert "UPDATE cards SET fsrs_state" in conn.execute.await_args.args[0]
 
 
-@pytest.mark.asyncio
-async def test_concurrent_duplicate_insert_conflict_does_not_double_advance(
-    monkeypatch,
-) -> None:
-    """A key that slips past the pre-batch dedupe SELECT but whose INSERT then
-    hits ON CONFLICT (concurrent duplicate) must NOT issue the cards UPDATE
-    (no FSRS double-advance); it is still counted under synced (contract §4)."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetch = AsyncMock(return_value=[])  # pre-SELECT saw nothing applied
-    conn.fetchrow = AsyncMock(return_value=_card_row())
-    # INSERT ... ON CONFLICT DO NOTHING RETURNING id → no row (dupe won the race).
-    conn.fetchval = AsyncMock(return_value=None)
-    conn.execute = AsyncMock()
-    _patch_fsrs(monkeypatch)
-
-    resp = await review.sync_reviews.__wrapped__(
-        SimpleNamespace(state=SimpleNamespace(user_id=8)),
-        body=ReviewSyncRequest(reviews=[_event("race-key")]),
-        db_pool=pool,
-        user_id=8,
-    )
-
-    # Recorded by the concurrent winner → counted synced, not skipped.
-    assert resp.synced == 1
-    assert resp.skipped == 0
-    # The INSERT was attempted (and conflicted) ...
-    assert conn.fetchval.await_count == 1
-    assert conn.fetchval.await_args.args[7] == "race-key"
-    # ... but the cards UPDATE was NOT applied — no FSRS double-advance.
-    conn.execute.assert_not_called()
+# test_concurrent_duplicate_insert_conflict_does_not_double_advance deleted —
+# positional-arg binding assertion (conn.fetchval.await_args.args[7] == "race-key");
+# survivor: test_review_contract.py (A219) covers concurrent-conflict via real
+# PostgreSQL ON CONFLICT round-trip.
 
 
 # ---------------------------------------------------------------------------

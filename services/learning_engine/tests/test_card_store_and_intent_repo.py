@@ -6,24 +6,12 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-
-class _Acquire:
-    """Async context manager returning a fake DB connection."""
-
-    def __init__(self, conn: AsyncMock) -> None:
-        self.conn = conn
-
-    async def __aenter__(self) -> AsyncMock:
-        return self.conn
-
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
-        return False
+from jarvis_common.testing import FakeAcquireCM
 
 
 def _pool_with_conn(conn: AsyncMock) -> MagicMock:
     pool = MagicMock()
-    pool.acquire.return_value = _Acquire(conn)
+    pool.acquire.return_value = FakeAcquireCM(conn)
     return pool
 
 

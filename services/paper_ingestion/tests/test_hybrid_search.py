@@ -79,7 +79,8 @@ def test_rrf_tiebreaking():
 
 
 def _make_pool(rows: list[dict]) -> AsyncMock:
-    """Create a mock asyncpg.Pool that returns the given rows from fetch()."""
+    # Local helper — canonical make_pool_and_conn doesn't support rows-list factory semantics
+    # (needs _dict_to_record transform + fetch-return wiring without fetchval/fetchrow defaults).
     records = [_dict_to_record(r) for r in rows]
     conn = AsyncMock()
     conn.fetch = AsyncMock(return_value=records)

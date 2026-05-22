@@ -1,0 +1,270 @@
+"""Knowledge graph domain contract tests — Phase B target rows A47, A48, A49.
+
+Survivor-of: test_knowledge_graph.py mock-unit assertions for get_graph,
+    list_entities, get_entity_detail.
+Carve-out: app.state.http_client is MagicMock (outbound HTTP);
+    Qdrant client is mocked (exempt external boundary).
+"""
+
+from __future__ import annotations
+
+import pytest
+import pytest_asyncio
+import httpx
+
+pytestmark = [pytest.mark.contract, pytest.mark.asyncio(loop_scope="session")]
+
+_TEST_API_KEY = "kg-contract-key-phase-b-do-not-use-in-prod"
+
+
+@pytest.fixture(scope="function")
+def _configure_api_key(monkeypatch):
+    from jarvis_common import auth as _auth
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
+    get_secrets_settings.cache_clear()
+    _auth.refresh_api_key_cache()
+    yield
+    get_secrets_settings.cache_clear()
+    _auth.refresh_api_key_cache()
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _pi_app_with_pool(contract_conn):
+    from jarvis_common import current_user_id_strict_with_owner_override
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.main import app
+
+    shared = SharedConnPool(contract_conn)
+    original_pool = getattr(app.state, "db_pool", None)
+    app.state.db_pool = shared
+
+    removed_override = app.dependency_overrides.pop(
+        current_user_id_strict_with_owner_override, None
+    )
+    had_override = removed_override is not None
+
+    yield app
+
+    if original_pool is None:
+        if hasattr(app.state, "db_pool"):
+            del app.state.db_pool
+    else:
+        app.state.db_pool = original_pool
+
+    if had_override:
+        app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
+
+
+def _make_client(app, cookie: str) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"X-API-Key": _TEST_API_KEY},
+        cookies={"jarvis_session": cookie},
+    )
+
+
+# ---------------------------------------------------------------------------
+# A47: GET /api/knowledge-graph — graph nodes/edges scoped to user's papers
+# ---------------------------------------------------------------------------
+
+
+async def test_a47_get_graph_owner_gets_200_with_structure(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """Covers map row A47: GET /api/knowledge-graph returns KnowledgeGraphResponse shape.
+
+    Verified: knowledge_graph.py:133-185 get_graph at HEAD d21aaea8.
+    Survivor-of (future Phase C): test_knowledge_graph.py mock-unit tests for get_graph.
+    """
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/knowledge-graph")
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    assert "entities" in body, (
+        f"Missing 'entities' in knowledge graph response: {list(body.keys())}"
+    )
+    assert "relationships" in body, (
+        f"Missing 'relationships' in knowledge graph response: {list(body.keys())}"
+    )
+    assert isinstance(body["entities"], list)
+    assert isinstance(body["relationships"], list)
+
+
+async def test_a47_get_graph_no_cross_user_entity_leak(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers map row A47: entities scoped — user B's seed entity not visible to user A.
+
+    Verified: knowledge_graph.py:148-150 get_knowledge_graph(user_id=user_id) scoping.
+    """
+    # Seed an entity linked to user B's paper only
+    entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('kg-contract-b-only', 'kg-contract-b-only', 'concept', 1)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT DO NOTHING""",
+        contract_two_users.paper_id_a,  # use paper_id_a but link to user_b_id
+        entity_id,
+        contract_two_users.user_b_id,
+    )
+
+    # User A should NOT see an entity scoped to user_b_id
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/knowledge-graph")
+
+    assert resp.status_code == 200
+    entity_names = [e["name"] for e in resp.json().get("entities", [])]
+    assert "kg-contract-b-only" not in entity_names, (
+        f"User A must not see user B's entity 'kg-contract-b-only'; got: {entity_names}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# A48: GET /api/knowledge-graph/entities — entity list scoped to user
+# ---------------------------------------------------------------------------
+
+
+async def test_a48_list_entities_owner_gets_200_list(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """Covers map row A48: GET /api/knowledge-graph/entities returns list for owner.
+
+    Verified: knowledge_graph.py:188-265 list_entities at HEAD d21aaea8.
+    Survivor-of (future Phase C): test_knowledge_graph.py mock-unit tests for list_entities.
+    """
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/knowledge-graph/entities")
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    assert isinstance(body, list), f"Expected list, got {type(body).__name__}"
+
+
+async def test_a48_list_entities_user_scoped_no_cross_user_leak(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers map row A48: user A's entity list does not include user B-only entities.
+
+    Verified: knowledge_graph.py:231-243 WHERE pe.user_id IS NOT DISTINCT FROM $3.
+    """
+    # Seed an entity linked only to user B
+    entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('list-ent-b-only', 'list-ent-b-only', 'method', 1)
+           RETURNING id"""
+    )
+    # Seed a paper for user B to own this entity
+    b_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('kg-b-paper-ext', 'arxiv', 'B entity paper', ARRAY['Author'],
+                   'https://kg-b.test/paper', $1)
+           RETURNING id""",
+        contract_two_users.user_b_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT DO NOTHING""",
+        b_paper_id,
+        entity_id,
+        contract_two_users.user_b_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/knowledge-graph/entities")
+
+    assert resp.status_code == 200
+    names = [e["name"] for e in resp.json()]
+    assert "list-ent-b-only" not in names, (
+        f"User A must not see user B-only entity 'list-ent-b-only'; names={names}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# A49: GET /api/knowledge-graph/entity/{entity_id} — entity detail scoped to owner
+# ---------------------------------------------------------------------------
+
+
+async def test_a49_get_entity_detail_user_b_gets_403_404(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers map row A49: GET /api/knowledge-graph/entity/{id} 403/404 for non-owner.
+
+    Verified: knowledge_graph.py:268 get_entity_detail at HEAD d21aaea8.
+    Survivor-of (future Phase C): test_kg_relationship_scoping.py mock-unit tests.
+    """
+    # Seed an entity linked to user A only
+    entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('detail-ent-a-only', 'detail-ent-a-only', 'concept', 1)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT DO NOTHING""",
+        contract_two_users.paper_id_a,
+        entity_id,
+        contract_two_users.user_a_id,
+    )
+
+    # User B should be denied
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp = await c.get(f"/api/knowledge-graph/entity/{entity_id}")
+
+    assert resp.status_code in (403, 404), (
+        f"User B should get 403/404 for user A's entity; got {resp.status_code}"
+    )
+
+
+async def test_a49_get_entity_detail_owner_gets_200(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers map row A49: GET /api/knowledge-graph/entity/{id} 200 for owner.
+
+    Verified: knowledge_graph.py:268 get_entity_detail at HEAD d21aaea8.
+    """
+    entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('detail-ent-owner', 'detail-ent-owner', 'concept', 1)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, user_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT DO NOTHING""",
+        contract_two_users.paper_id_a,
+        entity_id,
+        contract_two_users.user_a_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get(f"/api/knowledge-graph/entity/{entity_id}")
+
+    assert resp.status_code == 200, f"Owner expected 200, got {resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    assert "name" in body or "id" in body, f"Unexpected entity detail shape: {list(body.keys())}"

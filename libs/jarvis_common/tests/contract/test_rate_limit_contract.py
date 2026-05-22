@@ -144,3 +144,96 @@ async def test_rate_limit_handler_body_has_no_extra_keys() -> None:
     assert resp.status_code == 429
     body = resp.json()
     assert set(body.keys()) == {"detail"}, f"Unexpected body keys: {set(body.keys())}"
+
+
+# ---------------------------------------------------------------------------
+# A259 — pulse-generate 3/hour cooldown semantics
+# ---------------------------------------------------------------------------
+#
+# POST /api/pulse/generate is decorated with ``@limiter.limit("3/hour")``
+# (pulse.py:76).  The test below uses the same _make_app() isolation
+# strategy (fresh app + fresh limiter per test) to assert the semantic
+# contract WITHOUT requiring a running paper_ingestion instance or
+# pulse-generate route logic.  The "3/hour" window is the contract; the
+# mechanism is the shared handler already proven above.
+# ---------------------------------------------------------------------------
+
+
+async def test_pulse_generate_rate_limit_semantics_3_per_hour() -> None:
+    """Simulates the ``3/hour`` pulse-generate rate-limit contract.
+
+    After 3 allowed calls the 4th returns 429 with the canonical body.
+    This is the cooldown semantics documented in:
+      - pulse.py:76  ``@limiter.limit("3/hour")``
+      - reference_pulse_generate_429_by_design.md (vault memory)
+
+    A fresh isolated app is used so this test does not pollute the
+    per-service limiter state shared by other tests.
+    """
+    import httpx
+
+    # Use "3/minute" here (same trip semantics as 3/hour but instant reset
+    # in the test clock); the shape contract is identical — the handler and
+    # body are the same regardless of the window unit.
+    app = _make_app("3/minute")
+    responses: list[int] = []
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        for _ in range(4):
+            r = await client.post("/ping")
+            responses.append(r.status_code)
+
+    assert responses[:3] == [200, 200, 200], (
+        f"First 3 requests should succeed (within 3/hour quota): {responses[:3]}"
+    )
+    assert responses[3] == 429, f"4th request should be rate-limited (429); got {responses[3]}"
+    # Confirm cooldown body shape matches the canonical pulse-generate 429 shape
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.post("/ping")
+    assert resp.status_code == 429
+    body = resp.json()
+    assert "Rate limit exceeded" in body.get("detail", ""), (
+        f"Cooldown 429 body does not match pulse-generate contract: {body}"
+    )
+
+
+async def test_rate_limit_window_reset_allows_new_requests() -> None:
+    """Within-quota requests succeed; a fresh app (simulating window reset) allows again.
+
+    The window-reset contract: once the limit window expires, requests are
+    allowed again.  We model this by using two independent app instances
+    (each with a fresh MemoryStorage counter), which is equivalent to the
+    limiter's per-key counter rolling over after the window expires.
+
+    This proves the ``create_limiter`` call properly isolates state per-instance
+    (no cross-instance counter sharing through module-level singletons).
+    """
+    import httpx
+
+    # Trip the limit on app_1
+    app_1 = _make_app("1/minute")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_1),
+        base_url="http://test",
+    ) as client:
+        await client.post("/ping")  # allowed
+        resp_tripped = await client.post("/ping")  # tripped
+    assert resp_tripped.status_code == 429
+
+    # Fresh app_2 (simulates next window) — same key, fresh counter
+    app_2 = _make_app("1/minute")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_2),
+        base_url="http://test",
+    ) as client:
+        resp_fresh = await client.post("/ping")
+
+    assert resp_fresh.status_code == 200, (
+        f"After window reset (fresh limiter), first request should succeed; "
+        f"got {resp_fresh.status_code}"
+    )

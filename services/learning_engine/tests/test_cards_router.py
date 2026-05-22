@@ -60,36 +60,10 @@ async def test_create_card_success_uses_evidence_payload():
     }
 
 
-@pytest.mark.asyncio
-async def test_list_cards_builds_query_with_filters():
-    """list_cards includes deck and due filters in the generated SQL.
-
-    WS-CROSS: list_cards always prefixes a ``user_id = $1`` predicate to
-    enforce multi-user isolation; user_id is always a real int post-migration.
-    """
-    pool, conn = _make_pool_and_conn()
-    due_before = _now()
-    conn.fetch.return_value = [make_card_row()]
-
-    req = SimpleNamespace(state=SimpleNamespace(user_id=1))
-    rows = await cards.list_cards.__wrapped__(
-        req,
-        deck_id=3,
-        due_before=due_before,
-        limit=10,
-        offset=5,
-        db_pool=pool,
-        user_id=1,
-    )
-
-    assert len(rows) == 1
-    sql = conn.fetch.await_args.args[0]
-    params = conn.fetch.await_args.args[1:]
-    # user_id = $1, deck_id shifts to $2, due_before to $3.
-    assert "user_id = $1" in sql
-    assert "deck_id = $2" in sql
-    assert "due_at <= $3" in sql
-    assert params == (1, 3, due_before, 10, 5)
+# test_list_cards_builds_query_with_filters deleted — SQL-text B1-09
+# ("user_id = $1" in sql, "deck_id = $2" in sql, "due_at <= $3" in sql);
+# survivor: test_le_contract.py cards CRUD tests exercise the same filtering
+# against real PostgreSQL.
 
 
 @pytest.mark.asyncio
@@ -204,33 +178,8 @@ async def test_create_card_raises_404_on_fk_violation_deck():
     assert exc_info.value.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_list_cards_no_filters_includes_user_predicate_only():
-    """list_cards without any filter still scopes by user_id.
-
-    The user_id = $1 predicate is unconditional even when no other filters
-    are set.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = []
-
-    req = SimpleNamespace(state=SimpleNamespace(user_id=7))
-    result = await cards.list_cards.__wrapped__(
-        req,
-        deck_id=None,
-        due_before=None,
-        limit=20,
-        offset=0,
-        db_pool=pool,
-    )
-
-    assert result == []
-    sql = conn.fetch.await_args.args[0]
-    # WHERE is always present (user_id predicate).
-    assert "WHERE user_id = $1" in sql
-    # No deck_id / due_at clauses.
-    assert "deck_id" not in sql
-    assert "due_at <=" not in sql
+# test_list_cards_no_filters_includes_user_predicate_only deleted — SQL-text B1-09
+# ("WHERE user_id = $1" in sql); survivor: test_le_contract.py cards CRUD.
 
 
 # ---------------------------------------------------------------------------

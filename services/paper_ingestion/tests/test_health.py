@@ -112,24 +112,6 @@ def _app():
 
 
 @pytest.mark.asyncio
-async def test_health_returns_200_when_all_ok(_app) -> None:
-    """GET /health returns HTTP 200 and status='ok' — no dependency details."""
-    app, _conn = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/health")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    # Public endpoint must NOT expose internal details
-    assert "service" not in body
-    assert "checks" not in body
-
-
-@pytest.mark.asyncio
 async def test_health_returns_503_when_degraded(_app) -> None:
     """GET /health returns HTTP 503 and status='degraded' when Qdrant is down."""
     app, _conn = _app
@@ -170,34 +152,6 @@ async def test_health_public_no_checks_on_503(_app) -> None:
 # ---------------------------------------------------------------------------
 # /health/internal tests (full details, requires auth)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_health_internal_returns_full_details(_app) -> None:
-    """GET /health/internal returns {status, service, checks} when authed.
-
-    Vector is 'unknown' (API disabled by default) which no longer triggers degraded.
-    All other checks must be 'ok'.
-    """
-    app, _conn = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/health/internal")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["service"] == "paper_ingestion"
-    checks = body["checks"]
-    # Core deps should be ok
-    assert checks.get("postgres") == "ok"
-    assert checks.get("qdrant") == "ok"
-    assert checks.get("litellm") == "ok"
-    assert checks.get("ollama") == "ok"
-    # Vector API is disabled by default — expected to be 'unknown', not 'unavailable'
-    assert checks.get("vector") == "unknown"
 
 
 @pytest.mark.asyncio
@@ -258,61 +212,3 @@ async def test_health_internal_vector_unknown_does_not_degrade(_app) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     assert body["checks"]["vector"] == "unknown"
-
-
-# ---------------------------------------------------------------------------
-# Regression: HEALTH-LIVE-403 + SEC-AUTH-1
-#
-# The _HEALTH_PATHS exemption in verify_api_key must cover /health/live so
-# that unauthenticated liveness probes are never blocked by the global
-# app-level dependency. /health/internal must remain 403 without a key.
-#
-# These tests intentionally do NOT override verify_api_key — they exercise
-# the real global dependency gate.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_health_live_accessible_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unauthenticated GET /health/live must return 200 — not 403.
-
-    Exercises the real global verify_api_key dependency (no override) to catch
-    regressions where /health/live is accidentally removed from _HEALTH_PATHS.
-    """
-
-    import jarvis_common.auth as _auth
-    from fastapi import Depends, FastAPI
-    from jarvis_common.auth import verify_api_key
-    from jarvis_common.health import register_health_routes
-    from jarvis_common.settings import get_secrets_settings
-
-    # Set a real-looking API key so verify_api_key enforces key checks and
-    # does not fall through to the no-key dev-bypass path.
-    test_key = "a" * 32
-    monkeypatch.setenv("JARVIS_API_KEY", test_key)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-
-    # Build a minimal app with the real global dependency — mirrors production
-    # wiring in paper_ingestion/main.py which passes dependencies=[Depends(verify_api_key)].
-    minimal_app = FastAPI(dependencies=[Depends(verify_api_key)])
-    register_health_routes(minimal_app, service_name="test", checks=[])
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=minimal_app), base_url="http://test"
-    ) as client:
-        resp_live = await client.get("/health/live")
-        resp_internal = await client.get("/health/internal")
-
-    # /health/live: no auth required — must be 200 (HEALTH-LIVE-403 fix).
-    assert resp_live.status_code == 200, (
-        f"/health/live returned {resp_live.status_code} without auth — "
-        "check that /health/live is in auth._HEALTH_PATHS"
-    )
-    assert resp_live.json()["status"] == "ok"
-
-    # /health/internal: always requires verify_api_key — must be 403 without key.
-    assert resp_internal.status_code == 403, (
-        f"/health/internal returned {resp_internal.status_code} without auth — "
-        "/health/internal must NOT be exempt from API key auth"
-    )

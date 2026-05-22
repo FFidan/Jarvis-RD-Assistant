@@ -720,3 +720,49 @@ async def test_get_procrastinate_job_returns_none_when_procrastinate_table_missi
     result = await get_procrastinate_job_for_jarvis_id(pool, "abc-123")
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# JobStatusResponse model type correctness (migrated from test_models_jobstatus.py)
+# ---------------------------------------------------------------------------
+
+
+def test_job_status_response_user_id_accepts_int():
+    """JobStatusResponse.user_id accepts int (from JSONB job args)."""
+    from jarvis_common.models import JobStatusResponse
+
+    response = JobStatusResponse(
+        id="job-123",
+        kind="paper.summarize",
+        status="done",
+        user_id=1,
+    )
+    assert response.user_id == 1
+    assert isinstance(response.user_id, int)
+
+
+def test_job_status_response_user_id_accepts_none():
+    """JobStatusResponse.user_id accepts None."""
+    from jarvis_common.models import JobStatusResponse
+
+    response = JobStatusResponse(
+        id="job-123",
+        kind="paper.summarize",
+        status="done",
+        user_id=None,
+    )
+    assert response.user_id is None
+
+
+def test_job_status_response_user_id_rejects_string():
+    """JobStatusResponse.user_id does not accept string (it's an int field)."""
+    from jarvis_common.models import JobStatusResponse
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        JobStatusResponse(
+            id="job-123",
+            kind="paper.summarize",
+            status="done",
+            user_id="not-an-int",
+        )

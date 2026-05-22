@@ -461,3 +461,114 @@ async def test_get_project_detail_owner_sees_counts(
     # Counts are non-negative integers (type contract)
     assert isinstance(body["paper_count"], int) and body["paper_count"] >= 0
     assert isinstance(body["open_question_count"], int) and body["open_question_count"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# §A186 — POST /api/cards — 404 when deck not owned by caller
+# ---------------------------------------------------------------------------
+
+
+async def test_create_card_non_owner_deck_gets_404(contract_two_users, _le_app, _configure_api_key):
+    """User B cannot create a card in user A's deck — must get 404 (IDOR guard).
+
+    Exercises the real ``SELECT id FROM decks WHERE id = $1 AND user_id = $2``
+    ownership check in create_card, rather than the mock-fetchval assertion in
+    test_cards_router.py (which only confirms the SQL text).
+    """
+    deck_id_a = contract_two_users.deck_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.post(
+            "/api/cards",
+            json={
+                "deck_id": deck_id_a,
+                "card_type": "concept",
+                "front": "Injected front",
+                "back": "Injected back",
+            },
+        )
+
+    assert resp.status_code != 401, (
+        "POST /api/cards: got 401 — session wiring bug; "
+        "user B must authenticate before the ownership check fires"
+    )
+    assert resp.status_code == 404, (
+        f"IDOR: user B got {resp.status_code} creating a card in user A's deck {deck_id_a} "
+        f"(expected 404). Body: {resp.text[:300]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §A186 (positive) — POST /api/cards — card created with owner's user_id
+# ---------------------------------------------------------------------------
+
+
+async def test_create_card_row_has_owner_user_id(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/cards creates a card with the caller's user_id in DB.
+
+    Exercises insert_card setting user_id=user_id — a behavior the mock-pool
+    tests cannot verify because they never touch real Postgres.
+    """
+    deck_id_a = contract_two_users.deck_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/cards",
+            json={
+                "deck_id": deck_id_a,
+                "card_type": "concept",
+                "front": "Contract card front",
+                "back": "Contract card back",
+            },
+        )
+
+    assert resp.status_code == 201, (
+        f"POST /api/cards failed for owner: {resp.status_code}: {resp.text[:300]}"
+    )
+    card_id = resp.json()["id"]
+    db_user_id = await contract_conn.fetchval(
+        "SELECT user_id FROM cards WHERE id = $1",
+        card_id,
+    )
+    assert db_user_id == contract_two_users.user_a_id, (
+        f"Card {card_id} has user_id={db_user_id} in DB; "
+        f"expected user_a_id={contract_two_users.user_a_id}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §A190 — POST /api/decks — deck row inserted with caller's user_id
+# ---------------------------------------------------------------------------
+
+
+async def test_create_deck_row_has_caller_user_id(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/decks creates a deck with the caller's user_id in DB.
+
+    Exercises the real INSERT INTO decks … user_id = $4 against the contract
+    schema, replacing the mock-fetchrow assertion in test_decks_router.py.
+    Also verifies the new deck appears in user A's list and NOT in user B's.
+    """
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/decks", json={"name": "Contract Deck Alpha"})
+
+    assert resp.status_code == 201, f"POST /api/decks failed: {resp.status_code}: {resp.text[:300]}"
+    deck_id = resp.json()["id"]
+
+    db_user_id = await contract_conn.fetchval(
+        "SELECT user_id FROM decks WHERE id = $1",
+        deck_id,
+    )
+    assert db_user_id == contract_two_users.user_a_id, (
+        f"Deck {deck_id} has user_id={db_user_id}; expected {contract_two_users.user_a_id}"
+    )
+
+    # Confirm user B cannot see the new deck
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        list_resp = await c.get("/api/decks")
+    assert list_resp.status_code == 200
+    b_deck_ids = [d["id"] for d in list_resp.json()]
+    assert deck_id not in b_deck_ids, (
+        f"IDOR: user B sees user A's newly created deck {deck_id} in list {b_deck_ids}"
+    )

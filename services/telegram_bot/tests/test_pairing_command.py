@@ -19,6 +19,7 @@ import pytest
 from jarvis_common.testing import FakeAcquireCM, FakeTxnCM, make_bot_config, make_telegram_update
 from telegram_bot.handlers.commands import start_command  # noqa: E402
 from telegram_bot.handlers.commands.pairing_commands import pair_command  # noqa: E402
+from telegram_bot.handlers.commands.system_commands import _handle_pairing  # noqa: E402
 from telegram_bot.handlers.helpers import auth_check as _auth_check  # noqa: E402
 
 _OWNER_CHAT_ID = 777
@@ -385,4 +386,159 @@ async def test_start_pair_rate_limited_after_five_calls() -> None:
     reply: str = last_update.message.reply_text.call_args[0][0]
     assert "rate" in reply.lower() or "limit" in reply.lower(), (
         f"Expected rate-limit reply on 6th call, got: {reply!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# H3/H4: existing-owner check + log safety (migrated from test_pairing_takeover.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def _clear_pairing_timestamps():
+    """Reset rate-limit timestamps before/after each H3/H4 test."""
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+    yield
+    _timestamps.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_pairing_timestamps")
+async def test_already_paired_rejected():
+    """If an owner is already stored, pairing is refused and DB is NOT overwritten (H3)."""
+    conn = _make_conn(fetchval_return='"999"')
+    pool = _make_pool(conn)
+    update = make_telegram_update(chat_id=42)
+    context = _make_context(pool, _make_config(telegram_chat_id=None))
+
+    await _handle_pairing(update, context, "VALID_CODE")
+
+    conn.fetchrow.assert_not_awaited()
+    conn.execute.assert_not_awaited()
+    update.message.reply_text.assert_awaited_once()
+    reply_text = update.message.reply_text.call_args[0][0]
+    assert "already paired" in reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_pairing_timestamps")
+async def test_already_paired_integer_owner_rejected():
+    """Owner stored as bare integer string is also treated as already-paired (H3)."""
+    conn = _make_conn(fetchval_return="777")
+    pool = _make_pool(conn)
+    update = make_telegram_update(chat_id=42)
+    context = _make_context(pool, _make_config(telegram_chat_id=None))
+
+    await _handle_pairing(update, context, "SOME_CODE")
+
+    conn.execute.assert_not_awaited()
+    reply_text = update.message.reply_text.call_args[0][0]
+    assert "already paired" in reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_pairing_timestamps")
+async def test_no_existing_owner_allows_pairing():
+    """When no owner is set, valid pairing code is accepted and owner is written (H3)."""
+    from datetime import UTC, datetime, timedelta
+
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    conn = _make_conn(fetchval_return=None, fetchrow_return={"expires_at": future})
+    pool = _make_pool(conn)
+    update = make_telegram_update(chat_id=42)
+    context = _make_context(pool, _make_config(telegram_chat_id=None))
+
+    await _handle_pairing(update, context, "GOODCODE")
+
+    assert conn.execute.await_count == 2
+    update.message.reply_text.assert_awaited_once()
+    reply_text = update.message.reply_text.call_args[0][0]
+    assert "Paired" in reply_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_pairing_timestamps")
+async def test_pairing_logs_hash_not_raw_code(caplog):
+    """On exception inside _handle_pairing, raw code must NOT appear in log output (H4)."""
+    import hashlib
+    import logging
+
+    conn = _make_conn()
+    conn.fetchval = AsyncMock(side_effect=RuntimeError("db exploded"))
+    pool = _make_pool(conn)
+    update = make_telegram_update(chat_id=42)
+    context = _make_context(pool, _make_config(telegram_chat_id=None))
+
+    raw_code = "SUPERSECRETCODE123"
+
+    with caplog.at_level(logging.ERROR):
+        await _handle_pairing(update, context, raw_code)
+
+    for record in caplog.records:
+        assert raw_code not in record.getMessage(), (
+            f"Raw pairing code leaked in log: {record.getMessage()!r}"
+        )
+
+    failure_messages = [
+        r.getMessage() for r in caplog.records if "pairing_failed" in r.getMessage()
+    ]
+    assert failure_messages, "Expected at least one 'pairing_failed' log entry"
+
+    expected_hash = hashlib.sha256(raw_code.encode()).hexdigest()[:8]
+    assert any(expected_hash in msg for msg in failure_messages), (
+        f"Expected code_hash {expected_hash!r} in log, got: {failure_messages}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_pairing_timestamps")
+async def test_pairing_rate_limit_triggers():
+    """6th pairing attempt within 60 s from the same chat_id must be rejected (H3 rate-limit)."""
+    conn = _make_conn(fetchval_return=None, fetchrow_return=None)
+    pool = _make_pool(conn)
+    update = make_telegram_update(chat_id=42)
+    context = _make_context(pool, _make_config(telegram_chat_id=None))
+
+    for i in range(5):
+        update.message.reply_text.reset_mock()
+        await _handle_pairing(update, context, f"BAD_CODE_{i}")
+        reply_text = update.message.reply_text.call_args[0][0]
+        assert "Invalid or expired" in reply_text, f"Attempt {i + 1} should hit DB"
+
+    fetchrow_count_before = conn.fetchrow.await_count
+    update.message.reply_text.reset_mock()
+    await _handle_pairing(update, context, "BAD_CODE_5")
+
+    assert conn.fetchrow.await_count == fetchrow_count_before, (
+        "6th attempt should have been rate-limited before reaching DB"
+    )
+    reply_text = update.message.reply_text.call_args[0][0]
+    assert (
+        "Rate limit exceeded" in reply_text
+        or "Too many pairing" in reply_text
+        or "wait" in reply_text.lower()
+    ), f"Expected rate-limit message, got: {reply_text!r}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_pairing_timestamps")
+async def test_pairing_rate_limit_different_chats_independent():
+    """Rate limit is per-chat — two different chat IDs each get their own counter."""
+    conn = _make_conn(fetchval_return=None, fetchrow_return=None)
+    pool = _make_pool(conn)
+    context = _make_context(pool, _make_config(telegram_chat_id=None))
+
+    update_a = make_telegram_update(chat_id=10)
+    for _ in range(5):
+        await _handle_pairing(update_a, context, "CODE_A")
+
+    update_b = make_telegram_update(chat_id=20)
+    update_b.message.reply_text.reset_mock()
+    await _handle_pairing(update_b, context, "CODE_B")
+
+    reply_text = update_b.message.reply_text.call_args[0][0]
+    assert "Too many pairing attempts" not in reply_text, (
+        "Different chat_id should not be rate-limited"
     )

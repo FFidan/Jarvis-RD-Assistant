@@ -258,3 +258,89 @@ async def test_setup_status_via_contract_conn(pi_test_client, monkeypatch):
     assert body["setup_completed"] is False
     assert body["telegram_configured"] is False
     assert body["topics_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase B additions — setup-status topics_count reflects real DB rows
+# ---------------------------------------------------------------------------
+
+
+# §A-SYS-05 — GET /api/system/setup-status: topics_count reflects real topics table
+# Verified: system.py:193 (SELECT COUNT(*) AS n FROM topics)
+
+
+async def test_setup_status_topics_count_reflects_real_db(
+    pi_test_client, contract_conn, monkeypatch
+):
+    """GET /api/system/setup-status topics_count reflects the real topics table row count.
+
+    Inserts a topic row in the same transaction as the ASGI request (shared
+    contract_conn) and asserts topics_count >= 1.  Proves the dual-override
+    fixture shares the transactional connection for the topics COUNT query.
+    """
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    import paper_ingestion.routers.system as system_mod
+
+    # Insert a topic inside the contract transaction — visible to the ASGI route
+    await contract_conn.execute(
+        "INSERT INTO topics (name, query_terms) VALUES ('sys-contract-topic', ARRAY['test'])"
+    )
+
+    orig_probe = system_mod._probe_ollama
+
+    async def _fake_probe():
+        return False, []
+
+    system_mod._probe_ollama = _fake_probe
+    try:
+        resp = await pi_test_client.get("/api/system/setup-status")
+    finally:
+        system_mod._probe_ollama = orig_probe
+
+    assert resp.status_code == 200, f"setup-status failed: {resp.text}"
+    body = resp.json()
+    assert body["topics_count"] >= 1, (
+        f"topics_count must be >= 1 after inserting a topic in the same txn; "
+        f"got {body['topics_count']} — SharedConnPool may not be sharing the txn connection"
+    )
+
+
+# §A-SYS-06 — GET /api/system/setup-status: setup_completed=True when user_config set
+# Verified: system.py:196 (_coerce_bool(config.get("setup.completed"), default=False))
+
+
+async def test_setup_status_setup_completed_when_config_set(
+    pi_test_client, contract_conn, monkeypatch
+):
+    """GET /api/system/setup-status returns setup_completed=True when user_config row exists.
+
+    Inserts 'setup.completed' = 'true' (global, user_id IS NULL) in the same
+    transaction as the ASGI request. Proves the real user_config read path.
+    """
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    import paper_ingestion.routers.system as system_mod
+
+    await contract_conn.execute(
+        """INSERT INTO user_config (key, value, user_id)
+           VALUES ('setup.completed', 'true'::jsonb, NULL)
+           ON CONFLICT (key, user_id) DO UPDATE SET value = 'true'::jsonb
+           WHERE user_config.user_id IS NULL"""
+    )
+
+    orig_probe = system_mod._probe_ollama
+
+    async def _fake_probe():
+        return False, []
+
+    system_mod._probe_ollama = _fake_probe
+    try:
+        resp = await pi_test_client.get("/api/system/setup-status")
+    finally:
+        system_mod._probe_ollama = orig_probe
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["setup_completed"] is True, (
+        f"setup_completed must be True when user_config 'setup.completed'='true'; "
+        f"got {body['setup_completed']}"
+    )

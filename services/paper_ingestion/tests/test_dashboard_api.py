@@ -106,41 +106,9 @@ def _app():
 # ---------------------------------------------------------------------------
 
 
-async def test_dashboard_metrics_shape(_app):
-    """GET /api/dashboard/metrics returns all 7 fields as ints."""
-    app, conn = _app
-    conn.fetchrow.return_value = FakeRecord(
-        total_papers=10,
-        unread_papers=5,
-        pending_papers=3,
-        due_cards=2,
-        active_projects=1,
-        topic_count=4,
-        nudge_count=6,
-    )
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/dashboard/metrics")
-
-    assert resp.status_code == 200
-    body = resp.json()
-
-    expected_keys = {
-        "total_papers",
-        "unread_papers",
-        "pending_papers",
-        "due_cards",
-        "active_projects",
-        "topic_count",
-        "nudge_count",
-        "onboarding_stage",
-    }
-    assert set(body.keys()) == expected_keys
-    for key in expected_keys - {"onboarding_stage"}:
-        assert isinstance(body[key], int), f"{key} should be int"
-    assert isinstance(body["onboarding_stage"], str)
+# Collapsed (Phase C): test_dashboard_metrics_shape
+# Survivor: test_dashboard_contract.py::test_a32_dashboard_metrics_returns_all_fields
+# Contract A32 verifies all 7 field names present + non-negative ints with real DB data.
 
 
 def test_dashboard_metrics_uses_shared_pool_dependency() -> None:

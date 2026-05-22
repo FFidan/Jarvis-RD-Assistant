@@ -292,43 +292,10 @@ async def test_focus_log_task_not_found(exec_app):
     assert "task" in resp.json()["detail"].lower()
 
 
-@pytest.mark.asyncio
-async def test_focus_log_with_paper_id(exec_app):
-    """POST /api/executive/focus/log with paper_id returns 200 and uses new ON CONFLICT (paper_id, user_id) clause.
-
-    The exec_app fixture pins user_id=1 via dependency_overrides.  A previous
-    version also patched the module-level ``current_user_id_strict_with_owner_override``
-    name to return user_id=5, but that patch was dead-on-arrival: FastAPI's
-    ``dependency_overrides`` wins over a raw name-patch on the module, so the
-    patch never changed the resolved user_id.  The real assertion (ON CONFLICT
-    composite key) is independent of the caller's user_id value.
-    """
-    app, conn = exec_app
-
-    # fetchrow (SELECT FOR UPDATE) returns a row — paper exists
-    conn.fetchrow.return_value = FakeRecord(id=7)
-    conn.execute.return_value = "INSERT 1"
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/executive/focus/log",
-            json={"duration_hours": 0.5, "paper_id": 7},
-        )
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "success"
-    assert data["recorded_hours"] == 0.5
-
-    # Verify the ON CONFLICT clause references the composite key (paper_id, user_id)
-    executed_sqls = [str(call.args[0]) for call in conn.execute.call_args_list]
-    paper_state_sql = next((s for s in executed_sqls if "paper_user_state" in s), None)
-    assert paper_state_sql is not None, "Expected an INSERT into paper_user_state"
-    assert "ON CONFLICT (paper_id, user_id)" in paper_state_sql, (
-        f"SQL must use composite ON CONFLICT, got: {paper_state_sql!r}"
-    )
+# test_focus_log_with_paper_id deleted — SQL-text B1-09
+# ("ON CONFLICT (paper_id, user_id)" in paper_state_sql);
+# survivor: test_executive_contract.py (A197) verifies focus/log paper_id
+# path + composite ON CONFLICT against real PostgreSQL.
 
 
 @pytest.mark.asyncio
@@ -695,47 +662,10 @@ async def test_focus_log_task_not_found_no_side_effects(exec_app):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_focus_log_uses_select_for_update_on_task(exec_app):
-    """LE-009: log_focus_session issues SELECT … FOR UPDATE before task DML.
-
-    This mock-level test verifies two things:
-    1. Each invocation succeeds and returns {status: success}.
-    2. The handler's fetchrow call uses SELECT … FOR UPDATE SQL, which is the
-       mechanism that prevents TOCTOU races in production.
-
-    It does NOT verify that PostgreSQL actually serialises concurrent writes —
-    that requires a live database.  Real concurrency prevention is covered by
-    the live-PG suite in ``test_review_sync_live.py``
-    (``test_concurrent_duplicate_insert_conflict_does_not_double_advance``).
-    """
-    import asyncio
-
-    app, conn = exec_app
-
-    # Both requests target an existing task — fetchrow returns a row for each call.
-    conn.fetchrow.return_value = FakeRecord(id=1)
-    conn.execute.return_value = "UPDATE 1"
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        results = await asyncio.gather(
-            client.post("/api/executive/focus/log", json={"duration_hours": 0.5, "task_id": 1}),
-            client.post("/api/executive/focus/log", json={"duration_hours": 0.5, "task_id": 1}),
-        )
-
-    # Both requests must succeed.
-    assert all(r.status_code == 200 for r in results)
-    assert all(r.json()["status"] == "success" for r in results)
-
-    # fetchrow (SELECT ... FOR UPDATE) must have been called twice — once per request.
-    assert conn.fetchrow.call_count == 2
-
-    # The FOR UPDATE SQL must appear in both fetchrow calls.
-    for call in conn.fetchrow.call_args_list:
-        sql = call[0][0]
-        assert "FOR UPDATE" in sql.upper(), f"Expected FOR UPDATE in SQL: {sql!r}"
+# test_focus_log_uses_select_for_update_on_task deleted — SQL-text B1-09
+# ("FOR UPDATE" in sql.upper()); survivor: test_executive_contract.py (A197)
+# verifies task DML ordering against real PostgreSQL; live-PG concurrency
+# tested in test_review_sync_live.py.
 
 
 # ---------------------------------------------------------------------------
