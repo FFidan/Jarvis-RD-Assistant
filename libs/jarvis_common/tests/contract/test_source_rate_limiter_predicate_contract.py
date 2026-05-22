@@ -149,3 +149,99 @@ async def test_a262_window_reset_via_sql_update(contract_conn):
     assert row is not None
     # last_request_at should have been updated to approximately now
     assert row["last_request_at"] > past
+
+
+async def test_a262_cooldown_after_error_blocks_acquire(contract_conn):
+    """A262: after update_last_request('error') increments consecutive_failures.
+
+    A plain 'error' outcome does NOT set cooldown_until — consecutive_failures
+    accumulates. This test verifies the error branch increments the counter and
+    that is_in_cooldown() remains False until an explicit 'rate_limit' update.
+
+    Verified: source_rate_limiter.py:318-338 — error branch increments
+    consecutive_failures; cooldown_until not set.
+    Supersedes: mock-unit test_source_rate_limiter.py::test_error_increments_failures.
+    """
+    source_type = f"contract_rl_err_{uuid.uuid4().hex[:8]}"
+    limiter = _make_limiter(contract_conn, source_type, min_interval_seconds=0.0)
+
+    await limiter.acquire()
+    await limiter.update_last_request("error")
+
+    # After 'error' alone: NOT in cooldown
+    in_cd, until = await limiter.is_in_cooldown()
+    assert in_cd is False
+    assert until is None
+
+    row = await contract_conn.fetchrow(
+        "SELECT consecutive_failures, cooldown_until FROM source_health "
+        "WHERE source_type = $1 AND user_id IS NULL",
+        source_type,
+    )
+    assert row is not None
+    assert row["consecutive_failures"] >= 1, "error should increment consecutive_failures"
+    assert row["cooldown_until"] is None, "error alone must not set cooldown_until"
+
+
+async def test_a262_cooldown_persists_in_db(contract_conn):
+    """A262: cooldown_until survives re-read by a second limiter instance.
+
+    Simulates a process restart: a fresh PersistentSourceRateLimiter pointing at
+    the same source_type still sees the cooldown written by the first instance.
+
+    Verified: source_rate_limiter.py:347-382 — is_in_cooldown reads from DB
+    each time; no in-memory state carried between instances.
+    Supersedes: mock-unit test_source_rate_limiter.py::test_cooldown_survives_restart.
+    """
+    source_type = f"contract_rl_persist_{uuid.uuid4().hex[:8]}"
+    limiter1 = _make_limiter(contract_conn, source_type, min_interval_seconds=0.0)
+
+    await limiter1.acquire()
+    await limiter1.update_last_request("rate_limit", retry_after_s=3600)
+
+    # "restart": create a brand-new limiter pointing at the same row
+    limiter2 = _make_limiter(contract_conn, source_type, min_interval_seconds=0.0)
+    in_cd, until = await limiter2.is_in_cooldown()
+
+    assert in_cd is True, "New limiter instance should still see the DB cooldown"
+    assert until is not None
+    assert until > datetime.now(tz=UTC)
+
+
+async def test_a262_ok_update_clears_cooldown_and_failures(contract_conn):
+    """A262: update_last_request('ok') clears cooldown_until and resets consecutive_failures.
+
+    Verified: source_rate_limiter.py:274-292 — 'ok' branch sets cooldown_until=NULL,
+    consecutive_failures=0.
+    Supersedes: mock-unit test_source_rate_limiter.py::test_ok_clears_state.
+    """
+    source_type = f"contract_rl_ok_{uuid.uuid4().hex[:8]}"
+    limiter = _make_limiter(contract_conn, source_type, min_interval_seconds=0.0)
+
+    await limiter.acquire()
+    await limiter.update_last_request("error")
+    await limiter.update_last_request("rate_limit", retry_after_s=3600)
+
+    # Confirm both error state and cooldown are set
+    row_before = await contract_conn.fetchrow(
+        "SELECT cooldown_until, consecutive_failures FROM source_health "
+        "WHERE source_type = $1 AND user_id IS NULL",
+        source_type,
+    )
+    assert row_before is not None
+    assert row_before["cooldown_until"] is not None
+
+    await limiter.update_last_request("ok")
+
+    in_cd, _ = await limiter.is_in_cooldown()
+    assert in_cd is False
+
+    row_after = await contract_conn.fetchrow(
+        "SELECT cooldown_until, consecutive_failures, last_status FROM source_health "
+        "WHERE source_type = $1 AND user_id IS NULL",
+        source_type,
+    )
+    assert row_after is not None
+    assert row_after["cooldown_until"] is None
+    assert row_after["consecutive_failures"] == 0
+    assert row_after["last_status"] == "ok"

@@ -92,24 +92,9 @@ def _app():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_list_config(_app):
-    """GET /api/config returns list of config entries."""
-    app, conn, _ = _app
-    conn.fetch.return_value = [
-        FakeRecord(key="llm.smart_model", value="mistral-nemo"),
-        FakeRecord(key="llm.fast_model", value="qwen3.5:4b"),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/config")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 2
-    assert body[0]["key"] == "llm.smart_model"
+# Collapsed (E2.PI): test_list_config
+# Survivor: test_settings_contract.py::test_list_config_returns_list
+# GET /api/config returns list of config entries verified with real DB.
 
 
 @pytest.mark.asyncio
@@ -209,30 +194,9 @@ async def test_admin_still_sees_system_default(_app):
     )
 
 
-@pytest.mark.asyncio
-async def test_set_config_allowed_key(_app):
-    """PUT /api/config/{key} sets a config value for an allowed key."""
-    app, conn, mock_http = _app
-    mock_http.get.return_value = MagicMock(
-        status_code=200,
-        json=MagicMock(return_value={"models": [{"name": "qwen3:4b"}]}),
-    )
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/llm.smart_model",
-            json={"key": "llm.smart_model", "value": "qwen3:4b"},
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["key"] == "llm.smart_model"
-    assert body["value"] == "qwen3:4b"
-    # set_config now emits a log_event (INSERT INTO system_events) in addition to the
-    # UPSERT — expect at least one execute call (the config UPSERT).
-    conn.execute.assert_awaited()
+# Collapsed (E2.PI): test_set_config_allowed_key
+# Survivor: test_settings_contract.py::test_put_config_string_value_round_trip
+# PUT /api/config/{key} persists and returns config value verified with real DB round-trip.
 
 
 @pytest.mark.asyncio
@@ -313,21 +277,9 @@ async def test_set_config_does_not_persist_when_litellm_update_fails(_app, monke
     conn.execute.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_set_config_disallowed_key(_app):
-    """PUT /api/config/{key} returns 400 for a disallowed key."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/secret.password",
-            json={"key": "secret.password", "value": "hunter2"},
-        )
-
-    assert resp.status_code == 400
-    assert "Unknown config key" in resp.json()["detail"]
+# Collapsed (E2.PI): test_set_config_disallowed_key
+# Survivor: test_settings_contract.py::test_put_config_ghost_key_returns_400
+# PUT /api/config/{ghost-key} returns 400 Unknown config key verified with real DB.
 
 
 # ---------------------------------------------------------------------------
@@ -738,70 +690,35 @@ async def test_set_config_invalid_cron_returns_400(_app):
 
 
 @pytest.mark.asyncio
-async def test_set_config_invalid_weights_returns_400(_app):
-    """PUT /api/config/pulse.weights rejects a dict with wrong keys."""
-    app, conn, _ = _app
+@pytest.mark.parametrize(
+    ("config_key", "bad_value"),
+    [
+        pytest.param("pulse.weights", {"bad_key": 0.5}, id="weights_wrong_keys"),
+        pytest.param("pulse.deck_size", "10", id="deck_size_string"),
+    ],
+)
+async def test_set_config_invalid_value_returns_400(_app, config_key, bad_value):
+    """PUT /api/config/{key} rejects invalid values with 400."""
+    app, _conn, _ = _app
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         resp = await client.put(
-            "/api/config/pulse.weights",
-            json={"key": "pulse.weights", "value": {"bad_key": 0.5}},
+            f"/api/config/{config_key}",
+            json={"key": config_key, "value": bad_value},
         )
 
     assert resp.status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_set_config_string_deck_size_returns_400(_app):
-    """PUT /api/config/pulse.deck_size rejects a string value."""
-    app, conn, _ = _app
+# Collapsed (E2.PI): test_set_config_l2_lambda_valid_accepted
+# Survivor: test_settings_contract.py::test_put_pulse_l2_lambda_round_trip
+# PUT /api/config/pulse.l2_lambda accepts float in [0, 2] and persists — verified with real DB.
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/pulse.deck_size",
-            json={"key": "pulse.deck_size", "value": "10"},
-        )
-
-    assert resp.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_set_config_l2_lambda_valid_accepted(_app):
-    """PUT /api/config/pulse.l2_lambda accepts a float in [0, 2]."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/pulse.l2_lambda",
-            json={"key": "pulse.l2_lambda", "value": 0.5},
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["key"] == "pulse.l2_lambda"
-    assert body["value"] == 0.5
-
-
-@pytest.mark.asyncio
-async def test_set_config_l2_lambda_out_of_range_returns_400(_app):
-    """PUT /api/config/pulse.l2_lambda rejects a value > 2.0."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/pulse.l2_lambda",
-            json={"key": "pulse.l2_lambda", "value": 5.0},
-        )
-
-    assert resp.status_code == 400
+# Collapsed (E2.PI): test_set_config_l2_lambda_out_of_range_returns_400
+# Survivor: test_settings_contract.py::test_put_pulse_l2_lambda_out_of_range_returns_400
+# PUT /api/config/pulse.l2_lambda rejects value > 2.0 — verified with real DB.
 
 
 @pytest.mark.asyncio
@@ -828,87 +745,41 @@ async def test_set_config_valid_cron_accepted(_app):
 # ---------------------------------------------------------------------------
 
 
+# Collapsed (E2.PI): test_set_setup_completed_accepts_bool
+# Survivor: test_settings_contract.py::test_put_setup_completed_persists_true
+# PUT /api/config/setup.completed accepts and persists true — verified with real DB.
+
+
 @pytest.mark.asyncio
-async def test_set_setup_completed_accepts_bool(_app):
-    """PUT /api/config/setup.completed accepts a boolean value."""
+@pytest.mark.parametrize(
+    ("config_key", "string_value"),
+    [
+        pytest.param("setup.completed", "true", id="setup_completed_string"),
+        pytest.param("telegram.owner_chat_id", "123", id="telegram_chat_id_string"),
+    ],
+)
+async def test_set_config_rejects_wrong_type_string(_app, config_key, string_value):
+    """PUT /api/config/{key} rejects a string value where a non-string type is required."""
     app, _conn, _ = _app
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         resp = await client.put(
-            "/api/config/setup.completed",
-            json={"key": "setup.completed", "value": True},
-        )
-
-    assert resp.status_code == 200
-    assert resp.json()["value"] is True
-
-
-@pytest.mark.asyncio
-async def test_set_setup_completed_rejects_string(_app):
-    """PUT /api/config/setup.completed rejects a non-boolean value."""
-    app, _conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/setup.completed",
-            json={"key": "setup.completed", "value": "true"},
+            f"/api/config/{config_key}",
+            json={"key": config_key, "value": string_value},
         )
 
     assert resp.status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_set_telegram_owner_chat_id_accepts_int(_app):
-    """PUT /api/config/telegram.owner_chat_id accepts integer chat ids."""
-    app, _conn, _ = _app
+# Collapsed (E2.PI): test_set_telegram_owner_chat_id_accepts_int
+# Survivor: test_settings_contract.py::test_put_telegram_owner_chat_id_round_trip
+# PUT /api/config/telegram.owner_chat_id accepts integer and persists — verified with real DB.
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/telegram.owner_chat_id",
-            json={"key": "telegram.owner_chat_id", "value": 123456789},
-        )
-
-    assert resp.status_code == 200
-    assert resp.json()["value"] == 123456789
-
-
-@pytest.mark.asyncio
-async def test_set_telegram_owner_chat_id_accepts_none(_app):
-    """PUT /api/config/telegram.owner_chat_id accepts null to clear pairing."""
-    app, _conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/telegram.owner_chat_id",
-            json={"key": "telegram.owner_chat_id", "value": None},
-        )
-
-    assert resp.status_code == 200
-    assert resp.json()["value"] is None
-
-
-@pytest.mark.asyncio
-async def test_set_telegram_owner_chat_id_rejects_string(_app):
-    """PUT /api/config/telegram.owner_chat_id rejects a non-integer value."""
-    app, _conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/telegram.owner_chat_id",
-            json={"key": "telegram.owner_chat_id", "value": "123"},
-        )
-
-    assert resp.status_code == 400
+# Collapsed (E2.PI): test_set_telegram_owner_chat_id_accepts_none
+# Survivor: test_settings_contract.py::test_put_telegram_owner_chat_id_null_clears
+# PUT /api/config/telegram.owner_chat_id accepts null and clears value — verified with real DB.
 
 
 # ---------------------------------------------------------------------------
@@ -1141,19 +1012,10 @@ _GHOST_KEYS = [
 ]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("key,value", _GHOST_KEYS)
-async def test_ghost_key_returns_400(_app, key: str, value):
-    """PUT /api/config/<ghost-key> returns 400 (key removed from allow-list)."""
-    app, _conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(f"/api/config/{key}", json={"key": key, "value": value})
-
-    assert resp.status_code == 400
-    assert "Unknown config key" in resp.json()["detail"]
+# Collapsed (E2.PI): test_ghost_key_returns_400 (parametrized, 5 ghost keys)
+# Survivor: test_settings_contract.py::test_put_config_ghost_key_returns_400
+#           + test_settings_contract.py::test_put_config_ghost_key_does_not_write_db
+# Removed config keys return 400 Unknown config key — verified with real DB.
 
 
 # ---------------------------------------------------------------------------
@@ -1161,40 +1023,13 @@ async def test_ghost_key_returns_400(_app, key: str, value):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_fsrs_desired_retention_valid_accepted(_app):
-    """PUT /api/config/fsrs.desired_retention accepts a valid value in (0, 1)."""
-    app, conn, _ = _app
+# Collapsed (E2.PI): test_fsrs_desired_retention_valid_accepted
+# Survivor: test_settings_contract.py::test_put_fsrs_desired_retention_round_trip
+# PUT /api/config/fsrs.desired_retention accepts valid float in (0,1) and persists — verified with real DB.
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/fsrs.desired_retention",
-            json={"key": "fsrs.desired_retention", "value": 0.85},
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["key"] == "fsrs.desired_retention"
-    assert body["value"] == 0.85
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("bad_value", [0.0, 1.0, -0.1, 1.5, "high", True])
-async def test_fsrs_desired_retention_invalid_rejected(_app, bad_value):
-    """PUT /api/config/fsrs.desired_retention rejects out-of-range or wrong-type values."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/fsrs.desired_retention",
-            json={"key": "fsrs.desired_retention", "value": bad_value},
-        )
-
-    assert resp.status_code == 400
+# Collapsed (E2.PI): test_fsrs_desired_retention_invalid_rejected (parametrized, 6 bad values)
+# Survivor: test_settings_contract.py::test_put_fsrs_desired_retention_invalid_value_returns_400
+# PUT /api/config/fsrs.desired_retention rejects out-of-range and wrong-type values — verified with real DB.
 
 
 @pytest.mark.asyncio

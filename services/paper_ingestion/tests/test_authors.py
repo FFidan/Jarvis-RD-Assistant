@@ -1,7 +1,6 @@
 """Tests for author tracking CRUD endpoints and matching utilities."""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -230,45 +229,14 @@ async def test_list_authors_empty(_app):
     assert resp.json() == []
 
 
-async def test_list_authors_returns_data(_app):
-    """GET /api/authors returns tracked authors."""
-    app, conn = _app
-    conn.fetch.return_value = [
-        _make_author_record(author_id=1, author_name="Alice"),
-        _make_author_record(author_id=2, author_name="Bob"),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/authors")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) == 2
-    assert data[0]["author_name"] == "Alice"
+# Collapsed (E2.PI): test_list_authors_returns_data
+# Survivor: test_authors_contract.py::test_a19_list_authors_returns_only_own_rows
+# GET /api/authors returns tracked authors scoped to user — verified with real DB.
 
 
-async def test_create_author_returns_201(_app):
-    """POST /api/authors creates and returns author with 201."""
-    app, conn = _app
-    conn.fetchrow.side_effect = [
-        None,  # no duplicate
-        _make_author_record(author_name="Jane Doe"),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/authors",
-            json={"author_name": "Jane Doe"},
-        )
-
-    assert resp.status_code == 201
-    body = resp.json()
-    assert body["author_name"] == "Jane Doe"
-    assert body["source"] == "manual"
+# Collapsed (E2.PI): test_create_author_returns_201
+# Survivor: test_authors_contract.py::test_a20_create_author_inserts_row_and_409_on_duplicate
+# POST /api/authors creates author and returns 201 — verified with real DB.
 
 
 async def test_create_author_with_s2_id(_app):
@@ -292,90 +260,27 @@ async def test_create_author_with_s2_id(_app):
     assert body["s2_author_id"] == "S2_123"
 
 
-async def test_create_duplicate_author_returns_409(_app):
-    """POST /api/authors returns 409 for duplicate author."""
-    app, conn = _app
-    conn.fetchrow.return_value = {"id": 1}  # already exists
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/authors",
-            json={"author_name": "John Smith"},
-        )
-
-    assert resp.status_code == 409
+# Collapsed (E2.PI): test_create_duplicate_author_returns_409
+# Survivor: test_authors_contract.py::test_a20_create_author_inserts_row_and_409_on_duplicate
+# POST /api/authors returns 409 on duplicate — verified with real DB.
 
 
-async def test_update_author(_app):
-    """PUT /api/authors/{id} updates author fields."""
-    app, conn = _app
+# Collapsed (E2.PI): test_update_author
+# Survivor: test_authors_contract.py::test_a21_update_author_persists_and_404_for_non_owner
+# PUT /api/authors/{id} updates and persists author fields — verified with real DB.
 
-    with patch(
-        "paper_ingestion.routers.authors.dynamic_update",
-        new_callable=AsyncMock,
-        return_value=_make_author_record(enabled=False),
-    ):
-        conn.fetchrow.return_value = _make_author_record()
-
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.put(
-                "/api/authors/1",
-                json={"enabled": False},
-            )
-
-    assert resp.status_code == 200
-    assert resp.json()["enabled"] is False
+# Collapsed (E2.PI): test_update_author_not_found
+# Survivor: test_authors_contract.py::test_a21_update_author_persists_and_404_for_non_owner
+# PUT /api/authors/{id} returns 404 for missing author — verified with real DB.
 
 
-async def test_update_author_not_found(_app):
-    """PUT /api/authors/{id} returns 404 for missing author."""
-    app, conn = _app
-    conn.fetchrow.return_value = None
+# Collapsed (E2.PI): test_delete_author_returns_204
+# Survivor: test_authors_contract.py::test_a22_delete_author_removes_row_and_404_for_non_owner
+# DELETE /api/authors/{id} returns 204 on success — verified with real DB.
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/authors/999",
-            json={"enabled": False},
-        )
-
-    assert resp.status_code == 404
-
-
-async def test_delete_author_returns_204(_app):
-    """DELETE /api/authors/{id} returns 204 on success."""
-    app, conn = _app
-
-    with patch("paper_ingestion.routers.authors.delete_or_404", new_callable=AsyncMock):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.delete("/api/authors/1")
-
-    assert resp.status_code == 204
-
-
-async def test_delete_author_not_found(_app):
-    """DELETE /api/authors/{id} returns 404 when author does not exist."""
-    from fastapi import HTTPException
-
-    app, conn = _app
-
-    async def _raise_404(*args, **kwargs):
-        raise HTTPException(status_code=404, detail="Not found")
-
-    with patch("paper_ingestion.routers.authors.delete_or_404", side_effect=_raise_404):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.delete("/api/authors/999")
-
-    assert resp.status_code == 404
+# Collapsed (E2.PI): test_delete_author_not_found
+# Survivor: test_authors_contract.py::test_a22_delete_author_removes_row_and_404_for_non_owner
+# DELETE /api/authors/{id} returns 404 when missing — verified with real DB.
 
 
 async def test_auto_detect_from_starred(_app):

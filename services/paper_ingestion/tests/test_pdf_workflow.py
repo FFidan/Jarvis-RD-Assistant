@@ -11,18 +11,9 @@ import pytest
 import torch
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.models import ChunkForEmbedding
 from paper_ingestion.services.pdf_workflow import advisory_lock, run_process_pdf
-
-
-def _make_pool(conn: AsyncMock) -> MagicMock:
-    """Create a pool mock whose acquire() yields the provided connection."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
 
 
 @pytest.mark.asyncio
@@ -43,7 +34,7 @@ async def test_run_process_pdf_returns_already_processed_without_force():
     """Existing chunks short-circuit without calling the processor."""
     conn = AsyncMock()
     conn.fetchval.return_value = 4
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     embedder = MagicMock()
 
@@ -72,7 +63,7 @@ async def test_run_process_pdf_keeps_new_chunks_when_qdrant_cleanup_fails():
             __aexit__=AsyncMock(return_value=False),
         )
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     chunks = [
         SimpleNamespace(
             chunk_index=0,
@@ -107,7 +98,7 @@ async def test_run_process_pdf_wraps_embedding_failures():
     """Embedding errors keep sanitized cause detail for operators."""
     conn = AsyncMock()
     conn.fetchval.return_value = 0
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(
         side_effect=RuntimeError("Embedding service error (HTTP 401): bad auth")
@@ -144,7 +135,7 @@ async def test_run_process_pdf_persists_completed_chunks_on_embedding_batch_erro
             __aexit__=AsyncMock(return_value=False),
         )
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     completed_chunks = [
         ChunkForEmbedding(
@@ -204,7 +195,7 @@ async def test_run_process_pdf_embedding_batch_error_with_no_completed_chunks_sk
 
     conn = AsyncMock()
     conn.fetchval.return_value = 0
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(
         side_effect=EmbeddingBatchError(
@@ -260,7 +251,7 @@ async def test_run_process_pdf_stores_chunks_and_returns_processed():
             __aexit__=AsyncMock(return_value=False),
         )
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     chunks = [
         SimpleNamespace(
@@ -308,7 +299,7 @@ async def test_pdf_workflow_relabels_torch_oom_as_distinct_error():
     """torch.OutOfMemoryError is re-raised with a GPU-specific actionable message."""
     conn = AsyncMock()
     conn.fetchval.return_value = 0
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(side_effect=torch.OutOfMemoryError("simulated OOM"))
     embedder = MagicMock()
@@ -328,7 +319,7 @@ async def test_pdf_workflow_relabels_cuda_runtime_error():
     """RuntimeError with 'CUDA out of memory' is re-raised with a GPU-specific message."""
     conn = AsyncMock()
     conn.fetchval.return_value = 0
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(
         side_effect=RuntimeError("CUDA out of memory: tried to allocate 2 GiB")
@@ -350,7 +341,7 @@ async def test_pdf_workflow_preserves_embedding_error_for_httpx_failures():
     """httpx.HTTPStatusError is wrapped as 'Embedding service error'."""
     conn = AsyncMock()
     conn.fetchval.return_value = 0
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     pdf_processor = MagicMock()
     pdf_processor.process = AsyncMock(
         side_effect=httpx.HTTPStatusError(
@@ -377,7 +368,7 @@ async def test_pdf_workflow_embedding_http_status_stays_actionable(status_code: 
     """Provider HTTP status survives PDF workflow wrapping while URLs are redacted."""
     conn = AsyncMock()
     conn.fetchval.return_value = 0
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     response = httpx.Response(
         status_code,
         request=httpx.Request("POST", "http://litellm:4000/v1/embeddings"),
@@ -462,7 +453,7 @@ async def test_run_process_pdf_retry_uses_same_point_ids_after_phase3_failure():
                 __aexit__=AsyncMock(return_value=False),
             )
         )
-        return _make_pool(conn), conn
+        return make_pool_and_conn(conn=conn, with_transaction=False)[0], conn
 
     # --- First attempt ---
     pool1, conn1 = _make_fresh_pool_with_transaction()
@@ -590,7 +581,7 @@ async def test_force_reprocess_preserves_overlapping_vectors():
             __aexit__=AsyncMock(return_value=False),
         )
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     new_chunks = [
         SimpleNamespace(chunk_index=0, content="A", page_number=1, start_char=0, end_char=1),
@@ -638,7 +629,7 @@ async def test_force_reprocess_skips_qdrant_delete_when_new_fully_covers_old():
             __aexit__=AsyncMock(return_value=False),
         )
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     new_chunks = [
         SimpleNamespace(chunk_index=0, content="A", page_number=1, start_char=0, end_char=1),

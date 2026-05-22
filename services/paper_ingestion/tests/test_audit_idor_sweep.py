@@ -178,51 +178,9 @@ def test_system_models_does_not_leak_provider_keys():
 # — user B cannot enumerate user A's papers via /api/papers/brief (real-DB cross-user isolation).
 
 
-@pytest.mark.asyncio
-async def test_papers_brief_idor_user_id_filter_with_search():
-    """GET /api/papers/brief?search=X SQL must include user_id guard.
-
-    CC-03: list_papers_brief now resolves identity via
-    Depends(get_current_user_id), so the caller is set with a FastAPI
-    dependency override on the inner resolver (resolved recursively through
-    the wrapper) rather than a module-level patch.
-    """
-    import httpx
-    from httpx import ASGITransport
-    from jarvis_common import current_user_id_strict_with_owner_override, verify_api_key
-    from paper_ingestion.deps import get_db_pool
-    from paper_ingestion.main import app
-
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = []
-
-    old_limiter = app.state.limiter.enabled
-    app.state.limiter.enabled = False
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 42
-
-    try:
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.get("/api/papers/brief", params={"search": "neural"})
-    finally:
-        app.dependency_overrides.clear()
-        app.state.limiter.enabled = old_limiter
-
-    assert resp.status_code == 200
-    sql: str = conn.fetch.call_args.args[0]
-    # Sprint B: with an authenticated caller the brief endpoint JOINs
-    # user_library so user A cannot see user B's saved papers. The IDOR
-    # guard moves from a `WHERE p.user_id IS NOT DISTINCT FROM $N`
-    # predicate to a `JOIN user_library ul ON ... AND ul.user_id = $N`.
-    assert "JOIN user_library" in sql, (
-        f"brief SQL with search must JOIN user_library for IDOR guard; got:\n{sql!r}"
-    )
-    # user_id=42 must be passed as a query parameter
-    args = conn.fetch.call_args.args
-    assert 42 in args, f"user_id=42 must be bound in query params; got: {args}"
+# Collapsed (E2.PI): test_papers_brief_idor_user_id_filter_with_search
+# Survivor: test_papers_contract.py::test_papers_brief_user_b_does_not_see_user_a_paper
+# SQL JOIN user_library scoping verified behaviorally with real DB cross-user isolation.
 
 
 # ---------------------------------------------------------------------------

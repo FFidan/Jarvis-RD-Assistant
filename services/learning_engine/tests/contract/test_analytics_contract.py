@@ -342,3 +342,144 @@ async def test_analytics_summary_cross_period_isolation(
         f"Prior-period papers_read expected >= 5 (seeded 5 at day-31); "
         f"got {body['papers_read_prev']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# §A186 — Streak computation: 3 consecutive review days → streak=3
+# ---------------------------------------------------------------------------
+
+
+async def test_streak_three_consecutive_days(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """User with cards_reviewed > 0 for 3 consecutive days ending today has streak >= 3.
+
+    Seeds 3 daily_log rows (today, yesterday, day-before) with cards_reviewed=5.
+    The cards_review_streak_days field in /analytics/summary must be >= 3.
+    # Verified: services/learning_engine/learning_engine/routers/analytics.py:155-179
+    """
+    today = date.today()
+    for days_back in range(3):
+        log_date = today - timedelta(days=days_back)
+        await contract_conn.execute(
+            """INSERT INTO daily_log (user_id, log_date, cards_reviewed, focus_hours,
+                   papers_read, tasks_completed)
+               VALUES ($1, $2, 5, 0.0, 0, 0)
+               ON CONFLICT (user_id, log_date) DO UPDATE SET cards_reviewed = 5""",
+            contract_two_users.user_a_id,
+            log_date,
+        )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/analytics/summary", params={"days": 30})
+
+    assert resp.status_code == 200, (
+        f"analytics/summary failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    streak = resp.json()["cards_review_streak_days"]
+    assert streak >= 3, (
+        f"Expected cards_review_streak_days >= 3 after seeding 3 consecutive days; got {streak}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §A187 — Retention curve: user B cannot see user A's review_logs
+# ---------------------------------------------------------------------------
+
+
+async def test_retention_cross_user_isolation(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """User B's /analytics/retention response excludes user A's review_logs.
+
+    Seeds 10 review_logs for user A (all rating=4, today). User B has none.
+    User B's retention response must either be empty or have total=0 rows for today.
+    # Verified: services/learning_engine/learning_engine/routers/analytics.py:86-114
+    """
+    card_id_a = contract_two_users.card_id_a
+    for _ in range(10):
+        await contract_conn.execute(
+            """INSERT INTO review_logs (card_id, rating, user_id, reviewed_at)
+               VALUES ($1, 4, $2, NOW())""",
+            card_id_a,
+            contract_two_users.user_a_id,
+        )
+
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/analytics/retention", params={"days": 7})
+
+    assert resp.status_code == 200, (
+        f"retention for user B failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    total_b = sum(row["total"] for row in resp.json())
+    assert total_b < 10, (
+        f"IDOR: user B sees {total_b} review rows; expected < 10 (user A has 10 seeded)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §A188 — LLM cost ledger: per-user isolation confirmed by owner positive path
+# ---------------------------------------------------------------------------
+
+
+async def test_llm_cost_owner_sees_own_entries(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """GET /api/analytics/llm-cost: owner sees their own seeded entry.
+
+    Positive control complement to test_llm_cost_scoped_to_caller: user A seeds
+    a cost row (workflow='e1-ownership-test') and then sees it in their own response.
+    # Verified: services/learning_engine/learning_engine/routers/analytics.py:122-147
+    """
+    await contract_conn.execute(
+        """INSERT INTO llm_usage_log (user_id, workflow, cost_usd, created_at)
+           VALUES ($1, 'e1-ownership-test', 77.77, NOW())""",
+        contract_two_users.user_a_id,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/analytics/llm-cost", params={"days": 7})
+
+    assert resp.status_code == 200, (
+        f"llm-cost for user A failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    workflows = [row["workflow"] for row in resp.json()]
+    assert "e1-ownership-test" in workflows, (
+        f"User A expected to see their own 'e1-ownership-test' workflow; got {workflows}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §A189 — Summary: cross-user scoping — B's totals don't include A's data
+# ---------------------------------------------------------------------------
+
+
+async def test_analytics_summary_user_b_excludes_user_a_data(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """GET /api/analytics/summary: user B's totals don't include user A's daily_log data.
+
+    Seeds a daily_log row for user A with papers_read=99 (sentinel). User B's
+    papers_read_total must not reach 99.
+    # Verified: services/learning_engine/learning_engine/routers/analytics.py:187-260
+    """
+    today = date.today()
+    await contract_conn.execute(
+        """INSERT INTO daily_log (user_id, log_date, papers_read, focus_hours,
+               cards_reviewed, tasks_completed)
+           VALUES ($1, $2, 99, 0.0, 0, 0)
+           ON CONFLICT (user_id, log_date) DO UPDATE SET papers_read = 99""",
+        contract_two_users.user_a_id,
+        today,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/analytics/summary", params={"days": 30})
+
+    assert resp.status_code == 200, (
+        f"analytics/summary for B failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    b_papers = resp.json()["papers_read_total"]
+    assert b_papers < 99, (
+        f"IDOR: user B's papers_read_total={b_papers} includes user A's sentinel 99"
+    )

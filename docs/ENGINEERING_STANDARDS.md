@@ -109,16 +109,28 @@ LLM-generated scientific content must remain evidence-backed:
 
 ## Testing
 
-- Python unit and integration tests live under `services/*/tests` and
-  `libs/jarvis_common/tests`.
+Python test shape, mock policy, the carve-out registry, and the four prohibited
+anti-patterns are governed by [docs/contracts/07-testing.md](contracts/07-testing.md)
+— treat that contract as the single source of truth. The mechanics below are
+deliberately thin; the contract carries the load-bearing rules.
+
+- Python tests live under `services/*/tests/` (mock-unit + boundary-adapter)
+  and `services/*/tests/contract/` (contract layer requiring `JARVIS_RUN_LIVE_PG=1`).
+  Shared contract tests live under `libs/jarvis_common/tests/contract/`.
 - Repo-root pytest uses importlib mode and excludes `live_pg`, `integration`,
-  and `slow` by default.
+  and `slow` by default. Contract tests are collected-but-skipped without
+  `JARVIS_RUN_LIVE_PG=1`.
 - Docker-backed tests are required for behavior that depends on live Postgres,
   Qdrant, service networking, or container-only import/runtime behavior.
 - Frontend unit tests use Vitest. Browser regression tests use Playwright lanes:
   mocked, live smoke, and mutating live flows.
-- Test coverage should scale with blast radius. Shared contracts need broader
-  tests than local helper cleanups.
+- Test coverage scales with blast radius. Shared contracts need broader tests
+  than local helper cleanups.
+- New tests MUST conform to one of the four legitimate shapes (pure-function
+  unit / contract / boundary-adapter / E2E) per the testing contract; the four
+  anti-patterns documented there (handler-bypass, mock-the-mock, SQL-substring,
+  deep orchestration mock) are prohibited and enforced by
+  [scripts/check-test-shape.py](../scripts/check-test-shape.py) on every commit.
 
 ## Docs
 

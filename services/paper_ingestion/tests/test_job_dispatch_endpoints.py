@@ -1,20 +1,11 @@
 """Sprint 3 job endpoint contract tests."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
-
-
-def _mock_pool() -> MagicMock:
-    pool = MagicMock()
-    conn = AsyncMock()
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=conn)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = cm
-    return pool
+from jarvis_common.testing import make_pool_and_conn
 
 
 @pytest.fixture(autouse=True)
@@ -36,7 +27,7 @@ def app_with_pool():
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    pool = _mock_pool()
+    pool, _conn = make_pool_and_conn()
     app.state.db_pool = pool
     app.state.limiter.enabled = False
     app.dependency_overrides[get_db_pool] = lambda: pool

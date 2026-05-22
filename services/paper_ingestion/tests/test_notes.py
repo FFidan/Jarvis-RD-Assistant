@@ -185,46 +185,14 @@ async def test_list_notes_empty(_app):
     assert resp.json() == []
 
 
-async def test_create_note_returns_201(_app):
-    """POST /api/papers/{id}/notes creates and returns note with 201."""
-    app, conn = _app
-    conn.fetchrow.side_effect = [
-        {"id": 1},  # paper exists check
-        _make_note_record(user_note="my note", page_number=3),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/papers/1/notes",
-            json={"user_note": "my note", "page_number": 3},
-        )
-
-    assert resp.status_code == 201
-    body = resp.json()
-    assert body["user_note"] == "my note"
-    assert body["page_number"] == 3
-    assert body["paper_id"] == 1
+# Collapsed (E2.PI): test_create_note_returns_201
+# Survivor: test_notes_contract.py::test_notes_create_owner_gets_201
+# POST /api/papers/{id}/notes creates note and returns 201 with body — verified with real DB.
 
 
-async def test_list_notes_returns_created(_app):
-    """GET /api/papers/{id}/notes returns notes that exist."""
-    app, conn = _app
-    conn.fetch.return_value = [
-        _make_note_record(note_id=1, user_note="first"),
-        _make_note_record(note_id=2, user_note="second"),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/papers/1/notes")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) == 2
-    assert data[0]["user_note"] == "first"
+# Collapsed (E2.PI): test_list_notes_returns_created
+# Survivor: test_notes_contract.py::test_notes_list_owner_gets_own_note
+# GET /api/papers/{id}/notes returns the owner's notes — verified with real DB.
 
 
 async def test_list_notes_filters_by_source(_app):
@@ -250,25 +218,9 @@ async def test_list_notes_filters_by_source(_app):
     assert conn.fetch.await_args.args[2] == "zotero"
 
 
-async def test_update_note(_app):
-    """PUT /api/notes/{id} updates note text."""
-    app, conn = _app
-
-    with patch(
-        "paper_ingestion.routers.notes.dynamic_update",
-        new_callable=AsyncMock,
-        return_value=_make_note_record(user_note="updated"),
-    ):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.put(
-                "/api/notes/1",
-                json={"user_note": "updated"},
-            )
-
-    assert resp.status_code == 200
-    assert resp.json()["user_note"] == "updated"
+# Collapsed (E2.PI): test_update_note
+# Survivor: test_notes_contract.py::test_a62_update_note_owner_gets_200
+# PUT /api/notes/{id} updates note content for owner, returns 200 — verified with real DB.
 
 
 async def test_update_zotero_note_is_rejected(_app):
@@ -289,17 +241,9 @@ async def test_update_zotero_note_is_rejected(_app):
     assert resp.status_code == 403
 
 
-async def test_delete_note_returns_204(_app):
-    """DELETE /api/notes/{id} returns 204 on success."""
-    app, conn = _app
-
-    with patch("paper_ingestion.routers.notes.delete_or_404", new_callable=AsyncMock):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.delete("/api/notes/1")
-
-    assert resp.status_code == 204
+# Collapsed (E2.PI): test_delete_note_returns_204
+# Survivor: test_notes_contract.py::test_a64_delete_note_owner_gets_204
+# DELETE /api/notes/{id} returns 204 for owner — verified with real DB.
 
 
 async def test_delete_zotero_note_is_rejected(_app):
@@ -738,71 +682,19 @@ async def _async_user_8(_request, *_args, **_kwargs):
     return 8
 
 
-async def test_list_notes_scopes_to_author(_app, monkeypatch):
-    """DOM-A-14: list_notes scopes to the caller's user_id.
-
-    User 7 creates 2 notes (user_id=7).  User 8 calls list_notes — the SQL
-    includes an exact ``user_id = $2`` scope so the mock returns an empty
-    list because the conn.fetch stub returns [].
-    """
-    app, conn = _app
-    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
-    # assert_paper_ownership: single fetchrow for paper lookup (user_id=8 → None discovery → allow)
-    conn.fetchrow.return_value = {"discovered_by": None}
-    # The user-scoped SELECT returns empty (user 7's notes, not user 8's)
-    conn.fetch.return_value = []
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/papers/1/notes")
-
-    assert resp.status_code == 200
-    assert resp.json() == []
-    # Confirm the SQL carries an exact user_id scoping parameter
-    fetch_sql = conn.fetch.await_args.args[0]
-    assert "IS NOT DISTINCT FROM" not in fetch_sql
-    assert "user_id = $2" in fetch_sql
+# Collapsed (E2.PI): test_list_notes_scopes_to_author
+# Survivor: test_notes_contract.py::test_e1_notes_user_b_sees_empty_list_for_user_a_paper
+# GET notes for paper owned by user A returns empty list for user B — verified with real DB.
 
 
-async def test_update_note_rejects_non_author(_app, monkeypatch):
-    """DOM-A-05: update_note returns 404 when caller is not the note author.
-
-    Note was created by user 7. User 8 attempts to update it.
-    W2b B-NOTES: combined ownership+source SELECT (id + user_id) returns None → 404.
-    No separate fetchval source check is performed (no disclosure before ownership).
-    """
-    app, conn = _app
-    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
-    # Combined ownership+source SELECT returns None (note belongs to user 7, not 8)
-    conn.fetchrow.return_value = None
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put("/api/notes/1", json={"user_note": "hijack"})
-
-    assert resp.status_code == 404
+# Collapsed (E2.PI): test_update_note_rejects_non_author
+# Survivor: test_notes_contract.py::test_a62_update_note_user_b_gets_404
+# PUT /api/notes/{id} returns 404 for non-author — verified with real DB.
 
 
-async def test_delete_note_rejects_non_author(_app, monkeypatch):
-    """DOM-A-06: delete_note returns 404 when caller is not the note author.
-
-    Note was created by user 7. User 8 attempts to delete it.
-    W2b B-NOTES: combined ownership+source SELECT (id + user_id) returns None → 404.
-    No separate fetchval source check is performed (no disclosure before ownership).
-    """
-    app, conn = _app
-    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
-    # Combined ownership+source SELECT returns None (note belongs to user 7, not 8)
-    conn.fetchrow.return_value = None
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.delete("/api/notes/1")
-
-    assert resp.status_code == 404
+# Collapsed (E2.PI): test_delete_note_rejects_non_author
+# Survivor: test_notes_contract.py::test_a64_delete_note_user_b_gets_404
+# DELETE /api/notes/{id} returns 404 for non-author — verified with real DB.
 
 
 # ---------------------------------------------------------------------------

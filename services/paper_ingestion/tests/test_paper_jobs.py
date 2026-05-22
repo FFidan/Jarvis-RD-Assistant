@@ -65,6 +65,7 @@ def _make_ctx() -> MagicMock:
     return ctx
 
 
+# Keep local: pool.acquire returns conn directly (no aenter/aexit ctx wrapper) — paper_jobs uses async-with on conn itself.
 def _make_pool(row: dict) -> MagicMock:
     """Return an asyncpg pool mock that yields *row* from fetchrow."""
     conn = MagicMock()

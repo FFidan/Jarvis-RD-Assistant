@@ -53,6 +53,7 @@ def _stub_qdrant_models(monkeypatch):
 from tests._embedder_fakes import _dict_to_record, _make_embedder
 
 
+# Keep local: iterating fetchrow side-effects with _dict_to_record transform not supported by canonical make_pool_and_conn.
 def _make_pool_with_fetchrow(fetchrow_values: list[dict | None]) -> AsyncMock:
     """Create a mock pool where each acquire().fetchrow() returns the next value."""
     call_idx = 0

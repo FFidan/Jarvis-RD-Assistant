@@ -90,6 +90,7 @@ def _cfg_rows(
     ]
 
 
+# Keep local: pre-wires conn.execute/fetchrow/fetch/transaction with specific returns for zotero state tests — not covered by canonical.
 def _make_pool_capturing_conn(execute_returns: list[Any] | None = None):
     """Build a mock asyncpg pool whose conn.execute() captures calls in order.
 

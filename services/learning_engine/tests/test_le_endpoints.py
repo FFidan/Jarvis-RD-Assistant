@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import inspect
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -111,21 +111,8 @@ def _app():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_create_deck_success(_app):
-    """POST /api/decks creates a new deck and returns 201."""
-    app, conn, *_ = _app
-    conn.fetchrow.return_value = _make_deck_row(id=1, name="My Deck")
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post("/api/decks", json={"name": "My Deck"})
-
-    assert resp.status_code == 201
-    body = resp.json()
-    assert body["name"] == "My Deck"
-    assert body["card_count"] == 0
+# test_create_deck_success deleted — mock-unit duplicate;
+# survivor: test_le_contract.py::test_create_deck_row_has_caller_user_id (D6-01).
 
 
 @pytest.mark.asyncio
@@ -146,26 +133,8 @@ async def test_create_deck_empty_name_returns_422(_app):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_list_decks_success(_app):
-    """GET /api/decks returns a list of decks."""
-    app, conn, *_ = _app
-    conn.fetch.return_value = [
-        _make_deck_row(id=1, name="Deck A", card_count=5, due_count=2),
-        _make_deck_row(id=2, name="Deck B", card_count=0, due_count=0),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/decks")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 2
-    assert body[0]["name"] == "Deck A"
-    assert body[0]["card_count"] == 5
-    assert body[0]["due_count"] == 2
+# test_list_decks_success deleted — mock-unit duplicate;
+# survivor: test_le_contract.py::test_list_decks_user_a_sees_own_deck (D6-01).
 
 
 @pytest.mark.asyncio
@@ -283,29 +252,8 @@ def test_analytics_handlers_declare_model_aligned_return_types():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_create_card_success(_app):
-    """POST /api/cards creates a new card and returns 201."""
-    app, conn, _, mock_fsrs, *_ = _app
-    mock_fsrs.create_new_card.return_value = ({"state": "new"}, _now())
-    conn.fetchrow.return_value = make_card_row(id=10, deck_id=1, front="Q?", back="A.")
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/cards",
-            json={
-                "deck_id": 1,
-                "card_type": "concept",
-                "front": "What is ML?",
-                "back": "Machine Learning",
-            },
-        )
-
-    assert resp.status_code == 201
-    body = resp.json()
-    assert body["id"] == 10
+# test_create_card_success deleted — mock-unit duplicate;
+# survivor: test_le_contract.py::test_create_card_row_has_owner_user_id (D6-01).
 
 
 # ---------------------------------------------------------------------------
@@ -354,24 +302,8 @@ async def test_list_cards_filter_by_deck(_app):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_update_card_success(_app):
-    """PUT /api/cards/{id} updates card content."""
-    app, conn, *_ = _app
-    existing = make_card_row(id=5, front="Old Q", back="Old A")
-    updated = make_card_row(id=5, front="New Q", back="Old A")
-
-    # First fetchrow for existing, second for update
-    conn.fetchrow.side_effect = [existing, updated]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put("/api/cards/5", json={"front": "New Q"})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["front"] == "New Q"
+# test_update_card_success deleted — mock-unit duplicate;
+# survivor: test_le_contract.py::test_update_card_owner_gets_200 (D6-01).
 
 
 @pytest.mark.asyncio
@@ -393,18 +325,8 @@ async def test_update_card_not_found(_app):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_delete_card_success(_app):
-    """DELETE /api/cards/{id} returns 204 on success."""
-    app, conn, *_ = _app
-    conn.execute.return_value = "DELETE 1"
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.delete("/api/cards/5")
-
-    assert resp.status_code == 204
+# test_delete_card_success deleted — mock-unit duplicate;
+# survivor: test_le_contract.py::test_delete_card_owner_gets_204 (D6-01).
 
 
 @pytest.mark.asyncio
@@ -543,90 +465,14 @@ async def test_get_stats_success(_app):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_generate_enqueues_job_and_returns_202(_app):
-    """POST /api/generate defers a procrastinate task and returns 202 with job_id."""
-    app, conn, _, mock_fsrs, mock_generator, _ = _app
+# test_generate_enqueues_job_and_returns_202 deleted — mock-unit duplicate;
+# survivor: test_generation_router.py::test_generate_cards_endpoint_returns_job_id.
 
-    import jarvis_common.task_registry as task_registry
+# test_batch_generate_deck_not_found deleted — mock-unit duplicate;
+# survivor: test_generation_router.py::test_generate_cards_core_deck_not_found_raises_job_error.
 
-    mock_card_gen_task = MagicMock()
-    mock_card_gen_task.defer_async = AsyncMock()
-    with patch.dict(task_registry._TASK_MAP, {"card.generate": mock_card_gen_task}):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.post(
-                "/api/generate",
-                json={"paper_id": 1, "deck_id": 1},
-            )
-
-    assert resp.status_code == 202
-    body = resp.json()
-    assert isinstance(body["job_id"], str) and len(body["job_id"]) == 36
-    assert body["status"] == "queued"
-
-
-# ---------------------------------------------------------------------------
-# Tests: POST /api/generate/batch
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_batch_generate_deck_not_found(_app):
-    """batch_generate_cards returns 404 when the target deck does not exist."""
-    from fastapi import HTTPException
-    from learning_engine.models import BatchGenerateRequest
-    from learning_engine.routers import generation
-
-    _, conn, _, mock_fsrs, mock_generator, _ = _app
-    conn.fetchval.return_value = None
-    handler = generation.batch_generate_cards.__wrapped__
-
-    with pytest.raises(HTTPException, match="Deck not found") as exc_info:
-        await handler(
-            MagicMock(),
-            body=BatchGenerateRequest(deck_id=999),
-            db_pool=MagicMock(
-                acquire=MagicMock(
-                    return_value=MagicMock(
-                        __aenter__=AsyncMock(return_value=conn),
-                        __aexit__=AsyncMock(return_value=False),
-                    )
-                )
-            ),
-        )
-
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_batch_generate_success_returns_202_accepted(_app):
-    """batch_generate_cards defers a procrastinate task and returns 202 with job_id."""
-    from learning_engine.models import BatchGenerateRequest
-    from learning_engine.routers import generation
-
-    _, conn, _, mock_fsrs, mock_generator, _ = _app
-    pool, _ = _make_pool_and_conn()
-    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-    conn.fetchval.return_value = 1  # deck exists
-    handler = generation.batch_generate_cards.__wrapped__
-
-    import jarvis_common.task_registry as task_registry
-
-    mock_card_gen_batch_task = MagicMock()
-    mock_card_gen_batch_task.defer_async = AsyncMock()
-    with patch.dict(task_registry._TASK_MAP, {"card.generate_batch": mock_card_gen_batch_task}):
-        resp = await handler(
-            MagicMock(),
-            body=BatchGenerateRequest(deck_id=1),
-            db_pool=pool,
-        )
-
-    assert resp.status == "queued"
-    assert isinstance(resp.job_id, str) and len(resp.job_id) == 36
+# test_batch_generate_success_returns_202_accepted deleted — mock-unit duplicate;
+# survivor: test_generation_router.py::test_batch_generate_cards_returns_202_with_job_id.
 
 
 def test_batch_generate_declares_accepted_response_type():
@@ -647,42 +493,11 @@ def test_batch_generate_declares_accepted_response_type():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_export_deck_not_found(_app):
-    """GET /api/export/anki/{deck_id} returns 404 when deck does not exist."""
-    app, conn, *_ = _app
-    conn.fetchrow.return_value = None
+# test_export_deck_not_found deleted — mock-unit duplicate;
+# survivor: test_export.py::test_export_anki_returns_404_for_other_users_deck (H6).
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/export/anki/999")
-
-    assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_export_no_cards_returns_400(_app):
-    """GET /api/export/anki/{deck_id} returns 400 when deck has no cards."""
-    app, conn, *_ = _app
-    conn.fetchrow.return_value = FakeRecord(
-        id=1,
-        name="Empty Deck",
-        description=None,
-        topic_id=None,
-        card_count=0,
-        due_count=0,
-        created_at=_now(),
-    )
-    conn.fetch.return_value = []
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/export/anki/1")
-
-    assert resp.status_code == 400
-    assert "no cards" in resp.json()["detail"].lower()
+# test_export_no_cards_returns_400 deleted — mock-unit duplicate;
+# survivor: test_export.py::test_export_anki_returns_404_for_empty_deck_when_no_cards (H6).
 
 
 # ---------------------------------------------------------------------------
@@ -746,38 +561,8 @@ async def test_get_next_review_without_deck_id_unconstrained(_app):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_create_card_with_evidence(_app):
-    """POST /api/cards with evidence field succeeds."""
-    app, conn, _, mock_fsrs, *_ = _app
-    mock_fsrs.create_new_card.return_value = ({}, _now())
-    evidence = {"quote": "Some text", "page_number": 3, "chunk_id": 10}
-    conn.fetchrow.return_value = make_card_row(
-        id=20,
-        deck_id=1,
-        front="Q?",
-        back="A.",
-        evidence=evidence,
-    )
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/cards",
-            json={
-                "deck_id": 1,
-                "card_type": "quote",
-                "front": "What is this?",
-                "back": "That.",
-                "evidence": {"quote": "Some text", "page_number": 3, "chunk_id": 10},
-            },
-        )
-
-    assert resp.status_code == 201
-    body = resp.json()
-    assert body["evidence"]["quote"] == "Some text"
-    assert body["evidence"]["page_number"] == 3
+# test_create_card_with_evidence deleted — mock-unit duplicate;
+# survivor: test_cards_router.py::test_create_card_success_uses_evidence_payload.
 
 
 # ---------------------------------------------------------------------------

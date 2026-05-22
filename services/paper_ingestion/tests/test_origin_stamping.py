@@ -23,6 +23,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.models import PaperCreate, SourceType
 
 from tests.conftest import FakeRecord
@@ -57,16 +58,6 @@ def _make_conn(**kw) -> AsyncMock:
     conn.executemany = AsyncMock(return_value=None)
     conn.transaction = MagicMock(return_value=_txn_cm())
     return conn
-
-
-def _make_pool(conn: AsyncMock) -> MagicMock:
-    """Return a pool whose acquire() always yields *conn*."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=ctx)
-    return pool
 
 
 # Keep local: multi-conn side_effect semantics (successive acquire() calls yield different
@@ -171,7 +162,7 @@ async def test_pdf_upload_stamps_user_initiated(tmp_path: Path) -> None:
 
     conn.fetchrow = AsyncMock(side_effect=_fetchrow_dispatch)
 
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     # Patch PDF_STORAGE_PATH to use tmp_path so no real I/O is needed
     with (
@@ -278,7 +269,7 @@ async def test_local_pdf_import_stamps_user_initiated(tmp_path: Path) -> None:
     conn.fetchrow = AsyncMock(side_effect=_fetchrow_dispatch)
     conn.execute = AsyncMock(return_value=None)
 
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     with (
         patch(
@@ -350,7 +341,7 @@ async def test_pulse_job_stamps_pulse() -> None:
     )
 
     conn = _make_conn()
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     mock_profile = MagicMock()
     mock_profile.topics = [MagicMock()]
@@ -461,7 +452,7 @@ async def test_search_then_save_stamps_user_initiated() -> None:
         )
 
     conn = _make_conn()
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     mock_source = MagicMock()
     mock_source.search = AsyncMock(return_value=[fake_paper])
@@ -665,7 +656,7 @@ async def test_batch_save_papers_stamps_citation_batch() -> None:
     assert incoming.discovery_origin == "user_initiated"  # pre-condition
 
     conn = _make_conn()
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
 
     handler = getattr(batch_save_papers, "__wrapped__", batch_save_papers)
 

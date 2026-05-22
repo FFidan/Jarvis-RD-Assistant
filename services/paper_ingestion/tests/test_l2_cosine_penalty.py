@@ -25,6 +25,7 @@ from paper_ingestion.pulse.scoring import stage1_embedding_filter
 _FIXED_DATE = date(2026, 1, 1)  # fixed "today" for deterministic recency
 
 
+# Keep local: L2-penalty-specific signature (embedding_vec kwarg) not in pulse_helpers.make_pulse_paper.
 def _make_paper(
     embedding_vec: list[float] | None = None,
     external_id: str = "arxiv:0001",
@@ -41,6 +42,7 @@ def _make_paper(
     )
 
 
+# Keep local: L2-penalty-specific profile (zero-weight dims + l2_lambda override) differs from other pulse profiles.
 def _make_profile(
     library_centroid: list[float] | None,
     negative_centroid: list[float] | None,
@@ -72,6 +74,7 @@ def _make_profile(
     return profile
 
 
+# Keep local: returns a plain AsyncMock (not Embedder) with embed_texts wired — canonical testing_embedder._make_embedder() has no args.
 def _make_embedder(cand_vecs: list[list[float]]) -> AsyncMock:
     """Embedder mock that returns cand_vecs for candidates (no topics in these tests)."""
     mock = AsyncMock()

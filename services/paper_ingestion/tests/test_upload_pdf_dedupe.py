@@ -16,23 +16,9 @@ from fastapi.dependencies import utils as fastapi_dependency_utils
 
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
+from jarvis_common.testing import make_pool_and_conn  # noqa: E402
 from paper_ingestion.routers import pdf  # noqa: E402
 from tests.conftest import FakeRecord  # noqa: E402
-
-
-def _make_pool(conn):
-    """Return a pool mock whose acquire() always yields the given connection."""
-    txn = MagicMock()
-    txn.__aenter__ = AsyncMock(return_value=txn)
-    txn.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
 
 
 def _existing_paper_row(**overrides) -> FakeRecord:
@@ -109,7 +95,7 @@ async def test_upload_pdf_dedupe_adds_existing_paper_to_callers_library(tmp_path
     existing = _existing_paper_row()  # paper owned by user A in the global corpus
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=existing)  # dedupe hit on first call
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     upload_file = _make_upload_file()
 
@@ -153,7 +139,7 @@ async def test_upload_pdf_dedupe_idempotent_same_user_reraises_no_error(tmp_path
     existing = _existing_paper_row()
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=existing)
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     upload_file = _make_upload_file()
 
@@ -190,7 +176,7 @@ async def test_upload_pdf_dedupe_no_library_write_when_unauthenticated(tmp_path,
     existing = _existing_paper_row()
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=existing)
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     upload_file = _make_upload_file()
 

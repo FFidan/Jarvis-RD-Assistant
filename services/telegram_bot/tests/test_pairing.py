@@ -126,65 +126,12 @@ async def test_pair_already_consumed_token_replies_error():
     assert "already been used" in text
 
 
-@pytest.mark.asyncio
-async def test_pair_expired_token_deletes_and_replies_error():
-    """Expired token is deleted and user gets a clear expiry error."""
-    conn = _make_conn(
-        fetchrow_return={
-            "user_id": 10,
-            "expires_at": datetime.now(UTC) - timedelta(minutes=5),
-            "consumed_at": None,
-        }
-    )
-    pool = _make_pool(conn)
-    update = make_telegram_update()
-    context = _make_context(pool, args=["expiredtoken"])
+# test_pair_expired_token_deletes_and_replies_error — deleted; DB assertion covered by
+#   test_tg_contract.py::test_pair_command_rejects_expired_token
+# Kept: test_pair_rebound_emits_system_event_and_notifies_prior_chat (unique audit path)
 
-    await pair_command(update, context)
-
-    # Should have deleted the expired token
-    assert conn.execute.await_count >= 1
-    delete_sql = conn.execute.await_args_list[0].args[0]
-    assert "DELETE FROM telegram_pairing_tokens" in delete_sql
-
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
-    assert "expired" in text.lower()
-
-
-@pytest.mark.asyncio
-async def test_pair_valid_token_upserts_pairing_and_marks_consumed():
-    """Valid token upserts telegram_user_pairings and marks token consumed."""
-    future = datetime.now(UTC) + timedelta(minutes=10)
-    conn = _make_conn()
-    # First fetchrow: token lookup; second: UPSERT RETURNING (no rebound)
-    conn.fetchrow = AsyncMock(
-        side_effect=[
-            {"user_id": 99, "expires_at": future, "consumed_at": None},
-            {"was_update": False, "prior_chat_id": None},
-        ]
-    )
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=12345, username="alice")
-    context = _make_context(pool, args=["validtoken123"])
-
-    await pair_command(update, context)
-
-    # One execute call: mark token consumed; upsert now uses fetchrow (RETURNING)
-    assert conn.execute.await_count == 1
-    consumed_sql = conn.execute.await_args_list[0].args[0]
-    assert "consumed_at" in consumed_sql
-
-    # UPSERT was issued via fetchrow (second call)
-    assert conn.fetchrow.await_count == 2
-    upsert_sql = conn.fetchrow.await_args_list[1].args[0]
-    assert "telegram_user_pairings" in upsert_sql
-    assert "ON CONFLICT" in upsert_sql
-
-    # Success reply
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
-    assert "Paired" in text
+# test_pair_valid_token_upserts_pairing_and_marks_consumed — deleted; DB persistence covered by
+#   services/telegram_bot/tests/contract/test_tg_contract.py::test_pair_command_persists_pairing
 
 
 # ---------------------------------------------------------------------------
@@ -192,30 +139,8 @@ async def test_pair_valid_token_upserts_pairing_and_marks_consumed():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_unpair_paired_chat_removes_pairing():
-    """Unpair deletes the pairing row and confirms success."""
-    conn = _make_conn(fetchval_return=42, execute_return="DELETE 1")
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=12345)
-    config = _make_config(telegram_chat_id=12345)
-    context = _make_context(pool, config=config, args=[])
-    context.user_data = {"jarvis_user_id": 12345}
-
-    # Multi-user mode requires a paired user_id; patch auth_check to return one.
-    with patch(
-        "telegram_bot.handlers.commands._auth.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, 12345),
-    ):
-        await unpair_command(update, context)
-
-    # Should have called execute at least once with DELETE
-    executed_sqls = [c.args[0] for c in conn.execute.await_args_list]
-    assert any("DELETE FROM telegram_user_pairings" in s for s in executed_sqls)
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
-    assert "Unpaired" in text
+# test_unpair_paired_chat_removes_pairing — deleted; DB deletion covered by
+#   services/telegram_bot/tests/contract/test_tg_contract.py::test_unpair_command_deletes_pairing
 
 
 @pytest.mark.asyncio
@@ -240,29 +165,9 @@ async def test_unpair_not_paired_chat_replies_informational():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_whoami_paired_chat_shows_paired_since():
-    """Paired chat shows paired-since timestamp; must NOT leak the raw DB user_id."""
-    paired_at = datetime(2025, 6, 1, 10, 30, tzinfo=UTC)
-    row = {
-        "user_id": 99,
-        "telegram_username": "alice",
-        "paired_at": paired_at,
-    }
-
-    pool = _make_pool(_make_conn(), fetchrow_return=row)
-    update = make_telegram_update(chat_id=12345)
-    context = _make_context(pool, args=[])
-
-    await whoami_command(update, context)
-
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
-    assert "Paired" in text
-    assert "2025-06-01" in text  # paired-since date present
-    # 3.14 (DOM-D-07): raw DB PK must not be in the reply
-    assert not re.search(r"user_id=\d+", text), f"Raw user_id leaked in /whoami reply: {text!r}"
-    assert "99" not in text, f"Raw numeric DB PK 99 leaked in /whoami reply: {text!r}"
+# test_whoami_paired_chat_shows_paired_since — deleted; real DB read covered by
+#   services/telegram_bot/tests/contract/test_tg_contract.py::test_whoami_command_reads_real_pairing
+# Note: DOM-D-07 leak assertion retained in test_whoami_does_not_leak_db_user_id below.
 
 
 @pytest.mark.asyncio

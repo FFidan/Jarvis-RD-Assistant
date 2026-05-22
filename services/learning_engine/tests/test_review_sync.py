@@ -184,27 +184,9 @@ async def test_ordered_multi_event_same_card_threads_fsrs_forward(monkeypatch) -
     assert (r1, r2) == (3, 4)
 
 
-@pytest.mark.asyncio
-async def test_cross_user_isolation(monkeypatch) -> None:
-    """User B syncing only ever scopes to user B (dedupe + ownership + writes)."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetch = AsyncMock(return_value=[])
-    conn.fetchrow = AsyncMock(return_value=_card_row())
-    conn.fetchval = AsyncMock(return_value=1)  # INSERT won
-    conn.execute = AsyncMock()
-    _patch_fsrs(monkeypatch)
-
-    await review.sync_reviews.__wrapped__(
-        SimpleNamespace(state=SimpleNamespace(user_id=77)),
-        body=ReviewSyncRequest(reviews=[_event("u77")]),
-        db_pool=pool,
-        user_id=77,
-    )
-
-    assert conn.fetch.await_args.args[1] == 77  # dedupe pre-check user
-    assert conn.fetchrow.await_args.args[2] == 77  # ownership SELECT user
-    insert_call = conn.fetchval.await_args  # review_logs INSERT ... RETURNING id
-    assert insert_call.args[6] == 77  # review_logs.user_id
+# test_cross_user_isolation deleted — B1-09 positional-arg binding assertions
+# (args[1]==77, args[2]==77, args[6]==77); survivor:
+# test_review_contract.py::test_sync_reviews_user_b_event_skipped_for_user_a_card (A219).
 
 
 @pytest.mark.asyncio

@@ -136,6 +136,7 @@ def test_default_source_types_is_arxiv():
 # ---------------------------------------------------------------------------
 
 
+# Keep local: multi-source-specific kwargs (doi/arxiv_id/pub_year/source_type) not in pulse_helpers.make_pulse_paper.
 def _make_paper(
     external_id: str,
     title: str,

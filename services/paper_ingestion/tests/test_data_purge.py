@@ -18,6 +18,7 @@ from paper_ingestion.jobs.data_purge import (
 # ---------------------------------------------------------------------------
 
 
+# Keep local: uses asynccontextmanager pattern + returns (pool, conn) with execute result — not covered by canonical make_pool_and_conn.
 def _make_pool(
     fetch_rows: list[dict], execute_result: str = "DELETE 2"
 ) -> tuple[MagicMock, AsyncMock]:

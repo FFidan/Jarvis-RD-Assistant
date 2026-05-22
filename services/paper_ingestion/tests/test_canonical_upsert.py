@@ -17,6 +17,7 @@ from paper_ingestion.services.pdf_workflow import upsert_paper
 from tests.conftest import FakeRecord
 
 
+# Keep local: upsert-specific paper (discovery_origin/citation_count/metadata kwargs) not in pulse_helpers.make_pulse_paper.
 def _make_paper() -> PaperCreate:
     return PaperCreate(
         external_id="arxiv:9999.99999",

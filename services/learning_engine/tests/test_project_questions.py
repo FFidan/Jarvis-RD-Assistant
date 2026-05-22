@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
-from learning_engine.models import ProjectQuestionCreate
 from learning_engine.routers import project_questions
 
 from tests.conftest import make_pool_and_conn
@@ -25,105 +24,28 @@ def _request(user_id: int = 7):
     return types.SimpleNamespace(state=types.SimpleNamespace(user_id=user_id))
 
 
-def _pool(conn):
-    """Wrap an existing conn in a pool mock with transaction support."""
-    pool, _ = make_pool_and_conn(conn=conn)
-    return pool
-
-
 # ---------------------------------------------------------------------------
 # Question CRUD + ownership scoping
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_list_questions_owner_scoped_returns_rows() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=1)  # project owned by caller
-    conn.fetch = AsyncMock(
-        return_value=[
-            {"id": 1, "project_id": 1, "body": "Q one", "created_at": _NOW},
-            {"id": 2, "project_id": 1, "body": "Q two", "created_at": _NOW},
-        ]
-    )
-    out = await project_questions.list_project_questions.__wrapped__(
-        _request(7), project_id=1, db_pool=_pool(conn), user_id=7
-    )
-    assert [r["body"] for r in out] == ["Q one", "Q two"]
-    # owner guard fired with the caller's user_id (predicate exercised by contract suite)
-    _, *owner_args = conn.fetchval.call_args.args
-    assert owner_args == [1, 7]
+# test_list_questions_owner_scoped_returns_rows deleted — mock-unit B1-09;
+# survivor: test_le_contract.py::test_list_project_questions_owner_sees_own (D6-PQ).
 
+# test_list_questions_404_for_other_users_project deleted — mock-unit B1-09;
+# survivor: test_le_contract.py::test_list_project_questions_user_b_gets_404 (D6-PQ).
 
-@pytest.mark.asyncio
-async def test_list_questions_404_for_other_users_project() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=None)  # not owned by caller
-    with pytest.raises(HTTPException) as exc:
-        await project_questions.list_project_questions.__wrapped__(
-            _request(99), project_id=1, db_pool=_pool(conn), user_id=99
-        )
-    assert exc.value.status_code == 404
-    conn.fetch.assert_not_called()
+# test_create_question_owner_scoped deleted — mock-unit B1-09;
+# survivor: test_le_contract.py::test_list_project_questions_owner_sees_own (D6-PQ create+read).
 
+# test_create_question_404_for_other_users_project deleted — mock-unit B1-09;
+# survivor: test_le_contract.py::test_create_project_question_user_b_gets_404 (D6-PQ).
 
-@pytest.mark.asyncio
-async def test_create_question_owner_scoped() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=1)
-    conn.fetchrow = AsyncMock(
-        return_value={"id": 5, "project_id": 1, "body": "New Q", "created_at": _NOW}
-    )
-    out = await project_questions.create_project_question.__wrapped__(
-        _request(7),
-        project_id=1,
-        body=ProjectQuestionCreate(body="New Q"),
-        db_pool=_pool(conn),
-        user_id=7,
-    )
-    assert out["id"] == 5
-    _, *args = conn.fetchrow.call_args.args
-    assert args == [1, 7, "New Q"]
+# test_delete_question_scoped_by_user_id deleted — mock-unit B1-09;
+# survivor: test_le_contract.py (D6-PQ delete ownership check).
 
-
-@pytest.mark.asyncio
-async def test_create_question_404_for_other_users_project() -> None:
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=None)
-    with pytest.raises(HTTPException) as exc:
-        await project_questions.create_project_question.__wrapped__(
-            _request(99),
-            project_id=1,
-            body=ProjectQuestionCreate(body="X"),
-            db_pool=_pool(conn),
-            user_id=99,
-        )
-    assert exc.value.status_code == 404
-    conn.fetchrow.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_delete_question_scoped_by_user_id(monkeypatch) -> None:
-    conn = AsyncMock()
-    conn.execute = AsyncMock(return_value="DELETE 1")
-    monkeypatch.setattr(project_questions, "log_audit", AsyncMock(), raising=True)
-    await project_questions.delete_project_question.__wrapped__(
-        _request(7), question_id=5, db_pool=_pool(conn), user_id=7
-    )
-    _, *args = conn.execute.call_args.args
-    assert args == [5, 7]
-
-
-@pytest.mark.asyncio
-async def test_delete_question_404_when_not_owned() -> None:
-    """Another user's question is invisible — DELETE affects 0 rows → 404."""
-    conn = AsyncMock()
-    conn.execute = AsyncMock(return_value="DELETE 0")
-    with pytest.raises(HTTPException) as exc:
-        await project_questions.delete_project_question.__wrapped__(
-            _request(99), question_id=5, db_pool=_pool(conn), user_id=99
-        )
-    assert exc.value.status_code == 404
+# test_delete_question_404_when_not_owned deleted — mock-unit B1-09;
+# survivor: test_le_contract.py (D6-PQ delete IDOR guard).
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +64,11 @@ async def test_activity_404_for_other_users_project() -> None:
     conn.fetchval = AsyncMock(return_value=None)
     with pytest.raises(HTTPException) as exc:
         await project_questions.list_project_activity.__wrapped__(
-            _request(99), project_id=1, limit=20, db_pool=_pool(conn), user_id=99
+            _request(99),
+            project_id=1,
+            limit=20,
+            db_pool=make_pool_and_conn(conn=conn)[0],
+            user_id=99,
         )
     assert exc.value.status_code == 404
     conn.fetch.assert_not_called()
@@ -167,7 +93,7 @@ async def test_activity_union_user_id_bound_correctly() -> None:
     conn.fetchval = AsyncMock(return_value=1)
     conn.fetch = AsyncMock(return_value=[])
     await project_questions.list_project_activity.__wrapped__(
-        _request(42), project_id=5, limit=10, db_pool=_pool(conn), user_id=42
+        _request(42), project_id=5, limit=10, db_pool=make_pool_and_conn(conn=conn)[0], user_id=42
     )
     _, *args = conn.fetch.call_args.args
     # positional args: project_id, user_id, limit

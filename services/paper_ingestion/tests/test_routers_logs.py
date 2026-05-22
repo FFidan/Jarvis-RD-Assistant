@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -25,16 +25,6 @@ from httpx import ASGITransport
 
 _CID = str(uuid.uuid4())
 _CID_UUID = uuid.UUID(_CID)
-
-
-def _make_pool(conn: AsyncMock) -> MagicMock:
-    """Wrap *conn* in a mock asyncpg pool (acquire context manager)."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
 
 
 def _event_row(

@@ -8,25 +8,11 @@ Coverage:
 """
 
 import pathlib
-from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from httpx import ASGITransport
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _mock_pool() -> tuple[MagicMock, AsyncMock]:
-    pool = MagicMock()
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = ctx
-    return pool, conn
+from jarvis_common.testing import make_pool_and_conn
 
 
 def _paper_row(source_type: str, in_library: bool) -> dict:
@@ -50,7 +36,7 @@ def _snap_app(tmp_path):
     snap_dir.mkdir()
     (snap_dir / "page_1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
 
-    pool, conn = _mock_pool()
+    pool, conn = make_pool_and_conn()
     app.state.db_pool = pool
     app.state.limiter.enabled = False
 

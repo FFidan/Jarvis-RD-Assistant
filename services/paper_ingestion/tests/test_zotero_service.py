@@ -23,6 +23,7 @@ from tests.conftest import FakeRecord
 # ---------------------------------------------------------------------------
 
 
+# Keep local: multi-acquire side_effect semantics (successive acquire() yields different conns) not covered by canonical make_pool_and_conn.
 def _make_pool(*conn_returns):
     """Return a mock pool whose successive acquire().__aenter__ calls return conn_returns."""
     pool = MagicMock()

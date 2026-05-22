@@ -57,57 +57,20 @@ async def test_grace_constant_is_24h() -> None:
     assert SESSION_GRACE == timedelta(hours=24)
 
 
-@pytest.mark.asyncio
-async def test_non_expired_session_resolves() -> None:
-    pool, _ = make_pool_and_conn(fetchrow_return=_row(expires_at=_now() + timedelta(hours=1)))
-    request = _make_request(pool)
-    await _populate_state_from_cookie(request, _SESSION_ID)
-    assert request.state.user_id == 7
-    assert request.state.user_email == "user@example.com"
-    assert request.state.user_role == "user"
+# test_non_expired_session_resolves — deleted; covered by
+#   libs/jarvis_common/tests/contract/test_ws_auth_contract.py::test_active_session_resolves_user_id
 
+# test_expired_within_grace_resolves — deleted; covered by
+#   libs/jarvis_common/tests/contract/test_ws_auth_contract.py::test_grace_window_session_still_resolves
 
-@pytest.mark.asyncio
-async def test_expired_within_grace_resolves() -> None:
-    """Expired 1h ago — inside the 24h grace — still resolves identity."""
-    pool, _ = make_pool_and_conn(fetchrow_return=_row(expires_at=_now() - timedelta(hours=1)))
-    request = _make_request(pool)
-    await _populate_state_from_cookie(request, _SESSION_ID)
-    assert request.state.user_id == 7
-    assert request.state.user_email == "user@example.com"
+# test_expired_at_grace_edge_resolves — deleted; covered by
+#   libs/jarvis_common/tests/contract/test_ws_auth_contract.py::test_grace_window_session_still_resolves
 
+# test_expired_beyond_grace_does_not_resolve — deleted; covered by
+#   libs/jarvis_common/tests/contract/test_ws_auth_contract.py::test_hard_expired_session_does_not_resolve
 
-@pytest.mark.asyncio
-async def test_expired_at_grace_edge_resolves() -> None:
-    """Just inside the grace boundary still resolves (<= now - GRACE rejects)."""
-    pool, _ = make_pool_and_conn(
-        fetchrow_return=_row(expires_at=_now() - SESSION_GRACE + timedelta(minutes=1))
-    )
-    request = _make_request(pool)
-    await _populate_state_from_cookie(request, _SESSION_ID)
-    assert request.state.user_id == 7
-
-
-@pytest.mark.asyncio
-async def test_expired_beyond_grace_does_not_resolve() -> None:
-    """Expired 25h ago — outside the 24h grace — leaves request.state unset."""
-    pool, _ = make_pool_and_conn(fetchrow_return=_row(expires_at=_now() - timedelta(hours=25)))
-    request = _make_request(pool)
-    await _populate_state_from_cookie(request, _SESSION_ID)
-    assert not hasattr(request.state, "user_id")
-
-
-@pytest.mark.asyncio
-async def test_revoked_within_grace_hard_fails() -> None:
-    """revoked_at set hard-fails even when expiry is within grace."""
-    pool, _ = make_pool_and_conn(
-        fetchrow_return=_row(
-            expires_at=_now() - timedelta(hours=1), revoked_at=_now() - timedelta(hours=2)
-        )
-    )
-    request = _make_request(pool)
-    await _populate_state_from_cookie(request, _SESSION_ID)
-    assert not hasattr(request.state, "user_id")
+# test_revoked_within_grace_hard_fails — deleted; covered by
+#   libs/jarvis_common/tests/contract/test_ws_auth_contract.py::test_revoked_session_does_not_resolve
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ from jarvis_common.testing import FakeRecord, make_pool_and_conn as _make_pool_a
 # ---------------------------------------------------------------------------
 
 
+# Keep local: discovery-specific profile (query_terms on TopicRef, discovery weight set) differs from other pulse profiles.
 def _make_profile() -> UserProfile:
     return UserProfile(
         topics=[TopicRef(id=1, name="machine learning", query_terms=["ML"])],

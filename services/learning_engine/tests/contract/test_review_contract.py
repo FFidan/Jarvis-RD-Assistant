@@ -310,6 +310,69 @@ async def test_get_next_review_deck_scoped(
     )
 
 
+# ---------------------------------------------------------------------------
+# §A221 — GET /api/review/next?deck_id — cross-user deck returns empty list
+# ---------------------------------------------------------------------------
+
+
+async def test_get_next_review_cross_user_deck_id_returns_empty(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """User B passes user A's deck_id → 200 with empty list (not 404, not IDOR data leak).
+
+    review.py:108 EXISTS subquery: ``d.user_id = $1`` rejects user B because
+    deck_id_a's user_id != user B's id. The card_a is made due so a bug would
+    expose it.
+    # Verified: services/learning_engine/learning_engine/routers/review.py:104-116
+    """
+    card_id_a = contract_two_users.card_id_a
+    deck_id_a = contract_two_users.deck_id_a
+    await contract_conn.execute(
+        "UPDATE cards SET due_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
+        card_id_a,
+    )
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/review/next", params={"deck_id": deck_id_a, "limit": 50})
+
+    assert resp.status_code == 200, (
+        f"Expected 200 (empty); got {resp.status_code}: {resp.text[:300]}"
+    )
+    returned_ids = [card["id"] for card in resp.json()]
+    assert card_id_a not in returned_ids, (
+        f"IDOR via deck_id: user B received user A's card {card_id_a} "
+        f"when querying with A's deck_id. Full list: {returned_ids}"
+    )
+    assert returned_ids == [], (
+        f"Expected empty list; user B has no cards in deck_id_a. Got: {returned_ids}"
+    )
+
+
+async def test_get_next_review_no_deck_id_returns_all_user_due_decks(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """Unscoped GET /api/review/next (no deck_id) returns due cards from all of user A's decks.
+
+    Positive control: confirms the NULL deck_id path still works after the EXISTS
+    subquery guard is in place.
+    # Verified: services/learning_engine/learning_engine/routers/review.py:104-116
+    """
+    card_id_a = contract_two_users.card_id_a
+    await contract_conn.execute(
+        "UPDATE cards SET due_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
+        card_id_a,
+    )
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/review/next", params={"limit": 50})
+
+    assert resp.status_code == 200, (
+        f"Unscoped review/next failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    returned_ids = [card["id"] for card in resp.json()]
+    assert card_id_a in returned_ids, (
+        f"Expected user A's due card {card_id_a} in unscoped result; got {returned_ids}"
+    )
+
+
 async def test_get_stats_scoped_to_caller(contract_two_users, _le_app, _configure_api_key):
     """GET /api/stats returns correct totals for caller's cards and review_logs.
 

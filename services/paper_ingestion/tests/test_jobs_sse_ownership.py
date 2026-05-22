@@ -22,6 +22,7 @@ from httpx import ASGITransport
 _JOB_UUID = "00000000-0000-0000-0000-000000000001"
 
 
+# Keep local: wires fetchrow as an async function with custom side_effect — not covered by canonical make_pool_and_conn.
 def _make_pool_with_job(user_id: int | None, *, terminal: bool = True) -> MagicMock:
     """Return a mock asyncpg pool whose get_procrastinate_job_for_jarvis_id() returns a row.
 

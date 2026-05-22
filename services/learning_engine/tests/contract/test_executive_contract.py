@@ -367,3 +367,49 @@ async def test_log_focus_session_persists_to_daily_log(
     assert focus_hours is not None and focus_hours > 0, (
         f"Expected daily_log.focus_hours > 0 for user A after focus log; got {focus_hours}"
     )
+
+
+# ---------------------------------------------------------------------------
+# §A218 — GET /api/executive/my-day via session cookie (positive control)
+# ---------------------------------------------------------------------------
+
+
+async def test_my_day_returns_caller_data_via_session_cookie(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """GET /api/executive/my-day returns 200 with correct shape for session-authenticated caller.
+
+    Exercises current_user_id_strict_with_owner_override: session path resolves
+    user_id from the jarvis_session cookie. Tests scoping at the positive control
+    level — the fixture already has test_get_my_day_response_shape, this test
+    documents the contract for the *session-cookie* auth path explicitly.
+    # Verified: services/learning_engine/learning_engine/routers/executive.py:152-189
+    """
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/executive/my-day")
+
+    assert resp.status_code == 200, (
+        f"my-day via session cookie failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert isinstance(body.get("tasks"), list), f"tasks must be list; got {body}"
+    assert isinstance(body.get("cards_due"), int), f"cards_due must be int; got {body}"
+
+
+async def test_my_day_no_session_returns_401(_le_app, _configure_api_key):
+    """GET /api/executive/my-day without any session returns 401 (or 403 for no identity).
+
+    When neither session nor X-Owner-User-Id resolves, current_user_id_strict_with_owner_override
+    raises 401. Documents the behavior: API-key-only (no session, no override header) → 401.
+    # Verified: libs/jarvis_common/jarvis_common/auth.py:452-465
+    """
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_le_app),
+        base_url="http://test",
+        headers={"X-API-Key": _TEST_API_KEY},
+    ) as c:
+        resp = await c.get("/api/executive/my-day")
+
+    assert resp.status_code in (401, 403), (
+        f"Expected 401/403 for unauthenticated my-day; got {resp.status_code}: {resp.text[:300]}"
+    )

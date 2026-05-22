@@ -14,6 +14,7 @@ from paper_ingestion.pulse.scoring import ScoredCandidate
 from tests.conftest import _make_pool_and_conn
 
 
+# Keep local: job-orchestration-specific profile (deck_size/stage2_top_k kwargs) differs from other pulse profiles.
 def _make_profile(deck_size: int = 10, stage2_top_k: int = 30) -> UserProfile:
     return UserProfile(
         topics=[TopicRef(id=1, name="ml", query_terms=["ML"])],

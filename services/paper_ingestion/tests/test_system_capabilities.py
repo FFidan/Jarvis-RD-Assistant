@@ -2,20 +2,16 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing import make_pool_and_conn
 
 
 def _make_pool():
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
+    pool, _ = make_pool_and_conn()
     return pool
 
 

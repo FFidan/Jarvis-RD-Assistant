@@ -14,7 +14,7 @@ middleware shim, rather than spinning up the full session cookie machinery.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -26,15 +26,6 @@ from jarvis_common.testing import RoleMiddleware
 # ---------------------------------------------------------------------------
 
 _CID = str(uuid.uuid4())
-
-
-def _make_pool(conn: AsyncMock) -> MagicMock:
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
 
 
 def _event_row(*, id: int = 1) -> dict:

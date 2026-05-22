@@ -19,51 +19,7 @@ from jarvis_common.source_rate_limiter import (
     PersistentSourceRateLimiter,
     SourceRateLimiter,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_pool(fetchrow_side_effects=None, raise_exc=None):
-    """Return an asyncpg.Pool mock whose acquire() context yields a fresh conn.
-
-    Parameters
-    ----------
-    fetchrow_side_effects:
-        A list of return values (or exceptions) for successive ``conn.fetchrow``
-        calls.  If omitted, all calls return ``None``.
-    raise_exc:
-        If set, every ``fetchrow`` / ``execute`` call raises this exception.
-    """
-    conn = AsyncMock()
-
-    if raise_exc is not None:
-        conn.fetchrow = AsyncMock(side_effect=raise_exc)
-        conn.execute = AsyncMock(side_effect=raise_exc)
-    else:
-        if fetchrow_side_effects is not None:
-            conn.fetchrow = AsyncMock(side_effect=fetchrow_side_effects)
-        else:
-            conn.fetchrow = AsyncMock(return_value=None)
-        conn.execute = AsyncMock(return_value=None)
-
-    # conn.transaction() is called as a plain method (not awaited) and must
-    # return an async context manager.  Wire it up explicitly so it does not
-    # inadvertently return a coroutine (which AsyncMock would do by default).
-    txn_cm = AsyncMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=None)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-
-    pool = MagicMock()
-    # pool.acquire() used as async context manager; always returns the same conn
-    acquire_cm = AsyncMock()
-    acquire_cm.__aenter__ = AsyncMock(return_value=conn)
-    acquire_cm.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire = MagicMock(return_value=acquire_cm)
-    return pool, conn
-
+from jarvis_common.testing import make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # acquire() — slot claimed immediately (interval elapsed)
@@ -80,7 +36,7 @@ async def test_acquire_no_sleep_when_min_interval_elapsed(monkeypatch):
     now = datetime.now(tz=UTC)
     claim_row = {"last_request_at": now}
 
-    pool, _ = _make_pool(fetchrow_side_effects=[None, claim_row])
+    pool, _ = make_pool_and_conn(fetchrow_side_effects=[None, claim_row])
 
     sleep_calls: list[float] = []
 
@@ -124,7 +80,7 @@ async def test_acquire_sleeps_when_recent_request(monkeypatch):
     locked_row = {"last_request_at": recent_last_request, "cooldown_until": None}
     claim_row = {"last_request_at": now}
 
-    pool, _ = _make_pool(fetchrow_side_effects=[locked_row, None, None, claim_row])
+    pool, _ = make_pool_and_conn(fetchrow_side_effects=[locked_row, None, None, claim_row])
 
     sleep_calls: list[float] = []
 
@@ -164,7 +120,7 @@ async def test_acquire_no_sleep_when_no_row(monkeypatch):
     now = datetime.now(tz=UTC)
     claim_row = {"last_request_at": now}
 
-    pool, _ = _make_pool(fetchrow_side_effects=[None, claim_row])
+    pool, _ = make_pool_and_conn(fetchrow_side_effects=[None, claim_row])
 
     sleep_calls: list[float] = []
 
@@ -201,7 +157,7 @@ async def test_acquire_sleeps_through_cooldown(monkeypatch):
 
     cooldown_row = {"cooldown_until": cooldown_until, "last_request_at": now}
     # Only the FOR UPDATE fetch is called; the INSERT is skipped.
-    pool, _ = _make_pool(fetchrow_side_effects=[cooldown_row])
+    pool, _ = make_pool_and_conn(fetchrow_side_effects=[cooldown_row])
 
     sleep_calls: list[float] = []
 
@@ -231,7 +187,7 @@ async def test_acquire_sleeps_through_cooldown(monkeypatch):
 async def test_acquire_falls_back_when_pool_acquire_raises_oserror(monkeypatch):
     """acquire() uses the fallback SourceRateLimiter when the DB pool raises OSError."""
 
-    pool, _ = _make_pool(raise_exc=OSError("connection refused"))
+    pool, _ = make_pool_and_conn(raise_on_acquire=OSError("connection refused"))
 
     fallback_acquire_called: list[bool] = []
 
@@ -255,7 +211,7 @@ async def test_acquire_falls_back_when_pool_acquire_raises_oserror(monkeypatch):
 
 async def test_acquire_sleeps_min_interval_when_no_fallback_and_db_down(monkeypatch):
     """acquire() sleeps min_interval_seconds when DB is down and no fallback is set."""
-    pool, _ = _make_pool(raise_exc=OSError("no DB"))
+    pool, _ = make_pool_and_conn(raise_on_acquire=OSError("no DB"))
 
     sleep_calls: list[float] = []
 
@@ -282,7 +238,7 @@ async def test_acquire_sleeps_min_interval_when_no_fallback_and_db_down(monkeypa
 
 async def test_update_last_request_429_sets_cooldown_until():
     """update_last_request('rate_limit', retry_after_s=120) stores cooldown_until."""
-    pool, conn = _make_pool()
+    pool, conn = make_pool_and_conn()
 
     limiter = PersistentSourceRateLimiter(
         source_type="arxiv",
@@ -305,7 +261,7 @@ async def test_update_last_request_429_sets_cooldown_until():
 
 async def test_update_last_request_ok_clears_cooldown():
     """update_last_request('ok') calls execute with 'ok' status."""
-    pool, conn = _make_pool()
+    pool, conn = make_pool_and_conn()
 
     limiter = PersistentSourceRateLimiter(
         source_type="s2",
@@ -322,7 +278,7 @@ async def test_update_last_request_ok_clears_cooldown():
 
 async def test_update_last_request_error_increments_failures():
     """update_last_request('error') issues an UPSERT with consecutive_failures increment."""
-    pool, conn = _make_pool()
+    pool, conn = make_pool_and_conn()
 
     limiter = PersistentSourceRateLimiter(
         source_type="pubmed",
@@ -350,7 +306,7 @@ async def test_is_in_cooldown_returns_true_when_in_cooldown():
     cooldown_until = now + timedelta(minutes=30)
 
     row = {"cooldown_until": cooldown_until}
-    pool, _ = _make_pool(fetchrow_side_effects=[row])
+    pool, _ = make_pool_and_conn(fetchrow_side_effects=[row])
 
     limiter = PersistentSourceRateLimiter(
         source_type="arxiv",
@@ -366,7 +322,7 @@ async def test_is_in_cooldown_returns_true_when_in_cooldown():
 
 async def test_is_in_cooldown_returns_false_when_no_row():
     """is_in_cooldown() returns (False, None) when no source_health row exists."""
-    pool, _ = _make_pool(fetchrow_side_effects=[None])
+    pool, _ = make_pool_and_conn(fetchrow_side_effects=[None])
 
     limiter = PersistentSourceRateLimiter(
         source_type="s2",
@@ -386,7 +342,7 @@ async def test_is_in_cooldown_returns_false_when_cooldown_expired():
     past_cooldown = now - timedelta(minutes=5)
 
     row = {"cooldown_until": past_cooldown}
-    pool, _ = _make_pool(fetchrow_side_effects=[row])
+    pool, _ = make_pool_and_conn(fetchrow_side_effects=[row])
 
     limiter = PersistentSourceRateLimiter(
         source_type="pubmed",
@@ -439,12 +395,12 @@ async def test_concurrent_acquire_only_one_proceeds_without_sleep(monkeypatch):
 
     # Worker A: wins the claim immediately (no existing row).
     claim_row = {"last_request_at": now}
-    pool_a, _ = _make_pool(fetchrow_side_effects=[None, claim_row])
+    pool_a, _ = make_pool_and_conn(fetchrow_side_effects=[None, claim_row])
 
     # Worker B: loses attempt 0, sleeps using last_request_at from locked_row,
     # then wins on attempt 1.
     locked_row_b = {"last_request_at": recent, "cooldown_until": None}
-    pool_b, _ = _make_pool(fetchrow_side_effects=[locked_row_b, None, None, claim_row])
+    pool_b, _ = make_pool_and_conn(fetchrow_side_effects=[locked_row_b, None, None, claim_row])
 
     sleep_calls: list[float] = []
 
@@ -498,7 +454,7 @@ async def test_cooldown_observed_inside_same_transaction(monkeypatch):
     cooldown_until = now + timedelta(seconds=30.0)
 
     locked_row = {"cooldown_until": cooldown_until, "last_request_at": now}
-    pool, conn = _make_pool(fetchrow_side_effects=[locked_row])
+    pool, conn = make_pool_and_conn(fetchrow_side_effects=[locked_row])
 
     sleep_calls: list[float] = []
 
@@ -555,7 +511,7 @@ async def test_m2_race_cooldown_observed_not_bypassed(monkeypatch):
     # wrong fetchrow_call_count).
     bypass_sentinel = {"last_request_at": now}
     locked_row = {"cooldown_until": cooldown_until, "last_request_at": now}
-    pool, conn = _make_pool(fetchrow_side_effects=[locked_row, bypass_sentinel])
+    pool, conn = make_pool_and_conn(fetchrow_side_effects=[locked_row, bypass_sentinel])
 
     sleep_calls: list[float] = []
 
@@ -612,7 +568,7 @@ async def test_second_claim_failure_logs_warning_and_raises(monkeypatch, caplog)
     locked_row = {"last_request_at": recent, "cooldown_until": None}
 
     # attempt 0: [locked_row, None]; attempt 1: [None, None]
-    pool, _ = _make_pool(fetchrow_side_effects=[locked_row, None, None, None])
+    pool, _ = make_pool_and_conn(fetchrow_side_effects=[locked_row, None, None, None])
 
     sleep_calls: list[float] = []
 
@@ -779,7 +735,7 @@ async def test_m2_race_live_pg_cooldown_interleave_is_observed(live_pg_dsn: str)
 
 async def test_reset_issues_upsert_clearing_cooldown_and_failures():
     """reset() UPSERTs last_status='ok', cooldown_until=NULL, failures=0."""
-    pool, conn = _make_pool(fetchrow_side_effects=[None])
+    pool, conn = make_pool_and_conn(fetchrow_side_effects=[None])
     limiter = PersistentSourceRateLimiter(
         source_type="arxiv",
         user_id=None,
@@ -802,7 +758,7 @@ async def test_reset_issues_upsert_clearing_cooldown_and_failures():
 
 async def test_reset_swallows_db_error():
     """reset() never raises even when the DB pool errors."""
-    pool, _ = _make_pool(raise_exc=OSError("db down"))
+    pool, _ = make_pool_and_conn(raise_on_acquire=OSError("db down"))
     limiter = PersistentSourceRateLimiter(
         source_type="arxiv",
         user_id=7,
@@ -818,7 +774,7 @@ async def test_health_snapshot_in_cooldown():
     """Future cooldown_until → in_cooldown True, stale False."""
     until = datetime.now(tz=UTC) + timedelta(hours=1)
     last_req = datetime.now(tz=UTC) - timedelta(minutes=5)
-    pool, _ = _make_pool(
+    pool, _ = make_pool_and_conn(
         fetchrow_side_effects=[
             {
                 "cooldown_until": until,
@@ -850,7 +806,7 @@ async def test_health_snapshot_stale_when_rate_limit_and_cooldown_expired():
     set rate_limit + cooldown, the cooldown lapsed, nothing reset it.
     """
     past = datetime.now(tz=UTC) - timedelta(days=7)
-    pool, _ = _make_pool(
+    pool, _ = make_pool_and_conn(
         fetchrow_side_effects=[
             {
                 "cooldown_until": past,
@@ -876,7 +832,7 @@ async def test_health_snapshot_stale_when_rate_limit_and_cooldown_expired():
 
 async def test_health_snapshot_stale_when_rate_limit_and_no_cooldown():
     """rate_limit + NULL cooldown_until → stale True (null-or-past rule)."""
-    pool, _ = _make_pool(
+    pool, _ = make_pool_and_conn(
         fetchrow_side_effects=[
             {
                 "cooldown_until": None,
@@ -902,7 +858,7 @@ async def test_health_snapshot_stale_when_rate_limit_and_no_cooldown():
 async def test_health_snapshot_fresh_ok_not_stale():
     """last_status='ok' is never stale and never in cooldown."""
     now = datetime.now(tz=UTC)
-    pool, _ = _make_pool(
+    pool, _ = make_pool_and_conn(
         fetchrow_side_effects=[
             {
                 "cooldown_until": None,
@@ -927,7 +883,7 @@ async def test_health_snapshot_fresh_ok_not_stale():
 
 async def test_health_snapshot_no_row_returns_safe_default():
     """No source_health row → safe all-default snapshot."""
-    pool, _ = _make_pool(fetchrow_side_effects=[None])
+    pool, _ = make_pool_and_conn(fetchrow_side_effects=[None])
     limiter = PersistentSourceRateLimiter(
         source_type="arxiv",
         user_id=None,
@@ -948,7 +904,7 @@ async def test_health_snapshot_no_row_returns_safe_default():
 
 async def test_health_snapshot_db_error_returns_safe_default():
     """A DB error yields the safe default snapshot, never raises."""
-    pool, _ = _make_pool(raise_exc=OSError("db down"))
+    pool, _ = make_pool_and_conn(raise_on_acquire=OSError("db down"))
     limiter = PersistentSourceRateLimiter(
         source_type="arxiv",
         user_id=None,

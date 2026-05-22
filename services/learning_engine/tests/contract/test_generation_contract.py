@@ -267,3 +267,69 @@ async def test_generate_cards_core_revalidates_paper_ownership(
         f"RD-DA-001 depth: generate_cards_core returned {exc_info.value.status_code} "
         f"instead of 403 for user_b accessing paper_a. Detail: {exc_info.value.detail}"
     )
+
+
+# ---------------------------------------------------------------------------
+# §A202 — POST /api/generate without session → 401 (current_user_id_strict)
+# ---------------------------------------------------------------------------
+
+
+async def test_generate_endpoint_no_session_returns_401(_le_app, _configure_api_key):
+    """POST /api/generate with API key but no session cookie → 401.
+
+    generate_cards uses current_user_id_strict; no session = no resolved user_id → 401.
+    Documents that the generation endpoint is session-gated (not API-key-only).
+    # Verified: services/learning_engine/learning_engine/routers/generation.py:307
+    """
+    import jarvis_common.task_registry as task_registry
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+
+    with patch.dict(task_registry._TASK_MAP, {"card.generate": mock_task}):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=_le_app),
+            base_url="http://test",
+            headers={"X-API-Key": _TEST_API_KEY},
+        ) as c:
+            resp = await c.post(
+                "/api/generate",
+                json={"paper_id": 1, "deck_id": 1, "max_cards": 3},
+            )
+
+    assert resp.status_code == 401, (
+        f"Expected 401 for API-key-only generate; got {resp.status_code}: {resp.text[:300]}"
+    )
+    mock_task.defer_async.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# §A203 — POST /api/generate with invalid payload → 422 (validation)
+# ---------------------------------------------------------------------------
+
+
+async def test_generate_endpoint_missing_paper_id_returns_422(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """POST /api/generate missing required paper_id field → 422 (Pydantic discriminator).
+
+    GenerateCardsRequest requires paper_id: int; omitting it triggers FastAPI's
+    request body validation before any auth or DB query fires.
+    # Verified: services/learning_engine/learning_engine/models.py:99-104
+    """
+    import jarvis_common.task_registry as task_registry
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+
+    with patch.dict(task_registry._TASK_MAP, {"card.generate": mock_task}):
+        async with _client(_le_app, contract_two_users.cookie_a) as c:
+            resp = await c.post(
+                "/api/generate",
+                json={"deck_id": contract_two_users.deck_id_a, "max_cards": 3},
+            )
+
+    assert resp.status_code == 422, (
+        f"Expected 422 for missing paper_id; got {resp.status_code}: {resp.text[:300]}"
+    )
+    mock_task.defer_async.assert_not_awaited()

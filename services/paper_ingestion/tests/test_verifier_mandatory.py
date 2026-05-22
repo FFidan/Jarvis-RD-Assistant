@@ -32,6 +32,7 @@ from paper_ingestion.weekly_summary_models import ThemeOutput, WeeklyDigestOutpu
 # ---------------------------------------------------------------------------
 
 
+# Keep local: verifier-test-specific paper factory (abstract kwarg + fixed published_date) not covered by pulse_helpers.make_pulse_paper.
 def _make_paper(idx: int = 0, abstract: str = "Abstract text.") -> PaperCreate:
     return PaperCreate(
         external_id=f"arxiv:{idx:04d}",
@@ -55,6 +56,7 @@ def _make_scored(paper: PaperCreate) -> ScoredCandidate:
     )
 
 
+# Keep local: verifier-test-specific profile (llm_relevance/llm_novelty weights) differs from other pulse profiles.
 def _make_profile() -> UserProfile:
     return UserProfile(
         topics=[TopicRef(id=1, name="ML", description="Machine learning")],

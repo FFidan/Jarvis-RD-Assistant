@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 from telegram_bot.project_manager import ProjectManager
 
 
@@ -16,11 +17,7 @@ def _row(**values):
 
 def _make_pool_with_conn(conn: AsyncMock) -> MagicMock:
     """Create a pool mock whose acquire() yields the provided connection."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
+    pool, _ = make_pool_and_conn(conn=conn, with_transaction=False)
     return pool
 
 

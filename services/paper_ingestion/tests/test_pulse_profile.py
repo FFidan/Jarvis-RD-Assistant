@@ -743,6 +743,7 @@ async def test_load_weights_returns_per_user_override():
 # ---------------------------------------------------------------------------
 
 
+# Keep local: multi-conn phase-separated side_effect semantics not covered by canonical make_pool_and_conn.
 def _make_pool_with_weights(weights: dict) -> MagicMock:
     """Build a mock db_pool whose phase-3 connection returns the given weights."""
     phase1_conn = AsyncMock()

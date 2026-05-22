@@ -10,26 +10,13 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.extraction.kg_models import (
     KGEntityCandidate,
     KGExtractionOutput,
     KGRelationshipCandidate,
 )
 from paper_ingestion.models import VerificationResult
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_pool(conn: AsyncMock) -> MagicMock:
-    """Create a mock pool whose acquire() context manager returns *conn*."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
 
 
 def _chunk_row(
@@ -88,7 +75,7 @@ async def test_extraction_rejects_hallucinated_evidence():
     mock_conn.fetch.return_value = [_chunk_row()]
     mock_conn.execute = AsyncMock(return_value="UPDATE 1")
     mock_conn.fetchval = AsyncMock(return_value=None)
-    pool = _make_pool(mock_conn)
+    pool, _ = make_pool_and_conn(conn=mock_conn)
 
     kg_result = KGExtractionOutput(
         entities=[
@@ -148,7 +135,7 @@ async def test_extraction_persists_page_number_from_chunk():
     mock_conn.fetch.return_value = [_chunk_row(content=chunk_content, page_number=3)]
     mock_conn.execute = AsyncMock(return_value="UPDATE 1")
     mock_conn.fetchval = AsyncMock(return_value=1)  # INSERT succeeds
-    pool = _make_pool(mock_conn)
+    pool, _ = make_pool_and_conn(conn=mock_conn)
 
     kg_result = KGExtractionOutput(
         entities=[
@@ -212,7 +199,7 @@ async def test_extraction_keeps_verified_rows():
     mock_conn.fetch.return_value = [_chunk_row(content=evidence_text)]
     mock_conn.execute = AsyncMock(return_value="UPDATE 1")
     mock_conn.fetchval = AsyncMock(return_value=1)
-    pool = _make_pool(mock_conn)
+    pool, _ = make_pool_and_conn(conn=mock_conn)
 
     kg_result = KGExtractionOutput(
         entities=[
@@ -295,7 +282,7 @@ async def test_extraction_uses_full_text_for_verification():
     mock_conn.fetch.return_value = [chunk]
     mock_conn.execute = AsyncMock(return_value="UPDATE 1")
     mock_conn.fetchval = AsyncMock(return_value=1)
-    pool = _make_pool(mock_conn)
+    pool, _ = make_pool_and_conn(conn=mock_conn)
 
     kg_result = KGExtractionOutput(
         entities=[

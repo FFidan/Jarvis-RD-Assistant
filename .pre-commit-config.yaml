@@ -22,3 +22,11 @@ repos:
         language: system
         pass_filenames: false
         files: ^(db/migrations/|db/init\.sql|scripts/check-migrations-no-tx\.sh)
+  - repo: local
+    hooks:
+      - id: check-test-shape
+        name: Enforce docs/contracts/07-testing.md (no handler-bypass / SQL-substring / missing markers in test files)
+        entry: python3 scripts/check-test-shape.py
+        language: system
+        pass_filenames: true
+        files: ^(services/[^/]+/tests/|libs/jarvis_common/tests/).*\.py$

@@ -255,3 +255,114 @@ async def test_list_project_activity_owner_gets_200_with_correct_kinds(
         f"Expected 'completed_task' in activity feed kinds {kinds_present} "
         f"after seeding a done task"
     )
+
+
+# ---------------------------------------------------------------------------
+# §A212 — POST /api/projects/{id}/questions — row written with caller user_id
+# ---------------------------------------------------------------------------
+
+
+async def test_create_question_row_has_caller_user_id(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/projects/{id}/questions inserts row with correct user_id.
+
+    Collapses test_project_questions.py's SQL-text assertion to a real DB proof.
+    # Verified: services/learning_engine/learning_engine/routers/project_questions.py:98-108
+    """
+    project_id = contract_two_users.project_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            f"/api/projects/{project_id}/questions",
+            json={"body": "Contract question E1"},
+        )
+
+    assert resp.status_code == 201, (
+        f"POST /api/projects/{project_id}/questions failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    question_id = resp.json()["id"]
+    db_user_id = await contract_conn.fetchval(
+        "SELECT user_id FROM project_questions WHERE id = $1",
+        question_id,
+    )
+    assert db_user_id == contract_two_users.user_a_id, (
+        f"Question {question_id} has user_id={db_user_id}; expected {contract_two_users.user_a_id}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §A213 — GET /api/projects/{id}/questions — list returns only own questions
+# ---------------------------------------------------------------------------
+
+
+async def test_list_questions_returns_only_own(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """GET /api/projects/{id}/questions lists only questions owned by the caller.
+
+    Seeds a question for user A; user B has a different project (no access to A's).
+    Also verifies user A can list their own question.
+    # Verified: services/learning_engine/learning_engine/routers/project_questions.py:52-73
+    """
+    project_id = contract_two_users.project_id_a
+    question_id = await contract_conn.fetchval(
+        """INSERT INTO project_questions (project_id, user_id, body)
+           VALUES ($1, $2, 'Isolated question E1')
+           RETURNING id""",
+        project_id,
+        contract_two_users.user_a_id,
+    )
+
+    # User A can see their own question
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp_a = await c.get(f"/api/projects/{project_id}/questions")
+    assert resp_a.status_code == 200, (
+        f"User A list questions failed: {resp_a.status_code}: {resp_a.text[:300]}"
+    )
+    ids_a = [q["id"] for q in resp_a.json()]
+    assert question_id in ids_a, f"User A's question {question_id} missing from list; got {ids_a}"
+
+    # User B gets 404 (project not theirs)
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp_b = await c.get(f"/api/projects/{project_id}/questions")
+    assert resp_b.status_code == 404, (
+        f"IDOR: user B got {resp_b.status_code} listing A's questions (expected 404)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §A214 — update-idempotency: re-creating question doesn't change first row
+# ---------------------------------------------------------------------------
+
+
+async def test_create_question_idempotency_on_duplicate_body(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/projects/{id}/questions with same body creates separate rows (no de-dup).
+
+    Verifies two POST calls produce two separate rows — confirming the insert has
+    no UNIQUE constraint on (project_id, user_id, body). This is idempotency
+    documentation: the caller is responsible for de-dup, not the API.
+    # Verified: services/learning_engine/learning_engine/routers/project_questions.py:96-108
+    """
+    project_id = contract_two_users.project_id_a
+    body_text = "Duplicate question body contract"
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp1 = await c.post(f"/api/projects/{project_id}/questions", json={"body": body_text})
+        resp2 = await c.post(f"/api/projects/{project_id}/questions", json={"body": body_text})
+
+    assert resp1.status_code == 201 and resp2.status_code == 201, (
+        f"Expected both creates to succeed; got {resp1.status_code}, {resp2.status_code}"
+    )
+    id1, id2 = resp1.json()["id"], resp2.json()["id"]
+    assert id1 != id2, (
+        f"Expected two separate question rows; both returned id={id1} — unexpected de-dup"
+    )
+
+    count = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM project_questions WHERE project_id = $1 AND body = $2",
+        project_id,
+        body_text,
+    )
+    assert count >= 2, f"Expected >= 2 rows with same body; found {count}"

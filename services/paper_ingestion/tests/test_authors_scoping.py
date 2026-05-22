@@ -14,11 +14,12 @@ Cross-user isolation is proven by:
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common.testing import make_pool_and_conn
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,20 +48,6 @@ def _make_author_record(
     }
 
 
-def _mock_pool() -> tuple[MagicMock, AsyncMock]:
-    pool = MagicMock()
-    conn = AsyncMock()
-    txn_cm = MagicMock()
-    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
-    txn_cm.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn_cm)
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = ctx
-    return pool, conn
-
-
 @pytest.fixture()
 def _app_no_auth_override():
     """App fixture that does NOT stub current_user_id_strict.
@@ -73,7 +60,7 @@ def _app_no_auth_override():
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    pool, conn = _mock_pool()
+    pool, conn = make_pool_and_conn()
     app.state.db_pool = pool
     app.state.limiter.enabled = False
     app.dependency_overrides[get_db_pool] = lambda: pool
@@ -295,7 +282,7 @@ async def test_list_authors_requires_session():
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    pool, conn = _mock_pool()
+    pool, conn = make_pool_and_conn()
     conn.fetch.return_value = []
     app.state.db_pool = pool
     app.state.limiter.enabled = False

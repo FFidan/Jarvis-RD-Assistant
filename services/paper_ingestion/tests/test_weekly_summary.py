@@ -51,6 +51,7 @@ def _llm_output(themes: list[dict], summary: str) -> WeeklyDigestOutput:
     return WeeklyDigestOutput(themes=theme_objects, summary=summary)
 
 
+# Keep local: uses asynccontextmanager pattern (not acquire().ctx) + returns pool only (no conn handle) — different from canonical.
 def _make_pool(rows: list) -> MagicMock:
     """Build a mock asyncpg.Pool whose .acquire() context manager returns a conn with .fetch()."""
     conn = AsyncMock()
@@ -445,6 +446,7 @@ async def test_weekly_summary_llm_failure_has_empty_theme_splits():
 # ---------------------------------------------------------------------------
 
 
+# Keep local: param-capturing async fetch side_effect (tracks $2 user_id per call) not covered by canonical make_pool_and_conn.
 def _make_pool_capturing_params(rows_by_user_id: dict) -> tuple[MagicMock, list]:
     """Pool mock that captures the ``user_id`` bind param ($2) passed to fetch().
 

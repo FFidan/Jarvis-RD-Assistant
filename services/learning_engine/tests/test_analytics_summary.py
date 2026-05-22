@@ -143,79 +143,12 @@ def test_compute_streak_inner_gap():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_summary_per_user_isolation():
-    """User A's data is isolated from user B's data (simulated at DB level)."""
-    from learning_engine.routers.analytics import get_analytics_summary
+# test_summary_per_user_isolation deleted — mock-unit with B1-09 positional-arg
+# assertions (cur_args[1]==user_id); survivor:
+# test_analytics_contract.py::test_analytics_summary_user_b_excludes_user_a_data (A189).
 
-    handler = get_analytics_summary.__wrapped__
-
-    # User A has real data
-    current_a = FakeRecord(papers_read_total=5, focus_hours_total=12.5, cards_reviewed_total=80)
-    prev_a = FakeRecord(papers_read_prev=3, focus_hours_prev=10.0, cards_reviewed_prev=60)
-    focus_streak_a = [_make_streak_row(_TODAY - datetime.timedelta(days=i)) for i in range(3)]
-    review_streak_a = [_make_streak_row(_TODAY - datetime.timedelta(days=i)) for i in range(2)]
-
-    pool_a, conn_a = _make_pool_multi(
-        fetchrow_side_effects=[current_a, prev_a],
-        fetch_side_effects=[focus_streak_a, review_streak_a],
-    )
-    result_a = await handler(MagicMock(), days=30, db_pool=pool_a, user_id=1)
-
-    assert result_a.papers_read_total == 5
-    assert result_a.focus_hours_total == 12.5
-    assert result_a.cards_reviewed_total == 80
-    assert result_a.papers_read_prev == 3
-
-    # User B sees zeros (DB returns empty — scoped by user_id=$1=2)
-    current_b = FakeRecord(papers_read_total=0, focus_hours_total=0.0, cards_reviewed_total=0)
-    prev_b = FakeRecord(papers_read_prev=0, focus_hours_prev=0.0, cards_reviewed_prev=0)
-
-    pool_b, conn_b = _make_pool_multi(
-        fetchrow_side_effects=[current_b, prev_b],
-        fetch_side_effects=[[], []],
-    )
-    result_b = await handler(MagicMock(), days=30, db_pool=pool_b, user_id=2)
-
-    assert result_b.papers_read_total == 0
-    assert result_b.focus_hours_total == 0.0
-    assert result_b.cards_reviewed_total == 0
-    assert result_b.focus_streak_days == 0
-    assert result_b.cards_review_streak_days == 0
-
-    # Confirm user_id was threaded correctly to the DB for each user
-    cur_args_a = conn_a.fetchrow.call_args_list[0][0]
-    assert cur_args_a[1] == 1, "user A: user_id must be $1=1"
-
-    cur_args_b = conn_b.fetchrow.call_args_list[0][0]
-    assert cur_args_b[1] == 2, "user B: user_id must be $1=2"
-
-
-# ---------------------------------------------------------------------------
-# get_analytics_summary — current/prior-period split correctness
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_summary_period_delta_correctness():
-    """Deltas are derived from the two separate period rows (not mixed)."""
-    from learning_engine.routers.analytics import get_analytics_summary
-
-    handler = get_analytics_summary.__wrapped__
-
-    current_row = FakeRecord(papers_read_total=10, focus_hours_total=20.0, cards_reviewed_total=100)
-    prev_row = FakeRecord(papers_read_prev=4, focus_hours_prev=16.0, cards_reviewed_prev=72)
-
-    pool, _ = _make_pool_multi(
-        fetchrow_side_effects=[current_row, prev_row],
-        fetch_side_effects=[[], []],
-    )
-    result = await handler(MagicMock(), days=30, db_pool=pool, user_id=99)
-
-    # Delta = current - prev (frontend computes, but we confirm the raw values)
-    assert result.papers_read_total - result.papers_read_prev == 6
-    assert abs(result.focus_hours_total - result.focus_hours_prev - 4.0) < 1e-9
-    assert result.cards_reviewed_total - result.cards_reviewed_prev == 28
+# test_summary_period_delta_correctness deleted — mock-unit duplicate;
+# survivor: test_analytics_contract.py::test_analytics_summary_cross_period_isolation (A185).
 
 
 @pytest.mark.asyncio

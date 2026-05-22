@@ -14,6 +14,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest  # noqa: F401 — pytest is needed for pytest.mark.asyncio and pytest.approx
+from jarvis_common.testing import make_pool_and_conn
 from paper_ingestion.rag.verification import (
     RagConfidence,
     RagVerificationReport,
@@ -71,16 +72,6 @@ def _never_verified_verifier():
     verifier = MagicMock()
     verifier.verify_quote.return_value = result
     return verifier
-
-
-def _make_pool_with_conn(conn: AsyncMock) -> MagicMock:
-    """Wrap *conn* in a mock asyncpg pool whose .acquire() context manager yields it."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
 
 
 def _fake_conn(rows_by_paper_id: dict[int, list[dict]]) -> AsyncMock:
@@ -141,7 +132,7 @@ async def test_happy_path_all_verified():
     verifier = _always_verified_verifier()
     conn = AsyncMock()
     conn.fetch.return_value = []
-    pool = _make_pool_with_conn(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     # No paper_ids in sources → single-paper / synthetic path (no DB fetch)
     report = await verify_answer_sentences(answer, sources, verifier, pool)
@@ -237,7 +228,7 @@ async def test_multiple_papers_in_sources():
         2: [{"content": "paper 2 content"}],
     }
     conn = _fake_conn(rows_by_pid)
-    pool = _make_pool_with_conn(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     # Always-verified: every sentence verified against first paper tried
     verifier = _always_verified_verifier()
@@ -289,7 +280,7 @@ async def test_memoization_single_paper_fulltext_fetch():
 
     conn = AsyncMock()
     conn.fetch.side_effect = _fetch
-    pool = _make_pool_with_conn(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     verifier = _always_verified_verifier()
 

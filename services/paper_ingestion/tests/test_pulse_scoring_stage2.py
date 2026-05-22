@@ -43,6 +43,7 @@ def _make_scored(paper: PaperCreate, embedding: float = 0.5) -> ScoredCandidate:
     )
 
 
+# Keep local: stage2-specific profile (llm_relevance/llm_novelty weights, recent_positive/negative_titles) differs structurally from stage1.
 def _make_profile() -> UserProfile:
     return UserProfile(
         topics=[TopicRef(id=1, name="Neural ODEs", description="Continuous dynamics")],

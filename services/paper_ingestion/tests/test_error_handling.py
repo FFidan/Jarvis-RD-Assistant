@@ -1,7 +1,7 @@
 """Tests for error handling in SSE streaming, embedder, and health checks."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -234,122 +234,6 @@ async def test_search_chunks_runtime_error_propagates():
         )
 
 
-# ---------------------------------------------------------------------------
-# Test 6: Health check returns degraded when a dependency fails
-# ---------------------------------------------------------------------------
-
-
-async def _route_http_get(
-    *, litellm_ok: bool = True, ollama_ok: bool = True, vector_ok: bool = False
-):
-    """Build an httpx-mock .get side-effect routing per-URL.
-
-    Mirrors the helper in test_health.py — we now call the route handler via
-    ASGITransport (DOM-J-03 refactor moved health_check_internal into the
-    shared jarvis_common.health module).
-    """
-
-    async def _get(url: str, **_kwargs: object) -> MagicMock:
-        resp = MagicMock()
-        if "health/readiness" in url:
-            resp.status_code = 200 if litellm_ok else 503
-        elif "/api/tags" in url:
-            if not ollama_ok:
-                raise ConnectionError("ollama down")
-            resp.status_code = 200
-        elif "vector" in url or "8686" in url:
-            if not vector_ok:
-                raise ConnectionError("vector API disabled")
-            resp.status_code = 200
-        else:
-            resp.status_code = 200
-        return resp
-
-    return _get
-
-
-async def test_health_check_degraded():
-    """GET /health/internal returns 'degraded' when Qdrant is unavailable."""
-    from httpx import ASGITransport
-    from jarvis_common import verify_api_key
-    from paper_ingestion.main import app
-
-    # PostgreSQL: working
-    mock_conn = AsyncMock()
-    mock_conn.execute.return_value = None
-    mock_cm = AsyncMock()
-    mock_cm.__aenter__.return_value = mock_conn
-    mock_cm.__aexit__.return_value = False
-    mock_pool = MagicMock()
-    mock_pool.acquire.return_value = mock_cm
-    app.state.db_pool = mock_pool
-
-    # Qdrant: failing
-    mock_qdrant = AsyncMock()
-    mock_qdrant.get_collections.side_effect = ConnectionError("Qdrant down")
-    app.state.qdrant_client = mock_qdrant
-
-    # LiteLLM + Ollama: working; vector: unknown (disabled)
-    mock_http = AsyncMock(spec=httpx.AsyncClient)
-    mock_http.get = AsyncMock(side_effect=await _route_http_get())
-    app.state.http_client = mock_http
-
-    app.dependency_overrides[verify_api_key] = lambda: None
-    try:
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.get("/health/internal")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert resp.status_code == 503
-    data = resp.json()
-    assert data["status"] == "degraded"
-    assert data["service"] == "paper_ingestion"
-    assert data["checks"]["postgres"] == "ok"
-    assert data["checks"]["qdrant"] == "unavailable"
-    assert data["checks"]["litellm"] == "ok"
-
-
-async def test_health_check_all_ok():
-    """GET /health/internal returns 'ok' when all required dependencies are up."""
-    from httpx import ASGITransport
-    from jarvis_common import verify_api_key
-    from paper_ingestion.main import app
-
-    # PostgreSQL: working
-    mock_conn = AsyncMock()
-    mock_conn.execute.return_value = None
-    mock_cm = AsyncMock()
-    mock_cm.__aenter__.return_value = mock_conn
-    mock_cm.__aexit__.return_value = False
-    mock_pool = MagicMock()
-    mock_pool.acquire.return_value = mock_cm
-    app.state.db_pool = mock_pool
-
-    # Qdrant: working
-    mock_qdrant = AsyncMock()
-    mock_qdrant.get_collections.return_value = MagicMock()
-    app.state.qdrant_client = mock_qdrant
-
-    # LiteLLM + Ollama: working; vector: unknown (disabled by default)
-    mock_http = AsyncMock(spec=httpx.AsyncClient)
-    mock_http.get = AsyncMock(side_effect=await _route_http_get())
-    app.state.http_client = mock_http
-
-    app.dependency_overrides[verify_api_key] = lambda: None
-    try:
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.get("/health/internal")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert data["checks"]["postgres"] == "ok"
-    assert data["checks"]["qdrant"] == "ok"
-    assert data["checks"]["litellm"] == "ok"
+# test_health_check_degraded and test_health_check_all_ok deleted —
+# covered by libs/jarvis_common/tests/contract/test_health_contract.py
+# (test_health_internal_503_when_db_down, test_health_internal_200_full_payload).

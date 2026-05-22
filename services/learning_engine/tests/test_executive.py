@@ -509,93 +509,14 @@ async def test_my_day_includes_completed_tasks_today(exec_app):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_quick_add_task_standalone(exec_app):
-    """POST /api/executive/tasks with just title returns 201."""
-    import datetime
+# test_quick_add_task_standalone deleted — mock-unit duplicate;
+# survivor: test_executive_contract.py::test_quick_add_task_creates_row_with_user_id (A196).
 
-    app, conn = exec_app
-    now = datetime.datetime.now(tz=datetime.UTC).isoformat()
-    conn.fetchrow.return_value = FakeRecord(
-        id=99,
-        project_id=None,
-        title="Buy groceries",
-        priority=3,
-        status="todo",
-        deadline=None,
-        description=None,
-        parent_task_id=None,
-        estimated_hours=None,
-        actual_hours=None,
-        sort_order=0,
-        completed_at=None,
-        created_at=now,
-        updated_at=now,
-    )
+# test_quick_add_task_with_project deleted — mock-unit duplicate;
+# survivor: test_executive_contract.py::test_quick_add_task_creates_row_with_user_id (A196, project path).
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post("/api/executive/tasks", json={"title": "Buy groceries"})
-
-    assert resp.status_code == 201
-    assert resp.json()["title"] == "Buy groceries"
-    assert resp.json()["project_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_quick_add_task_with_project(exec_app):
-    """POST /api/executive/tasks with valid project_id returns 201."""
-    import datetime
-
-    app, conn = exec_app
-    now = datetime.datetime.now(tz=datetime.UTC).isoformat()
-    conn.fetchval.return_value = 10  # project exists
-    conn.fetchrow.return_value = FakeRecord(
-        id=100,
-        project_id=10,
-        title="Fix bug",
-        priority=2,
-        status="todo",
-        deadline=None,
-        description=None,
-        parent_task_id=None,
-        estimated_hours=None,
-        actual_hours=None,
-        sort_order=0,
-        completed_at=None,
-        created_at=now,
-        updated_at=now,
-    )
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/executive/tasks",
-            json={"title": "Fix bug", "project_id": 10, "priority": 2},
-        )
-
-    assert resp.status_code == 201
-    assert resp.json()["project_id"] == 10
-
-
-@pytest.mark.asyncio
-async def test_quick_add_task_invalid_project(exec_app):
-    """POST /api/executive/tasks with bad project_id returns 404."""
-    app, conn = exec_app
-    conn.fetchval.return_value = None  # project doesn't exist
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/executive/tasks",
-            json={"title": "Some task", "project_id": 99999},
-        )
-
-    assert resp.status_code == 404
-    assert "project" in resp.json()["detail"].lower()
+# test_quick_add_task_invalid_project deleted — mock-unit duplicate;
+# survivor: test_executive_contract.py::test_quick_add_task_non_owned_project_gets_404 (A196).
 
 
 @pytest.mark.asyncio

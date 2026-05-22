@@ -16,6 +16,7 @@ from paper_ingestion.models import PaperCreate, SourceType
 from paper_ingestion.pipelines import auto_fetch as af
 
 
+# Keep local: auto-fetch-specific paper (discovery_origin/citation_count/metadata kwargs) not in pulse_helpers.make_pulse_paper.
 def _make_paper(idx: int = 0) -> PaperCreate:
     return PaperCreate(
         external_id=f"arxiv:1000.0000{idx}",

@@ -61,35 +61,9 @@ async def test_request_link_unknown_email_returns_sent_true(monkeypatch) -> None
     assert not any("INSERT INTO magic_link_tokens" in s for s in executed_sql)
 
 
-@pytest.mark.asyncio
-async def test_request_link_known_email_inserts_token_and_logs(monkeypatch) -> None:
-    """Known email → token row inserted, dev-mode log emitted."""
-    monkeypatch.setenv("DEV_MODE", "true")
-    monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value={"id": 42})
-    conn.execute = AsyncMock()
-    pool = _build_mock_pool(conn)
-    request = _build_request(pool)
-
-    sent_calls: list[tuple[str, str]] = []
-
-    async def fake_send_magic_link(email, link, *, pool=None):
-        sent_calls.append((email, link))
-
-    monkeypatch.setattr(auth_router, "send_magic_link", fake_send_magic_link)
-
-    result = await auth_router.request_link.__wrapped__(
-        auth_router.RequestLinkBody(email="ferhat@example.com"),
-        request,
-    )
-
-    assert result.sent is True
-    executed_sql = [c.args[0] for c in conn.execute.await_args_list]
-    assert any("INSERT INTO magic_link_tokens" in s for s in executed_sql)
-    assert len(sent_calls) == 1
-    assert sent_calls[0][0] == "ferhat@example.com"
-    assert "token=" in sent_calls[0][1]
+# Collapsed (E2.PI): test_request_link_known_email_inserts_token_and_logs
+# Survivor: libs/jarvis_common/tests/contract/test_session_contract.py::test_request_link_creates_token_row
+# POST /api/auth/request-link inserts magic_link_tokens row — verified with real DB.
 
 
 @pytest.mark.asyncio

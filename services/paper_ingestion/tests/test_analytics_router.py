@@ -7,17 +7,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from httpx import ASGITransport
-
-
-def _mock_pool() -> tuple[MagicMock, AsyncMock]:
-    """Create a mocked asyncpg pool with one context-managed connection."""
-    pool = MagicMock()
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = ctx
-    return pool, conn
+from jarvis_common.testing import make_pool_and_conn
 
 
 @pytest.fixture()
@@ -27,7 +17,7 @@ def app_with_pool():
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
-    pool, conn = _mock_pool()
+    pool, conn = make_pool_and_conn()
     app.state.db_pool = pool
     app.state.limiter.enabled = False
     app.dependency_overrides[get_db_pool] = lambda: pool

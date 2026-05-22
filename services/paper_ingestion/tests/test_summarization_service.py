@@ -27,6 +27,7 @@ async def _noop_lock(*args, **kwargs):
     yield
 
 
+# Keep local: multi-acquire side_effect semantics (successive acquire() yields different conns) not covered by canonical make_pool_and_conn.
 def _make_pool(*connections: AsyncMock) -> MagicMock:
     """Create a pool mock that yields the provided connections in order."""
     contexts = []

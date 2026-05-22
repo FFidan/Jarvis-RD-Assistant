@@ -181,22 +181,11 @@ def test_rate_open_writes_nothing(client):
     mock_trash.assert_not_called()
 
 
-def test_rate_down_writes_recommendation_feedback_negative_pulse_thumbs(client):
-    """rating='down' calls _upsert_recommendation_feedback(signal='negative', source='pulse_thumbs')."""
-    tc, pool, conn = client
-    conn.fetchval.return_value = 1
-
-    with patch(
-        "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
-    ) as mock_fb:
-        resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "down"})
-
-    assert resp.status_code == 200
-    mock_fb.assert_awaited_once()
-    _conn_arg, paper_id_arg, user_id_arg, signal_arg, source_arg = mock_fb.await_args.args
-    assert paper_id_arg == 42
-    assert signal_arg == "negative"
-    assert source_arg == "pulse_thumbs"
+# test_rate_down_writes_recommendation_feedback_negative_pulse_thumbs: DELETED (Phase E2).
+# SQL-wiring assertion (_upsert_recommendation_feedback called with signal='negative',
+# source='pulse_thumbs') replaced by strictly stronger behavioral contract:
+# test_pulse_contract.py::test_e1_rate_card_down_writes_negative_feedback verifies
+# the actual recommendation_feedback DB row after POST /api/pulse/rate?rating=down.
 
 
 def test_rate_dismiss_writes_state_trash_and_recommendation_feedback_negative_dismiss_combined(

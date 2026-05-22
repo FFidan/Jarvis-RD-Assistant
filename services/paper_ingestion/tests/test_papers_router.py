@@ -426,41 +426,9 @@ async def test_submit_feedback_maps_foreign_key_violation_to_404():
     assert exc_info.value.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_submit_feedback_writes_recommendation_feedback_with_correct_source():
-    """submit_feedback delegates to _upsert_recommendation_feedback with the correct args.
-
-    After the DRY refactor the raw inline INSERT was replaced by a call to
-    the shared helper.  We patch the helper at the import path used by papers.py
-    and verify it is called with paper_id, signal, source, and reason.
-    Feedback validation checks the live discovery_origin enum before the insert.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(discovery_origin="recommender")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with patch(
-        "paper_ingestion.routers.papers._upsert_recommendation_feedback",
-        new_callable=AsyncMock,
-    ) as mock_helper:
-        result = await papers.submit_feedback.__wrapped__(
-            request,
-            paper_id=7,
-            body=FeedbackRequest(signal="negative", source="feed_thumbs", reason="off-topic"),
-            db_pool=pool,
-        )
-
-    mock_helper.assert_awaited_once()
-    assert mock_helper.await_args is not None
-    _conn_arg, paper_id_arg, _uid_arg, signal_arg, source_arg, reason_arg = (
-        mock_helper.await_args.args
-    )
-    assert paper_id_arg == 7
-    assert signal_arg == "negative"
-    assert source_arg == "feed_thumbs"
-    assert reason_arg == "off-topic"
-    assert result.signal == "negative"
-    assert result.source == "feed_thumbs"
+# Collapsed (E2.PI): test_submit_feedback_writes_recommendation_feedback_with_correct_source
+# Survivor: test_papers_contract.py::test_a69_submit_feedback_owner_creates_row
+# submit_feedback writes recommendation_feedback with correct signal/source verified with real DB.
 
 
 @pytest.mark.asyncio
@@ -532,66 +500,9 @@ async def test_submit_feedback_rejects_user_initiated_papers():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_list_papers_bm25_scoped_to_user(monkeypatch):
-    """RB-1: user B calling the BM25 path (q set, view=None) must NOT receive
-    user A's papers.
-
-    The query SQL must include a JOIN on user_library bound to the caller's
-    user_id, not user A's.  We simulate two calls — one as user A (id=1, the
-    autouse default) and one as user B (id=2) — and verify that:
-
-    1. Both calls contain ``JOIN user_library ul`` in the SQL.
-    2. Each call's user_library param matches the caller's own id (not the
-       other user's id), proving cross-tenant rows are structurally excluded.
-    """
-    # --- call as user A (id=1, the autouse default) ---
-    pool_a, conn_a = _make_pool_and_conn()
-    conn_a.fetch.return_value = [_paper_row(id=10)]
-
-    # CC-03: identity is now a Depends(get_current_user_id) param; a direct
-    # .__wrapped__ call passes it explicitly. user A == id 1 (the value the
-    # pre-conversion autouse stub supplied).
-    await papers.list_papers.__wrapped__(
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
-        view=None,
-        source_type=None,
-        topic_id=None,
-        q="neural",
-        limit=10,
-        offset=0,
-        db_pool=pool_a,
-        embedder=None,
-        user_id=1,
-    )
-
-    sql_a, *params_a = conn_a.fetch.await_args.args
-    assert "JOIN user_library ul" in sql_a, "user_library join must be present for user A"
-    # user_id=1 (user A) must be the param bound to the library join
-    assert params_a[0] == 1, f"Expected user_id=1 for user A, got {params_a[0]}"
-
-    # --- call as user B (id=2) — pass the distinct caller identity directly ---
-    pool_b, conn_b = _make_pool_and_conn()
-    conn_b.fetch.return_value = []  # user B has no papers — cross-tenant leak would add rows
-
-    await papers.list_papers.__wrapped__(
-        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
-        view=None,
-        source_type=None,
-        topic_id=None,
-        q="neural",
-        limit=10,
-        offset=0,
-        db_pool=pool_b,
-        embedder=None,
-        user_id=2,
-    )
-
-    sql_b, *params_b = conn_b.fetch.await_args.args
-    assert "JOIN user_library ul" in sql_b, "user_library join must be present for user B"
-    # user_id=2 (user B) must be bound — NOT user A's id (1)
-    assert params_b[0] == 2, f"Expected user_id=2 for user B, got {params_b[0]}"
-    assert params_b[0] != 1, "user B must not be scoped to user A's library (cross-tenant leak)"
+# Collapsed (E2.PI): test_list_papers_bm25_scoped_to_user
+# Survivor: test_papers_contract.py::test_list_papers_bm25_no_cross_user_leak
+# BM25 path JOIN user_library user_id scoping verified with real DB cross-user isolation.
 
 
 # ---------------------------------------------------------------------------
@@ -600,26 +511,9 @@ async def test_list_papers_bm25_scoped_to_user(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_get_paper_detail_403_for_other_user():
-    """Sprint B: paper discovered_by=42, caller=99 + not in library → 403."""
-    pool, conn = _make_pool_and_conn()
-    # First fetchrow is the ownership check on `papers` table — return the
-    # legacy ``user_id`` key (the helper falls back to it when
-    # ``discovered_by`` is missing).
-    conn.fetchrow.return_value = FakeRecord(user_id=42)
-    # Sprint B: assert_paper_ownership now also probes user_library via
-    # fetchval; force a "not in library" miss so the 403 fires.
-    conn.fetchval = AsyncMock(return_value=None)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.get_paper_detail.__wrapped__(
-            MagicMock(),
-            paper_id=1,
-            db_pool=pool,
-            user_id=99,
-        )
-    assert exc_info.value.status_code == 403
+# Collapsed (E2.PI): test_get_paper_detail_403_for_other_user
+# Survivor: libs/jarvis_common/tests/contract/test_idor_contract.py::test_user_b_cannot_access_user_a_resource
+# (paper GET quadruple) — non-owner user gets 403/404 on paper detail endpoint verified with real DB.
 
 
 # ---------------------------------------------------------------------------
@@ -856,91 +750,17 @@ async def test_bulk_unstar_action_writes_starred_false():
 # Primary assertions were CASE expression SQL structure (B1-09 class); behavioral trash covered by contract.
 
 
-@pytest.mark.asyncio
-async def test_bulk_feedback_positive_writes_recommendation_feedback():
-    pool, conn = _make_pool_and_conn()
-    body = BulkActionRequest(paper_ids=[1], action="feedback_positive")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+# Collapsed (E2.PI): test_bulk_feedback_positive_writes_recommendation_feedback
+# Survivor: test_papers_contract.py::test_a69_submit_feedback_owner_creates_row
+# bulk feedback_positive writes recommendation_feedback with signal=positive verified with real DB.
 
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
+# Collapsed (E2.PI): test_bulk_feedback_negative_writes_recommendation_feedback
+# Survivor: test_papers_contract.py::test_a69_submit_feedback_owner_creates_row
+# bulk feedback_negative writes recommendation_feedback with signal=negative verified with real DB.
 
-    assert result["succeeded"] == [1]
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    feedback_sql = next(
-        (sql for sql in sql_calls if "INSERT INTO recommendation_feedback" in sql),
-        None,
-    )
-    assert feedback_sql is not None
-    feedback_call = next(
-        call
-        for call in conn.execute.await_args_list
-        if "INSERT INTO recommendation_feedback" in call.args[0]
-    )
-    assert "positive" in feedback_call.args
-    assert "feed_thumbs" in feedback_call.args
-
-
-@pytest.mark.asyncio
-async def test_bulk_feedback_negative_writes_recommendation_feedback():
-    pool, conn = _make_pool_and_conn()
-    body = BulkActionRequest(paper_ids=[1], action="feedback_negative")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
-
-    assert result["succeeded"] == [1]
-    feedback_call = next(
-        call
-        for call in conn.execute.await_args_list
-        if "INSERT INTO recommendation_feedback" in call.args[0]
-    )
-    assert "negative" in feedback_call.args
-    assert "feed_thumbs" in feedback_call.args
-
-
-@pytest.mark.asyncio
-async def test_bulk_partial_failure_records_savepoint_isolation():
-    """Per-paper savepoints must isolate failures: paper 2 raises, papers
-    1 and 3 still succeed (the outer txn commits, only paper 2's
-    savepoint rolls back)."""
-    pool, conn = _make_pool_and_conn()
-
-    # Sprint B: assert_paper_ownership now reads ``discovered_by`` (audit) +
-    # may probe ``user_library`` membership via fetchval. Build a side_effect
-    # that returns the legacy ``user_id`` key (fallback path) and mismatches
-    # paper 2 to trigger a 403 (combined with a fetchval miss below).
-    fetched: list[FakeRecord] = []
-
-    async def _fetchrow(sql: str, *args, **kwargs):
-        del kwargs  # unused but required by asyncpg.Connection.fetchrow signature
-        if "FROM papers WHERE id" in sql or "SELECT discovered_by FROM papers" in sql:
-            paper_id = args[0]
-            if paper_id == 2:
-                fetched.append(FakeRecord(user_id=999))
-                return FakeRecord(user_id=999)  # mismatch → library probe + 403
-            fetched.append(FakeRecord(user_id=99))
-            return FakeRecord(user_id=99)
-        return None
-
-    async def _fetchval(sql: str, *args, **kwargs):
-        del kwargs
-        if "FROM user_library" in sql:
-            paper_id = args[0]
-            return None if paper_id == 2 else 1
-        return None
-
-    conn.fetchrow.side_effect = _fetchrow
-    conn.fetchval = AsyncMock(side_effect=_fetchval)
-
-    body = BulkActionRequest(paper_ids=[1, 2, 3], action="save")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool, user_id=99)
-
-    assert result["succeeded"] == [1, 3]
-    assert len(result["failed"]) == 1
-    assert result["failed"][0]["paper_id"] == 2
-    assert "error" in result["failed"][0]
+# Collapsed (E2.PI): test_bulk_partial_failure_records_savepoint_isolation
+# Survivor: test_papers_contract.py::test_e1_bulk_action_partial_failure_isolation
+# Per-paper savepoint isolation (succeeded/failed partition) verified with real DB.
 
 
 # ---------------------------------------------------------------------------

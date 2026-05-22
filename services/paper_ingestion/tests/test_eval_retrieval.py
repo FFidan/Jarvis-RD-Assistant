@@ -29,6 +29,7 @@ def _load_module():
         return importlib.reload(eval_mod)
 
 
+# Keep local: adds pool.close = AsyncMock() (eval_retrieval explicitly calls pool.close()) not in canonical make_pool_and_conn.
 def _make_pool(rows):
     """Create a mock asyncpg pool for eval_retrieval.main."""
     conn = AsyncMock()

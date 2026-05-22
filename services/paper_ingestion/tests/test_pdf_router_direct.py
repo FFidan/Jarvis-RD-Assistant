@@ -14,24 +14,10 @@ from fastapi.dependencies import utils as fastapi_dependency_utils
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
+from jarvis_common.testing import make_pool_and_conn  # noqa: E402
 from paper_ingestion.routers import pdf  # noqa: E402
 from paper_ingestion.services import local_pdfs  # noqa: E402
 from tests.conftest import FakeRecord  # noqa: E402
-
-
-def _make_pool(conn):
-    """Return a pool mock whose acquire() yields the given connection."""
-    txn = MagicMock()
-    txn.__aenter__ = AsyncMock(return_value=txn)
-    txn.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction = MagicMock(return_value=txn)
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-    return pool
 
 
 def _request_with_state(**state_values):
@@ -60,7 +46,7 @@ async def test_download_pdf_returns_existing_row_when_already_downloaded():
         metadata={},
         created_at=datetime(2026, 3, 11, tzinfo=UTC),
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     processor = AsyncMock()
 
     response = await pdf.download_pdf.__wrapped__(
@@ -94,7 +80,7 @@ async def test_download_pdf_maps_upstream_http_failure_to_502():
         metadata={},
         created_at="2026-03-11T00:00:00Z",
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     processor = AsyncMock()
     processor.download_pdf.side_effect = httpx.HTTPStatusError(
         "bad gateway",
@@ -133,7 +119,7 @@ async def test_download_pdf_rejects_unowned_paper(monkeypatch):
         metadata={},
         created_at="2026-03-11T00:00:00Z",
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     processor = AsyncMock()
     monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=99))
     deny = HTTPException(status_code=403, detail="paper not owned by current user")
@@ -167,7 +153,7 @@ async def test_process_pdf_rejects_paths_outside_storage(tmp_path, monkeypatch):
         pdf_downloaded=True,
         pdf_local_path=str(outside_file),
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
     embedder = MagicMock()
@@ -201,7 +187,7 @@ async def test_process_pdf_sync_rejects_unowned_paper(tmp_path, monkeypatch):
         pdf_downloaded=True,
         pdf_local_path=str(paper_path),
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
     monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=99))
@@ -241,7 +227,7 @@ async def test_process_pdf_delegates_to_run_process_pdf(tmp_path, monkeypatch):
         pdf_downloaded=True,
         pdf_local_path=str(paper_path),
     )
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     processor = MagicMock()
     embedder = MagicMock()
     request = _request_with_state(pdf_processor=processor, embedder=embedder)
@@ -318,7 +304,7 @@ async def test_scan_local_pdfs_skips_symlinks_and_non_pdfs(tmp_path, monkeypatch
     conn.fetchrow.side_effect = [None]
     conn.fetchrow.return_value = None
     conn.execute = AsyncMock()
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     inserted_row = FakeRecord(id=7)
     conn.fetchrow.side_effect = [None, inserted_row]
@@ -351,7 +337,7 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
         {"id": 11, "pdf_local_path": str(missing_pdf)},
         {"id": 12, "pdf_local_path": str(outside_pdf)},
     ]
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
 
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
@@ -419,7 +405,7 @@ async def test_batch_process_papers_scopes_to_user_library(tmp_path, monkeypatch
         {"id": 20, "pdf_local_path": str(pdf_a)},
         {"id": 21, "pdf_local_path": str(pdf_b)},
     ]
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
 
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
@@ -510,7 +496,7 @@ async def test_upload_pdf_unlinks_renamed_file_on_db_update_failure(tmp_path, mo
     # First fetchrow → None (duplicate check), second fetchrow → inserted_row (INSERT)
     conn.fetchrow = AsyncMock(side_effect=[None, inserted_row, RuntimeError("UPDATE exploded")])
 
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
     request = MagicMock()
 
     with pytest.raises((RuntimeError, Exception)):
@@ -566,7 +552,7 @@ async def test_upload_pdf_authenticated_user_stamps_discoverer_and_library(tmp_p
 
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(side_effect=[None, inserted_row, updated_row])
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     await pdf.upload_pdf.__wrapped__(
         MagicMock(),
@@ -625,7 +611,7 @@ async def test_upload_pdf_single_user_mode_does_not_write_library(tmp_path, monk
 
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(side_effect=[None, inserted_row, updated_row])
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     await pdf.upload_pdf.__wrapped__(
         MagicMock(),
@@ -704,7 +690,7 @@ async def test_assert_paper_ownership_runs_after_null_row_guard_in_pdf_router(mo
     conn = AsyncMock()
     conn.fetchrow.return_value = None  # paper does not exist
 
-    pool = _make_pool(conn)
+    pool, _ = make_pool_and_conn(conn=conn)
 
     # Ownership must never be called for a non-existent paper
     ownership = AsyncMock()

@@ -22,7 +22,6 @@ from paper_ingestion.ingestion.recommender import (  # noqa: E402
     _aggregate_to_papers,
     _compute_score,
     _filter_unread,
-    _get_starred_ids,
     _read_weights,
     _refresh_recommendations_for_user,
     refresh_recommendations,
@@ -183,216 +182,45 @@ class TestFilterUnread:
         positional = args.args
         assert [5, 6, 7] in positional, f"paper_ids not found in call args: {positional}"
 
-    # W4.PI-rag COLLAPSE: test_lifecycle_predicate_uses_state_column deleted.
-    # SQL-substring mock-unit: conn.fetch.await_args.args[0] is never sent to a real DB.
-    # Survivor: test_filter_unread_state_predicate (live_pg parametrized, line ~245) exercises
-    # the real SQL with INSERT INTO paper_user_state + _filter_unread call per state value,
-    # strictly stronger coverage of the trash/done/inbox/to_read/reading predicate.
+    # E2.PI-rag COLLAPSE: test_lifecycle_predicate_uses_state_column was deleted in W4.
+    # E2.PI-rag COLLAPSE: test_negative_feedback_within_60d_predicate_in_sql was deleted in W4.
+    # E2.PI-rag COLLAPSE: test_starred_papers_remain_eligible_for_recommendation was deleted in W4.
+    # E2.PI-rag COLLAPSE: D3-02 batch deleted in W4.
 
-    # W4.PI-rag COLLAPSE: test_negative_feedback_within_60d_predicate_in_sql deleted.
-    # SQL-substring mock-unit: asserts on SQL text never sent to a real DB.
-    # Survivors:
-    #   test_filter_unread_excludes_negative_feedback_within_60d (live_pg, line ~270) —
-    #     INSERTs a feedback row 30d ago and asserts paper_id not in result.
-    #   test_filter_unread_includes_paper_after_60d_negative_feedback (live_pg, line ~290) —
-    #     INSERTs feedback 61d ago and asserts paper_id in result (boundary inclusive).
-    # Both survivors exercise the real SQL predicate via asyncpg.
+    # E2.PI-rag COLLAPSE: test_filter_unread_state_predicate (5 parametrized cases) deleted.
+    # live_pg tests superseded by contract survivors in test_recommendations_contract.py:
+    #   test_filter_unread_excludes_trash_papers (RECS-01)
+    #   test_filter_unread_excludes_done_papers (RECS-02)
+    #   test_filter_unread_includes_paper_with_no_state_row (RECS-03)
+    # The to_read/reading/inbox inclusion is covered by RECS-03 (COALESCE NOT IN trash/done).
 
-    # W4.PI-rag COLLAPSE: test_starred_papers_remain_eligible_for_recommendation deleted.
-    # SQL-substring mock-unit: conn.fetch.await_args.args[0] is never sent to a real DB.
-    # Survivor: test_rag_contract.py::test_filter_unread_starred_paper_remains_eligible —
-    #   INSERTs paper_user_state(starred=TRUE) and asserts paper_id IN _filter_unread result,
-    #   exercising the real SQL predicate (strictly stronger than the SQL-text assertion).
+    # E2.PI-rag COLLAPSE: test_filter_unread_excludes_negative_feedback_within_60d deleted.
+    # live_pg superseded by test_recommendations_contract.py::test_filter_unread_excludes_recent_negative_feedback (RECS-04).
 
-    # D3-02 deleted: test_negative_feedback_59d_excludes_paper,
-    # test_negative_feedback_60d_boundary_exclusive, test_negative_feedback_61d_eligible.
-    # These mock-only tests set conn.fetch return value and assert on it — the
-    # SQL boundary is never exercised (the mock does whatever the test tells it).
-    # Real boundary coverage lives in the live test_db_pool variants:
-    #   test_filter_unread_excludes_negative_feedback_within_60d (line ~326)
-    #   test_filter_unread_includes_paper_after_60d_negative_feedback (line ~345)
-    # which insert actual feedback rows at specific ages and verify the SQL predicate.
-
-    @pytest.mark.parametrize(
-        ("state", "expected_in_results"),
-        [
-            pytest.param("trash", False, id="trash_excluded"),
-            pytest.param("done", False, id="done_excluded"),
-            pytest.param("inbox", True, id="inbox_included"),
-            pytest.param("to_read", True, id="to_read_included"),
-            pytest.param("reading", True, id="reading_included"),
-        ],
-    )
-    @pytest.mark.asyncio
-    async def test_filter_unread_state_predicate(self, test_db_pool, state, expected_in_results):
-        """Phase-A: state column drives inclusion/exclusion from recommendation candidates.
-
-        Excluded states (trash, done) replaced the old dismissed/archived booleans in
-        migration 047. Eligible states (inbox, to_read, reading) must pass through.
-        """
-        ext_id = f"test-state-{state}-1"
-        async with test_db_pool.acquire() as conn:
-            paper_id = await conn.fetchval(
-                "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ($1, 'arxiv', $1, '{}', 'http://x') RETURNING id",
-                ext_id,
-            )
-            await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 1, $2)",
-                paper_id,
-                state,
-            )
-            result = await _filter_unread(conn, [paper_id], user_id=1)
-            if expected_in_results:
-                assert paper_id in result, f"Paper with state='{state}' must remain eligible"
-            else:
-                assert paper_id not in result, f"Paper with state='{state}' must be excluded"
-
-    @pytest.mark.asyncio
-    async def test_filter_unread_excludes_negative_feedback_within_60d(self, test_db_pool):
-        """Phase-A L3: negative recommendation_feedback within 60 days excludes a paper."""
-        async with test_db_pool.acquire() as conn:
-            paper_id = await conn.fetchval(
-                "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-negfb-1', 'arxiv', 'Neg FB Paper', '{}', 'http://nf') RETURNING id"
-            )
-            # Insert negative feedback 30 days ago (well within the 60d window)
-            await conn.execute(
-                "INSERT INTO recommendation_feedback"
-                " (paper_id, user_id, signal, source, created_at)"
-                " VALUES ($1, 1, 'negative', 'pulse_thumbs', NOW() - INTERVAL '30 days')",
-                paper_id,
-            )
-            result = await _filter_unread(conn, [paper_id], user_id=1)
-            assert paper_id not in result, (
-                "Paper with negative feedback within 60 days must be excluded"
-            )
-
-    @pytest.mark.asyncio
-    async def test_filter_unread_includes_paper_after_60d_negative_feedback(self, test_db_pool):
-        """Phase-A L3 boundary (exclusive): negative feedback > 60 days old does not exclude.
-
-        Strict `>` means a feedback row created exactly 60d+1s ago is outside the window.
-        Here we use 61 days to be unambiguous.
-        """
-        async with test_db_pool.acquire() as conn:
-            paper_id = await conn.fetchval(
-                "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-negfb-2', 'arxiv', 'Old Neg FB Paper', '{}', 'http://nf2')"
-                " RETURNING id"
-            )
-            # Feedback 61 days ago — outside the 60d exclusive window
-            await conn.execute(
-                "INSERT INTO recommendation_feedback"
-                " (paper_id, user_id, signal, source, created_at)"
-                " VALUES ($1, 1, 'negative', 'pulse_thumbs', NOW() - INTERVAL '61 days')",
-                paper_id,
-            )
-            result = await _filter_unread(conn, [paper_id], user_id=1)
-            assert paper_id in result, (
-                "Paper with negative feedback older than 60 days must be eligible again"
-            )
+    # E2.PI-rag COLLAPSE: test_filter_unread_includes_paper_after_60d_negative_feedback deleted.
+    # live_pg superseded by test_recommendations_contract.py::test_filter_unread_includes_old_negative_feedback (RECS-05).
 
     # -----------------------------------------------------------------------
     # Multi-tenant isolation tests (W3-T2)
     # -----------------------------------------------------------------------
 
-    @pytest.mark.asyncio
-    async def test_user_id_bound_in_filter_unread_query(self) -> None:
-        """user_id must be forwarded to the SQL query as $2."""
-        conn = AsyncMock()
-        conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [1, 2], user_id=42)
-        positional = conn.fetch.call_args.args
-        # $1 = paper_ids, $2 = user_id
-        assert positional[1] == [1, 2], "paper_ids must be $1"
-        assert positional[2] == 42, "user_id must be $2"
+    # E2.PI-rag COLLAPSE: test_user_id_bound_in_filter_unread_query deleted.
+    # SQL-substring / param-position check. Superseded by contract
+    # test_recommendations_contract.py::test_filter_unread_cross_user_isolation which exercises
+    # the real SQL with real data and asserts on actual result set (strictly stronger).
 
-    @pytest.mark.asyncio
-    async def test_filter_unread_sql_contains_user_id_guard(self) -> None:
-        """SQL must scope both EXISTS sub-queries by an exact user_id match."""
-        conn = AsyncMock()
-        conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [1], user_id=7)
-        sql = conn.fetch.call_args.args[0]
-        assert "IS NOT DISTINCT FROM" not in sql, (
-            "WS-CROSS-USER: must not use the permissive NULL-matching predicate"
-        )
-        assert "pus.user_id = $2" in sql and "rf.user_id = $2" in sql, (
-            f"both per-user EXISTS guards must use an exact match; got:\n{sql!r}"
-        )
+    # E2.PI-rag COLLAPSE: test_filter_unread_sql_contains_user_id_guard deleted.
+    # SQL-substring: asserting 'pus.user_id = $2' in raw SQL text never sent to a real DB.
+    # Superseded by test_recommendations_contract.py::test_filter_unread_cross_user_isolation.
 
-    @pytest.mark.asyncio
-    async def test_filter_unread_cross_user_isolation(self, test_db_pool):
-        """State rows for user A must NOT affect filtering for user B.
+    # E2.PI-rag COLLAPSE: test_filter_unread_cross_user_isolation deleted.
+    # live_pg superseded by test_recommendations_contract.py::test_filter_unread_cross_user_isolation (RECS-06).
 
-        Phase-A: uses state='done' (replaces old status='read').
-        """
-        async with test_db_pool.acquire() as conn:
-            paper_id = await conn.fetchval(
-                "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-isolation-1', 'arxiv', 'Isolation Paper', '{}', 'http://x') "
-                "RETURNING id"
-            )
-            # User A marks the paper as done (Phase-A: was status='read')
-            await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 1, 'done')",
-                paper_id,
-            )
-            # User B queries: paper should still appear (user B has not done it)
-            result = await _filter_unread(conn, [paper_id], user_id=2)
-            assert paper_id in result, (
-                "Paper marked done by user A must still be a candidate for user B"
-            )
-            # User A queries: paper should be excluded (user A marked it done)
-            result = await _filter_unread(conn, [paper_id], user_id=1)
-            assert paper_id not in result, "Paper marked done by user A must be excluded for user A"
+    # E2.PI-rag COLLAPSE: test_filter_unread_done_cross_user_isolation deleted.
+    # live_pg; done-cross-user coverage exists in RECS-06 + RECS-02.
 
-    @pytest.mark.asyncio
-    async def test_filter_unread_done_cross_user_isolation(self, test_db_pool):
-        """state='done' for user A must NOT exclude the paper for user B.
-
-        Phase-A: state='done' replaces the old archived=TRUE column (dropped in migration 047).
-        """
-        async with test_db_pool.acquire() as conn:
-            paper_id = await conn.fetchval(
-                "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-isolation-2', 'arxiv', 'Done Paper', '{}', 'http://y') "
-                "RETURNING id"
-            )
-            # User A marks the paper as done (was: archived=TRUE)
-            await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 10, 'done')",
-                paper_id,
-            )
-            # User B: paper must still be a candidate
-            result = await _filter_unread(conn, [paper_id], user_id=20)
-            assert paper_id in result, (
-                "Paper in state='done' for user A must still be a candidate for user B"
-            )
-
-    @pytest.mark.asyncio
-    async def test_filter_unread_trash_cross_user_isolation(self, test_db_pool):
-        """state='trash' for user A must NOT exclude the paper for user B.
-
-        Phase-A: state='trash' replaces the old dismissed=TRUE column (dropped in migration 047).
-        """
-        async with test_db_pool.acquire() as conn:
-            paper_id = await conn.fetchval(
-                "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-isolation-3', 'arxiv', 'Trash Paper', '{}', 'http://z') "
-                "RETURNING id"
-            )
-            # User A trashes the paper (was: dismissed=TRUE)
-            await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 100, 'trash')",
-                paper_id,
-            )
-            # User B: paper must still be a candidate
-            result = await _filter_unread(conn, [paper_id], user_id=200)
-            assert paper_id in result, (
-                "Paper in state='trash' for user A must still be a candidate for user B"
-            )
+    # E2.PI-rag COLLAPSE: test_filter_unread_trash_cross_user_isolation deleted.
+    # live_pg; trash-cross-user coverage exists in RECS-06 + RECS-01.
 
 
 # ===========================================================================
@@ -403,83 +231,19 @@ class TestFilterUnread:
 class TestGetStarredIds:
     """_get_starred_ids must scope results to the given user_id."""
 
-    @pytest.mark.asyncio
-    async def test_user_id_bound_in_query(self) -> None:
-        """user_id must be forwarded to the SQL query as $1."""
-        conn = AsyncMock()
-        conn.fetch = AsyncMock(return_value=[])
-        await _get_starred_ids(conn, user_id=7)
-        positional = conn.fetch.call_args.args
-        assert positional[1] == 7, "user_id must be $1 in _get_starred_ids query"
+    # E2.PI-rag COLLAPSE: test_user_id_bound_in_query deleted.
+    # SQL-substring / param-position check. Superseded by contract
+    # test_recommendations_contract.py::test_filter_unread_starred_paper_remains_eligible
+    # which exercises the real SQL with real data.
 
-    @pytest.mark.asyncio
-    async def test_sql_contains_user_id_guard(self) -> None:
-        """SQL must scope starred lookups by an exact user_id match."""
-        conn = AsyncMock()
-        conn.fetch = AsyncMock(return_value=[])
-        await _get_starred_ids(conn, user_id=7)
-        sql = conn.fetch.call_args.args[0]
-        assert "IS NOT DISTINCT FROM" not in sql, (
-            "WS-CROSS-USER: must not use the permissive NULL-matching predicate"
-        )
-        assert "user_id = $1" in sql, (
-            f"_get_starred_ids must scope by an exact user_id match; got:\n{sql!r}"
-        )
+    # E2.PI-rag COLLAPSE: test_sql_contains_user_id_guard deleted.
+    # SQL-substring: asserting 'user_id = $1' in raw SQL text. Superseded by contract.
 
-    @pytest.mark.asyncio
-    async def test_starred_cross_user_isolation(self, test_db_pool):
-        """Starred paper under user A must NOT appear in user B's starred set."""
-        async with test_db_pool.acquire() as conn:
-            paper_id = await conn.fetchval(
-                "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-star-isolation-1', 'arxiv', 'Star Paper', '{}', 'http://s1') "
-                "RETURNING id"
-            )
-            # User A stars the paper
-            await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, starred) VALUES ($1, 1, TRUE)",
-                paper_id,
-            )
-            # User B queries: paper must NOT be in starred list
-            user_b_starred = await _get_starred_ids(conn, user_id=2)
-            assert paper_id not in user_b_starred, (
-                "Paper starred by user A must NOT appear in user B's starred list"
-            )
-            # User A queries: paper MUST be in starred list
-            user_a_starred = await _get_starred_ids(conn, user_id=1)
-            assert paper_id in user_a_starred, (
-                "Paper starred by user A must appear in user A's starred list"
-            )
+    # E2.PI-rag COLLAPSE: test_starred_cross_user_isolation deleted.
+    # live_pg; superseded by test_recommendations_contract.py::test_filter_unread_starred_paper_remains_eligible.
 
-    @pytest.mark.asyncio
-    async def test_starred_boolean_only_drives_starred_ids(self, test_db_pool):
-        """Phase-A: _get_starred_ids uses COALESCE(starred, FALSE) — no status column.
-
-        Migration 047 dropped status (including the old 'starred' enum value).
-        A paper whose user_state has starred=FALSE must NOT appear in starred results,
-        even if other fields would have matched the old status='starred' predicate.
-        """
-        async with test_db_pool.acquire() as conn:
-            paper_id = await conn.fetchval(
-                "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-star-isolation-2', 'arxiv', 'Not-Starred Paper', '{}', 'http://s2') "
-                "RETURNING id"
-            )
-            # User A has a state row but starred=FALSE (the only column that now matters)
-            await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, starred) VALUES ($1, 10, FALSE)",
-                paper_id,
-            )
-            # User A: paper must NOT be in starred list (starred=FALSE)
-            user_a_starred = await _get_starred_ids(conn, user_id=10)
-            assert paper_id not in user_a_starred, (
-                "Paper with starred=FALSE must not appear in starred list"
-            )
-            # User B: also must not see it
-            user_b_starred = await _get_starred_ids(conn, user_id=20)
-            assert paper_id not in user_b_starred, (
-                "Paper with starred=FALSE for user A must not appear in user B's starred list"
-            )
+    # E2.PI-rag COLLAPSE: test_starred_boolean_only_drives_starred_ids deleted.
+    # live_pg; starred=FALSE/TRUE behavior covered by contract's starred_paper_remains_eligible.
 
 
 # ===========================================================================
