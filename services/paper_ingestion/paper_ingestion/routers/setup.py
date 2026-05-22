@@ -33,6 +33,7 @@ admin is logged in. Both can coexist.
 """
 
 import logging
+import os
 import re
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
@@ -78,6 +79,13 @@ _CLOUD_LLM_KEY_MAP = {
 class SetupStatusResponse(BaseModel):
     configured: bool
     setup_mode: Literal["single", "multi"] = "single"
+    hw_tier_baseline: str | None = None
+    hw_tier_current: str | None = None
+    hw_tier_changed: bool = False
+    recommended_backend: str | None = None
+    current_backend: str | None = None
+    observed_backend: str | None = None
+    observed_recent_share: float = 0.0
 
 
 class ServiceStatus(BaseModel):
@@ -249,16 +257,39 @@ async def get_status(request: Request) -> SetupStatusResponse:
     Always reachable — the SetupGate on the frontend polls this on every
     boot, so it must never 401/403/500 on a fresh DB.
     """
+    from jarvis_common.hw_detect import detect_tier  # noqa: PLC0415
+    from jarvis_common.litellm_observer import observed_share  # noqa: PLC0415
+
     pool = request.app.state.db_pool
     mode = get_core_settings().jarvis_setup_mode
+
+    baseline = os.getenv("JARVIS_HW_TIER") or None
+    current = detect_tier()
+    backend = os.getenv("JARVIS_LLM_BACKEND") or None
+    served, share = observed_share("smart")
+    recommended = "vllm" if current in ("24-48", "ge-48") else "ollama"
+    changed = bool(baseline and baseline != current)
+
     try:
         admins = await _admin_count(pool)
     except Exception:
         logger.exception("setup status: admin count query failed")
         # Fail-open: report unconfigured so the wizard can run / the operator
         # can recover. The DB error itself will surface in /api/setup/system-check.
-        return SetupStatusResponse(configured=False, setup_mode=mode)
-    return SetupStatusResponse(configured=admins > 0, setup_mode=mode)
+        configured = False
+    else:
+        configured = admins > 0
+    return SetupStatusResponse(
+        configured=configured,
+        setup_mode=mode,
+        hw_tier_baseline=baseline,
+        hw_tier_current=current,
+        hw_tier_changed=changed,
+        recommended_backend=recommended,
+        current_backend=backend,
+        observed_backend=served,
+        observed_recent_share=share,
+    )
 
 
 @router.post(
