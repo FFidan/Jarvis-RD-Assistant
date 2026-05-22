@@ -412,9 +412,8 @@ async def test_a227_start_command_pairs_owner_via_telegram_pairing(contract_conn
         "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
     )
     assert row is not None, "user_config telegram.owner_chat_id must be written by start_command"
-    import json
-
-    assert int(json.loads(row["value"])) == 3301
+    value = row["value"]
+    assert int(value) == 3301
 
     # AND: the pairing code is consumed (deleted)
     code_row = await contract_conn.fetchrow(

@@ -15,13 +15,12 @@ Idiomatic-mock carve-out (KEPT, not contract-tested):
 
 from __future__ import annotations
 
-import httpx
 import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock
-from datetime import UTC, datetime, timedelta
 
-from jarvis_common.testing import SharedConnPool
+
+from jarvis_common.testing_contract_apps import (
+    make_contract_client as _client,
+)
 
 pytestmark = [
     pytest.mark.contract,
@@ -29,108 +28,10 @@ pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
 ]
 
-_TEST_API_KEY = "le-contract-test-key-do-not-use-in-prod"
-
 
 # ---------------------------------------------------------------------------
 # App fixture — wires LE app to the contract connection
 # ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _le_app(contract_conn):
-    """learning_engine app with db_pool wired to the contract connection.
-
-    The limiter is disabled so rate-limit 429s never interfere with ownership /
-    IDOR assertions.  The FSRSManager, AnkiExporter, and http_client are
-    idiomatic mocks (algorithmic / outbound-HTTP boundaries kept as mocks per
-    idiomatic-mock carve-out).
-    """
-    from learning_engine.deps import get_db_pool, get_fsrs_manager, get_anki_exporter
-    from learning_engine.main import app
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    original_http = getattr(app.state, "http_client", None)
-    original_fsrs = getattr(app.state, "fsrs_manager", None)
-    original_exporter = getattr(app.state, "anki_exporter", None)
-    original_generator = getattr(app.state, "card_generator", None)
-
-    # Idiomatic mocks for non-DB state
-    mock_fsrs = MagicMock()
-    _now = datetime.now(UTC)
-    mock_fsrs.create_new_card.return_value = ({}, _now)
-    mock_fsrs.schedule_review.return_value = ({}, {}, _now + timedelta(days=1))
-
-    app.state.db_pool = shared
-    app.state.http_client = AsyncMock()
-    app.state.fsrs_manager = mock_fsrs
-    app.state.anki_exporter = MagicMock()
-    app.state.card_generator = AsyncMock()
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[get_fsrs_manager] = lambda: mock_fsrs
-    app.dependency_overrides[get_anki_exporter] = lambda: MagicMock()
-
-    from learning_engine.deps import limiter
-
-    limiter_was_enabled = limiter.enabled
-    limiter.enabled = False
-
-    try:
-        yield app
-    finally:
-        limiter.enabled = limiter_was_enabled
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        if original_http is None:
-            if hasattr(app.state, "http_client"):
-                del app.state.http_client
-        else:
-            app.state.http_client = original_http
-        if original_fsrs is None:
-            if hasattr(app.state, "fsrs_manager"):
-                del app.state.fsrs_manager
-        else:
-            app.state.fsrs_manager = original_fsrs
-        if original_exporter is None:
-            if hasattr(app.state, "anki_exporter"):
-                del app.state.anki_exporter
-        else:
-            app.state.anki_exporter = original_exporter
-        if original_generator is None:
-            if hasattr(app.state, "card_generator"):
-                del app.state.card_generator
-        else:
-            app.state.card_generator = original_generator
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(get_fsrs_manager, None)
-        app.dependency_overrides.pop(get_anki_exporter, None)
-
-
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    """Configure the JARVIS_API_KEY in the test environment."""
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-
-
-def _client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -575,4 +476,154 @@ async def test_create_deck_row_has_caller_user_id(
     b_deck_ids = [d["id"] for d in list_resp.json()]
     assert deck_id not in b_deck_ids, (
         f"IDOR: user B sees user A's newly created deck {deck_id} in list {b_deck_ids}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cluster 12 — Card behaviors (LE-C-01..LE-C-04)
+# Survivor-of mock-units in test_cards_router.py:
+#   test_create_card_success_uses_evidence_payload   → LE-C-01
+#   test_update_card_returns_existing_row_when_body_is_empty → LE-C-03
+#   test_update_card_uses_dynamic_update             → LE-C-03 (behavioral)
+#   test_create_card_raises_404_on_fk_violation_deck → LE-C-02
+#   test_create_card_skips_ownership_check_when_no_paper → LE-C-01 (no-paper happy path)
+#   test_card_create_front_over_cap_is_rejected      → LE-C-04 (HTTP layer)
+# Pre-existing survivors cover:
+#   test_update_card_raises_404_when_missing         → test_update_card_user_b_gets_404 (line 161)
+#   test_delete_card_raises_404_when_row_missing     → test_delete_card_user_b_gets_404 (line 204)
+#   test_create_card_asserts_paper_ownership         → test_create_card_non_owner_deck_gets_404 (line 475)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_card_persists_evidence_payload(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/cards with evidence={quote, page_number} persists it as JSONB.
+
+    Exercises the real ``evidence = body.evidence.model_dump() if body.evidence else {}``
+    path and the JSONB write to cards.evidence. Replaces the mock-unit assertion on
+    ``mock_insert.await_args.args[6]`` (positional-arg lock-in).
+
+    # Verified: services/learning_engine/learning_engine/routers/cards.py:30
+    # (create_card serializes body.evidence into the JSONB column via insert_card).
+    """
+    deck_id_a = contract_two_users.deck_id_a
+    paper_id_a = contract_two_users.paper_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/cards",
+            json={
+                "deck_id": deck_id_a,
+                "paper_id": paper_id_a,
+                "card_type": "concept",
+                "front": "What is X?",
+                "back": "X is Y.",
+                "evidence": {"quote": "exact quote text", "page_number": 7},
+            },
+        )
+
+    assert resp.status_code == 201, (
+        f"POST /api/cards with evidence failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    card_id = resp.json()["id"]
+
+    evidence_row = await contract_conn.fetchval(
+        "SELECT evidence FROM cards WHERE id = $1",
+        card_id,
+    )
+    assert evidence_row is not None, "evidence column is NULL — payload not persisted"
+    # asyncpg JSONB codec decodes to dict
+    assert isinstance(evidence_row, dict), f"evidence should be dict, got {type(evidence_row)}"
+    assert evidence_row.get("quote") == "exact quote text", (
+        f"evidence.quote not persisted: got {evidence_row.get('quote')!r}"
+    )
+    assert evidence_row.get("page_number") == 7, (
+        f"evidence.page_number not persisted: got {evidence_row.get('page_number')!r}"
+    )
+
+
+async def test_create_card_missing_deck_returns_404(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """POST /api/cards with a nonexistent deck_id returns 404.
+
+    Exercises the ``SELECT id FROM decks WHERE id = $1 AND user_id = $2`` check —
+    when the SELECT returns NULL, the handler raises HTTPException(404, "Deck not
+    found"). This replaces the mock-unit that patched ``insert_card`` to raise
+    ForeignKeyViolationError (an internal mechanic not visible at the HTTP boundary).
+
+    # Verified: services/learning_engine/learning_engine/routers/cards.py:30
+    # (create_card lines 45-50: missing-deck SELECT yields None → 404).
+    """
+    nonexistent_deck_id = 9_999_999
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/cards",
+            json={
+                "deck_id": nonexistent_deck_id,
+                "card_type": "concept",
+                "front": "Q?",
+                "back": "A.",
+            },
+        )
+
+    assert resp.status_code == 404, (
+        f"Expected 404 for missing deck, got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert "deck" in resp.text.lower(), (
+        f"404 detail should reference 'deck'; got: {resp.text[:200]}"
+    )
+
+
+async def test_update_card_empty_body_returns_existing_row(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """PUT /api/cards/{id} with empty body returns the existing row without mutation.
+
+    Exercises the ``SELECT * FROM cards WHERE id = $1 AND user_id = $2 FOR UPDATE``
+    short-circuit when no fields change. Replaces the mock-unit assertion on
+    ``conn.fetchrow.await_count == 1`` (implementation-detail lock-in).
+
+    # Verified: services/learning_engine/learning_engine/routers/cards.py:113
+    # (update_card short-circuits when CardUpdate is fully empty).
+    """
+    card_id = contract_two_users.card_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.put(f"/api/cards/{card_id}", json={})
+
+    assert resp.status_code == 200, (
+        f"PUT /api/cards/{card_id} with empty body failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["id"] == card_id, (
+        f"Empty-body PUT returned wrong row: got id={body.get('id')}, expected {card_id}"
+    )
+
+
+async def test_create_card_front_over_cap_returns_422(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """POST /api/cards with front > 500 chars returns 422 via FastAPI validation.
+
+    Upgrades the pure-unit ``test_card_create_front_over_cap_is_rejected`` to a
+    full HTTP contract: confirms the cap is enforced at the request boundary,
+    not just at the Pydantic model layer.
+
+    # Verified: services/learning_engine/learning_engine/routers/cards.py:30
+    # (create_card binds CardCreate; FastAPI runs Pydantic validation before handler).
+    """
+    deck_id_a = contract_two_users.deck_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/cards",
+            json={
+                "deck_id": deck_id_a,
+                "card_type": "concept",
+                "front": "x" * 501,
+                "back": "valid back",
+            },
+        )
+
+    assert resp.status_code == 422, (
+        f"Expected 422 for oversized front, got {resp.status_code}: {resp.text[:300]}"
     )

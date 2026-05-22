@@ -20,6 +20,12 @@ from __future__ import annotations
 import httpx
 import pytest
 import pytest_asyncio
+from jarvis_common.testing_contract_apps import (
+    DEFAULT_CONTRACT_API_KEY,
+)
+from jarvis_common.testing_contract_apps import (
+    make_contract_client as _make_client,
+)
 
 pytestmark = [
     pytest.mark.contract,
@@ -27,7 +33,6 @@ pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
 ]
 
-_TEST_API_KEY = "idor-contract-shared-key-do-not-use-in-prod"
 
 # (method, path_template, owned_attr, kind)
 #
@@ -183,19 +188,6 @@ def _ids() -> list[str]:
     return [f"{m}:{p}:{k}" for m, p, _, k in IDOR_QUADRUPLES]
 
 
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-
-
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def _pi_app_with_pool(contract_conn):
     """paper_ingestion app with its state.db_pool wired to the contract conn."""
@@ -211,15 +203,6 @@ async def _pi_app_with_pool(contract_conn):
             del app.state.db_pool
     else:
         app.state.db_pool = original
-
-
-def _make_client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
 
 
 @pytest.mark.parametrize("method,path_template,owned_attr,kind", IDOR_QUADRUPLES, ids=_ids())
@@ -338,7 +321,7 @@ def _make_le_client(app, cookie: str) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
+        headers={"X-API-Key": DEFAULT_CONTRACT_API_KEY},
         cookies={"jarvis_session": cookie},
     )
 

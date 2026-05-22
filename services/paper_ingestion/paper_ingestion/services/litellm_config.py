@@ -144,53 +144,58 @@ async def _get_thinking_disabled(
         return False
 
 
+async def _get_num_ctx(
+    alias: str,
+    machine_id: str,
+    db_pool: Any,
+) -> int | None:
+    """Return the per-machine num_ctx override for *alias*, if configured."""
+    if not machine_id or db_pool is None:
+        return None
+    config_key = f"llm.{machine_id}.{alias}_num_ctx"
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+                config_key,
+            )
+        if row is None:
+            return None
+        val = row["value"]
+        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
+            return val
+        return None
+    except Exception:
+        logger.warning(
+            "Could not read num_ctx key for alias %r on machine %r",
+            alias,
+            machine_id,
+            exc_info=True,
+        )
+        return None
+
+
 async def update_litellm_model(
     config_key: str,
     model_name: str,
     db_pool: Any = None,
     machine_id: str = "",
+    num_ctx: int | None = None,
+    thinking_disabled: bool | None = None,
 ) -> bool:
     """Route an alias to a new model, injecting cloud API keys when needed.
 
     For local Ollama models the existing litellm config.yaml is updated on
     disk (SEC-002: only valid when the mount is read-write).  For cloud-provider
     models (``anthropic/``, ``openai/``, ``gemini/``) the change is delivered
-    via LiteLLM's ``POST /config/update`` endpoint instead — the YAML is never
+    via LiteLLM's ``POST /config/update`` endpoint instead -- the YAML is never
     written (SEC-002 compliance).
 
-    Parameters
-    ----------
-    config_key : str
-        Either the user_config key (``'llm.smart_model'``) or the alias
-        directly (``'smart'``).  Both forms are accepted for convenience.
-    model_name : str
-        The full model string, e.g. ``'mistral-nemo'``, ``'ollama/mistral-nemo'``
-        or ``'anthropic/claude-sonnet-4-5'``.
-    db_pool : asyncpg Pool, optional
-        Required when *model_name* has a cloud-provider prefix so that the
-        encrypted API key can be fetched, or when thinking-mode propagation
-        is desired.
-    machine_id : str, optional
-        The current machine's hostname.  When provided together with *db_pool*,
-        ``update_litellm_model`` reads the
-        ``llm.{machine_id}.thinking_disabled.{model_name}`` user_config flag for
-        thinking-capable models and includes ``extra_body: {think: false}`` in
-        the LiteLLM params when that flag is set.
-
-    Returns
-    -------
-    bool
-        ``True`` if the alias was updated (YAML written or POST succeeded),
-        ``False`` if the key is not a model role or no change was needed.
-
-    Raises
-    ------
-    ValueError
-        If *model_name* contains disallowed characters (SEC-002).
-    RuntimeError
-        If the config file is read-only (SEC-002 mount is ``:ro``).
+    ``num_ctx`` and ``thinking_disabled`` are pending per-machine settings
+    overrides. ``num_ctx`` is local/Ollama-only; thinking overrides may be
+    included for catalog entries that support thinking.
     """
-    # Resolve config_key → alias.  Accept either format for convenience.
+    # Resolve config_key -> alias. Accept either format for convenience.
     alias = ROLE_TO_ALIAS.get(config_key) or (
         config_key if config_key in ROLE_TO_ALIAS.values() else None
     )
@@ -198,10 +203,10 @@ async def update_litellm_model(
         return False
 
     # -------------------------------------------------------------------------
-    # Detect cloud-provider prefix.  gemini/ maps to the "google" provider name.
+    # Detect cloud-provider prefix. gemini/ maps to the "google" provider name.
     # -------------------------------------------------------------------------
     cloud_provider: str | None = None
-    # Normalize: strip :latest — Ollama's default implicit tag is never stored in
+    # Normalize: strip :latest -- Ollama's default implicit tag is never stored in
     # config.yaml, so "mistral-nemo:latest" and "mistral-nemo" must be treated as equal.
     if model_name.endswith(":latest"):
         model_name = model_name[:-7]
@@ -210,18 +215,27 @@ async def update_litellm_model(
     if "/" in model_name:
         prefix, model_suffix = model_name.split("/", 1)
         cloud_provider = _CLOUD_PREFIX_TO_PROVIDER.get(prefix)
-        # model_suffix already holds the part after "/" — validate only that part.
+        # model_suffix already holds the part after "/" -- validate only that part.
 
     # SEC-002: validate the model-name portion (no path traversal / shell chars).
     # For "provider/model-name" strings we validate only the model-name suffix.
     _validate_model_name(model_suffix)
 
     # -------------------------------------------------------------------------
-    # Thinking-mode propagation.
-    # For thinking-capable models (supports_thinking=True in catalog), read the
-    # per-machine thinking_disabled flag and build an extra_body override when set.
+    # Hardware-aware propagation.
+    # num_ctx is an Ollama runtime option and must not be sent to cloud provider
+    # aliases. Thinking is model-scoped but only meaningful for thinking-capable
+    # catalog entries. Explicit keyword values represent pending settings writes
+    # and must win over persisted DB state.
     # -------------------------------------------------------------------------
     extra_body: dict[str, Any] | None = None
+    if cloud_provider is None:
+        effective_num_ctx = num_ctx
+        if effective_num_ctx is None:
+            effective_num_ctx = await _get_num_ctx(alias, machine_id, db_pool)
+        if effective_num_ctx is not None:
+            extra_body = {"num_ctx": effective_num_ctx}
+
     # Import here to avoid circular import at module level
     from jarvis_common.model_catalog import ModelCatalogEntry, load_model_catalog  # noqa: PLC0415
 
@@ -234,9 +248,17 @@ async def update_litellm_model(
             catalog_entry = _entry
             break
     if catalog_entry is not None and catalog_entry.supports_thinking:
-        thinking_disabled = await _get_thinking_disabled(model_name, machine_id, db_pool)
-        if thinking_disabled:
-            extra_body = {"think": False}
+        effective_thinking_disabled = thinking_disabled
+        if effective_thinking_disabled is None:
+            effective_thinking_disabled = await _get_thinking_disabled(
+                model_name,
+                machine_id,
+                db_pool,
+            )
+        if effective_thinking_disabled:
+            if extra_body is None:
+                extra_body = {}
+            extra_body["think"] = False
             logger.info(
                 "Thinking mode disabled for model %r on machine %r (alias %r)",
                 model_name,
@@ -250,7 +272,7 @@ async def update_litellm_model(
     if cloud_provider is not None:
         if db_pool is None:
             logger.warning(
-                "Cannot inject cloud API key for alias %r — db_pool not provided; "
+                "Cannot inject cloud API key for alias %r -- db_pool not provided; "
                 "falling back to Ollama alias update",
                 alias,
             )
@@ -259,7 +281,7 @@ async def update_litellm_model(
             api_key = await get_provider_api_key(cloud_provider, db_pool)
             if api_key is None:
                 logger.warning(
-                    "No API key configured for provider %r (alias %r) — "
+                    "No API key configured for provider %r (alias %r) -- "
                     "falling back to Ollama alias update",
                     cloud_provider,
                     alias,
@@ -310,11 +332,40 @@ async def update_litellm_model(
                     new_model,
                 )
 
-            # Propagate thinking-mode override regardless of model change.
+            # Propagate hardware overrides regardless of model change. A pending
+            # thinking_disabled=False write removes only the think flag while
+            # preserving any other extra_body values such as num_ctx.
+            hardware_changed = False
             if extra_body is not None:
-                params["extra_body"] = extra_body
+                existing_extra = params.get("extra_body")
+                if not isinstance(existing_extra, dict):
+                    existing_extra = {}
+                merged_extra = {**existing_extra, **extra_body}
+                if thinking_disabled is False:
+                    merged_extra.pop("think", None)
+                if merged_extra != existing_extra:
+                    if merged_extra:
+                        params["extra_body"] = merged_extra
+                    else:
+                        params.pop("extra_body", None)
+                    hardware_changed = True
+            elif thinking_disabled is False:
+                existing_extra = params.get("extra_body")
+                if isinstance(existing_extra, dict) and "think" in existing_extra:
+                    remaining_extra = dict(existing_extra)
+                    remaining_extra.pop("think", None)
+                    if remaining_extra:
+                        params["extra_body"] = remaining_extra
+                    else:
+                        params.pop("extra_body", None)
+                    hardware_changed = True
+            if hardware_changed:
                 updated = True
-                logger.info("Injected extra_body=%r into LiteLLM alias %r", extra_body, alias)
+                logger.info(
+                    "Updated LiteLLM hardware params for alias %r: extra_body=%r",
+                    alias,
+                    params.get("extra_body"),
+                )
 
             if model_changed:
                 updated = True
@@ -327,7 +378,12 @@ async def update_litellm_model(
             )
         except OSError:
             logger.warning("LiteLLM config is :ro; falling back to in-memory /config/update")
-            return await _post_ollama_alias_update(alias, new_model, extra_body=extra_body)
+            merged_extra = params.get("extra_body") if isinstance(params, dict) else None
+            return await _post_ollama_alias_update(
+                alias,
+                new_model,
+                extra_body=merged_extra if isinstance(merged_extra, dict) else None,
+            )
 
     return updated
 

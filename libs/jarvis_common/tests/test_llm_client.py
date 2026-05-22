@@ -94,6 +94,18 @@ def test_strip_think_blocks_unclosed_tag_truncation(raw, expected):
     assert strip_think_blocks(raw) == expected
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "<think>hidden</think>",
+        "<think>truncated reasoning",
+        "   <think>hidden</think>   ",
+    ],
+)
+def test_strip_think_blocks_only_reasoning_has_no_visible_content(raw: str) -> None:
+    assert llm_client.strip_think_blocks(raw) == ""
+
+
 def test_chat_completion_options_with_response_format_preserves_other_fields():
     """with_response_format should only swap the response format field."""
     options = llm_client.ChatCompletionOptions(
@@ -160,6 +172,26 @@ async def test_request_chat_completion_content_forwards_response_format(monkeypa
         headers={},
         timeout=45.0,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["<think>hidden</think>", "   "])
+async def test_request_chat_completion_content_rejects_empty_visible_content(raw: str, monkeypatch):
+    """The scalar helper must fail explicitly when think stripping leaves no answer."""
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"choices": [{"message": {"content": raw}}]}
+    http_client = AsyncMock()
+    http_client.post.return_value = response
+
+    with pytest.raises(llm_client.EmptyVisibleLLMContentError, match="no visible content"):
+        await llm_client.request_chat_completion_content(
+            http_client,
+            prompt="Summarize this.",
+            options=llm_client.ChatCompletionOptions(model="smart"),
+            config=llm_client.LiteLLMConfig(base_url="http://litellm.test:4000"),
+        )
 
 
 @pytest.mark.asyncio

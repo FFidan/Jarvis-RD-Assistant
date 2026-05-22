@@ -37,11 +37,12 @@ with open(template_path) as f:
     prompt_template = f.read()
 for tier, entries in data["tiers"].items():
     for e in entries:
-        cell_dir = os.path.join(bundle, "quality", tier + "_" + e["backend"], e["backend"])
-        # Task 3 used cand_dir = OUT_DIR/${pair} where pair = ${CAND_TIER}_${CAND_BACKEND}.
-        # quality_capture wrote to OUT_DIR/quality/${pair}/${engine}. So a cell's answers
-        # live at <bundle>/quality/<tier>_<backend>/<backend>/q*.txt.
-        task_path = os.path.join(tasks_dir, f"{tier}__{e['model'].replace('/', '_')}.md")
+        # Match vllm_confirmatory_bench.sh:184 pair-name: model_id / and : replaced with _
+        safe_model = e["model"].replace("/", "_").replace(":", "_")
+        cell_dir = os.path.join(
+            bundle, "quality", f"{tier}_{e['backend']}_{safe_model}", e["backend"]
+        )
+        task_path = os.path.join(tasks_dir, f"{tier}__{e['model'].replace('/', '_').replace(':', '_')}.md")
         with open(task_path, "w") as out:
             out.write(prompt_template
                       .replace("${SEED_DIR}", seed)

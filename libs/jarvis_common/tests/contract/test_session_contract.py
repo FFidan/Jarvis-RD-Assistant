@@ -27,18 +27,19 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
-import httpx
 import pytest
 import pytest_asyncio
 from jarvis_common.testing import SharedConnPool, _seed_user
+from jarvis_common.testing_contract_apps import (
+    configure_contract_api_key,
+    make_contract_client,
+)
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-_TEST_KEY = "session-contract-key-do-not-use-in-prod"
 
 
 # ---------------------------------------------------------------------------
@@ -53,16 +54,13 @@ def _hash_token(raw: str) -> str:
 
 @pytest.fixture(scope="function")
 def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_KEY)
     monkeypatch.setenv("DEV_MODE", "true")  # keep Secure=False so httpx transport works
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
+    with configure_contract_api_key(monkeypatch):
+        yield
+
+
+def _client(app, cookie: str | None, *, follow_redirects: bool = False):
+    return make_contract_client(app, cookie, follow_redirects=follow_redirects)
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
@@ -110,7 +108,7 @@ async def test_request_link_creates_token_row(
     Grounding: auth.py:163-170 — ``INSERT INTO magic_link_tokens (token_hash, user_id, expires_at)``.
     This is the DB write the mock tests skip entirely.
     """
-    user_id, _ = await _seed_user(contract_conn, "ml-req@contract.test")
+    user_id, _ = await _seed_user(contract_conn, "ml-req@contract.example.com")
 
     intercepted: list[str] = []
 
@@ -122,14 +120,10 @@ async def test_request_link_creates_token_row(
         "paper_ingestion.routers.auth.send_magic_link",
         side_effect=_fake_send,
     ):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=_auth_app),
-            base_url="http://test",
-            headers={"X-API-Key": _TEST_KEY},
-        ) as c:
+        async with _client(_auth_app, None) as c:
             resp = await c.post(
                 "/api/auth/request-link",
-                json={"email": "ml-req@contract.test"},
+                json={"email": "ml-req@contract.example.com"},
             )
 
     assert resp.status_code == 200, f"request-link failed: {resp.status_code}: {resp.text[:300]}"
@@ -162,7 +156,7 @@ async def test_verify_token_creates_session_row(
     Grounding: auth.py:249-257 — ``INSERT INTO sessions (user_id, expires_at) RETURNING id``.
     Covers the full creation-flow contract including token → session atomicity.
     """
-    user_id, _ = await _seed_user(contract_conn, "ml-verify@contract.test")
+    user_id, _ = await _seed_user(contract_conn, "ml-verify@contract.example.com")
     raw_token = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw_token)
     expires_at = datetime.now(UTC) + timedelta(minutes=15)
@@ -174,12 +168,7 @@ async def test_verify_token_creates_session_row(
         expires_at,
     )
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_auth_app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_KEY},
-        follow_redirects=False,
-    ) as c:
+    async with _client(_auth_app, None, follow_redirects=False) as c:
         resp = await c.post("/api/auth/verify", json={"token": raw_token})
 
     assert resp.status_code == 200, f"verify failed: {resp.status_code}: {resp.text[:300]}"
@@ -216,7 +205,7 @@ async def test_verify_token_replay_returns_400(
     This is the replay-prevention contract; mock tests assert the branch exists
     but don't execute it against a real DB update.
     """
-    user_id, _ = await _seed_user(contract_conn, "ml-replay@contract.test")
+    user_id, _ = await _seed_user(contract_conn, "ml-replay@contract.example.com")
     raw_token = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw_token)
 
@@ -228,11 +217,7 @@ async def test_verify_token_replay_returns_400(
         user_id,
     )
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_auth_app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_KEY},
-    ) as c:
+    async with _client(_auth_app, None) as c:
         resp = await c.post("/api/auth/verify", json={"token": raw_token})
 
     assert resp.status_code == 400, (

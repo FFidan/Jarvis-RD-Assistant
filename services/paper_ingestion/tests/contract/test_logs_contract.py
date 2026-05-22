@@ -22,8 +22,12 @@ from __future__ import annotations
 import uuid
 
 import pytest
-import pytest_asyncio
 import httpx
+
+from jarvis_common.testing_contract_apps import (
+    DEFAULT_CONTRACT_API_KEY,
+    make_contract_client,
+)
 
 pytestmark = [
     pytest.mark.contract,
@@ -31,64 +35,9 @@ pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
 ]
 
-_TEST_API_KEY = "logs-contract-key-phase-b-do-not-use-in-prod"
 
-
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-
-
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _pi_app_with_pool(contract_conn):
-    """Wires the PI app to the contract connection.
-
-    The logs router uses require_admin_or_api_key (router-level dependency):
-    callers with no session role present (API-key-only) pass through.
-    The X-API-Key header satisfies verify_api_key; the absence of a
-    session cookie means user_role is absent, which satisfies
-    require_admin_or_api_key (ops / API-key path, not a non-admin session).
-    """
-    from jarvis_common import current_user_id_strict_with_owner_override
-    from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.main import app
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-
-    removed_override = app.dependency_overrides.pop(
-        current_user_id_strict_with_owner_override, None
-    )
-    had_override = removed_override is not None
-
-    yield app
-
-    if original_pool is None:
-        if hasattr(app.state, "db_pool"):
-            del app.state.db_pool
-    else:
-        app.state.db_pool = original_pool
-
-    if had_override:
-        app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
-
-
-def _make_api_key_client(app) -> httpx.AsyncClient:
-    """Client using API-key only (no session cookie) — passes require_admin_or_api_key."""
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-    )
+def _make_api_key_client(app):
+    return make_contract_client(app, None)
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +59,7 @@ async def test_a51_list_events_returns_events_from_db(
     # Insert a known event row
     event_id = await contract_conn.fetchval(
         """INSERT INTO system_events (level, category, source, message)
-           VALUES ('info', 'test', 'contract-test-source', 'contract test event')
+           VALUES ('info', 'source', 'contract-test-source', 'contract test event')
            RETURNING id"""
     )
 
@@ -141,7 +90,7 @@ async def test_a51_list_events_non_admin_non_apikey_gets_401_or_403(
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_pi_app_with_pool),
         base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
+        headers={"X-API-Key": DEFAULT_CONTRACT_API_KEY},
         cookies={"jarvis_session": contract_two_users.cookie_a},
     ) as c:
         resp = await c.get("/api/logs/events")
@@ -169,7 +118,7 @@ async def test_a52_get_event_returns_single_event_and_404_for_missing(
     """
     event_id = await contract_conn.fetchval(
         """INSERT INTO system_events (level, category, source, message)
-           VALUES ('error', 'test', 'contract-src', 'single event lookup')
+           VALUES ('error', 'error', 'contract-src', 'single event lookup')
            RETURNING id"""
     )
 
@@ -205,7 +154,7 @@ async def test_a53_get_summary_returns_non_negative_counts(
     # Insert a recent event to ensure summary is non-empty
     await contract_conn.execute(
         """INSERT INTO system_events (level, category, source, message)
-           VALUES ('warning', 'application', 'contract-summary-src', 'summary test')"""
+           VALUES ('warning', 'config', 'contract-summary-src', 'summary test')"""
     )
 
     async with _make_api_key_client(_pi_app_with_pool) as c:
@@ -247,18 +196,18 @@ async def test_a54_get_correlation_returns_matching_events(
     # Insert two events with this correlation_id
     id1 = await contract_conn.fetchval(
         """INSERT INTO system_events (level, category, source, message, correlation_id)
-           VALUES ('info', 'test', 'corr-src', 'event-1', $1) RETURNING id""",
+           VALUES ('info', 'source', 'corr-src', 'event-1', $1) RETURNING id""",
         correlation_id,
     )
     id2 = await contract_conn.fetchval(
         """INSERT INTO system_events (level, category, source, message, correlation_id)
-           VALUES ('info', 'test', 'corr-src', 'event-2', $1) RETURNING id""",
+           VALUES ('info', 'source', 'corr-src', 'event-2', $1) RETURNING id""",
         correlation_id,
     )
     # Insert unrelated event with different correlation_id
     await contract_conn.execute(
         """INSERT INTO system_events (level, category, source, message, correlation_id)
-           VALUES ('info', 'test', 'corr-src', 'unrelated', $1)""",
+           VALUES ('info', 'source', 'corr-src', 'unrelated', $1)""",
         uuid.uuid4(),
     )
 
@@ -316,7 +265,7 @@ async def test_a55_list_sources_returns_distinct_sources(
     unique_source = f"contract-src-{uuid.uuid4().hex[:8]}"
     await contract_conn.execute(
         """INSERT INTO system_events (level, category, source, message)
-           VALUES ('info', 'test', $1, 'source listing test')""",
+           VALUES ('info', 'source', $1, 'source listing test')""",
         unique_source,
     )
     # Reset cache again after insert to force re-query

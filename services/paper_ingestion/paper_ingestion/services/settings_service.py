@@ -122,15 +122,46 @@ _THINKING_DISABLED_PATTERN = re.compile(
 )
 
 
+def _classify_litellm_runtime_key(key: str) -> dict[str, str] | None:
+    """Classify model-role and per-machine LiteLLM runtime settings."""
+    if key in ROLE_TO_ALIAS:
+        return {"kind": "model_role", "role_key": key}
+
+    num_ctx_match = _NUM_CTX_PATTERN.fullmatch(key)
+    if num_ctx_match:
+        machine_id, role = num_ctx_match.groups()
+        return {
+            "kind": "num_ctx",
+            "machine_id": machine_id,
+            "role": role,
+            "role_key": f"llm.{role}_model",
+        }
+
+    thinking_match = _THINKING_DISABLED_PATTERN.fullmatch(key)
+    if thinking_match:
+        machine_id, model_id = thinking_match.groups()
+        return {
+            "kind": "thinking_disabled",
+            "machine_id": machine_id,
+            "model_id": model_id,
+        }
+
+    return None
+
+
+_CLOUD_MODEL_PREFIXES = ("anthropic/", "openai/", "gemini/")
+
+
+def _is_cloud_model_assignment(model_id: str) -> bool:
+    """Return True for LiteLLM cloud-provider model IDs."""
+    return model_id.startswith(_CLOUD_MODEL_PREFIXES)
+
+
 def _is_allowed_config_key(key: str) -> bool:
     """Return True if *key* is either a known static key or a valid dynamic pattern."""
     if key in _ALLOWED_CONFIG_KEYS:
         return True
-    if _NUM_CTX_PATTERN.fullmatch(key):
-        return True
-    if _THINKING_DISABLED_PATTERN.fullmatch(key):
-        return True
-    return False
+    return _classify_litellm_runtime_key(key) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1033,6 +1064,95 @@ async def build_export_zip(pool: asyncpg.Pool, user_id: int | None) -> bytes:
     return buf.getvalue()
 
 
+async def _fetch_system_config_values(
+    db_pool: asyncpg.Pool,
+    keys: list[str],
+) -> dict[str, Any]:
+    """Return NULL-user config values for *keys*, keyed by config key."""
+    if not keys:
+        return {}
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT key, value FROM user_config WHERE key = ANY($1::text[]) AND user_id IS NULL",
+            keys,
+        )
+    return {str(row["key"]): row["value"] for row in rows}
+
+
+async def _apply_litellm_runtime_update(
+    *,
+    db_pool: asyncpg.Pool,
+    key: str,
+    value: Any,
+    update_litellm_model_fn: Any,
+) -> None:
+    """Apply model and per-machine runtime settings to LiteLLM before DB writes."""
+    from fastapi import HTTPException  # noqa: PLC0415
+
+    from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
+        _config_lock,
+        reload_litellm,
+        update_litellm_model,
+    )
+
+    runtime_key = _classify_litellm_runtime_key(key)
+    if runtime_key is None:
+        return
+
+    _update_fn = (
+        update_litellm_model_fn if update_litellm_model_fn is not None else update_litellm_model
+    )
+
+    try:
+        async with _config_lock:
+            updated = False
+            kind = runtime_key["kind"]
+            if kind == "model_role":
+                updated = await _update_fn(key, str(value), db_pool=db_pool)
+            elif kind == "num_ctx":
+                role_key = runtime_key["role_key"]
+                model_values = await _fetch_system_config_values(db_pool, [role_key])
+                model_id = model_values.get(role_key)
+                if model_id is None:
+                    raise RuntimeError(f"No model is assigned for {role_key}")
+                model_id_str = str(model_id)
+                if _is_cloud_model_assignment(model_id_str):
+                    return
+                updated = await _update_fn(
+                    role_key,
+                    model_id_str,
+                    db_pool=db_pool,
+                    machine_id=runtime_key["machine_id"],
+                    num_ctx=value,
+                )
+                if not updated:
+                    raise RuntimeError(
+                        f"LiteLLM alias {role_key} was not updated for {kind} on "
+                        f"{runtime_key['machine_id']}"
+                    )
+            elif kind == "thinking_disabled":
+                model_id = runtime_key["model_id"]
+                assignments = await _fetch_system_config_values(db_pool, sorted(ROLE_TO_ALIAS))
+                for role_key, assigned_model in assignments.items():
+                    if str(assigned_model) != model_id:
+                        continue
+                    alias_updated = await _update_fn(
+                        role_key,
+                        str(assigned_model),
+                        db_pool=db_pool,
+                        machine_id=runtime_key["machine_id"],
+                        thinking_disabled=value,
+                    )
+                    updated = bool(alias_updated) or updated
+
+            if updated:
+                reloaded = await reload_litellm()
+                if not reloaded:
+                    raise RuntimeError("LiteLLM accepted the alias update but reload failed")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # ---------------------------------------------------------------------------
 # Config write orchestration
 # ---------------------------------------------------------------------------
@@ -1055,33 +1175,19 @@ async def write_config(
     Returns the display value (masked if the key is an encrypted secret).
 
     Raises ``fastapi.HTTPException`` on validation failure, model-assignment
-    rejection, or scheduler rollback.
-
-    Parameters
-    ----------
-    update_litellm_model_fn:
-        Optional callable with the same signature as
-        ``paper_ingestion.services.litellm_config.update_litellm_model``.
-        When provided, this callable is used instead of the default import so
-        callers can substitute a monkeypatched version in tests.  Defaults to
-        ``paper_ingestion.services.litellm_config.update_litellm_model``.
-
-    Notes
-    -----
-    - The ``require_admin`` auth gate is NOT called here — the router handles
-      that before delegating so the patch path
-      ``paper_ingestion.routers.settings.require_admin`` remains stable.
-    - ``log_audit`` and ``_log_event`` stay in the router for the same reason.
+    rejection, LiteLLM update failure, or scheduler rollback.
     """
     from fastapi import HTTPException  # noqa: PLC0415
 
+    runtime_key = _classify_litellm_runtime_key(key)
+
     # Validate the value
-    if _NUM_CTX_PATTERN.fullmatch(key):
+    if runtime_key is not None and runtime_key["kind"] == "num_ctx":
         try:
             _validate_positive_int(value)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    elif _THINKING_DISABLED_PATTERN.fullmatch(key):
+    elif runtime_key is not None and runtime_key["kind"] == "thinking_disabled":
         try:
             _validate_bool(value)
         except ValueError as exc:
@@ -1130,26 +1236,12 @@ async def write_config(
     # LiteLLM update (before DB write so we can abort on failure).
     # The ``update_litellm_model_fn`` parameter lets callers (i.e. the router)
     # pass a monkeypatched reference so test patches remain effective.
-    if key in ROLE_TO_ALIAS:
-        from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
-            _config_lock,
-            reload_litellm,
-            update_litellm_model,
-        )
-
-        _update_fn = (
-            update_litellm_model_fn if update_litellm_model_fn is not None else update_litellm_model
-        )
-
-        try:
-            async with _config_lock:
-                updated = await _update_fn(key, str(value), db_pool=db_pool)
-                if updated:
-                    reloaded = await reload_litellm()
-                    if not reloaded:
-                        raise RuntimeError("LiteLLM accepted the alias update but reload failed")
-        except (ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _apply_litellm_runtime_update(
+        db_pool=db_pool,
+        key=key,
+        value=value,
+        update_litellm_model_fn=update_litellm_model_fn,
+    )
 
     # DB write
     if key in _ENCRYPTED_KEYS:

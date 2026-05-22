@@ -65,9 +65,18 @@ export function SettingsAIPanel() {
     },
   });
 
-  // Derive the initial selection from loaded data
+  const candidateBackends = new Set((data?.candidates_for_tier ?? []).map((c) => c.backend));
+  const recommendedBackend: 'ollama' | 'vllm' =
+    data?.recommended_backend === 'vllm' ? 'vllm' : 'ollama';
+
+  // Derive the initial selection from configured state only when it is selectable.
   const rawBackend = data?.configured_backend ?? data?.recommended_backend ?? 'ollama';
-  const initialBackend: 'ollama' | 'vllm' = rawBackend === 'vllm' ? 'vllm' : 'ollama';
+  const initialBackend: 'ollama' | 'vllm' =
+    rawBackend === 'vllm' && candidateBackends.has('vllm')
+      ? 'vllm'
+      : rawBackend === 'ollama' && candidateBackends.has('ollama')
+        ? 'ollama'
+        : recommendedBackend;
 
   const [selectedBackend, setSelectedBackend] = useState<'ollama' | 'vllm' | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
@@ -195,6 +204,17 @@ export function SettingsAIPanel() {
         </div>
       )}
 
+      {(data?.candidate_issues?.length ?? 0) > 0 && (
+        <div
+          role="alert"
+          data-testid="candidate-issues"
+          className="rounded-md border border-blue-400 bg-blue-50 dark:bg-blue-950/20 px-4 py-3 text-sm text-blue-900 dark:text-blue-300"
+        >
+          Some empirical candidates were omitted because they are not in the curated model
+          catalog. {data?.candidate_issues[0]}
+        </div>
+      )}
+
       {/* Configured vs observed status */}
       <section className="space-y-1">
         <h3 className="text-sm font-medium">Current Status</h3>
@@ -286,7 +306,7 @@ export function SettingsAIPanel() {
 
       {/* Apply / Reset */}
       <div className="flex items-center gap-3 pt-2">
-        <Button onClick={handleApply} disabled={applyMut.isPending || !isDirty}>
+        <Button onClick={handleApply} disabled={applyMut.isPending || !isDirty || !activeModel}>
           {applyMut.isPending ? 'Applying…' : 'Apply'}
         </Button>
         <Button variant="ghost" onClick={handleReset} disabled={!isDirty && !applyMut.isError}>

@@ -23,65 +23,16 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import pytest
-import pytest_asyncio
-import httpx
+
+from jarvis_common.testing_contract_apps import (
+    make_contract_client as _make_client,
+)
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-_TEST_API_KEY = "my-day-contract-key-phase-b-do-not-use-in-prod"
-
-
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-
-
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _pi_app_with_pool(contract_conn):
-    from jarvis_common import current_user_id_strict_with_owner_override
-    from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.main import app
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-
-    removed_override = app.dependency_overrides.pop(
-        current_user_id_strict_with_owner_override, None
-    )
-    had_override = removed_override is not None
-
-    yield app
-
-    if original_pool is None:
-        if hasattr(app.state, "db_pool"):
-            del app.state.db_pool
-    else:
-        app.state.db_pool = original_pool
-
-    if had_override:
-        app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
-
-
-def _make_client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -156,26 +107,24 @@ async def test_a58_upsert_journal_creates_and_idempotent(
 
     Verified: my_day.py:71-98 upsert_journal_entry — ON CONFLICT DO UPDATE.
     """
-    test_date = (
-        date.today() + timedelta(days=30)
-    ).isoformat()  # far future to avoid seed collision
-    payload = {"date": test_date, "prompts": {"win": "contract test win"}}
+    test_date = date.today() + timedelta(days=30)  # far future to avoid seed collision
+    payload = {"date": test_date.isoformat(), "prompts": {"first_move": "contract test win"}}
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp1 = await c.post("/api/my-day/journal", json=payload)
 
     assert resp1.status_code == 200, resp1.text[:300]
     body1 = resp1.json()
-    assert body1["prompts"]["win"] == "contract test win"
+    assert body1["prompts"]["first_move"] == "contract test win"
 
     # Upsert with updated content
-    payload2 = {"date": test_date, "prompts": {"win": "updated win"}}
+    payload2 = {"date": test_date.isoformat(), "prompts": {"first_move": "updated win"}}
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp2 = await c.post("/api/my-day/journal", json=payload2)
 
     assert resp2.status_code == 200, resp2.text[:300]
     body2 = resp2.json()
-    assert body2["prompts"]["win"] == "updated win", "Upsert did not update prompts"
+    assert body2["prompts"]["first_move"] == "updated win", "Upsert did not update prompts"
 
     # Exactly one row in DB for this user+date
     count = await contract_conn.fetchval(
@@ -299,7 +248,7 @@ async def test_a158_create_thread_inserts_row_with_correct_user_id(
 
     Verified: threads.py:120-145 create_thread — INSERT with user_id=$1.
     """
-    payload = {"title": "New Contract Thread", "anchor": None, "progress": None}
+    payload = {"title": "New Contract Thread", "anchor": None}
 
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.post("/api/my-day/threads", json=payload)

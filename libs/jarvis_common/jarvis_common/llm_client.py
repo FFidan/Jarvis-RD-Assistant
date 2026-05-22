@@ -72,6 +72,10 @@ LLM_TIMEOUT_DEFAULT = 120.0
 LLM_TIMEOUT_LONG = 300.0
 
 
+class EmptyVisibleLLMContentError(RuntimeError):
+    """Raised when a scalar chat response has no user-visible content."""
+
+
 @dataclass(frozen=True)
 class LiteLLMConfig:
     """Resolved LiteLLM connection settings.
@@ -233,6 +237,8 @@ async def request_chat_completion_content(
     ------
     RuntimeError
         On HTTP error, timeout, or connection failure.
+    EmptyVisibleLLMContentError
+        If the response only contains whitespace or stripped think-block text.
     ValueError
         If the response body does not contain ``choices[0].message.content``.
     """
@@ -283,7 +289,12 @@ async def request_chat_completion_content(
             or options.model
         )
         record_serve(options.model, served)
-    return strip_think_blocks(raw)
+    visible = strip_think_blocks(raw)
+    if not visible:
+        raise EmptyVisibleLLMContentError(
+            "LiteLLM chat response contained no visible content after think-block stripping"
+        )
+    return visible
 
 
 @observe(as_type="generation")

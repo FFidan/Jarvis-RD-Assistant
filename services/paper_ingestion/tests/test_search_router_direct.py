@@ -3,12 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
-
-import httpx
-import pytest
-from paper_ingestion.models import PaperCreate, SearchRequest, SourceType
-from paper_ingestion.routers import search
+from unittest.mock import AsyncMock
 
 
 def _make_source(*, api_key: str | None = None, side_effect=None):
@@ -20,83 +15,10 @@ def _make_source(*, api_key: str | None = None, side_effect=None):
     return source
 
 
-@pytest.mark.asyncio
-async def test_search_preview_returns_results_without_db_writes(monkeypatch):
-    """Preview search should return source results without upserting them."""
-    db_pool = MagicMock()
-    http_client = MagicMock()
-    source = _make_source(side_effect=None)
-    source.search.return_value = [
-        PaperCreate(
-            external_id="s2:1",
-            source_type=SourceType.SEMANTIC_SCHOLAR,
-            title="Neural ODE",
-            authors=["Ada"],
-            abstract="preview",
-            published_date=None,
-            url="https://www.semanticscholar.org/paper/1",
-            pdf_url=None,
-            citation_count=0,
-            metadata={},
-        )
-    ]
-    monkeypatch.setattr(search, "get_source_for_type", AsyncMock(return_value=source))
-
-    result = await search.search_papers_preview.__wrapped__(
-        MagicMock(),
-        body=SearchRequest(query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10),
-        db_pool=db_pool,
-        http_client=http_client,
-    )
-
-    assert len(result.results) == 1
-    assert result.results[0].title == "Neural ODE"
-    # DB reads for library matching are fine; no write path should execute.
-    acquired = db_pool.acquire.return_value.__aenter__.return_value
-    acquired.execute.assert_not_called()
-    acquired.executemany.assert_not_called()
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
-@pytest.mark.asyncio
-async def test_search_preview_maps_semantic_scholar_rate_limit_without_api_key(monkeypatch):
-    """Preview search degrades gracefully on S2 rate limit, reporting the source as degraded."""
-    request = httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search")
-    response = httpx.Response(429, request=request)
-    source = _make_source(
-        side_effect=httpx.HTTPStatusError("rate limited", request=request, response=response)
-    )
-    monkeypatch.setattr(search, "get_source_for_type", AsyncMock(return_value=source))
-
-    result = await search.search_papers_preview.__wrapped__(
-        MagicMock(),
-        body=SearchRequest(query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10),
-        db_pool=MagicMock(),
-        http_client=MagicMock(),
-    )
-
-    # Source failed — reported as degraded, not raised as HTTP exception
-    assert result.results == []
-    assert "semantic_scholar" in result.degraded_sources
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
-@pytest.mark.asyncio
-async def test_search_preview_maps_semantic_scholar_rate_limit_with_api_key(monkeypatch):
-    """Preview search degrades gracefully on S2 rate limit even when an API key is configured."""
-    request = httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search")
-    response = httpx.Response(429, request=request)
-    source = _make_source(
-        api_key="configured",
-        side_effect=httpx.HTTPStatusError("rate limited", request=request, response=response),
-    )
-    monkeypatch.setattr(search, "get_source_for_type", AsyncMock(return_value=source))
-
-    result = await search.search_papers_preview.__wrapped__(
-        MagicMock(),
-        body=SearchRequest(query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10),
-        db_pool=MagicMock(),
-        http_client=MagicMock(),
-    )
-
-    # Source failed — reported as degraded, not raised as HTTP exception
-    assert result.results == []
-    assert "semantic_scholar" in result.degraded_sources
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).

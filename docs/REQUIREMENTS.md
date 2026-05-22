@@ -91,11 +91,15 @@ respx>=0.21.0                # Mock httpx for async tests
 |---------|-------|---------|
 | PostgreSQL | `postgres:16.8` | Main database (all application state) |
 | n8n | `docker.n8n.io/n8nio/n8n:1.77.0` | Optional workflow automation (`--profile n8n`) |
-| Ollama | `ollama/ollama:0.17.7` | Local LLM inference (GPU recommended) |
+| Ollama | `ollama/ollama:0.23.1` | Local LLM inference (GPU recommended); pin lives in `versions.env` as `OLLAMA_IMAGE` |
 | Ollama Bootstrap | Custom init container | One-shot model pull for Ollama (runs before ollama service starts) |
 | Qdrant | `qdrant/qdrant:v1.13.2` | Vector store for paper chunk embeddings |
 | LiteLLM | `docker.litellm.ai/berriai/litellm@sha256:29252f25ed1b538d44f6b76ec97412c5537a180b39ede744b9f3e86ffdd278f5` | Unified LLM gateway (pull_policy: never) |
 | React dashboard | `nginx:alpine` (built from `frontend/`) | Web dashboard (container port 3000; current Compose host binding 3001) |
+
+Image pins are operational inputs, not prose-only examples: `versions.env` is the source of truth for tested third-party images, and `docker-compose.yml` keeps the same Ollama fallback (`${OLLAMA_IMAGE:-ollama/ollama:0.23.1}`). The default Ollama host publish is loopback-only (`127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434`), so browser/LAN clients cannot call the daemon directly.
+
+**CVE-2026-7482 posture (Ollama):** keep `OLLAMA_IMAGE` at the patched tested pin above or a newer validated pin. The loopback host bind reduces host/LAN exposure, but every container attached to the `jarvis` Docker network can still reach `http://ollama:11434`; do not attach untrusted sidecars to that network. If an operator overrides JARVIS to use a shared external Ollama daemon, that daemon must be patched and bound to loopback or an equivalently trusted private network. Reopen this posture if the pin moves below the patched line, the host bind is changed away from `127.0.0.1`, a shared-daemon override is documented without equivalent controls, untrusted Docker-network peers are introduced, or a new Ollama advisory changes the fixed-version floor.
 
 ## External APIs (free, no key required for basic usage)
 
@@ -140,8 +144,8 @@ Current reality note:
 
 | Option | Configuration | Notes |
 |--------|--------------|-------|
-| OpenAI | `OPENAI_API_KEY` in `.env` | GPT-4o recommended for summaries |
-| Anthropic | `ANTHROPIC_API_KEY` in `.env` | Claude recommended for summaries |
+| OpenAI | Preferred: encrypted per-user `llm.openai.api_key` in Settings; `.env` `OPENAI_API_KEY` is bootstrap/legacy only | GPT-4o recommended for summaries |
+| Anthropic | Preferred: encrypted per-user `llm.anthropic.api_key` in Settings; `.env` `ANTHROPIC_API_KEY` is bootstrap/legacy only | Claude recommended for summaries |
 | Local Ollama | No key needed | Included in Docker Compose; slower but free and private |
 | Any OpenAI-compatible API | Configure in `litellm/config.yaml` | Via LiteLLM proxy routing |
 
@@ -291,9 +295,9 @@ JARVIS uses Docker Secrets for sensitive runtime values. Each secret is stored i
 | `litellm_master_key` | `/run/secrets/litellm_master_key` | `litellm`, `paper_ingestion`, `learning_engine`, `telegram_bot` | `LITELLM_MASTER_KEY_FILE` |
 | `jarvis_config_key` | `/run/secrets/jarvis_config_key` | `paper_ingestion`, `learning_engine` | `JARVIS_CONFIG_KEY_FILE` |
 
-These secret files must exist before running `docker compose up`. The `scripts/init-dirs.sh` helper creates the `secrets/` directory but does not populate the files — populate them manually or via your secrets manager.
+These secret files must exist before running `docker compose up`. The canonical repo path is `bash scripts/init-secrets.sh` (or `scripts/jarvis-setup.sh`, which calls it): it creates `secrets/`, generates missing local secrets, syncs the corresponding Docker-secret files, and leaves existing values intact. Manual file population is an advanced path for operators wiring an external secrets manager; keep the same filenames, one secret value per file, mode `0600` where possible.
 
-Plain environment variable fallbacks (e.g., `JARVIS_API_KEY`, `QDRANT_API_KEY`) remain accepted for backwards compatibility and local dev without Docker Secrets.
+Plain environment variable fallbacks (e.g., `JARVIS_API_KEY`, `QDRANT_API_KEY`) remain accepted only for local development and backward compatibility. Production and shared deployments should use the helper-managed Docker Secret files and `_FILE` variables.
 
 ## Optional Reranker
 

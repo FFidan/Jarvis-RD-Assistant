@@ -224,6 +224,8 @@ gains an optional field:
     "default": "fits" | "partial" | "unfit" | "cloud" | "unknown",
     "at_num_ctx": 8192,
     "required_vram_gb": 12.0,
+    "base_vram_gb": 9.5,
+    "base_num_ctx": 8192,
     "default_num_ctx": 8192,
     "max_num_ctx": 32768,
     "kv_cache_bytes_per_token": 1024
@@ -245,11 +247,12 @@ path ([`01-settings.md` §1](01-settings.md#1-storage-tables)). The frontend
 constructs the key as `llm.{machineId}.{role}_num_ctx` from the
 `machine_id` returned in `GET /api/system/hardware`.
 
-`_ALLOWED_CONFIG_KEYS` in
-[`routers/settings.py`](../../services/paper_ingestion/paper_ingestion/routers/settings.py)
-must accept the **prefix pattern** `llm.*.{smart,fast,embed}_num_ctx`
-(implementation detail for T3-B; the contract just specifies that the keys
-are writable through the existing endpoint).
+`_ALLOWED_CONFIG_KEYS` plus the dynamic classifier in
+[`settings_service.py`](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L117-L164)
+accept the **prefix pattern** `llm.*.{smart,fast,embed}_num_ctx` and the
+model-scoped pattern `llm.*.thinking_disabled.{model_id}`. Runtime writes are
+applied to LiteLLM before the `user_config` row is persisted; if the LiteLLM
+update or reload fails, the write aborts and the DB value is not advanced.
 
 ---
 
@@ -366,12 +369,13 @@ decision). Backward-compatible.
 
 ### 7.4 LiteLLM config integration
 
-Wave-5 implementation must propagate the persisted num_ctx into LiteLLM's
-runtime config (`litellm_params.num_ctx`) the same way `update_litellm_model`
-([cited in 05-model-lifecycle.md §11](05-model-lifecycle.md#11-api-summary))
-propagates a model alias change. The Wave-0 lifespan guard already protects
-against bad LiteLLM rehydration; that guard covers num_ctx changes too
-because they go through the same `_post_config_update` path.
+Runtime writes now propagate per-machine `num_ctx` into LiteLLM's runtime
+config (`litellm_params.extra_body.num_ctx`) via `update_litellm_model` before
+DB persistence. Cloud-assigned models intentionally skip `num_ctx` propagation
+while still allowing the UI state to persist. Thinking toggles update every
+currently assigned role using the same model id; `thinking_disabled=True`
+adds `extra_body.think: false`, and `False` removes only that flag while
+preserving other hardware parameters such as `num_ctx`.
 
 ---
 
@@ -497,13 +501,17 @@ before consuming this contract as evidence for implementation.
 
 | Citation | File:line | Behavior |
 |---|---|---|
-| `HardwareInfo` dataclass | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:43-51` | Frozen dataclass: `vram_gb`, `vram_source`, `tier`, `detected_at`. T3-B adds `machine_id`. |
-| `hardware_tier(vram_gb)` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:62-71` | Maps VRAM GB → ordinal 0..4. Kept as fallback when new fields missing. |
-| `_probe_nvidia_smi()` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:74-99` | `subprocess.run([...], timeout=2.0)` — no shell expansion; returns max(memory.total) / 1024 GB or None. |
-| `_probe_macos_vram()` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:102-126` | Parses `system_profiler SPDisplaysDataType` "VRAM" line; imprecise. |
-| `detect_hardware()` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:129-145` | Probes nvidia-smi → macOS → CPU fallback. On all-fail: `vram_gb=0.0`, `vram_source="cpu"`. |
-| `get_cached_hardware(state)` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:148-161` | 1-hour TTL on `app.state.hw_info` / `hw_info_at`; refreshes silently on miss. |
-| `build_model_statuses(...)` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:216-291` | Computes `status`, `fit`, `can_assign`, `assign_blocker` per entry. T3-B extends with `fit_detail`. |
+| `HardwareInfo` dataclass | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:121-147` | Frozen dataclass: `vram_gb`, `vram_source`, `tier`, `detected_at`, and internal `machine_id`; `to_dict()` returns all fields. |
+| `hardware_tier(vram_gb)` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:171-192` | Maps VRAM GB → ordinal 0..4. Kept as fallback when new fields missing. |
+| `_probe_nvidia_smi()` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:195-220` | `subprocess.run([...], timeout=2.0)` — no shell expansion; returns max(memory.total) / 1024 GB or None. |
+| `_probe_macos_vram()` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:223-247` | Parses `system_profiler SPDisplaysDataType` "VRAM" line; imprecise. |
+| `detect_hardware()` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:250-267` | Probes nvidia-smi → macOS → CPU fallback; returns hostname as internal `machine_id`. |
+| `get_cached_hardware(state)` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:270-283` | 1-hour TTL on `app.state.hw_info` / `hw_info_at`; refreshes silently on miss. |
+| `compute_vram_fit(...)` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:395-479` | Computes `fit_detail`, including `base_vram_gb` and `base_num_ctx` for frontend what-if math. |
+| `build_model_statuses(...)` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:482-585` | Computes `status`, `fit`, `can_assign`, `assign_blocker`, and `fit_detail` per entry. |
+| `_classify_litellm_runtime_key` | `services/paper_ingestion/paper_ingestion/services/settings_service.py:125-149` | Classifies role assignments plus per-machine `num_ctx` and `thinking_disabled` keys. |
+| `_apply_litellm_runtime_update` | `services/paper_ingestion/paper_ingestion/services/settings_service.py:1082-1148` | Applies LiteLLM runtime updates before DB writes; cloud model `num_ctx` writes return without alias mutation. |
+| `update_litellm_model` | `services/paper_ingestion/paper_ingestion/services/litellm_config.py:178-291` | Applies pending `num_ctx` and thinking flags; sends cloud aliases through `/config/update` without `num_ctx`. |
 | `recommendations_for_role(role, ...)` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:294-322` | Sorts entries by readiness priority for one role. |
 | `model_catalog.json` (15 entries) | `libs/jarvis_common/jarvis_common/data/model_catalog.json:1-242` | Today's schema — no `min_vram_gb_at_default_ctx` / `kv_cache_bytes_per_token`. T3-A adds them. |
 | `GET /api/system/models` | `services/paper_ingestion/paper_ingestion/routers/system.py:229-320` | Returns `installed`, `hardware`, `current`, `issues`, `catalog`, `recommendations`. T3-B extends `catalog[i]`. |

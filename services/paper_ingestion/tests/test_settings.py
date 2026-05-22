@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
-from jarvis_common.testing import RoleMiddleware
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -277,6 +277,242 @@ async def test_set_config_does_not_persist_when_litellm_update_fails(_app, monke
     conn.execute.assert_not_awaited()
 
 
+async def _write_runtime_config(pool, key: str, value, update_litellm_model_fn):
+    from paper_ingestion.services.settings_service import write_config
+
+    return await write_config(
+        db_pool=pool,
+        scheduler=MagicMock(),
+        http_client=AsyncMock(),
+        ollama_url="http://ollama",
+        key=key,
+        value=value,
+        caller_user_id=1,
+        update_litellm_model_fn=update_litellm_model_fn,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dynamic_num_ctx_updates_current_role_model_before_persist(monkeypatch):
+    """Per-machine num_ctx writes push the current local role assignment to LiteLLM first."""
+    pool, conn = _make_pool_and_conn(
+        fetch_return=[FakeRecord(key="llm.smart_model", value="qwen3:14b")]
+    )
+    calls = []
+
+    async def capture_update(*args, **kwargs):
+        calls.append((args, kwargs, conn.execute.await_count))
+        return True
+
+    monkeypatch.setattr(
+        "paper_ingestion.services.litellm_config.reload_litellm",
+        AsyncMock(return_value=True),
+    )
+
+    result = await _write_runtime_config(
+        pool,
+        "llm.host-rtx5060.smart_num_ctx",
+        32768,
+        capture_update,
+    )
+
+    assert result == 32768
+    assert len(calls) == 1
+    args, kwargs, execute_count = calls[0]
+    assert args == ("llm.smart_model", "qwen3:14b")
+    assert kwargs["db_pool"] is pool
+    assert kwargs["machine_id"] == "host-rtx5060"
+    assert kwargs["num_ctx"] == 32768
+    assert execute_count == 0
+    conn.execute.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_num_ctx_does_not_persist_when_litellm_reports_no_update(monkeypatch):
+    """A local num_ctx write aborts if LiteLLM cannot update the assigned alias."""
+    pool, conn = _make_pool_and_conn(
+        fetch_return=[FakeRecord(key="llm.smart_model", value="qwen3:14b")]
+    )
+    update_litellm_model_fn = AsyncMock(return_value=False)
+    reload_litellm = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "paper_ingestion.services.litellm_config.reload_litellm",
+        reload_litellm,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _write_runtime_config(
+            pool,
+            "llm.host-rtx5060.smart_num_ctx",
+            32768,
+            update_litellm_model_fn,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "was not updated" in str(exc_info.value.detail)
+    update_litellm_model_fn.assert_awaited_once()
+    reload_litellm.assert_not_awaited()
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_num_ctx_cloud_assignment_persists_without_litellm_update(monkeypatch):
+    """Cloud-assigned roles keep num_ctx as UI state without sending it to LiteLLM."""
+    pool, conn = _make_pool_and_conn(
+        fetch_return=[FakeRecord(key="llm.smart_model", value="openai/gpt-4o")]
+    )
+    update_litellm_model_fn = AsyncMock(return_value=True)
+    reload_litellm = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "paper_ingestion.services.litellm_config.reload_litellm",
+        reload_litellm,
+    )
+
+    result = await _write_runtime_config(
+        pool,
+        "llm.host-rtx5060.smart_num_ctx",
+        32768,
+        update_litellm_model_fn,
+    )
+
+    assert result == 32768
+    update_litellm_model_fn.assert_not_awaited()
+    reload_litellm.assert_not_awaited()
+    conn.execute.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_litellm_cloud_update_omits_num_ctx_extra_body(monkeypatch):
+    """Direct cloud alias updates ignore num_ctx because it is local-Ollama-only."""
+    from paper_ingestion.services import litellm_config
+
+    pool, _conn = _make_pool_and_conn(fetchrow_return=FakeRecord(value="sk-test"))
+    captured = {}
+
+    async def capture_post_config_update(alias, model_name, api_key, extra_body=None):
+        captured.update(
+            alias=alias,
+            model_name=model_name,
+            api_key=api_key,
+            extra_body=extra_body,
+        )
+        return True
+
+    monkeypatch.setattr(litellm_config, "_post_config_update", capture_post_config_update)
+
+    result = await litellm_config.update_litellm_model(
+        "llm.smart_model",
+        "openai/gpt-4o",
+        db_pool=pool,
+        machine_id="host-rtx5060",
+        num_ctx=32768,
+    )
+
+    assert result is True
+    assert captured == {
+        "alias": "smart",
+        "model_name": "openai/gpt-4o",
+        "api_key": "sk-test",
+        "extra_body": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_thinking_toggle_updates_only_matching_assigned_roles(monkeypatch):
+    """Thinking toggles refresh every role assigned to that model on the machine."""
+    pool, conn = _make_pool_and_conn(
+        fetch_return=[
+            FakeRecord(key="llm.smart_model", value="qwen3:14b"),
+            FakeRecord(key="llm.fast_model", value="qwen3:14b"),
+            FakeRecord(key="llm.embed_model", value="mxbai-embed-large"),
+        ]
+    )
+    calls = []
+
+    async def capture_update(*args, **kwargs):
+        calls.append((args, kwargs, conn.execute.await_count))
+        return True
+
+    monkeypatch.setattr(
+        "paper_ingestion.services.litellm_config.reload_litellm",
+        AsyncMock(return_value=True),
+    )
+
+    result = await _write_runtime_config(
+        pool,
+        "llm.host-rtx5060.thinking_disabled.qwen3:14b",
+        True,
+        capture_update,
+    )
+
+    assert result is True
+    assert [args for args, _kwargs, _count in calls] == [
+        ("llm.smart_model", "qwen3:14b"),
+        ("llm.fast_model", "qwen3:14b"),
+    ]
+    assert all(kwargs["machine_id"] == "host-rtx5060" for _args, kwargs, _count in calls)
+    assert all(kwargs["thinking_disabled"] is True for _args, kwargs, _count in calls)
+    assert all(execute_count == 0 for _args, _kwargs, execute_count in calls)
+    conn.execute.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_litellm_failure_leaves_db_unchanged(monkeypatch):
+    """Dynamic hardware settings preserve LiteLLM-first rollback semantics."""
+    from fastapi import HTTPException
+
+    pool, conn = _make_pool_and_conn(
+        fetch_return=[FakeRecord(key="llm.smart_model", value="qwen3:14b")]
+    )
+
+    async def fail_update(*args, **kwargs):
+        raise RuntimeError("LiteLLM dynamic update failed")
+
+    monkeypatch.setattr(
+        "paper_ingestion.services.litellm_config.reload_litellm",
+        AsyncMock(return_value=True),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _write_runtime_config(
+            pool,
+            "llm.host-rtx5060.smart_num_ctx",
+            32768,
+            fail_update,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "LiteLLM dynamic update failed" in str(exc_info.value.detail)
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        pytest.param("llm.host-rtx5060.smart_num_ctx", 0, id="num_ctx_zero"),
+        pytest.param(
+            "llm.host-rtx5060.thinking_disabled.qwen3:14b",
+            "true",
+            id="thinking_string",
+        ),
+    ],
+)
+async def test_invalid_dynamic_litellm_values_return_400(key, value):
+    """Dynamic LiteLLM hardware settings keep strict value validation."""
+    from fastapi import HTTPException
+
+    pool, conn = _make_pool_and_conn()
+    update_litellm_model_fn = AsyncMock(return_value=True)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _write_runtime_config(pool, key, value, update_litellm_model_fn)
+
+    assert exc_info.value.status_code == 400
+    update_litellm_model_fn.assert_not_awaited()
+    conn.execute.assert_not_awaited()
+
+
 # Collapsed (E2.PI): test_set_config_disallowed_key
 # Survivor: test_settings_contract.py::test_put_config_ghost_key_returns_400
 # PUT /api/config/{ghost-key} returns 400 Unknown config key verified with real DB.
@@ -286,390 +522,46 @@ async def test_set_config_does_not_persist_when_litellm_update_fails(_app, monke
 # Tests: Nudges
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_list_nudges(_app):
-    """GET /api/nudges returns list of scheduled nudges."""
-    app, conn, _ = _app
-    conn.fetch.return_value = [
-        FakeRecord(
-            id=1,
-            nudge_type="review_reminder",
-            cron_expression="0 9 * * *",
-            enabled=True,
-            config={},
-            last_fired_at=None,
-            created_at=_now(),
-        ),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/nudges")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 1
-    assert body[0]["nudge_type"] == "review_reminder"
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_list_nudges_non_admin_returns_403(_app):
-    """GET /api/nudges returns 403 for non-admin browser sessions (L-12)."""
-    app, _conn, _ = _app
-    wrapped = RoleMiddleware(app, "member")
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=wrapped), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/nudges")
-
-    assert resp.status_code == 403
-    assert "Admin" in resp.json()["detail"]
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_update_nudge_found(_app):
-    """PUT /api/nudges/{id} updates the nudge when found."""
-    app, conn, _ = _app
-    existing = FakeRecord(
-        id=1,
-        nudge_type="review_reminder",
-        cron_expression="0 9 * * *",
-        enabled=True,
-        config={},
-        last_fired_at=None,
-        created_at=_now(),
-    )
-    updated = FakeRecord(
-        id=1,
-        nudge_type="review_reminder",
-        cron_expression="0 10 * * *",
-        enabled=True,
-        config={},
-        last_fired_at=None,
-        created_at=_now(),
-    )
-    conn.fetchrow.side_effect = [existing, updated]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/nudges/1",
-            json={"cron_expression": "0 10 * * *"},
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["cron_expression"] == "0 10 * * *"
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_update_nudge_not_found(_app):
-    """PUT /api/nudges/{id} returns 404 when nudge does not exist."""
-    app, conn, _ = _app
-    conn.fetchrow.return_value = None
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put("/api/nudges/999", json={"enabled": False})
-
-    assert resp.status_code == 404
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-# ---------------------------------------------------------------------------
-# Tests: Sources
-# ---------------------------------------------------------------------------
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_list_sources(_app):
-    """GET /api/sources returns list of paper sources."""
-    app, conn, _ = _app
-    conn.fetch.return_value = [
-        FakeRecord(
-            id=1,
-            source_type="arxiv",
-            enabled=True,
-            config={},
-            priority=1,
-            display_order=0,
-            created_at=_now(),
-        ),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/sources")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 1
-    assert body[0]["source_type"] == "arxiv"
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_list_sources_ordered_by_display_order(_app):
-    """GET /api/sources issues ORDER BY display_order ASC, id ASC."""
-
-    app, conn, _ = _app
-    conn.fetch.return_value = [
-        FakeRecord(
-            id=2,
-            source_type="pubmed",
-            enabled=True,
-            config={},
-            priority=1,
-            display_order=1,
-            created_at=_now(),
-        ),
-        FakeRecord(
-            id=1,
-            source_type="arxiv",
-            enabled=True,
-            config={},
-            priority=1,
-            display_order=2,
-            created_at=_now(),
-        ),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/sources")
-
-    assert resp.status_code == 200
-    # Verify the SQL passed to fetch includes ORDER BY display_order
-    fetch_sql = conn.fetch.call_args[0][0]
-    assert "display_order" in fetch_sql.lower()
-    body = resp.json()
-    assert body[0]["source_type"] == "pubmed"
-    assert body[1]["source_type"] == "arxiv"
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_reorder_sources_persists_order(_app):
-    """PATCH /api/sources/reorder updates display_order and returns ordered list."""
-    app, conn, _ = _app
-    # First fetch: existing source_types validation
-    conn.fetch.side_effect = [
-        [
-            FakeRecord(source_type="arxiv"),
-            FakeRecord(source_type="pubmed"),
-            FakeRecord(source_type="openalex"),
-        ],
-        # Second fetch: return after update
-        [
-            FakeRecord(
-                id=2,
-                source_type="pubmed",
-                enabled=True,
-                config={},
-                priority=1,
-                display_order=1,
-                created_at=_now(),
-            ),
-            FakeRecord(
-                id=3,
-                source_type="openalex",
-                enabled=True,
-                config={},
-                priority=1,
-                display_order=2,
-                created_at=_now(),
-            ),
-            FakeRecord(
-                id=1,
-                source_type="arxiv",
-                enabled=True,
-                config={},
-                priority=1,
-                display_order=3,
-                created_at=_now(),
-            ),
-        ],
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.patch(
-            "/api/sources/reorder",
-            json={"source_types": ["pubmed", "openalex", "arxiv"]},
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 3
-    assert body[0]["source_type"] == "pubmed"
-    assert body[0]["display_order"] == 1
-    assert body[2]["source_type"] == "arxiv"
-    assert body[2]["display_order"] == 3
-    # Verify execute was called for each source_type in order
-    assert conn.execute.await_count == 3
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_reorder_sources_unknown_source_returns_400(_app):
-    """PATCH /api/sources/reorder returns 400 for unknown source_type."""
-    app, conn, _ = _app
-    conn.fetch.return_value = [
-        FakeRecord(source_type="arxiv"),
-        FakeRecord(source_type="pubmed"),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.patch(
-            "/api/sources/reorder",
-            json={"source_types": ["arxiv", "nonexistent_source"]},
-        )
-
-    assert resp.status_code == 400
-    detail = resp.json()["detail"]
-    assert "nonexistent_source" in detail
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_update_source_found(_app):
-    """PUT /api/sources/{id} updates the source when found."""
-    app, conn, _ = _app
-    existing = FakeRecord(
-        id=1,
-        source_type="arxiv",
-        enabled=True,
-        config={},
-        priority=1,
-        created_at=_now(),
-    )
-    updated = FakeRecord(
-        id=1,
-        source_type="arxiv",
-        enabled=False,
-        config={},
-        priority=1,
-        created_at=_now(),
-    )
-    conn.fetchrow.side_effect = [existing, updated]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put("/api/sources/1", json={"enabled": False})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["enabled"] is False
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_update_source_not_found(_app):
-    """PUT /api/sources/{id} returns 404 when source does not exist."""
-    app, conn, _ = _app
-    conn.fetchrow.return_value = None
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put("/api/sources/999", json={"enabled": False})
-
-    assert resp.status_code == 404
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-# ---------------------------------------------------------------------------
-# Tests: Analytics
-# ---------------------------------------------------------------------------
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_papers_by_source(_app):
-    """GET /api/analytics/papers-by-source returns paper counts by source."""
-    app, conn, _ = _app
-    conn.fetch.return_value = [
-        FakeRecord(source_type="arxiv", count=25),
-        FakeRecord(source_type="semantic_scholar", count=10),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/analytics/papers-by-source")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 2
-    assert body[0]["source_type"] == "arxiv"
-    assert body[0]["count"] == 25
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
-@pytest.mark.asyncio
-async def test_papers_by_status(_app):
-    """GET /api/analytics/papers-by-status returns paper counts by status."""
-    app, conn, _ = _app
-    conn.fetch.return_value = [
-        FakeRecord(status="new", count=30),
-        FakeRecord(status="read", count=15),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/analytics/papers-by-status")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 2
-    assert body[0]["status"] == "new"
-    assert body[0]["count"] == 30
-
-
-@pytest.mark.asyncio
-async def test_papers_by_source_scopes_non_admin_browser_user(_app):
-    """Non-admin analytics should not expose other users' corpus size."""
-    from paper_ingestion.routers import settings
-
-    _app_obj, conn, _ = _app
-    conn.fetch.return_value = [FakeRecord(source_type="arxiv", count=2)]
-    request = SimpleNamespace(state=SimpleNamespace(user_id=42, user_role="member"))
-
-    with patch.object(settings, "current_user_id_strict", new=AsyncMock(return_value=42)):
-        rows = await settings.papers_by_source.__wrapped__(request, db_pool=_app_obj.state.db_pool)
-
-    assert rows == [{"source_type": "arxiv", "count": 2}]
-    sql = conn.fetch.await_args.args[0]
-    assert "JOIN user_library ul" in sql
-    assert "ul.user_id = $1" in sql
-    assert conn.fetch.await_args.args[1] == 42
-
-
-@pytest.mark.asyncio
-async def test_papers_by_status_scopes_non_admin_browser_user(_app):
-    """Per-state counts for browser users should be derived only from their library."""
-    from paper_ingestion.routers import settings
-
-    _app_obj, conn, _ = _app
-    conn.fetch.return_value = [FakeRecord(status="inbox", count=1)]
-    request = SimpleNamespace(state=SimpleNamespace(user_id=42, user_role="member"))
-
-    with patch.object(settings, "current_user_id_strict", new=AsyncMock(return_value=42)):
-        rows = await settings.papers_by_status.__wrapped__(request, db_pool=_app_obj.state.db_pool)
-
-    assert rows == [{"status": "inbox", "count": 1}]
-    sql = conn.fetch.await_args.args[0]
-    assert "JOIN user_library ul" in sql
-    assert "IS NOT DISTINCT FROM" not in sql
-    assert "pus.user_id = $1" in sql
-    assert conn.fetch.await_args.args[1] == 42
-
-
-# ---------------------------------------------------------------------------
-# Tests: pulse.* config key validation (F1.4)
-# ---------------------------------------------------------------------------
+# Cluster 1 deletion (2026-05-22): superseded by test_pi_settings_extended_contract.py (S-01..S-08).
 
 
 @pytest.mark.asyncio
@@ -719,25 +611,6 @@ async def test_set_config_invalid_value_returns_400(_app, config_key, bad_value)
 # Collapsed (E2.PI): test_set_config_l2_lambda_out_of_range_returns_400
 # Survivor: test_settings_contract.py::test_put_pulse_l2_lambda_out_of_range_returns_400
 # PUT /api/config/pulse.l2_lambda rejects value > 2.0 — verified with real DB.
-
-
-@pytest.mark.asyncio
-async def test_set_config_valid_cron_accepted(_app):
-    """PUT /api/config/pulse.cron accepts a valid cron expression."""
-    app, conn, _ = _app
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.put(
-            "/api/config/pulse.cron",
-            json={"key": "pulse.cron", "value": "0 4 * * *"},
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["key"] == "pulse.cron"
-    assert body["value"] == "0 4 * * *"
 
 
 # ---------------------------------------------------------------------------
@@ -934,7 +807,7 @@ async def test_test_provider_error_response_does_not_leak_upstream_body():
     any portion of the upstream response body (which could contain sensitive
     diagnostic information).
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from paper_ingestion.main import app
 

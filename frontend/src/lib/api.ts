@@ -1644,8 +1644,10 @@ export const getMyDayBundle = () =>
 export interface AIBackendCandidate {
   backend: 'ollama' | 'vllm';
   model: string;
+  catalog_id?: string | null;
+  source?: 'catalog' | 'tier-candidates';
   rank: number;
-  score?: number;
+  score?: number | null;
   reasoning?: string;
 }
 
@@ -1658,6 +1660,7 @@ export interface AISettings {
   observed_backend: string | null;
   observed_recent_share: number;
   candidates_for_tier: AIBackendCandidate[];
+  candidate_issues: string[];
   eval_report_date: string | null;
 }
 

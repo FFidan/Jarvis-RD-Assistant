@@ -312,6 +312,11 @@ hint. This is an intentional one-time manual step — there is no auto-seed of t
 Auto-seeding would couple the Langfuse container's bound address into the service layer (YAGNI;
 the URL is operator-specific and cannot be inferred generically).
 
+
+### 9.6 Diagnostic artifact redaction
+
+Perf and observability bundles are meant to leave the operator machine for agent or human review. Before any tarball is created, bundle builders MUST redact obvious API keys, auth headers, cookies, session files, and secret-like environment values while preserving logs, timings, failure bodies, and metadata needed to diagnose the run. A redaction manifest should be included in the bundle so reviewers can tell whether sanitisation ran.
+
 ---
 
 ## 10. Invariants
@@ -334,6 +339,9 @@ The implementation MUST satisfy these. Testable.
    `langfuse` MUST live at the top of files that already define a
    trace-boundary function, OR inside `app_factory.py`. No utility
    function in core code should depend on Langfuse being installed.
+7. **Bundle redaction before export.** Any perf or observability tarball that may
+   be copied off-box MUST run the artifact redaction step before archive
+   creation and include a redaction manifest.
 
 ---
 

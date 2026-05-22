@@ -81,6 +81,8 @@ const fitDetailFits = {
   default: 'fits' as const,
   at_num_ctx: 8192,
   required_vram_gb: 12.0,
+  base_vram_gb: 12.0,
+  base_num_ctx: 8192,
   default_num_ctx: 8192,
   max_num_ctx: 32768,
   kv_cache_bytes_per_token: 1000000, // 1 MB/token → large jumps for testing
@@ -110,6 +112,8 @@ const systemModelsWithFitDetail = {
         default: 'fits' as const,
         at_num_ctx: 8192,
         required_vram_gb: 3.0,
+        base_vram_gb: 3.0,
+        base_num_ctx: 8192,
         default_num_ctx: 8192,
         max_num_ctx: 32768,
         kv_cache_bytes_per_token: 500000,
@@ -125,6 +129,8 @@ const systemModelsWithFitDetail = {
         default: 'fits' as const,
         at_num_ctx: 8192,
         required_vram_gb: 1.0,
+        base_vram_gb: 1.0,
+        base_num_ctx: 8192,
         default_num_ctx: 8192,
         max_num_ctx: 8192,
         kv_cache_bytes_per_token: 128000,
@@ -316,7 +322,7 @@ describe('IngestionSection — fit badge color', () => {
      * required = 12.0 + 8192 * 1_000_000 / 1e9 = 12.0 + 8.192 = 20.192 → unfit
      *
      * So we need a model with lower base VRAM to hit the partial zone.
-     * Use required_vram_gb=10.0, default=8192, kv=500_000:
+     * Use base_vram_gb=10.0, base=8192, kv=500_000:
      * At 16384: required = 10.0 + (16384-8192)*500_000/1e9 = 10.0 + 4.096 = 14.096 > 13.515 → partial
      */
     const { fetchConfig, apiFetch } = await import('@/lib/api');
@@ -331,6 +337,8 @@ describe('IngestionSection — fit badge color', () => {
             default: 'fits' as const,
             at_num_ctx: 8192,
             required_vram_gb: 10.0,
+            base_vram_gb: 10.0,
+            base_num_ctx: 8192,
             default_num_ctx: 8192,
             max_num_ctx: 32768,
             kv_cache_bytes_per_token: 500_000,
@@ -357,6 +365,80 @@ describe('IngestionSection — fit badge color', () => {
       // partial: 14.096 / 15.9 = 88.6% — above 85%, below 120%
       expect(screen.getByTestId('fit-badge-partial')).toBeInTheDocument();
     });
+  });
+
+  it('uses backend baseline fields instead of double-counting selected required VRAM', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue([
+      ...baseConfig,
+      { key: 'llm.host-rtx5060.smart_num_ctx', value: 16384 },
+    ]);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      catalog: [
+        {
+          ...systemModelsWithFitDetail.catalog[0],
+          fit_detail: {
+            default: 'partial' as const,
+            at_num_ctx: 16384,
+            required_vram_gb: 14.915,
+            base_vram_gb: 10.0,
+            base_num_ctx: 8192,
+            default_num_ctx: 8192,
+            max_num_ctx: 32768,
+            kv_cache_bytes_per_token: 600_000,
+          },
+        },
+        ...systemModelsWithFitDetail.catalog.slice(1),
+      ],
+    });
+
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('configure-toggle-smart'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('fit-badge-partial')).toHaveTextContent('14.9 GB / 15.9 GB');
+    });
+    expect(screen.queryByTestId('fit-badge-unfit')).not.toBeInTheDocument();
+  });
+
+  it('falls back to backend verdict when additive baseline fields are absent', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue([
+      ...baseConfig,
+      { key: 'llm.host-rtx5060.smart_num_ctx', value: 16384 },
+    ]);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      catalog: [
+        {
+          ...systemModelsWithFitDetail.catalog[0],
+          fit_detail: {
+            default: 'partial' as const,
+            at_num_ctx: 16384,
+            required_vram_gb: 14.915,
+            default_num_ctx: 8192,
+            max_num_ctx: 32768,
+            kv_cache_bytes_per_token: 600_000,
+          },
+        },
+        ...systemModelsWithFitDetail.catalog.slice(1),
+      ],
+    });
+
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('configure-toggle-smart'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('fit-badge-partial')).toHaveTextContent('Partial offload · slower');
+    });
+    expect(screen.queryByText(/14\.9 GB \/ 15\.9 GB/)).not.toBeInTheDocument();
   });
 
   it('shows red badge and clamps slider when required VRAM exceeds 120%', async () => {

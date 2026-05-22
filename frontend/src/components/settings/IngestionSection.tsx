@@ -65,19 +65,35 @@ interface SystemModelsApi {
   hardware_recommendation?: HardwareRecommendation;
 }
 
+type FitDetailWithBaseline = ModelFitDetail & {
+  base_vram_gb?: number | null;
+  base_num_ctx?: number | null;
+};
+
+function hasFitBaseline(
+  fitDetail: ModelFitDetail,
+): fitDetail is ModelFitDetail & { base_vram_gb: number; base_num_ctx: number } {
+  const detail: FitDetailWithBaseline = fitDetail;
+  return (
+    typeof detail.base_vram_gb === 'number' &&
+    Number.isFinite(detail.base_vram_gb) &&
+    typeof detail.base_num_ctx === 'number' &&
+    Number.isFinite(detail.base_num_ctx)
+  );
+}
+
 /**
  * Compute required VRAM for a model at a given num_ctx.
- * Mirrors the backend formula from Contract 06 §4.
- * Returns null when catalog fields are absent.
+ * Uses the backend-provided baseline fields; older fit_detail payloads return null.
  */
 function computeRequiredVram(
   fitDetail: ModelFitDetail,
   numCtx: number,
-): number {
-  const base = fitDetail.required_vram_gb ?? 0;
+): number | null {
+  if (!hasFitBaseline(fitDetail)) return null;
   const kvBytes = fitDetail.kv_cache_bytes_per_token ?? 1024;
-  const extraTokens = Math.max(0, numCtx - fitDetail.default_num_ctx);
-  return base + (extraTokens * kvBytes) / 1e9;
+  const extraTokens = Math.max(0, numCtx - fitDetail.base_num_ctx);
+  return fitDetail.base_vram_gb + (extraTokens * kvBytes) / 1e9;
 }
 
 /**
@@ -106,7 +122,7 @@ function largestFittingStop(
   for (const stop of stops) {
     if (stop > fitDetail.max_num_ctx) break;
     const req = computeRequiredVram(fitDetail, stop);
-    if (req <= vramGb * 0.85) best = stop;
+    if (req !== null && req <= vramGb * 0.85) best = stop;
   }
   return best;
 }
@@ -121,9 +137,10 @@ function clampToNonUnfit(
   vramGb: number,
   stops: readonly number[],
 ): number {
-  const allowed = stops.filter(
-    (s) => s <= fitDetail.max_num_ctx && fitStatus(computeRequiredVram(fitDetail, s), vramGb) !== 'unfit',
-  );
+  const allowed = stops.filter((s) => {
+    const req = computeRequiredVram(fitDetail, s);
+    return s <= fitDetail.max_num_ctx && req !== null && fitStatus(req, vramGb) !== 'unfit';
+  });
   if (allowed.length === 0) return stops[0] ?? 2048;
   // If current value is allowed, keep it; otherwise clamp to max allowed
   if (allowed.includes(value)) return value;
@@ -367,6 +384,7 @@ function NumCtxSlider({
     if (!fitDetail) return null;
     if (vramGb <= 0) return 'unknown' as const;
     const req = computeRequiredVram(fitDetail, currentStop);
+    if (req === null) return null;
     return fitStatus(req, vramGb);
   })();
 
@@ -397,7 +415,7 @@ function NumCtxSlider({
 
     // Clamp: block unfit stops (§10.3)
     let clampedStop: NumCtx = rawStop;
-    if (fitDetail && vramGb > 0) {
+    if (fitDetail && hasFitBaseline(fitDetail) && vramGb > 0) {
       const clamped = clampToNonUnfit(rawStop, fitDetail, vramGb, stops);
       clampedStop = isNumCtx(clamped) ? clamped : rawStop;
     }
@@ -409,7 +427,7 @@ function NumCtxSlider({
     const idx = values[0] ?? 0;
     const rawStop = stops[idx] ?? stops[0];
     let clampedStop: NumCtx = rawStop;
-    if (fitDetail && vramGb > 0) {
+    if (fitDetail && hasFitBaseline(fitDetail) && vramGb > 0) {
       const clamped = clampToNonUnfit(rawStop, fitDetail, vramGb, stops);
       clampedStop = isNumCtx(clamped) ? clamped : rawStop;
     }
@@ -443,10 +461,10 @@ function NumCtxSlider({
         />
         <div className="flex justify-between text-xs text-muted-foreground">
           {stops.map((s) => {
-            const isUnfit =
-              fitDetail && vramGb > 0
-                ? fitStatus(computeRequiredVram(fitDetail, s), vramGb) === 'unfit'
-                : false;
+            const req = fitDetail ? computeRequiredVram(fitDetail, s) : null;
+            const isUnfit = req !== null && vramGb > 0
+              ? fitStatus(req, vramGb) === 'unfit'
+              : false;
             return (
               <span
                 key={s}

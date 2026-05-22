@@ -33,6 +33,7 @@ const baseSettings = {
     { backend: 'vllm', model: 'Qwen/Qwen3-14B-AWQ', rank: 1, score: 105, reasoning: 'Top eval.' },
     { backend: 'vllm', model: 'Qwen/Qwen3-8B-AWQ', rank: 2, score: 63, reasoning: 'Strong reasoning.' },
   ],
+  candidate_issues: [],
   eval_report_date: 'docs/perf/2026-05-22-tier-defaults-report.md',
 };
 
@@ -66,6 +67,38 @@ describe('SettingsAIPanel', () => {
     } as any);
     render(wrap(<SettingsAIPanel />));
     expect(await screen.findByRole('alert')).toHaveTextContent(/offline/i);
+  });
+
+
+  it('renders configured observed recommended and catalog omission states', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue({
+      ...baseSettings,
+      recommended_backend: 'ollama',
+      recommended_model: 'qwen3:72b',
+      configured_backend: 'vllm',
+      configured_model: 'Qwen/Qwen3-14B-AWQ',
+      observed_backend: 'vllm/Qwen/Qwen3-14B-AWQ',
+      candidates_for_tier: [
+        { backend: 'ollama', model: 'qwen3:72b', rank: 1, reasoning: 'Catalog fallback.' },
+      ],
+      candidate_issues: [
+        'ge-48 rank 1 vllm/Qwen/Qwen3-14B-AWQ: model is not in the curated model catalog',
+      ],
+    } as any);
+
+    render(wrap(<SettingsAIPanel />));
+
+    expect(await screen.findByTestId('candidate-issues')).toHaveTextContent(/curated model catalog/i);
+    expect(screen.getByText('Configured').nextElementSibling as HTMLElement).toHaveTextContent(
+      'vllm / Qwen/Qwen3-14B-AWQ',
+    );
+    expect(screen.getByText('Observed (recent)').nextElementSibling as HTMLElement).toHaveTextContent(
+      'vllm/Qwen/Qwen3-14B-AWQ (100%)',
+    );
+    expect(screen.getAllByText('Recommended')[0].nextElementSibling as HTMLElement).toHaveTextContent(
+      'ollama / qwen3:72b',
+    );
+    expect(screen.getByRole('option', { name: /qwen3:72b/ })).toBeInTheDocument();
   });
 
   it('shows hw-change banner when hw_tier_changed is true', async () => {

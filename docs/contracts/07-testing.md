@@ -3,6 +3,7 @@
 **Date:** 2026-05-22
 **Reviewers must update this contract in the same patch as any change to:**
 - The public surface of [libs/jarvis_common/jarvis_common/testing.py](../../libs/jarvis_common/jarvis_common/testing.py) (canonical factories)
+- The public surface of [libs/jarvis_common/jarvis_common/testing_contract_apps.py](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) (contract app/client helpers)
 - The set of `pytest.mark.*` markers registered in [pyproject.toml](../../pyproject.toml)
 - The carve-out registry in §5 (idiomatic-mock boundaries)
 - The autouse `_default_authenticated_user` stub in [services/paper_ingestion/tests/conftest.py](../../services/paper_ingestion/tests/conftest.py)
@@ -21,7 +22,7 @@ The contract is **machine-enforceable** where practical (pre-commit hook), **pol
 - Mock policy — which boundaries may be mocked, which may not
 - The carve-out registry (idiomatic external boundaries)
 - Anti-patterns prohibited in new test code
-- The canonical test infrastructure (`jarvis_common.testing`, contract layer, autouse stubs)
+- The canonical test infrastructure (`jarvis_common.testing`, `jarvis_common.testing_contract_apps`, contract layer, autouse stubs)
 - The rot-on-touch policy for legacy mock-units
 
 **Out of scope.**
@@ -48,7 +49,7 @@ Every new Python test MUST be one of these four shapes. Anything else is the wor
 
 **LOC target.** ≤30 LOC per test. Most fit in 5-15 LOC.
 
-**Population target.** ~150-250 tests across the codebase.
+**Health metric.** One collected node may cover a small related input table when the assertions stay specific and labeled; split only when failures would become ambiguous.
 
 **Canonical example.**
 
@@ -95,7 +96,7 @@ pytestmark = [
 
 **LOC target.** ≤40 LOC per test body. App + client fixtures shared across the file count once, not per-test.
 
-**Population target.** ~400-500 tests across the codebase. **This is the largest layer.**
+**Health metric.** Coverage follows public behavior maps and risk, not a fixed population target. Prefer one scenario test per user-observable branch with real auth/DB state.
 
 **Canonical example.**
 
@@ -128,13 +129,13 @@ Real cookie, real route, real DB, real assertion.
 
 **When to use.** When adding or changing an adapter for Ollama / Qdrant / Zotero / OpenAlex / Semantic Scholar / arXiv / LiteLLM / OpenAI / Telegram Bot API / FSRS library / anki exporter.
 
-**Location.** Service-local `tests/test_<adapter>.py` (e.g., `test_embedder_behavior.py`, `test_zotero_client.py`).
+**Location.** Service-local `tests/test_<adapter>.py` or shared sidecar tests (e.g., `test_zotero_client.py`, `test_testing_sidecars.py`).
 
 **Fixtures.** Boundary-specific. `respx.mock` for HTTP. `MagicMock`/`AsyncMock` for libraries we wrap (FSRS, anki). `patch.dict(task_registry._TASK_MAP, ...)` for procrastinate.
 
 **LOC target.** ≤30 LOC per test body.
 
-**Population target.** ~80-120 tests total across the codebase.
+**Health metric.** Keep adapter coverage to canonical boundary scenarios: success, retry/rate-limit, timeout, malformed response, auth/config failure, and one representative degradation branch.
 
 **Canonical example.**
 
@@ -170,7 +171,7 @@ The adapter is tested. The library (`httpx`) is not. The service (`api.zotero.or
 
 **LOC target.** ≤80 LOC per test.
 
-**Population target.** ~30-50 tests across the codebase.
+**Health metric.** Keep Playwright to critical journeys and regressions that need browser-to-API proof; do not use it for component behavior already covered by Vitest or Python contracts.
 
 **Note.** Vitest unit tests (`frontend/src/__tests__/`) are governed by frontend conventions (see ENGINEERING_STANDARDS.md); they're not in scope of this Python contract. The same shape principles apply — test behavior, not implementation, and respect the carve-out for backend HTTP calls.
 
@@ -342,9 +343,9 @@ These boundaries MAY be mocked in test code at the carve-out edge (typically in 
 
 | Boundary | Mock mechanism | Test population guarded |
 |---|---|---|
-| Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP | ~150 tests |
+| Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP; superseded where possible by faux-Ollama/LiteLLM sidecar (LIVE) | ~150 legacy tests, shrinking as sidecar survivors replace them |
 | Cross-encoder reranker (`rerank_chunks`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) | `AsyncMock` on `EmbeddingSearchMixin.rerank_chunks` | ~80 tests |
-| Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant` | ~120 tests |
+| Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant`; superseded where possible by faux-Qdrant sidecar (LIVE) | ~120 legacy tests, shrinking as sidecar survivors replace them |
 | `respx.mock` / `httpx_mock` for source HTTP | respx routes | ~200 tests (Zotero, S2, OpenAlex, arXiv, PubMed) |
 | `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client` | ~80 tests |
 | Telegram Bot API (`bot.send_message`, `reply_text`, `Update`) | `make_telegram_update` + `AsyncMock` | ~120 tests |
@@ -386,17 +387,14 @@ The codebase has ~2,000 pre-existing tests that violate §2 (mostly handler-bypa
 **Policy:** rot-on-touch.
 
 - DO NOT run "big-bang cleanup" passes against them. Past attempts (Phase B, W4, Phase C, recomposition E2) hit a structural ceiling at ~128 deletions per pass — the survivor-citation discipline is correct but expensive.
-- DO delete legacy mock-unit tests when their file is touched for any other reason (bug fix, feature work, refactor). If a contract survivor exists, cite it in the commit message; if no survivor, write one in the same PR.
-- DO NOT block PRs solely on the presence of legacy mock-units in the file being touched. The touch already creates the obligation; review can flag specific candidates.
+- DO delete or recompose legacy mock-unit tests when their touched behavior slice is already covered by a contract, boundary-adapter, sidecar, or pure-unit survivor. Cite the survivor in the commit message or local ledger; if no survivor exists, write one in the same PR.
+- DO NOT require a whole-file rewrite merely because one behavior slice changed. Review should name concrete anti-pattern tests in the edited slice, not use this policy as a license for broad churn.
 
-**Population estimate over time** (rough projection):
-- Today: ~3,100 default-collected tests (~2,000 mock-unit + ~1,100 legitimate)
-- 6 months at typical PR churn: ~2,500 default-collected
-- 12 months: ~2,000 default-collected (approaching the ~700-900 healthy target as the boundary-adapter sidecars come online)
+**Health metrics over time:** brittle implementation-coupled tests should trend down in touched files; survivor-cited recompositions should trend up; default collected count is an observation, not an acceptance gate.
 
-### 6.2 Faux-Ollama / faux-Qdrant sidecars (not in scope of this contract)
+### 6.2 Faux-Ollama / faux-Qdrant sidecars (LIVE replacement path)
 
-The recomposition closeout (§"What WOULD actually move the needle") identified that replacing mocked Ollama / Qdrant with in-process fakes would unlock ~100-200 more deletions per boundary. This is a multi-week infrastructure project tracked separately; this contract is silent on it. When/if those sidecars land, §5.1 entries gain a `superseded by faux-X (LIVE)` note and the carve-out edges move outward.
+The recomposition closeout (§"What WOULD actually move the needle") identified that replacing mocked Ollama / Qdrant with deterministic sidecars would unlock cleaner coverage for those boundaries. That replacement path is now LIVE for the shared `testing_sidecars` infrastructure: new success-path Ollama/LiteLLM and Qdrant integration coverage MUST use the faux sidecars when the behavior under test is our HTTP/vector integration. Keep the §5.1 carve-outs for legacy tests and for boundary failures the sidecars do not model yet.
 
 ### 6.3 What this contract does NOT defer
 
@@ -419,7 +417,6 @@ It does NOT defer the rules. As of 2026-05-22, no new PR may add a §2 anti-patt
 - [docs/audit/2026-05-22-recomposition-closeout.md](../audit/2026-05-22-recomposition-closeout.md) — why this contract exists (the structural ceiling proof)
 - [docs/audit/2026-05-22-recomposition-evidence.md](../audit/2026-05-22-recomposition-evidence.md) — carve-out floor calculation
 - [docs/audit/2026-05-21-coverage-map.md](../audit/2026-05-21-coverage-map.md) — 280 rows of endpoint × coverage (Phase A foundation)
-- codex audit findings — 5 high-severity bypasses closed by recomposition E0 (audit doc kept local, not committed)
 
 ---
 
@@ -433,6 +430,10 @@ Every cited symbol has been Read at HEAD `master` after the recomposition merge 
 | `SharedConnPool` | [libs/jarvis_common/jarvis_common/testing.py:410](../../libs/jarvis_common/jarvis_common/testing.py) | Pool-shaped wrapper exposing a single contract_conn via `acquire()` AND direct pool methods (`fetch`/`fetchrow`/`fetchval`/`execute`/`executemany`). Direct-method support added during recomposition infra cleanup (2026-05-22). |
 | `contract_conn` fixture | [libs/jarvis_common/jarvis_common/testing.py:373](../../libs/jarvis_common/jarvis_common/testing.py) | Per-test asyncpg connection wrapped in a transaction that rollbacks on test exit. Requires `JARVIS_RUN_LIVE_PG=1`. |
 | `contract_two_users` fixture | [libs/jarvis_common/jarvis_common/testing.py:588](../../libs/jarvis_common/jarvis_common/testing.py) | Seeds two real DB users with valid session cookies + owned resources (paper, note, deck, etc.) all within the contract_conn transaction. |
+| `configure_contract_api_key` | [libs/jarvis_common/jarvis_common/testing_contract_apps.py:32](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) | Context manager that sets the contract API key and refreshes auth/settings caches before and after the test. |
+| `make_contract_client` | [libs/jarvis_common/jarvis_common/testing_contract_apps.py:50](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) | ASGI `httpx.AsyncClient` factory with the standard contract API-key header and optional session cookie. |
+| `patch_app_state` | [libs/jarvis_common/jarvis_common/testing_contract_apps.py:70](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) | Restores exact `app.state` attributes after contract app wiring. |
+| `patch_dependency_overrides` | [libs/jarvis_common/jarvis_common/testing_contract_apps.py:96](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) | Patches FastAPI dependency overrides without clearing unrelated keys, then restores exact previous values. |
 | `_default_authenticated_user` autouse stub | [services/paper_ingestion/tests/conftest.py:108](../../services/paper_ingestion/tests/conftest.py) | Returns user_id=1 globally for all PI tests UNLESS test is marked `pytest.mark.real_auth`. The marker opt-out is mandatory for any PI contract test that depends on session cookies. |
 | `pytest.mark.contract` registration | [pyproject.toml](../../pyproject.toml) `[tool.pytest.ini_options].markers` | `"contract: DB-backed contract test (session container + per-test txn rollback); requires JARVIS_RUN_LIVE_PG=1"` |
 | `pytest.mark.real_auth` registration | [pyproject.toml](../../pyproject.toml) | `"real_auth: opt out of the autouse user-id stub; exercise the real session resolver"` |

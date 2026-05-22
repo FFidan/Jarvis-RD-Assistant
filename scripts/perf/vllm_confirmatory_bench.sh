@@ -188,7 +188,10 @@ finalize() {
   timeout 30 bash -c "cd '${REPO_ROOT}' && ${COMPOSE} --profile vllm stop vllm" >/dev/null 2>&1 \
     || { [[ -n "${vc}" ]] && timeout 20 docker rm -f "${vc}" >/dev/null 2>&1; } || true
   write_results_md "${rc}"
-  if ( cd "$(dirname "${OUT_DIR}")" && tar czf "${OUT_DIR}.tar.gz" "$(basename "${OUT_DIR}")" ); then
+  if ! bench_redact_bundle_tree "${OUT_DIR}" || [[ ! -f "${OUT_DIR}/REDACTION-MANIFEST.txt" ]]; then
+    bench_warn "BUNDLE_REDACTION_FAILED — not creating tarball. Raw local results kept at:"
+    bench_warn "  ${OUT_DIR}  — inspect/redact manually before sharing."
+  elif ( cd "$(dirname "${OUT_DIR}")" && tar czf "${OUT_DIR}.tar.gz" "$(basename "${OUT_DIR}")" ); then
     bench_log "BUNDLE → ${OUT_DIR}.tar.gz"
   else
     bench_warn "BUNDLE_FAILED — tar czf errored (disk full?). Raw results kept at:"

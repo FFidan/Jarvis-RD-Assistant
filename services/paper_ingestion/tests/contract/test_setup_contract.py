@@ -33,6 +33,7 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 import httpx
+from cryptography.fernet import Fernet
 from jarvis_common.testing import SharedConnPool
 
 pytestmark = [
@@ -45,6 +46,21 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 # Fixture
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="function")
+def _configure_config_key(monkeypatch):
+    """Provide a real Fernet key for encrypted setup endpoints."""
+    from jarvis_common.crypto import refresh_fernet_cache
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", Fernet.generate_key().decode())
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
+    get_secrets_settings.cache_clear()
+    refresh_fernet_cache()
+    yield
+    get_secrets_settings.cache_clear()
+    refresh_fernet_cache()
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
@@ -113,7 +129,7 @@ async def test_a131_status_configured_when_admin_exists(setup_client, contract_c
     # Seed an admin user directly.
     await contract_conn.execute(
         "INSERT INTO users (email, role) VALUES ($1, 'admin')",
-        "status-admin@example.test",
+        "status-admin@example.com",
     )
 
     resp = await setup_client.get("/api/setup/status")
@@ -175,7 +191,7 @@ async def test_a134_smtp_post_persists_to_db(setup_client, contract_conn):
         json={
             "host": "smtp.contract.test",
             "port": 465,
-            "from_email": "jarvis@contract.test",
+            "from_email": "jarvis@contract.example.com",
             "test_send": False,
         },
     )
@@ -199,7 +215,7 @@ async def test_a134_smtp_post_persists_to_db(setup_client, contract_conn):
         "SELECT value FROM user_config WHERE key = 'smtp.from' AND user_id IS NULL",
     )
     assert from_row is not None, "smtp.from row must exist in user_config after POST"
-    assert from_row["value"] == "jarvis@contract.test"
+    assert from_row["value"] == "jarvis@contract.example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -216,14 +232,14 @@ async def test_a135_create_first_admin_inserts_user_and_session(setup_client, co
     """
     resp = await setup_client.post(
         "/api/setup/admin",
-        json={"email": "first-admin@example.test"},
+        json={"email": "first-admin@example.com"},
     )
 
     assert resp.status_code == 200, (
         f"Expected 200 from create_first_admin; got {resp.status_code}: {resp.text[:300]}"
     )
     body = resp.json()
-    assert body["email"] == "first-admin@example.test"
+    assert body["email"] == "first-admin@example.com"
     assert body["role"] == "admin"
     assert "id" in body
 
@@ -254,12 +270,12 @@ async def test_a135_create_admin_409_when_admin_already_exists(setup_client, con
     # Seed an existing admin.
     await contract_conn.execute(
         "INSERT INTO users (email, role) VALUES ($1, 'admin')",
-        "existing-admin@example.test",
+        "existing-admin@example.com",
     )
 
     resp = await setup_client.post(
         "/api/setup/admin",
-        json={"email": "second-admin@example.test"},
+        json={"email": "second-admin@example.com"},
     )
 
     assert resp.status_code == 409, (
@@ -272,7 +288,9 @@ async def test_a135_create_admin_409_when_admin_already_exists(setup_client, con
 # ---------------------------------------------------------------------------
 
 
-async def test_a136_cloud_llm_keys_stored_encrypted(setup_client, contract_conn):
+async def test_a136_cloud_llm_keys_stored_encrypted(
+    setup_client, contract_conn, _configure_config_key
+):
     """Covers map row A136: POST /api/setup/cloud-llm-keys writes encrypted rows to user_config.
 
     Verifies that: (a) saved_providers reflects submitted keys,
@@ -304,7 +322,9 @@ async def test_a136_cloud_llm_keys_stored_encrypted(setup_client, contract_conn)
 # ---------------------------------------------------------------------------
 
 
-async def test_a137_telegram_token_stored_encrypted(setup_client, contract_conn):
+async def test_a137_telegram_token_stored_encrypted(
+    setup_client, contract_conn, _configure_config_key
+):
     """Covers map row A137: POST /api/setup/telegram-bot-token persists encrypted token.
 
     Verified: setup.py:670-688 configure_telegram_bot_token at HEAD.
@@ -414,7 +434,7 @@ async def test_e1_setup_state_advances_after_admin_creation(setup_client, contra
     # Create the first admin
     resp_admin = await setup_client.post(
         "/api/setup/admin",
-        json={"email": "flow-admin@example.test"},
+        json={"email": "flow-admin@example.com"},
     )
     assert resp_admin.status_code == 200, f"Admin creation failed: {resp_admin.text[:200]}"
 
@@ -438,7 +458,7 @@ async def test_e1_setup_smtp_idempotent_update(setup_client, contract_conn):
         json={
             "host": "smtp-first.test",
             "port": 587,
-            "from_email": "a@test.test",
+            "from_email": "a@test.example.com",
             "test_send": False,
         },
     )
@@ -447,7 +467,7 @@ async def test_e1_setup_smtp_idempotent_update(setup_client, contract_conn):
         json={
             "host": "smtp-second.test",
             "port": 465,
-            "from_email": "b@test.test",
+            "from_email": "b@test.example.com",
             "test_send": False,
         },
     )
@@ -490,7 +510,7 @@ async def test_e1_setup_admin_creates_session_and_user(setup_client, contract_co
     """
     resp = await setup_client.post(
         "/api/setup/admin",
-        json={"email": "atomic-admin@example.test"},
+        json={"email": "atomic-admin@example.com"},
     )
     assert resp.status_code == 200
     user_id = resp.json()["id"]

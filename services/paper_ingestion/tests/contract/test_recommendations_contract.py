@@ -26,19 +26,20 @@ Idiomatic-mock carve-out (KEEP):
 
 from __future__ import annotations
 
-import httpx
 import pytest
 import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
+
+from jarvis_common.testing_contract_apps import (
+    make_contract_client as _client,
+)
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-_TEST_API_KEY = "recommendations-contract-key-do-not-use-in-prod"
 
 
 # ---------------------------------------------------------------------------
@@ -86,28 +87,6 @@ async def _pi_app(contract_conn):
         app.dependency_overrides.pop(get_db_pool, None)
 
 
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-
-
-def _client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
-
-
 # ---------------------------------------------------------------------------
 # §A-RECS-01 — _filter_unread: trash state exclusion
 # Verified: recommender.py:220-245 (_filter_unread)
@@ -125,7 +104,7 @@ async def test_filter_unread_excludes_trash_papers(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-trash@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-trash@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -159,7 +138,7 @@ async def test_filter_unread_excludes_done_papers(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-done@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-done@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -190,7 +169,7 @@ async def test_filter_unread_includes_paper_with_no_state_row(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-nostate@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-nostate@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -218,7 +197,7 @@ async def test_filter_unread_excludes_recent_negative_feedback(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-negfb@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-negfb@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -253,7 +232,7 @@ async def test_filter_unread_includes_old_negative_feedback(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-oldfb@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-oldfb@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -292,10 +271,10 @@ async def test_filter_unread_cross_user_isolation(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_a_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-isoa@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-isoa@contract.example.com', 'user') RETURNING id"
     )
     user_b_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-isob@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-isob@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -440,17 +419,17 @@ async def test_dismiss_recommendation_404_for_nonexistent(
 
 
 async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
-    """_filter_unread must return papers whose state = 'starred' (NOT in exclusion set).
+    """_filter_unread must return papers whose starred flag is TRUE.
 
     The exclusion predicate is: COALESCE(pus.state, 'inbox') IN ('trash', 'done').
-    'starred' is NOT excluded — starred papers remain recommendable.
+    The starred boolean is NOT an exclusion predicate — starred papers remain recommendable.
     Verified: recommender.py:220-245 (_filter_unread exclusion set).
     Survivor-of (Phase E2): test_recommender.py::TestFilterUnread::test_starred_papers_remain_eligible_for_recommendation.
     """
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-starred@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-starred@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url)
@@ -458,17 +437,18 @@ async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
            RETURNING id"""
     )
     await contract_conn.execute(
-        """INSERT INTO paper_user_state (paper_id, user_id, state)
-           VALUES ($1, $2, 'starred')
-           ON CONFLICT (paper_id, user_id) DO UPDATE SET state = 'starred'""",
+        """INSERT INTO paper_user_state (paper_id, user_id, state, starred)
+           VALUES ($1, $2, 'to_read', TRUE)
+           ON CONFLICT (paper_id, user_id)
+           DO UPDATE SET state = 'to_read', starred = TRUE""",
         paper_id,
         user_id,
     )
 
     result = await _filter_unread(contract_conn, [paper_id], user_id=user_id)
     assert paper_id in result, (
-        "Paper with state='starred' must remain eligible for recommendations "
-        "('starred' is not in the COALESCE(...) IN ('trash', 'done') exclusion set)"
+        "Paper with starred=TRUE must remain eligible for recommendations "
+        "(starred is not in the COALESCE(...) IN ('trash', 'done') exclusion set)"
     )
 
 
@@ -520,9 +500,59 @@ async def test_filter_unread_empty_candidate_list_returns_empty(contract_conn):
     from paper_ingestion.ingestion.recommender import _filter_unread
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('recs-empty@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('recs-empty@contract.example.com', 'user') RETURNING id"
     )
     result = await _filter_unread(contract_conn, [], user_id=user_id)
     assert result == set() or len(result) == 0, (
         "Empty candidate list must return empty set from _filter_unread"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cluster 9 — Recommender weights precedence (C9-03)
+# Survivor-of test_recommender.py::TestReadWeightsPrecedence::* (4 mock-units).
+# C9-01/C9-02/C9-04 require full _refresh_recommendations_for_user with embedder
+# carve-out wiring — deferred to rot-on-touch (existing TestComputeScore +
+# TestAggregateToPapers pure-unit tests cover the scoring math).
+# ---------------------------------------------------------------------------
+
+
+async def test_c9_03_read_weights_user_row_wins_over_global(contract_two_users, contract_conn):
+    """_read_weights: per-user row precedence > global (user_id IS NULL) row.
+
+    # Verified: services/paper_ingestion/paper_ingestion/ingestion/recommender.py:155
+    # (_read_weights ORDER BY key, user_id NULLS LAST; user-row sets _cfg_raw[k]
+    # only if non-NULL, overriding any prior global row).
+    """
+    from paper_ingestion.ingestion.recommender import _read_weights
+
+    # Global row (user_id NULL): liked_weight=0.3
+    await contract_conn.execute(
+        """
+        INSERT INTO user_config (key, value, user_id)
+        VALUES ('recommendation.liked_weight', $1::jsonb, NULL)
+        ON CONFLICT (key, user_id) DO UPDATE SET value = EXCLUDED.value
+        """,
+        "0.3",
+    )
+    # Per-user row for user A: liked_weight=0.8
+    await contract_conn.execute(
+        """
+        INSERT INTO user_config (key, value, user_id)
+        VALUES ('recommendation.liked_weight', $1::jsonb, $2)
+        ON CONFLICT (key, user_id) DO UPDATE SET value = EXCLUDED.value
+        """,
+        "0.8",
+        contract_two_users.user_a_id,
+    )
+
+    liked_a, _, _ = await _read_weights(contract_conn, contract_two_users.user_a_id)
+    assert liked_a == 0.8, (
+        f"User A's per-user liked_weight=0.8 should win over global 0.3; got {liked_a}"
+    )
+
+    # User B with no per-user row should see the global 0.3
+    liked_b, _, _ = await _read_weights(contract_conn, contract_two_users.user_b_id)
+    assert liked_b == 0.3, (
+        f"User B with no per-user row should see global liked_weight=0.3; got {liked_b}"
     )

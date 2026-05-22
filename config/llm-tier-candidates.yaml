@@ -1,9 +1,18 @@
-# Per-tier LLM candidates — source-of-truth for /api/settings/ai
+# Per-tier LLM candidates — empirical overlay for /api/settings/ai
 #
-# Generated from the 2026-05-22 hardware-aware-LLM-backend eval bench.
-# See docs/perf/2026-05-22-tier-defaults-report.md for the narrative.
-# See ObsidianVault/projects/JARVIS_RD_Assistant/bench-candidate-ids.md for
-# why some HF model ids failed (Phi-4-AWQ, deepseek-ai/...-AWQ, Qwen3-30B-A3B-AWQ).
+# The curated model catalog remains the Ollama model authority. This file ranks
+# empirically tested candidates by hardware tier; the API normalizes Ollama rows
+# through the catalog and keeps safe ranked vLLM rows as an empirical overlay.
+# Omitted rows are reported in candidate_issues.
+#
+# Generated from the 2026-05-22 hardware-aware-LLM-backend Phase 3 rerun.
+# See docs/perf/2026-05-22-phase3-bench-rerun.md for the narrative.
+# Phase 3 fixed the unclosed-<think> regex bug (strip_think_blocks at
+# libs/jarvis_common/jarvis_common/llm_client.py:156) plus two Phase 2 bench
+# infrastructure bugs (settings_ai container-path + render-litellm-config
+# api_base). Bench bundles: vllm-confirmatory-{20260522T123333Z (REDACTED-HOST ge-48),
+# 20260522T134039Z (FF-PC 8-16), 20260522T144456Z (REDACTED-HOST sim-only)} archived
+# on NAS at /mnt/backup/jarvis-rd-archive-{ff-pc,redacted-host}/bench-bundles/.
 #
 # Re-generate by running scripts/perf/aggregate_judge.py over a bench bundle,
 # then hand-translating its tier-rankings.json into this schema.
@@ -13,7 +22,7 @@
 #   tiers.<tier>.candidates: list of { backend, model, rank, score, reasoning, evidence }
 #   evidence: "bench" | "sim-bench" | "static-benchmark" | "pending-bench"
 
-generated_from: docs/perf/2026-05-22-tier-defaults-report.md
+generated_from: docs/perf/2026-05-22-phase3-bench-rerun.md
 generated_at: 2026-05-22
 
 tiers:
@@ -26,7 +35,7 @@ tiers:
         rank: 1
         score: null
         evidence: static-benchmark
-        reasoning: "CPU-only inference; smallest Qwen3 variant. ~1.3 GB RAM. No bench evidence — chosen by reasoning size + family consistency with higher tiers."
+        reasoning: "CPU-only inference; smallest Qwen3 thinking variant. ~1.3 GB RAM. Phase 3 unchanged from Phase 2 — no bench evidence, conservative pick by family consistency."
 
   lt-8:
     fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
@@ -36,7 +45,7 @@ tiers:
         rank: 1
         score: null
         evidence: static-benchmark
-        reasoning: "<8 GB VRAM; small thinking-mode model. No bench evidence; conservative pick."
+        reasoning: "<8 GB VRAM; small thinking model. Phase 3 unchanged from Phase 2."
       - backend: ollama
         model: llama3.2:3b
         rank: 2
@@ -52,29 +61,31 @@ tiers:
         rank: 1
         score: 67
         evidence: bench
-        reasoning: "Bench-validated on 5060 Ti 16 GB. Stable, no think-block leak (not a thinking model), beat qwen3:7b in judge score by 38 pts on the 12-prompt science-RAG eval. P95 throughput at c=4 from local sweep."
+        reasoning: "Phase 1 bench-validated on 5060 Ti 16 GB. Stable non-thinking model; no streaming-strip dependency. Phase 3: unchanged (non-thinking models unaffected by the strip-fix); kept as 8-16 winner. P95 throughput at c=4 from local sweep."
       - backend: ollama
-        model: qwen3:7b
+        model: deepseek-r1:7b
         rank: 2
-        score: 29
+        score: 79
         evidence: bench
-        reasoning: "Bench-validated but underperforms: P0 _strip_think_blocks bypassed on Ollama streaming path, leaving raw <think> traces in answers + truncation issues. Re-evaluate once the strip-streaming pipeline is fixed."
+        reasoning: "Phase 3 NEW: substituted for non-existent qwen3:7b (Qwen3 family on Ollama has no 7b variant). DeepSeek-R1 distill on qwen-7b, thinking-mode. Bench-validated 5060 Ti 16 GB at ~5 GB Q4 native. Beats qwen2.5 baseline 79 vs 67 but with weak citation-grounding (uses internal Paper N labels instead of arxiv ids) and one pipeline-failure on q10. Thinking-model option for users who want chain-of-thought reasoning; non-thinking qwen2.5 stays #1 for citation-quality."
 
   16-24:
     fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
     candidates:
-      - backend: ollama
-        model: qwen2.5:7b-instruct
-        rank: 1
-        score: null
-        evidence: static-benchmark
-        reasoning: "No native 16-24 bench. Inferred default — same Ollama model as 8-16 winner, scales fine to this VRAM range. Pair A finding from 2026-05-18 (Ollama wins single-user latency at c=4 in 16-24 band) supports this."
       - backend: vllm
         model: Qwen/Qwen2.5-7B-Instruct-AWQ
+        rank: 1
+        score: 112
+        evidence: sim-bench
+        sim_vram_mb: 19320
+        sim_or_native: sim
+        reasoning: "Phase 3 NEW 16-24 sim bench on 5880 Ada at util=0.42 (~19.3 GB ceiling). 112/144 judge score — strong on focused single-paper tasks (q03/q11 perfect), weaker on cross-paper synthesis (q04 7/12 due to RAG retrieval ordering issues). Non-thinking model, no <think> bypass. Sim-tier caveat: absolute latency upper-bound vs real 16-24 GB cards; relative ranking valid."
+      - backend: ollama
+        model: qwen2.5:7b-instruct
         rank: 2
         score: null
         evidence: static-benchmark
-        reasoning: "Advanced opt-in for users who want concurrent-load handling. vLLM-7B-AWQ fits comfortably in 16-24 GB; gains under concurrency, slower at c=1-4."
+        reasoning: "Conservative Ollama fallback for users who don't want vLLM. Inferred from 8-16 winner; comfortable in 16-24 VRAM."
 
   24-48:
     fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
@@ -86,21 +97,13 @@ tiers:
         evidence: sim-bench
         sim_vram_mb: 24576
         sim_or_native: sim
-        reasoning: "Sim-tier bench winner at util=0.53 (24576 / 46068). 119/144 judge score — HIGHEST across all candidates judged. Non-thinking model (no <think> bypass issue); 4 perfect 12/12 prompts (methodology, critique, synthesis, loss-function math). Caveats: q07 gradient-derivation refusal scored 5/12; q12 interpreted limitations as checklist-style rather than research limits. Sim-tier latency is upper-bound optimistic vs real 24 GB cards (3090/4090 etc.) — relative ranking valid; absolute numbers directional."
-      - backend: vllm
-        model: Qwen/Qwen3-8B-AWQ
-        rank: 2
-        score: 67
-        evidence: sim-bench
-        sim_vram_mb: 24576
-        sim_or_native: sim
-        reasoning: "Sim-tier bench at util=0.53. 67/144 — held back by P0 _strip_think_blocks bypass on 4 of 12 streaming responses + truncation on 3 more. Same architectural fix needed as ge-48 Qwen3-8B-AWQ. Worth re-evaluating once the streaming-path think-strip is fixed."
+        reasoning: "Phase 1 winner unchanged in Phase 3 (non-thinking model not affected by strip-fix). Sim-tier bench at util=0.53. 119/144 judge score — HIGHEST across all sim-tier candidates. 4 perfect 12/12 prompts (methodology, critique, synthesis, loss-function math)."
       - backend: ollama
         model: qwen2.5:7b-instruct
-        rank: 3
+        rank: 2
         score: null
         evidence: static-benchmark
-        reasoning: "Conservative Ollama fallback for users who don't want vLLM weight pulls. Inferred from 8-16 winner; comfortable in 24-48 VRAM."
+        reasoning: "Conservative Ollama fallback. Comfortable in 24-48 VRAM."
 
   ge-48:
     fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
@@ -108,46 +111,57 @@ tiers:
       - backend: vllm
         model: Qwen/Qwen3-14B-AWQ
         rank: 1
-        score: 105
+        score: 92
         evidence: bench
-        reasoning: "Bench-validated winner on 5880 Ada 48 GB. 105/144 judge score — strong synthesis + citation grounding. Caveats: (a) think-block strip P0 fix bypassed on streaming path in 3 of 12 answers; (b) 3 of 12 truncated mid-sentence (max-tokens cap). Recommended default once both issues are fixed; should improve further."
+        reasoning: "Phase 3 bench-validated winner on 5880 Ada 48 GB. Strip-fix CONFIRMED working (zero <think> tag leakage across all 12 answers; verified vs Phase 1 baseline of 105/144). Score regression from 105→92 reveals a separate issue: max_tokens=700 cap fires INSIDE the <think> block on 3 of 12 prompts (q03/q04/q10), the strip suppresses the truncated CoT, full_answer ends empty. Phase 1 inflated by think-content being counted as completeness. Phase 3 score is honest. Production fix: raise streaming max_tokens for thinking models, or detect-and-retry on in_think=True at stream end."
       - backend: vllm
         model: Qwen/Qwen3-8B-AWQ
         rank: 2
-        score: 63
+        score: 84
         evidence: bench
-        reasoning: "Bench-validated baseline. 63/144 judge score — same think-block + truncation issues as 14B, lower reasoning depth. Use when 14B too slow or unavailable."
+        reasoning: "Phase 3 IMPROVED from Phase 1 baseline (63 → 84, +21 points). Strip-fix yields visible improvement. Same 3-prompt pipeline-failure pattern as 14B (q08-q10 empty answers). Recommended when 14B too slow or VRAM-constrained."
 
-# Candidates that were specified but failed to bench (invalid HF model ids).
-# See vault/projects/JARVIS_RD_Assistant/bench-candidate-ids.md for validated
-# community-AWQ replacements:
-#   deepseek-ai/DeepSeek-R1-Distill-Qwen-14B-AWQ → casperhansen/deepseek-r1-distill-qwen-14b-awq
-#   microsoft/Phi-4-AWQ → (no published AWQ; use microsoft/phi-4 BF16, ~28 GB)
-#   Qwen/Qwen3-30B-A3B-AWQ → ELVISIO/Qwen3-30B-A3B-AWQ (879 K downloads)
+# Carry-forward Phase 3 known issues + future-cycle candidates:
 #
-# Opt-in next-cycle bench rerun would extend the ge-48 candidate pool with
-# these community-AWQ replacements once decided.
+# 1. P0 streaming <think> leak — FIXED in Phase 3 (commit e1aedb4d).
+#    strip_think_blocks now matches <think>.*?(?:</think>|$) so unclosed
+#    blocks at max_tokens truncation are stripped. Streaming path
+#    (strip_think_streaming) was already correct; the bug was in the
+#    non-streaming companion.
+#
+# 2. Empty-answer-on-truncation (NEW Phase 3 finding) — when a Qwen3
+#    thinking model hits max_tokens=700 INSIDE a <think> block, the
+#    streaming generator's in_think=True suppression keeps the carry
+#    hidden (correct, no leak), but full_answer stays empty. This
+#    affected 3 of 12 prompts on each ge-48 cell. Fix candidates:
+#    (a) raise max_tokens for thinking models, or (b) detect
+#    in_think=True at stream end and retry with extra_body.think=false.
+#    Deferred to a Phase 3 follow-up; doesn't invalidate the Phase 3
+#    winners since the same issue applied to all thinking candidates.
+#
+# 3. casperhansen/deepseek-r1-distill-qwen-14b-awq — FIRST attempt
+#    loaded successfully past 825s (deepseek-r1 vllm support works) but
+#    timed out at 900s by ~25 seconds. Cache is warm now (9.3 GB) but
+#    retry attempts ran into HF cache state issues and didn't reach
+#    `/v1/models` within 1800s. Worth a third attempt with VLLM_BOOT_TIMEOUT_S=3600
+#    on a clean docker volume reset.
+#
+# 4. ELVISIO/Qwen3-30B-A3B-AWQ — Engine core init crash on first attempt
+#    (likely MoE-AWQ compatibility issue with vllm v0.11.0). Defer to
+#    a future vllm release that ships better MoE-AWQ support.
+#
+# 5. Qwen3-8B-AWQ at sim-tier (16-24 / 24-48) — does NOT fit at util=0.42
+#    or util=0.53. Boot timed out on both. Confirms Qwen3-8B-AWQ needs
+#    util>=~0.6 (close to native ge-48 0.75). NOT a candidate below ge-48.
+#
+# 6. Paper-number scrambling — every cell shows misattribution between
+#    seed papers and the model's internal "Paper N" labels. RAG retrieval
+#    ordering is inconsistent. Out-of-scope for Phase 3 streaming-strip
+#    work; tracked as a separate RAG-grounding follow-up.
 
-# Known issues surfaced during the 2026-05-22 eval (must be addressed before
-# Phase 2 / Settings UI consumes this yaml meaningfully):
-#
-# 1. P0 think-block strip (_strip_think_blocks in services/paper_ingestion/
-#    paper_ingestion/routers/rag.py) is NOT firing on the streaming RAG path
-#    despite passing unit tests. Multiple bench candidates show <think>...</think>
-#    in final answers. The strip applies in ask_paper + ask_cross_paper (non-
-#    streaming) but the streaming wrapper (stream_rag_events) relies on
-#    strip_think_streaming chunk-wise. Empirical bench evidence shows that
-#    chunk-wise stripping leaks blocks when chunk boundaries split a <think>
-#    open/close tag.
-#
-# 2. /api/ask rate limit hit during sim-tier bench despite the bench setting
-#    ASK_RATE_LIMIT=1000/minute. The variable IS in the container env (verified
-#    via `docker exec env`), so the limit hit is from a different slowapi
-#    decorator (per-IP global? per-route burst?). Needs investigation before
-#    24-48 sim-tier rerun.
-#
-# 3. Qdrant volume not wiped on the REDACTED-HOST bench, causing corpus pollution
-#    (older "cat:cs.CL AND abs:transformer" papers accumulated from past
-#    bench runs). The bench's stage_boot DID wipe qdrant locally but may have
-#    been skipped on the remote — investigate the qdrant_container detection
-#    on different compose project names.
+# Bench bundles (NAS-archived 2026-05-22):
+#   /mnt/backup/jarvis-rd-archive-redacted-host/bench-bundles/
+#     vllm-confirmatory-20260522T123333Z.tar.gz  (ge-48: Qwen3-14B + Qwen3-8B + 2 failures)
+#     vllm-confirmatory-20260522T144456Z.tar.gz  (sim-only: 16-24 Qwen2.5-7B succeeded; 2 failures)
+#   /mnt/backup/jarvis-rd-archive-ff-pc/bench-bundles/
+#     vllm-confirmatory-20260522T134039Z.tar.gz  (8-16: deepseek-r1:7b)

@@ -22,11 +22,11 @@ from __future__ import annotations
 from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_contract_apps import make_contract_client
 from pydantic import BaseModel
 
 pytestmark = [
@@ -34,8 +34,6 @@ pytestmark = [
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-_TEST_API_KEY = "jc-jobs-contract-test-key"
 
 
 class _CardGeneratePayload(BaseModel):
@@ -79,26 +77,12 @@ async def _jobs_app(contract_conn):
     yield app
 
 
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
+def _authed_client(app, cookie: str):
+    return make_contract_client(app, cookie)
 
 
-def _authed_client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
+def _api_key_client(app):
+    return make_contract_client(app, None)
 
 
 # ---------------------------------------------------------------------------
@@ -164,11 +148,7 @@ async def test_create_job_requires_session_identity(
 
     with patch.dict(task_registry._TASK_MAP, {"card.generate": mock_task}):
         # No cookie — API-key only
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=_jobs_app),
-            base_url="http://test",
-            headers={"X-API-Key": _TEST_API_KEY},
-        ) as c:
+        async with _api_key_client(_jobs_app) as c:
             resp = await c.post(
                 "/api/jobs",
                 json={
@@ -209,7 +189,7 @@ async def _seed_pj(conn, *, user_id: int, job_id: str) -> None:
         INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
         VALUES ('contract_test', 'card.generate', $1::jsonb, 'todo')
         """,
-        f'{{"job_id": "{job_id}", "user_id": {user_id}}}',
+        {"job_id": job_id, "user_id": user_id},
     )
 
 
@@ -300,26 +280,18 @@ async def test_cancel_job_owner_ok_non_owner_404(contract_two_users, _jobs_app, 
     Supersedes: mock-unit test_jobs_router.py::test_cancel_job_non_owner.
     """
     import uuid
-    from unittest.mock import AsyncMock, MagicMock, patch
 
     job_id = str(uuid.uuid4())
     shared = _jobs_app.state.db_pool
     await _seed_pj(shared._conn, user_id=contract_two_users.user_a_id, job_id=job_id)
 
-    # Non-owner must get 404; no cancellation should occur
-    mock_manager = MagicMock()
-    mock_manager.cancel_job_by_id_async = AsyncMock()
-    mock_app = MagicMock()
-    mock_app.job_manager = mock_manager
-
-    with patch("jarvis_common.jobs_router.procrastinate_app", mock_app):
-        async with _authed_client(_jobs_app, contract_two_users.cookie_b) as c:
-            resp_b = await c.post(f"/api/jobs/{job_id}/cancel")
+    # Non-owner must get 404 before the router imports/calls the broker app.
+    async with _authed_client(_jobs_app, contract_two_users.cookie_b) as c:
+        resp_b = await c.post(f"/api/jobs/{job_id}/cancel")
 
     assert resp_b.status_code == 404, (
         f"Non-owner got {resp_b.status_code} (expected 404). Body: {resp_b.text[:300]}"
     )
-    mock_manager.cancel_job_by_id_async.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

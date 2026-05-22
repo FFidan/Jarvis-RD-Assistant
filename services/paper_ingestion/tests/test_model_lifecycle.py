@@ -204,6 +204,9 @@ def test_compute_vram_fit_qwen3_14b_unfit_at_32768_on_16gb() -> None:
     assert result["at_num_ctx"] == 32768
     assert result["required_vram_gb"] is not None
     assert result["required_vram_gb"] > 19.0  # sanity: well above threshold
+    assert result["base_vram_gb"] is not None
+    assert result["base_vram_gb"] < result["required_vram_gb"]
+    assert result["base_num_ctx"] == result["default_num_ctx"]
 
 
 def test_compute_vram_fit_qwen3_14b_fits_at_8192_on_16gb() -> None:
@@ -221,6 +224,8 @@ def test_compute_vram_fit_qwen3_14b_fits_at_8192_on_16gb() -> None:
     assert result["at_num_ctx"] == 8192
     assert result["required_vram_gb"] is not None
     assert result["required_vram_gb"] < 13.6
+    assert result["base_vram_gb"] == result["required_vram_gb"]
+    assert result["base_num_ctx"] == 8192
 
 
 def test_compute_vram_fit_falls_back_to_vram_gb_when_field_absent() -> None:
@@ -250,6 +255,8 @@ def test_compute_vram_fit_falls_back_to_vram_gb_when_field_absent() -> None:
     # 8.0 ≤ 0.85 * 16 = 13.6 → fits
     assert result["default"] == "fits"
     assert result["required_vram_gb"] == 8.0
+    assert result["base_vram_gb"] == 8.0
+    assert result["base_num_ctx"] == 8192
     assert result["default_num_ctx"] == 8192
     assert result["kv_cache_bytes_per_token"] is None  # entry has None → returned as-is
 
@@ -264,6 +271,8 @@ def test_compute_vram_fit_skips_cloud_models() -> None:
 
     assert result["default"] == "cloud"
     assert result["required_vram_gb"] is None
+    assert result["base_vram_gb"] is None
+    assert result["base_num_ctx"] == 8192
     assert result["at_num_ctx"] == 8192
 
 
@@ -276,6 +285,8 @@ def test_compute_vram_fit_handles_zero_vram_probe_failure() -> None:
 
     assert result["default"] == "unknown"
     assert result["required_vram_gb"] is None
+    assert result["base_vram_gb"] is not None
+    assert result["base_num_ctx"] == 8192
 
 
 def test_machine_id_uses_hostname() -> None:
@@ -299,6 +310,8 @@ def test_build_model_statuses_includes_fit_detail() -> None:
         assert "default" in fd
         assert fd["default"] in ("fits", "partial", "unfit", "cloud", "unknown")
         assert "at_num_ctx" in fd
+        assert "base_vram_gb" in fd
+        assert "base_num_ctx" in fd
 
 
 def test_build_model_statuses_uses_num_ctx_per_role() -> None:
@@ -318,6 +331,11 @@ def test_build_model_statuses_uses_num_ctx_per_role() -> None:
     by_id = {item["id"]: item for item in statuses}
     fd = by_id["qwen3:14b"]["fit_detail"]
     assert fd["at_num_ctx"] == 32768
+    assert fd["base_num_ctx"] == (entry.default_num_ctx or 8192)
+    assert fd["base_vram_gb"] == entry.min_vram_gb_at_default_ctx
+    assert fd["required_vram_gb"] is not None
+    assert fd["base_vram_gb"] is not None
+    assert fd["required_vram_gb"] > fd["base_vram_gb"]
     assert fd["default"] == "unfit"
 
 

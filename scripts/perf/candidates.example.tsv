@@ -11,5 +11,8 @@ ge-48	vllm	ELVISIO/Qwen3-30B-A3B-AWQ		MoE 30B/3B-active, community AWQ (879K dow
 # 16-24 (NEW sim cell on 5880 Ada at util=0.42 ~= 19.3GB) — Phase 3 coverage
 16-24	vllm	Qwen/Qwen2.5-7B-Instruct-AWQ	19320	NEW Phase 3 sim-tier; util=0.42
 16-24	vllm	Qwen/Qwen3-8B-AWQ	19320	NEW Phase 3 sim-tier; util=0.42 thinking
-# 8-16 (5060 Ti native) — rerun qwen3:7b only (thinking; qwen2.5:7b-instruct winner stands)
-8-16	ollama	qwen3:7b		native dev box thinking, rerun w/ Phase 3 strip-fix
+# 8-16 (5060 Ti native) — thinking-model rerun with Phase 3 strip-fix.
+# qwen3:7b doesn't exist on Ollama registry (Qwen3 sizes: 0.6b/1.7b/4b/8b/14b/30b/32b);
+# substituting deepseek-r1:7b (qwen-distill, ~5GB Q4, thinking-mode native).
+# qwen2.5:7b-instruct (67/144, non-thinking) stays as the 8-16 baseline.
+8-16	ollama	deepseek-r1:7b		R1-distill qwen-7b thinking; Phase 3 strip-fix retest

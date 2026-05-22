@@ -46,7 +46,7 @@ async def _seed_admin_user(conn) -> tuple[int, str]:
     """Insert one admin user + valid session. Returns (user_id, session_cookie)."""
     user_id = await conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
-        "admin-contract-test@example.test",
+        "admin-contract-test@example.com",
     )
     session_id = await conn.fetchval(
         """INSERT INTO sessions (user_id, expires_at)
@@ -127,9 +127,7 @@ async def plain_client(contract_conn):
 
     # Seed admin so the users table is not empty (session middleware needs it).
     await _seed_admin_user(contract_conn)
-    _user_id, user_cookie = await _seed_plain_user(
-        contract_conn, "plain-user-contract@example.test"
-    )
+    _user_id, user_cookie = await _seed_plain_user(contract_conn, "plain-user-contract@example.com")
 
     shared = SharedConnPool(contract_conn)
     original_pool = getattr(app.state, "db_pool", None)
@@ -220,7 +218,7 @@ async def test_a4_list_users_returns_non_deleted_users(admin_client, contract_co
     assert isinstance(body, list)
     # The seeded admin user must appear.
     emails = [u["email"] for u in body]
-    assert "admin-contract-test@example.test" in emails, f"Seeded admin not in list: {emails}"
+    assert "admin-contract-test@example.com" in emails, f"Seeded admin not in list: {emails}"
     # All returned users must have required UserRecord fields.
     for user in body:
         for field in ("id", "email", "role", "created_at"):
@@ -249,7 +247,7 @@ async def test_a5_invite_user_creates_db_row(admin_client, contract_conn):
     Verified: admin.py:154-216 invite_user at HEAD.
     Survivor-of (future Phase C): test_admin_users.py invite mock assertions.
     """
-    new_email = "invited-contract-user@example.test"
+    new_email = "invited-contract-user@example.com"
 
     resp = await admin_client.post(
         "/api/admin/users",
@@ -285,7 +283,7 @@ async def test_a5_invite_user_409_on_duplicate_email(admin_client, contract_conn
 
     Verified: admin.py:163-172 conflict check at HEAD.
     """
-    dup_email = "dup-invite-contract@example.test"
+    dup_email = "dup-invite-contract@example.com"
     # Pre-insert the user directly.
     await contract_conn.execute(
         "INSERT INTO users (email, role) VALUES ($1, 'user')",
@@ -316,7 +314,7 @@ async def test_a6_update_role_persists_to_db(admin_client, contract_conn):
     # Seed a target user.
     target_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
-        "role-change-target@example.test",
+        "role-change-target@example.com",
     )
 
     resp = await admin_client.patch(
@@ -366,7 +364,7 @@ async def test_a7_soft_delete_sets_deleted_at(admin_client, contract_conn):
     """
     target_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
-        "soft-delete-target@example.test",
+        "soft-delete-target@example.com",
     )
 
     resp = await admin_client.delete(f"/api/admin/users/{target_id}")
@@ -409,7 +407,7 @@ async def test_a8_restore_user_clears_deleted_at(admin_client, contract_conn):
     """
     target_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
-        "restore-target@example.test",
+        "restore-target@example.com",
     )
     # Soft-delete the user in DB (within 30-day window).
     await contract_conn.execute(
@@ -440,7 +438,7 @@ async def test_a8_restore_outside_grace_returns_404(admin_client, contract_conn)
     """
     target_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
-        "restore-expired-target@example.test",
+        "restore-expired-target@example.com",
     )
     # Soft-delete the user past the 30-day grace window.
     await contract_conn.execute(

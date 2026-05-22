@@ -37,7 +37,11 @@ class FitDetail(TypedDict):
     at_num_ctx:
         The ``num_ctx`` value for which the fit was computed.
     required_vram_gb:
-        Estimated VRAM requirement in GB, or ``None`` when indeterminate.
+        Estimated VRAM requirement in GB at ``at_num_ctx``, or ``None`` when indeterminate.
+    base_vram_gb:
+        Estimated VRAM requirement in GB at ``base_num_ctx``, used as the what-if baseline.
+    base_num_ctx:
+        Context length corresponding to ``base_vram_gb``.
     default_num_ctx:
         Catalog default context length used as the VRAM baseline.
     max_num_ctx:
@@ -49,6 +53,8 @@ class FitDetail(TypedDict):
     default: Literal["fits", "partial", "unfit", "cloud", "unknown"]
     at_num_ctx: int
     required_vram_gb: float | None
+    base_vram_gb: float | None
+    base_num_ctx: int
     default_num_ctx: int
     max_num_ctx: int
     kv_cache_bytes_per_token: int | None
@@ -396,6 +402,7 @@ def compute_vram_fit(
     Returns a dict matching contract §5.1 fit_detail shape:
       {"default": "fits"|"partial"|"unfit"|"cloud"|"unknown",
        "at_num_ctx": int, "required_vram_gb": float | None,
+       "base_vram_gb": float | None, "base_num_ctx": int,
        "default_num_ctx": int, "max_num_ctx": int,
        "kv_cache_bytes_per_token": int | None}
     """
@@ -418,17 +425,8 @@ def compute_vram_fit(
             "default": "cloud",
             "at_num_ctx": num_ctx,
             "required_vram_gb": None,
-            "default_num_ctx": resolved_default_ctx,
-            "max_num_ctx": resolved_max_ctx,
-            "kv_cache_bytes_per_token": entry.kv_cache_bytes_per_token,
-        }
-
-    # Hardware probe failed or CPU-only: cannot determine fit
-    if hardware.vram_gb == 0.0:
-        return {
-            "default": "unknown",
-            "at_num_ctx": num_ctx,
-            "required_vram_gb": None,
+            "base_vram_gb": None,
+            "base_num_ctx": resolved_default_ctx,
             "default_num_ctx": resolved_default_ctx,
             "max_num_ctx": resolved_max_ctx,
             "kv_cache_bytes_per_token": entry.kv_cache_bytes_per_token,
@@ -440,6 +438,20 @@ def compute_vram_fit(
         if entry.min_vram_gb_at_default_ctx is not None
         else entry.vram_gb
     )
+
+    # Hardware probe failed or CPU-only: publish the catalog baseline, but do not
+    # claim a selected-context requirement or fit verdict for this machine.
+    if hardware.vram_gb == 0.0:
+        return {
+            "default": "unknown",
+            "at_num_ctx": num_ctx,
+            "required_vram_gb": None,
+            "base_vram_gb": round(min_vram, 3),
+            "base_num_ctx": resolved_default_ctx,
+            "default_num_ctx": resolved_default_ctx,
+            "max_num_ctx": resolved_max_ctx,
+            "kv_cache_bytes_per_token": entry.kv_cache_bytes_per_token,
+        }
 
     # VRAM required at requested num_ctx
     extra_tokens = max(0, num_ctx - resolved_default_ctx)
@@ -459,6 +471,8 @@ def compute_vram_fit(
         "default": status,
         "at_num_ctx": num_ctx,
         "required_vram_gb": round(required_vram_gb, 3),
+        "base_vram_gb": round(min_vram, 3),
+        "base_num_ctx": resolved_default_ctx,
         "default_num_ctx": resolved_default_ctx,
         "max_num_ctx": resolved_max_ctx,
         "kv_cache_bytes_per_token": entry.kv_cache_bytes_per_token,

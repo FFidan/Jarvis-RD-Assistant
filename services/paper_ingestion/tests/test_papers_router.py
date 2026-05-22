@@ -243,92 +243,12 @@ async def test_get_paper_detail_starred_independent_of_state():
     assert result.user_state.starred is True
 
 
-@pytest.mark.asyncio
-async def test_get_paper_detail_processing_failed_true_when_last_job_failed():
-    """When the latest paper.process/paper.analyze job for this paper+user
-    terminated in `failed`, the response carries processing_failed=True so the
-    left Pipeline rail (PaperTOC) shows ✗ from the SAME persisted signal
-    ActionsSidebar polls via getJob — no parallel status."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.side_effect = [
-        _paper_row(id=7),
-        None,  # no summary
-        None,  # no user_state
-        None,  # no feedback
-    ]
-    conn.fetch.return_value = []
-    # fetchval order: (1) project-link COUNT → 0, (2) last process-job status.
-    conn.fetchval = AsyncMock(side_effect=[0, "failed"])
-
-    with (
-        patch(
-            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
-        ),
-        patch.object(papers, "row_to_paper_response", return_value=_paper_response(id=7)),
-    ):
-        result = await papers.get_paper_detail.__wrapped__(
-            MagicMock(),
-            paper_id=7,
-            db_pool=pool,
-        )
-
-    assert result.processing_failed is True
-    # W4-followup: SQL-text assertions on procrastinate_jobs task_name substrings stripped (B1-09).
-    # Behavioral outcome (processing_failed=True/False) is what the UI consumes.
-
-
-@pytest.mark.asyncio
-async def test_get_paper_detail_processing_failed_false_when_last_job_succeeded():
-    """A non-failed latest job leaves processing_failed=False."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.side_effect = [_paper_row(id=8), None, None, None]
-    conn.fetch.return_value = []
-    conn.fetchval = AsyncMock(side_effect=[0, "other"])
-
-    with (
-        patch(
-            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
-        ),
-        patch.object(papers, "row_to_paper_response", return_value=_paper_response(id=8)),
-    ):
-        result = await papers.get_paper_detail.__wrapped__(
-            MagicMock(),
-            paper_id=8,
-            db_pool=pool,
-        )
-
-    assert result.processing_failed is False
-
-
-@pytest.mark.asyncio
-async def test_get_paper_detail_sets_has_project_links_false_when_unlinked():
-    """get_paper_detail should expose a false project-link flag when count is zero."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.side_effect = [
-        _paper_row(id=4),
-        None,
-        None,
-        None,  # no recommendation_feedback row
-    ]
-    conn.fetch.return_value = []
-    conn.fetchval = AsyncMock(return_value=0)
-
-    with (
-        patch(
-            "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
-        ),
-        patch.object(papers, "row_to_paper_response", return_value=_paper_response(id=4)),
-    ):
-        result = await papers.get_paper_detail.__wrapped__(
-            MagicMock(),
-            paper_id=4,
-            db_pool=pool,
-        )
-
-    assert result.has_project_links is False
-    assert result.processing_failed is False
-    # Two fetchvals now: project-link count + last-process-job status.
-    assert conn.fetchval.await_count == 2
+# Cluster 6 deletions (2026-05-22):
+#   test_get_paper_detail_processing_failed_true_when_last_job_failed,
+#   test_get_paper_detail_processing_failed_false_when_last_job_succeeded,
+#   test_get_paper_detail_sets_has_project_links_false_when_unlinked
+# all superseded by test_papers_contract.py::test_paper_detail_processing_failed_flag
+# + test_paper_detail_has_project_links_flag (real-DB asserts).
 
 
 # ---------------------------------------------------------------------------
@@ -401,77 +321,10 @@ def test_submit_feedback_validates_signal_and_source():
         FeedbackRequest.model_validate({"signal": "positive", "source": "rss_feed"})
 
 
-@pytest.mark.asyncio
-async def test_submit_feedback_maps_foreign_key_violation_to_404():
-    """submit_feedback should convert a FK error on the recommendation_feedback
-    INSERT into a stable 404.
-
-    After the DRY refactor, the error surfaces from conn.execute inside
-    _upsert_recommendation_feedback (not conn.fetchrow).
-    Feedback validation checks the live discovery_origin enum before the insert.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(discovery_origin="pulse")
-    conn.execute.side_effect = asyncpg.ForeignKeyViolationError("missing paper")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with pytest.raises(HTTPException, match="Paper 7 not found") as exc_info:
-        await papers.submit_feedback.__wrapped__(
-            request,
-            paper_id=7,
-            body=FeedbackRequest(signal="positive", source="feed_thumbs"),
-            db_pool=pool,
-        )
-
-    assert exc_info.value.status_code == 404
-
-
-# Collapsed (E2.PI): test_submit_feedback_writes_recommendation_feedback_with_correct_source
-# Survivor: test_papers_contract.py::test_a69_submit_feedback_owner_creates_row
-# submit_feedback writes recommendation_feedback with correct signal/source verified with real DB.
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("origin", ["pulse", "recommender", "citation_batch"])
-async def test_submit_feedback_accepts_system_discovered_origins(origin: str):
-    """Explicit thumbs are allowed for all current system-discovered origins."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(discovery_origin=origin)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with patch(
-        "paper_ingestion.routers.papers._upsert_recommendation_feedback",
-        new_callable=AsyncMock,
-    ) as mock_helper:
-        result = await papers.submit_feedback.__wrapped__(
-            request,
-            paper_id=7,
-            body=FeedbackRequest(signal="positive", source="feed_thumbs"),
-            db_pool=pool,
-        )
-
-    mock_helper.assert_awaited_once()
-    assert result.source == "feed_thumbs"
-
-
-@pytest.mark.asyncio
-async def test_submit_feedback_rejects_user_initiated_papers():
-    """User-initiated papers are excluded from recommendation feedback/training."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(discovery_origin="user_initiated")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.submit_feedback.__wrapped__(
-            request,
-            paper_id=7,
-            body=FeedbackRequest(signal="positive", source="paper_detail_thumbs"),
-            db_pool=pool,
-        )
-
-    assert exc_info.value.status_code == 400
-    assert "user_initiated" in exc_info.value.detail
-    conn.execute.assert_not_awaited()
+# Cluster 6 deletions (2026-05-22):
+#   test_submit_feedback_maps_foreign_key_violation_to_404      → test_papers_contract.py::test_feedback_404_when_paper_deleted_or_missing
+#   test_submit_feedback_accepts_system_discovered_origins (×3) → existing test_a69_submit_feedback_owner_creates_row (679)
+#   test_submit_feedback_rejects_user_initiated_papers          → test_papers_contract.py::test_feedback_rejects_user_initiated_paper
 
 
 # ---------------------------------------------------------------------------
@@ -541,44 +394,10 @@ async def test_submit_feedback_rejects_user_initiated_papers():
 # Survivor: test_done_paper_idempotent_recall (line ~1458)
 
 
-@pytest.mark.asyncio
-async def test_star_paper_sets_starred_true_does_not_change_state():
-    """``star`` writes ``starred = $N`` only — no ``state =`` clause.
-
-    Group B rewrote star_paper to use a CTE + RETURNING fetchrow (not execute)
-    so the upsert SQL is now in conn.fetchrow calls, not conn.execute.
-    """
-    pool, conn = _make_pool_and_conn()
-    # Only one fetchrow call now: CTE RETURNING — returns is_new_row + prev_starred.
-    # (The redundant paper-existence SELECT was removed in W2c B-DRY-RED9;
-    # assert_paper_ownership already guarantees existence before this point.)
-    conn.fetchrow.side_effect = [
-        FakeRecord(is_new_row=True, prev_starred=False),
-    ]
-    # fetchval: COUNT(*) from project_papers → 0 (no zotero.push needed)
-    conn.fetchval.return_value = 0
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with patch(
-        "paper_ingestion.papers_service.assert_paper_ownership", AsyncMock(return_value=None)
-    ):
-        result = await papers.star_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert result == {"status": "ok", "paper_id": 42}
-    # Group B: upsert is now via conn.fetchrow (CTE WITH RETURNING), not conn.execute.
-    fetchrow_sql_calls = [call.args[0] for call in conn.fetchrow.await_args_list]
-    upsert_sql = next(
-        (sql for sql in fetchrow_sql_calls if "INSERT INTO paper_user_state" in sql), None
-    )
-    assert upsert_sql is not None, (
-        f"Expected CTE upsert in fetchrow calls; got {fetchrow_sql_calls}"
-    )
-    assert "starred" in upsert_sql
-    # The DO UPDATE SET clause must NOT touch state.
-    do_update_clause = upsert_sql.split("DO UPDATE SET", 1)[-1]
-    assert "state =" not in do_update_clause, (
-        f"star_paper must not write state; DO UPDATE SET = {do_update_clause!r}"
-    )
+# Cluster 6 deletion (2026-05-22):
+#   test_star_paper_sets_starred_true_does_not_change_state → test_papers_contract.py::test_star_paper_sets_starred_true
+# (real-DB assertion that starred=TRUE in paper_user_state after the call,
+# replacing SQL-substring checks on the CTE clause).
 
 
 # W4-followup: collapsed to contract/test_papers_contract.py::test_unstar_paper_state_transition
@@ -597,26 +416,10 @@ async def test_star_paper_sets_starred_true_does_not_change_state():
 
 
 @pytest.mark.asyncio
-async def test_restore_paper_non_trash_returns_409():
-    """W1.2 precondition: restore on a non-trash paper must raise 409.
-
-    A paper in 'inbox' (or any non-trash state) must not be silently demoted
-    to inbox; the state machine requires the paper to be in 'trash' first.
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)
-    conn.fetchval.return_value = "inbox"  # _assert_paper_in_state: NOT in trash
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.restore_paper.__wrapped__(request, 42, db_pool=pool)
-
-    assert exc_info.value.status_code == 409
-    # Confirm _restore_paper was NOT called (no COALESCE execute in sql_calls).
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    assert not any("COALESCE(state_before_trash, 'inbox')" in sql for sql in sql_calls), (
-        f"_restore_paper must not run when precondition fails; got {sql_calls}"
-    )
+# Cluster 6 deletion (2026-05-22):
+#   test_restore_paper_non_trash_returns_409 → test_papers_contract.py::
+#   test_restore_non_trash_paper_returns_409 (real-DB assertion on the
+#   _assert_paper_in_states guard at restore_paper:738-751).
 
 
 # Collapsed (Phase C): test_trash_and_reject_writes_both_lifecycle_and_feedback

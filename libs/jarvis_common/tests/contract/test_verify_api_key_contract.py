@@ -192,7 +192,7 @@ async def test_valid_session_cookie_passes_without_api_key(contract_conn, _key_e
     This is the DB-backed branch the mock tests cannot exercise.
     SessionMiddleware queries the real sessions table and sets user_id.
     """
-    _user_id, cookie = await _seed_user(contract_conn, "valid-session@contract.test")
+    _user_id, cookie = await _seed_user(contract_conn, "valid-session@contract.example.com")
     app = _make_probe_app(lambda: SharedConnPool(contract_conn))
 
     async with httpx.AsyncClient(
@@ -216,7 +216,7 @@ async def test_revoked_session_cookie_returns_403(contract_conn, _key_env):
     This is the DB-backed branch proving that session revocation is enforced
     at the middleware layer, not just at the verify_api_key layer.
     """
-    user_id, cookie = await _seed_user(contract_conn, "revoked-session@contract.test")
+    user_id, cookie = await _seed_user(contract_conn, "revoked-session@contract.example.com")
     await contract_conn.execute(
         "UPDATE sessions SET revoked_at = NOW() WHERE id = $1::uuid", cookie
     )
@@ -242,7 +242,7 @@ async def test_expired_session_cookie_returns_403(contract_conn, _key_env):
     SESSION_GRACE (24h) means a session expired by ≤24h still resolves for
     offline-sync. We push expires_at to 25h in the past to ensure rejection.
     """
-    user_id, cookie = await _seed_user(contract_conn, "expired-session@contract.test")
+    user_id, cookie = await _seed_user(contract_conn, "expired-session@contract.example.com")
     beyond_grace = datetime.now(UTC) - timedelta(hours=25)
     await contract_conn.execute(
         "UPDATE sessions SET expires_at = $1 WHERE id = $2::uuid",
@@ -271,7 +271,7 @@ async def test_session_within_grace_window_still_passes(contract_conn, _key_env)
     This asserts the offline-tolerant grace is enforced correctly: only
     sessions past the full grace period are rejected.
     """
-    user_id, cookie = await _seed_user(contract_conn, "grace-session@contract.test")
+    user_id, cookie = await _seed_user(contract_conn, "grace-session@contract.example.com")
     within_grace = datetime.now(UTC) - timedelta(hours=1)
     await contract_conn.execute(
         "UPDATE sessions SET expires_at = $1 WHERE id = $2::uuid",

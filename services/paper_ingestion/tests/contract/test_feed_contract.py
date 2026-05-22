@@ -26,13 +26,16 @@ import pytest_asyncio
 
 from jarvis_common.testing import SharedConnPool
 
+from jarvis_common.testing_contract_apps import (
+    DEFAULT_CONTRACT_API_KEY,
+    make_contract_client as _client,
+)
+
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-_TEST_API_KEY = "feed-contract-key-do-not-use-in-prod"
 
 
 # ---------------------------------------------------------------------------
@@ -78,28 +81,6 @@ async def _pi_app(contract_conn):
         else:
             app.state.embedder = original_embedder
         app.dependency_overrides.pop(get_db_pool, None)
-
-
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-
-
-def _client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +211,7 @@ async def test_feed_empty_library_returns_zero_total(contract_conn, _pi_app, _co
     """GET /api/papers/feed for a user with no library papers returns total=0."""
     # Seed a user with no papers
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('feed-empty@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('feed-empty@contract.example.com', 'user') RETURNING id"
     )
     session_id = await contract_conn.fetchval(
         """INSERT INTO sessions (user_id, expires_at)
@@ -242,7 +223,7 @@ async def test_feed_empty_library_returns_zero_total(contract_conn, _pi_app, _co
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_pi_app),
         base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
+        headers={"X-API-Key": DEFAULT_CONTRACT_API_KEY},
         cookies={"jarvis_session": str(session_id)},
     ) as c:
         resp = await c.get("/api/papers/feed?scope=library")
@@ -266,4 +247,126 @@ async def test_feed_invalid_scope_returns_422(contract_two_users, _pi_app, _conf
 
     assert resp.status_code == 422, (
         f"Expected 422 for unknown scope; got {resp.status_code}: {resp.text}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cluster 8 — Dashboard feed filters (source_types / q / date_from-to)
+# Survivor-of mock-units in test_dashboard_api.py:
+#   test_feed_filter_by_source     → C8-feed-source
+#   test_feed_filter_by_text       → C8-feed-text
+#   test_feed_filter_by_date_range → C8-feed-date
+# ---------------------------------------------------------------------------
+
+
+async def test_feed_filter_by_source_type_behavioral(
+    contract_two_users, contract_conn, _pi_app, _configure_api_key
+):
+    """GET /api/papers/feed?source_types=X returns only papers with that source_type.
+
+    Seeds two papers for user A — one arxiv, one semantic_scholar — and verifies
+    the filter excludes the non-matching source. Replaces the SQL-substring
+    assertion ("p.source_type IN" in sql) with a behavioral consequence.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/feed.py:31
+    # (list_feed_papers passes source_types to build_feed_queries).
+    """
+    # Seed an additional paper with a different source_type
+    other_paper_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        VALUES ('feed-s2-1', 'semantic_scholar', 'Other Source Paper', ARRAY['B'],
+                'https://example.test/s2', $1)
+        RETURNING id
+        """,
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        contract_two_users.user_a_id,
+        other_paper_id,
+    )
+
+    async with _client(_pi_app, contract_two_users.cookie_a) as c:
+        # _seed_resources creates paper_id_a with source_type='arxiv'.
+        resp = await c.get("/api/papers/feed?source_types=arxiv")
+
+    assert resp.status_code == 200, resp.text[:300]
+    ids = [p["id"] for p in resp.json().get("papers", [])]
+    assert contract_two_users.paper_id_a in ids, (
+        f"arxiv-filter dropped user A's arxiv paper {contract_two_users.paper_id_a}: {ids}"
+    )
+    assert other_paper_id not in ids, (
+        f"arxiv-filter leaked semantic_scholar paper {other_paper_id}: {ids}"
+    )
+
+
+async def test_feed_filter_by_text_behavioral(
+    contract_two_users, contract_conn, _pi_app, _configure_api_key
+):
+    """GET /api/papers/feed?q=X returns papers matching the BM25 search query.
+
+    The seeded user-A paper has title "ZZZ-ISOLATION-A-PAPER Quantum Entanglement
+    of Owls" (see jarvis_common.testing.A_PAPER_TITLE). q=Quantum should match.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/feed.py:31
+    # (list_feed_papers passes q to build_feed_queries which uses websearch_to_tsquery).
+    """
+    # Refresh the paper's tsvector if a trigger exists; otherwise BM25 column should
+    # already be populated by the insert trigger in _seed_resources.
+    async with _client(_pi_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/papers/feed?q=Quantum")
+
+    assert resp.status_code == 200, resp.text[:300]
+    ids = [p["id"] for p in resp.json().get("papers", [])]
+    assert contract_two_users.paper_id_a in ids, (
+        f"q=Quantum should match seeded A_PAPER_TITLE; got ids={ids}"
+    )
+
+
+async def test_feed_filter_by_date_range_behavioral(
+    contract_two_users, contract_conn, _pi_app, _configure_api_key
+):
+    """GET /api/papers/feed?date_from=...&date_to=... filters by created_at.
+
+    Seeds two additional papers — one before the window and one inside —
+    and verifies only the in-window paper appears. Replaces the SQL-substring
+    assertion ("p.created_at >=" in sql) with a behavioral assertion.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/feed.py:31
+    # (list_feed_papers passes date_from / date_to to build_feed_queries).
+    """
+    in_window_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by, created_at)
+        VALUES ('feed-in-window', 'arxiv', 'In-window paper', ARRAY['IW'],
+                'https://example.test/iw', $1, '2025-06-15T12:00:00Z')
+        RETURNING id
+        """,
+        contract_two_users.user_a_id,
+    )
+    out_of_window_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by, created_at)
+        VALUES ('feed-out-window', 'arxiv', 'Out-of-window paper', ARRAY['OW'],
+                'https://example.test/ow', $1, '2023-01-01T12:00:00Z')
+        RETURNING id
+        """,
+        contract_two_users.user_a_id,
+    )
+    for pid in (in_window_id, out_of_window_id):
+        await contract_conn.execute(
+            "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+            contract_two_users.user_a_id,
+            pid,
+        )
+
+    async with _client(_pi_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/papers/feed?date_from=2025-01-01&date_to=2026-01-01")
+
+    assert resp.status_code == 200, resp.text[:300]
+    ids = [p["id"] for p in resp.json().get("papers", [])]
+    assert in_window_id in ids, f"date_range filter dropped in-window paper {in_window_id}: {ids}"
+    assert out_of_window_id not in ids, (
+        f"date_range filter leaked out-of-window paper {out_of_window_id}: {ids}"
     )

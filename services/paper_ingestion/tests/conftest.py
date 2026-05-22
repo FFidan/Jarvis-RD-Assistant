@@ -16,6 +16,7 @@ first (--import-mode=importlib + shared tests namespace invariant).
 # the _validate_cron validator in app.routers.settings).
 import apscheduler.triggers.cron  # noqa: F401
 import pytest
+import pytest_asyncio
 
 # Re-export canonical shared fixtures — keep these names stable; 76 test
 # files import them directly via ``from tests.conftest import …``.
@@ -49,11 +50,46 @@ from jarvis_common.testing import (  # noqa: E402, F401
     _make_contract_two_users_fixture,
 )
 from jarvis_common.testing import make_contract_pg_dsn as _make_contract_pg_dsn  # noqa: E402
+from jarvis_common.testing_contract_apps import (  # noqa: E402
+    configure_contract_api_key,
+    make_contract_client,
+    patch_app_state,
+    patch_dependency_overrides,
+)
 
 contract_pg_dsn = _make_contract_pg_dsn("jarvis-rd-contract")
 _contract_pool = _make_contract_pool_fixture()
 contract_conn = _make_contract_conn_fixture()
 contract_two_users = _make_contract_two_users_fixture()
+
+
+@pytest.fixture(scope="function")
+def _configure_api_key(monkeypatch):
+    """Configure the standard contract-test API key for ASGI clients."""
+    with configure_contract_api_key(monkeypatch) as key:
+        yield key
+
+
+def _make_client(app, cookie: str):
+    """Return the standard contract-test ASGI client for PI contract tests."""
+    return make_contract_client(app, cookie)
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _pi_app_with_pool(contract_conn):
+    """Wire the PI app to the per-test contract connection."""
+    from jarvis_common import current_user_id_strict_with_owner_override
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.main import app
+
+    shared = SharedConnPool(contract_conn)
+    with (
+        patch_app_state(app, {"db_pool": shared}),
+        patch_dependency_overrides(
+            app, remove_overrides={current_user_id_strict_with_owner_override}
+        ),
+    ):
+        yield app
 
 
 # ---------------------------------------------------------------------------
@@ -285,8 +321,8 @@ async def two_users(live_pg_dsn):
         await run_migrations(pool, migrations_dir=migrations_dir)
 
         async with pool.acquire() as conn:
-            user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.test")
-            user_b_id, cookie_b = await _seed_user(conn, "iso-user-b@example.test")
+            user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.com")
+            user_b_id, cookie_b = await _seed_user(conn, "iso-user-b@example.com")
             res_a = await _seed_resources(conn, user_a_id, "a")
             await _seed_resources(conn, user_b_id, "b")
 

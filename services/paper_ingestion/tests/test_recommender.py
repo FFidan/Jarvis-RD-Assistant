@@ -22,7 +22,6 @@ from paper_ingestion.ingestion.recommender import (  # noqa: E402
     _aggregate_to_papers,
     _compute_score,
     _filter_unread,
-    _read_weights,
     _refresh_recommendations_for_user,
     refresh_recommendations,
 )
@@ -508,74 +507,5 @@ class TestRefreshRecommendationsFanout:
 # ===========================================================================
 
 
-class TestReadWeightsPrecedence:
-    """_read_weights must apply user-row-wins: per-user config beats NULL-global config."""
-
-    def _make_conn(self, rows: list) -> AsyncMock:
-        """Return a minimal asyncpg.Connection mock whose fetch() returns *rows*."""
-        conn = AsyncMock()
-        conn.fetch = AsyncMock(return_value=rows)
-        return conn
-
-    @pytest.mark.asyncio
-    async def test_user_row_wins_over_global(self) -> None:
-        """When a per-user row and a global NULL-user row both exist, the per-user value wins."""
-        # Global row: liked_weight=0.6 (the default), project_weight=0.4, enabled=True
-        # Per-user row: liked_weight=0.9 (user override)
-        # SQL ordering: user-specific rows come first (NULLS LAST on user_id), so the
-        # per-user liked_weight row arrives before the global one for that key.
-        rows = [
-            # liked_weight — user-specific row first (user_id=7)
-            FakeRecord({"key": "recommendation.liked_weight", "value": 0.9, "user_id": 7}),
-            # liked_weight — global row second (NULL user_id); must be ignored
-            FakeRecord({"key": "recommendation.liked_weight", "value": 0.6, "user_id": None}),
-            # project_weight — global only
-            FakeRecord({"key": "recommendation.project_weight", "value": 0.4, "user_id": None}),
-            # enabled — global only
-            FakeRecord({"key": "recommendation.enabled", "value": True, "user_id": None}),
-        ]
-        conn = self._make_conn(rows)
-        liked, project, enabled = await _read_weights(conn, user_id=7)
-
-        assert liked == pytest.approx(0.9), "per-user liked_weight must override global"
-        assert project == pytest.approx(0.4)
-        assert enabled is True
-
-    @pytest.mark.asyncio
-    async def test_global_row_used_when_no_user_row(self) -> None:
-        """When only the global (user_id IS NULL) row exists, it is used as the fallback."""
-        rows = [
-            FakeRecord({"key": "recommendation.liked_weight", "value": 0.3, "user_id": None}),
-            FakeRecord({"key": "recommendation.project_weight", "value": 0.7, "user_id": None}),
-            FakeRecord({"key": "recommendation.enabled", "value": True, "user_id": None}),
-        ]
-        conn = self._make_conn(rows)
-        liked, project, enabled = await _read_weights(conn, user_id=42)
-
-        assert liked == pytest.approx(0.3), "global liked_weight must be used when no user row"
-        assert project == pytest.approx(0.7)
-        assert enabled is True
-
-    @pytest.mark.asyncio
-    async def test_empty_config_uses_module_defaults(self) -> None:
-        """No rows at all → falls back to _DEFAULT_LIKED_WEIGHT / _DEFAULT_PROJECT_WEIGHT."""
-        conn = self._make_conn([])
-        liked, project, enabled = await _read_weights(conn, user_id=1)
-
-        assert liked == pytest.approx(_DEFAULT_LIKED_WEIGHT)
-        assert project == pytest.approx(_DEFAULT_PROJECT_WEIGHT)
-        assert enabled is True
-
-    @pytest.mark.asyncio
-    async def test_user_disabled_overrides_global_enabled(self) -> None:
-        """Per-user enabled=False wins over global enabled=True."""
-        rows = [
-            # enabled — user-specific row first
-            FakeRecord({"key": "recommendation.enabled", "value": False, "user_id": 5}),
-            # enabled — global row (must be ignored)
-            FakeRecord({"key": "recommendation.enabled", "value": True, "user_id": None}),
-        ]
-        conn = self._make_conn(rows)
-        _liked, _project, enabled = await _read_weights(conn, user_id=5)
-
-        assert enabled is False, "per-user enabled=False must win over global enabled=True"
+# Cluster 9 deletion (2026-05-22): TestReadWeightsPrecedence class superseded by
+# test_recommendations_contract.py::test_c9_03_read_weights_user_row_wins_over_global.

@@ -11,28 +11,16 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-import httpx
+
+from jarvis_common.testing_contract_apps import (
+    make_contract_client as _make_client,
+)
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-_TEST_API_KEY = "extraction-contract-key-phase-b-do-not-use-in-prod"
-
-
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
@@ -68,43 +56,6 @@ async def _pi_app_admin(contract_conn):
 
     if had_override:
         app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
-
-
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _pi_app_with_pool(contract_conn):
-    """PI app wired to contract conn — no admin bypass (for non-admin 403 tests)."""
-    from jarvis_common import current_user_id_strict_with_owner_override
-    from jarvis_common.testing import SharedConnPool
-    from paper_ingestion.main import app
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    app.state.db_pool = shared
-
-    removed_override = app.dependency_overrides.pop(
-        current_user_id_strict_with_owner_override, None
-    )
-    had_override = removed_override is not None
-
-    yield app
-
-    if original_pool is None:
-        if hasattr(app.state, "db_pool"):
-            del app.state.db_pool
-    else:
-        app.state.db_pool = original_pool
-
-    if had_override:
-        app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
-
-
-def _make_client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +104,14 @@ async def test_a36_create_template_admin_persists_to_db(
             json={
                 "name": template_name,
                 "description": "Phase B contract test template",
-                "fields": [{"name": "field1", "description": "test field", "field_type": "text"}],
+                "fields": [
+                    {
+                        "name": "field1",
+                        "label": "Field 1",
+                        "description": "test field",
+                        "type": "text",
+                    }
+                ],
                 "is_default": False,
             },
         )
@@ -195,7 +153,14 @@ async def test_a36_create_template_duplicate_name_returns_409(
             json={
                 "name": dup_name,
                 "description": "dup",
-                "fields": [],
+                "fields": [
+                    {
+                        "name": "field1",
+                        "label": "Field 1",
+                        "description": "duplicate field",
+                        "type": "text",
+                    }
+                ],
                 "is_default": False,
             },
         )

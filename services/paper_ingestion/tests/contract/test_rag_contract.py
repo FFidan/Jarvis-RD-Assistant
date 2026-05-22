@@ -290,7 +290,7 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
 
     # Seed a user to own the paper exclusively (user_library requires FK to users).
     owner_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('owner@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('owner@contract.example.com', 'user') RETURNING id"
     )
     # Seed a paper owned exclusively by that user.
     pid_owned = await contract_conn.fetchval(
@@ -355,63 +355,57 @@ async def test_prepare_cross_paper_rag_visibility_excludes_other_user_papers(con
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_ask_endpoint_cross_paper_real_db_structure(contract_conn, pi_test_client):
-    """POST /api/ask: real DB for paper metadata; prepare_cross_paper_rag and LLM stay mocked.
-
-    Verifies the HTTP response shape (status, answer, sources) and confirms the
-    contract client is wired to the real schema.
-    """
+async def test_ask_endpoint_cross_paper_real_db_structure(
+    contract_conn, contract_two_users, pi_test_client
+):
+    """POST /api/ask uses real prep/DB and returns the RAG response envelope."""
+    # Verified: services/paper_ingestion/paper_ingestion/routers/rag.py:384
+    # /api/ask invokes real prepare_cross_paper_rag before scalar LLM generation.
+    from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from jarvis_common.auth import verify_api_key
     from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
     from paper_ingestion.main import app
-    from paper_ingestion.rag.streaming import CrossPaperRagPrep
 
-    # Seed a paper in the real DB.
-    await contract_conn.execute(
+    paper_id = await contract_conn.fetchval(
         "INSERT INTO papers (external_id, source_type, title, authors, url)"
-        " VALUES ('contract-ask-01', 'arxiv', 'Ask Contract Paper', '{\"Z\"}', 'http://ask1')"
-        " ON CONFLICT DO NOTHING"
+        " VALUES ('contract-ask-01', 'arxiv', 'Ask Contract Paper', '{}', 'http://ask1')"
+        " RETURNING id"
     )
-
-    fake_sources = [
+    chunks = [
         {
-            "paper_id": 1,
-            "paper_title": "Ask Contract Paper",
-            "content": "Relevant finding.",
+            "paper_id": paper_id,
+            "chunk_index": 0,
+            "content": "Transformers use self-attention over token representations.",
             "page_number": 1,
             "score": 0.9,
         }
     ]
-    fake_messages = [{"role": "user", "content": "How do transformers work?"}]
-
-    async def _stub_prepare(embedder, db_pool, body, http_client, *, user_id):
-        return CrossPaperRagPrep(messages=fake_messages, sources=fake_sources)
+    embedder = SimpleNamespace(
+        search_chunks_global=AsyncMock(return_value=chunks),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
 
     async def _stub_llm(http_client, messages, options, config):
+        assert "Ask Contract Paper" in messages[0]["content"]
         return "Transformers use self-attention."
 
+    pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
     app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_embedder] = lambda: AsyncMock()
+    app.dependency_overrides[get_embedder] = lambda: embedder
     app.dependency_overrides[get_http_client] = lambda: AsyncMock()
     app.dependency_overrides[get_verifier] = lambda: MagicMock()
     app.state.limiter.enabled = False
 
     try:
-        with (
-            patch(
-                "paper_ingestion.routers.rag.prepare_cross_paper_rag",
-                side_effect=_stub_prepare,
-            ),
-            patch(
-                "paper_ingestion.routers.rag.request_chat_completion_content",
-                side_effect=_stub_llm,
-            ),
+        with patch(
+            "paper_ingestion.routers.rag.request_chat_completion_content",
+            side_effect=_stub_llm,
         ):
             resp = await pi_test_client.post(
                 "/api/ask",
-                json={"question": "How do transformers work?"},
+                json={"question": "How do transformers work?", "decompose": False},
             )
     finally:
         app.dependency_overrides.pop(verify_api_key, None)
@@ -419,18 +413,154 @@ async def test_ask_endpoint_cross_paper_real_db_structure(contract_conn, pi_test
         app.dependency_overrides.pop(get_http_client, None)
         app.dependency_overrides.pop(get_verifier, None)
         app.state.limiter.enabled = True
+        pi_test_client.cookies.clear()
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert "answer" in body
+    assert body["answer"] == "Transformers use self-attention."
     assert isinstance(body["sources"], list)
     assert len(body["sources"]) == 1
-    for src in body["sources"]:
-        assert "paper_id" in src
-        assert "paper_title" in src
-        assert "content" in src
-        assert "page_number" in src
-        assert "score" in src
+    assert body["sources"][0]["paper_id"] == paper_id
+    assert body["sources"][0]["paper_title"] == "Ask Contract Paper"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_ask_endpoint_cross_paper_llm_timeout_maps_504(
+    contract_conn, contract_two_users, pi_test_client
+):
+    """POST /api/ask maps scalar LiteLLM timeout failures to HTTP 504."""
+    # Verified: services/paper_ingestion/paper_ingestion/routers/rag.py:396
+    # /api/ask calls request_chat_completion_content and maps timeout RuntimeError to 504.
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import httpx
+
+    from jarvis_common.auth import verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url)"
+        " VALUES ('contract-ask-timeout-01', 'arxiv', 'Timeout Contract Paper', '{}', 'http://timeout')"
+        " RETURNING id"
+    )
+    chunks = [
+        {
+            "paper_id": paper_id,
+            "chunk_index": 0,
+            "content": "Relevant finding.",
+            "page_number": 1,
+            "score": 0.9,
+        }
+    ]
+    embedder = SimpleNamespace(
+        search_chunks_global=AsyncMock(return_value=chunks),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+
+    async def _stub_llm(http_client, messages, options, config):
+        raise RuntimeError("LiteLLM chat request timed out") from httpx.ReadTimeout("timed out")
+
+    pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_embedder] = lambda: embedder
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_verifier] = lambda: MagicMock()
+    app.state.limiter.enabled = False
+
+    try:
+        with patch(
+            "paper_ingestion.routers.rag.request_chat_completion_content",
+            side_effect=_stub_llm,
+        ):
+            resp = await pi_test_client.post(
+                "/api/ask",
+                json={"question": "How do transformers work?", "decompose": False},
+            )
+    finally:
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.dependency_overrides.pop(get_embedder, None)
+        app.dependency_overrides.pop(get_http_client, None)
+        app.dependency_overrides.pop(get_verifier, None)
+        app.state.limiter.enabled = True
+        pi_test_client.cookies.clear()
+
+    assert resp.status_code == 504, resp.text
+    assert resp.json()["detail"] == "LLM request timed out"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_ask_endpoint_cross_paper_empty_visible_llm_maps_degraded_502(
+    contract_conn, contract_two_users, pi_test_client
+):
+    """POST /api/ask maps empty visible scalar LLM content to explicit degraded 502."""
+    # Verified: services/paper_ingestion/paper_ingestion/routers/rag.py:410
+    # /api/ask maps EmptyVisibleLLMContentError to an explicit degraded 502 detail.
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.auth import verify_api_key
+    from jarvis_common.llm_client import EmptyVisibleLLMContentError
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url)"
+        " VALUES ('contract-ask-empty-01', 'arxiv', 'Empty Visible Contract Paper', '{}', 'http://empty')"
+        " RETURNING id"
+    )
+    chunks = [
+        {
+            "paper_id": paper_id,
+            "chunk_index": 0,
+            "content": "Relevant finding.",
+            "page_number": 1,
+            "score": 0.9,
+        }
+    ]
+    embedder = SimpleNamespace(
+        search_chunks_global=AsyncMock(return_value=chunks),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+
+    async def _stub_llm(http_client, messages, options, config):
+        raise EmptyVisibleLLMContentError(
+            "LiteLLM chat response contained no visible content after think-block stripping"
+        )
+
+    pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_embedder] = lambda: embedder
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_verifier] = lambda: MagicMock()
+    app.state.limiter.enabled = False
+
+    try:
+        with patch(
+            "paper_ingestion.routers.rag.request_chat_completion_content",
+            side_effect=_stub_llm,
+        ):
+            resp = await pi_test_client.post(
+                "/api/ask",
+                json={"question": "How do transformers work?", "decompose": False},
+            )
+    finally:
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.dependency_overrides.pop(get_embedder, None)
+        app.dependency_overrides.pop(get_http_client, None)
+        app.dependency_overrides.pop(get_verifier, None)
+        app.state.limiter.enabled = True
+        pi_test_client.cookies.clear()
+
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["detail"] == {
+        "status": "degraded",
+        "code": "llm_empty_visible_content",
+        "message": "LLM response contained no visible answer.",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +588,7 @@ async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
 
     # Seed user and paper
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('starred-elig@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('starred-elig@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         "INSERT INTO papers (external_id, source_type, title, authors, url)"
@@ -491,22 +621,18 @@ async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
 async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test_client):
-    """POST /api/papers/{paper_id}/ask: owner path returns correct response envelope.
-
-    DB asserts: paper row exists (ownership check runs against real schema);
-    response shape carries {answer, sources, confidence, verified_fraction}.
-    prepare_single_paper_rag + LLM stay mocked — this is an endpoint-layer
-    DB-connectivity test, not a RAG correctness test.
-    """
+    """POST /api/papers/{paper_id}/ask uses real prep and returns the response envelope."""
+    # Verified: services/paper_ingestion/paper_ingestion/routers/rag.py:211
+    # Per-paper ask calls real prepare_single_paper_rag after ownership succeeds.
+    from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from jarvis_common.auth import get_current_user_id, verify_api_key
     from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
     from paper_ingestion.main import app
 
-    # Seed a user + paper owned by that user.
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('a104-owner@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('a104-owner@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
@@ -515,40 +641,33 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
            RETURNING id""",
         user_id,
     )
-
-    fake_sources = [
+    chunks = [
         {
-            "paper_id": paper_id,
             "content": "Key finding from the paper.",
             "page_number": 1,
             "score": 0.87,
         }
     ]
-    fake_messages = [{"role": "user", "content": "What is this paper about?"}]
-
-    async def _stub_prepare(embedder, db_pool, paper_id_, body, http_client):
-        return fake_messages, fake_sources
+    embedder = SimpleNamespace(
+        search_chunks_in_paper=AsyncMock(return_value=chunks),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
 
     async def _stub_llm(http_client, messages, options, config):
+        assert "A104 Ask Contract Paper" in messages[0]["content"]
         return "This paper is about contract tests."
 
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_current_user_id] = lambda: user_id
-    app.dependency_overrides[get_embedder] = lambda: AsyncMock()
+    app.dependency_overrides[get_embedder] = lambda: embedder
     app.dependency_overrides[get_http_client] = lambda: AsyncMock()
     app.dependency_overrides[get_verifier] = lambda: MagicMock()
     app.state.limiter.enabled = False
 
     try:
-        with (
-            patch(
-                "paper_ingestion.routers.rag.prepare_single_paper_rag",
-                side_effect=_stub_prepare,
-            ),
-            patch(
-                "paper_ingestion.routers.rag.request_chat_completion_content",
-                side_effect=_stub_llm,
-            ),
+        with patch(
+            "paper_ingestion.routers.rag.request_chat_completion_content",
+            side_effect=_stub_llm,
         ):
             resp = await pi_test_client.post(
                 f"/api/papers/{paper_id}/ask",
@@ -564,11 +683,132 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert "answer" in body, "Response must carry 'answer'"
-    assert isinstance(body["sources"], list), "Response must carry 'sources' list"
-    # sources are enriched with paper_id by the router
-    if body["sources"]:
-        assert "paper_id" in body["sources"][0]
+    assert body["answer"] == "This paper is about contract tests."
+    assert isinstance(body["sources"], list)
+    assert body["sources"][0]["paper_id"] == paper_id
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a104_per_paper_ask_llm_timeout_maps_504(contract_conn, pi_test_client):
+    """POST /api/papers/{paper_id}/ask maps scalar LiteLLM timeouts to 504."""
+    # Verified: services/paper_ingestion/paper_ingestion/routers/rag.py:231
+    # Per-paper scalar timeout failures map to HTTP 504.
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import httpx
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('a104-timeout@contract.example.com', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('contract-a104-timeout', 'arxiv', 'A104 Timeout Paper', '{}',
+                   'http://a104-timeout', $1)
+           RETURNING id""",
+        user_id,
+    )
+    chunks = [{"content": "Finding.", "page_number": 1, "score": 0.87}]
+    embedder = SimpleNamespace(
+        search_chunks_in_paper=AsyncMock(return_value=chunks),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+
+    async def _stub_llm(http_client, messages, options, config):
+        raise RuntimeError("LiteLLM chat request timed out") from httpx.ReadTimeout("timed out")
+
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_current_user_id] = lambda: user_id
+    app.dependency_overrides[get_embedder] = lambda: embedder
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_verifier] = lambda: MagicMock()
+    app.state.limiter.enabled = False
+
+    try:
+        with patch(
+            "paper_ingestion.routers.rag.request_chat_completion_content",
+            side_effect=_stub_llm,
+        ):
+            resp = await pi_test_client.post(
+                f"/api/papers/{paper_id}/ask",
+                json={"question": "What is this paper about?"},
+            )
+    finally:
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.dependency_overrides.pop(get_current_user_id, None)
+        app.dependency_overrides.pop(get_embedder, None)
+        app.dependency_overrides.pop(get_http_client, None)
+        app.dependency_overrides.pop(get_verifier, None)
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 504, resp.text
+    assert resp.json()["detail"] == "LLM request timed out"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a104_per_paper_ask_empty_visible_maps_degraded_502(contract_conn, pi_test_client):
+    """POST /api/papers/{paper_id}/ask maps empty visible scalar content to 502."""
+    # Verified: services/paper_ingestion/paper_ingestion/routers/rag.py:233
+    # Per-paper empty-visible scalar output maps to a degraded 502 detail object.
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from jarvis_common.llm_client import EmptyVisibleLLMContentError
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('a104-empty@contract.example.com', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('contract-a104-empty', 'arxiv', 'A104 Empty Paper', '{}',
+                   'http://a104-empty', $1)
+           RETURNING id""",
+        user_id,
+    )
+    chunks = [{"content": "Finding.", "page_number": 1, "score": 0.87}]
+    embedder = SimpleNamespace(
+        search_chunks_in_paper=AsyncMock(return_value=chunks),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+
+    async def _stub_llm(http_client, messages, options, config):
+        raise EmptyVisibleLLMContentError("no visible content")
+
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_current_user_id] = lambda: user_id
+    app.dependency_overrides[get_embedder] = lambda: embedder
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_verifier] = lambda: MagicMock()
+    app.state.limiter.enabled = False
+
+    try:
+        with patch(
+            "paper_ingestion.routers.rag.request_chat_completion_content",
+            side_effect=_stub_llm,
+        ):
+            resp = await pi_test_client.post(
+                f"/api/papers/{paper_id}/ask",
+                json={"question": "What is this paper about?"},
+            )
+    finally:
+        app.dependency_overrides.pop(verify_api_key, None)
+        app.dependency_overrides.pop(get_current_user_id, None)
+        app.dependency_overrides.pop(get_embedder, None)
+        app.dependency_overrides.pop(get_http_client, None)
+        app.dependency_overrides.pop(get_verifier, None)
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["detail"]["code"] == "llm_empty_visible_content"
 
 
 @pytest.mark.contract
@@ -587,7 +827,7 @@ async def test_a104_per_paper_ask_non_owner_gets_403(contract_conn, pi_test_clie
 
     # Seed owner + paper.
     owner_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('a104-owner2@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('a104-owner2@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
@@ -599,7 +839,7 @@ async def test_a104_per_paper_ask_non_owner_gets_403(contract_conn, pi_test_clie
     # Seed a second user who does NOT own the paper.
     intruder_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role)"
-        " VALUES ('a104-intruder@contract.test', 'user') RETURNING id"
+        " VALUES ('a104-intruder@contract.example.com', 'user') RETURNING id"
     )
 
     app.dependency_overrides[verify_api_key] = lambda: None
@@ -652,7 +892,7 @@ async def test_a105_ask_stream_owner_gets_sse_response(contract_conn, pi_test_cl
     from paper_ingestion.main import app
 
     user_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('a105-owner@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('a105-owner@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
@@ -726,7 +966,7 @@ async def test_a105_ask_stream_non_owner_gets_403(contract_conn, pi_test_client)
     from paper_ingestion.main import app
 
     owner_id = await contract_conn.fetchval(
-        "INSERT INTO users (email, role) VALUES ('a105-owner2@contract.test', 'user') RETURNING id"
+        "INSERT INTO users (email, role) VALUES ('a105-owner2@contract.example.com', 'user') RETURNING id"
     )
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
@@ -737,7 +977,7 @@ async def test_a105_ask_stream_non_owner_gets_403(contract_conn, pi_test_client)
     )
     intruder_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role)"
-        " VALUES ('a105-intruder@contract.test', 'user') RETURNING id"
+        " VALUES ('a105-intruder@contract.example.com', 'user') RETURNING id"
     )
 
     app.dependency_overrides[verify_api_key] = lambda: None

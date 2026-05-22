@@ -19,8 +19,8 @@ who writes it, who reads it, and current LIVE/GHOST/PARTIAL status.
   [paper-lifecycle redesign spec](../archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md).
 - Pomodoro timer settings (`usePomodoroStore` Zustand) — UI-local only,
   never persisted server-side.
-- Authentication (`JARVIS_API_KEY` in env / `auth-store`) — bootstrap, not
-  user-controllable.
+- Authentication (`JARVIS_API_KEY` from Docker Secret / env fallback /
+  `auth-store`) — bootstrap, not user-controllable.
 - HTTP request/response Pydantic shapes — covered by service-local models,
   not this contract.
 
@@ -102,9 +102,9 @@ validation and is an intentional non-regression: the omission is by design, not 
 | `llm.smart_model` | `"smart"` (init.sql seed) | On write: [settings.py:357-367](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L357-L367) calls `update_litellm_model` ([litellm_config.py:110-249](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L110-L249)) which rewrites `litellm_config/config.yaml` (or POSTs `/config/update` for cloud) | Runtime authority is LiteLLM's config file, not `user_config`. The `user_config` row exists for the UI's read-back display. If the YAML mount is `:ro` (SEC-002) the write raises `RuntimeError` and 400 propagates. **Status quo accepted 2026-05-02** — see §9. |
 | `llm.fast_model` | `"fast"` | Same as above | Same |
 | `llm.embed_model` | `"embed"` | Same as above | Same |
-| `llm.anthropic.api_key` | (none) | Encrypted. Read by [litellm_config.py:get_provider_api_key](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L52-L83) when a cloud model alias is selected; also read by `POST /api/providers/anthropic/test` ([settings.py:607-665](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L607-L665)) | Only consumed if the model alias is set to `anthropic/...` AND a cloud-provider POST is in flight; otherwise dormant. **Status quo accepted 2026-05-02** — conditional secrets are by design. |
-| `llm.openai.api_key` | (none) | Same pattern | Same |
-| `llm.google.api_key` | (none) | Same pattern | Same |
+| `llm.anthropic.api_key` | (none) | Encrypted per-user credential. Read by [litellm_config.py:get_provider_api_key](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L52-L83) when a cloud model alias is selected; also read by `POST /api/providers/anthropic/test` ([settings.py:607-665](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L607-L665)) | Preferred BYO-provider path. Only consumed if the model alias is set to `anthropic/...` AND a cloud-provider POST is in flight; otherwise dormant. `.env` provider keys are bootstrap/legacy only, not the request-time Settings authority. |
+| `llm.openai.api_key` | (none) | Same encrypted per-user pattern | Same preferred BYO-provider path; `.env` `OPENAI_API_KEY` is bootstrap/legacy only |
+| `llm.google.api_key` | (none) | Same encrypted per-user pattern | Same preferred BYO-provider path; `.env` Google provider keys are bootstrap/legacy only |
 
 ### 2.3 GHOST keys (allowed by API; no consumer reads them)
 
@@ -239,7 +239,7 @@ The implementation MUST satisfy these. Testable.
 3. **GET masking.** No GET endpoint may return plaintext for any key in `_SECRET_KEYS`. Verifier: `mask_secret` or `"****"` is the only path returning a non-None value for a secret key.
 4. **JSONB no double-encode.** Plain (non-encrypted) keys MUST be written via the `$2::jsonb` parametric cast WITHOUT `json.dumps()`. The asyncpg JSONB codec handles serialization. (See [ENGINEERING_STANDARDS.md "Database"](../ENGINEERING_STANDARDS.md#database).)
 5. **Live cron reschedule preconditions.** A successful `PUT pulse.cron` MUST result in `next_run_time ∈ [now, now + 366 days]` or the write is rolled back.
-6. **No raw env reads at request time** for keys that are user-controllable. (Bootstrap-only env reads — `JARVIS_API_KEY`, `LITELLM_BASE_URL` — are exempt.)
+6. **No raw env reads at request time** for keys that are user-controllable. Bootstrap-only env reads — `JARVIS_API_KEY`, `LITELLM_BASE_URL`, and legacy provider-key env vars used before a user stores encrypted Settings credentials — are exempt.
 
 ---
 
@@ -307,7 +307,7 @@ Plan: [docs/archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md](.
 | Item | Why accepted |
 |---|---|
 | `llm.{smart,fast,embed}_model` PARTIAL | LiteLLM YAML is the deliberate runtime authority. The `user_config` row exists for UI read-back display only. See [03-llm.md §2](03-llm.md). |
-| `llm.{anthropic,openai,google}.api_key` PARTIAL | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. See [03-llm.md §2](03-llm.md). **Per-user BYO credentials** (not a shared ops secret): `set_config` writes with `row_user_id = caller_user_id` ([settings.py:827](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L827)); reads are scoped to the caller's row with no cross-user fallback ([settings.py:698-704](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L698-L704)). The first-run/Settings wizard surfaces these keys for convenience but they remain per-user — there is no privilege-escalation path. (CFG-1 design-clarification 2026-05-18, agent: claude-code) |
+| `llm.{anthropic,openai,google}.api_key` PARTIAL | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. See [03-llm.md §2](03-llm.md). **Per-user encrypted BYO credentials are preferred** (not shared ops secrets): `set_config` writes with `row_user_id = caller_user_id` ([settings.py:827](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L827)); reads are scoped to the caller's row with no cross-user fallback ([settings.py:698-704](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L698-L704)). The first-run/Settings wizard surfaces these keys for convenience but they remain per-user. `.env` provider-key variables are bootstrap/legacy only and must not become the request-time authority for user-controllable provider credentials. (CFG-1 design-clarification 2026-05-18, agent: claude-code) |
 
 ---
 

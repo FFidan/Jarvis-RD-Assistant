@@ -14,9 +14,7 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
-from fastapi import HTTPException
 from paper_ingestion.models import PaperCreate, SearchRequest, SourceType
 from paper_ingestion.routers import search
 from paper_ingestion.routers.search import (
@@ -26,7 +24,6 @@ from paper_ingestion.routers.search import (
     _normalize_url,
     _round_robin_merge,
 )
-from paper_ingestion.services import source_helper
 from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
@@ -222,132 +219,16 @@ def _make_preview_pool(rows: list[dict] | None = None, fetch_side_effect=None) -
     return _FakePool(rows, fetch_side_effect=fetch_side_effect)
 
 
-@pytest.mark.asyncio
-async def test_preview_multi_source_merge_and_dedup(monkeypatch):
-    """Multi-source preview returns merged, deduplicated results."""
-    arxiv_papers = [
-        _make_paper("arxiv:1", "Paper One", SourceType.ARXIV, doi="10.1/1"),
-        _make_paper("arxiv:2", "Paper Two", SourceType.ARXIV),
-    ]
-    pubmed_papers = [
-        _make_paper("pubmed:1", "PubMed Paper", SourceType.PUBMED),
-        _make_paper("pubmed:dup", "Paper One Dup", SourceType.PUBMED, doi="10.1/1"),  # dup
-    ]
-
-    arxiv_source = _make_plugin_source(SourceType.ARXIV, arxiv_papers)
-    pubmed_source = _make_plugin_source(SourceType.PUBMED, pubmed_papers)
-
-    async def fake_get_source(st, db_pool, http_client, request=None):
-        if st == SourceType.ARXIV:
-            return arxiv_source
-        return pubmed_source
-
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
-
-    body = SearchRequest(
-        query="test",
-        source_types=[SourceType.ARXIV, SourceType.PUBMED],
-        max_results=10,
-    )
-    result = await search.search_papers_preview.__wrapped__(
-        MagicMock(),
-        body=body,
-        db_pool=_make_preview_pool(),
-        http_client=MagicMock(),
-    )
-
-    assert isinstance(result, search.SearchPreviewResponse)
-    assert result.total == 3  # 4 papers minus 1 dup
-    assert len(result.results) == 3
-    assert result.degraded_sources == []
-    # per_source_counts should reflect the two sources
-    assert "arxiv" in result.per_source_counts
-    assert "pubmed" in result.per_source_counts
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
-@pytest.mark.asyncio
-async def test_preview_per_source_counts_accurate(monkeypatch):
-    """per_source_counts reflects actual deduplicated counts per source."""
-    arxiv_papers = [_make_paper(f"arxiv:{i}", f"A{i}", SourceType.ARXIV) for i in range(3)]
-    pubmed_papers = [_make_paper(f"pubmed:{i}", f"P{i}", SourceType.PUBMED) for i in range(2)]
-
-    arxiv_source = _make_plugin_source(SourceType.ARXIV, arxiv_papers)
-    pubmed_source = _make_plugin_source(SourceType.PUBMED, pubmed_papers)
-
-    async def fake_get_source(st, db_pool, http_client, request=None):
-        return arxiv_source if st == SourceType.ARXIV else pubmed_source
-
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
-
-    body = SearchRequest(
-        query="test",
-        source_types=[SourceType.ARXIV, SourceType.PUBMED],
-        max_results=10,
-    )
-    result = await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
-    )
-
-    assert result.per_source_counts["arxiv"] == 3
-    assert result.per_source_counts["pubmed"] == 2
-    assert result.total == 5
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
-@pytest.mark.asyncio
-async def test_preview_source_error_isolated(monkeypatch):
-    """If one source raises RuntimeError, its papers are absent but degraded_sources is set."""
-    arxiv_papers = [_make_paper("arxiv:1", "Good Paper", SourceType.ARXIV)]
-    arxiv_source = _make_plugin_source(SourceType.ARXIV, arxiv_papers)
-    broken_source = _make_plugin_source(
-        SourceType.PUBMED, [], raises=RuntimeError("network failure")
-    )
-
-    async def fake_get_source(st, db_pool, http_client, request=None):
-        return arxiv_source if st == SourceType.ARXIV else broken_source
-
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
-
-    body = SearchRequest(
-        query="test",
-        source_types=[SourceType.ARXIV, SourceType.PUBMED],
-        max_results=10,
-    )
-    result = await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
-    )
-
-    # arxiv results still returned
-    assert result.total == 1
-    assert result.results[0].external_id == "arxiv:1"
-    # pubmed in degraded_sources
-    assert "pubmed" in result.degraded_sources
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
-@pytest.mark.asyncio
-async def test_preview_legacy_source_both_still_works(monkeypatch):
-    """Legacy ``source='both'`` is migrated to arxiv+s2 and returns results."""
-    arxiv_papers = [_make_paper("a:1", "Arxiv Paper", SourceType.ARXIV)]
-    s2_papers = [_make_paper("s2:1", "S2 Paper", SourceType.SEMANTIC_SCHOLAR)]
-
-    arxiv_source = _make_plugin_source(SourceType.ARXIV, arxiv_papers)
-    s2_source = _make_plugin_source(SourceType.SEMANTIC_SCHOLAR, s2_papers)
-
-    async def fake_get_source(st, db_pool, http_client, request=None):
-        return arxiv_source if st == SourceType.ARXIV else s2_source
-
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
-
-    # Create request using legacy "both" via dict (as an HTTP client would send)
-    body = SearchRequest(**{"query": "test", "source": "both", "max_results": 10})
-    assert SourceType.ARXIV in body.source_types
-    assert SourceType.SEMANTIC_SCHOLAR in body.source_types
-
-    result = await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
-    )
-
-    assert result.total == 2
-    assert result.degraded_sources == []
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
 @pytest.mark.asyncio
@@ -885,171 +766,16 @@ async def test_load_local_library_matches_filters_candidate_rows_by_args():
     assert title_year_candidates[("doi match paper", 2024)][0].match.paper_id == 11
 
 
-@pytest.mark.asyncio
-async def test_preview_source_errors_are_structured_and_drive_degraded_sources(monkeypatch):
-    """Source load/search failures populate structured source_errors and degraded_sources."""
-    rate_limit_response = httpx.Response(
-        429,
-        request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
-        headers={"Retry-After": "17"},
-    )
-    rate_limit_exc = httpx.HTTPStatusError(
-        "too many requests",
-        request=rate_limit_response.request,
-        response=rate_limit_response,
-    )
-
-    source_map = {
-        SourceType.ARXIV: _make_plugin_source(
-            SourceType.ARXIV, [_make_paper("ok:1", "Ok Paper", SourceType.ARXIV)]
-        ),
-        SourceType.SEMANTIC_SCHOLAR: _make_plugin_source(
-            SourceType.SEMANTIC_SCHOLAR, [], raises=rate_limit_exc
-        ),
-    }
-
-    async def fake_get_source(st, db_pool, http_client, request=None):
-        if st == SourceType.PUBMED:
-            raise ValueError("bootstrap failed")
-        return source_map[st]
-
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
-
-    body = SearchRequest(
-        query="test",
-        source_types=[SourceType.PUBMED, SourceType.SEMANTIC_SCHOLAR, SourceType.ARXIV],
-        max_results=10,
-    )
-    result = await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
-    )
-
-    assert result.degraded_sources == list(result.source_errors.keys())
-    assert result.source_errors["pubmed"].kind == "unavailable"
-    assert result.source_errors["semantic_scholar"].kind == "rate_limit"
-    assert result.source_errors["semantic_scholar"].status_code == 429
-    assert result.source_errors["semantic_scholar"].retry_after_s == 17
-    assert result.source_errors["semantic_scholar"].message.startswith(
-        "Semantic Scholar rate limit reached"
-    )
-    assert set(result.source_errors) == {"pubmed", "semantic_scholar"}
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
-@pytest.mark.asyncio
-async def test_preview_batched_bootstrap_error_degrades_default_path(monkeypatch):
-    """The non-monkeypatched batched resolver should degrade expected source bootstrap errors."""
-    arxiv_source = _make_plugin_source(
-        SourceType.ARXIV, [_make_paper("ok:1", "Ok Paper", SourceType.ARXIV)]
-    )
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(sources={SourceType.ARXIV.value: arxiv_source}))
-    )
-
-    class BrokenPubMedSource:
-        def __init__(self, config, http_client):
-            raise ValueError("bad pubmed config")
-
-    def fake_get_source_class(source_type: str):
-        if source_type == SourceType.PUBMED.value:
-            return BrokenPubMedSource
-        raise AssertionError(f"unexpected source class lookup: {source_type}")
-
-    monkeypatch.setattr(source_helper, "get_source_class", fake_get_source_class)
-    source_rows = [
-        {
-            "id": 1,
-            "source_type": SourceType.ARXIV.value,
-            "enabled": True,
-            "config": {},
-        },
-        {
-            "id": 2,
-            "source_type": SourceType.PUBMED.value,
-            "enabled": True,
-            "config": {},
-        },
-    ]
-    pool = _make_preview_pool(fetch_side_effect=[source_rows, []])
-
-    body = SearchRequest(
-        query="test",
-        source_types=[SourceType.PUBMED, SourceType.ARXIV],
-        max_results=10,
-    )
-    result = await search.search_papers_preview.__wrapped__(
-        request, body=body, db_pool=pool, http_client=MagicMock()
-    )
-
-    assert [paper.external_id for paper in result.results] == ["ok:1"]
-    assert result.source_errors["pubmed"].kind == "unavailable"
-    assert result.degraded_sources == ["pubmed"]
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
-@pytest.mark.asyncio
-async def test_preview_generic_http_429_maps_to_rate_limit(monkeypatch):
-    """Any source returning HTTP 429 is classified as a rate limit."""
-    rate_limit_response = httpx.Response(
-        429,
-        request=httpx.Request("GET", "https://api.pubmed.ncbi.nlm.nih.gov"),
-        headers={"Retry-After": "11"},
-    )
-    rate_limit_exc = httpx.HTTPStatusError(
-        "too many requests",
-        request=rate_limit_response.request,
-        response=rate_limit_response,
-    )
-
-    async def fake_get_source(st, db_pool, http_client, request=None):
-        return _make_plugin_source(
-            st,
-            [_make_paper("ok:1", "Ok Paper", st)],
-            raises=rate_limit_exc if st == SourceType.PUBMED else None,
-        )
-
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
-
-    body = SearchRequest(
-        query="test",
-        source_types=[SourceType.PUBMED, SourceType.ARXIV],
-        max_results=10,
-    )
-    result = await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
-    )
-
-    assert result.source_errors["pubmed"].kind == "rate_limit"
-    assert result.source_errors["pubmed"].status_code == 429
-    assert result.source_errors["pubmed"].retry_after_s == 11
-    assert result.source_errors["pubmed"].message.startswith("PubMed rate limit reached")
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
-@pytest.mark.asyncio
-async def test_preview_unexpected_source_init_failure_propagates(monkeypatch):
-    """Unexpected source-resolution bugs should still surface instead of degrading."""
-
-    async def fake_get_source(st, db_pool, http_client, request=None):
-        if st == SourceType.ARXIV:
-            return _make_plugin_source(
-                SourceType.ARXIV, [_make_paper("ok:1", "Ok Paper", SourceType.ARXIV)]
-            )
-        raise AssertionError("unexpected bug")
-
-    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
-
-    body = SearchRequest(
-        query="test",
-        source_types=[SourceType.ARXIV, SourceType.PUBMED],
-        max_results=10,
-    )
-    with pytest.raises(AssertionError, match="unexpected bug"):
-        await search.search_papers_preview.__wrapped__(
-            MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
-        )
-
-
-# ---------------------------------------------------------------------------
-# Empty source_types guard (fixes ZeroDivisionError 500 on empty list)
-# ---------------------------------------------------------------------------
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
 def test_empty_source_types_rejected_by_pydantic():
@@ -1068,48 +794,7 @@ def test_empty_source_types_rejected_by_pydantic():
     ), f"Expected min_length validation error on source_types, got: {errors}"
 
 
-@pytest.mark.asyncio
-async def test_empty_source_types_defensive_guard_preview():
-    """Defensive guard in search_papers_preview raises HTTPException 400.
-
-    Pydantic normally blocks empty source_types before the handler runs, but
-    the guard protects against future payload changes or direct internal calls
-    that bypass the Pydantic layer (belt-and-suspenders).
-    """
-    body = SearchRequest.model_construct(
-        query="test",
-        source=None,
-        source_types=[],
-        max_results=10,
-        year_from=None,
-        year_to=None,
-        sort_by="relevance",
-        author=None,
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await search.search_papers_preview.__wrapped__(
-            MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
-        )
-    assert exc_info.value.status_code == 400
-    assert "at least one source" in exc_info.value.detail.lower()
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).
 
 
-@pytest.mark.asyncio
-async def test_empty_source_types_defensive_guard_search():
-    """Defensive guard in search_papers (non-preview) raises HTTPException 400."""
-    body = SearchRequest.model_construct(
-        query="test",
-        source=None,
-        source_types=[],
-        max_results=10,
-        year_from=None,
-        year_to=None,
-        sort_by="relevance",
-        author=None,
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await search.search_papers.__wrapped__(
-            MagicMock(), body=body, db_pool=MagicMock(), http_client=MagicMock()
-        )
-    assert exc_info.value.status_code == 400
-    assert "at least one source" in exc_info.value.detail.lower()
+# Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).

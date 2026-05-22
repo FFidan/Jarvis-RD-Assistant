@@ -239,7 +239,7 @@ harness on the real box. Only run the full matrix if smoke exits 0.
 
 | Requirement | Why |
 |---|---|
-| `docker curl python3 git awk tar` on host | preflight hard-checks |
+| `docker curl python3 git awk tar` on host | preflight hard-checks; `python3` also performs bundle redaction before tar creation |
 | NVIDIA GPU, `nvidia-smi` present, VRAM ≥ `MIN_VRAM_MB` (default 40000) | full matrix needs a 48 GB box; set `MIN_VRAM_MB=0` only for smoke |
 | `.env` present with `EMBEDDING_DIMENSION` matching `litellm/config.yaml` `embed` alias `dimensions:` | mismatch makes every paper fail to embed; preflight drift-guard aborts early |
 | `secrets/jarvis_api_key.txt`, `docker-compose.vllm.yml`, `docker-compose.perf.yml`, `litellm/config.yaml` | required files |
@@ -254,5 +254,8 @@ recorded coexistence budget warns of OOM risk vs the pinned embedder),
 
 **On abort the bundle self-diagnoses** — `ABORT.txt`, per-sweep `loadgen.log`,
 `loadgen-FATAL.txt`, `vllm-boot-fail.log`, `env.txt` (incl. derived compose
-project + VRAM budget). Copy `artifacts/perf/vllm-confirmatory-<ts>.tar.gz`
-back; the agent verdicts purely from it.
+project + VRAM budget). Before the tarball is written, the finalizer redacts
+obvious API keys, auth headers, cookies, session files, and secret-like env
+values, then writes `REDACTION-MANIFEST.txt`. Copy
+`artifacts/perf/vllm-confirmatory-<ts>.tar.gz` back; the agent verdicts purely
+from it.

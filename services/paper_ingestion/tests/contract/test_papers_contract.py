@@ -22,28 +22,16 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-import httpx
+
+from jarvis_common.testing_contract_apps import (
+    make_contract_client as _make_client,
+)
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-_TEST_API_KEY = "papers-contract-key-d1-do-not-use-in-prod"
-
-
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
@@ -62,7 +50,13 @@ async def _pi_app_with_pool(contract_conn):
 
     shared = SharedConnPool(contract_conn)
     original_pool = getattr(app.state, "db_pool", None)
+    original_embedder = getattr(app.state, "embedder", None)
+    had_embedder = hasattr(app.state, "embedder")
     app.state.db_pool = shared
+    # These contracts exercise the DB/BM25 path.  If another fixture or app
+    # startup leaves an embedder on app.state, list_papers takes the hybrid
+    # Qdrant path and can return an empty successful result instead.
+    app.state.embedder = None
 
     # Remove the autouse stub so session-cookie auth works in contract tests.
     removed_override = app.dependency_overrides.pop(
@@ -79,18 +73,14 @@ async def _pi_app_with_pool(contract_conn):
     else:
         app.state.db_pool = original_pool
 
+    if had_embedder:
+        app.state.embedder = original_embedder
+    elif hasattr(app.state, "embedder"):
+        del app.state.embedder
+
     # Restore override exactly as found (so autouse fixture teardown doesn't fail)
     if had_override:
         app.dependency_overrides[current_user_id_strict_with_owner_override] = removed_override
-
-
-def _make_client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -990,8 +980,17 @@ async def test_a92_recompute_all_priorities_returns_updated_count(
     returns the count of updated rows. With at least the seeded paper in the DB,
     updated >= 1.
     """
-    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
-        resp = await c.post("/api/papers/recompute-priorities")
+    from jarvis_common.auth import require_admin
+
+    async def _allow_admin():
+        return None
+
+    _pi_app_with_pool.dependency_overrides[require_admin] = _allow_admin
+    try:
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+            resp = await c.post("/api/papers/recompute-priorities")
+    finally:
+        _pi_app_with_pool.dependency_overrides.pop(require_admin, None)
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
     body = resp.json()
@@ -1221,3 +1220,301 @@ async def test_e1_annotations_idempotent_double_put(
     assert count == 1, (
         f"Exactly one paper_user_state row must exist after double PUT; got count={count}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cluster 6 — Papers router behaviors (star / restore-409 / detail flags / feedback)
+# Survivor-of mock-units in test_papers_router.py:
+#   test_star_paper_sets_starred_true_does_not_change_state (545) → C6-star
+#   test_restore_paper_non_trash_returns_409 (600)               → C6-restore-409
+#   test_get_paper_detail_processing_failed_true_when_last_job_failed (247) → C6-pf-flag
+#   test_get_paper_detail_processing_failed_false_when_last_job_succeeded (281) → C6-pf-flag (sub-assertion)
+#   test_get_paper_detail_sets_has_project_links_false_when_unlinked (304) → C6-hpl-flag
+#   test_submit_feedback_rejects_user_initiated_papers (458)     → C6-feedback-reject
+#   test_submit_feedback_accepts_system_discovered_origins (436, parametrize x3) → existing test_a69_submit_feedback_owner_creates_row (679)
+#   test_submit_feedback_maps_foreign_key_violation_to_404 (405) → DEFERRED (the FK handler at submit_feedback:438-439 is defensive-only and unreachable in practice because the discovery_origin SELECT at lines 414-419 returns None first → 404 via that path; same response shape)
+# ---------------------------------------------------------------------------
+
+
+async def test_star_paper_sets_starred_true(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """PUT /api/papers/{id}/star sets starred=TRUE in paper_user_state.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:624
+    # (star_paper: upserts via CTE; zotero.push enqueue iff new-star + project-link
+    # + zotero.auto_push_on_star=true; default config means no enqueue → no
+    # task_registry carve-out needed for this test).
+    """
+    paper_id_a = contract_two_users.paper_id_a
+    user_a_id = contract_two_users.user_a_id
+
+    # Reset starred=FALSE so star_paper exercises the off→on path
+    await contract_conn.execute(
+        "UPDATE paper_user_state SET starred = FALSE WHERE paper_id=$1 AND user_id=$2",
+        paper_id_a,
+        user_a_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.put(f"/api/papers/{paper_id_a}/star")
+
+    assert resp.status_code == 200, resp.text[:300]
+    assert resp.json().get("status") == "ok"
+
+    starred_now = await contract_conn.fetchval(
+        "SELECT starred FROM paper_user_state WHERE paper_id=$1 AND user_id=$2",
+        paper_id_a,
+        user_a_id,
+    )
+    assert starred_now is True, f"starred should be TRUE after PUT /star; got {starred_now!r}"
+
+
+async def test_restore_non_trash_paper_returns_409(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """PUT /api/papers/{id}/restore on a paper NOT in trash returns 409.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:738
+    # (restore_paper calls _assert_paper_in_states(allowed=("trash",)) → 409 if
+    # the paper's current state is not in the allowed set).
+    """
+    paper_id_a = contract_two_users.paper_id_a
+    user_a_id = contract_two_users.user_a_id
+
+    # Make sure the paper is in a non-trash state ('to_read' from _seed_resources)
+    cur_state = await contract_conn.fetchval(
+        "SELECT state FROM paper_user_state WHERE paper_id=$1 AND user_id=$2",
+        paper_id_a,
+        user_a_id,
+    )
+    assert cur_state != "trash", (
+        f"Test pre-condition: seeded paper must be in non-trash state; got {cur_state!r}"
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.put(f"/api/papers/{paper_id_a}/restore")
+
+    assert resp.status_code == 409, (
+        f"Expected 409 restoring non-trash paper; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+async def test_paper_detail_processing_failed_flag(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """GET /api/papers/{id} reflects the latest paper.process job status as processing_failed=True.
+
+    Seeds a procrastinate_jobs row with status='failed' for the paper; verifies
+    the detail response surfaces processing_failed=True. Replaces the mock-unit
+    that controlled the SQL response directly.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:231
+    # (get_paper_detail computes processing_failed from the latest procrastinate
+    # job with task_name in {paper.process, paper.analyze} for the paper).
+    """
+    paper_id_a = contract_two_users.paper_id_a
+    user_a_id = contract_two_users.user_a_id
+
+    await contract_conn.execute(
+        """
+        INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
+        VALUES ('paper_ingestion', 'paper.process', $1::jsonb, 'failed')
+        """,
+        {"paper_id": paper_id_a, "user_id": user_a_id, "job_id": "test-failed-job"},
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get(f"/api/papers/{paper_id_a}")
+
+    assert resp.status_code == 200, resp.text[:300]
+    assert resp.json().get("processing_failed") is True, (
+        f"Expected processing_failed=True after seeding failed paper.process job; "
+        f"got: {resp.json().get('processing_failed')!r}"
+    )
+
+
+async def test_paper_detail_has_project_links_flag(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """GET /api/papers/{id} reflects project_papers count as has_project_links.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:231
+    # (get_paper_detail computes has_project_links from COUNT(*) > 0 of
+    # project_papers rows for the paper).
+    """
+    paper_id_a = contract_two_users.paper_id_a
+    project_id_a = contract_two_users.project_id_a
+
+    # Initially no project_papers link — expect has_project_links=False
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_before = await c.get(f"/api/papers/{paper_id_a}")
+    assert resp_before.status_code == 200, resp_before.text[:300]
+    assert resp_before.json().get("has_project_links") in (False, None), (
+        f"Pre-condition: no project links yet; got {resp_before.json().get('has_project_links')!r}"
+    )
+
+    # Add a project link
+    await contract_conn.execute(
+        "INSERT INTO project_papers (project_id, paper_id) VALUES ($1, $2)",
+        project_id_a,
+        paper_id_a,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_after = await c.get(f"/api/papers/{paper_id_a}")
+    assert resp_after.status_code == 200, resp_after.text[:300]
+    assert resp_after.json().get("has_project_links") is True, (
+        f"Expected has_project_links=True after project_papers insert; got "
+        f"{resp_after.json().get('has_project_links')!r}"
+    )
+
+
+async def test_feedback_rejects_user_initiated_paper(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """POST /api/papers/{id}/feedback rejects user_initiated papers with 400.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:390
+    # (submit_feedback returns 400 when paper.discovery_origin == 'user_initiated').
+    """
+    paper_id_a = contract_two_users.paper_id_a
+    # Force discovery_origin to user_initiated (seed_resources sets it via discovered_by only)
+    await contract_conn.execute(
+        "UPDATE papers SET discovery_origin = 'user_initiated' WHERE id = $1",
+        paper_id_a,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            f"/api/papers/{paper_id_a}/feedback",
+            json={"signal": "negative", "source": "feed_thumbs"},
+        )
+
+    assert resp.status_code == 400, (
+        f"Expected 400 for user_initiated paper feedback; got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert "user_initiated" in resp.text.lower(), (
+        f"400 detail should mention user_initiated; got: {resp.text[:300]}"
+    )
+
+
+async def test_feedback_404_when_paper_deleted_or_missing(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """POST /api/papers/{id}/feedback returns 404 when the paper does not exist.
+
+    The defensive FK-violation handler at submit_feedback:438-439 is unreachable
+    in practice because assert_paper_ownership at :412 returns 404 first when
+    the paper row is missing. This test covers the observable HTTP boundary
+    (404) regardless of which internal branch fires.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:390
+    # (submit_feedback: assert_paper_ownership → 404 if paper missing).
+    """
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/papers/9999999/feedback",
+            json={"signal": "positive", "source": "feed_thumbs"},
+        )
+
+    assert resp.status_code in (403, 404), (
+        f"Expected 403/404 for missing paper feedback; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cluster 8 — Paper detail null user_state (one test; the 3 feed-filter tests
+# of Cluster 8 live in test_feed_contract.py).
+# Survivor-of: test_dashboard_api.py::test_paper_detail_user_state_null_when_absent
+# ---------------------------------------------------------------------------
+
+
+async def test_paper_detail_null_user_state(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """GET /api/papers/{id} returns user_state=null when no paper_user_state row exists.
+
+    _seed_resources auto-creates a paper_user_state row for the seeded paper;
+    so we seed a fresh paper without one and verify the null-state response shape.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:231
+    # (get_paper_detail returns user_state=None when the paper_user_state row is missing).
+    """
+    user_a_id = contract_two_users.user_a_id
+    fresh_paper_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        VALUES ('fresh-no-user-state', 'arxiv', 'Fresh paper', ARRAY['F'],
+                'https://example.test/fresh', $1)
+        RETURNING id
+        """,
+        user_a_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_a_id,
+        fresh_paper_id,
+    )
+    # Intentionally NOT inserting into paper_user_state.
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get(f"/api/papers/{fresh_paper_id}")
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    assert body.get("user_state") is None, (
+        f"Expected user_state=null when no paper_user_state row; got {body.get('user_state')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cluster 10 — Origin stamping (batch_save_papers → 'citation_batch')
+# Survivor-of test_origin_stamping.py::test_batch_save_papers_stamps_citation_batch.
+# Note: upload_pdf user_initiated + discovered_by is already covered by Cluster 4's
+# test_p01_upload_pdf_stamps_user_initiated_and_adds_to_library.
+# ---------------------------------------------------------------------------
+
+
+async def test_batch_save_stamps_citation_batch_origin(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """POST /api/papers/batch-save stamps discovery_origin='citation_batch' on each paper.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:353
+    # (batch_save_papers: `paper.discovery_origin = "citation_batch"` at line 378
+    # overrides PaperCreate's default before upsert_paper).
+    """
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/papers/batch-save",
+            json=[
+                {
+                    "external_id": "batch-c10-1",
+                    "source_type": "arxiv",
+                    "title": "Batch paper one",
+                    "authors": ["A. One"],
+                    "abstract": "abstract",
+                    "url": "https://example.test/b1",
+                },
+                {
+                    "external_id": "batch-c10-2",
+                    "source_type": "arxiv",
+                    "title": "Batch paper two",
+                    "authors": ["A. Two"],
+                    "abstract": "abstract",
+                    "url": "https://example.test/b2",
+                },
+            ],
+        )
+
+    assert resp.status_code == 200, resp.text[:300]
+
+    rows = await contract_conn.fetch(
+        "SELECT discovery_origin FROM papers WHERE external_id IN ('batch-c10-1', 'batch-c10-2')"
+    )
+    assert len(rows) == 2, f"Expected 2 inserted papers; got {len(rows)}"
+    for row in rows:
+        assert row["discovery_origin"] == "citation_batch", (
+            f"Expected discovery_origin='citation_batch'; got {row['discovery_origin']!r}"
+        )

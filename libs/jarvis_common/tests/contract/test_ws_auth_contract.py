@@ -29,10 +29,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import httpx
 import pytest
 import pytest_asyncio
 from jarvis_common.testing import SharedConnPool, _seed_user
+from jarvis_common.testing_contract_apps import (
+    make_contract_client as _make_client,
+)
 
 pytestmark = [
     pytest.mark.contract,
@@ -40,25 +42,10 @@ pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
 ]
 
-_TEST_API_KEY = "phase-e1-jc-ws-auth-key"
-
 
 # ---------------------------------------------------------------------------
 # Fixture: minimal PI app wired to contract_conn
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
@@ -80,15 +67,6 @@ async def _pi_app(contract_conn):
                 del app.state.db_pool
         else:
             app.state.db_pool = original
-
-
-def _make_client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +106,7 @@ async def test_active_session_resolves_user_id(_pi_app, contract_conn, _configur
     Verified: session_middleware.py:102 — request.state.user_id = int(row["user_id"]).
     Supersedes: mock-unit tests that stub request.state.user_id = 1 directly.
     """
-    user_id, _ = await _seed_user(contract_conn, "ws-active@contract.test")
+    user_id, _ = await _seed_user(contract_conn, "ws-active@contract.example.com")
     expires_at = datetime.now(UTC) + timedelta(hours=1)
     cookie = await _seed_session(contract_conn, user_id, expires_at=expires_at)
 
@@ -153,7 +131,7 @@ async def test_grace_window_session_still_resolves(_pi_app, contract_conn, _conf
     A session expired 1 hour ago is within 24h grace → identity resolved → 200.
     Supersedes: mock-unit tests that test grace by stubbing datetime.now.
     """
-    user_id, _ = await _seed_user(contract_conn, "ws-grace@contract.test")
+    user_id, _ = await _seed_user(contract_conn, "ws-grace@contract.example.com")
     # Expired 1 hour ago — inside the 24h grace window
     expires_at = datetime.now(UTC) - timedelta(hours=1)
     cookie = await _seed_session(contract_conn, user_id, expires_at=expires_at)
@@ -181,7 +159,7 @@ async def test_hard_expired_session_does_not_resolve(_pi_app, contract_conn, _co
 
     Supersedes: mock-unit tests that test hard-expiry via datetime monkeypatch.
     """
-    user_id, _ = await _seed_user(contract_conn, "ws-hardexp@contract.test")
+    user_id, _ = await _seed_user(contract_conn, "ws-hardexp@contract.example.com")
     # Expired 25 hours ago — outside the 24h grace window
     expires_at = datetime.now(UTC) - timedelta(hours=25)
     cookie = await _seed_session(contract_conn, user_id, expires_at=expires_at)
@@ -217,7 +195,7 @@ async def test_revoked_session_does_not_resolve(_pi_app, contract_conn, _configu
     Verified: session_middleware.py:91-92 — if row["revoked_at"] is not None: return.
     Supersedes: mock-unit tests that assert the revoked branch.
     """
-    user_id, _ = await _seed_user(contract_conn, "ws-revoked@contract.test")
+    user_id, _ = await _seed_user(contract_conn, "ws-revoked@contract.example.com")
     expires_at = datetime.now(UTC) + timedelta(hours=24)  # would be valid except for revocation
     revoked_at = datetime.now(UTC) - timedelta(minutes=5)
     cookie = await _seed_session(

@@ -29,7 +29,7 @@ pytestmark = [
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def pi_settings_client(contract_conn):
+async def pi_settings_client(contract_conn, contract_two_users):
     """ASGI client wired to the real per-test transaction via SharedConnPool.
 
     Sets BOTH overrides so routes that use Depends(get_db_pool) AND any that
@@ -67,7 +67,9 @@ async def pi_settings_client(contract_conn):
 
     try:
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+            cookies={"jarvis_session": contract_two_users.cookie_a},
         ) as client:
             yield client
     finally:
@@ -178,7 +180,9 @@ async def test_put_config_ghost_key_does_not_write_db(contract_conn, pi_settings
 # ---------------------------------------------------------------------------
 
 
-async def test_put_fsrs_desired_retention_round_trip(contract_conn, pi_settings_client):
+async def test_put_fsrs_desired_retention_round_trip(
+    contract_conn, contract_two_users, pi_settings_client
+):
     """PUT /api/config/fsrs.desired_retention persists; GET reads it back.
 
     Verified: settings_service.py:436 (_validate_fsrs_retention),
@@ -195,7 +199,9 @@ async def test_put_fsrs_desired_retention_round_trip(contract_conn, pi_settings_
     assert body["value"] == 0.85
 
     row = await contract_conn.fetchrow(
-        "SELECT value FROM user_config WHERE key = 'fsrs.desired_retention'",
+        """SELECT value FROM user_config
+           WHERE key = 'fsrs.desired_retention' AND user_id = $1""",
+        contract_two_users.user_a_id,
     )
     assert row is not None, "fsrs.desired_retention row must be written to user_config"
     assert abs(float(row["value"]) - 0.85) < 1e-9, (

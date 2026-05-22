@@ -62,7 +62,7 @@ Runtime default update on 2026-05-11:
 
 ### Non-goals (hard)
 
-- **Empirical eval harness** — no `scripts/eval_models.py`, no per-model STEM score tracking. No per-discipline benchmark claims. The honest answer is: benchmarks exist for math (AIME, MATH-500), nothing defensible for "ML paper summarization vs history paper summarization". We do not ship theater.
+- **Public benchmark theater** — no per-discipline benchmark claims and no catalog ranking by generic STEM scores. The curated model catalog remains the authority for model identity, roles, assignability, and local Ollama lifecycle. A separate operator-only settings plane may consume `config/llm-tier-candidates.yaml` as an empirical overlay for exact backend/model candidates that were actually bench-run on target hardware; those rows are allow-list inputs, not marketing claims.
 - **Work-style onboarding wizard** — "are you a historian or a physicist?" flows. Not worth the complexity. The tier-based recommendation is sufficient.
 - **Per-task fallback chains** — "use Claude if qwen3:14b fails". Adds latency routing complexity; the existing `smart`/`fast`/`embed` alias system already handles this at the LiteLLM layer.
 - **Multi-machine aggregation** — the 48GB machine is a second setup context, not a networked peer. Settings show hardware for the machine the backend runs on. The user labels machines manually.
@@ -496,9 +496,11 @@ The catalog is static in the package. If Ollama renames `qwen3:14b` → `qwen3:1
 | `GET` | `/api/system/models/recommendations?role=smart` | Sorted recommendations for role |
 | `POST` | `/api/system/models/{tag}/pull` | Enqueue procrastinate `model.pull` job |
 | `DELETE` | `/api/system/models/{tag}` | Delete if unassigned |
+| `GET` | `/api/settings/ai` | Admin/operator plane: resolved tier candidates, configured backend/model, observed served model, and candidate issues |
+| `POST` | `/api/settings/ai` | Apply one resolved tier candidate; rejects arbitrary backend/model strings and rolls back environment state on apply failure |
 
 Existing endpoints unchanged:
-- `PUT /api/config/{key}` — handles `llm.smart_model`, `llm.fast_model`, `llm.embed_model`
+- `PUT /api/config/{key}` — handles `llm.smart_model`, `llm.fast_model`, `llm.embed_model`, and the per-machine runtime keys from Contract 06
 - `POST /api/providers/{provider}/test` — unchanged
 - `GET /api/jobs/{id}/stream` — pull progress (no change needed)
 

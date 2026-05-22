@@ -18,6 +18,7 @@ from jarvis_common.litellm_observer import observed_share
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
+    EmptyVisibleLLMContentError,
     get_litellm_config,
     request_chat_completion_content,
     strip_think_blocks,
@@ -61,6 +62,26 @@ router = APIRouter(
 # Allows bench to exempt itself without application code risk; default preserves
 # the production rate limit (10/minute per user/IP).
 _ASK_RATE_LIMIT = os.getenv("ASK_RATE_LIMIT", "10/minute")
+
+
+def _is_timeout_failure(exc: BaseException) -> bool:
+    """Return True when an exception chain came from an httpx timeout."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, httpx.TimeoutException):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _empty_visible_detail() -> dict[str, str]:
+    return {
+        "status": "degraded",
+        "code": "llm_empty_visible_content",
+        "message": "LLM response contained no visible answer.",
+    }
 
 
 def _strip_think_blocks(text: str) -> str:
@@ -201,14 +222,22 @@ async def ask_paper(
             messages=messages,
             options=ChatCompletionOptions(
                 model=smart_model,
-                max_tokens=512,
+                max_tokens=700,
                 temperature=0.1,
                 timeout=LLM_TIMEOUT_DEFAULT,
             ),
             config=litellm_config,
         )
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="LLM request timed out")
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="LLM request timed out") from exc
+    except EmptyVisibleLLMContentError as exc:
+        logger.warning("RAG LLM returned no visible content for paper %d", paper_id, exc_info=True)
+        raise HTTPException(status_code=502, detail=_empty_visible_detail()) from exc
+    except RuntimeError as exc:
+        if _is_timeout_failure(exc):
+            raise HTTPException(status_code=504, detail="LLM request timed out") from exc
+        logger.error("RAG LLM call failed for paper %d: %s", paper_id, exc, exc_info=True)
+        raise HTTPException(status_code=502, detail="LLM request failed") from exc
     except Exception as exc:
         logger.error("RAG LLM call failed for paper %d: %s", paper_id, exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc
@@ -376,8 +405,16 @@ async def ask_cross_paper(
             ),
             config=litellm_config,
         )
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="LLM request timed out")
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="LLM request timed out") from exc
+    except EmptyVisibleLLMContentError as exc:
+        logger.warning("Cross-paper RAG LLM returned no visible content", exc_info=True)
+        raise HTTPException(status_code=502, detail=_empty_visible_detail()) from exc
+    except RuntimeError as exc:
+        if _is_timeout_failure(exc):
+            raise HTTPException(status_code=504, detail="LLM request timed out") from exc
+        logger.error("Cross-paper RAG LLM call failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail="LLM request failed") from exc
     except Exception as exc:
         logger.error("Cross-paper RAG LLM call failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc

@@ -314,7 +314,13 @@ streaming has its own framing (SSE token events) that Instructor cannot wrap.
 After [04-observability.md](04-observability.md) ships, this path is wrapped by `@observe(as_type="generation")`
 boundaries; that's the only B.2 work it gets.
 
-### 6.2 Query decomposition (`decompose_query`)
+### 6.2 RAG scalar answers
+
+[`request_chat_completion_content`](../../libs/jarvis_common/jarvis_common/llm_client.py#L200-L297) is the non-streaming scalar exception for RAG answer text. It sends to LiteLLM `/v1/chat/completions`, strips `<think>...</think>` blocks, records the served `smart` model, and raises `EmptyVisibleLLMContentError` when the response has no visible content after stripping.
+
+[`/api/papers/{paper_id}/ask`](../../services/paper_ingestion/paper_ingestion/routers/rag.py#L178-L269) and [`/api/ask`](../../services/paper_ingestion/paper_ingestion/routers/rag.py#L352-L435) call this helper with `max_tokens=700`. Timeout failures map to HTTP 504. Empty-visible scalar content maps to HTTP 502 with an explicit degraded detail object, rather than returning a blank answer.
+
+### 6.3 Query decomposition (`decompose_query`)
 
 [rag/decomposition.py:75-85](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L75-L85) uses `call_llm_structured` with `RootModel[list[str]]` (Wave 3 complete):
 
@@ -330,7 +336,7 @@ sub_queries = result.root  # list[str]
 
 `call_llm_json_value` has been fully removed from this call site. No permitted exceptions remain.
 
-### 6.3 Embeddings (`embed_texts`)
+### 6.4 Embeddings (`embed_texts`)
 
 [llm_client.py:201-238](../../libs/jarvis_common/jarvis_common/llm_client.py#L201-L238). Different endpoint (`/v1/embeddings`), different return shape (`list[list[float]]`), no JSON parsing, no retry, no Pydantic. Default timeout 60 s. Errors wrapped as `RuntimeError`.
 

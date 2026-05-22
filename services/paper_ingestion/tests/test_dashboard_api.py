@@ -9,7 +9,6 @@ Covers:
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 import httpx
@@ -142,93 +141,13 @@ def test_feed_route_precedes_dynamic_paper_detail_route() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_feed_filter_by_source(_app):
-    """GET /api/papers/feed?source_types=semantic_scholar filters by source."""
-    app, conn = _app
-    records = [_make_paper_record(paper_id=1, source_type="semantic_scholar")]
-    conn.fetch.return_value = records
-    conn.fetchval.return_value = 1
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/papers/feed", params={"source_types": "semantic_scholar"})
-
-    assert resp.status_code == 200
-    fetch_call = conn.fetch.call_args
-    sql = fetch_call[0][0]
-    assert "p.source_type IN" in sql
-
-
-async def test_feed_filter_by_text(_app):
-    """GET /api/papers/feed?q=attention uses full-text search."""
-    app, conn = _app
-    conn.fetch.return_value = [_make_paper_record()]
-    conn.fetchval.return_value = 1
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/papers/feed", params={"q": "attention"})
-
-    assert resp.status_code == 200
-    fetch_call = conn.fetch.call_args
-    sql = fetch_call[0][0]
-    assert "websearch_to_tsquery" in sql
-
-
-async def test_feed_filter_by_date_range(_app):
-    """GET /api/papers/feed?date_from=2026-01-01&date_to=2026-03-01 filters by date."""
-    app, conn = _app
-    conn.fetch.return_value = [_make_paper_record()]
-    conn.fetchval.return_value = 1
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get(
-            "/api/papers/feed",
-            params={"date_from": "2026-01-01", "date_to": "2026-03-01"},
-        )
-
-    assert resp.status_code == 200
-    fetch_call = conn.fetch.call_args
-    sql = fetch_call[0][0]
-    assert "p.created_at >=" in sql
-    assert "p.created_at <=" in sql
-
-
-# ---------------------------------------------------------------------------
-# Tests: GET /api/papers/{paper_id} — user_state
-# ---------------------------------------------------------------------------
-
-
-async def test_paper_detail_user_state_null_when_absent(_app):
-    """GET /api/papers/{id} returns user_state=null when no state exists."""
-    app, conn = _app
-
-    paper_row = _make_detail_paper_record(paper_id=1)
-
-    # Handler calls: paper, summary, user_state, feedback (4 fetchrows) + project_link_count (fetchval)
-    conn.fetchrow.side_effect = [paper_row, None, None, None]
-    conn.fetchval.return_value = 0  # project_link_count
-    conn.fetch.return_value = []
-
-    # WS-CROSS-USER: ownership now always runs; this test asserts detail
-    # shape, not ownership (covered elsewhere) — pass it through.
-    # C3: ownership is dispatched via papers_service.assert_paper_ownership.
-    with patch(
-        "paper_ingestion.papers_service.assert_paper_ownership",
-        new=AsyncMock(return_value=None),
-    ):
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.get("/api/papers/1")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["user_state"] is None
+# Cluster 8 deletions (2026-05-22):
+#   test_feed_filter_by_source     → test_feed_contract.py::test_feed_filter_by_source_type_behavioral
+#   test_feed_filter_by_text       → test_feed_contract.py::test_feed_filter_by_text_behavioral
+#   test_feed_filter_by_date_range → test_feed_contract.py::test_feed_filter_by_date_range_behavioral
+#   test_paper_detail_user_state_null_when_absent → test_papers_contract.py::test_paper_detail_null_user_state
+# All four were SQL-substring or handler-bypass mock-units; real-DB contract equivalents
+# now exist with behavioral assertions on the in/out result sets.
 
 
 # ---------------------------------------------------------------------------

@@ -8,108 +8,18 @@ Covers:
 
 from __future__ import annotations
 
-import httpx
 import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock
-from datetime import UTC, datetime, timedelta
 
-from jarvis_common.testing import SharedConnPool
+
+from jarvis_common.testing_contract_apps import (
+    make_contract_client as _client,
+)
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-_TEST_API_KEY = "le-contract-projects-test-key"
-
-
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _le_app(contract_conn):
-    from learning_engine.deps import get_anki_exporter, get_db_pool, get_fsrs_manager
-    from learning_engine.main import app
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    original_http = getattr(app.state, "http_client", None)
-    original_fsrs = getattr(app.state, "fsrs_manager", None)
-    original_exporter = getattr(app.state, "anki_exporter", None)
-    original_generator = getattr(app.state, "card_generator", None)
-
-    mock_fsrs = MagicMock()
-    _now = datetime.now(UTC)
-    mock_fsrs.create_new_card.return_value = ({}, _now)
-    mock_fsrs.schedule_review.return_value = ({}, {}, _now + timedelta(days=1))
-
-    app.state.db_pool = shared
-    app.state.http_client = AsyncMock()
-    app.state.fsrs_manager = mock_fsrs
-    app.state.anki_exporter = MagicMock()
-    app.state.card_generator = AsyncMock()
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[get_fsrs_manager] = lambda: mock_fsrs
-    app.dependency_overrides[get_anki_exporter] = lambda: MagicMock()
-
-    from learning_engine.deps import limiter
-
-    limiter_was_enabled = limiter.enabled
-    limiter.enabled = False
-
-    try:
-        yield app
-    finally:
-        limiter.enabled = limiter_was_enabled
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        if original_http is None:
-            if hasattr(app.state, "http_client"):
-                del app.state.http_client
-        else:
-            app.state.http_client = original_http
-        if original_fsrs is None:
-            if hasattr(app.state, "fsrs_manager"):
-                del app.state.fsrs_manager
-        else:
-            app.state.fsrs_manager = original_fsrs
-        if original_exporter is None:
-            if hasattr(app.state, "anki_exporter"):
-                del app.state.anki_exporter
-        else:
-            app.state.anki_exporter = original_exporter
-        if original_generator is None:
-            if hasattr(app.state, "card_generator"):
-                del app.state.card_generator
-        else:
-            app.state.card_generator = original_generator
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(get_fsrs_manager, None)
-        app.dependency_overrides.pop(get_anki_exporter, None)
-
-
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-
-
-def _client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,15 @@ The 401 failure mode that motivated the round-15 drop is mitigated because
 `init-secrets.sh` is idempotent and writes both app + litellm sides from a
 single source. DOCKER-005: `PGPASSWORD` in backup sidecar replaced with `.pgpass`-via-Docker-Secret. No longer deferred.
 
+
+---
+
+## OLLAMA-CVE-2026-7482 — Ollama daemon exposure posture — MONITOR
+
+Current posture is documented in `docs/REQUIREMENTS.md`: the tested image pin is `ollama/ollama:0.23.1` via `versions.env`, the Compose fallback matches that pin, and the host port is loopback-only. Residual risk remains at the Docker-network boundary: containers attached to the `jarvis` network can reach `http://ollama:11434`, so untrusted peers must not join that network.
+
+Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host publish changes away from `127.0.0.1`, an external shared-Ollama override lacks equivalent patch/bind controls, untrusted Docker-network peers are introduced, or a later Ollama advisory supersedes CVE-2026-7482 guidance.
+
 ---
 
 ## TG-001 / TG-002 / TG-003 — Telegram callback hardening — CLOSED (Sprint 4)
@@ -199,13 +208,17 @@ Wall-clock budget enforcement deferred until profiling shows need.
 
 Performance smell, not a correctness issue. Defer to performance sprint.
 
-### Cross-paper RAG ownership thread-through (Sprint 4 follow-up)
+### Cross-paper RAG ownership thread-through — CLOSED (2026-05-22 refresh)
 
-Wave 6B-β covered single-paper and cross-paper SQL endpoints, but the
-`embedder.search_chunks_global()` retrieval path used by `/api/ask`,
-`/api/ask/stream`, and `weekly_summary` doesn't receive `user_id`. Multi-user
-mode would currently leak chunks across users for these 3 endpoints.
-Recommended WS-6C ticket.
+The old Sprint 4 follow-up text is stale. Current `/api/ask` and
+`/api/ask/stream` resolve `user_id` from `get_current_user_id` and pass it into
+`prepare_cross_paper_rag`; the RAG prep path passes that value through
+`embedder.search_chunks_global(..., user_id=user_id)` and re-checks returned
+paper metadata through `user_library`. `weekly_summary` is likewise called with
+the session-derived `user_id`. Reopen only if a cross-paper RAG or digest route
+accepts caller-supplied user IDs, omits `user_id` when calling the shared RAG
+prep path, bypasses the Qdrant user-scope filter, or removes the secondary
+`user_library` metadata predicate.
 
 ### Search upsert user_id stamping (Sprint 4 follow-up)
 

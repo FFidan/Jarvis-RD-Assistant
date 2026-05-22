@@ -201,3 +201,50 @@ async def test_update_litellm_model_falls_back_to_in_memory_on_ro_config(tmp_pat
         assert result is True
         assert write_calls["n"] == 1  # write was attempted once
         assert respx.calls.call_count == 1  # fallback was invoked
+
+
+@pytest.mark.asyncio
+async def test_ro_config_fallback_preserves_existing_num_ctx_when_adding_think(
+    tmp_path, monkeypatch
+):
+    """Read-only fallback sends the merged extra_body, not only the pending flag."""
+    import json
+
+    import httpx as _httpx
+    import respx
+
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        [
+            {
+                "model_name": "smart",
+                "litellm_params": {
+                    "model": "ollama/qwen3:14b",
+                    "extra_body": {"num_ctx": 8192},
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+
+    def _fail_write(self, content, **kwargs):
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr(config_path.__class__, "write_text", _fail_write)
+
+    with respx.mock:
+        respx.post("http://litellm:4000/config/update").mock(
+            return_value=_httpx.Response(200, json={"message": "ok"})
+        )
+        result = await update_litellm_model(
+            "llm.smart_model",
+            "qwen3:14b",
+            machine_id="host-rtx5060",
+            thinking_disabled=True,
+        )
+        payload = json.loads(respx.calls.last.request.content)
+
+    assert result is True
+    params = payload["model_list"][0]["litellm_params"]
+    assert params["extra_body"] == {"num_ctx": 8192, "think": False}

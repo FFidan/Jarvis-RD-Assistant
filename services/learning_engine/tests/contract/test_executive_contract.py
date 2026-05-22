@@ -13,106 +13,18 @@ from __future__ import annotations
 
 import httpx
 import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock
-from datetime import UTC, datetime, timedelta
 
-from jarvis_common.testing import SharedConnPool
+
+from jarvis_common.testing_contract_apps import (
+    DEFAULT_CONTRACT_API_KEY,
+    make_contract_client as _client,
+)
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-_TEST_API_KEY = "le-contract-executive-test-key"
-
-
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def _le_app(contract_conn):
-    from learning_engine.deps import get_anki_exporter, get_db_pool, get_fsrs_manager
-    from learning_engine.main import app
-
-    shared = SharedConnPool(contract_conn)
-    original_pool = getattr(app.state, "db_pool", None)
-    original_http = getattr(app.state, "http_client", None)
-    original_fsrs = getattr(app.state, "fsrs_manager", None)
-    original_exporter = getattr(app.state, "anki_exporter", None)
-    original_generator = getattr(app.state, "card_generator", None)
-
-    mock_fsrs = MagicMock()
-    _now = datetime.now(UTC)
-    mock_fsrs.create_new_card.return_value = ({}, _now)
-    mock_fsrs.schedule_review.return_value = ({}, {}, _now + timedelta(days=1))
-
-    app.state.db_pool = shared
-    app.state.http_client = AsyncMock()
-    app.state.fsrs_manager = mock_fsrs
-    app.state.anki_exporter = MagicMock()
-    app.state.card_generator = AsyncMock()
-    app.dependency_overrides[get_db_pool] = lambda: shared
-    app.dependency_overrides[get_fsrs_manager] = lambda: mock_fsrs
-    app.dependency_overrides[get_anki_exporter] = lambda: MagicMock()
-
-    from learning_engine.deps import limiter
-
-    limiter_was_enabled = limiter.enabled
-    limiter.enabled = False
-
-    try:
-        yield app
-    finally:
-        limiter.enabled = limiter_was_enabled
-        if original_pool is None:
-            if hasattr(app.state, "db_pool"):
-                del app.state.db_pool
-        else:
-            app.state.db_pool = original_pool
-        if original_http is None:
-            if hasattr(app.state, "http_client"):
-                del app.state.http_client
-        else:
-            app.state.http_client = original_http
-        if original_fsrs is None:
-            if hasattr(app.state, "fsrs_manager"):
-                del app.state.fsrs_manager
-        else:
-            app.state.fsrs_manager = original_fsrs
-        if original_exporter is None:
-            if hasattr(app.state, "anki_exporter"):
-                del app.state.anki_exporter
-        else:
-            app.state.anki_exporter = original_exporter
-        if original_generator is None:
-            if hasattr(app.state, "card_generator"):
-                del app.state.card_generator
-        else:
-            app.state.card_generator = original_generator
-        app.dependency_overrides.pop(get_db_pool, None)
-        app.dependency_overrides.pop(get_fsrs_manager, None)
-        app.dependency_overrides.pop(get_anki_exporter, None)
-
-
-@pytest.fixture(scope="function")
-def _configure_api_key(monkeypatch):
-    from jarvis_common import auth as _auth
-    from jarvis_common.settings import get_secrets_settings
-
-    monkeypatch.setenv("JARVIS_API_KEY", _TEST_API_KEY)
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-    yield
-    get_secrets_settings.cache_clear()
-    _auth.refresh_api_key_cache()
-
-
-def _client(app, cookie: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
-        cookies={"jarvis_session": cookie},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +242,7 @@ async def test_log_focus_session_non_owned_task_gets_404(
     async with _client(_le_app, contract_two_users.cookie_b) as c:
         resp = await c.post(
             "/api/executive/focus/log",
-            json={"duration_minutes": 25, "task_id": task_id_a},
+            json={"duration_hours": 25 / 60, "task_id": task_id_a},
         )
 
     assert resp.status_code == 404, (
@@ -350,7 +262,7 @@ async def test_log_focus_session_persists_to_daily_log(
     async with _client(_le_app, contract_two_users.cookie_a) as c:
         resp = await c.post(
             "/api/executive/focus/log",
-            json={"duration_minutes": 30},
+            json={"duration_hours": 0.5},
         )
 
     assert resp.status_code == 200, f"POST focus/log failed: {resp.status_code}: {resp.text[:300]}"
@@ -406,10 +318,174 @@ async def test_my_day_no_session_returns_401(_le_app, _configure_api_key):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_le_app),
         base_url="http://test",
-        headers={"X-API-Key": _TEST_API_KEY},
+        headers={"X-API-Key": DEFAULT_CONTRACT_API_KEY},
     ) as c:
         resp = await c.get("/api/executive/my-day")
 
     assert resp.status_code in (401, 403), (
         f"Expected 401/403 for unauthenticated my-day; got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cluster 13 — Executive my-day behaviors (LE-E-01..LE-E-05)
+# Survivor-of mock-units in test_executive.py:
+#   test_my_day_returns_focus_stats (414)         → LE-E-01
+#   test_my_day_limit_recommendations_query_param (196) → LE-E-01 (incidental shape)
+#   test_focus_log_paper_not_found (302)          → LE-E-02
+#   test_focus_log_rejects_other_users_paper (322) → LE-E-03
+#   test_my_day_bundle_null_tolerant_when_empty (719) → LE-E-04
+#   test_focus_log_missing_duration_returns_422 (351) → LE-E-05
+#   test_focus_log_negative_hours_returns_422 (523) → LE-E-05 (sub-assertion)
+#   test_focus_log_excessive_hours_returns_422 (533) → LE-E-05 (sub-assertion)
+# Pre-existing survivors cover (no new contract needed):
+#   test_my_day_happy_path / _empty (100, 174)    → test_get_my_day_response_shape (197)
+#   test_focus_log_bare_timer / _with_task_id (225, 246) → test_log_focus_session_persists_to_daily_log (342)
+#   test_focus_log_task_not_found / _no_side_effects (276, 565) → test_log_focus_session_non_owned_task_gets_404 (325)
+#   test_my_day_tasks_include_project_context (372) → test_get_my_day_tasks_scoped_to_caller (227)
+#   test_my_day_returns_project_pulse (436)       → 197
+#   test_my_day_includes_completed_tasks_today (464) → 227
+#   test_my_day_bundle_shape_and_aggregation (639) → test_get_my_day_bundle_response_keys (251) + LE-E-04
+# ---------------------------------------------------------------------------
+
+
+async def test_my_day_focus_stats_aggregation(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """GET /api/executive/my-day aggregates focus_hours from daily_log for the caller.
+
+    Seeds a daily_log row for user A with focus_hours=1.5; asserts the response
+    field today_focus_hours == 1.5. Replaces test_my_day_returns_focus_stats's
+    SQL-keyed mock dispatch with a real-DB read; also asserts IDOR isolation.
+
+    # Verified: services/learning_engine/learning_engine/routers/executive.py:151
+    # (get_my_day runs 6 concurrent reads scoped to current_user_id_strict;
+    # today_focus_hours comes from _FOCUS_HOURS_SQL against daily_log).
+    """
+    await contract_conn.execute(
+        """
+        INSERT INTO daily_log (user_id, log_date, focus_hours)
+        VALUES ($1, CURRENT_DATE, 1.5)
+        ON CONFLICT (user_id, log_date) DO UPDATE SET focus_hours = EXCLUDED.focus_hours
+        """,
+        contract_two_users.user_a_id,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/executive/my-day")
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    assert body.get("today_focus_hours") == 1.5, (
+        f"Expected today_focus_hours=1.5 for user A; got {body.get('today_focus_hours')!r}"
+    )
+
+    # IDOR: user B should not see user A's hours
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp_b = await c.get("/api/executive/my-day")
+    assert resp_b.status_code == 200, resp_b.text[:300]
+    body_b = resp_b.json()
+    assert body_b.get("today_focus_hours") in (0, 0.0, None), (
+        f"IDOR leak: user B saw today_focus_hours={body_b.get('today_focus_hours')!r}"
+    )
+
+
+async def test_focus_log_paper_not_found_returns_404(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """POST /api/executive/focus/log with a nonexistent paper_id returns 404.
+
+    Exercises the real assert_paper_ownership check against the live schema.
+
+    # Verified: services/learning_engine/learning_engine/routers/executive.py:399
+    # (log_focus_session calls assert_paper_ownership when paper_id is provided).
+    """
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/executive/focus/log",
+            json={"duration_hours": 0.5, "paper_id": 9_999_999},
+        )
+
+    assert resp.status_code == 404, (
+        f"Expected 404 for missing paper; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+async def test_focus_log_rejects_other_users_paper(contract_two_users, _le_app, _configure_api_key):
+    """User B cannot log focus against user A's paper (assert_paper_ownership).
+
+    Exercises real discovered_by / user_library ownership check across the HTTP
+    boundary — replaces the mock-fetchrow assertion in
+    test_focus_log_rejects_other_users_paper (line 322 of test_executive.py).
+
+    # Verified: services/learning_engine/learning_engine/routers/executive.py:399
+    # (log_focus_session: assert_paper_ownership for paper_id when provided).
+    """
+    paper_id_a = contract_two_users.paper_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.post(
+            "/api/executive/focus/log",
+            json={"duration_hours": 0.5, "paper_id": paper_id_a},
+        )
+
+    assert resp.status_code in (403, 404), (
+        f"User B logging focus against user A's paper_id={paper_id_a}: "
+        f"expected 403/404, got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+async def test_my_day_bundle_null_tolerant_with_no_seed(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """GET /api/executive/my-day-bundle for a user with no bundle data returns 200.
+
+    All seven concurrent reads must null-tolerate empty rows: intent has null
+    fields, tasks is [], journal is null, pulse_today is null. No 500.
+
+    # Verified: services/learning_engine/learning_engine/routers/executive.py:283
+    # (get_my_day_bundle runs 7 concurrent reads; null-tolerant serialization).
+    """
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/executive/my-day-bundle")
+
+    assert resp.status_code == 200, (
+        f"my-day-bundle should be null-tolerant; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    for key in ("tasks", "intent", "threads", "journal", "pulse_today"):
+        assert key in body, f"my-day-bundle missing key {key!r}: {body}"
+    assert isinstance(body["tasks"], list), (
+        f"tasks must be list; got {type(body['tasks']).__name__}"
+    )
+
+
+async def test_focus_log_invalid_duration_returns_422(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """POST /api/executive/focus/log enforces duration_hours: float, gt=0, le=24 at HTTP layer.
+
+    Three sub-assertions: missing, negative, excessive. Replaces three mock-unit
+    tests (missing 351, negative 523, excessive 533).
+
+    # Verified: services/learning_engine/learning_engine/routers/executive.py:135
+    # (FocusSessionRequest: duration_hours: float = Field(..., gt=0, le=24)).
+    """
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        # Missing duration_hours
+        resp_missing = await c.post("/api/executive/focus/log", json={})
+        assert resp_missing.status_code == 422, (
+            f"missing duration_hours should 422; got {resp_missing.status_code}: "
+            f"{resp_missing.text[:200]}"
+        )
+
+        # Zero or negative duration_hours
+        resp_neg = await c.post("/api/executive/focus/log", json={"duration_hours": -0.5})
+        assert resp_neg.status_code == 422, (
+            f"negative duration_hours should 422; got {resp_neg.status_code}"
+        )
+
+        # Excessive duration_hours (> 24h cap)
+        resp_excess = await c.post("/api/executive/focus/log", json={"duration_hours": 25.0})
+        assert resp_excess.status_code == 422, (
+            f"excessive duration_hours should 422; got {resp_excess.status_code}"
+        )

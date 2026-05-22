@@ -26,38 +26,7 @@ def _request_with_state(**state_values):
     return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
-@pytest.mark.asyncio
-async def test_download_pdf_returns_existing_row_when_already_downloaded():
-    """download_pdf should short-circuit when the paper already has a local PDF."""
-    conn = AsyncMock()
-    conn.fetchrow.return_value = FakeRecord(
-        id=1,
-        title="Paper",
-        external_id="arxiv:1",
-        source_type="arxiv",
-        authors=["Ada"],
-        abstract="A paper",
-        published_date=None,
-        url="https://arxiv.org/abs/1",
-        pdf_url="https://arxiv.org/pdf/1.pdf",
-        pdf_downloaded=True,
-        pdf_local_path="/data/pdfs/1.pdf",
-        citation_count=0,
-        metadata={},
-        created_at=datetime(2026, 3, 11, tzinfo=UTC),
-    )
-    pool, _ = make_pool_and_conn(conn=conn)
-    processor = AsyncMock()
-
-    response = await pdf.download_pdf.__wrapped__(
-        MagicMock(),
-        paper_id=1,
-        db_pool=pool,
-        pdf_processor=processor,
-    )
-
-    assert response.pdf_downloaded is True
-    processor.download_pdf.assert_not_called()
+# Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
 
 
 @pytest.mark.asyncio
@@ -99,44 +68,7 @@ async def test_download_pdf_maps_upstream_http_failure_to_502():
     assert exc_info.value.status_code == 502
 
 
-@pytest.mark.asyncio
-async def test_download_pdf_rejects_unowned_paper(monkeypatch):
-    """download_pdf must enforce the same canonical-corpus ownership guard as other paper actions."""
-    conn = AsyncMock()
-    conn.fetchrow.return_value = FakeRecord(
-        id=1,
-        title="Paper",
-        external_id="arxiv:1",
-        source_type="arxiv",
-        authors=["Ada"],
-        abstract="A paper",
-        published_date=None,
-        url="https://arxiv.org/abs/1",
-        pdf_url="https://arxiv.org/pdf/1.pdf",
-        pdf_downloaded=False,
-        pdf_local_path=None,
-        citation_count=0,
-        metadata={},
-        created_at="2026-03-11T00:00:00Z",
-    )
-    pool, _ = make_pool_and_conn(conn=conn)
-    processor = AsyncMock()
-    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=99))
-    deny = HTTPException(status_code=403, detail="paper not owned by current user")
-    ownership = AsyncMock(side_effect=deny)
-    monkeypatch.setattr(pdf, "assert_paper_ownership", ownership)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await pdf.download_pdf.__wrapped__(
-            MagicMock(),
-            paper_id=1,
-            db_pool=pool,
-            pdf_processor=processor,
-        )
-
-    assert exc_info.value.status_code == 403
-    ownership.assert_awaited_once_with(conn, 1, 99)
-    processor.download_pdf.assert_not_called()
+# Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
 
 
 @pytest.mark.asyncio
@@ -173,44 +105,7 @@ async def test_process_pdf_rejects_paths_outside_storage(tmp_path, monkeypatch):
     assert exc_info.value.status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_process_pdf_sync_rejects_unowned_paper(tmp_path, monkeypatch):
-    """The synchronous backward-compat path must not bypass paper ownership."""
-    storage_dir = tmp_path / "storage"
-    storage_dir.mkdir()
-    paper_path = storage_dir / "1.pdf"
-    paper_path.write_bytes(b"%PDF-1.7\ncontent")
-
-    conn = AsyncMock()
-    conn.fetchrow.return_value = FakeRecord(
-        id=1,
-        pdf_downloaded=True,
-        pdf_local_path=str(paper_path),
-    )
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
-    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=99))
-    deny = HTTPException(status_code=403, detail="paper not owned by current user")
-    ownership = AsyncMock(side_effect=deny)
-    monkeypatch.setattr(pdf, "assert_paper_ownership", ownership)
-    run_process_pdf = AsyncMock()
-    monkeypatch.setattr(pdf, "run_process_pdf", run_process_pdf)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await pdf.process_pdf.__wrapped__(
-            request,
-            paper_id=1,
-            force=False,
-            sync=True,
-            db_pool=pool,
-            pdf_processor=MagicMock(),
-            embedder=MagicMock(),
-        )
-
-    assert exc_info.value.status_code == 403
-    ownership.assert_awaited_once_with(conn, 1, 99)
-    run_process_pdf.assert_not_called()
+# Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
 
 
 @pytest.mark.asyncio
@@ -253,36 +148,7 @@ async def test_process_pdf_delegates_to_run_process_pdf(tmp_path, monkeypatch):
     run_process_pdf.assert_awaited_once_with(1, paper_path, pool, processor, embedder, force=True)
 
 
-@pytest.mark.asyncio
-async def test_process_pdf_async_enqueues_job():
-    """process_pdf without sync=True (default) defers a paper_process task."""
-    from unittest.mock import patch as mock_patch
-
-    fake_uuid = "test-job-uuid"
-    request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
-    pool = MagicMock()  # not used in async path — defer_async is patched
-
-    import jarvis_common.task_registry as task_registry
-
-    mock_task = MagicMock()
-    mock_defer = AsyncMock()
-    mock_task.defer_async = mock_defer
-    with (
-        mock_patch.dict(task_registry._TASK_MAP, {"paper.process": mock_task}),
-        mock_patch("uuid.uuid4", return_value=fake_uuid),
-    ):
-        result = await pdf.process_pdf.__wrapped__(
-            request,
-            paper_id=42,
-            force=False,
-            sync=False,
-            db_pool=pool,
-            embedder=MagicMock(),
-        )
-
-    assert result["job_id"] == fake_uuid
-    assert result["status"] == "queued"
-    mock_defer.assert_awaited_once_with(job_id=fake_uuid, user_id=1, paper_id=42, force=False)
+# Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
 
 
 @pytest.mark.asyncio
@@ -375,203 +241,13 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
 # H10: batch_process_papers must scope to user_library when user_id is set
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_batch_process_papers_scopes_to_user_library(tmp_path, monkeypatch):
-    """batch_process_papers must only process papers in the caller's user_library.
-
-    H10 audit finding: when user_id is not None the SQL must JOIN user_library
-    so that user A cannot trigger re-embedding of the whole corpus.
-
-    Setup: corpus has 5 downloaded papers; user A owns 2 of them.
-    The conn.fetch mock returns only those 2 rows (simulating the JOIN).
-    We assert:
-      - conn.fetch was called with a query that contains 'user_library'
-      - only 2 papers were queued
-      - the defer call carries user_id=7
-    """
-    storage_dir = tmp_path / "storage"
-    storage_dir.mkdir()
-
-    # Two PDFs that belong to user A
-    pdf_a = storage_dir / "20.pdf"
-    pdf_a.write_bytes(b"%PDF-1.7\nuser_a_paper")
-    pdf_b = storage_dir / "21.pdf"
-    pdf_b.write_bytes(b"%PDF-1.7\nuser_a_paper_2")
-
-    # conn.fetch simulates the DB returning only user A's 2 papers
-    conn = AsyncMock()
-    conn.fetch.return_value = [
-        {"id": 20, "pdf_local_path": str(pdf_a)},
-        {"id": 21, "pdf_local_path": str(pdf_b)},
-    ]
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
-
-    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=7))
-
-    fake_uuid = "job-scoped-123"
-    mock_defer = AsyncMock()
-
-    from unittest.mock import patch as mock_patch  # noqa: PLC0415
-
-    import jarvis_common.task_registry as task_registry
-
-    mock_task_bp = MagicMock()
-    mock_task_bp.defer_async = mock_defer
-    with (
-        mock_patch.dict(task_registry._TASK_MAP, {"papers.batch_process": mock_task_bp}),
-        mock_patch("uuid.uuid4", return_value=fake_uuid),
-    ):
-        result = await pdf.batch_process_papers.__wrapped__(
-            request,
-            limit=10,
-            force=False,
-            db_pool=pool,
-        )
-
-    # Only the 2 user-library papers should have been queued
-    assert result["queued"] == 2
-    assert result["total_unprocessed"] == 2
-    assert result["skipped_missing_pdf"] == 0
-    assert result["job_id"] == fake_uuid
-
-    # The SQL sent to the DB must include user_library JOIN
-    fetch_call_sql = conn.fetch.await_args_list[0].args[0]
-    assert "user_library" in fetch_call_sql, (
-        "batch_process_papers must JOIN user_library when user_id is set"
-    )
-
-    # user_id must be threaded to the job
-    mock_defer.assert_awaited_once_with(
-        job_id=fake_uuid, user_id=7, paper_ids=[20, 21], force=False
-    )
+# Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
 
 
-# ---------------------------------------------------------------------------
-# PI-015: upload_pdf atomicity — dangling-file rollback on UPDATE failure
-# ---------------------------------------------------------------------------
+# Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
 
 
-@pytest.mark.asyncio
-async def test_upload_pdf_unlinks_renamed_file_on_db_update_failure(tmp_path, monkeypatch):
-    """upload_pdf must remove the renamed pdf file if the UPDATE papers fails.
-
-    PI-015: after temp_path.rename(pdf_path) the UPDATE can fail; the
-    transaction rolls back the DB insert but the file stays on disk.
-    The fix wraps the UPDATE in try/except and unlinks pdf_path on failure.
-    """
-    import io
-
-    from fastapi import UploadFile
-
-    storage_dir = tmp_path / "pdfs"
-    storage_dir.mkdir()
-    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-
-    # Build a minimal PDF UploadFile (valid %PDF- header)
-    pdf_content = b"%PDF-1.7\n" + b"x" * 100
-    upload_file = UploadFile(filename="paper.pdf", file=io.BytesIO(pdf_content))
-
-    # Conn: INSERT returns a row, but UPDATE raises
-    inserted_row = FakeRecord(
-        id=99,
-        external_id="local:abc123",
-        source_type="local",
-        title="Test Paper",
-        authors=[],
-        abstract=None,
-        published_date=None,
-        url="local://abc123",
-        pdf_url=None,
-        pdf_downloaded=False,
-        pdf_local_path=None,
-        citation_count=0,
-        metadata={},
-        created_at=None,
-    )
-
-    conn = AsyncMock()
-    # First fetchrow → None (duplicate check), second fetchrow → inserted_row (INSERT)
-    conn.fetchrow = AsyncMock(side_effect=[None, inserted_row, RuntimeError("UPDATE exploded")])
-
-    pool, _ = make_pool_and_conn(conn=conn)
-    request = MagicMock()
-
-    with pytest.raises((RuntimeError, Exception)):
-        await pdf.upload_pdf.__wrapped__(
-            request,
-            file=upload_file,
-            title="Test Paper",
-            authors="",
-            abstract="",
-            db_pool=pool,
-        )
-
-    # The renamed file (storage_dir/99.pdf) must have been cleaned up
-    assert not (storage_dir / "99.pdf").exists(), (
-        "Dangling file left on disk after DB UPDATE failure"
-    )
-
-
-@pytest.mark.asyncio
-async def test_upload_pdf_authenticated_user_stamps_discoverer_and_library(tmp_path, monkeypatch):
-    """Authenticated uploads must be private library entries, not global system papers."""
-    import io
-
-    from fastapi import UploadFile
-
-    storage_dir = tmp_path / "pdfs"
-    storage_dir.mkdir()
-    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=42))
-    add_to_library = AsyncMock()
-    monkeypatch.setattr(pdf, "add_to_library", add_to_library, raising=False)
-
-    pdf_content = b"%PDF-1.7\n" + b"x" * 100
-    upload_file = UploadFile(filename="paper.pdf", file=io.BytesIO(pdf_content))
-    inserted_row = FakeRecord(
-        id=101,
-        external_id="local:abc123",
-        source_type="local",
-        title="Private Upload",
-        authors=[],
-        abstract=None,
-        published_date=None,
-        url="local://abc123",
-        pdf_url=None,
-        pdf_downloaded=False,
-        pdf_local_path=None,
-        citation_count=0,
-        metadata={},
-        created_at=datetime(2026, 5, 12, tzinfo=UTC),
-        discovered_by=42,
-    )
-    updated_row = FakeRecord({**inserted_row, "pdf_downloaded": True, "pdf_local_path": "x"})
-
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(side_effect=[None, inserted_row, updated_row])
-    pool, _ = make_pool_and_conn(conn=conn)
-
-    await pdf.upload_pdf.__wrapped__(
-        MagicMock(),
-        file=upload_file,
-        title="Private Upload",
-        authors="",
-        abstract="",
-        db_pool=pool,
-    )
-
-    insert_sql = conn.fetchrow.await_args_list[1].args[0]
-    assert "discovered_by" in insert_sql
-    assert conn.fetchrow.await_args_list[1].args[-1] == 42
-    add_to_library.assert_awaited_once_with(
-        conn,
-        user_id=42,
-        paper_id=101,
-        added_via="manual_save",
-    )
+# Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
 
 
 @pytest.mark.asyncio
@@ -678,81 +354,7 @@ def test_process_pdf_async_response_model_no_500():
 # DOM-A-04: download_pdf null-row guard must run before ownership check
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_assert_paper_ownership_runs_after_null_row_guard_in_pdf_router(monkeypatch):
-    """download_pdf must return 404 for unknown paper_id before calling ownership.
-
-    DOM-A-04: previously assert_paper_ownership was called while row was still
-    None (fetchrow returned None), causing it to run on a non-existent paper.
-    After the fix, the null-row guard raises HTTPException(404) first.
-    """
-    conn = AsyncMock()
-    conn.fetchrow.return_value = None  # paper does not exist
-
-    pool, _ = make_pool_and_conn(conn=conn)
-
-    # Ownership must never be called for a non-existent paper
-    ownership = AsyncMock()
-    monkeypatch.setattr(pdf, "assert_paper_ownership", ownership)
-    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=99))
-
-    processor = AsyncMock()
-
-    with pytest.raises(HTTPException) as exc_info:
-        await pdf.download_pdf.__wrapped__(
-            MagicMock(),
-            paper_id=9999,
-            db_pool=pool,
-            pdf_processor=processor,
-        )
-
-    assert exc_info.value.status_code == 404
-    assert "Paper not found" in exc_info.value.detail
-    # Ownership must NOT have been called — the null guard fires first
-    ownership.assert_not_awaited()
+# Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
 
 
-# ---------------------------------------------------------------------------
-# DOM-A-10: upload_pdf form fields must enforce max_length limits
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_upload_pdf_rejects_oversized_title(tmp_path, monkeypatch):
-    """upload_pdf must reject a title longer than 500 characters with HTTP 422.
-
-    DOM-A-10: without max_length on the Form(...) parameter, an oversized title
-    would reach the DB and cause either a silent truncation or a constraint
-    violation.  After adding max_length=500 FastAPI/Pydantic rejects the request
-    before the handler body executes.
-    """
-    import io
-
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
-    from paper_ingestion.routers.pdf import router
-
-    app = FastAPI()
-    app.include_router(router)
-
-    fake_pool = MagicMock()
-    app.dependency_overrides[get_db_pool] = lambda: fake_pool
-    app.dependency_overrides[get_pdf_processor] = lambda: MagicMock()
-    app.dependency_overrides[get_embedder] = lambda: MagicMock()
-
-    oversized_title = "A" * 601  # exceeds 500-char limit
-
-    pdf_bytes = b"%PDF-1.7\n" + b"x" * 100
-
-    with TestClient(app, raise_server_exceptions=False) as client:
-        resp = client.post(
-            "/api/upload-pdf",
-            data={"title": oversized_title, "authors": "", "abstract": ""},
-            files={"file": ("paper.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
-        )
-
-    assert resp.status_code == 422, (
-        f"Expected 422 for oversized title, got {resp.status_code}: {resp.text}"
-    )
+# Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).

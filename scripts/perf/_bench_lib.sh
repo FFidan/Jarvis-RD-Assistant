@@ -191,3 +191,94 @@ rag_ask_p50_p95() {
   awk -F',' '$1=="scenario_c_rag_ask" {print $3, $4; found=1}
              END {if (!found) print "NA NA"}' "${csv}"
 }
+
+# bench_redact_bundle_tree <dir>
+#
+# Sanitise diagnostic artifacts before they are archived for review. The bundle
+# should keep failure evidence, timings, logs, and metadata, but it must not carry
+# bearer tokens, API keys, cookies, session jars, or secret-like env values.
+bench_redact_bundle_tree() {
+  local root="$1"
+  [[ -d "${root}" ]] || return 0
+  python3 - "${root}" <<'PYREDACT'
+import os
+import re
+import sys
+
+root = sys.argv[1]
+secret_name = (
+    r"(?:api[_-]?key|x-api-key|authorization|auth[_-]?header|bearer|"
+    r"cookie|session|token|secret|password|passwd|credential)"
+)
+whole_file_name_re = re.compile(r"(^|[._-])(cookies?|session)([._-]|$)", re.I)
+env_value_re = re.compile(
+    rf"(?im)^(\s*(?:export\s+)?[A-Z0-9_.-]*{secret_name}[A-Z0-9_.-]*\s*=\s*).+$"
+)
+quoted_key_re = re.compile(
+    rf"(?i)([\"']?[A-Z0-9_.-]*{secret_name}[A-Z0-9_.-]*[\"']?\s*:\s*)"
+    r"([\"']).*?\2"
+)
+header_re = re.compile(r"(?im)^(\s*(?:Authorization|X-API-Key|Cookie|Set-Cookie)\s*:\s*).+$")
+curl_header_re = re.compile(
+    r"(?i)(-H\s+[\"'](?:Authorization|X-API-Key|Cookie|Set-Cookie)\s*:\s*)[^\"']+([\"'])"
+)
+bearer_re = re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}")
+obvious_token_re = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_-]{12,}|pk-lf-[A-Za-z0-9_-]{12,}|"
+    r"sk-lf-[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{12,})\b"
+)
+
+
+def redact_text(text: str) -> str:
+    text = header_re.sub(r"\1[REDACTED]", text)
+    text = curl_header_re.sub(r"\1[REDACTED]\2", text)
+    text = env_value_re.sub(r"\1[REDACTED]", text)
+    text = quoted_key_re.sub(r"\1\"[REDACTED]\"", text)
+    text = bearer_re.sub(r"\1 [REDACTED]", text)
+    text = obvious_token_re.sub("[REDACTED]", text)
+    return text
+
+
+redacted = []
+for dirpath, _, filenames in os.walk(root):
+    for filename in filenames:
+        path = os.path.join(dirpath, filename)
+        rel = os.path.relpath(path, root)
+        if rel == "REDACTION-MANIFEST.txt":
+            continue
+        try:
+            data = open(path, "rb").read()
+        except OSError:
+            continue
+        if whole_file_name_re.search(filename):
+            try:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(
+                        "[REDACTED session/cookie artifact]\n"
+                        f"original_bytes={len(data)}\n"
+                    )
+                redacted.append(rel)
+            except OSError:
+                pass
+            continue
+        if b"\0" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        clean = redact_text(text)
+        if clean != text:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(clean)
+            redacted.append(rel)
+
+manifest = os.path.join(root, "REDACTION-MANIFEST.txt")
+with open(manifest, "w", encoding="utf-8") as fh:
+    fh.write("Perf bundle redaction completed before tar creation.\n")
+    fh.write("Scope: API keys, auth headers, cookies, session files, and secret-like env values.\n")
+    fh.write(f"files_redacted={len(redacted)}\n")
+    for rel in sorted(redacted):
+        fh.write(f"- {rel}\n")
+PYREDACT
+}
