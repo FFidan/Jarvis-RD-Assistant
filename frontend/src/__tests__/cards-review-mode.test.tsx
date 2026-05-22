@@ -202,16 +202,16 @@ describe('ReviewMode', () => {
     });
   });
 
-  it('calls getNextReview with limit=1 and no deckId when not deck-scoped', async () => {
+  it('calls getNextReview with limit=1', async () => {
     renderReview({});
     await waitFor(() => screen.getByText(CARD_FIXTURE.front));
-    expect(mockGetNextReview).toHaveBeenCalledWith(1, undefined);
+    expect(mockGetNextReview).toHaveBeenCalledWith(1);
   });
 
-  it('passes deckId to getNextReview when deck-scoped', async () => {
+  it('calls getNextReview with limit=1 when deck-scoped (deckId scopes query key only)', async () => {
     renderReview({ deckId: 7 });
     await waitFor(() => screen.getByText(CARD_FIXTURE.front));
-    expect(mockGetNextReview).toHaveBeenCalledWith(1, 7);
+    expect(mockGetNextReview).toHaveBeenCalledWith(1);
   });
 
   it('shows QueryErrorState (not null/empty) when query rejects', async () => {

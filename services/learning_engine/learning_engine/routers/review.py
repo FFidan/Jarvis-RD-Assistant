@@ -95,22 +95,16 @@ router = APIRouter(
 async def get_next_review(
     request: Request,
     limit: int = Query(default=1, ge=1, le=50),
-    deck_id: int | None = Query(default=None, ge=1),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> list[CardResponse]:
-    """Get next due card(s) for review, optionally scoped to a deck."""
+    """Get next due card(s) for review."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT c.* FROM cards c "
-            "WHERE c.due_at <= NOW() "
-            "AND c.user_id = $1 "
-            "AND ($2::int IS NULL OR (c.deck_id = $2::int AND EXISTS ("
-            "  SELECT 1 FROM decks d WHERE d.id = $2::int AND d.user_id = $1"
-            "))) "
-            "ORDER BY c.due_at ASC LIMIT $3",
+            "SELECT * FROM cards WHERE due_at <= NOW() "
+            "AND user_id = $1 "
+            "ORDER BY due_at ASC LIMIT $2",
             user_id,
-            deck_id,
             limit,
         )
     return [row_to_card_response(row) for row in rows]

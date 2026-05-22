@@ -118,9 +118,12 @@ export async function* streamSSE(
   });
 
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
       useAuthStore.getState().logout();
       throw new Error('Unauthorized — session ended');
+    }
+    if (res.status === 403) {
+      throw new Error('Forbidden — you do not have permission to access this resource');
     }
     throw new Error(`SSE ${res.status}: ${res.status >= 500 ? 'Server error' : 'Request failed'}`);
   }
@@ -157,9 +160,12 @@ export async function* streamAnalyze(
   });
 
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
       useAuthStore.getState().logout();
       throw new Error('Unauthorized — session ended');
+    }
+    if (res.status === 403) {
+      throw new Error('Forbidden — you do not have permission to access this resource');
     }
     throw new Error(`Analyze SSE ${res.status}: ${res.status >= 500 ? 'Server error' : 'Request failed'}`);
   }

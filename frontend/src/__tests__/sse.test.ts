@@ -119,7 +119,7 @@ describe('streamSSE', () => {
     expect(logoutMock).toHaveBeenCalledOnce();
   });
 
-  it('calls logout and throws on 403 response', async () => {
+  it('does NOT call logout and throws Forbidden on 403 response', async () => {
     const { useAuthStore } = await import('@/stores/auth-store');
     const logoutMock = vi.fn();
     // Partial AuthState mock — only the fields used by this code path.
@@ -133,8 +133,8 @@ describe('streamSSE', () => {
     );
 
     const gen = streamSSE('/api/ask/stream', { question: 'test' });
-    await expect(gen.next()).rejects.toThrow('Unauthorized — session ended');
-    expect(logoutMock).toHaveBeenCalledOnce();
+    await expect(gen.next()).rejects.toThrow('Forbidden — you do not have permission to access this resource');
+    expect(logoutMock).not.toHaveBeenCalled();
   });
 
   it('reader.cancel is called in finally block after stream completes', async () => {

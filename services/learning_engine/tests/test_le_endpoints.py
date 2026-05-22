@@ -705,42 +705,6 @@ async def test_get_next_review_respects_limit(_app):
     assert len(resp.json()) == 5
 
 
-@pytest.mark.asyncio
-async def test_get_next_review_with_deck_id_filters_results(_app):
-    """GET /api/review/next?deck_id=2 returns only cards from that deck."""
-    app, conn, *_ = _app
-    conn.fetch.return_value = [make_card_row(id=10, deck_id=2)]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/review/next", params={"deck_id": 2})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 1
-    assert body[0]["id"] == 10
-    assert body[0]["deck_id"] == 2
-
-
-@pytest.mark.asyncio
-async def test_get_next_review_without_deck_id_unconstrained(_app):
-    """GET /api/review/next without deck_id returns cards from all decks."""
-    app, conn, *_ = _app
-    conn.fetch.return_value = [
-        make_card_row(id=1, deck_id=1),
-        make_card_row(id=2, deck_id=3),
-    ]
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/review/next", params={"limit": 10})
-
-    assert resp.status_code == 200
-    assert len(resp.json()) == 2
-
-
 # ---------------------------------------------------------------------------
 # Tests: POST /api/cards with evidence
 # ---------------------------------------------------------------------------
