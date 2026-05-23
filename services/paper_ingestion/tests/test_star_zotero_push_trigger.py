@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jarvis_common.task_registry as task_registry
 import pytest
 from paper_ingestion.routers import papers
-from paper_ingestion.routers import papers_lifecycle
 
 from tests.conftest import _make_pool_and_conn
 
@@ -194,7 +193,7 @@ async def test_star_enqueue_failure_is_best_effort():
     mock_task.defer_async = AsyncMock(side_effect=RuntimeError("queue down"))
     with (
         patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
-        patch.object(papers_lifecycle.logger, "exception") as mock_log_exc,
+        patch.object(papers.logger, "exception") as mock_log_exc,
     ):
         # Must NOT raise
         result = await papers.star_paper.__wrapped__(
