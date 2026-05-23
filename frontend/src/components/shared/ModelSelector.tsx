@@ -190,8 +190,10 @@ function localModelPath(entry: ModelCatalogEntry): string {
 
 export function ModelSelector({ value, onChange, configKey: role }: ModelSelectorProps) {
   const queryClient = useQueryClient();
-  const { isOpen, confirm, handleConfirm, handleCancel } = useConfirm();
+  const { isOpen: deleteIsOpen, confirm: confirmDelete, handleConfirm: handleDeleteConfirm, handleCancel: handleDeleteCancel } = useConfirm();
+  const { isOpen: pullIsOpen, confirm: confirmPull, handleConfirm: handlePullConfirm, handleCancel: handlePullCancel } = useConfirm();
   const [deleteTarget, setDeleteTarget] = useState<ModelCatalogEntry | null>(null);
+  const [pullTarget, setPullTarget] = useState<ModelCatalogEntry | null>(null);
   const { data, error } = useQuery<SystemModels>({
     queryKey: ['system-models'],
     queryFn: () => apiFetch<SystemModels>('/api/system/models'),
@@ -292,11 +294,10 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
       e.id !== selectedEntry?.id,
   );
   const handlePull = async (entry: ModelCatalogEntry) => {
-    const parts: string[] = [];
-    if (entry.disk_gb > 0) parts.push(`${entry.disk_gb.toFixed(1)} GB disk`);
-    if (entry.vram_gb > 0) parts.push(`${entry.vram_gb.toFixed(1)} GB VRAM`);
-    const sizeNote = parts.length > 0 ? ` (requires ${parts.join(', ')})` : '';
-    if (!window.confirm(`Pull ${entry.name}?${sizeNote}`)) return;
+    setPullTarget(entry);
+    const confirmed = await confirmPull();
+    setPullTarget(null);
+    if (!confirmed) return;
     setPullingIds((prev) => new Set(prev).add(entry.id));
     try {
       await pullMutation.mutateAsync(entry);
@@ -310,7 +311,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
   };
   const handleDelete = async (entry: ModelCatalogEntry) => {
     setDeleteTarget(entry);
-    const confirmed = await confirm();
+    const confirmed = await confirmDelete();
     if (confirmed) {
       deleteMutation.mutate(entry);
     }
@@ -528,7 +529,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
         </div>
       )}
       <ConfirmDialog
-        open={isOpen && deleteTarget !== null}
+        open={deleteIsOpen && deleteTarget !== null}
         title="Delete Model"
         description={
           deleteTarget
@@ -536,8 +537,34 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
             : undefined
         }
         confirmLabel="Delete"
-        onConfirm={handleConfirm}
-        onCancel={handleCancel}
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+      />
+      <ConfirmDialog
+        open={pullIsOpen && pullTarget !== null}
+        title="Pull Model"
+        description={
+          pullTarget
+            ? `Pull ${pullTarget.name}?${
+                [
+                  pullTarget.disk_gb > 0 ? `${pullTarget.disk_gb.toFixed(1)} GB disk` : '',
+                  pullTarget.vram_gb > 0 ? `${pullTarget.vram_gb.toFixed(1)} GB VRAM` : '',
+                ]
+                  .filter(Boolean)
+                  .join(', ')
+                  ? ` (requires ${[
+                      pullTarget.disk_gb > 0 ? `${pullTarget.disk_gb.toFixed(1)} GB disk` : '',
+                      pullTarget.vram_gb > 0 ? `${pullTarget.vram_gb.toFixed(1)} GB VRAM` : '',
+                    ]
+                      .filter(Boolean)
+                      .join(', ')})`
+                  : ''
+              }`
+            : undefined
+        }
+        confirmLabel="Pull"
+        onConfirm={handlePullConfirm}
+        onCancel={handlePullCancel}
       />
     </div>
   );

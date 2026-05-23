@@ -218,7 +218,17 @@ async def test_quick_add_task_creates_row_with_user_id(
         )
 
     assert resp.status_code == 201, f"Quick-add task failed: {resp.status_code}: {resp.text[:300]}"
-    task_id = resp.json()["id"]
+    body = resp.json()
+    task_id = body["id"]
+
+    # Response shape: safe fields present
+    assert body["title"] == "Quick Task Contract", f"title mismatch: {body.get('title')!r}"
+    assert body["status"] == "todo", f"status mismatch: {body.get('status')!r}"
+    assert isinstance(body["priority"], int), f"priority not int: {body.get('priority')!r}"
+
+    # Response shape: user_id must never be exposed (LE-D5-03)
+    assert "user_id" not in body, f"user_id leaked in response: {body.get('user_id')}"
+
     db_user_id = await contract_conn.fetchval(
         "SELECT user_id FROM tasks WHERE id = $1",
         task_id,
@@ -456,6 +466,37 @@ async def test_my_day_bundle_null_tolerant_with_no_seed(
         assert key in body, f"my-day-bundle missing key {key!r}: {body}"
     assert isinstance(body["tasks"], list), (
         f"tasks must be list; got {type(body['tasks']).__name__}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §LE-D5-02 — POST /api/executive/intent/today rate-limit (30/minute)
+# ---------------------------------------------------------------------------
+
+
+async def test_intent_today_post_rate_limited(contract_two_users, _le_app, _configure_api_key):
+    """POST /api/executive/intent/today enforces 30/minute rate limit.
+
+    Bursts 31 requests; at least one must return 429.
+    Temporarily re-enables the limiter (disabled globally in _le_app for other tests).
+    """
+    from learning_engine.deps import limiter
+
+    limiter.enabled = True
+    try:
+        statuses = []
+        async with _client(_le_app, contract_two_users.cookie_a) as c:
+            for i in range(31):
+                resp = await c.post(
+                    "/api/executive/intent/today",
+                    json={"intent": f"burst {i}"},
+                )
+                statuses.append(resp.status_code)
+    finally:
+        limiter.enabled = False
+
+    assert 429 in statuses, (
+        f"Expected at least one 429 from 31 rapid POSTs; got statuses: {set(statuses)}"
     )
 
 

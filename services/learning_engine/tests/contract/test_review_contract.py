@@ -283,14 +283,31 @@ async def test_get_next_review_no_deck_id_returns_all_user_due_decks(
     )
 
 
-async def test_get_stats_scoped_to_caller(contract_two_users, _le_app, _configure_api_key):
+async def test_get_stats_scoped_to_caller(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
     """GET /api/stats returns correct totals for caller's cards and review_logs.
 
     Collapses test_le_endpoints.py::test_get_review_stats which only checks
     response keys against a mocked pool. Here we assert the behavioral contract:
     user A sees their card in total_cards; user B's totals reflect only B's data.
+
+    IDNF proof: a NULL-user_id card must NOT be counted in user A's total_cards.
+    The card_stats CTE uses ``user_id IS NOT DISTINCT FROM $1`` — with $1 = A's
+    integer id, a NULL-user_id row does NOT match, so total_cards is unaffected.
     """
-    # User A — has 1 card seeded by contract_two_users
+    deck_id_a = contract_two_users.deck_id_a
+    user_a_id = contract_two_users.user_a_id
+
+    # Seed a card with user_id = NULL (the IDNF sentinel).
+    null_card_id = await contract_conn.fetchval(
+        "INSERT INTO cards (deck_id, card_type, front, back, user_id)"
+        " VALUES ($1, 'concept', 'null-user front', 'null-user back', NULL)"
+        " RETURNING id",
+        deck_id_a,
+    )
+
+    # User A — has 1 card seeded by contract_two_users (plus the NULL-user card above)
     async with _client(_le_app, contract_two_users.cookie_a) as c:
         resp_a = await c.get("/api/stats")
 
@@ -302,6 +319,25 @@ async def test_get_stats_scoped_to_caller(contract_two_users, _le_app, _configur
     assert "streak_days" in body_a, f"Response missing streak_days: {body_a}"
     assert isinstance(body_a["total_cards"], int) and body_a["total_cards"] >= 1, (
         f"User A expected total_cards >= 1 (has 1 seeded); got {body_a['total_cards']}"
+    )
+    # The NULL-user card must NOT inflate user A's count (IDNF: NULL IS NOT DISTINCT FROM
+    # integer = false, so it is correctly excluded).
+    null_card_count = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM cards WHERE id = $1 AND user_id IS NULL",
+        null_card_id,
+    )
+    assert null_card_count == 1, "NULL-user card not seeded correctly — test setup error"
+    # If card_stats used strict `=` instead of IDNF, a NULL-user card owned by the same
+    # deck would still not match (= with NULL is always false), but a NULL $1 would include
+    # everything. Here user_a_id IS an integer, so we confirm total_cards equals exactly
+    # the count of user A's own cards (not inflated by the NULL-user row).
+    own_card_count = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM cards WHERE user_id = $1",
+        user_a_id,
+    )
+    assert body_a["total_cards"] == own_card_count, (
+        f"total_cards={body_a['total_cards']} but user A owns {own_card_count} cards; "
+        f"NULL-user card (id={null_card_id}) must NOT be counted (IDNF semantic)"
     )
 
     # User B — also has 1 card; total_cards should reflect B's own cards only
@@ -317,4 +353,86 @@ async def test_get_stats_scoped_to_caller(contract_two_users, _le_app, _configur
     assert body_b["total_cards"] == body_a["total_cards"], (
         f"Each user has 1 seeded card but totals differ unexpectedly: "
         f"A={body_a['total_cards']} B={body_b['total_cards']}"
+    )
+
+
+async def test_sync_reviews_releases_connection_between_batches(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/review/sync with ≥100 events acquires the pool connection > 1 time.
+
+    Proves the N=50 batching refactor (LE-D5-05): one acquire for the pre-flight
+    idempotency-key lookup, then one acquire per 50-event chunk.  Also confirms
+    idempotency: re-sending the same body reports synced=0.
+    """
+    card_id_a = contract_two_users.card_id_a
+    reviewed_at = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+
+    # Build 100 distinct events — all for user A's card, each with a unique key.
+    n_events = 100
+    events = [
+        {
+            "idempotency_key": f"batch-proof-{uuid.uuid4()}",
+            "card_id": card_id_a,
+            "rating": 3,
+            "reviewed_at": reviewed_at,
+            "review_duration_ms": 800,
+        }
+        for _ in range(n_events)
+    ]
+
+    # Instrument db_pool.acquire to count invocations.
+    pool = _le_app.state.db_pool
+    original_acquire = pool.acquire
+    acquire_count = 0
+
+    def counting_acquire():
+        nonlocal acquire_count
+        acquire_count += 1
+        return original_acquire()
+
+    pool.acquire = counting_acquire
+
+    try:
+        async with _client(_le_app, contract_two_users.cookie_a) as c:
+            resp = await c.post("/api/review/sync", json={"reviews": events})
+    finally:
+        pool.acquire = original_acquire  # always restore
+
+    assert resp.status_code == 200, f"Sync failed: {resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    # All 100 events are new — expect synced=100, skipped=0.
+    assert body["synced"] == n_events and body["skipped"] == 0, (
+        f"Expected synced={n_events} skipped=0; got {body}"
+    )
+    # Pre-flight + ceil(100/50)=2 chunk acquires → 3 total > 1.
+    assert acquire_count > 1, (
+        f"Expected > 1 pool.acquire() calls (batching proof); got {acquire_count}. "
+        "sync_reviews may be holding one connection for the whole loop."
+    )
+
+    # Re-send the same body — idempotency must hold: synced=0.
+    acquire_count = 0
+    pool.acquire = counting_acquire
+    try:
+        async with _client(_le_app, contract_two_users.cookie_a) as c:
+            resp2 = await c.post("/api/review/sync", json={"reviews": events})
+    finally:
+        pool.acquire = original_acquire
+
+    assert resp2.status_code == 200, f"Re-send failed: {resp2.status_code}: {resp2.text[:300]}"
+    body2 = resp2.json()
+    # All 100 events are already applied — reported as synced (idempotent re-play).
+    # No new review_log rows must be created (ON CONFLICT DO NOTHING guarantees this).
+    assert body2["synced"] == n_events and body2["skipped"] == 0, (
+        f"Idempotency broken on re-send: expected synced={n_events} skipped=0; got {body2}"
+    )
+    # Confirm no double-insert: total row count for these keys must still be n_events.
+    idem_keys = [e["idempotency_key"] for e in events]
+    row_count = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM review_logs WHERE idempotency_key = ANY($1::text[])",
+        idem_keys,
+    )
+    assert row_count == n_events, (
+        f"Double-insert detected: expected {n_events} review_log rows; found {row_count}"
     )

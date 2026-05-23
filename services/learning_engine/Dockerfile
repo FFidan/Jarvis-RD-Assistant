@@ -6,7 +6,7 @@ WORKDIR /app
 COPY libs/jarvis_common/ ./libs/jarvis_common/
 COPY services/learning_engine/requirements.txt services/learning_engine/constraints.txt ./
 RUN pip install --no-cache-dir -c constraints.txt ./libs/jarvis_common/ \
-    && pip install --no-cache-dir -c constraints.txt -r requirements.txt
+    && pip install --no-cache-dir --require-hashes -r constraints.txt
 
 RUN adduser --disabled-password --no-create-home appuser
 

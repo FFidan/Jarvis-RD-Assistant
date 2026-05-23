@@ -48,6 +48,7 @@ services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:16.8}
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 2g
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-jarvis}
@@ -78,6 +79,7 @@ services:
     image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:1.77.0}
     profiles: ["n8n"]
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 2g
     ports:
       - "127.0.0.1:5678:5678"
@@ -125,6 +127,7 @@ services:
   ollama:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.23.1}
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 20g
     ports:
       - "127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434"
@@ -158,6 +161,7 @@ services:
 
   ollama-bootstrap:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.23.1}
+    security_opt: ["no-new-privileges:true"]
     depends_on:
       ollama:
         condition: service_healthy
@@ -190,6 +194,7 @@ services:
   qdrant:
     image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.13.2}
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 2g
     environment:
       # Qdrant reads the API key from this file path via its _FILE convention
@@ -220,6 +225,7 @@ services:
   litellm:
     image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm@sha256:29252f25ed1b538d44f6b76ec97412c5537a180b39ede744b9f3e86ffdd278f5}
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
@@ -492,6 +498,7 @@ services:
     image: ${POSTGRES_IMAGE:-postgres:16.8}
     profiles: [backup]
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 256m
     environment:
       PGHOST: postgres
@@ -525,6 +532,7 @@ services:
     image: postgres:16.8-alpine
     profiles: [observability]
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     environment:
       POSTGRES_USER: langfuse
       POSTGRES_DB: langfuse
@@ -556,8 +564,12 @@ services:
     image: ${LANGFUSE_IMAGE:-langfuse/langfuse@sha256:85c278dcab96c15db94191a5c1664f85aba2d7fb6771a00e99681c902c4b7015}
     profiles: [observability]
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     ports:
       - "${LANGFUSE_BIND_HOST:-127.0.0.1}:${LANGFUSE_HOST_PORT:-3002}:3000"
+    # S5-05: DATABASE_URL/NEXTAUTH_SECRET/SALT are interpolated from .env (plaintext).
+    # Langfuse v2 has no _FILE convention for these vars; accepted risk for
+    # single-tenant self-hosted deployments where the host is the trust boundary.
     environment:
       NEXTAUTH_URL: http://localhost:${LANGFUSE_HOST_PORT:-3002}
       TELEMETRY_ENABLED: "false"
@@ -619,6 +631,7 @@ services:
       dashboard:
         condition: service_healthy
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     mem_limit: 256m
     logging:
       driver: json-file
@@ -634,6 +647,7 @@ services:
     profiles: [caddy-local]
     container_name: jarvis_caddy_local
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
@@ -662,6 +676,7 @@ services:
     image: ${CADDY_IMAGE:-caddy:2.9-alpine}
     profiles: [letsencrypt]
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     ports:
       - "${LETSENCRYPT_HTTP_PORT:-80}:80"
       - "${LETSENCRYPT_HTTPS_PORT:-443}:443"

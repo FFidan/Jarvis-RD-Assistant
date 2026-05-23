@@ -87,18 +87,24 @@ SEEDED_COUNT=$(printf '%s\n' "$SEEDED_VERSIONS" | grep -c '[0-9]')
 SEEDED_MIN=$(printf '%s\n' "$SEEDED_VERSIONS" | head -1)
 SEEDED_MAX=$(printf '%s\n' "$SEEDED_VERSIONS" | tail -1)
 
-if [ "$SEEDED_COUNT" -ne 88 ] || [ "$SEEDED_MIN" -ne 1 ] || [ "$SEEDED_MAX" -ne 88 ]; then
-  echo "db/init.sql schema_migrations bootstrap must seed exactly versions 1..88 contiguous." >&2
-  echo "  Found: count=$SEEDED_COUNT, min=$SEEDED_MIN, max=$SEEDED_MAX (expected 88, 1, 88)." >&2
+# Derive expected count from db/init.sql rather than hardcoding 88.
+# Extracts the highest version number from the INSERT INTO schema_migrations
+# VALUES block — robust to future squash additions.
+EXPECTED=$(awk '/INSERT INTO schema_migrations/,/ON CONFLICT \(version\)/' db/init.sql \
+  | grep -oE '\([0-9]+\)' | tr -d '()' | sort -n | tail -1)
+
+if [ "$SEEDED_COUNT" -ne "$EXPECTED" ] || [ "$SEEDED_MIN" -ne 1 ] || [ "$SEEDED_MAX" -ne "$EXPECTED" ]; then
+  echo "db/init.sql schema_migrations bootstrap must seed exactly versions 1..${EXPECTED} contiguous." >&2
+  echo "  Found: count=$SEEDED_COUNT, min=$SEEDED_MIN, max=$SEEDED_MAX (expected ${EXPECTED}, 1, ${EXPECTED})." >&2
   exit 1
 fi
 
-# Verify no gaps: seeded list must equal seq 1 88.
-EXPECTED=$(seq 1 88 | tr '\n' ' ')
+# Verify no gaps: seeded list must equal seq 1 $EXPECTED.
+EXPECTED_SEQ=$(seq 1 "$EXPECTED" | tr '\n' ' ')
 ACTUAL=$(printf '%s\n' "$SEEDED_VERSIONS" | tr '\n' ' ')
-if [ "$ACTUAL" != "$EXPECTED" ]; then
+if [ "$ACTUAL" != "$EXPECTED_SEQ" ]; then
   echo "db/init.sql schema_migrations bootstrap has gaps or duplicates." >&2
-  echo "  Expected: $EXPECTED" >&2
+  echo "  Expected: $EXPECTED_SEQ" >&2
   echo "  Actual:   $ACTUAL" >&2
   exit 1
 fi

@@ -5,7 +5,8 @@
 # with pip for small images and simple build layers:
 #
 # - requirements files contain direct, human-auditable service dependencies
-# - constraints files contain lock-derived transitive pins for resolver parity
+# - constraints files contain lock-derived transitive pins with SHA-256 hashes
+#   for supply-chain hardening (pip install --require-hashes in Dockerfiles)
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -89,7 +90,6 @@ export_constraints() {
       --only-group "$group" \
       --no-annotate \
       --no-header \
-      --no-hashes \
       --no-emit-project \
       --output-file "$tmp_output" \
       >/dev/null

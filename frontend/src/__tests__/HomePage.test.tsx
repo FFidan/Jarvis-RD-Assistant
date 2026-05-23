@@ -131,53 +131,64 @@ describe('HomePage', () => {
     });
 
     it('does not call batchProcessPapers when user cancels confirmation', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(false);
       renderHomePage();
       const button = screen.getByRole('button', { name: /Process PDFs/i });
       await userEvent.click(button);
-      expect(window.confirm).toHaveBeenCalledWith(
-        'This will process PDFs for all papers in your library. This may take several minutes. Continue?',
-      );
+      expect(screen.getByText('Are you sure?')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'This will process PDFs for all papers in your library. This may take several minutes. Continue?',
+        ),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
       expect(batchProcessPapers).not.toHaveBeenCalled();
     });
 
     it('does not call batchSummarizePapers when user cancels confirmation', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(false);
       renderHomePage();
       const button = screen.getByRole('button', { name: /Summarize/i });
       await userEvent.click(button);
-      expect(window.confirm).toHaveBeenCalledWith(
-        'This will generate AI summaries for all unprocessed papers. This costs LLM tokens. Continue?',
-      );
+      expect(screen.getByText('Are you sure?')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'This will generate AI summaries for all unprocessed papers. This costs LLM tokens. Continue?',
+        ),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
       expect(batchSummarizePapers).not.toHaveBeenCalled();
     });
 
     it('does not call batchExtractEntities when user cancels confirmation', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(false);
       renderHomePage();
       const button = screen.getByRole('button', { name: /Extract Entities/i });
       await userEvent.click(button);
-      expect(window.confirm).toHaveBeenCalledWith(
-        'This will extract entities from all papers. This costs LLM tokens. Continue?',
-      );
+      expect(screen.getByText('Are you sure?')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'This will extract entities from all papers. This costs LLM tokens. Continue?',
+        ),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
       expect(batchExtractEntities).not.toHaveBeenCalled();
     });
 
     it('calls batchProcessPapers when user confirms', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 5, total_unprocessed: 5, skipped_missing_pdf: 0, job_id: 'job-123' });
       renderHomePage();
       const button = screen.getByRole('button', { name: /Process PDFs/i });
       await userEvent.click(button);
+      expect(screen.getByText('Are you sure?')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       await waitFor(() => expect(batchProcessPapers).toHaveBeenCalledTimes(1));
     });
 
     it('calls batchSummarizePapers and shows queued count', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(true);
       vi.mocked(batchSummarizePapers).mockResolvedValue({ total_unsummarized: 7, job_id: 'job-sum-1' });
       renderHomePage();
       const button = screen.getByRole('button', { name: /Summarize/i });
       await userEvent.click(button);
+      expect(screen.getByText('Are you sure?')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       await waitFor(() => expect(batchSummarizePapers).toHaveBeenCalledTimes(1));
       expect(await screen.findByText('Queued 7 papers')).toBeInTheDocument();
     });

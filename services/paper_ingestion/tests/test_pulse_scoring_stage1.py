@@ -10,7 +10,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.profile import UserProfile
-from paper_ingestion.pulse.scoring import stage1_embedding_filter
+import paper_ingestion.pulse.scoring as _scoring_mod
+from paper_ingestion.pulse.scoring import (
+    _llm_concurrency,
+    _llm_model,
+    stage1_embedding_filter,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -424,3 +429,21 @@ async def test_stage1_default_now_uses_utc_date():
         "a date.today() fallback on a non-UTC host would give age_days=1 "
         f"(recency={math.exp(-1 / 30.0):.6f}) instead"
     )
+
+
+def test_llm_constants_read_from_cfg_at_call_time(monkeypatch):
+    """_llm_concurrency() and _llm_model() re-read _get_cfg() on every call."""
+
+    class _FakeCfg:
+        def __init__(self, concurrency, model):
+            self.pulse_llm_concurrency = concurrency
+            self.pulse_stage2_model = model
+
+    calls = iter([_FakeCfg(2, "fast"), _FakeCfg(8, "smart"), _FakeCfg(4, None), _FakeCfg(1, "")])
+
+    monkeypatch.setattr(_scoring_mod, "_get_cfg", lambda: next(calls))
+
+    assert _llm_concurrency() == 2
+    assert _llm_model() == "smart"
+    assert _llm_concurrency() == 4
+    assert _llm_model() == "fast"

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Request
 from jarvis_common.auth import current_user_id_strict, verify_api_key
 from pydantic import BaseModel, Field
 
-from learning_engine.deps import get_db_pool
+from learning_engine.deps import get_db_pool, limiter
 from learning_engine.repos.intent_repo import (
     IntentRow,
 )
@@ -29,6 +29,7 @@ class IntentBody(BaseModel):
 
 
 @router.get("/intent/today", dependencies=[Depends(verify_api_key)])
+@limiter.limit("60/minute")
 async def get_intent_today(
     request: Request,
     db_pool: Pool = Depends(get_db_pool),
@@ -39,6 +40,7 @@ async def get_intent_today(
 
 
 @router.post("/intent/today", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
 async def save_intent_today(
     request: Request,
     payload: IntentBody,

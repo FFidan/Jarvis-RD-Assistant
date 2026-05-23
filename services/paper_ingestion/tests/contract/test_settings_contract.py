@@ -315,6 +315,63 @@ async def test_put_telegram_owner_chat_id_null_clears(contract_conn, pi_settings
     assert resp.json()["value"] is None
 
 
+@pytest.mark.asyncio(loop_scope="session")
+async def test_put_config_db_committed_before_litellm_called(
+    contract_conn, pi_settings_client, monkeypatch
+):
+    """DB row is written even when _apply_litellm_runtime_update raises.
+
+    Verifies BUG-D4-004 fix: DB write happens BEFORE LiteLLM runtime update so
+    that a LiteLLM failure does not discard the persisted config value.
+    Also verifies that when _write_config_row raises, _apply_litellm_runtime_update
+    is never called.
+    """
+    import paper_ingestion.services.settings_service as _svc
+
+    # -- Part 1: LiteLLM fails → DB row still committed ----------------------
+    litellm_called: list[str] = []
+
+    async def _litellm_fail(**kwargs):  # noqa: ARG001
+        litellm_called.append("called")
+        raise RuntimeError("litellm-fail")
+
+    monkeypatch.setattr(_svc, "_apply_litellm_runtime_update", _litellm_fail)
+
+    with pytest.raises(RuntimeError, match="litellm-fail"):
+        await pi_settings_client.put(
+            "/api/config/pulse.deck_size",
+            json={"key": "pulse.deck_size", "value": 42},
+        )
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+        "pulse.deck_size",
+    )
+    assert row is not None
+    assert row["value"] == 42
+    assert litellm_called
+
+    # -- Part 2: DB write fails → LiteLLM update never called ----------------
+    monkeypatch.undo()
+
+    litellm_reached: list[str] = []
+
+    async def _litellm_spy(**kwargs):  # noqa: ARG001
+        litellm_reached.append("called")
+
+    async def _db_fail(*args, **kwargs):  # noqa: ARG001
+        raise RuntimeError("db-fail")
+
+    monkeypatch.setattr(_svc, "_write_config_row", _db_fail)
+    monkeypatch.setattr(_svc, "_apply_litellm_runtime_update", _litellm_spy)
+
+    with pytest.raises(RuntimeError, match="db-fail"):
+        await pi_settings_client.put(
+            "/api/config/pulse.deck_size",
+            json={"key": "pulse.deck_size", "value": 99},
+        )
+    assert not litellm_reached
+
+
 # ---------------------------------------------------------------------------
 # W1A.4 — settings/ai contract tests
 #

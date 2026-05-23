@@ -18,6 +18,7 @@ from learning_engine.models import (
     MyDayRecommendationItem,
     MyDayResponse,
     MyDayTaskItem,
+    TaskResponse,
 )
 
 router = APIRouter(prefix="/api/executive", tags=["executive"])
@@ -365,14 +366,14 @@ async def get_my_day_bundle(
     }
 
 
-@router.post("/tasks", status_code=201)
+@router.post("/tasks", status_code=201, response_model=TaskResponse)
 @limiter.limit("30/minute")
 async def quick_add_task(
     request: Request,
     payload: QuickAddTaskRequest,
     db_pool: Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
-) -> dict[str, Any]:
+) -> TaskResponse:
     """Quick-add a task, optionally linked to a project."""
     async with db_pool.acquire() as conn:
         if payload.project_id is not None:
@@ -394,7 +395,7 @@ async def quick_add_task(
             payload.priority,
             user_id,
         )
-    return dict(row)  # type: ignore[arg-type]
+    return TaskResponse.model_validate(dict(row))  # type: ignore[arg-type]
 
 
 @router.post("/focus/log", response_model=FocusSessionResponse)

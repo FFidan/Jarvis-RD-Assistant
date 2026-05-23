@@ -91,4 +91,51 @@ describe('WhyPopover', () => {
     expect(screen.getByText(/relevance/i)).toBeInTheDocument();
     expect(screen.getByText(/novelty/i)).toBeInTheDocument();
   });
+
+  it('closes on Escape key press', async () => {
+    const { explainPulseCard } = await import('@/lib/api');
+    vi.mocked(explainPulseCard).mockResolvedValue({
+      card_id: 7,
+      reasoning: 'matches your topic',
+      signals: {},
+      llm_relevance: 9,
+      llm_novelty: 7,
+    });
+    const user = userEvent.setup();
+    renderWithClient(<WhyPopover cardId={7} trigger={<button>Why?</button>} />);
+    await user.click(screen.getByText('Why?'));
+    await waitFor(() => {
+      expect(screen.getByText('Why this paper?')).toBeInTheDocument();
+    });
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByText('Why this paper?')).not.toBeInTheDocument();
+    });
+  });
+
+  it('closes on outside click', async () => {
+    const { explainPulseCard } = await import('@/lib/api');
+    vi.mocked(explainPulseCard).mockResolvedValue({
+      card_id: 7,
+      reasoning: 'matches your topic',
+      signals: {},
+      llm_relevance: 9,
+      llm_novelty: 7,
+    });
+    const user = userEvent.setup();
+    renderWithClient(
+      <div>
+        <WhyPopover cardId={7} trigger={<button>Why?</button>} />
+        <button>Outside</button>
+      </div>,
+    );
+    await user.click(screen.getByText('Why?'));
+    await waitFor(() => {
+      expect(screen.getByText('Why this paper?')).toBeInTheDocument();
+    });
+    await user.click(screen.getByText('Outside'));
+    await waitFor(() => {
+      expect(screen.queryByText('Why this paper?')).not.toBeInTheDocument();
+    });
+  });
 });

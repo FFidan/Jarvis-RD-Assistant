@@ -31,7 +31,10 @@ async def get_activity(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
 ) -> list[ActivityItem]:
-    """Return daily_log entries for the last N days, scoped to the calling user."""
+    """Return daily_log entries for the last N days, scoped to the calling user.
+
+    Excludes today for stable KPI snapshot; mirrors /summary semantic.
+    """
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -39,6 +42,7 @@ async def get_activity(
             FROM daily_log
             WHERE user_id = $1
               AND log_date >= CURRENT_DATE - $2::int
+              AND log_date <  CURRENT_DATE
             ORDER BY log_date ASC
             """,
             user_id,

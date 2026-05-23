@@ -187,8 +187,10 @@ async def sync_reviews(
     skipped = 0
     if not body.reviews:
         return ReviewSyncResponse(synced=0, skipped=0)
+
+    # Pre-flight: resolve already-applied idempotency keys, then release connection.
+    keys = [e.idempotency_key for e in body.reviews]
     async with db_pool.acquire() as conn:
-        keys = [e.idempotency_key for e in body.reviews]
         applied_rows = await conn.fetch(
             "SELECT idempotency_key FROM review_logs "
             "WHERE user_id = $1 AND idempotency_key = ANY($2::text[])",
@@ -197,56 +199,64 @@ async def sync_reviews(
         )
         applied = {r["idempotency_key"] for r in applied_rows}
         fsrs_manager = await _build_fsrs_manager_from_db(conn, user_id=user_id)
-        for event in body.reviews:
-            if event.idempotency_key in applied:
-                synced += 1
-                continue
-            async with conn.transaction():
-                card = await conn.fetchrow(
-                    "SELECT * FROM cards WHERE id = $1 AND user_id = $2 FOR UPDATE",
-                    event.card_id,
-                    user_id,
-                )
-                if not card:
-                    skipped += 1
-                    continue
-                new_state, log_dict, next_due = fsrs_manager.schedule_review(
-                    card["fsrs_state"], event.rating.value
-                )
-                inserted_log_id = await conn.fetchval(
-                    """
-                    INSERT INTO review_logs
-                        (card_id, rating, review_duration_ms, reviewed_at,
-                         fsrs_log, user_id, idempotency_key)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (user_id, idempotency_key)
-                        WHERE idempotency_key IS NOT NULL DO NOTHING
-                    RETURNING id
-                    """,
-                    event.card_id,
-                    event.rating.value,
-                    event.review_duration_ms,
-                    event.reviewed_at,
-                    log_dict,
-                    user_id,
-                    event.idempotency_key,
-                )
-                if inserted_log_id is None:
-                    # A concurrent request with the same idempotency_key won the
-                    # INSERT (its row is durably recorded). Do NOT advance FSRS
-                    # again — count as synced per contract §4 and move on.
-                    applied.add(event.idempotency_key)
+
+    # Process events in chunks of 50; acquire a fresh connection per chunk.
+    _batch_size = 50
+    events = body.reviews
+    for batch_start in range(0, len(events), _batch_size):
+        batch = events[batch_start : batch_start + _batch_size]
+        async with db_pool.acquire() as conn:
+            for event in batch:
+                if event.idempotency_key in applied:
                     synced += 1
                     continue
-                await conn.execute(
-                    "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
-                    "WHERE id = $3",
-                    new_state,
-                    next_due,
-                    event.card_id,
-                )
-            applied.add(event.idempotency_key)
-            synced += 1
+                async with conn.transaction():
+                    card = await conn.fetchrow(
+                        "SELECT * FROM cards WHERE id = $1 AND user_id = $2 FOR UPDATE",
+                        event.card_id,
+                        user_id,
+                    )
+                    if not card:
+                        skipped += 1
+                        continue
+                    new_state, log_dict, next_due = fsrs_manager.schedule_review(
+                        card["fsrs_state"], event.rating.value
+                    )
+                    inserted_log_id = await conn.fetchval(
+                        """
+                        INSERT INTO review_logs
+                            (card_id, rating, review_duration_ms, reviewed_at,
+                             fsrs_log, user_id, idempotency_key)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        ON CONFLICT (user_id, idempotency_key)
+                            WHERE idempotency_key IS NOT NULL DO NOTHING
+                        RETURNING id
+                        """,
+                        event.card_id,
+                        event.rating.value,
+                        event.review_duration_ms,
+                        event.reviewed_at,
+                        log_dict,
+                        user_id,
+                        event.idempotency_key,
+                    )
+                    if inserted_log_id is None:
+                        # A concurrent request with the same idempotency_key won the
+                        # INSERT (its row is durably recorded). Do NOT advance FSRS
+                        # again — count as synced per contract §4 and move on.
+                        applied.add(event.idempotency_key)
+                        synced += 1
+                        continue
+                    await conn.execute(
+                        "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
+                        "WHERE id = $3",
+                        new_state,
+                        next_due,
+                        event.card_id,
+                    )
+                applied.add(event.idempotency_key)
+                synced += 1
+
     return ReviewSyncResponse(synced=synced, skipped=skipped)
 
 
@@ -267,7 +277,7 @@ async def get_stats(
                         COUNT(*) AS total_cards,
                         COUNT(*) FILTER (WHERE due_at <= NOW()) AS due_now
                     FROM cards
-                    WHERE user_id = $1
+                    WHERE user_id IS NOT DISTINCT FROM $1
                 ),
                 today_stats AS (
                     SELECT COUNT(*) AS reviewed_today

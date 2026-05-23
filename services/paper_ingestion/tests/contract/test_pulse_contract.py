@@ -1286,20 +1286,20 @@ async def test_pulse_generate_user_id_threading_deck_is_user_scoped(
 
 
 # §W2.3-01 — Stage 2 routes requests to the configured model alias
-# Verified: pulse/scoring.py:56 (_LLM_MODEL = _get_cfg().pulse_stage2_model or "fast")
-# Verified: pulse/scoring.py:305-306 (ChatCompletionOptions(model=_LLM_MODEL))
+# Verified: pulse/scoring.py:56 (_llm_model() lazy getter)
+# Verified: pulse/scoring.py:305-306 (ChatCompletionOptions(model=_llm_model()))
 # Survivor-of: test_pulse_scoring_stage2.py::test_stage2_uses_fast_model_and_single_retry_by_default
 #              test_pulse_scoring_stage2.py::test_stage2_model_and_retry_budget_are_env_configurable
 
 
 async def test_pulse_scoring_w2_stage2_model_config_respected(monkeypatch):
-    """stage2_llm_rerank sends the chat request to the model alias in _LLM_MODEL.
+    """stage2_llm_rerank sends the chat request to the model alias returned by _llm_model().
 
     Uses a FauxLiteLLMServer with a scripted response queued under "smart".
-    Monkeypatches the module-level _LLM_MODEL to "smart" so the production
+    Monkeypatches the lazy _llm_model() getter to "smart" so the production
     code sends the request to that alias.  The scripted response is consumed
     only if the model field in the request matches "smart".
-    Verified: pulse/scoring.py:56 — _LLM_MODEL drives ChatCompletionOptions.model.
+    Verified: pulse/scoring.py:56 — _llm_model() drives ChatCompletionOptions.model.
     """
     import instructor
     import openai
@@ -1325,7 +1325,7 @@ async def test_pulse_scoring_w2_stage2_model_config_respected(monkeypatch):
             ),
         )
 
-        monkeypatch.setattr(_scoring, "_LLM_MODEL", "smart")
+        monkeypatch.setattr(_scoring, "_llm_model", lambda: "smart")
 
         paper = PaperCreate(
             external_id="w2-model-01",
@@ -1408,7 +1408,7 @@ async def test_pulse_scoring_w2_stage2_verifier_gated_filter_drops_unverifiable(
             mode=instructor.Mode.JSON,
         )
         faux.add_pydantic_response(
-            _scoring._LLM_MODEL,
+            _scoring._llm_model(),
             PulseScoringOutput(relevance=7, novelty=5, reasoning=fabricated_reasoning),
         )
 
@@ -1628,7 +1628,7 @@ async def test_pulse_scoring_w2_stage3_llm_502_falls_back_to_stage2_output():
             openai.AsyncOpenAI(base_url=f"{faux.url}/v1", api_key="dummy"),
             mode=instructor.Mode.JSON,
         )
-        faux.add_error(_scoring._LLM_MODEL, 502, "upstream overloaded")
+        faux.add_error(_scoring._llm_model(), 502, "upstream overloaded")
 
         paper = PaperCreate(
             external_id="w2-502-fallback-01",
@@ -1721,9 +1721,9 @@ async def test_pulse_scoring_w2_retry_then_success_pattern_recovers(monkeypatch)
             mode=instructor.Mode.JSON,
         )
         # First call: 502 error; second call (retry): valid response
-        faux.add_error(_scoring._LLM_MODEL, 502, "transient overload")
+        faux.add_error(_scoring._llm_model(), 502, "transient overload")
         faux.add_pydantic_response(
-            _scoring._LLM_MODEL,
+            _scoring._llm_model(),
             PulseScoringOutput(
                 relevance=9, novelty=7, reasoning="Advances state-of-the-art on benchmarks."
             ),
@@ -1768,3 +1768,25 @@ async def test_pulse_scoring_w2_retry_then_success_pattern_recovers(monkeypatch)
         "If retry failed, llm_relevance would be None with reasoning='LLM scoring failed'."
     )
     assert result[0].llm_novelty == 7, f"llm_novelty must be 7; got {result[0].llm_novelty!r}"
+
+
+async def test_pulse_routes_match_null_user_legacy_rows(contract_conn):
+    """Legacy NULL-user pulse_decks rows surface via IS NOT DISTINCT FROM NULL."""
+    null_deck_id = await contract_conn.fetchval(
+        "INSERT INTO pulse_decks (deck_date, card_count, user_id) "
+        "VALUES (CURRENT_DATE, 0, NULL) RETURNING id"
+    )
+
+    strict_count = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM pulse_decks WHERE id = $1 AND user_id = $2",
+        null_deck_id,
+        None,
+    )
+    assert strict_count == 0
+
+    idnf_count = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM pulse_decks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+        null_deck_id,
+        None,
+    )
+    assert idnf_count == 1

@@ -1086,7 +1086,7 @@ async def _apply_litellm_runtime_update(
     value: Any,
     update_litellm_model_fn: Any,
 ) -> None:
-    """Apply model and per-machine runtime settings to LiteLLM before DB writes."""
+    """Apply model and per-machine runtime settings to LiteLLM after the DB write."""
     from fastapi import HTTPException  # noqa: PLC0415
 
     from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
@@ -1233,17 +1233,7 @@ async def write_config(
         if row is not None and isinstance(row["value"], str):
             old_zotero_poll_cron = row["value"]
 
-    # LiteLLM update (before DB write so we can abort on failure).
-    # The ``update_litellm_model_fn`` parameter lets callers (i.e. the router)
-    # pass a monkeypatched reference so test patches remain effective.
-    await _apply_litellm_runtime_update(
-        db_pool=db_pool,
-        key=key,
-        value=value,
-        update_litellm_model_fn=update_litellm_model_fn,
-    )
-
-    # DB write
+    # DB write first — DB is the source of truth.
     if key in _ENCRYPTED_KEYS:
         ciphertext_bytes = encrypt_secret(str(value)).encode("ascii")
         async with db_pool.acquire() as conn:
@@ -1257,6 +1247,17 @@ async def write_config(
     else:
         async with db_pool.acquire() as conn:
             await _write_config_row(conn, user_id=row_user_id, key=key, value=value)
+
+    # LiteLLM runtime update after DB commit; on failure the DB write stays
+    # committed (LiteLLM reconciles from DB on reload).
+    # The ``update_litellm_model_fn`` parameter lets callers (i.e. the router)
+    # pass a monkeypatched reference so test patches remain effective.
+    await _apply_litellm_runtime_update(
+        db_pool=db_pool,
+        key=key,
+        value=value,
+        update_litellm_model_fn=update_litellm_model_fn,
+    )
 
     # Scheduler side-effects
     if key == "pulse.cron":

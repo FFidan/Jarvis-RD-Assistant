@@ -250,7 +250,7 @@ async def rate_card(
             """SELECT 1 FROM pulse_cards pc
                JOIN pulse_decks pd ON pc.deck_id = pd.id
                WHERE pc.paper_id = $1
-                 AND pd.user_id = $2
+                 AND pd.user_id IS NOT DISTINCT FROM $2
                LIMIT 1""",
             body.paper_id,
             user_id,
@@ -302,7 +302,7 @@ async def explain_card(
             FROM pulse_cards pc
             JOIN pulse_decks pd ON pc.deck_id = pd.id
             WHERE pc.id = $1
-              AND pd.user_id = $2
+              AND pd.user_id IS NOT DISTINCT FROM $2
             """,
             card_id,
             user_id,
@@ -345,7 +345,7 @@ async def get_stats(
                     SELECT stats->>'last_error'
                     FROM pulse_decks
                     WHERE generated_at >= NOW() - make_interval(days => $1)
-                      AND user_id = $2
+                      AND user_id IS NOT DISTINCT FROM $2
                     ORDER BY generated_at DESC
                     LIMIT 1
                 ) AS last_error,
@@ -353,13 +353,13 @@ async def get_stats(
                     SELECT degraded_reason
                     FROM pulse_decks
                     WHERE generated_at >= NOW() - make_interval(days => $1)
-                      AND user_id = $2
+                      AND user_id IS NOT DISTINCT FROM $2
                     ORDER BY generated_at DESC
                     LIMIT 1
                 ) AS degraded_reason
             FROM pulse_decks
             WHERE generated_at >= NOW() - make_interval(days => $1)
-              AND user_id = $2
+              AND user_id IS NOT DISTINCT FROM $2
             """,
             days,
             caller_id,
@@ -408,7 +408,7 @@ async def debug_pulse(
             """
             SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
             FROM pulse_decks
-            WHERE user_id = $1
+            WHERE user_id IS NOT DISTINCT FROM $1
             ORDER BY generated_at DESC
             LIMIT 1
             """,

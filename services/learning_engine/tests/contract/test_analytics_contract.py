@@ -65,13 +65,29 @@ async def test_activity_user_b_cannot_see_user_a_rows(
 async def test_activity_owner_sees_own_rows(
     contract_two_users, contract_conn, _le_app, _configure_api_key
 ):
-    """User A sees their own daily_log row (positive control)."""
+    """User A sees past daily_log rows but NOT today's row (stable-KPI semantic).
+
+    Seeds a past-date row (yesterday, focus_hours=7.25) which must appear, and a
+    today row (focus_hours=8.88) which must NOT appear — /activity excludes today
+    to mirror /summary's stable-KPI window.
+    """
     today = date.today()
+    yesterday = today - timedelta(days=1)
+    # Past-date seed — must appear in response
     await contract_conn.execute(
         """INSERT INTO daily_log (user_id, log_date, focus_hours, cards_reviewed,
                papers_read, tasks_completed)
            VALUES ($1, $2, 7.25, 0, 0, 0)
            ON CONFLICT (user_id, log_date) DO UPDATE SET focus_hours = 7.25""",
+        contract_two_users.user_a_id,
+        yesterday,
+    )
+    # Today seed — must NOT appear in response (excluded for stable KPI snapshot)
+    await contract_conn.execute(
+        """INSERT INTO daily_log (user_id, log_date, focus_hours, cards_reviewed,
+               papers_read, tasks_completed)
+           VALUES ($1, $2, 8.88, 0, 0, 0)
+           ON CONFLICT (user_id, log_date) DO UPDATE SET focus_hours = 8.88""",
         contract_two_users.user_a_id,
         today,
     )
@@ -82,7 +98,11 @@ async def test_activity_owner_sees_own_rows(
     assert resp.status_code == 200
     focus_values = [row["focus_hours"] for row in resp.json()]
     assert 7.25 in focus_values, (
-        f"User A expected to see their own focus_hours 7.25 in activity; got {focus_values}"
+        f"User A expected to see their own focus_hours 7.25 (yesterday) in activity; got {focus_values}"
+    )
+    assert 8.88 not in focus_values, (
+        f"Today's row (focus_hours=8.88) must be excluded from /activity (stable-KPI semantic); "
+        f"got {focus_values}"
     )
 
 

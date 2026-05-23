@@ -11,6 +11,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useUIStore } from '@/stores/ui-store';
 import { errorMessage } from '@/lib/errors';
 import { SetupBanner } from '@/components/setup/SetupBanner';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useConfirm } from '@/hooks/use-confirm';
 
 interface BatchButtonProps<T> {
   label: string;
@@ -18,6 +20,7 @@ interface BatchButtonProps<T> {
   mutationFn: () => Promise<T>;
   formatResult: (data: T) => string;
   confirmMessage?: string;
+  confirmTitle?: string;
 }
 
 function BatchButton<T>({
@@ -26,8 +29,10 @@ function BatchButton<T>({
   mutationFn,
   formatResult,
   confirmMessage,
+  confirmTitle,
 }: BatchButtonProps<T>) {
   const queryClient = useQueryClient();
+  const { isOpen, confirm, handleConfirm, handleCancel } = useConfirm();
   const mutation = useMutation({
     mutationFn,
     onSuccess: () => {
@@ -35,15 +40,20 @@ function BatchButton<T>({
     },
   });
 
+  const handleClick = async () => {
+    if (confirmMessage) {
+      const confirmed = await confirm();
+      if (!confirmed) return;
+    }
+    mutation.mutate();
+  };
+
   return (
     <div className="flex flex-col items-start gap-1">
       <Button
         variant="outline"
         size="sm"
-        onClick={() => {
-          if (confirmMessage && !window.confirm(confirmMessage)) return;
-          mutation.mutate();
-        }}
+        onClick={handleClick}
         disabled={mutation.isPending}
       >
         {mutation.isPending ? (
@@ -62,6 +72,16 @@ function BatchButton<T>({
         <span className="text-xs text-[var(--status-bad)]">
           Failed: {errorMessage(mutation.error)}
         </span>
+      )}
+      {confirmMessage && (
+        <ConfirmDialog
+          open={isOpen}
+          title={confirmTitle ?? 'Are you sure?'}
+          description={confirmMessage}
+          confirmLabel="Continue"
+          onConfirm={handleConfirm}
+          onCancel={handleCancel}
+        />
       )}
     </div>
   );

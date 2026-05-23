@@ -288,8 +288,7 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, list
       onShowCheatSheet: () => useKeyboardShortcuts.getState().open(),
       onClearSelection: () => useBulkSelection.getState().clear(),
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [papers.length, saveMutation, skipMutation, markReadingMut, markDoneMut, trashMutation, starMutation, unstarMutation, restoreMutation, onView],
+    [papers, saveMutation, skipMutation, markReadingMut, markDoneMut, trashMutation, starMutation, unstarMutation, restoreMutation, onView],
   );
 
   useFeedKeyboardShortcuts(surface, papers, clampedFocusedIdx, shortcutCallbacks);

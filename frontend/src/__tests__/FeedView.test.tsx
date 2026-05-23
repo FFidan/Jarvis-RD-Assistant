@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { FeedView } from '@/components/feed/FeedView';
 import type { FeedPaper } from '@/types';
@@ -177,5 +177,124 @@ describe('FeedView — mutation onError toasts (NI-3)', () => {
         expect.objectContaining({ description: '500 Internal Server Error' }),
       );
     });
+  });
+});
+
+describe('FeedView — shortcut callback freshness (W3-C5-02)', () => {
+  // Renders FeedView inside a MemoryRouter with a sentinel /paper/:id route so
+  // we can assert on navigate() calls triggered by keyboard shortcuts.
+  function NavigationCapture({ onNavigate }: { onNavigate: (path: string) => void }) {
+    const loc = useLocation();
+    onNavigate(loc.pathname);
+    return null;
+  }
+
+  function renderWithNav() {
+    let capturedPath = '/';
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route
+              path="/"
+              element={
+                <>
+                  <FeedView surface="inbox" />
+                  <NavigationCapture onNavigate={(p) => { capturedPath = p; }} />
+                </>
+              }
+            />
+            <Route
+              path="/paper/:id"
+              element={<NavigationCapture onNavigate={(p) => { capturedPath = p; }} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return { getPath: () => capturedPath };
+  }
+
+  const freshPaper: FeedPaper = {
+    id: 42,
+    external_id: 'arxiv:2601.00042',
+    source_type: 'arxiv',
+    title: 'Fresh Shortcut Paper',
+    authors: ['Carol Researcher'],
+    abstract: 'Abstract for shortcut freshness test.',
+    published_date: '2026-02-01',
+    url: 'https://example.com/paper/42',
+    pdf_url: null,
+    pdf_local_path: null,
+    pdf_downloaded: false,
+    discovered_at: null,
+    citation_count: 0,
+    priority_score: 0.7,
+    metadata: {},
+    created_at: '2026-02-02T00:00:00Z',
+    summary_brief: 'Brief',
+    tldr: null,
+    confidence: null,
+    rating: null,
+    has_chunks: false,
+    has_summary: false,
+    state: 'inbox',
+    state_before_trash: null,
+    starred: false,
+    discovery_origin: 'pulse',
+    user_state: {
+      state: 'inbox',
+      state_before_trash: null,
+      starred: false,
+      rating: null,
+      user_notes: null,
+      flagged: false,
+      updated_at: null,
+    },
+    recent_feedback: null,
+  };
+
+  it('o key navigates to the paper at focused index (shortcutCallbacks.onOpenDetail is not stale)', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchFeed).mockResolvedValue({ papers: [freshPaper], total: 1 });
+
+    const { getPath } = renderWithNav();
+
+    // Wait for the paper row to appear — focusedIdx defaults to 0 so paper[0] is selected
+    await screen.findByRole('button', { name: /save fresh shortcut paper/i });
+
+    // Press o — onOpenDetail(papers[0].id) should navigate to /paper/42
+    act(() => {
+      fireEvent.keyDown(document.body, { key: 'o' });
+    });
+
+    await waitFor(() => expect(getPath()).toBe('/paper/42'));
+  });
+
+  it('o key uses the updated paper list when papers change between renders', async () => {
+    const api = await import('@/lib/api');
+
+    const paperA: FeedPaper = { ...freshPaper, id: 10, title: 'Paper A' };
+    const paperB: FeedPaper = { ...freshPaper, id: 20, title: 'Paper B' };
+
+    // First load returns paper A; second fetch (query refetch) returns paper B
+    vi.mocked(api.fetchFeed)
+      .mockResolvedValueOnce({ papers: [paperA], total: 1 })
+      .mockResolvedValueOnce({ papers: [paperB], total: 1 });
+
+    const { getPath } = renderWithNav();
+
+    // Wait for paper A
+    await screen.findByRole('button', { name: /save paper a/i });
+
+    // Press o → should navigate to /paper/10 (paper A's id, index 0)
+    act(() => {
+      fireEvent.keyDown(document.body, { key: 'o' });
+    });
+
+    await waitFor(() => expect(getPath()).toBe('/paper/10'));
   });
 });

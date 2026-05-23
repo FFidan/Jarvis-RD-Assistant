@@ -23,7 +23,7 @@
 	}
 
 	# Match prod hardening — HSTS belongs at the TLS terminator only.
-	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 
 	reverse_proxy http://dashboard:3000 {
 		header_up Host localhost

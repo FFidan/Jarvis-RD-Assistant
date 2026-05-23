@@ -215,8 +215,6 @@ const defaultModels = {
 describe('ModelSelector', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    // Restore default mock after tests that override it
     const { apiFetch } = await import('@/lib/api');
     vi.mocked(apiFetch).mockResolvedValue(defaultModels);
   });
@@ -421,6 +419,11 @@ describe('ModelSelector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pull model Qwen3 4B' }));
 
     await waitFor(() => {
+      expect(screen.getByText('Pull Model')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
+
+    await waitFor(() => {
       expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3%3A4b/pull', {
         method: 'POST',
       });
@@ -456,6 +459,11 @@ describe('ModelSelector', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Pull model Qwen3 8B' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Pull Model')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
 
     await waitFor(() => {
       expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3%3A8b/pull', {
@@ -498,6 +506,11 @@ describe('ModelSelector', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Pull model Qwen3 8B' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Pull Model')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Pull' }));
 
     await waitFor(() => {
       expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3%3A8b/pull', {

@@ -50,10 +50,14 @@ class Stage2ClientUnavailableError(RuntimeError):
     """openai_client is None at stage2 entry — caller should mark deck degraded."""
 
 
-# Default 4: effective Ollama parallelism is bounded by OLLAMA_NUM_PARALLEL
-# (compose default: 2), so 8 just queues uselessly without throughput gain.
-_LLM_CONCURRENCY = _get_cfg().pulse_llm_concurrency
-_LLM_MODEL = _get_cfg().pulse_stage2_model or "fast"
+def _llm_concurrency() -> int:
+    return _get_cfg().pulse_llm_concurrency
+
+
+def _llm_model() -> str:
+    return _get_cfg().pulse_stage2_model or "fast"
+
+
 _LLM_MAX_TOKENS = 512  # enough for reasoning + JSON; was 256 (too small for thinking models)
 _LLM_TEMPERATURE = 0.0
 
@@ -289,7 +293,7 @@ async def stage2_llm_rerank(
             "Pulse Stage-2 invoked without openai_client; deck cannot be reranked"
         )
 
-    semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
+    semaphore = asyncio.Semaphore(_llm_concurrency())
 
     async def _score_one(sc: ScoredCandidate) -> ScoredCandidate:
         async with semaphore:
@@ -303,11 +307,11 @@ async def stage2_llm_rerank(
                     candidate=sc.paper,
                 )
                 options = ChatCompletionOptions(
-                    model=_LLM_MODEL,
+                    model=_llm_model(),
                     max_tokens=_LLM_MAX_TOKENS,
                     temperature=_LLM_TEMPERATURE,
                 )
-                with probe_span("pulse_stage2_llm", model=_LLM_MODEL):
+                with probe_span("pulse_stage2_llm", model=_llm_model()):
                     output: PulseScoringOutput = await call_llm_structured(
                         openai_client,  # type: ignore[arg-type]
                         response_model=PulseScoringOutput,
