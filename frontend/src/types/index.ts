@@ -1311,12 +1311,14 @@ export interface SystemCapabilities {
 }
 
 // --- Executive § My Day aggregate bundle (GET /api/executive/my-day-bundle) ---
-// TODO(F7): tighten once /api/executive/my-day-bundle ships
+// Grounded against executive.py:get_my_day_bundle return shape.
 export interface MyDayBundle {
-  tasks: unknown;
-  intent: unknown;
-  threads: unknown;
-  yesterday: unknown;
-  journal: unknown;
-  pulse_today: unknown;
+  tasks: MyDayTask[];
+  intent: { intent: string | null; updated_at: string | null };
+  /** Thread rows from the bundle. last_at is nullable (no activity yet). */
+  threads: Array<Omit<Thread, 'last_at'> & { last_at: string | null }>;
+  yesterday: YesterdaySummary;
+  journal: JournalEntry | null;
+  /** Always null — Pulse assembly lives in paper_ingestion, not learning_engine. */
+  pulse_today: null;
 }

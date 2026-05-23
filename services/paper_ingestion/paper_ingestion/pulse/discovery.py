@@ -243,14 +243,22 @@ async def discover_candidates(
                 "retry_after_s": None,
                 "settings_hint": None,
             }
-            async with db_pool.acquire() as conn:
-                await conn.execute(
-                    "INSERT INTO source_run_history"
-                    " (user_id, source_type, started_at, finished_at,"
-                    " status, candidate_count, duration_ms)"
-                    " VALUES ($1, $2, NOW(), NOW(), 'cooldown_skip', 0, 0)",
-                    profile.user_id,
+            try:
+                async with db_pool.acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO source_run_history"
+                        " (user_id, source_type, started_at, finished_at,"
+                        " status, candidate_count, duration_ms)"
+                        " VALUES ($1, $2, NOW(), NOW(), 'cooldown_skip', 0, 0)",
+                        profile.user_id,
+                        src_type,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "pulse.discovery: source_run_history INSERT failed for %s: %s",
                     src_type,
+                    exc,
+                    exc_info=True,
                 )
             logger.info(
                 "pulse.discover: source %s in cooldown until %s — skipping",

@@ -78,6 +78,8 @@ exclude_docs: |
   superpowers/
   screenshots/
   audit/
+  handoff/
+  manual/_meta.md
 
 # Curated allowlist — operator/developer docs + user manual scaffold.
 # archive/, plans/, specs/, perf/, agentic/, superpowers/, screenshots/,
@@ -108,7 +110,9 @@ nav:
       - Observability: contracts/04-observability.md
       - Model Lifecycle: contracts/05-model-lifecycle.md
       - Hardware-Aware Settings: contracts/06-hardware-aware-settings.md
+      - Testing Contract: contracts/07-testing.md
   - User Guide:
+      - Quick Reference: USER_GUIDE.md
       - Overview: manual/index.md
       - Getting Started: manual/getting-started.md
       - Navigation: manual/navigation.md

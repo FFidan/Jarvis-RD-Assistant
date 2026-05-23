@@ -10,7 +10,10 @@ import time as _time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
+
+if TYPE_CHECKING:
+    import asyncpg
 
 import httpx
 
@@ -96,11 +99,11 @@ class PaperSource(ABC):
         self,
         config: PaperSourceConfig,
         http_client: httpx.AsyncClient,
-        db_pool: Any = None,
+        db_pool: "asyncpg.Pool | None" = None,
     ) -> None:
         self.config = config
         self.http_client = http_client
-        self.db_pool: Any = db_pool
+        self.db_pool: asyncpg.Pool | None = db_pool
         self._last_poll_diagnostic: SourcePollDiagnostic | None = None
 
     @property
@@ -277,6 +280,48 @@ class PaperSource(ABC):
             The paper if found, None otherwise.
         """
         ...
+
+    async def _insert_run_history(
+        self,
+        *,
+        started_at: float,
+        status: str,
+        candidate_count: int,
+        duration_ms: int,
+        user_id: int | None = None,
+    ) -> None:
+        """Insert a row into ``source_run_history`` if ``db_pool`` is available."""
+        if self.db_pool is None:
+            return
+        import datetime as _dt
+
+        now_utc = _dt.datetime.now(tz=_dt.UTC)
+        started_utc = now_utc - _dt.timedelta(milliseconds=duration_ms)
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO source_run_history
+                        (user_id, source_type, started_at, finished_at,
+                         status, candidate_count, duration_ms, detail)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+                    """,
+                    user_id,
+                    self.source_type,
+                    started_utc,
+                    now_utc,
+                    status,
+                    candidate_count,
+                    duration_ms,
+                    "{}",
+                )
+        except Exception as exc:
+            logger.warning(
+                "%s: failed to insert source_run_history: %s",
+                self.source_type,
+                exc,
+                exc_info=True,
+            )
 
     async def fetch_new_since(
         self,

@@ -12,13 +12,18 @@ from datetime import UTC, date, datetime
 from email.utils import parsedate_to_datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import asyncpg
+from urllib.parse import urlparse
 
 import httpx
 from jarvis_common.event_log import log_event
 from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
 from paper_ingestion.sources._xml_safe import safe_fromstring
 from paper_ingestion.sources.base import PaperSource, SourceQuery, _enforce_startup_grace
 from paper_ingestion.sources.registry import register_source
@@ -105,7 +110,7 @@ class ArxivSource(PaperSource):
         self,
         config: PaperSourceConfig,
         http_client: httpx.AsyncClient,
-        db_pool: Any = None,
+        db_pool: "asyncpg.Pool | None" = None,
     ) -> None:
         super().__init__(config, http_client, db_pool)
         # arXiv asks clients to wait 3 seconds between repeated calls.
@@ -357,6 +362,14 @@ class ArxivSource(PaperSource):
             elif link.get("rel") == "alternate":
                 abs_url = link.get("href", abs_url)
 
+        # DRY-S3: validate pdf_url against the SSRF allowlist before storing.
+        if pdf_url is not None:
+            _parsed = urlparse(pdf_url)
+            _hostname = _parsed.hostname or ""
+            if _parsed.scheme not in ("http", "https") or _hostname not in ALLOWED_PDF_DOMAINS:
+                logger.warning("arxiv: rejecting non-allowlisted pdf_url netloc=%s", _parsed.netloc)
+                pdf_url = None
+
         # Categories
         categories = [
             cat.get("term", "") for cat in entry.findall(f"{{{ARXIV_NS}}}primary_category")
@@ -495,7 +508,6 @@ class ArxivSource(PaperSource):
             Deduplicated papers newer than *since*, ordered by submission date.
         """
         # Startup grace — lets containers finish their warm-up before first burst.
-        # TODO: add startup_grace_seconds to user_config schema (follow-up).
         grace = getattr(getattr(self.config, "pulse", None), "startup_grace_seconds", 0.0)
         await _enforce_startup_grace(grace)
 
@@ -586,8 +598,10 @@ class ArxivSource(PaperSource):
                             message="fetch_failed",
                             context={"http_status": None, "exception": repr(_exc)[:300]},
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(
+                            "arxiv: log_event write failed for fetch_failed", exc_info=exc
+                        )
                 continue
 
             if root is None:
@@ -632,8 +646,11 @@ class ArxivSource(PaperSource):
                                     "exception": diag.get("message", "")[:300],
                                 },
                             )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(
+                            "arxiv: log_event write failed for rate_limit/fetch_failed",
+                            exc_info=exc,
+                        )
                 continue
 
             entries = root.findall(f"{{{ATOM_NS}}}entry")
@@ -677,47 +694,12 @@ class ArxivSource(PaperSource):
                             "query_count": len(consolidated),
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "arxiv: log_event write failed for fetch_succeeded", exc_info=exc
+                    )
 
         return papers
-
-    async def _insert_run_history(
-        self,
-        *,
-        started_at: float,
-        status: str,
-        candidate_count: int,
-        duration_ms: int,
-        user_id: int | None = None,
-    ) -> None:
-        """Insert a row into ``source_run_history`` if ``db_pool`` is available."""
-        if self.db_pool is None:
-            return
-        import datetime as _dt
-
-        now_utc = _dt.datetime.now(tz=_dt.UTC)
-        started_utc = now_utc - _dt.timedelta(milliseconds=duration_ms)
-        try:
-            async with self.db_pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO source_run_history
-                        (user_id, source_type, started_at, finished_at,
-                         status, candidate_count, duration_ms, detail)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-                    """,
-                    user_id,
-                    "arxiv",
-                    started_utc,
-                    now_utc,
-                    status,
-                    candidate_count,
-                    duration_ms,
-                    "{}",
-                )
-        except Exception as exc:
-            logger.warning("arXiv: failed to insert source_run_history: %s", exc, exc_info=True)
 
     async def fetch_by_id(self, external_id: str) -> PaperCreate | None:
         """Fetch a single paper by arXiv ID.

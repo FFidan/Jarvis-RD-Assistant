@@ -243,14 +243,6 @@ older `db/init.sql` snapshots that blanket-seeded `schema_migrations`. After
 manually patch missing `user_config.encrypted_value`, Procrastinate tables/types,
 or `job_progress` unless the migration runner logs an explicit SQL failure.
 
-If your dev DB was started from `master` between commits `7ac5af3` and the 2026-04-26 remediation, migrations 040 and 041 may be missing (the files were briefly numbered 037/038, colliding with `pulse_models` and `paper_contradictions`). Run the one-shot reconciliation script to catch up:
-
-```bash
-docker compose exec postgres psql -U jarvis jarvis < scripts/reconcile_037_038_collision.sql
-```
-
-The script is fully idempotent (uses `IF NOT EXISTS` / `OR REPLACE` guards) and registers the missing versions in `schema_migrations` so the migration runner skips them on next boot. No data is dropped.
-
 ## Upgrading
 
 `versions.env` is the source of truth for pinned image versions; every Docker image in `docker-compose.yml` uses `${VAR:-fallback}`, so committing a new pin is the upgrade. `update.sh` compares the pinned versions against what is currently running, prints a diff, and prompts before pulling. To **rollback** after a bad upgrade:
@@ -331,7 +323,7 @@ The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 r
 
 | Command | What it does | Rate limit | Auth |
 |---|---|---|---|
-| `/start` | Greet the bot and confirm connectivity. Currently authenticates against the global `TELEGRAM_CHAT_ID` env var. Sprint A will add per-user pairing via `/start <code>`. | per-user default | Chat matching `TELEGRAM_CHAT_ID` |
+| `/start` | Greet the bot and confirm connectivity. Sprint A shipped: per-user pairing via `/start <code>` is live (`telegram_user_pairings` table was added in pre-squash migration 071, now absorbed into `db/init.sql`). | per-user default | Paired chat only |
 | `/help` | List available commands. | per-user default | Paired chat only |
 | `/papers` | Show the latest papers in your library. | per-user default | Paired chat only |
 | `/inbox` | Show inbox papers (state='inbox') with origin-conditional 👍/👎/🗑+👎 keyboard. Maps to GET /api/papers/feed?view=inbox. | per-user default | Paired chat only |
@@ -371,7 +363,7 @@ Six cron-scheduled nudge types are delivered to the paired chat (timezone-aware,
 
 Commands are rate-limited per-user by a sliding-window decorator. `/pulse_now` additionally has a **5-minute cooldown** to protect the LLM gateway from manual refresh loops.
 
-**Security note on `TELEGRAM_CHAT_ID`:** The current release uses a global `TELEGRAM_CHAT_ID` env var; all notifications go to a single chat. If you point it at a **group chat**, *any member of that group can send commands and see your papers*. Keep the bot in a private DM for now. **Sprint A** (see `docs/plans/archive/2026-05-10-multiuser-followup-sprints.md`) will replace `TELEGRAM_CHAT_ID` with per-user chat pairing: each user generates a pairing code in Settings and sends `/start <code>` to the bot; notifications are then routed per-user.
+**Security note on `TELEGRAM_CHAT_ID`:** `TELEGRAM_CHAT_ID` is the legacy single-user path and remains supported for backward compatibility. **Sprint A shipped** (see `docs/plans/archive/2026-05-10-multiuser-followup-sprints.md`): per-user chat pairing is now the multi-user path — each user generates a pairing code in Settings and sends `/start <code>` to the bot, and notifications are then routed per-user. If you still use `TELEGRAM_CHAT_ID`, all notifications go to that single chat; pointing it at a **group chat** means *any member of that group can send commands and see your papers*, so keep the bot in a private DM in that case.
 
 ## Remote Access (LAN)
 

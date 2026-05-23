@@ -1,13 +1,12 @@
 # JARVIS RD Assistant - Product Requirements Document (PRD)
 
-**Version:** 1.4
-**Date:** 2026-05-02
+**Version:** 0.4.1 (Living document — see git tags for release versions.)
+**Date:** 2026-05-23
 **Status:** Active
 
-> Implementation status note (2026-05-02):
-> This PRD reflects features shipped through v1.4.3 (Round 15 Wave 1.7) plus
-> the W1.8 post-deploy fixes (commit 48ce145). The Discovery & Pulse subsystem
-> (Phase 1) shipped in v1.3.0 on 2026-05-01; Pulse is live in production.
+> Implementation status note (updated 2026-05-23):
+> This PRD reflects features shipped through git tag v0.4.1. The Discovery &
+> Pulse subsystem (Phase 1) shipped on 2026-05-01; Pulse is live in production.
 > The Paper Lifecycle Redesign (single-state ENUM + orthogonal Star) shipped
 > as Phase A of the Modernization Marathon (commit ee1de7f, 2026-05-01).
 > Section 3.1 reflects the two distinct sub-features (Pulse = discovery,
@@ -225,7 +224,7 @@ Features shipped in v1 that form the foundation Pulse and Weekly Summary build o
 - Gantt charts
 - Budget tracking
 
-### 3.4 Shipped Beyond MVP (v1.0 to v1.1)
+### 3.4 Shipped Beyond MVP (v0.1.0 baseline)
 
 These features were promoted from v2 or added during development:
 
@@ -246,7 +245,7 @@ These features were promoted from v2 or added during development:
 - **10-page React dashboard**: Home, Research Feed, Paper Detail, Learning Cards,
   Projects, Settings, Analytics, Extractions, Citation Graph, Knowledge Graph
 
-### Shipped Beyond MVP (v1.2.0 to v1.2.4)
+### Shipped Beyond MVP (Phase 1 — Discovery & Pulse sprint)
 
 These features shipped in the Phase 1 Discovery & Pulse sprint and subsequent audit remediation cycles:
 
@@ -282,6 +281,16 @@ These features shipped in the Sprint 6 remediation pass (audit findings C1/C2/H1
 - **Brace-escape verification fix**: the quote verifier no longer mismatches f-string brace literals (`{{`, `}}`) against source text, eliminating a class of false-negative verification failures on templated extractions.
 - **Embedder shim cleanup**: stale `_COMPAT_SHIM` path in `paper_ingestion/ingestion/embedder.py` removed; all callers use the canonical `embed_texts()` interface.
 - **Migration 043 robustness**: duplicate-key handling added to the migration runner for constraint-already-exists errors so that re-running migrations on partially-applied databases does not abort startup.
+
+### Shipped in v0.2.0–v0.4.1 (2026-05-10 to 2026-05-23)
+
+These features shipped after the Sprint 6 audit cycle:
+
+- **Multi-user auth** (migration 074): magic-link sign-in, session cookies, admin send-sign-in-link UI, and Telegram pairing. `magic_link_tokens` table live in `db/init.sql`. Auth resolvers (`current_user_id_strict` / `current_user_id_or_none`) read from `SessionMiddleware`-populated request state.
+- **PWA offline reader**: service worker + `manifest.json`; `ConnectivityBanner`, `query-persister`, and `logout-hygiene` tested in `frontend/src/__tests__/`. Offline reads of cached paper content work without a network connection.
+- **Model Lifecycle UI + Hardware-Aware Settings**: `services/paper_ingestion/paper_ingestion/routers/system.py` exposes hardware-fit data (`HardwareInfo`, `recommend_models`, VRAM-aware tier selection). Frontend `SettingsAIPanel` + `ModelSelector` surface per-VRAM recommendations.
+- **Langfuse observability** (operator-provisioned): `@observe()` decorators on all structured LLM calls; `OBSERVABILITY_ENABLED` boot-gate in `main.py`; `SecretsSettings _FILE` pattern for keypair injection. Contract: `docs/contracts/04-observability.md`.
+- **Testing Contract + pre-commit guard**: `docs/contracts/07-testing.md` defines four legitimate test shapes and four prohibited anti-patterns. `scripts/check-test-shape.py` enforces rules TS-01..TS-08 as a pre-commit hook on every commit touching test files.
 
 ### Multi-Tenant Status
 
@@ -525,7 +534,7 @@ subsystem (§8.5) directly closes this gap.
 
 ### 8.3 RAG Quality Targets
 
-| Component | Current (v1.2) | Target (v2) |
+| Component | Current (v0.4.x) | Target (future) |
 |-----------|----------------|-------------|
 | Embedding model | nomic-embed-text (768d) | _(achieved)_ |
 | Retrieval | Hybrid RRF + cross-encoder rerank | _(achieved)_ |

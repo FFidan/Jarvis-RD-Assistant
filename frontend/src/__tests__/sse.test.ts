@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { streamSSE, streamAnalyze, type StreamEvent, type AnalyzeEvent } from '@/lib/sse';
+import { createSSEReader } from '@/lib/sse-reader';
 
 // Mock auth store — must be defined before importing sse to ensure
 // the module-level import in sse.ts resolves to this mock.
@@ -194,6 +195,44 @@ describe('streamSSE', () => {
     // Snippet is a truncated string, not the raw exception.
     expect(typeof snippet).toBe('string');
     expect(snippet.length).toBeLessThanOrEqual(120);
+  });
+});
+
+describe('createSSEReader', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('yields raw data-line payloads and stops on [DONE]', async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      'data: hello\n\n',
+      'data: world\n\n',
+      'data: [DONE]\n\n',
+      'data: should-not-appear\n\n',
+    ];
+    let idx = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (idx < chunks.length) {
+          controller.enqueue(encoder.encode(chunks[idx]));
+          idx++;
+        } else {
+          controller.close();
+        }
+      },
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(stream, { status: 200 }),
+    );
+
+    const frames: string[] = [];
+    for await (const frame of createSSEReader('/api/test/stream')) {
+      frames.push(frame);
+    }
+
+    expect(frames).toEqual(['hello', 'world']);
   });
 });
 

@@ -1,15 +1,21 @@
 """Tests for PaperSource.consolidate_topics and SourceQuery dataclass.
 
 PR-A2: default consolidate_topics implementation and SourceQuery API.
+DRY-S1: _insert_run_history hoisted to base.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import time
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from paper_ingestion.models import TopicRef
+from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.sources.arxiv_source import ArxivSource
 from paper_ingestion.sources.base import PaperSource, SourceQuery
+from paper_ingestion.sources.openalex_source import OpenAlexSource
+from paper_ingestion.sources.pubmed_source import PubMedSource
+from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
 
 # ---------------------------------------------------------------------------
 # Minimal concrete subclass
@@ -108,3 +114,56 @@ def test_consolidate_topics_each_query_has_exactly_one_topic(stub_source):
     queries = stub_source.consolidate_topics(topics)
     for q in queries:
         assert len(q.topics) == 1
+
+
+# ---------------------------------------------------------------------------
+# DRY-S1: _insert_run_history hoisted to PaperSource base
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_pool() -> MagicMock:
+    """Shared helper: fake asyncpg pool that records execute calls."""
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock()
+    mock_pool = MagicMock()
+    mock_pool.acquire = MagicMock()
+    mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    return mock_pool, mock_conn
+
+
+def _make_config(source_type: SourceType) -> PaperSourceConfig:
+    return PaperSourceConfig(id=1, source_type=source_type, enabled=True, config={})
+
+
+@pytest.mark.parametrize(
+    "source_cls,source_type_enum,expected_source_type",
+    [
+        (ArxivSource, SourceType.ARXIV, "arxiv"),
+        (OpenAlexSource, SourceType.OPENALEX, "openalex"),
+        (SemanticScholarSource, SourceType.SEMANTIC_SCHOLAR, "semantic_scholar"),
+        (PubMedSource, SourceType.PUBMED, "pubmed"),
+    ],
+)
+async def test_insert_run_history_hoisted_to_base(
+    source_cls, source_type_enum, expected_source_type
+):
+    """_insert_run_history on base inserts correct source_type for each subclass."""
+    mock_pool, mock_conn = _make_mock_pool()
+    config = _make_config(source_type_enum)
+    source = source_cls(config=config, http_client=MagicMock(), db_pool=mock_pool)
+
+    assert source.source_type == expected_source_type
+
+    await source._insert_run_history(
+        started_at=time.monotonic(),
+        status="ok",
+        candidate_count=5,
+        duration_ms=100,
+        user_id=None,
+    )
+
+    mock_conn.execute.assert_called_once()
+    sql, *args = mock_conn.execute.call_args.args
+    assert "source_run_history" in sql
+    assert expected_source_type in args

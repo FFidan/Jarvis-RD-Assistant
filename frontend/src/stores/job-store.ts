@@ -12,6 +12,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth-store';
 import { createJob as apiCreateJob, listJobs as apiListJobs, cancelJob as apiCancelJob, getJob as apiGetJob } from '@/lib/api';
+import { createSSEReader } from '@/lib/sse-reader';
 import { queryClient } from '@/lib/query-client';
 import { getNavigate } from '@/lib/navigate-bridge';
 
@@ -278,96 +279,69 @@ export const useJobStore = create<JobStore>()(
           await _reconnectAfterDrop(delayMs);
         };
 
-        // Stream job events via GET SSE endpoint
+        // Stream job events via GET SSE endpoint using createSSEReader.
+        // createSSEReader handles buffering, line-splitting, [DONE] sentinel, and
+        // reader.cancel() in its finally block — eliminating the inline reader loop.
         (async () => {
           try {
-            const res = await fetch(`/api/jobs/${jobId}/stream`, {
-              method: 'GET',
-              credentials: 'include',
+            let terminalReceived = false;
+            // Track current backoff delay; reset to base on every successful frame
+            let currentReconnectDelay = reconnectDelay;
+
+            for await (const raw of createSSEReader(`/api/jobs/${jobId}/stream`, {
               headers,
               signal: controller.signal,
-            });
+            })) {
+              try {
+                const event = JSON.parse(raw) as Partial<Job>;
+                // streaming_timeout sentinel — treat as non-terminal; reconnect with backoff
+                if ((event as { status?: string }).status === 'streaming_timeout') {
+                  get()._cleanupSubscription(jobId);
+                  // controller is already aborted by _cleanupSubscription, so do NOT
+                  // pass its signal to sleep — it would throw AbortError immediately (G-01)
+                  await sleep(currentReconnectDelay);
+                  const nextDelay = Math.min(currentReconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
+                  get().subscribe(jobId, nextDelay);
+                  return;
+                }
+                const current = get().jobs[jobId] ?? {};
+                const updated: Job = {
+                  ...(current as Job),
+                  ...event,
+                  id: jobId,
+                };
+                get()._upsertJob(updated);
+                // Successful event frame received — reset backoff for any future reconnect
+                currentReconnectDelay = RECONNECT_BASE_DELAY_MS;
 
-            if (!res.ok || !res.body) {
-              // On auth failure, logout
-              if (res.status === 401 || res.status === 403) {
+                if (TERMINAL_STATUSES.has(updated.status)) {
+                  terminalReceived = true;
+                  _handleTerminal(updated);
+                  break;
+                }
+              } catch {
+                /* skip malformed frames */
+              }
+            }
+
+            // Stream ended (either [DONE], connection drop, or terminal break).
+            // If no terminal job status was received, reconcile via REST poll.
+            if (!terminalReceived) {
+              await _reconcileOrRetry(currentReconnectDelay);
+            }
+          } catch (err) {
+            // AbortError means we intentionally cancelled — not an error.
+            if (err instanceof DOMException && err.name === 'AbortError') return;
+            // createSSEReader throws "SSE GET failed: <status>" on non-ok responses.
+            // Auth failures → logout and drop the job.
+            if (err instanceof Error) {
+              const authMatch = /SSE GET failed: (401|403)/.exec(err.message);
+              if (authMatch) {
                 get().removeJob(jobId);
                 useAuthStore.getState().logout();
                 return;
               }
-              await _reconcileOrRetry(reconnectDelay);
-              return;
             }
-
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            let terminalReceived = false;
-            let doneSentinelReceived = false;
-            // Track current backoff delay; reset to base on every successful frame
-            let currentReconnectDelay = reconnectDelay;
-
-            while (true) {
-              let streamDone = false;
-              const { done, value } = await reader.read();
-              if (done) {
-                // Stream closed without a terminal event — fall back to a REST poll
-                if (!terminalReceived) {
-                  await _reconcileOrRetry(currentReconnectDelay);
-                }
-                break;
-              }
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop() ?? '';
-
-              for (const line of lines) {
-                if (!line.startsWith('data: ')) continue;
-                const raw = line.slice(6).trim();
-                if (raw === '[DONE]') { doneSentinelReceived = true; streamDone = true; break; }
-                try {
-                  const event = JSON.parse(raw) as Partial<Job>;
-                  // streaming_timeout sentinel — treat as non-terminal; reconnect with backoff
-                  if ((event as { status?: string }).status === 'streaming_timeout') {
-                    get()._cleanupSubscription(jobId);
-                    // controller is already aborted by _cleanupSubscription, so do NOT
-                    // pass its signal to sleep — it would throw AbortError immediately (G-01)
-                    await sleep(currentReconnectDelay);
-                    const nextDelay = Math.min(currentReconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
-                    get().subscribe(jobId, nextDelay);
-                    return;
-                  }
-                  const current = get().jobs[jobId] ?? {};
-                  const updated: Job = {
-                    ...(current as Job),
-                    ...event,
-                    id: jobId,
-                  };
-                  get()._upsertJob(updated);
-                  // Successful event frame received — reset backoff for any future reconnect
-                  currentReconnectDelay = RECONNECT_BASE_DELAY_MS;
-
-                  if (TERMINAL_STATUSES.has(updated.status)) {
-                    terminalReceived = true;
-                    _handleTerminal(updated);
-                    break;
-                  }
-                } catch {
-                  /* skip malformed frames */
-                }
-              }
-              // [DONE] sentinel received — exit the while(true) read loop (G-02)
-              if (streamDone) break;
-            }
-
-            if (doneSentinelReceived && !terminalReceived) {
-              await _reconcileOrRetry(currentReconnectDelay);
-            }
-
-            await reader.cancel().catch(() => {});
-          } catch (err) {
-            // AbortError means we intentionally cancelled — not an error
-            if (err instanceof DOMException && err.name === 'AbortError') return;
             // Other errors: reconcile if possible, otherwise reconnect with backoff.
             await _reconcileOrRetry(reconnectDelay);
           }

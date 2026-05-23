@@ -1405,61 +1405,6 @@ export async function testProvider(
   return apiFetch(`/api/providers/${provider}/test`, { method: 'POST' });
 }
 
-// --- Jobs (streaming) ---
-
-export async function streamJob(
-  jobId: string,
-  onEvent: (ev: {
-    progress?: number;
-    status?: string;
-    progress_message?: string | null;
-    result?: Record<string, unknown> | null;
-    error?: { message: string; action_link?: { label: string; href: string } } | null;
-  }) => void,
-  signal: AbortSignal,
-): Promise<void> {
-  const apiKey = useAuthStore.getState().getApiKey();
-  const res = await fetch(`/api/jobs/${jobId}/stream`, {
-    method: 'GET',
-    credentials: 'include',
-    headers: apiKey ? { 'X-API-Key': apiKey } : {},
-    signal,
-  });
-
-  if (!res.ok) {
-    handleAuthFailure(res.status);
-    throw new ApiError(res.status, await res.text());
-  }
-
-  if (!res.body) return;
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const raw = line.slice(6).trim();
-        if (raw === '[DONE]') return;
-        try {
-          onEvent(JSON.parse(raw));
-        } catch {
-          /* skip malformed frames */
-        }
-      }
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-}
-
 // --- Snapshots ---
 
 /**

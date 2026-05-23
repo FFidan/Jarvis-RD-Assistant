@@ -70,9 +70,15 @@ _TS06_DEF_TEST = re.compile(r"^\s*(?:async\s+)?def\s+test_", re.MULTILINE)
 # TS-07: inline factories that have canonical replacements
 _TS07_INLINE_FACTORIES = re.compile(
     r"^\s*(?:async\s+)?def\s+_(make_pool|mock_pool|make_embedder|build_request|"
-    r"FakeRecord|make_telegram_update)\s*\(",
+    r"FakeRecord|make_telegram_update|make_config)\s*\(",
     re.MULTILINE,
 )
+
+# TS-07 body check for _make_config: only fire when body contains a direct
+# BotConfig(...) construction (delegating wrappers that call make_bot_config
+# are NOT an inline factory violation).
+_TS07_BOTCONFIG_LITERAL = re.compile(r"\bBotConfig\s*\(")
+_TS07_NEXT_DEF = re.compile(r"^\s*(?:async\s+)?def\s+\w", re.MULTILINE)
 
 # ---------------------------------------------------------------------------
 # Scoping
@@ -241,11 +247,34 @@ def check_file(path: str) -> tuple[list[str], list[str]]:
             )
 
     # TS-07 WARN: inline factories that have canonical replacements (new additions only)
+    full_lines = full_text.splitlines()
     for lineno, content in added:
         m = _TS07_INLINE_FACTORIES.match(content)
-        if m:
+        if not m:
+            continue
+        factory_name = m.group(1)
+        if factory_name == "make_config":
+            # Only fire when the function body directly constructs BotConfig(...).
+            # Delegating wrappers (e.g. `return make_bot_config(...)`) are fine.
+            # Extract body: lines after the matched line until next `def` or EOF.
+            body_start = lineno  # lineno is 1-based; index = lineno (0-based next line)
+            body_lines = []
+            for line in full_lines[body_start:]:
+                if _TS07_NEXT_DEF.match(line):
+                    break
+                body_lines.append(line)
+            body = "\n".join(body_lines)
+            if not _TS07_BOTCONFIG_LITERAL.search(body):
+                continue  # delegating wrapper — not a violation
             warnings.append(
-                f"{path}:{lineno}: TS-07 inline `_{m.group(1)}` has a canonical "
+                f"{path}:{lineno}: TS-07 inline `_make_config` directly constructs "
+                f"`BotConfig(...)` — use canonical replacement: "
+                f"jarvis_common.testing.make_bot_config — see "
+                f"docs/contracts/07-testing.md §5 + §8"
+            )
+        else:
+            warnings.append(
+                f"{path}:{lineno}: TS-07 inline `_{factory_name}` has a canonical "
                 f"replacement in jarvis_common.testing — see "
                 f"docs/contracts/07-testing.md §5 + §8"
             )

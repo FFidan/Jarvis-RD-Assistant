@@ -243,7 +243,7 @@ Existing installs get migrations applied automatically on startup by the auto-mi
 
 **Migration 018** (2026-04-11) for the Phase 1 Discovery & Pulse subsystem added:
 
-- Three new tables: `pulse_decks` (one row per daily deck), `pulse_cards` (papers in each deck with score metadata and LLM reasoning), and `pulse_ratings` (user feedback 👍/👎/💾/open/dismiss — collected silently from Phase 1 for the Phase 2 classifier). **Phase A note (migration 049, 2026-04-29):** `pulse_ratings` is dropped and replaced by the broader `recommendation_feedback` table that consolidates Pulse + Inbox + Paper-Detail thumbs into a single signal store; see [docs/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) §3.3 + §7.
+- Three new tables: `pulse_decks` (one row per daily deck), `pulse_cards` (papers in each deck with score metadata and LLM reasoning), and a Phase 1 feedback table (user feedback 👍/👎/💾/open/dismiss — collected silently for the Phase 2 classifier). **Phase A note (migration 049, 2026-04-29):** the Phase 1 feedback table is dropped and replaced by the broader `recommendation_feedback` table that consolidates Pulse + Inbox + Paper-Detail thumbs into a single signal store; see [docs/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) §3.3 + §7.
 - One helper table: `pdf_resolutions` (caches results of the PDF resolution chain to dedupe resolver calls).
 - One new optional column: `topics.description TEXT NULL` (free-text context for the Pulse LLM scoring prompt).
 - New rows in `paper_sources` registering `openalex` and `pubmed` source types. `pubmed` ships with `enabled=TRUE` to match the "works out of the box, no key required" principle; `openalex` ships `enabled=FALSE` until the user provides a key.
@@ -276,11 +276,11 @@ The following Python dependency was added for the Phase 1 subsystem (now present
 
 | Dependency | Service | Purpose |
 |------------|---------|---------|
-| `scikit-learn>=1.5.0` | paper_ingestion | Per-user logistic regression classifier trained on `pulse_ratings` for Stage 4 scoring. |
+| `scikit-learn>=1.5.0` | paper_ingestion | Per-user logistic regression classifier trained on `recommendation_feedback` for Stage 4 scoring. |
 | `networkx>=3.3` or equivalent | paper_ingestion | Citation graph algorithms (PageRank, Adamic/Adar) as scoring signals. May be avoided by implementing the algorithms directly on top of asyncpg queries. |
 | `bertopic>=0.16` | paper_ingestion | Optional, for the monthly "Rising Topics" widget. Heavy dep — may be deferred further. |
 
-Phase 1 explicitly ships **without** `scikit-learn`, `networkx`, and `bertopic` to keep the Phase 1 footprint minimal. Phase 2 pulls them in only when the features that need them are implemented.
+Phase 1 **shipped**: `scikit-learn` is in `requirements-optional.txt` and `pulse/training.py` contains the full classifier pipeline. `networkx` and `bertopic` remain deferred to Phase 2 and are only pulled in when the features that need them are implemented.
 
 ## Secrets & Files
 
@@ -310,7 +310,7 @@ Without these flags the service starts normally and falls back to RRF-only ranki
 
 ## Migration History (024-043)
 
-**Migrations 024-032** (2026-04-17 to 2026-04-23) cover Round-8 through Round-14 audit remediation, Zotero integration, cloud LLM key encryption, HTTPS/TLS setup, Telegram pairing hardening, and Pulse hardening. See `db/migrations/` for individual SQL files.
+**Migrations 024-032** (2026-04-17 to 2026-04-23) cover Round-8 through Round-14 audit remediation, Zotero integration, cloud LLM key encryption, HTTPS/TLS setup, Telegram pairing hardening, and Pulse hardening. After the 2026-05-19 W1-3 squash, the canonical baseline lives in `db/init.sql`. New migrations start at 0089 in `db/migrations/`. Pre-squash files 001-088 are absorbed into the init.sql baseline and are not present as separate files.
 
 **Migrations 033-035** (2026-04-24): WS-1 cloud LLM key encryption (migration 033), RAG answer verification metadata (migration 034), post-R14 sprint hardening (migration 035).
 
@@ -324,4 +324,4 @@ Without these flags the service starts normally and falls back to RRF-only ranki
 
 **Migration 043** (2026-04-27): `multiuser_unique_constraints` — adds unique constraints scoped by `user_id` to prevent cross-user collisions once enforcement is activated. The Sprint 5 `papers.is_bookmarked` column + `PATCH /api/papers/{id}/bookmark` endpoint that this migration originally constrained were both removed in Phase A migration 047 (replaced by `state` ENUM + orthogonal `papers.starred` BOOLEAN); see [docs/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) §3.
 
-**Migrations 044-049** (2026-04-29 — Phase A lifecycle redesign): see the redesign spec and migration files. Headline changes: 047 collapses 5 lifecycle booleans + status enum into a single `state` ENUM + orthogonal `starred`; 048 adds `papers.discovery_origin`; 049 drops `pulse_ratings` in favor of `recommendation_feedback`.
+**Migrations 044-049** (2026-04-29 — Phase A lifecycle redesign): see the redesign spec and migration files. Headline changes: 047 collapses 5 lifecycle booleans + status enum into a single `state` ENUM + orthogonal `starred`; 048 adds `papers.discovery_origin`; 049 drops the Phase 1 feedback table in favor of `recommendation_feedback`.

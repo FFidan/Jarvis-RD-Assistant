@@ -27,18 +27,23 @@ the first of the month when day is absent, and January 1 when month is absent.
 """
 
 import logging
+import time as _time
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import asyncpg
 
 import httpx
-from jarvis_common.source_rate_limiter import SourceRateLimiter
+from jarvis_common.event_log import log_event
+from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
 from lxml import (
     etree,  # type: ignore[reportAttributeAccessIssue]  # lxml stubs lack etree export typing
 )
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources._xml_safe import safe_fromstring
-from paper_ingestion.sources.base import PaperSource
+from paper_ingestion.sources.base import PaperSource, _enforce_startup_grace
 from paper_ingestion.sources.registry import register_source
 
 
@@ -221,8 +226,13 @@ class PubMedSource(PaperSource):
 
     source_type = "pubmed"
 
-    def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
-        super().__init__(config, http_client)
+    def __init__(
+        self,
+        config: PaperSourceConfig,
+        http_client: httpx.AsyncClient,
+        db_pool: "asyncpg.Pool | None" = None,
+    ) -> None:
+        super().__init__(config, http_client, db_pool)
         from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
         _cfg = get_paper_ingestion_settings()
@@ -231,8 +241,8 @@ class PubMedSource(PaperSource):
             _cfg.pubmed_api_key.get_secret_value() if _cfg.pubmed_api_key else None
         )
         # rate: 10 req/s with API key, ~3 req/s otherwise
-        interval = 0.1 if self._api_key else 0.34
-        self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / interval)
+        self._rate_interval = 0.1 if self._api_key else 0.34
+        self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / self._rate_interval)
 
     async def _rate_limit(self) -> None:
         """Enforce NCBI rate limit: 10 req/s with API key, ~3 req/s otherwise."""
@@ -418,7 +428,7 @@ class PubMedSource(PaperSource):
         since: datetime,
         topics: list[TopicRef],
         limit: int = 100,
-        user_id: int | None = None,  # noqa: ARG002 — accepted for base-class compat
+        user_id: int | None = None,
     ) -> list[PaperCreate]:
         """Fetch PubMed papers published after *since* relevant to the given topics.
 
@@ -434,12 +444,29 @@ class PubMedSource(PaperSource):
             Topics to include.  An empty list triggers a single undirected date query.
         limit : int
             Maximum total papers to return.
+        user_id : int | None
+            Forwarded to per-user rate-limit slots and ``source_run_history`` rows.
 
         Returns
         -------
         list[PaperCreate]
             Papers published after *since*. Returns ``[]`` on HTTP errors.
         """
+        # Startup grace — lets containers finish their warm-up before first burst.
+        grace = getattr(getattr(self.config, "pulse", None), "startup_grace_seconds", 0.0)
+        await _enforce_startup_grace(grace)
+
+        # Persistent rate limiter (no-op when db_pool is None).
+        p_limiter: PersistentSourceRateLimiter | None = None
+        if self.db_pool is not None:
+            p_limiter = PersistentSourceRateLimiter(
+                source_type="pubmed",
+                user_id=user_id,
+                min_interval_seconds=self._rate_interval,
+                db_pool=self.db_pool,
+                fallback=self._rate_limiter,
+            )
+
         since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
         mindate = since_utc.strftime("%Y/%m/%d")
         date_params = {"mindate": mindate, "datetype": "pdat"}
@@ -456,6 +483,12 @@ class PubMedSource(PaperSource):
         papers: list[PaperCreate] = []
         per_q = max(1, limit // max(len(term_queries), 1))
 
+        started_at = _time.monotonic()
+        candidate_count = 0
+
+        if p_limiter is not None:
+            await p_limiter.acquire()
+
         for term in term_queries:
             if len(papers) >= limit:
                 break
@@ -466,7 +499,35 @@ class PubMedSource(PaperSource):
             seen_pmids.update(new_pmids)
             fetched = await self._efetch(new_pmids)
             papers.extend(fetched)
+            candidate_count += len(fetched)
             if len(papers) >= limit:
                 break
+
+        duration_ms = int((_time.monotonic() - started_at) * 1000)
+        if p_limiter is not None:
+            await p_limiter.update_last_request("ok")
+        await self._insert_run_history(
+            started_at=started_at,
+            status="ok",
+            candidate_count=candidate_count,
+            duration_ms=duration_ms,
+            user_id=user_id,
+        )
+        if self.db_pool is not None:
+            try:
+                await log_event(
+                    pool=self.db_pool,
+                    level="info",
+                    category="source",
+                    source="pubmed",
+                    message="fetch_succeeded",
+                    context={
+                        "http_status": 200,
+                        "papers_fetched": candidate_count,
+                        "query_count": len(term_queries),
+                    },
+                )
+            except Exception as exc:
+                logger.warning("pubmed: log_event write failed for fetch_succeeded", exc_info=exc)
 
         return papers[:limit]

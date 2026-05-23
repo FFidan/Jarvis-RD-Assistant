@@ -158,7 +158,8 @@ spans: `POST /api/papers/search-hybrid` (→ `embed_texts_post` +
 `prepare_cross_paper_rag` + `embed_texts_post`), `POST /api/pulse/generate`
 (→ `pulse_stage2_llm`, async worker). With probes armed it now collects real
 spans (verified: 54 spans, evidence-based bottleneck recorded in
-`docs/perf/2026-05-18-baseline-report.md` §"Dominant bottleneck DETERMINED").
+the raw bundle at `handoff/vllm-confirmatory-20260519T093213Z/` — rendered
+report deferred to post-phase-3 cadence).
 
 Preconditions / knobs:
 - Session mint needs **exactly one non-deleted user + an admin**, or

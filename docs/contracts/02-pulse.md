@@ -4,7 +4,7 @@
 **Reviewers must update this contract in the same patch as any change to:**
 - The 8 numbered steps in [pulse/job.py:run_pulse](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L68)
 - `_DEFAULT_WEIGHTS` in [pulse/profile.py:19-30](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L19-L30)
-- `_LLM_CONCURRENCY` / `_STAGE2_TIMEOUT_SECONDS` / `PULSE_STAGE2_*` scoring knobs / per-call timeouts
+- `_llm_concurrency()` / `_stage2_timeout()` lazy getters / `PULSE_STAGE2_*` scoring knobs / per-call timeouts
 - The `signals` dict shape on `ScoredCandidate`
 - The `stats` dict keys produced by `run_pulse` (drives the Settings → Pulse Diagnostics panel)
 
@@ -115,7 +115,7 @@ multiplier separately; see [01-settings.md §2.1](01-settings.md#21-live-keys-wr
 ### 3.2 Conditional signals (LIVE-CONDITIONAL)
 
 These four signals default to weight 0.0 in `_DEFAULT_WEIGHTS` and `_PULSE_REQUIRED_WEIGHT_KEYS`
-([routers/settings.py:133-135](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L133-L135) makes them OPTIONAL on PUT). They are **populated only when the user assigns a non-zero weight** AND the gating dependency is available.
+([settings_service.py:299-301](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L299-L301) makes them OPTIONAL on PUT). They are **populated only when the user assigns a non-zero weight** AND the gating dependency is available.
 
 | Signal | Computed by | Activation gate | Dependency | Failure mode |
 |---|---|---|---|---|
@@ -139,7 +139,7 @@ by `pulse_decks.stats`) MUST report:
 
 Every key in `_DEFAULT_WEIGHTS` is present in §3.1 or §3.2 above. Adding a
 new weight key MUST add the corresponding row to one of those tables AND to
-`_PULSE_WEIGHT_KEYS` in routers/settings.py. The validator and contract are
+`_PULSE_WEIGHT_KEYS` in [settings_service.py:285-298](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L285-L298). The validator and contract are
 the two halves of the same allow-list.
 
 ---
@@ -147,7 +147,7 @@ the two halves of the same allow-list.
 ## 4. Weight schema
 
 `user_config['pulse.weights']` is a JSONB object whose keys are a subset of
-`_PULSE_WEIGHT_KEYS` ([routers/settings.py:119-132](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L119-L132)). Validation:
+`_PULSE_WEIGHT_KEYS` ([settings_service.py:285-298](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L285-L298)). Validation:
 
 - Required keys: `embedding`, `topic`, `llm_relevance`, `llm_novelty`,
   `author_bonus`, `recency` (the always-populated set, §3.1)
@@ -163,7 +163,7 @@ Load path ([profile.py:178-186](../../services/paper_ingestion/paper_ingestion/p
 2. Merge user values over defaults (so missing optional keys default to 0.0)
 3. Clamp every value to `[0, 1]`; log a warning if any was out of range
 
-`pulse.l2_lambda` is **separately stored** ([profile.py:191-193](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L191-L193)) at the same level as the weights but with range `[0, 2]`. After load it is *also* injected into `weights["l2_lambda"]` for downstream convenience — but it is NEVER multiplied by a signal in `stage3_combine`; it's a Stage-1 multiplier (see §3.1 footnote).
+`pulse.l2_lambda` is stored as a dedicated `UserProfile` field outside the `weights` dict ([profile.py:57-59](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L57-L59), [profile.py:232-236](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L232-L236)), per DOM-B-01 invariant; `stage3_combine` never iterates it as a scoring signal.
 
 ---
 
@@ -172,23 +172,25 @@ Load path ([profile.py:178-186](../../services/paper_ingestion/paper_ingestion/p
 | Knob | Value | Source | Purpose |
 |---|---|---|---|
 | Per-LLM-call timeout | 120 s | `LLM_TIMEOUT_DEFAULT` at [llm_client.py:16](../../libs/jarvis_common/jarvis_common/llm_client.py#L16) | Single chat completion request (or single retry) cannot exceed this |
-| Stage-2 concurrency | 8 | `_LLM_CONCURRENCY` at [scoring.py:30](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L30) | Semaphore-bounded parallel scorers |
+| Stage-2 concurrency | default 4 (configurable via live config key `pulse.llm_concurrency`) | `_llm_concurrency()` lazy getter at [scoring.py:53](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L53) | Semaphore-bounded parallel scorers |
 | Stage-2 model alias | `fast` | `PULSE_STAGE2_MODEL` with fallback at [scoring.py:47](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L47) | Uses the smaller local model for Pulse scoring by default; operators can override to `smart` or another LiteLLM alias |
 | Stage-2 retry budget | 1 | `PULSE_STAGE2_MAX_RETRIES` with fallback at [scoring.py:52-61](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L52-L61) | Caps structured-output retries so one bad candidate does not expand into a long manual Pulse run |
 | Stage-2 orchestrator call | 1 call over all Stage-1 survivors | `_stage2_with_progress` at [job.py:218-232](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L218-L232); inner concurrency at [scoring.py:292](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L292) | `run_pulse` no longer slices candidates into outer batches; `stage2_llm_rerank` owns per-candidate concurrency |
-| Stage-2 wall-clock cap | 600 s | `_STAGE2_TIMEOUT_SECONDS` at [job.py:48](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L48); applied at [job.py:204-207](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L204-L207) | Outer `asyncio.wait_for` around all Stage-2 work; on timeout → `_fallback_stage2` |
+| Stage-2 wall-clock cap | default 900 s (configurable via `pulse.stage2_timeout_seconds`) | `_stage2_timeout()` lazy getter at [job.py:55](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L55); applied at [job.py:241-243](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L241-L243) | Outer `asyncio.wait_for` around all Stage-2 work; on timeout → `_fallback_stage2` |
+| Discovery lookback window | default 7 days (configurable via `pulse.lookback_days`; integer, validated [1, 90]) | `_validate_lookback_days` at [settings_service.py:371-376](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L371-L376); default from [profile.py:54](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L54) | Controls how far back Stage 1 looks for candidate papers |
+| Startup grace | default 0 s (configurable via `pulse.startup_grace_seconds`; float, validated [0, 300]) | `_validate_startup_grace_seconds` at [settings_service.py:379-384](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L379-L384); default from [profile.py:55-56](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L55-L56) | Warmup pause before first outbound HTTP burst |
 
 ### 5.1 Worst-case math
 
-With `pulse.stage2_top_k = 40` (default), `_LLM_CONCURRENCY = 8`,
+With `pulse.stage2_top_k = 40` (default), `pulse.llm_concurrency = 4` (default),
 `PULSE_STAGE2_MODEL=fast`, `PULSE_STAGE2_MAX_RETRIES=1`, and per-call timeout
 120 s, the theoretical worst-case Stage-2 wall-clock is
 
 ```
-  ceil(40 / 8) waves × 120 s/wave × up to 2 attempts = 1200 s
+  ceil(40 / 4) waves × 120 s/wave × up to 2 attempts = 2400 s
 ```
 
-The outer 600 s cap still wins. In practice the fast alias is expected to score
+The outer 900 s cap still wins. In practice the fast alias is expected to score
 well below the per-call timeout; if structured-output validation repeatedly
 fails, the pipeline degrades to embedding-only fallback instead of blocking the
 job indefinitely. The May 2026 speed fix removed the old outer batch-of-5 loop
@@ -335,7 +337,7 @@ Documenting; not prescribing.
 These dispositions are the implementation plan's call. The contract's job
 is to surface the choices.
 
-**Decision log:** The "600 s Stage-2 cap (observed to fire 2026-05-02)" row was first resolved by Task B.1 (2026-05-02) via `_LLM_CONCURRENCY` 5→8 and `_DEFAULT_STAGE2_TOP_K` 50→40. The 2026-05-06 closeout keeps those limits but routes Stage 2 through the fast alias by default, lowers structured-output retries to 1, and removes the outer batch loop so the scorer's semaphore is the only concurrency control.
+**Decision log:** The Stage-2 cap row was first resolved by Task B.1 (2026-05-02) via concurrency 5→8 and `_DEFAULT_STAGE2_TOP_K` 50→40. The 2026-05-06 closeout routes Stage 2 through the fast alias by default, lowers structured-output retries to 1, and removes the outer batch loop so the scorer's semaphore is the only concurrency control. Cycle 2 (2026-05-23) replaced the module-level constants with lazy getters and raised the wall-clock default to 900 s.
 
 ---
 
@@ -356,9 +358,9 @@ Every cited identifier was Read in the session producing this contract.
 | Citation | File:line | One-line behavior |
 |---|---|---|
 | `run_pulse` orchestrator | services/paper_ingestion/paper_ingestion/pulse/job.py:68-381 | 8-stage pipeline with degraded/fatal handling |
-| `_STAGE2_TIMEOUT_SECONDS = 600` | services/paper_ingestion/paper_ingestion/pulse/job.py:48 | Stage-2 wall-clock cap |
-| `_fallback_stage2` | services/paper_ingestion/paper_ingestion/pulse/job.py:51-65 | Clears LLM signals, preserves Stage 1 final_score |
-| `asyncio.wait_for(_stage2_with_progress(), timeout=600)` | services/paper_ingestion/paper_ingestion/pulse/job.py:204-207 | Timeout enforcement |
+| `_stage2_timeout()` lazy getter | services/paper_ingestion/paper_ingestion/pulse/job.py:55 | Stage-2 wall-clock cap; default 900 s via `pulse_stage2_timeout_seconds` |
+| `_fallback_stage2` | services/paper_ingestion/paper_ingestion/pulse/job.py:64-78 | Clears LLM signals, preserves Stage 1 final_score |
+| `asyncio.wait_for(_stage2_with_progress(), timeout=_stage2_timeout())` | services/paper_ingestion/paper_ingestion/pulse/job.py:241-243 | Timeout enforcement |
 | Stage-2 single-call progress reporting | services/paper_ingestion/paper_ingestion/pulse/job.py:218-232 | One Stage-2 call over all survivors; completion progress reports `N/N` |
 | Citation signals gate | services/paper_ingestion/paper_ingestion/pulse/job.py:233-241 | `wants_citation` triggers compute_citation_signals |
 | Classifier gate | services/paper_ingestion/paper_ingestion/pulse/job.py:258-270 | `wants_classifier` triggers classifier_scores |
@@ -366,7 +368,7 @@ Every cited identifier was Read in the session producing this contract.
 | `pulse.train_classifier` post-run enqueue | services/paper_ingestion/paper_ingestion/pulse/job.py:373 | Self-improving classifier loop |
 | `_pulse_generate_job` job_handler | services/paper_ingestion/paper_ingestion/pulse/job.py:384-417 | On-demand entry point via jobs subsystem |
 | `ScoredCandidate` dataclass | services/paper_ingestion/paper_ingestion/pulse/scoring.py:42-53 | Cross-stage envelope |
-| `_LLM_CONCURRENCY = 8` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:46 | Stage-2 semaphore |
+| `_llm_concurrency()` lazy getter | services/paper_ingestion/paper_ingestion/pulse/scoring.py:53 | Stage-2 semaphore; default 4 via `pulse_llm_concurrency` |
 | `_LLM_MODEL` from `PULSE_STAGE2_MODEL` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:47 | Stage-2 model alias defaults to `fast` |
 | `_stage2_max_retries()` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:52-61 | Stage-2 structured-output retry budget defaults to 1 |
 | `_LLM_MAX_TOKENS = 512`, `_LLM_TEMPERATURE = 0.0` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:48-49 | Stage-2 LLM options |
@@ -379,7 +381,7 @@ Every cited identifier was Read in the session producing this contract.
 | `UserProfile` BaseModel | services/paper_ingestion/paper_ingestion/pulse/profile.py:34-52 | Per-user context envelope |
 | `load_profile` | services/paper_ingestion/paper_ingestion/pulse/profile.py:55-377 | Two-phase DB+HTTP centroid load |
 | Weights load + clamp | services/paper_ingestion/paper_ingestion/pulse/profile.py:178-186 | Merge with defaults; clamp to [0,1] |
-| `pulse.l2_lambda` load | services/paper_ingestion/paper_ingestion/pulse/profile.py:191-193 | Read with default 0.5; injected into weights dict |
+| `pulse.l2_lambda` load | services/paper_ingestion/paper_ingestion/pulse/profile.py:232-236 | Read with default 0.5; stored as dedicated `UserProfile.l2_lambda` field (DOM-B-01) |
 | `_RATING_HISTORY_LIMIT = 10` | services/paper_ingestion/paper_ingestion/pulse/profile.py:31 | Recent positive/negative title cap |
 | `compute_citation_signals` | services/paper_ingestion/paper_ingestion/pulse/citation_signals.py:11-107 | networkx-backed PageRank + count + Adamic-Adar |
 | Citation signals graceful degrade on missing networkx | services/paper_ingestion/paper_ingestion/pulse/citation_signals.py:22-25 | `ImportError` → `{}` |
@@ -392,6 +394,6 @@ Every cited identifier was Read in the session producing this contract.
 | `LLM_TIMEOUT_DEFAULT = 120.0` | libs/jarvis_common/jarvis_common/llm_client.py:16 | Per-call timeout default |
 | `build_scoring_prompt` | services/paper_ingestion/paper_ingestion/pulse/prompts.py:36-136 | Two-message chat list; system + user |
 | `PULSE_SCORING_SYSTEM_PROMPT` | services/paper_ingestion/paper_ingestion/pulse/prompts.py:18-33 | Strict-JSON instruction |
-| `_PULSE_REQUIRED_WEIGHT_KEYS` | services/paper_ingestion/paper_ingestion/routers/settings.py:133-135 | 6 always-required weights |
-| `_validate_pulse_weights` | services/paper_ingestion/paper_ingestion/routers/settings.py:153-164 | Required + optional + range check |
+| `_PULSE_REQUIRED_WEIGHT_KEYS` | services/paper_ingestion/paper_ingestion/services/settings_service.py:299-301 | 6 always-required weights |
+| `_validate_pulse_weights` | services/paper_ingestion/paper_ingestion/services/settings_service.py:319-331 | Required + optional + range check |
 | `pulse_overnight` scheduler job id | services/paper_ingestion/paper_ingestion/scheduler.py (registration site) | Cron-triggered Pulse run |

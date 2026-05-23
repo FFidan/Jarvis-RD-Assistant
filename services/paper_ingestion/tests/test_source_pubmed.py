@@ -507,3 +507,144 @@ async def test_pub_plus_date_never_appears_in_request():
         url_str = str(call.request.url)
         assert "pub+date" not in url_str, f"'pub+date' found in URL: {url_str}"
         assert "pub%2Bdate" not in url_str, f"encoded 'pub+date' found in URL: {url_str}"
+
+
+# ---------------------------------------------------------------------------
+# DRY-S2: PubMedSource symmetry — db_pool + grace + persistent limiter + run history
+# ---------------------------------------------------------------------------
+
+
+def _make_source_with_pool(mock_pool) -> PubMedSource:
+    """PubMedSource constructed with a fake db_pool."""
+    config = PaperSourceConfig(id=4, source_type=SourceType.PUBMED, enabled=True, config={})
+    client = httpx.AsyncClient()
+    return PubMedSource(config, client, db_pool=mock_pool)
+
+
+def _make_mock_pool():
+    """Return (pool, conn) mocks wired for asyncpg-style acquire()."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock()
+    mock_pool = MagicMock()
+    mock_pool.acquire = MagicMock()
+    mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    return mock_pool, mock_conn
+
+
+@respx.mock
+async def test_fetch_new_since_calls_enforce_startup_grace():
+    """fetch_new_since respects _enforce_startup_grace (called at entry)."""
+    from unittest.mock import AsyncMock, patch
+
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    grace_mock = AsyncMock()
+    with patch("paper_ingestion.sources.pubmed_source._enforce_startup_grace", grace_mock):
+        await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC),
+            topics=[TopicRef(id=1, name="AI", query_terms=["AI"])],
+            limit=10,
+        )
+
+    grace_mock.assert_called_once()
+
+
+@respx.mock
+async def test_fetch_new_since_uses_persistent_rate_limiter_when_pool_set():
+    """PersistentSourceRateLimiter is instantiated and acquire() called when db_pool is set."""
+    from unittest.mock import AsyncMock, patch
+
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    mock_pool, _ = _make_mock_pool()
+    source = _make_source_with_pool(mock_pool)
+
+    mock_limiter = AsyncMock()
+    mock_limiter.acquire = AsyncMock()
+    mock_limiter.update_last_request = AsyncMock()
+
+    with patch(
+        "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+        return_value=mock_limiter,
+    ):
+        await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC),
+            topics=[TopicRef(id=1, name="AI", query_terms=["AI"])],
+            limit=10,
+        )
+
+    mock_limiter.acquire.assert_called_once()
+
+
+@respx.mock
+async def test_fetch_new_since_inserts_run_history_on_success():
+    """fetch_new_since inserts source_run_history row with status='ok' when pool set."""
+    from unittest.mock import AsyncMock, patch
+
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    mock_pool, mock_conn = _make_mock_pool()
+    source = _make_source_with_pool(mock_pool)
+
+    mock_limiter = AsyncMock()
+    mock_limiter.acquire = AsyncMock()
+    mock_limiter.update_last_request = AsyncMock()
+
+    with patch(
+        "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+        return_value=mock_limiter,
+    ):
+        await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC),
+            topics=[TopicRef(id=1, name="AI", query_terms=["AI"])],
+            limit=10,
+        )
+
+    all_calls = mock_conn.execute.call_args_list
+    run_history_calls = [c for c in all_calls if "source_run_history" in c.args[0]]
+    assert run_history_calls, "Expected source_run_history insert"
+    sql, *args = run_history_calls[0].args
+    assert "ok" in args
+    assert "pubmed" in args
+
+
+@respx.mock
+async def test_fetch_new_since_calls_log_event_on_success():
+    """fetch_new_since calls log_event with fetch_succeeded after a successful run."""
+    from unittest.mock import AsyncMock, patch
+
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    mock_pool, mock_conn = _make_mock_pool()
+    source = _make_source_with_pool(mock_pool)
+
+    mock_limiter = AsyncMock()
+    mock_limiter.acquire = AsyncMock()
+    mock_limiter.update_last_request = AsyncMock()
+
+    log_event_mock = AsyncMock()
+    with (
+        patch(
+            "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+            return_value=mock_limiter,
+        ),
+        patch("paper_ingestion.sources.pubmed_source.log_event", log_event_mock),
+    ):
+        await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC),
+            topics=[TopicRef(id=1, name="AI", query_terms=["AI"])],
+            limit=10,
+        )
+
+    log_event_mock.assert_called_once()
+    call_kwargs = log_event_mock.call_args.kwargs
+    assert call_kwargs.get("message") == "fetch_succeeded"
+    assert call_kwargs.get("source") == "pubmed"

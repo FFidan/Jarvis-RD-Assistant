@@ -52,6 +52,6 @@ chain was never replayable from blank by construction.
 
 When the `0089+` tail grows large again, repeat the regeneration mechanic
 documented at
-`docs/superpowers/plans/2026-05-19-wave1-baseline-mechanic.md` (§A) and
+`docs/archive/2026-05/superpowers-plans/2026-05-19-wave1-baseline-mechanic.md` (§A) and
 re-prove via the §D schema-equivalence test before deleting the absorbed
 migrations.

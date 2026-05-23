@@ -139,6 +139,10 @@ async def run_pulse(
         "last_error": None,
         "degraded_reason": None,
         "source_diagnostics": {},
+        "deck_date": None,
+        "card_count": 0,
+        "source_counts": {},
+        "classifier": None,
     }
 
     # --- 1. profile ------------------------------------------------------

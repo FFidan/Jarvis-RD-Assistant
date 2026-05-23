@@ -386,6 +386,6 @@ author re-Reads each cited file before final claim.
 | `generate_weekly_summary` | services/paper_ingestion/paper_ingestion/weekly_summary.py:63 | Weekly digest trace |
 | `scan_contradictions` | services/paper_ingestion/paper_ingestion/services/contradictions.py:535 | Contradiction scan trace |
 | `configure_lifespan` (SDK init point) | libs/jarvis_common/jarvis_common/app_factory.py:151 | Equal-length init/teardown lifespan builder |
-| `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/routers/settings.py:101-108 | Privacy: plaintext NEVER in span metadata |
+| `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/services/settings_service.py:259-269 | Privacy: plaintext NEVER in span metadata |
 | `mask_secret` | libs/jarvis_common/jarvis_common/crypto.py | Helper for scrubbing values before span attachment |
 | Existing impl spec | docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md | Drives the integration work that produces this contract's steady state |

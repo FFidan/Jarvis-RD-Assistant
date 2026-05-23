@@ -7,10 +7,12 @@ from jarvis_common.settings import (
     CoreSettings,
     JobsSettings,
     RerankerSettings,
+    SecretsSettings,
     TelegramSettings,
     get_core_settings,
     get_jobs_settings,
     get_reranker_settings,
+    get_secrets_settings,
     get_telegram_settings,
 )
 from pydantic import ValidationError
@@ -182,3 +184,42 @@ def test_factories_reflect_runtime_env_changes(monkeypatch):
 
     monkeypatch.setenv("TELEGRAM_BOT_URL", "http://host:9000")
     assert get_telegram_settings().url_or_none == "http://host:9000"
+
+
+# ---------------------------------------------------------------------------
+# DRY-C1 — _resolve_env_file_indirection shared by CoreSettings + SecretsSettings
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_env_file_indirection_shared_by_core_and_secrets(tmp_path, monkeypatch):
+    """Both CoreSettings and SecretsSettings use the same hoisted helper.
+
+    This test proves that a _FILE env var resolves correctly through both
+    classes — confirming the factored-out function is wired in both validators.
+    """
+    # Create a temp secret file
+    secret_file = tmp_path / "api.key"
+    secret_file.write_text("shared-secret-value\n")
+
+    # Clear any pre-existing direct + file env vars that might interfere
+    for key in ("JARVIS_API_KEY", "JARVIS_API_KEY_FILE"):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("JARVIS_API_KEY_FILE", str(secret_file))
+
+    # Both classes must resolve the _FILE indirection via the shared helper
+    core = CoreSettings()
+    assert core.jarvis_api_key is not None
+    assert core.jarvis_api_key.get_secret_value() == "shared-secret-value"
+
+    get_secrets_settings.cache_clear()
+    secrets = SecretsSettings()
+    assert secrets.jarvis_api_key is not None
+    assert secrets.jarvis_api_key.get_secret_value() == "shared-secret-value"
+
+    # Both classes also raise identically on a missing file
+    monkeypatch.setenv("JARVIS_API_KEY_FILE", "/nonexistent/secret.key")
+    with pytest.raises((RuntimeError, OSError)):
+        CoreSettings()
+    with pytest.raises((RuntimeError, OSError)):
+        SecretsSettings()

@@ -111,39 +111,6 @@ def make_pulse_card_row(
     )
 
 
-def make_pdf_resolution_row(
-    doi: str | None = "10.1234/example",
-    arxiv_id: str | None = None,
-    resolved_url: str | None = "https://arxiv.org/pdf/2401.00001",
-    resolver_name: str = "arxiv",
-) -> FakeRecord:
-    """Return a FakeRecord matching the pdf_resolutions schema.
-
-    Parameters
-    ----------
-    doi:
-        Canonical DOI or None for arXiv-only papers.
-    arxiv_id:
-        arXiv identifier or None for DOI-only papers.
-    resolved_url:
-        PDF URL if resolution succeeded; None if all resolvers failed
-        (cached failure marker).
-    resolver_name:
-        Which resolver produced the result (``'arxiv'``, ``'unpaywall'``,
-        ``'core'``, or ``'failed'``).
-    """
-    return FakeRecord(
-        {
-            "id": 1,
-            "doi": doi,
-            "arxiv_id": arxiv_id,
-            "resolved_url": resolved_url,
-            "resolver_name": resolver_name,
-            "resolved_at": "2024-01-15T04:05:00+00:00",
-        }
-    )
-
-
 def fake_embedding_vector(dim: int = 1024) -> list[float]:
     """Return a deterministic unit-ish embedding vector of length ``dim``.
 

@@ -42,6 +42,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from jarvis_common.auth import refresh_api_key_cache, validate_production_config
 from jarvis_common.config import get_jarvis_common_settings
+from jarvis_common.correlation_middleware import CorrelationIdMiddleware
 from jarvis_common.crypto import reload_fernet_on_sighup, validate_encrypted_config_rows
 from jarvis_common.db_helpers import init_pg_connection
 from jarvis_common.error_handlers import (
@@ -306,7 +307,8 @@ def configure_middleware_and_errors(
 
     Middleware order (Starlette: last-added = outermost = runs first):
 
-    1. RequestIDMiddleware (added first -- innermost)
+    1. RequestIDMiddleware (innermost -- emits X-Request-Id)
+    1b. CorrelationIdMiddleware (wraps RequestID -- reads/emits X-Correlation-Id)
     2. SlowAPIMiddleware (rate limiting)
     3. CORSMiddleware
     4. ProxyHeadersMiddleware (added last -- outermost, decodes XFF first)
@@ -326,8 +328,11 @@ def configure_middleware_and_errors(
         learning_engine default); pass a comma-separated string or a list to
         restrict.
     """
-    # 1. RequestIDMiddleware
+    # 1. RequestIDMiddleware (innermost — emits X-Request-Id first).
     app.add_middleware(RequestIDMiddleware)
+    # 1b. CorrelationIdMiddleware — wraps RequestID so the correlation layer can
+    #     read the already-assigned request-ID header from the outer scope.
+    app.add_middleware(CorrelationIdMiddleware)
 
     # 2. SlowAPIMiddleware -- pre-auth global cap.
     app.state.limiter = limiter

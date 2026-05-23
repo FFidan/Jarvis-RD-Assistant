@@ -8,7 +8,10 @@ Rate limit: 1 request/second on the free tier.
 import logging
 import time as _time
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import asyncpg
 from urllib.parse import quote as _url_quote
 from urllib.parse import urlparse as _urlparse
 
@@ -48,7 +51,7 @@ class SemanticScholarSource(PaperSource):
         self,
         config: PaperSourceConfig,
         http_client: httpx.AsyncClient,
-        db_pool: Any = None,
+        db_pool: "asyncpg.Pool | None" = None,
     ) -> None:
         super().__init__(config, http_client, db_pool)
         # Optional API key for higher rate limits (config overrides env var)
@@ -393,8 +396,11 @@ class SemanticScholarSource(PaperSource):
                             message="fetch_failed",
                             context={"http_status": None, "exception": repr(_exc)[:300]},
                         )
-                    except Exception:
-                        pass
+                    except Exception as log_exc:
+                        logger.warning(
+                            "semantic_scholar: log_event write failed for fetch_failed",
+                            exc_info=log_exc,
+                        )
                 continue
 
             if not data:
@@ -438,8 +444,11 @@ class SemanticScholarSource(PaperSource):
                                     "exception": diag.get("message", "")[:300],
                                 },
                             )
-                    except Exception:
-                        pass
+                    except Exception as log_exc:
+                        logger.warning(
+                            "semantic_scholar: log_event write failed for rate_limit/fetch_failed",
+                            exc_info=log_exc,
+                        )
                 continue
 
             candidate_count = 0
@@ -504,47 +513,13 @@ class SemanticScholarSource(PaperSource):
                             "query_count": len(queries),
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as log_exc:
+                    logger.warning(
+                        "semantic_scholar: log_event write failed for fetch_succeeded",
+                        exc_info=log_exc,
+                    )
 
         return papers[:limit]
-
-    async def _insert_run_history(
-        self,
-        *,
-        started_at: float,
-        status: str,
-        candidate_count: int,
-        duration_ms: int,
-        user_id: int | None = None,
-    ) -> None:
-        """Insert a row into ``source_run_history`` if ``db_pool`` is available."""
-        if self.db_pool is None:
-            return
-        import datetime as _dt
-
-        now_utc = _dt.datetime.now(tz=_dt.UTC)
-        started_utc = now_utc - _dt.timedelta(milliseconds=duration_ms)
-        try:
-            async with self.db_pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO source_run_history
-                        (user_id, source_type, started_at, finished_at,
-                         status, candidate_count, duration_ms, detail)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-                    """,
-                    user_id,
-                    "semantic_scholar",
-                    started_utc,
-                    now_utc,
-                    status,
-                    candidate_count,
-                    duration_ms,
-                    "{}",
-                )
-        except Exception as exc:
-            logger.warning("S2: failed to insert source_run_history: %s", exc, exc_info=True)
 
     async def fetch_citations(self, paper_id: str, limit: int = 100) -> list[dict]:
         """Fetch papers that cite the given paper.

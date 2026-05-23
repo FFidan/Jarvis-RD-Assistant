@@ -250,6 +250,81 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
 # Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
 
 
+# ---------------------------------------------------------------------------
+# dev-mode inline refactor smoke tests (W2.T3 — structural, behaviour unchanged)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_process_pdf_dev_mode_exposes_error_detail(tmp_path, monkeypatch):
+    """When get_core_settings().dev_mode is True, RuntimeError detail is exposed."""
+    from jarvis_common.settings import CoreSettings
+    from unittest.mock import patch as mock_patch
+
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    paper_path = storage_dir / "1.pdf"
+    paper_path.write_bytes(b"%PDF-1.7\ncontent")
+
+    conn = AsyncMock()
+    conn.fetchrow.return_value = FakeRecord(
+        id=1,
+        pdf_downloaded=True,
+        pdf_local_path=str(paper_path),
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+    processor = MagicMock()
+    embedder = MagicMock()
+    request = _request_with_state(pdf_processor=processor, embedder=embedder)
+    request.state = SimpleNamespace(request_id="req-test-1")
+
+    boom = RuntimeError("internal failure detail")
+    run_process_pdf_mock = AsyncMock(side_effect=boom)
+
+    dev_settings = CoreSettings(dev_mode=True)
+
+    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
+    monkeypatch.setattr(pdf, "run_process_pdf", run_process_pdf_mock)
+
+    with mock_patch("paper_ingestion.routers.pdf.get_core_settings", return_value=dev_settings):
+        with pytest.raises(HTTPException) as exc_info:
+            await pdf.process_pdf.__wrapped__(
+                request,
+                paper_id=1,
+                force=False,
+                sync=True,
+                db_pool=pool,
+                pdf_processor=processor,
+                embedder=embedder,
+            )
+
+    assert exc_info.value.status_code == 502
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    assert "internal failure detail" in detail["detail"]
+    assert detail["error_type"] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_debug_pulse_returns_404_when_dev_mode_false():
+    """debug_pulse must return HTTP 404 when get_core_settings().dev_mode is False."""
+    from jarvis_common.settings import CoreSettings
+    from unittest.mock import patch as mock_patch
+    from paper_ingestion.routers import pulse
+
+    prod_settings = CoreSettings(dev_mode=False)
+
+    with mock_patch("paper_ingestion.routers.pulse.get_core_settings", return_value=prod_settings):
+        with pytest.raises(HTTPException) as exc_info:
+            await pulse.debug_pulse.__wrapped__(
+                MagicMock(),
+                db_pool=MagicMock(),
+                caller_id=1,
+            )
+
+    assert exc_info.value.status_code == 404
+
+
 @pytest.mark.asyncio
 async def test_upload_pdf_single_user_mode_does_not_write_library(tmp_path, monkeypatch):
     """API-key/single-user uploads keep the legacy NULL-user behavior."""

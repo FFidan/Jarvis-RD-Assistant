@@ -243,7 +243,6 @@ __all__ = [
     "encrypt_secret",
     "decrypt_secret",
     "mask_secret",
-    "rotate_key",
     "refresh_fernet_cache",
     "reload_fernet_on_sighup",
     "resolve_secret_row",

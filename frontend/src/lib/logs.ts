@@ -6,6 +6,7 @@
 
 import { useAuthStore } from '@/stores/auth-store';
 import { apiFetch } from '@/lib/api';
+import { createSSEReader } from '@/lib/sse-reader';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -103,44 +104,15 @@ export function streamCorrelation(
 
   (async () => {
     try {
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: apiKey ? { 'X-API-Key': apiKey } : {},
+      for await (const raw of createSSEReader(url, {
+        headers: apiKey ? { 'X-API-Key': apiKey } : undefined,
         signal: controller.signal,
-      });
-
-      if (!res.ok || !res.body) {
-        opts.onDone();
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-            if (raw === '[DONE]') {
-              opts.onDone();
-              return;
-            }
-            try {
-              opts.onEvent(JSON.parse(raw) as SystemEvent);
-            } catch {
-              /* skip malformed frames */
-            }
-          }
+      })) {
+        try {
+          opts.onEvent(JSON.parse(raw) as SystemEvent);
+        } catch {
+          /* skip malformed frames */
         }
-      } finally {
-        await reader.cancel().catch(() => {});
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;

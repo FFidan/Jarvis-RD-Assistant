@@ -28,7 +28,10 @@ shared across all calls on the same instance.
 import logging
 import time as _time
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import asyncpg
 from urllib.parse import urlparse
 
 import httpx
@@ -122,7 +125,7 @@ class OpenAlexSource(PaperSource):
         self,
         config: PaperSourceConfig,
         http_client: httpx.AsyncClient,
-        db_pool: Any = None,
+        db_pool: "asyncpg.Pool | None" = None,
     ) -> None:
         super().__init__(config, http_client, db_pool)
         from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
@@ -559,8 +562,11 @@ class OpenAlexSource(PaperSource):
                                         "exception": None,
                                     },
                                 )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.warning(
+                                "openalex: log_event write failed for rate_limit/fetch_failed",
+                                exc_info=exc,
+                            )
                     continue
                 response.raise_for_status()
                 data = response.json()
@@ -598,8 +604,10 @@ class OpenAlexSource(PaperSource):
                             message="fetch_failed",
                             context={"http_status": _exc_status, "exception": repr(exc)[:300]},
                         )
-                    except Exception:
-                        pass
+                    except Exception as log_exc:
+                        logger.warning(
+                            "openalex: log_event write failed for fetch_failed", exc_info=log_exc
+                        )
                 continue
 
             candidate_count = 0
@@ -641,44 +649,9 @@ class OpenAlexSource(PaperSource):
                             "query_count": len(consolidated),
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "openalex: log_event write failed for fetch_succeeded", exc_info=exc
+                    )
 
         return papers
-
-    async def _insert_run_history(
-        self,
-        *,
-        started_at: float,
-        status: str,
-        candidate_count: int,
-        duration_ms: int,
-        user_id: int | None = None,
-    ) -> None:
-        """Insert a row into ``source_run_history`` if ``db_pool`` is available."""
-        if self.db_pool is None:
-            return
-        import datetime as _dt
-
-        now_utc = _dt.datetime.now(tz=_dt.UTC)
-        started_utc = now_utc - _dt.timedelta(milliseconds=duration_ms)
-        try:
-            async with self.db_pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO source_run_history
-                        (user_id, source_type, started_at, finished_at,
-                         status, candidate_count, duration_ms, detail)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-                    """,
-                    user_id,
-                    "openalex",
-                    started_utc,
-                    now_utc,
-                    status,
-                    candidate_count,
-                    duration_ms,
-                    "{}",
-                )
-        except Exception as exc:
-            logger.warning("OpenAlex: failed to insert source_run_history: %s", exc, exc_info=True)

@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,6 +43,33 @@ __all__ = [
     "get_telegram_settings",
     "get_jobs_settings",
 ]
+
+
+def _resolve_env_file_indirection(values: Any, fields: Any) -> Any:
+    """Resolve ``<FIELD>_FILE`` env-var indirection for any settings class.
+
+    For each field name in *fields*, checks ``os.environ`` for a corresponding
+    ``<FIELD_NAME_UPPER>_FILE`` variable.  When found, reads and strips that
+    file's content and injects it into *values* under the field name.  An empty
+    file resolves to ``None`` so that ``Optional[SecretStr]`` fields remain
+    unset rather than receiving an empty string.
+
+    Raised:
+        RuntimeError: when the nominated file cannot be opened.
+    """
+    if not isinstance(values, dict):
+        return values
+    for field_name in fields:
+        env_name = field_name.upper()
+        file_var = os.environ.get(f"{env_name}_FILE", "")
+        if file_var:
+            try:
+                # An empty secret file must resolve to None, not "",
+                # so downstream Optional[SecretStr] fields stay unset.
+                values[field_name] = Path(file_var).read_text().strip() or None
+            except OSError as exc:
+                raise RuntimeError(f"Failed to read secret from {file_var!r}") from exc
+    return values
 
 
 # Read from the real process environment only — no .env files. Services are
@@ -95,21 +122,7 @@ class CoreSettings(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def _resolve_file_indirection(cls, values):
-        import os  # noqa: PLC0415
-
-        if not isinstance(values, dict):
-            return values
-        for field_name in cls.model_fields:
-            env_name = field_name.upper()
-            file_var = os.environ.get(f"{env_name}_FILE", "")
-            if file_var:
-                try:
-                    # An empty secret file must resolve to None, not "",
-                    # so downstream Optional[SecretStr] fields stay unset.
-                    values[field_name] = Path(file_var).read_text().strip() or None
-                except OSError as exc:
-                    raise RuntimeError(f"Failed to read secret from {file_var!r}") from exc
-        return values
+        return _resolve_env_file_indirection(values, cls.model_fields)
 
     @model_validator(mode="after")
     def _promote_dev_flags(self) -> CoreSettings:
@@ -234,22 +247,7 @@ class SecretsSettings(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def _resolve_file_indirection(cls, values):
-        import os  # noqa: PLC0415
-
-        if not isinstance(values, dict):
-            return values
-        for field_name in cls.model_fields:
-            env_name = field_name.upper()
-            file_var = os.environ.get(f"{env_name}_FILE", "")
-            if file_var:
-                try:
-                    # An empty secret file (e.g. telegram_bot_token on the
-                    # Telegram-skipped install path) must resolve to None, not
-                    # "", so downstream Optional[SecretStr] fields stay unset.
-                    values[field_name] = Path(file_var).read_text().strip() or None
-                except OSError as exc:
-                    raise RuntimeError(f"Failed to read secret from {file_var!r}") from exc
-        return values
+        return _resolve_env_file_indirection(values, cls.model_fields)
 
 
 @lru_cache(maxsize=1)

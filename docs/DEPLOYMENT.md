@@ -353,7 +353,40 @@ A normal install needs **no manual `.env` editing** beyond what `setup.sh` write
 
 ---
 
-> **Alternatives:** Cloudflare Tunnel and DIY port-forward+ACME are possible but out of scope here; setup is on the operator if pursued.
+## Mode 3 — Cloudflare Tunnel
+
+Exposes JARVIS over a Cloudflare-managed outbound tunnel — no inbound port required. Edge TLS is terminated by Cloudflare; traffic from the edge to the origin remains HTTPS on the Docker network.
+
+**Prerequisites:**
+
+- A Cloudflare account with a configured tunnel (create one in the [Zero Trust dashboard](https://one.dash.cloudflare.com/)).
+- The tunnel token written to `secrets/cloudflare_tunnel_token.txt` (mode 600, gitignored):
+
+```bash
+echo -n '<your-tunnel-token>' > secrets/cloudflare_tunnel_token.txt
+chmod 600 secrets/cloudflare_tunnel_token.txt
+```
+
+**Bootstrap:**
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+`setup.sh` option 3 writes the token path and brings the tunnel profile up automatically. The `cloudflared` container reads the token from the Docker secret at `/run/secrets/cloudflare_tunnel_token` — no `CLOUDFLARED_TUNNEL_TOKEN` environment variable is used.
+
+**Healthcheck:**
+
+```bash
+docker compose ps cloudflared   # Status should be "healthy" or "running"
+docker compose logs --tail=20 cloudflared   # Look for "Connection established"
+```
+
+**Config directory:** `infra/` does not include a cloudflared-specific config subdirectory — tunnel routing is configured entirely in the Cloudflare Zero Trust dashboard. The compose secret definition is at the bottom of `docker-compose.yml` (`cloudflare_tunnel_token`).
+
+> **SEC note:** Cloudflare acts as a reverse proxy. The `CF-Connecting-IP` header is trusted only when `JARVIS_TRUST_CF_CONNECTING_IP=true` is set in `.env` (see mode table above). Leave unset unless you lock access to Cloudflare IPs only.
+
+---
 
 ## Mode 4 — Tailscale Funnel (alternative tunnel)
 
@@ -595,7 +628,7 @@ Key `paper_ingestion` endpoints referenced in operator workflows:
 | `DELETE` | `/api/system/models/{tag}` | API key | Delete an inactive curated Ollama model; rejects active/unknown tags |
 | `GET` | `/api/jobs/{id}/stream` | API key | SSE stream for async job progress |
 
-`learning_engine` (:8001) endpoints follow the same auth convention (`X-API-Key` header). See `services/learning_engine/paper_ingestion/routers/` for the full surface.
+`learning_engine` (:8001) endpoints follow the same auth convention (`X-API-Key` header). See `services/learning_engine/learning_engine/routers/` for the full surface.
 
 ---
 

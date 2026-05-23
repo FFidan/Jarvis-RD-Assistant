@@ -57,10 +57,19 @@ async def post_init(application: Application) -> None:
     application.bot_data["scheduler"] = scheduler
 
     # Start internal HTTP API in the background (for reload-nudges endpoint)
-    asyncio.get_running_loop().create_task(
+    _internal_api_task = asyncio.get_running_loop().create_task(
         start_internal_server(scheduler),
         name="internal_api",
     )
+    application.bot_data["internal_api_task"] = _internal_api_task
+
+    def _log_internal_api_exception(task: "asyncio.Task[None]") -> None:
+        if task.cancelled():
+            return
+        if (exc := task.exception()) is not None:
+            logger.error("internal_api task raised: %s", exc, exc_info=exc)
+
+    _internal_api_task.add_done_callback(_log_internal_api_exception)
 
     # Register bot commands for the Telegram "/" autocomplete menu
     await application.bot.set_my_commands(

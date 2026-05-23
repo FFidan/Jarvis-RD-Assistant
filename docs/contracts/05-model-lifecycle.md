@@ -3,8 +3,8 @@
 **Status:** SHIPPED — backend and Settings lifecycle v1 live-verified
 **Date:** 2026-05-03
 **Scope:** Model catalog, hardware-aware recommendations, pull-on-demand UI, cloud model integration, Settings UI GHOST surface fix
-**Depends on:** Phase C (embedding swap, spec at `docs/specs/2026-05-03-c-embedding-upgrade.md`)
-**Related:** `docs/contracts/03-llm.md`, `docs/specs/2026-05-03-c-embedding-upgrade.md`
+**Depends on:** Phase C (embedding swap, spec at `docs/archive/2026-05/specs/2026-05-03-c-embedding-upgrade.md`)
+**Related:** `docs/contracts/03-llm.md`, `docs/archive/2026-05/specs/2026-05-03-c-embedding-upgrade.md`
 
 ---
 
@@ -478,7 +478,7 @@ The catalog is static in the package. If Ollama renames `qwen3:14b` → `qwen3:1
 
 | Step | Action |
 |---|---|
-| Phase C | Pulled `qwen3-embedding:0.6b`, rebuilt `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, updated `litellm/config.yaml` embed alias, and left `kg_entities` as a separately checkpointed/rebuildable optional collection. Full historical spec at `docs/specs/2026-05-03-c-embedding-upgrade.md`. |
+| Phase C | Pulled `qwen3-embedding:0.6b`, rebuilt `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, updated `litellm/config.yaml` embed alias, and left `kg_entities` as a separately checkpointed/rebuildable optional collection. Full historical spec at `docs/archive/2026-05/specs/2026-05-03-c-embedding-upgrade.md`. |
 | Shipped | Removed `nomic-embed-text` and `mistral-nemo:12b` from active `litellm/config.yaml` defaults. |
 | Shipped | Set smart/fast defaults: `smart=qwen3:14b`, `fast=qwen3:4b`. |
 | Shipped (14b→8b) | Downgraded smart default to qwen3:8b in litellm/config.yaml — qwen3:14b starved the GPU-resident embedder on 16 GB cards; admins restore 14b via Settings → llm.smart_model. |
@@ -537,13 +537,14 @@ evidence for a future implementation pass.
 | `_CLOUD_PREFIX_TO_PROVIDER` | `services/paper_ingestion/paper_ingestion/services/litellm_config.py` | Maps `openai/`, `anthropic/`, `gemini/` prefixes to provider name |
 | `_probe_ollama()` | `services/paper_ingestion/paper_ingestion/routers/system.py` | TTL-cached `GET {OLLAMA_BASE_URL}/api/tags`; returns full tag list |
 | `_OllamaProbeCache` | `services/paper_ingestion/paper_ingestion/routers/system.py` | TTL cache class used by `_probe_ollama` |
-| `llm.anthropic.api_key` | `services/paper_ingestion/paper_ingestion/routers/settings.py:_ALLOWED_CONFIG_KEYS` | Encrypted BYTEA in `user_config`; live in production |
-| `llm.openai.api_key` | `services/paper_ingestion/paper_ingestion/routers/settings.py:_ALLOWED_CONFIG_KEYS` | Same |
-| `llm.google.api_key` | `services/paper_ingestion/paper_ingestion/routers/settings.py:_ALLOWED_CONFIG_KEYS` | Same |
-| `POST /api/providers/{provider}/test` | `services/paper_ingestion/paper_ingestion/routers/settings.py` | Existing endpoint; provider test-ping only; no model-select today |
-| `_SUPPORTED_PROVIDERS` | `services/paper_ingestion/paper_ingestion/routers/settings.py` | `frozenset({"anthropic", "openai", "google"})` |
+| `llm.anthropic.api_key` | `services/paper_ingestion/paper_ingestion/services/settings_service.py:_ALLOWED_CONFIG_KEYS` (defined at `settings_service.py:56`) | Encrypted BYTEA in `user_config`; live in production |
+| `llm.openai.api_key` | `services/paper_ingestion/paper_ingestion/services/settings_service.py:_ALLOWED_CONFIG_KEYS` (defined at `settings_service.py:56`) | Same |
+| `llm.google.api_key` | `services/paper_ingestion/paper_ingestion/services/settings_service.py:_ALLOWED_CONFIG_KEYS` (defined at `settings_service.py:56`) | Same |
+| `POST /api/providers/{provider}/test` | `services/paper_ingestion/paper_ingestion/routers/settings.py:429` | Existing endpoint; provider test-ping only; no model-select today |
+| `_SUPPORTED_PROVIDERS` | `services/paper_ingestion/paper_ingestion/services/settings_service.py:975` | `frozenset({"anthropic", "openai", "google"})` |
 | Runtime defaults | `litellm/config.yaml` | Active defaults are `ollama/qwen3:14b` (smart), `ollama/qwen3:4b` (fast), and `ollama/qwen3-embedding:4b` (embed). Cloud examples remain commented out/non-default. |
 | `PaperIngestionSettings.embedding_model_name` / `embedding_dimension` | `services/paper_ingestion/paper_ingestion/config.py` | Defaults are `qwen3-embedding:4b` and `2560`; services pass them to ingestion/embedder runtime. |
 | `scripts/reembed.py` defaults | `scripts/reembed.py` | Defaults to `qwen3-embedding:4b`/`2560`; collection recreation stays gated by explicit snapshot confirmation flags. |
 | `embed_dim_expected = EMBEDDING_DIMENSION` | `services/paper_ingestion/paper_ingestion/routers/pulse.py` | Pulse debug validates topic embedding dimensions against the runtime embedding dimension. |
+| `build_model_statuses(...)` | `services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:482-585` | Computes `status`, `fit`, `can_assign`, `assign_blocker`, and `fit_detail` per catalog entry by crossing catalog state with installed Ollama models and active LiteLLM config. |
 | `task_registry.py` task count | `libs/jarvis_common/jarvis_common/task_registry.py` | Job kinds are registry-driven; `model.pull` is the paper-ingestion owner for pull jobs. |

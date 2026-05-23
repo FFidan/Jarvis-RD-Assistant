@@ -2,6 +2,7 @@
 - consolidate_topics (merge + split at 1500-char cap)
 - fetch_new_since wired with PersistentSourceRateLimiter
 - source_run_history writes on success and 429
+- DRY-S3: pdf_url allowlist check in _parse_entry
 """
 
 from __future__ import annotations
@@ -9,11 +10,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+from xml.etree.ElementTree import fromstring
 
 import httpx
 import respx
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
-from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ArxivSource
+from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ATOM_NS, ArxivSource
 from paper_ingestion.sources.base import SourceQuery
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -288,3 +290,63 @@ async def test_fetch_new_since_writes_run_history_on_429_with_cooldown(monkeypat
     sql, *args = run_history_calls[0].args
     assert "source_run_history" in sql
     assert "rate_limit" in args
+
+
+# ---------------------------------------------------------------------------
+# DRY-S3: pdf_url allowlist in _parse_entry
+# ---------------------------------------------------------------------------
+
+
+def _make_entry_xml(pdf_href: str) -> object:
+    """Build a minimal Atom <entry> element with the given pdf link href."""
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2301.99999v1</id>
+    <title>Test Paper</title>
+    <summary>Abstract text.</summary>
+    <published>2023-01-15T12:00:00Z</published>
+    <link title="pdf" href="{pdf_href}" type="application/pdf"/>
+    <link rel="alternate" href="http://arxiv.org/abs/2301.99999v1"/>
+    <author><name>Test Author</name></author>
+  </entry>
+</feed>"""
+    root = fromstring(xml)
+    return root.find(f"{{{ATOM_NS}}}entry")
+
+
+def test_parse_entry_rejects_non_allowlisted_pdf(caplog):
+    """_parse_entry sets pdf_url=None and logs a warning for non-allowlisted hostnames."""
+    import logging
+
+    source = _make_source()
+    entry = _make_entry_xml("https://evil.example.com/foo.pdf")
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.sources.arxiv_source"):
+        paper = source._parse_entry(entry)
+
+    assert paper.pdf_url is None
+    assert any("evil.example.com" in r.message for r in caplog.records)
+
+
+def test_parse_entry_accepts_allowlisted_pdf():
+    """_parse_entry keeps pdf_url for known arxiv.org hostnames."""
+    source = _make_source()
+    entry = _make_entry_xml("https://arxiv.org/pdf/2301.99999v1")
+
+    paper = source._parse_entry(entry)
+
+    assert paper.pdf_url == "https://arxiv.org/pdf/2301.99999v1"
+
+
+def test_parse_entry_rejects_http_scheme_pdf(caplog):
+    """_parse_entry rejects non-http/https pdf_url schemes (e.g. ftp://)."""
+    import logging
+
+    source = _make_source()
+    entry = _make_entry_xml("ftp://arxiv.org/pdf/2301.99999v1")
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.sources.arxiv_source"):
+        paper = source._parse_entry(entry)
+
+    assert paper.pdf_url is None

@@ -62,11 +62,6 @@ router = APIRouter(
 )
 
 
-def _is_dev_mode() -> bool:
-    """Return True when DEV_MODE=true (case-insensitive)."""
-    return get_core_settings().dev_mode
-
-
 # ---------------------------------------------------------------------------
 # POST /api/pulse/generate
 # ---------------------------------------------------------------------------
@@ -400,7 +395,7 @@ async def debug_pulse(
     inversion vector. The endpoint is gated behind ``DEV_MODE=true``; in
     production it returns 404 to avoid disclosing existence.
     """
-    if not _is_dev_mode():
+    if not get_core_settings().dev_mode:
         raise HTTPException(status_code=404)
     async with db_pool.acquire() as conn:
         # Fetch the most recent deck row for this caller

@@ -251,6 +251,148 @@ def _recommendations_app(monkeypatch):
     app.dependency_overrides.clear()
 
 
+# ---------------------------------------------------------------------------
+# BUG-02: source_run_history INSERT failure must not propagate out of discover_candidates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discover_handles_source_run_history_insert_failure(caplog):
+    """discover_candidates must not raise when the source_run_history INSERT fails.
+
+    The INSERT is observability-only (run-history); a DB failure there must
+    never surface as a pipeline error.  The warning must be logged so the
+    failure is still observable.
+    """
+    import logging
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from paper_ingestion.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.profile import UserProfile
+
+    # Conn whose execute raises (INSERT path) but fetch works (source list).
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {"id": 1, "source_type": "arxiv", "enabled": True, "config": {}},
+    ]
+    conn.execute.side_effect = RuntimeError("db INSERT exploded")
+
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+
+    profile = UserProfile(
+        topics=[],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
+        library_centroid=None,
+        weights={},
+        deck_size=10,
+        stage2_top_k=40,
+        recent_positive_titles=[],
+        recent_negative_titles=[],
+        user_id=1,
+    )
+
+    # A mock source whose source_type matches the DB row so cache lookup finds it.
+    mock_src = MagicMock()
+    mock_src.source_type = "arxiv"
+    source_cache = {"arxiv": mock_src}
+
+    # Make the rate limiter report in_cooldown=True for the arxiv source.
+    mock_snapshot = {
+        "in_cooldown": True,
+        "cooldown_until": "2099-01-01T00:00:00+00:00",
+        "stale": False,
+    }
+    mock_limiter = AsyncMock()
+    mock_limiter.health_snapshot = AsyncMock(return_value=mock_snapshot)
+
+    since = datetime(2026, 1, 1, tzinfo=UTC)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="paper_ingestion.pulse.discovery"),
+        patch(
+            "paper_ingestion.pulse.discovery.PersistentSourceRateLimiter",
+            return_value=mock_limiter,
+        ),
+        patch("paper_ingestion.pulse.discovery.get_source_class", return_value=None),
+    ):
+        async with httpx.AsyncClient() as http_client:
+            result = await discover_candidates(
+                db_pool=pool,
+                http_client=http_client,
+                profile=profile,
+                since=since,
+                source_cache=source_cache,
+            )
+
+    # Must not raise; returns empty candidates because the only source was in cooldown.
+    papers, source_counts, diagnostics = result
+    assert papers == []
+
+    # The INSERT failure must be logged as a warning.
+    assert any("source_run_history INSERT failed" in record.message for record in caplog.records), (
+        f"Expected 'source_run_history INSERT failed' warning; got: {[r.message for r in caplog.records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BUG-03: run_pulse early-return (load_profile failure) must include all 12 keys
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_pulse_early_return_stats_has_all_required_keys():
+    """Stats dict returned on load_profile failure must include all 12 contract keys.
+
+    Per 02-pulse.md §7 the stats dict must carry deck_date, card_count,
+    source_counts, and classifier even when the pipeline aborts at step 1.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from paper_ingestion.pulse.job import run_pulse
+
+    pool = MagicMock()
+
+    with patch(
+        "paper_ingestion.pulse.job.load_profile",
+        AsyncMock(side_effect=RuntimeError("db down")),
+    ):
+        stats = await run_pulse(
+            db_pool=pool,
+            http_client=MagicMock(),
+            embedder=MagicMock(),
+            user_id=1,
+        )
+
+    required_keys = {
+        "candidate_count",
+        "stage1_survivors",
+        "stage2_scored",
+        "llm_calls",
+        "duration_s",
+        "last_error",
+        "degraded_reason",
+        "source_diagnostics",
+        "deck_date",
+        "card_count",
+        "source_counts",
+        "classifier",
+    }
+    assert set(stats.keys()) >= required_keys, (
+        f"Stats dict missing keys: {required_keys - set(stats.keys())}"
+    )
+    # Sentinel defaults on the early-return path
+    assert stats["deck_date"] is None
+    assert stats["card_count"] == 0
+    assert stats["source_counts"] == {}
+    assert stats["classifier"] is None
+    assert "load_profile" in stats["last_error"]
+
+
 @pytest.mark.asyncio
 async def test_list_recommendations_rate_limit(_recommendations_app):
     """6 rapid calls to GET /api/recommendations should yield at least one 429."""

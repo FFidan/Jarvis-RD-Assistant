@@ -60,6 +60,8 @@ def _llm_model() -> str:
 
 _LLM_MAX_TOKENS = 512  # enough for reasoning + JSON; was 256 (too small for thinking models)
 _LLM_TEMPERATURE = 0.0
+_RECENCY_HALF_LIFE_DAYS = 30.0  # e-folding time for the recency decay: exp(-age_days / N)
+_AUTHOR_BONUS_WEIGHT = 0.5  # weight applied to author_bonus in the stage-1 preliminary score
 
 
 def _stage2_max_retries() -> int:
@@ -116,7 +118,7 @@ def _recency_decay(published_date: date | None, now: date) -> float:
     if published_date is None:
         return 0.0
     age_days = max(0, (now - published_date).days)
-    return max(0.0, min(1.0, math.exp(-age_days / 30.0)))
+    return max(0.0, min(1.0, math.exp(-age_days / _RECENCY_HALF_LIFE_DAYS)))
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +233,7 @@ async def stage1_embedding_filter(
             "author_bonus": author_bonus,
         }
         # Preliminary score (for ranking cut only)
-        prelim = embedding_sim + topic_sim + recency + author_bonus * 0.5
+        prelim = embedding_sim + topic_sim + recency + author_bonus * _AUTHOR_BONUS_WEIGHT
 
         scored.append(
             ScoredCandidate(
@@ -274,9 +276,8 @@ async def stage2_llm_rerank(
         against the candidate's title+abstract.  Required — every card must
         carry a verification result so the frontend can render a trust badge.
     openai_client:
-        Instructor-patched ``openai.AsyncOpenAI`` client for structured calls.
-        When provided, ``call_llm_structured`` is used instead of the legacy
-        ``call_llm`` path.  Pass ``app.state.openai_client`` from the service
+        Instructor-patched ``openai.AsyncOpenAI`` client for structured calls via
+        ``call_llm_structured``.  Pass ``app.state.openai_client`` from the service
         lifespan.
 
     Returns

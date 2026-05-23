@@ -56,7 +56,7 @@ the cutover commit (Wave 3). No backwards-compat alias.
 
 ```python
 async def call_llm_structured(
-    http_client: httpx.AsyncClient,
+    openai_client: "openai.AsyncOpenAI",
     *,
     response_model: type[T],          # Pydantic BaseModel subclass
     prompt: str | None = None,
@@ -67,9 +67,10 @@ async def call_llm_structured(
 ) -> T: ...
 ```
 
-Implementation: patches `openai.AsyncOpenAI(base_url=litellm.base_url, api_key="dummy")`
-with `instructor.from_openai(client, mode=instructor.Mode.JSON)`, then calls
-`chat.completions.create(response_model=T, max_retries=max_retries, ...)`.
+Implementation: expects `openai_client` to be already instructor-patched at service startup
+(see `app_factory.py:401` inside `make_init_langfuse_hook`); call site uses
+`chat.completions.create(...)` directly. Per inline `llm_client.py:380-382` comment
+"Do NOT call instructor.from_openai() again — the client is wrapped in the service lifespan".
 
 Either `prompt` (single user message) or `messages` (full chat list) is
 accepted; `prompt` is sugar for `messages=[{"role":"user","content":prompt}]`

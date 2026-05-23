@@ -29,8 +29,6 @@ The existing per-service rate-limit tests collapse in Sub-wave 4.4 to
 "is the limiter wired" smokes citing this suite as survivor.
 """
 
-from __future__ import annotations
-
 import pytest
 
 pytestmark = [

@@ -136,6 +136,7 @@ async def test_contradictions_scan_delegates_to_service_and_reports_progress() -
         )
 
     assert result == {"status": "ok"}
+    assert scan.await_args is not None
     assert scan.await_args.kwargs["paper_id"] == 7
     assert scan.await_args.kwargs["limit"] == 3
     assert scan.await_args.kwargs["openai_client"] is openai_client
@@ -143,3 +144,26 @@ async def test_contradictions_scan_delegates_to_service_and_reports_progress() -
         (0.1, "Collecting verified findings"),
         (1.0, "Done"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_contradiction_job_extracts_user_id_from_payload() -> None:
+    """user_id from the procrastinate payload must be forwarded to scan_contradictions."""
+    from paper_ingestion._state import set_services
+    from paper_ingestion.contradiction_jobs import _contradictions_scan_job
+
+    set_services(verifier=MagicMock(), openai_client=MagicMock())
+
+    with patch(
+        "paper_ingestion.contradiction_jobs.scan_contradictions",
+        AsyncMock(return_value={"contradictions_found": 0}),
+    ) as scan:
+        await _contradictions_scan_job(
+            MagicMock(),
+            MagicMock(),
+            {"user_id": 42, "paper_id": 7, "limit": 25},
+            _ctx(),
+        )
+
+    assert scan.await_args is not None
+    assert scan.await_args.kwargs["user_id"] == 42, "user_id was not extracted from payload"

@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { queryClient } from '@/lib/query-client';
+import * as sseReader from '@/lib/sse-reader';
 
 // --- Module mocks (hoisted before any imports) ---
 
@@ -804,5 +805,38 @@ describe('JobStore', () => {
     const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
     expect(keys).not.toContain('feed');
     expect(keys).not.toContain('papers');
+  });
+
+  // ----- createSSEReader integration (DRY-F1) -----
+
+  it('subscribe: uses createSSEReader to stream job events (DRY-F1)', async () => {
+    // Spy on createSSEReader to confirm subscribe delegates to it.
+    const readerSpy = vi.spyOn(sseReader, 'createSSEReader');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"running","progress":10,"progress_message":"Going"}\n\n',
+          'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-sse-spy',
+      kind: 'pulse.generate',
+      payload: {},
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // createSSEReader must have been called with the job stream URL
+    expect(readerSpy).toHaveBeenCalledWith(
+      '/api/jobs/job-sse-spy/stream',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 });

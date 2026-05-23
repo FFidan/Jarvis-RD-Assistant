@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock
-from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing import A_PAPER_TITLE, SharedConnPool
 
 pytestmark = [
     pytest.mark.contract,
@@ -606,4 +606,154 @@ async def test_settings_ai_dismiss_banner_persists_per_user(contract_conn, _ai_s
     ctx_dict = ctx if isinstance(ctx, dict) else _json.loads(ctx)
     assert ctx_dict.get("banner_kind") == banner_kind, (
         f"context jsonb must include banner_kind='{banner_kind}'; got {ctx_dict!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# A130 — GET /api/me/export contract tests
+#
+# Verified: routers/settings.py:466-486 (export_my_data)
+# Verified: auth.py:283-308 (current_user_id_strict — raises HTTPException(401) when
+#           request.state.user_id is absent)
+# Verified: services/settings_service.py:1044-1064 (build_export_zip)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def _me_export_client(contract_conn, contract_two_users):
+    """ASGI client wired for GET /api/me/export (authenticated as user A).
+
+    - SharedConnPool so build_export_zip's pool.acquire() shares the contract txn.
+    - Session cookie for user A so current_user_id_strict resolves request.state.user_id.
+    - Limiter disabled to avoid 429 on repeated test invocations.
+    """
+    from jarvis_common import verify_api_key
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    shared = SharedConnPool(contract_conn)
+    app.state.limiter.enabled = False
+    try:
+        with (
+            patch_app_state(app, {"db_pool": shared}),
+            patch_dependency_overrides(
+                app,
+                set_overrides={
+                    get_db_pool: lambda: shared,
+                    verify_api_key: lambda: None,
+                },
+            ),
+        ):
+            async with make_contract_client(app, contract_two_users.cookie_a) as client:
+                yield client
+    finally:
+        app.state.limiter.enabled = True
+
+
+async def test_get_my_export_returns_zip_for_authenticated_user(
+    _me_export_client,
+):
+    """A130: GET /api/me/export returns 200 + application/zip for authenticated user.
+
+    Verified: routers/settings.py:466-486 (export_my_data StreamingResponse)
+    Verified: services/settings_service.py:1044-1064 (build_export_zip returns bytes)
+    Verified: auth.py:283-308 (current_user_id_strict resolves cookie_a session)
+    """
+    resp = await _me_export_client.get("/api/me/export")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 for authenticated export; got {resp.status_code}: {resp.text}"
+    )
+    content_type = resp.headers.get("content-type", "")
+    assert content_type.startswith("application/zip"), (
+        f"Expected application/zip Content-Type; got {content_type!r}"
+    )
+    assert len(resp.content) > 0, "Export ZIP body must be non-empty"
+
+
+async def test_get_my_export_requires_auth(contract_conn):
+    """A130: GET /api/me/export without a session cookie returns 401.
+
+    Verified: auth.py:283-308 (current_user_id_strict raises HTTPException(401)
+              when request.state.user_id is absent — no jarvis_session cookie).
+    """
+    from jarvis_common import verify_api_key
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_app_state,
+        patch_dependency_overrides,
+    )
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    shared = SharedConnPool(contract_conn)
+    app.state.limiter.enabled = False
+    try:
+        with (
+            patch_app_state(app, {"db_pool": shared}),
+            patch_dependency_overrides(
+                app,
+                set_overrides={
+                    get_db_pool: lambda: shared,
+                    verify_api_key: lambda: None,
+                },
+            ),
+        ):
+            # Pass None for the session cookie → no jarvis_session header sent.
+            async with make_contract_client(app, None) as unauth_client:
+                resp = await unauth_client.get("/api/me/export")
+    finally:
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 401, (
+        f"Expected 401 for unauthenticated export; got {resp.status_code}: {resp.text}"
+    )
+
+
+async def test_get_my_export_excludes_other_users_papers(
+    _me_export_client,
+    contract_two_users,
+):
+    """A130 — cross-user isolation: user A's export ZIP must not contain user B's papers.
+
+    Closes the Wave-3 Axis-4 wave-gate finding (GDPR export correctness): the
+    happy-path test only checks status / content-type / non-empty body. A
+    regression that passed the wrong user_id to ``build_export_zip`` (e.g.
+    ``None`` or a hardcoded constant) would not be caught. Here we leverage the
+    ``contract_two_users`` fixture which already seeds one paper per user with
+    ``discovered_by`` set; we then GET as user A and assert user B's seeded
+    paper is absent from ``papers.jsonl``.
+
+    Verified: services/settings_service.py:1029 — papers query is scoped via
+    ``WHERE p.discovered_by = $1``; jarvis_common/testing.py:546 — fixture
+    seeds A_PAPER_TITLE for user A and ``paper-b`` for user B.
+    """
+    import io
+    import json
+    import zipfile
+
+    resp = await _me_export_client.get("/api/me/export")
+    assert resp.status_code == 200, resp.text
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        papers_jsonl = zf.read("papers.jsonl").decode()
+
+    titles = {json.loads(line)["title"] for line in papers_jsonl.splitlines() if line.strip()}
+
+    assert A_PAPER_TITLE in titles, (
+        f"User A's seeded paper '{A_PAPER_TITLE}' missing from export; got titles={titles!r}"
+    )
+    assert "paper-b" not in titles, (
+        f"User B's paper 'paper-b' leaked into user A's export; got titles={titles!r}"
+    )
+    # Defence-in-depth: ensure none of the other A_* test constants would clash —
+    # contract_two_users seeds exactly one paper per user, so user A's ZIP must
+    # contain exactly one paper row.
+    assert len(titles) == 1, (
+        f"Expected exactly 1 paper for user A in export; got {len(titles)}: {titles!r}"
     )

@@ -226,7 +226,6 @@ def fake_record():
 from tests.pulse_helpers import (  # noqa: F401
     fake_embedding_vector,
     fake_llm_score_response,
-    make_pdf_resolution_row,
     make_pulse_card_row,
     make_pulse_deck_row,
 )

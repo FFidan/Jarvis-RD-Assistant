@@ -32,11 +32,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["pdf"])
 
 
-def _is_dev_mode() -> bool:
-    """Return True when DEV_MODE=true (case-insensitive)."""
-    return get_core_settings().dev_mode
-
-
 # ---------------------------------------------------------------------------
 # POST /api/download-pdf/{paper_id}
 # ---------------------------------------------------------------------------
@@ -191,7 +186,7 @@ async def process_pdf(
         )
     except RuntimeError as exc:
         request_id = getattr(request.state, "request_id", None) or str(paper_id)
-        if _is_dev_mode():
+        if get_core_settings().dev_mode:
             detail: dict = {
                 "detail": str(exc),
                 "error_type": type(exc).__name__,

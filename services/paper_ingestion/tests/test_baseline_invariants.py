@@ -769,3 +769,23 @@ async def test_baseline_fk_gap_tables_delete_rules(live_pg_dsn: str) -> None:
                 assert rule == "SET NULL", f"{table}: expected ON DELETE SET NULL, got {rule!r}"
     finally:
         await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0089 — pdf_resolutions table dropped.
+# Re-home form: schema-introspection (information_schema.tables absent).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pdf_resolutions_table_dropped(test_db_pool: asyncpg.Pool) -> None:
+    """Migration 0089 must drop the pdf_resolutions table.
+
+    test_db_pool applies db/init.sql + run_migrations(), so migration 0089
+    (DROP TABLE IF EXISTS pdf_resolutions CASCADE) runs before this assertion.
+    """
+    async with test_db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'pdf_resolutions'"
+        )
+    assert row is None, "pdf_resolutions table should be dropped by migration 0089"
