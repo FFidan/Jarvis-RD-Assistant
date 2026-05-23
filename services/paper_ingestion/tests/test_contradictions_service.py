@@ -662,3 +662,47 @@ async def test_persist_contradiction_writes_user_id():
     # Behaviour-shape assertion: user_id reaches the INSERT as a bind parameter.
     # SQL column-list shape is exercised by the live-PG contract test.
     assert 99 in params, f"W1-D2-002: expected user_id=99 in INSERT params, got {params}"
+
+
+# ---------------------------------------------------------------------------
+# Gap 4: contradiction_jobs user_id extraction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "user_id_payload, expected",
+    [("42", 42), (None, None)],
+)
+@pytest.mark.asyncio
+async def test_contradiction_job_extracts_user_id_from_payload_str_or_absent(
+    user_id_payload, expected, monkeypatch
+):
+    """_contradictions_scan_job correctly converts str→int and None→None for user_id."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.jobs import JobContext
+    from paper_ingestion.contradiction_jobs import _contradictions_scan_job
+
+    scan_mock = AsyncMock(return_value={"found": 0, "inserted": 0})
+    pool = MagicMock()
+    http_client = MagicMock()
+    ctx = JobContext(job_id="test-job", _pool=pool)
+
+    payload: dict = {"paper_id": None, "limit": 10}
+    if user_id_payload is not None:
+        payload["user_id"] = user_id_payload
+
+    with (
+        patch("paper_ingestion.contradiction_jobs.scan_contradictions", scan_mock),
+        patch("paper_ingestion.contradiction_jobs.get_services") as get_svc_mock,
+    ):
+        svc = MagicMock()
+        svc.verifier = MagicMock()
+        svc.openai_client = MagicMock()
+        get_svc_mock.return_value = svc
+
+        result = await _contradictions_scan_job(pool, http_client, payload, ctx)
+
+    scan_mock.assert_awaited_once()
+    assert result == {"found": 0, "inserted": 0}
+    assert scan_mock.call_args.kwargs["user_id"] == expected

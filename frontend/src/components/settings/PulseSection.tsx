@@ -887,7 +887,7 @@ export function PulseSection() {
   return (
     <div className="space-y-6">
       {/* ── Schedule card ── */}
-      <Card className="rounded-md border-hair shadow-none">
+      <Card className="rounded-md border-hair shadow-none" data-testid="pulse-schedule-card">
         <CardHeader>
           <CardDescription>
             Nightly ranked deck of candidate papers scored by the Pulse pipeline.
@@ -1056,7 +1056,7 @@ export function PulseSection() {
       </Card>
 
       {/* ── Advanced tuning card ── */}
-      <Card className="rounded-md border-hair shadow-none">
+      <Card className="rounded-md border-hair shadow-none" data-testid="pulse-weights-card">
         <CardHeader className="pb-3">
           <button
             type="button"
@@ -1300,7 +1300,7 @@ export function PulseSection() {
       </Card>
 
       {/* ── Last Pulse run status card ── */}
-      <Card className="rounded-md border-hair shadow-none">
+      <Card className="rounded-md border-hair shadow-none" data-testid="pulse-status-card">
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             Last Pulse run

@@ -10,7 +10,6 @@ from jarvis_common.crypto import (
     mask_secret,
     refresh_fernet_cache,
     resolve_secret_row,
-    rotate_key,
     validate_encrypted_config_rows,
 )
 from jarvis_common.testing import FakeRecord, make_pool_and_conn
@@ -81,26 +80,6 @@ def test_wrong_key_raises(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # Key rotation
 # ---------------------------------------------------------------------------
-
-
-def test_rotation_works(valid_key) -> None:
-    """rotate_key decrypts with old key and re-encrypts with new key correctly."""
-    old_key = valid_key
-    new_key = Fernet.generate_key()
-
-    plaintext = "rotate-me"
-    # Encrypt with old key (via the live cache)
-    ciphertext_old = encrypt_secret(plaintext)
-
-    # Rotate to new key
-    ciphertext_new = rotate_key(old_key, new_key, ciphertext_old)
-
-    # New key can decrypt
-    assert Fernet(new_key).decrypt(ciphertext_new.encode()).decode() == plaintext
-
-    # Old key cannot decrypt the new ciphertext
-    with pytest.raises(InvalidToken):
-        Fernet(old_key).decrypt(ciphertext_new.encode())
 
 
 def test_rotation_via_old_env_decrypts_legacy_ciphertext(monkeypatch) -> None:

@@ -1,0 +1,206 @@
+"""Characterization tests for pulse/job.py::run_pulse — pre-decomposition snapshot (W0.T4).
+
+These tests pin the observable shape and degraded-path behaviour of run_pulse
+before Wave 1 extracts helper functions into _orchestrator_phases.py.  The same
+tests MUST pass byte-identically after extraction; any divergence signals a
+regression.
+
+Scope: smoke-level (2–4 assertions each).  Exhaustive pulse coverage lives in
+the existing contract/test_pulse_contract.py suite.
+
+Stats dict keys verified against docs/contracts/02-pulse.md §7:
+  candidate_count, stage1_survivors, stage2_scored, llm_calls, duration_s,
+  last_error, degraded_reason, deck_date, card_count, source_counts,
+  source_diagnostics, classifier, classifier_training_enqueued.
+
+Verified identifiers:
+  pulse.job.run_pulse                job.py:100 — async pipeline, returns stats dict
+  pulse.job._zero_candidate_degraded_reason  job.py:81 — builds degraded string
+  docs/contracts/02-pulse.md §7     — 13-key stats dict contract
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from jarvis_common.testing import SharedConnPool
+
+# Verified: services/paper_ingestion/paper_ingestion/pulse/job.py:99 (run_pulse)
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.real_auth,
+    pytest.mark.asyncio(loop_scope="session"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Expected stats keys per docs/contracts/02-pulse.md §7
+# ---------------------------------------------------------------------------
+
+_CONTRACT_STATS_KEYS = frozenset(
+    {
+        "candidate_count",
+        "stage1_survivors",
+        "stage2_scored",
+        "llm_calls",
+        "duration_s",
+        "last_error",
+        "degraded_reason",
+        "deck_date",
+        "card_count",
+        "source_counts",
+        "source_diagnostics",
+        "classifier",
+        "classifier_training_enqueued",
+    }
+)
+
+# ---------------------------------------------------------------------------
+# Shared fixture: far-future deck date to avoid collision with production rows
+# ---------------------------------------------------------------------------
+
+_DECK_DATE_CHAR = datetime(2098, 12, 1, 4, 0, tzinfo=UTC)
+
+
+def _minimal_profile() -> MagicMock:
+    """Minimal profile mock that satisfies run_pulse without hitting real sources."""
+    return MagicMock(
+        topics=[],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
+        library_centroid=None,
+        weights={"embedding": 1.0},
+        deck_size=5,
+        stage2_top_k=10,
+        liked_paper_ids=[],
+        recent_positive_titles=[],
+        recent_negative_titles=[],
+        lookback_days=7,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared patch context: zero-candidate pipeline collaborators
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _zero_candidate_patches():
+    """Patch all pipeline collaborators to produce zero candidates.
+
+    Yields nothing — tests use it purely to suppress I/O and LLM calls.
+    Both characterization tests share the exact same 5-patch combination;
+    extracting it here avoids ~40 LOC of duplication.
+    """
+    with (
+        patch(
+            "paper_ingestion.pulse.job.load_profile",
+            AsyncMock(return_value=_minimal_profile()),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.discover_candidates",
+            AsyncMock(return_value=([], {}, {})),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage1_embedding_filter",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage3_combine",
+            AsyncMock(return_value=[]),
+        ),
+        patch("paper_ingestion.pulse.job.assemble_deck", MagicMock(return_value=[])),
+    ):
+        yield
+
+
+# ---------------------------------------------------------------------------
+# Test 1 — stats dict has all 13 contract keys when zero candidates returned
+# ---------------------------------------------------------------------------
+
+
+async def test_run_pulse_returns_stats_with_all_contract_keys(
+    contract_conn,
+    contract_two_users,
+):
+    """run_pulse stats dict contains every key listed in 02-pulse.md §7.
+
+    Uses patched collaborators so no real LLM / embedder / sources are needed.
+    Zero candidates → degraded path (card_count=0, deck_date set, all keys present).
+
+    Verified: pulse/job.py:133-147 (stats dict initialisation, 13 keys),
+              pulse/job.py:376-378 (deck_date + degraded_reason populated before return),
+              docs/contracts/02-pulse.md §7 (13-key contract).
+    """
+    from paper_ingestion.pulse.job import run_pulse
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+
+    with _zero_candidate_patches():
+        stats = await run_pulse(
+            db_pool=pool,
+            http_client=MagicMock(),
+            embedder=MagicMock(),
+            now=_DECK_DATE_CHAR,
+            user_id=user_id,
+        )
+
+    missing = _CONTRACT_STATS_KEYS - set(stats.keys())
+    assert not missing, (
+        f"run_pulse stats dict is missing required contract keys: {sorted(missing)}. "
+        f"Present keys: {sorted(stats.keys())}"
+    )
+    # Smoke-check types for a representative subset
+    assert isinstance(stats["candidate_count"], int)
+    assert isinstance(stats["stage1_survivors"], int)
+    assert isinstance(stats["duration_s"], float | int)
+    assert isinstance(stats["deck_date"], str)
+
+
+# ---------------------------------------------------------------------------
+# Test 2 — zero candidates → degraded_reason is non-None
+# ---------------------------------------------------------------------------
+
+
+async def test_run_pulse_zero_candidates_returns_degraded_reason(
+    contract_conn,
+    contract_two_users,
+):
+    """When all sources return zero candidates, degraded_reason must be non-None.
+
+    Contract: 02-pulse.md §9 invariant 9 + §7 degraded_reason key.
+    Verified: pulse/job.py:189-191 (_zero_candidate_degraded_reason called when
+              candidates=[] and last_error is None).
+    """
+    from paper_ingestion.pulse.job import run_pulse
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+
+    # Ensure a unique deck date distinct from test 1 to avoid UPSERT collision
+    deck_date_t2 = datetime(2098, 12, 2, 4, 0, tzinfo=UTC)
+
+    with _zero_candidate_patches():
+        stats = await run_pulse(
+            db_pool=pool,
+            http_client=MagicMock(),
+            embedder=MagicMock(),
+            now=deck_date_t2,
+            user_id=user_id,
+        )
+
+    # Zero candidates with no fatal error must set a human-readable degraded_reason
+    assert stats["degraded_reason"] is not None, (
+        "run_pulse with zero candidates must set stats['degraded_reason'] to a non-None string. "
+        f"Got: degraded_reason={stats['degraded_reason']!r}, last_error={stats['last_error']!r}"
+    )
+    assert isinstance(stats["degraded_reason"], str)
+    assert len(stats["degraded_reason"]) > 0
+    # The zero-candidate reason must mention candidates (contract wording)
+    assert "candidates" in stats["degraded_reason"].lower(), (
+        f"degraded_reason should reference 'candidates'; got: {stats['degraded_reason']!r}"
+    )

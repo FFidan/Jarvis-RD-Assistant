@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
 from lxml import etree
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
@@ -647,4 +648,44 @@ async def test_fetch_new_since_calls_log_event_on_success():
     log_event_mock.assert_called_once()
     call_kwargs = log_event_mock.call_args.kwargs
     assert call_kwargs.get("message") == "fetch_succeeded"
+    assert call_kwargs.get("source") == "pubmed"
+
+
+@respx.mock
+async def test_fetch_new_since_records_run_history_status_error_on_exception():
+    """fetch_new_since inserts source_run_history with status='error' when an unexpected exception propagates."""
+    from unittest.mock import AsyncMock, patch
+
+    respx.get(ESEARCH_URL).mock(side_effect=RuntimeError("unexpected upstream failure"))
+
+    mock_pool, mock_conn = _make_mock_pool()
+    source = _make_source_with_pool(mock_pool)
+
+    mock_limiter = AsyncMock()
+    mock_limiter.acquire = AsyncMock()
+    mock_limiter.update_last_request = AsyncMock()
+
+    log_event_mock = AsyncMock()
+    with (
+        patch(
+            "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+            return_value=mock_limiter,
+        ),
+        patch("paper_ingestion.sources.pubmed_source.log_event", log_event_mock),
+        pytest.raises(RuntimeError, match="unexpected upstream failure"),
+    ):
+        await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC),
+            topics=[TopicRef(id=1, name="AI", query_terms=["AI"])],
+            limit=10,
+            user_id=7,
+        )
+
+    all_calls = mock_conn.execute.call_args_list
+    run_history_calls = [c for c in all_calls if "source_run_history" in c.args[0]]
+    assert run_history_calls, "Expected source_run_history insert on error"
+
+    log_event_mock.assert_called()
+    call_kwargs = log_event_mock.call_args.kwargs
+    assert call_kwargs.get("message") == "fetch_failed"
     assert call_kwargs.get("source") == "pubmed"

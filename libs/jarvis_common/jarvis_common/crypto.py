@@ -229,16 +229,6 @@ def mask_secret(plaintext: str) -> str:
     return "****" + plaintext[-4:]
 
 
-def rotate_key(old_key: bytes, new_key: bytes, ciphertext: str) -> str:
-    """Decrypt *ciphertext* with *old_key* and re-encrypt with *new_key*.
-
-    Returns the new ciphertext string.
-    Raises cryptography.fernet.InvalidToken if old_key cannot decrypt the token.
-    """
-    plaintext = Fernet(old_key).decrypt(ciphertext.encode()).decode()
-    return Fernet(new_key).encrypt(plaintext.encode()).decode()
-
-
 __all__ = [
     "encrypt_secret",
     "decrypt_secret",

@@ -165,6 +165,43 @@ describe('streamSSE', () => {
     expect(cancelMock).toHaveBeenCalledOnce();
   });
 
+  it('throws an error containing the status code on non-OK non-auth response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('Internal Server Error', { status: 500 }),
+    );
+
+    const gen = streamSSE('/api/ask/stream', { question: 'test' });
+    await expect(gen.next()).rejects.toThrow('500');
+  });
+
+  it('rejects with AbortError when signal is aborted while fetch is in flight', async () => {
+    const ac = new AbortController();
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, opts) => {
+      return new Promise((_resolve, reject) => {
+        const signal = (opts as RequestInit | undefined)?.signal;
+        if (signal?.aborted) {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+          return;
+        }
+        signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        });
+        // Never resolves on its own — waits for abort.
+      });
+    });
+
+    const gen = streamSSE('/api/ask/stream', { question: 'test' }, ac.signal);
+    const iterPromise = gen.next();
+
+    // Abort after the generator has started awaiting fetch.
+    queueMicrotask(() => ac.abort());
+
+    const err = await iterPromise.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DOMException);
+    expect((err as DOMException).name).toBe('AbortError');
+  });
+
   it('warns and skips malformed frames while yielding subsequent valid frames (streamSSE)', async () => {
     const stream = createMockReadableStream([
       'data: {"type":"token","content":"before"}\n\n',

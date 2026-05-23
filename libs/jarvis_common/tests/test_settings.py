@@ -223,3 +223,14 @@ def test_resolve_env_file_indirection_shared_by_core_and_secrets(tmp_path, monke
         CoreSettings()
     with pytest.raises((RuntimeError, OSError)):
         SecretsSettings()
+
+
+def test_resolve_env_file_indirection_empty_file_resolves_to_none(tmp_path, monkeypatch):
+    """An empty (whitespace-only) secret file resolves to None, not an empty string."""
+    empty_file = tmp_path / "empty.key"
+    empty_file.write_text("   \n  ")
+    for key in ("JARVIS_API_KEY", "JARVIS_API_KEY_FILE"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("JARVIS_API_KEY_FILE", str(empty_file))
+    settings = CoreSettings()
+    assert settings.jarvis_api_key is None

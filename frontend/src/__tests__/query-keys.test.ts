@@ -8,15 +8,15 @@ import { QUERY_KEYS } from '@/lib/query-keys';
  */
 describe('QUERY_KEYS registry', () => {
   describe('papers', () => {
-    it('list() returns the bare prefix tuple', () => {
-      expect(QUERY_KEYS.papers.list()).toEqual(['papers-feed']);
+    it('feedAll() returns the bare prefix tuple for cache invalidation', () => {
+      expect(QUERY_KEYS.papers.feedAll()).toEqual(['papers-feed']);
     });
 
-    it('list(surface, ...) returns full parameterized tuple', () => {
-      expect(QUERY_KEYS.papers.list('inbox', null, 'library', 30, 0, null)).toEqual([
+    it('feed(surface, ...) returns full parameterized tuple', () => {
+      expect(QUERY_KEYS.papers.feed('inbox', 'all', 'library', 30, 0, null)).toEqual([
         'papers-feed',
         'inbox',
-        null,
+        'all',
         'library',
         30,
         0,
@@ -34,11 +34,7 @@ describe('QUERY_KEYS registry', () => {
       expect(QUERY_KEYS.pulse.today()).toEqual(['pulse-today']);
     });
 
-    it('stats() returns bare key', () => {
-      expect(QUERY_KEYS.pulse.stats()).toEqual(['pulse-stats']);
-    });
-
-    it('stats(days) returns parameterized key', () => {
+    it('pulse.stats(days) encodes days', () => {
       expect(QUERY_KEYS.pulse.stats(7)).toEqual(['pulse-stats', 7]);
     });
 
@@ -55,17 +51,19 @@ describe('QUERY_KEYS registry', () => {
     it('list() returns correct tuple', () => {
       expect(QUERY_KEYS.decks.list()).toEqual(['decks']);
     });
+  });
 
-    it('cards() returns bare key', () => {
-      expect(QUERY_KEYS.decks.cards()).toEqual(['cards']);
+  describe('cards', () => {
+    it('all() returns bare key', () => {
+      expect(QUERY_KEYS.cards.all()).toEqual(['cards']);
     });
 
-    it('cards(deckId) returns parameterized key', () => {
-      expect(QUERY_KEYS.decks.cards(5)).toEqual(['cards', 5]);
+    it('byDeck(deckId) returns parameterized key', () => {
+      expect(QUERY_KEYS.cards.byDeck(5)).toEqual(['cards', 5]);
     });
 
     it('stats() returns correct tuple', () => {
-      expect(QUERY_KEYS.decks.stats()).toEqual(['card-stats']);
+      expect(QUERY_KEYS.cards.stats()).toEqual(['card-stats']);
     });
   });
 
@@ -75,17 +73,13 @@ describe('QUERY_KEYS registry', () => {
     });
   });
 
-  describe('extractions', () => {
+  describe('extraction', () => {
     it('templates() returns correct tuple', () => {
-      expect(QUERY_KEYS.extractions.templates()).toEqual(['extraction-templates']);
-    });
-
-    it('table() returns bare invalidation key', () => {
-      expect(QUERY_KEYS.extractions.table()).toEqual(['extraction-table']);
+      expect(QUERY_KEYS.extraction.templates()).toEqual(['extraction-templates']);
     });
 
     it('table(templateId, paperIds) returns parameterized key', () => {
-      expect(QUERY_KEYS.extractions.table(2, [10, 20])).toEqual(['extraction-table', 2, [10, 20]]);
+      expect(QUERY_KEYS.extraction.table(2, [10, 20])).toEqual(['extraction-table', 2, [10, 20]]);
     });
   });
 });

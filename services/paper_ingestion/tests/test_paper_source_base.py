@@ -167,3 +167,17 @@ async def test_insert_run_history_hoisted_to_base(
     sql, *args = mock_conn.execute.call_args.args
     assert "source_run_history" in sql
     assert expected_source_type in args
+
+
+async def test_insert_run_history_noops_when_db_pool_is_none():
+    """_insert_run_history returns immediately without error when db_pool is None."""
+    config = _make_config(SourceType.ARXIV)
+    source = ArxivSource(config=config, http_client=MagicMock(), db_pool=None)
+
+    await source._insert_run_history(
+        started_at=time.monotonic(),
+        status="ok",
+        candidate_count=0,
+        duration_ms=50,
+        user_id=None,
+    )

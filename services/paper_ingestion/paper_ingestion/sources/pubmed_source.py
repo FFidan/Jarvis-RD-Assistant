@@ -489,19 +489,44 @@ class PubMedSource(PaperSource):
         if p_limiter is not None:
             await p_limiter.acquire()
 
-        for term in term_queries:
-            if len(papers) >= limit:
-                break
-            pmids = await self._esearch(term or "pubmed[sb]", retmax=per_q, extra=date_params)
-            new_pmids = [p for p in pmids if p not in seen_pmids]
-            if not new_pmids:
-                continue
-            seen_pmids.update(new_pmids)
-            fetched = await self._efetch(new_pmids)
-            papers.extend(fetched)
-            candidate_count += len(fetched)
-            if len(papers) >= limit:
-                break
+        try:
+            for term in term_queries:
+                if len(papers) >= limit:
+                    break
+                pmids = await self._esearch(term or "pubmed[sb]", retmax=per_q, extra=date_params)
+                new_pmids = [p for p in pmids if p not in seen_pmids]
+                if not new_pmids:
+                    continue
+                seen_pmids.update(new_pmids)
+                fetched = await self._efetch(new_pmids)
+                papers.extend(fetched)
+                candidate_count += len(fetched)
+                if len(papers) >= limit:
+                    break
+        except Exception as _exc:
+            logger.warning("pubmed: fetch_new_since failed", exc_info=True)
+            if p_limiter is not None:
+                await p_limiter.update_last_request("error")
+            await self._insert_run_history(
+                started_at=started_at,
+                status="error",
+                candidate_count=0,
+                duration_ms=int((_time.monotonic() - started_at) * 1000),
+                user_id=user_id,
+            )
+            if self.db_pool is not None:
+                try:
+                    await log_event(
+                        pool=self.db_pool,
+                        level="error",
+                        category="source",
+                        source="pubmed",
+                        message="fetch_failed",
+                        context={"http_status": None, "exception": repr(_exc)[:300]},
+                    )
+                except Exception as exc:
+                    logger.warning("pubmed: log_event write failed for fetch_failed", exc_info=exc)
+            raise
 
         duration_ms = int((_time.monotonic() - started_at) * 1000)
         if p_limiter is not None:

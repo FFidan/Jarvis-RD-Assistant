@@ -143,6 +143,7 @@ async def run_pulse(
         "card_count": 0,
         "source_counts": {},
         "classifier": None,
+        "classifier_training_enqueued": False,
     }
 
     # --- 1. profile ------------------------------------------------------
