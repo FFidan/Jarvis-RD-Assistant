@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { updateSource } from '@/lib/api';
@@ -64,7 +65,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
     mutationFn: ({ id, data }: { id: number; data: Partial<SourceConfig> }) =>
       updateSource(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sources'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources.list() });
     },
   });
 

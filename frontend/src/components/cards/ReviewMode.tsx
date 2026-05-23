@@ -17,6 +17,7 @@
 
 import { useState, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { RotateCcw } from 'lucide-react';
 import type { Card as CardType } from '@/types';
 import { getNextReview, submitReview, fetchDecks } from '@/lib/api';
@@ -73,7 +74,7 @@ export function ReviewMode({
 
   // Pre-fetch decks to resolve deck name for the eyebrow.
   const { data: decks = [] } = useQuery({
-    queryKey: ['decks'],
+    queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
 
@@ -87,7 +88,7 @@ export function ReviewMode({
     onSuccess: () => {
       setRevealed(false);
       startTime.current = Date.now();
-      queryClient.invalidateQueries({ queryKey: ['card-stats'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.stats() });
       onReviewSuccess?.();
       refetch().then(({ data }) => {
         if (!data || (data as CardType[]).length === 0) {

@@ -19,6 +19,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -46,7 +47,7 @@ export function FirstRunSetupPage() {
   // wizard, or the operator hand-bootstrapped a user), bounce to '/'. Avoids
   // showing a stale wizard.
   const { data: status } = useQuery({
-    queryKey: ['first-run-status'],
+    queryKey: QUERY_KEYS.setup.firstRun(),
     queryFn: getFirstRunStatus,
     staleTime: 0,
     retry: false,
@@ -60,7 +61,7 @@ export function FirstRunSetupPage() {
   const goNext = () => setStep((s) => Math.min(TOTAL_STEPS, s + 1));
   const goBack = () => setStep((s) => Math.max(1, s - 1));
   const finish = () => {
-    queryClient.invalidateQueries({ queryKey: ['first-run-status'] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.firstRun() });
     navigate('/', { replace: true });
   };
 

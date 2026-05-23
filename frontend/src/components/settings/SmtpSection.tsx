@@ -13,6 +13,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getSmtpConfig, saveSmtpConfig } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,7 +29,7 @@ export function SmtpSection() {
   const qc = useQueryClient();
 
   const { data: config, isLoading } = useQuery<SmtpConfig>({
-    queryKey: ['smtp-config'],
+    queryKey: QUERY_KEYS.account.smtp(),
     queryFn: getSmtpConfig,
     staleTime: 60_000,
   });
@@ -55,7 +56,7 @@ export function SmtpSection() {
   const saveMut = useMutation({
     mutationFn: saveSmtpConfig,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['smtp-config'] });
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.account.smtp() });
     },
   });
 

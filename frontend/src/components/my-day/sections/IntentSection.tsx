@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { fetchMyDay, createQuickTask, updateTask, fetchIntentToday, saveIntentToday } from '@/lib/api';
@@ -14,7 +15,7 @@ function CompletedRow({ task }: { task: MyDayTask }) {
     mutationFn: () => updateTask(task.id, { status: 'todo' }),
     onSuccess: () => toast.success('Task reopened'),
     onError: (err: Error) => toast.error(`Failed to reopen: ${err.message}`),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['my-day'] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() }),
   });
 
   return (
@@ -51,14 +52,14 @@ export function IntentSection() {
   const queryClient = useQueryClient();
 
   const { data, isError } = useQuery({
-    queryKey: ['my-day'],
+    queryKey: QUERY_KEYS.myDay.today(),
     queryFn: fetchMyDay,
     refetchInterval: 60_000,
   });
 
   // Intent query
   const { data: intentData, isError: isIntentError } = useQuery({
-    queryKey: ['intent', 'today'],
+    queryKey: QUERY_KEYS.intent.today(),
     queryFn: fetchIntentToday,
   });
 
@@ -72,7 +73,7 @@ export function IntentSection() {
     mutationFn: saveIntentToday,
     onError: () => toast.error('Failed to save intent'),
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: ['intent', 'today'] }),
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.intent.today() }),
   });
 
   // Debounced autosave (800 ms)
@@ -97,7 +98,7 @@ export function IntentSection() {
       setAddTitle('');
       setAddPriority(3);
       setShowAddForm(false);
-      queryClient.invalidateQueries({ queryKey: ['my-day'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() });
     },
   });
 

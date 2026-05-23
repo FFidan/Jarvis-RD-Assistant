@@ -13,6 +13,7 @@
  */
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { FileText, ArrowLeft, Menu, List } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { useUIStore } from '@/stores/ui-store';
@@ -76,19 +77,19 @@ export function PaperDetailPage() {
 
   // Main data query (unchanged from previous layout)
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['paper-detail', paperId],
+    queryKey: QUERY_KEYS.papers.detail(paperId),
     queryFn: () => fetchPaperDetail(paperId),
     enabled: !isNaN(paperId) && paperId > 0,
   });
 
   // Count queries for TOC badges
   const { data: userNotesData = [] } = useQuery({
-    queryKey: ['notes', paperId, 'user'],
+    queryKey: QUERY_KEYS.notes.user(paperId),
     queryFn: () => fetchNotes(paperId, 'user'),
     enabled: !isNaN(paperId) && paperId > 0,
   });
   const { data: contradictionsData } = useQuery({
-    queryKey: ['contradictions', paperId, 'verified'],
+    queryKey: QUERY_KEYS.contradictions.verified(paperId),
     queryFn: () => fetchContradictions({ paper_id: paperId, status: 'verified', limit: 20 }),
     enabled: !isNaN(paperId) && paperId > 0,
   });

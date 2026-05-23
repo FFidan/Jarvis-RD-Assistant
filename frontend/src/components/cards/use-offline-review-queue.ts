@@ -30,6 +30,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { submitReview } from '@/lib/api';
 import { useOnlineStatus } from '@/hooks/use-online-status';
@@ -79,8 +80,8 @@ export function useOfflineReviewQueue(): UseOfflineReviewQueue {
         // SINGLE reconcile toast — no merge UI (canonical contract).
         toast.success(`${outcome.synced} synced, ${outcome.skipped} skipped`);
         // Server recomputed FSRS — refresh the read surfaces.
-        queryClient.invalidateQueries({ queryKey: ['card-stats'] });
-        queryClient.invalidateQueries({ queryKey: ['review-next'] });
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.stats() });
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.reviewQueue.next() });
       } else if (outcome.status === 'deferred') {
         // Endpoint absent / transport failed: retain the queue, back off,
         // surface nothing alarming. It will retry on the next online edge

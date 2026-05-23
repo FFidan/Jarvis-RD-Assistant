@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { CheckCircle2, AlertTriangle, Loader2, XCircle } from 'lucide-react';
 import { getSetupStatus } from '@/lib/api';
 
@@ -38,7 +39,7 @@ function Row({
  */
 export function SystemCheck() {
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['setup-status'],
+    queryKey: QUERY_KEYS.setup.status(),
     queryFn: getSetupStatus,
     refetchInterval: 5000,
     staleTime: 0,

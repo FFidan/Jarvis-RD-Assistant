@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Plus, Trash2, Pencil, ListTodo } from 'lucide-react';
 import type { Task } from '@/types';
 import { fetchTasks, createTask, updateTask, deleteTask } from '@/lib/api';
@@ -64,13 +65,13 @@ export function TasksTab({ projectId }: TasksTabProps) {
   const [editActualHours, setEditActualHours] = useState('');
 
   const { data: tasks = [], isLoading } = useQuery({
-    queryKey: ['tasks', projectId],
+    queryKey: QUERY_KEYS.tasks.byProject(projectId),
     queryFn: () => fetchTasks(projectId),
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['tasks', projectId] });
-    queryClient.invalidateQueries({ queryKey: ['projects'] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.tasks.byProject(projectId) });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() });
   };
 
   const createMut = useMutation({

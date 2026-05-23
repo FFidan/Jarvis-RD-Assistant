@@ -15,6 +15,7 @@ import { createJob as apiCreateJob, listJobs as apiListJobs, cancelJob as apiCan
 import { createSSEReader } from '@/lib/sse-reader';
 import { queryClient } from '@/lib/query-client';
 import { getNavigate } from '@/lib/navigate-bridge';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 /**
  * Per-kind query invalidation: when a job of the given kind reaches
@@ -23,52 +24,52 @@ import { getNavigate } from '@/lib/navigate-bridge';
  *
  * Values are functions so paper_id etc. can be threaded through from payload.
  */
-const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => unknown[][]> = {
-  'pulse.generate':         () => [['pulse-today'], ['pulse-stats']],
+const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => readonly (readonly unknown[])[]> = {
+  'pulse.generate':         () => [QUERY_KEYS.pulse.today(), QUERY_KEYS.pulse.statsAll()],
   'paper.process':          (j) => {
     const paperId = getPaperIdFromJob(j);
     return paperId == null
-      ? [['action-items-unprocessed']]
-      : [['paper-detail', paperId], ['action-items-unprocessed']];
+      ? [QUERY_KEYS.actionItems.unprocessed()]
+      : [QUERY_KEYS.papers.detail(paperId), QUERY_KEYS.actionItems.unprocessed()];
   },
   'paper.summarize':        (j) => {
     const paperId = getPaperIdFromJob(j);
-    return paperId == null ? [] : [['paper-detail', paperId]];
+    return paperId == null ? [] : [QUERY_KEYS.papers.detail(paperId)];
   },
-  'card.generate':          () => [['decks'], ['cards']],
+  'card.generate':          () => [QUERY_KEYS.decks.list(), QUERY_KEYS.cards.all()],
   'paper.analyze':          (j) => {
     const paperId = getPaperIdFromJob(j);
-    return paperId == null ? [] : [['paper-detail', paperId]];
+    return paperId == null ? [] : [QUERY_KEYS.papers.detail(paperId)];
   },
-  'papers.batch_process':   () => [['papers-feed'], ['feed-counts'], ['action-items-unprocessed']],
-  'papers.scan_local':      () => [['papers-feed'], ['feed-counts']],
-  'papers.batch_summarize': () => [['papers-feed']],
+  'papers.batch_process':   () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts(), QUERY_KEYS.actionItems.unprocessed()],
+  'papers.scan_local':      () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts()],
+  'papers.batch_summarize': () => [QUERY_KEYS.papers.feedAll()],
   'extraction.single':      (j) => {
     const paperId = getPaperIdFromJob(j);
-    return paperId == null ? [['extraction-table']] : [['paper-detail', paperId], ['extraction-table']];
+    return paperId == null ? [['extraction-table']] : [QUERY_KEYS.papers.detail(paperId), ['extraction-table']]; // Note: ['extraction-table'] bare prefix — no registry factory for all entries
   },
-  'extraction.batch':       () => [['extraction-table']],
-  'digest.weekly':          () => [['digest-weekly']],
+  'extraction.batch':       () => [['extraction-table']], // Note: bare prefix for invalidation — no registry factory for all extraction-table entries
+  'digest.weekly':          () => [QUERY_KEYS.digest.weekly()],
   'contradictions.scan':    (j) => {
     const paperId = getPaperIdFromJob(j);
     return paperId == null
-      ? [['contradictions']]
-      : [['contradictions', paperId, 'verified'], ['paper-detail', paperId]];
+      ? [['contradictions']] // Note: bare prefix — no registry factory for all contradictions entries
+      : [QUERY_KEYS.contradictions.verified(paperId), QUERY_KEYS.papers.detail(paperId)];
   },
   'zotero.push':            (j) => {
     const paperId = getPaperIdFromJob(j);
-    return paperId == null ? [] : [['zotero-linkage', paperId], ['paper-detail', paperId]];
+    return paperId == null ? [] : [QUERY_KEYS.zotero.linkage(paperId), QUERY_KEYS.papers.detail(paperId)];
   },
   'zotero.resync':          (j) => {
     const paperId = getPaperIdFromJob(j);
-    return paperId == null ? [] : [['zotero-linkage', paperId], ['paper-detail', paperId]];
+    return paperId == null ? [] : [QUERY_KEYS.zotero.linkage(paperId), QUERY_KEYS.papers.detail(paperId)];
   },
   'zotero.sync_annotations': (j) => {
     const paperId = getPaperIdFromJob(j);
-    return paperId == null ? [] : [['notes', paperId], ['notes', paperId, 'zotero']];
+    return paperId == null ? [] : [QUERY_KEYS.notes.user(paperId), QUERY_KEYS.notes.zotero(paperId)];
   },
-  'zotero.poll':            () => [['papers-feed'], ['feed-counts']],
-  'zotero.sync_from_zotero': () => [['papers-feed'], ['feed-counts']],
+  'zotero.poll':            () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts()],
+  'zotero.sync_from_zotero': () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts()],
 };
 
 /** Terminal statuses — job will not receive more events. */

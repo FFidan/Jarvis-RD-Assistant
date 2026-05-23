@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Joyride, { ACTIONS, EVENTS, STATUS, type CallBackProps, type Step } from 'react-joyride';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchTopics, fetchFeed, setConfig } from '@/lib/api';
 
 // ── Tour steps ─────────────────────────────────────────────────────────────
@@ -61,13 +62,13 @@ const TOUR_STEPS: Step[] = [
 
 function useOnboardingEligibility() {
   const topicsQuery = useQuery({
-    queryKey: ['topics'],
+    queryKey: QUERY_KEYS.topics.list(),
     queryFn: fetchTopics,
     staleTime: 60_000,
   });
 
   const feedQuery = useQuery({
-    queryKey: ['papers-feed', 'onboarding-check'],
+    queryKey: QUERY_KEYS.feed.onboardingCheck(),
     queryFn: () => fetchFeed({ limit: 1 }),
     staleTime: 60_000,
   });

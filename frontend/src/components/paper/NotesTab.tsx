@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import {
   fetchNotes,
   createNote,
@@ -36,7 +37,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
   const [highlightText, setHighlightText] = useState('');
 
   const { data: notes = [], isLoading, isError } = useQuery({
-    queryKey: ['notes', paperId, 'user'],
+    queryKey: QUERY_KEYS.notes.user(paperId),
     queryFn: () => fetchNotes(paperId, 'user'),
   });
 
@@ -45,7 +46,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
     isLoading: zoteroLoading,
     isError: zoteroError,
   } = useQuery({
-    queryKey: ['notes', paperId, 'zotero'],
+    queryKey: QUERY_KEYS.notes.zotero(paperId),
     queryFn: () => fetchNotes(paperId, 'zotero'),
   });
 
@@ -57,7 +58,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
         page_number: pageNumber ? Number(pageNumber) : null,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notes', paperId, 'user'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notes.user(paperId) });
       setNoteText('');
       setPageNumber('');
       setHighlightText('');
@@ -67,7 +68,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
   const deleteMut = useMutation({
     mutationFn: (noteId: number) => deleteNote(noteId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notes', paperId, 'user'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notes.user(paperId) });
     },
   });
 
@@ -86,7 +87,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
   const promoteZoteroMut = useMutation({
     mutationFn: (noteId: number) => promoteZoteroNote(noteId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notes', paperId, 'zotero'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notes.zotero(paperId) });
     },
   });
 

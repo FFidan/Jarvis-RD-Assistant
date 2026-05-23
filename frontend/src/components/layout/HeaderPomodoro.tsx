@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { Clock, Pause, Play, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -41,7 +42,7 @@ export function HeaderPomodoro() {
 
   const logMutation = useMutation({
     mutationFn: logFocusSession,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['my-day'] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() }),
   });
 
   if (phase === 'idle') return null;

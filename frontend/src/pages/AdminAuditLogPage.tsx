@@ -12,6 +12,7 @@
 
 import { useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { formatDistanceToNow } from 'date-fns';
 import { listAuditLog, type AuditLogEntry } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -48,7 +49,7 @@ export function AdminAuditLogPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['admin', 'audit-log', actionPrefix],
+    queryKey: QUERY_KEYS.admin.auditLog(actionPrefix),
     queryFn: ({ pageParam }) =>
       listAuditLog({
         limit: 50,

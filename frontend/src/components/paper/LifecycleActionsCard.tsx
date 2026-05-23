@@ -35,6 +35,7 @@ import {
   Trash,
 } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import {
   savePaper,
   skipPaper,
@@ -73,9 +74,9 @@ export function LifecycleActionsCard({
     });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-    queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
-    queryClient.invalidateQueries({ queryKey: ['paper-detail', paperId] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.detail(paperId) });
   };
 
   const saveMut = useMutation({

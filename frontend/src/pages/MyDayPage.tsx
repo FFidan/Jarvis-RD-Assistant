@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { DateMasthead } from '@/components/my-day/sections/DateMasthead';
 import { YesterdaySection } from '@/components/my-day/sections/YesterdaySection';
 import { HeroNow } from '@/components/my-day/sections/HeroNow';
@@ -55,7 +56,7 @@ export function MyDayPage() {
   //
   // Net result: ~4 section-level requests eliminated on cold mount.
   const { data: bundle } = useQuery<MyDayBundle>({
-    queryKey: ['my-day-bundle', tzOffsetMinutes],
+    queryKey: QUERY_KEYS.myDay.bundle(tzOffsetMinutes),
     queryFn: () => getMyDayBundle(),
     staleTime: 60_000, // bundle is a snapshot; individual queries may refresh faster
   });

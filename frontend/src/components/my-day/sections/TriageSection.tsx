@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -125,14 +126,14 @@ export function TriageSection() {
 
   // Query 1 — unprocessed action items (reuses existing query key for dedup)
   const { data: actionData } = useQuery({
-    queryKey: ['action-items-unprocessed'],
+    queryKey: QUERY_KEYS.actionItems.unprocessed(),
     queryFn: () => fetchFeedPapers({ statuses: 'new', limit: 10 }),
     refetchInterval: 60_000,
   });
 
   // Query 2 — missing foundational papers (reuses existing query key for dedup)
   const { data: foundationalData = [] } = useQuery({
-    queryKey: ['analytics', 'missing-foundational'],
+    queryKey: QUERY_KEYS.analytics.missingFoundational(),
     queryFn: fetchMissingFoundationalPapers,
   });
 
@@ -152,7 +153,7 @@ export function TriageSection() {
           status: 'queued',
         });
       }
-      queryClient.invalidateQueries({ queryKey: ['analytics', 'missing-foundational'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.analytics.missingFoundational() });
     },
   });
 
@@ -170,13 +171,13 @@ export function TriageSection() {
         startJob('paper.process', { paper_id: p.id }).catch(() => {}),
       ),
     );
-    queryClient.invalidateQueries({ queryKey: ['action-items-unprocessed'] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.actionItems.unprocessed() });
   }, [processableItems, startJob, queryClient]);
 
   const handleProcess = useCallback(
     (paper: FeedPaper) => {
       startJob('paper.process', { paper_id: paper.id }).catch(() => {});
-      queryClient.invalidateQueries({ queryKey: ['action-items-unprocessed'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.actionItems.unprocessed() });
     },
     [startJob, queryClient],
   );

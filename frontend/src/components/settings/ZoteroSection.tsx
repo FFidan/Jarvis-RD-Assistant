@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchConfig, setConfig, zoteroTest, zoteroPollNow } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -30,7 +31,7 @@ export function ZoteroSection() {
   const queryClient = useQueryClient();
 
   const { data: configs = [], isLoading } = useQuery({
-    queryKey: ['config'],
+    queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
 
@@ -63,7 +64,7 @@ export function ZoteroSection() {
       if (ZOTERO_LIBRARY_SCOPE_KEYS.has(variables.key)) {
         setLibraryScopeChanged(true);
       }
-      queryClient.invalidateQueries({ queryKey: ['config'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
     },
   });
 

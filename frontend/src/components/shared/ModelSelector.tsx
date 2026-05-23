@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Cpu, Download, Trash2 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -195,7 +196,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
   const [deleteTarget, setDeleteTarget] = useState<ModelCatalogEntry | null>(null);
   const [pullTarget, setPullTarget] = useState<ModelCatalogEntry | null>(null);
   const { data, error } = useQuery<SystemModels>({
-    queryKey: ['system-models'],
+    queryKey: QUERY_KEYS.config.systemModels(),
     queryFn: () => apiFetch<SystemModels>('/api/system/models'),
     staleTime: 60_000,
   });
@@ -271,12 +272,12 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
   const pullMutation = useMutation({
     mutationFn: (entry: ModelCatalogEntry) =>
       apiFetch(`/api/system/models/${localModelPath(entry)}/pull`, { method: 'POST' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['system-models'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() }),
   });
   const deleteMutation = useMutation({
     mutationFn: (entry: ModelCatalogEntry) =>
       apiFetch(`/api/system/models/${localModelPath(entry)}`, { method: 'DELETE' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['system-models'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() }),
   });
   const [pullingIds, setPullingIds] = useState<Set<string>>(new Set());
   const canDeleteSelected =

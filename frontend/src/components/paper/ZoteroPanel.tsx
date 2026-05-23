@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 import { zoteroPushPaper, zoteroGetLinkage, zoteroResync } from '@/lib/api';
 import { Copy, ExternalLink, RefreshCw, Send } from 'lucide-react';
@@ -14,18 +15,18 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
   const [copied, setCopied] = useState(false);
 
   const { data: linkage, isLoading, isError } = useQuery({
-    queryKey: ['zotero-linkage', paperId],
+    queryKey: QUERY_KEYS.zotero.linkage(paperId),
     queryFn: () => zoteroGetLinkage(paperId),
   });
 
   const pushMutation = useMutation({
     mutationFn: () => zoteroPushPaper(paperId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['zotero-linkage', paperId] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.zotero.linkage(paperId) }),
   });
 
   const resyncMutation = useMutation({
     mutationFn: () => zoteroResync(paperId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['zotero-linkage', paperId] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.zotero.linkage(paperId) }),
   });
 
   const copyKey = (key: string) => {

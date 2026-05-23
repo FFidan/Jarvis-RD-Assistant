@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -24,7 +25,7 @@ export function TodaysPulseSection() {
   const [expanded, setExpanded] = useState(false);
 
   const { data: deck, isLoading, isError } = useQuery<PulseDeck | null>({
-    queryKey: ['pulse-today'],
+    queryKey: QUERY_KEYS.pulse.today(),
     queryFn: fetchPulseToday,
   });
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { MemoryRouter } from 'react-router-dom';
 import { IntentSection } from '@/components/my-day/sections/IntentSection';
 import type { MyDayResponse } from '@/types';
@@ -261,7 +262,7 @@ describe('IntentSection', () => {
       });
 
       // Invalidate queries to trigger a refetch
-      await queryClient.invalidateQueries({ queryKey: ['my-day'] });
+      await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() });
 
       // After the useEffect fires (completedToday.length === 0 → setShowCompleted(false)),
       // the entire completed footer is gone (guarded by completedToday.length > 0)

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { fetchFeed } from '@/lib/api';
@@ -9,7 +10,7 @@ export function HeroResumeReading() {
   const navigate = useNavigate();
 
   const { data, isLoading, isError } = useQuery<FeedResponse>({
-    queryKey: ['feed', 'reading', 'hero'],
+    queryKey: QUERY_KEYS.feed.readingHero(),
     queryFn: () => fetchFeed({ view: 'library', filter: 'reading', limit: 20 }),
     staleTime: 60_000,
   });

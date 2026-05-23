@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { errorMessage } from '@/lib/errors';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getCitationGraph } from '@/lib/api';
 import { CytoscapeGraph } from '@/components/graph/CytoscapeGraph';
 import { GraphControls, type LayoutType } from '@/components/graph/GraphControls';
@@ -28,7 +29,7 @@ export function CitationGraphPage() {
     isError,
     error,
   } = useQuery({
-    queryKey: ['citation-graph', paperIds, depth],
+    queryKey: QUERY_KEYS.citation.graph(paperIds, depth),
     queryFn: () => getCitationGraph(paperIds, depth),
     enabled: paperIds.length > 0,
   });

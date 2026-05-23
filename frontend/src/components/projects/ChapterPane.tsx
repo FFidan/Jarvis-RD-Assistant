@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Trash2, FolderKanban, Pencil } from 'lucide-react';
 import type { Project } from '@/types';
 import { deleteProject, updateProject } from '@/lib/api';
@@ -60,7 +61,7 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
   const deleteMut = useMutation({
     mutationFn: () => deleteProject(project!.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() });
       setShowDelete(false);
       onDeleted();
     },
@@ -70,8 +71,8 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
     mutationFn: (status: string) =>
       updateProject(project!.id, { status } as Partial<Project>),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['project', project!.id] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.detail(project!.id) });
     },
   });
 
@@ -79,7 +80,7 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
     mutationFn: (deadline: string | null) =>
       updateProject(project!.id, { deadline } as Partial<Project>),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() });
     },
   });
 

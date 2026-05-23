@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,7 +32,7 @@ export function LangfuseLinkCard() {
   const queryClient = useQueryClient();
 
   const { data: configs } = useQuery<ConfigEntry[]>({
-    queryKey: ['config'],
+    queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
   const savedUrl = (configs?.find((c) => c.key === CONFIG_KEY)?.value as string | undefined) ?? '';
@@ -46,7 +47,7 @@ export function LangfuseLinkCard() {
     onSuccess: () => {
       setError(null);
       setDraft(null);
-      queryClient.invalidateQueries({ queryKey: ['config'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
     },
     onError: (e) => setError(e instanceof Error ? e.message : 'Failed to save'),
   });

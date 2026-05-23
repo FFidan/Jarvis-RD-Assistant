@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Plus, Trash2, Pencil, Flag } from 'lucide-react';
 import type { Milestone } from '@/types';
 import { fetchMilestones, createMilestone, updateMilestone, deleteMilestone } from '@/lib/api';
@@ -37,12 +38,12 @@ export function MilestonesTab({ projectId }: MilestonesTabProps) {
   const [editDeadline, setEditDeadline] = useState('');
 
   const { data: milestones = [], isLoading } = useQuery({
-    queryKey: ['milestones', projectId],
+    queryKey: QUERY_KEYS.projects.milestones(projectId),
     queryFn: () => fetchMilestones(projectId),
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['milestones', projectId] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.milestones(projectId) });
   };
 
   const createMut = useMutation({

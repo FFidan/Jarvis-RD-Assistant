@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { AlertTriangle, Loader2, ScanSearch } from 'lucide-react';
 import { fetchContradictions, scanPaperContradictions } from '@/lib/api';
 import { useJobStore, type Job } from '@/stores/job-store';
@@ -48,7 +49,7 @@ export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ['contradictions', paperId, 'verified'],
+    queryKey: QUERY_KEYS.contradictions.verified(paperId),
     queryFn: () => fetchContradictions({ paper_id: paperId, status: 'verified', limit: CONTRADICTION_LIMIT }),
     enabled: Number.isFinite(paperId) && paperId > 0,
   });

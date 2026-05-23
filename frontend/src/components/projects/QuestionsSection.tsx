@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Plus, Trash2, HelpCircle } from 'lucide-react';
 import { createProjectQuestion, deleteProjectQuestion } from '@/lib/api';
 import type { ProjectQuestion } from '@/types';
@@ -19,10 +20,10 @@ export function QuestionsSection({ projectId, questions }: QuestionsSectionProps
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
   const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ['project-questions', projectId] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.questions(projectId) });
 
   const invalidateProjects = () =>
-    queryClient.invalidateQueries({ queryKey: ['projects'] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() });
 
   const createMut = useMutation({
     mutationFn: (body: string) => createProjectQuestion(projectId, body),

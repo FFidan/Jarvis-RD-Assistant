@@ -13,6 +13,7 @@ export function FetchCitationsButton() {
     mutationFn: () => batchFetchCitations(),
     onSuccess: (data) => {
       setStatusMessage(data.message);
+      // Note: bare prefix for invalidation — no registry factory for citation all-entries
       queryClient.invalidateQueries({ queryKey: ['citation-graph'] });
     },
   });

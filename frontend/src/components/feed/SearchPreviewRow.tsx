@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { ExternalLink, Loader2, MoreHorizontal, RefreshCw, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SearchPreviewResult } from '@/types';
@@ -59,7 +60,7 @@ export function SearchPreviewRow({
   }, [initialZoteroItemKey, paperId, trackedZoteroJob]);
 
   const { data: savedZoteroLinkage } = useQuery({
-    queryKey: ['zotero-linkage', paperId],
+    queryKey: QUERY_KEYS.zotero.linkage(paperId as number),
     queryFn: () => zoteroGetLinkage(paperId as number),
     enabled:
       paperId != null &&

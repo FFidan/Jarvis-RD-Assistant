@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { BookOpen } from 'lucide-react';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { VerificationBadge } from '@/components/shared/VerificationBadge';
@@ -18,7 +19,7 @@ import type { WeeklyDigestTheme, WeeklyDigestTopic } from '@/types';
  */
 export function WeeklyDigestSection() {
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['digest-weekly'],
+    queryKey: QUERY_KEYS.digest.weekly(),
     queryFn: () => fetchWeeklyDigest(7),
     staleTime: 30 * 60 * 1000, // 30 min — digest updates at most once a week
   });

@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -23,7 +24,7 @@ export function HeroThread() {
   const queryClient = useQueryClient();
 
   const { data, isLoading, isError } = useQuery<Thread[]>({
-    queryKey: ['my-day', 'threads'],
+    queryKey: QUERY_KEYS.myDay.threads(),
     queryFn: fetchThreads,
     staleTime: 60_000,
   });
@@ -31,7 +32,7 @@ export function HeroThread() {
   const resumeMutation = useMutation({
     mutationFn: (id: number) => resumeThread(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['my-day', 'threads'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.threads() });
       toast.success('Thread resumed');
     },
     onError: (err: Error) => toast.error(`Couldn't resume: ${err.message}`),

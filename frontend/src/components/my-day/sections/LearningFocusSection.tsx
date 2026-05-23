@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Clock } from 'lucide-react';
 import { getStats, fetchMyDay } from '@/lib/api';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
@@ -12,14 +13,14 @@ export function LearningFocusSection() {
 
   // Reuses same query key as LearningCardsSummary — deduped in React Query cache
   const { data: stats } = useQuery<RetentionStats>({
-    queryKey: ['retention-stats'],
+    queryKey: QUERY_KEYS.retention.stats(),
     queryFn: getStats,
     refetchInterval: 120_000,
   });
 
   // Reuses the shared ['my-day'] query key (deduped with IntentSection et al.)
   const { data: myDay } = useQuery<MyDayResponse>({
-    queryKey: ['my-day'],
+    queryKey: QUERY_KEYS.myDay.today(),
     queryFn: fetchMyDay,
   });
 

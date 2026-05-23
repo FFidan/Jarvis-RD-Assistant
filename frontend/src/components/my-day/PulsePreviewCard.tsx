@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Sparkles, RefreshCw, Loader2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -122,7 +123,7 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
     refetch,
     isFetching,
   } = useQuery<PulseDeck | null>({
-    queryKey: ['pulse-today'],
+    queryKey: QUERY_KEYS.pulse.today(),
     queryFn: fetchPulseToday,
   });
 
@@ -147,9 +148,9 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
       ratePulseCard(paperId, rating),
     onMutate: async ({ paperId, rating }) => {
       if (rating !== 'save') return undefined;
-      const prev = queryClient.getQueryData<PulseDeck>(['pulse-today']);
+      const prev = queryClient.getQueryData<PulseDeck>(QUERY_KEYS.pulse.today());
       if (prev) {
-        queryClient.setQueryData<PulseDeck>(['pulse-today'], {
+        queryClient.setQueryData<PulseDeck>(QUERY_KEYS.pulse.today(), {
           ...prev,
           cards: prev.cards.map((c) =>
             c.paper_id === paperId ? { ...c, user_state: 'to_read' } : c,
@@ -163,12 +164,12 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
     },
     onError: (err: Error, _vars, context) => {
       if (context?.prev !== undefined) {
-        queryClient.setQueryData(['pulse-today'], context.prev);
+        queryClient.setQueryData(QUERY_KEYS.pulse.today(), context.prev);
       }
       toast.error(`Failed to rate card: ${err.message ?? 'unknown error'}`);
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pulse.today() });
     },
   });
 

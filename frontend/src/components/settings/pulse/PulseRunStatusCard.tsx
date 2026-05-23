@@ -18,6 +18,7 @@ import { useJobStore } from '@/stores/job-store';
 import { formatDate } from '@/lib/utils';
 import { StatusBadge } from '@/components/ui/status-badge';
 import type { PulseStats } from '@/types';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { DiagnosticsPanel } from '../DiagnosticsPanel';
 import { SourceConfigPanel } from '../SourceConfigPanel';
 
@@ -129,8 +130,8 @@ export function PulseRunStatusCard({
         <SourceConfigPanel
           isAdmin={isAdmin}
           onArxivCooldownCleared={() => {
-            void queryClient.invalidateQueries({ queryKey: ['pulse-debug'] });
-            void queryClient.invalidateQueries({ queryKey: ['pulse-stats'] });
+            void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pulse.debug() });
+            void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pulse.statsAll() });
           }}
         />
       </CardContent>

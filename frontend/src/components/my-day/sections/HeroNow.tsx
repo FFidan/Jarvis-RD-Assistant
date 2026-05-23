@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { HeroPulse } from './HeroPulse';
 import { HeroTask } from './HeroTask';
@@ -91,14 +92,14 @@ export function HeroNow() {
   const taskPhaseLabel = taskLabelForPhase(phase);
 
   const { data: readingData } = useQuery<FeedResponse>({
-    queryKey: ['feed', 'reading', 'hero'],
+    queryKey: QUERY_KEYS.feed.readingHero(),
     queryFn: () => fetchFeed({ view: 'library', filter: 'reading', limit: 20 }),
     staleTime: 60_000,
   });
   const hasReading = (readingData?.papers ?? []).some((p) => p.state === 'reading');
 
   const { data: threadData } = useQuery<Thread[]>({
-    queryKey: ['my-day', 'threads'],
+    queryKey: QUERY_KEYS.myDay.threads(),
     queryFn: fetchThreads,
     staleTime: 60_000,
   });

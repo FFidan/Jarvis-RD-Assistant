@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { uploadPdf, processPdf } from '@/lib/api';
@@ -41,8 +42,8 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
           status: 'queued',
         });
         setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'done' as FileStatus } : f)));
-        queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-        queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
         onComplete?.();
       } catch (err) {
         setFiles(s =>
@@ -88,8 +89,8 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
             );
           }
         }
-        queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-        queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
         onComplete?.();
       })();
       return [...prev, ...entries];

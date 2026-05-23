@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchNudges, updateNudge, fetchConfig, setConfig } from '@/lib/api';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -106,26 +107,26 @@ export function AutomationSection() {
   const queryClient = useQueryClient();
 
   const { data: nudges = [], isLoading } = useQuery({
-    queryKey: ['nudges'],
+    queryKey: QUERY_KEYS.account.nudges(),
     queryFn: fetchNudges,
   });
 
   const { data: configs = [] } = useQuery({
-    queryKey: ['config'],
+    queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
 
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<Nudge> }) => updateNudge(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['nudges'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.account.nudges() });
     },
   });
 
   const configMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['config'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
     },
   });
 

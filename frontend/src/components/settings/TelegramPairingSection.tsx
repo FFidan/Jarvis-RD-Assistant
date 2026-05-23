@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { CheckCircle2, Copy, Loader2, Unlink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getTelegramPairing, removeTelegramPairing, requestTelegramPairToken } from '@/lib/api';
@@ -137,7 +138,7 @@ export function TelegramPairingSection() {
 
   // Current pairing status (poll every 5s while a token is pending)
   const statusQuery = useQuery({
-    queryKey: ['user-telegram-pairing'],
+    queryKey: QUERY_KEYS.pairing.userTelegram(),
     queryFn: getTelegramPairing,
     refetchInterval: pendingToken ? 5000 : false,
     staleTime: 0,
@@ -161,7 +162,7 @@ export function TelegramPairingSection() {
   const unpairMut = useMutation({
     mutationFn: removeTelegramPairing,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['user-telegram-pairing'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pairing.userTelegram() });
     },
   });
 

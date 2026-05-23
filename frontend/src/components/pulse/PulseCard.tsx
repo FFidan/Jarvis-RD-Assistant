@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Trash2, ThumbsDown, Bookmark, HelpCircle } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -66,9 +67,9 @@ export function PulseCard({
   const trashAndRejectMut = useMutation({
     mutationFn: () => trashAndRejectPaper(card.paper_id),
     onMutate: () => {
-      const prev = queryClient.getQueryData<import('@/types').PulseDeck>(['pulse-today']);
+      const prev = queryClient.getQueryData<import('@/types').PulseDeck>(QUERY_KEYS.pulse.today());
       if (prev) {
-        queryClient.setQueryData<import('@/types').PulseDeck>(['pulse-today'], {
+        queryClient.setQueryData<import('@/types').PulseDeck>(QUERY_KEYS.pulse.today(), {
           ...prev,
           cards: prev.cards.filter((c) => c.card_id !== card.card_id),
         });
@@ -76,20 +77,20 @@ export function PulseCard({
       return { prev };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-      queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
       toast.success('Trashed and excluded similar topics');
     },
     onError: (err, _vars, context) => {
       if (context?.prev !== undefined) {
-        queryClient.setQueryData(['pulse-today'], context.prev);
+        queryClient.setQueryData(QUERY_KEYS.pulse.today(), context.prev);
       }
       toast.error('Failed to trash & reject', {
         description: err instanceof Error ? err.message : 'Unknown error',
       });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pulse.today() });
     },
   });
 
@@ -98,9 +99,9 @@ export function PulseCard({
     onMutate: () => {
       // Optimistically patch the card's user_state to 'inbox' so the button
       // reflects the change immediately without waiting for the round-trip.
-      const prev = queryClient.getQueryData<import('@/types').PulseDeck>(['pulse-today']);
+      const prev = queryClient.getQueryData<import('@/types').PulseDeck>(QUERY_KEYS.pulse.today());
       if (prev) {
-        queryClient.setQueryData<import('@/types').PulseDeck>(['pulse-today'], {
+        queryClient.setQueryData<import('@/types').PulseDeck>(QUERY_KEYS.pulse.today(), {
           ...prev,
           cards: prev.cards.map((c) =>
             c.card_id === card.card_id ? { ...c, user_state: 'inbox' } : c,
@@ -112,7 +113,7 @@ export function PulseCard({
     onError: (err, _vars, context) => {
       // Roll back the optimistic update on failure.
       if (context?.prev !== undefined) {
-        queryClient.setQueryData(['pulse-today'], context.prev);
+        queryClient.setQueryData(QUERY_KEYS.pulse.today(), context.prev);
       }
       toast.error('Failed to unsave paper', {
         description: err instanceof Error ? err.message : 'Unknown error',
@@ -122,7 +123,7 @@ export function PulseCard({
       toast.success('Paper moved back to Inbox');
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pulse.today() });
     },
   });
 

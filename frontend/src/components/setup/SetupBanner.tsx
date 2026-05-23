@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useNavigate } from 'react-router-dom';
 import { Rocket, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -15,7 +16,7 @@ export function SetupBanner() {
   const { setupBannerDismissed, dismissSetupBanner } = useUIStore();
 
   const { data } = useQuery({
-    queryKey: ['setup-status'],
+    queryKey: QUERY_KEYS.setup.status(),
     queryFn: getSetupStatus,
     staleTime: 30_000,
   });

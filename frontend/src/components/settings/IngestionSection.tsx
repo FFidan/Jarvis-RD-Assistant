@@ -1,17 +1,16 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchConfig, setConfig, apiFetch } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
-import { Pencil, Check, X, Settings2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Settings2, ChevronDown, ChevronRight } from 'lucide-react';
 import { ModelSelector } from '@/components/shared/ModelSelector';
-import { InfoTooltip } from '@/components/ui/info-tooltip';
 import type { ConfigEntry, ModelFitDetail } from '@/types';
+import { ConfigEntryCard } from './ingestion/ConfigEntryCard';
 
 // ---------------------------------------------------------------------------
 // Hardware-Aware Settings helpers (Contract 06)
@@ -379,16 +378,20 @@ function NumCtxSlider({
 
   const currentStop = stops[sliderIndex] ?? stops[0];
 
+  // Memoize required VRAM for the current slider position (used in fit badge + label rows)
+  const req = useMemo(
+    () => (fitDetail ? computeRequiredVram(fitDetail, currentStop) : null),
+    [fitDetail, currentStop],
+  );
+
   // Compute live fit for current slider position
   const computedFit = (() => {
     if (!fitDetail) return null;
     if (vramGb <= 0) return 'unknown' as const;
-    const req = computeRequiredVram(fitDetail, currentStop);
     if (req === null) return null;
     return fitStatus(req, vramGb);
   })();
 
-  const computedRequired = fitDetail ? computeRequiredVram(fitDetail, currentStop) : null;
   const largestFitting = fitDetail && vramGb > 0
     ? largestFittingStop(fitDetail, vramGb, stops)
     : undefined;
@@ -406,7 +409,7 @@ function NumCtxSlider({
 
   const saveMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['config'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() }),
   });
 
   const handleSliderChange = (values: number[]) => {
@@ -444,7 +447,7 @@ function NumCtxSlider({
           {badgeStatus !== 'unknown' && (
             <FitBadge
               status={badgeStatus as 'fits' | 'partial' | 'unfit' | 'cloud' | 'unknown'}
-              requiredVramGb={computedRequired}
+              requiredVramGb={req}
               availableVramGb={vramGb > 0 ? vramGb : undefined}
               largestFitting={largestFitting}
             />
@@ -461,9 +464,9 @@ function NumCtxSlider({
         />
         <div className="flex justify-between text-xs text-muted-foreground">
           {stops.map((s) => {
-            const req = fitDetail ? computeRequiredVram(fitDetail, s) : null;
-            const isUnfit = req !== null && vramGb > 0
-              ? fitStatus(req, vramGb) === 'unfit'
+            const stopReq = fitDetail ? computeRequiredVram(fitDetail, s) : null;
+            const isUnfit = stopReq !== null && vramGb > 0
+              ? fitStatus(stopReq, vramGb) === 'unfit'
               : false;
             return (
               <span
@@ -647,11 +650,6 @@ const CONFIG_METADATA: Record<
 // Note: 'user.timezone' is intentionally excluded from CONFIG_METADATA here;
 // it is owned exclusively by AutomationSection (searchable combobox).
 
-/** Format a config value for display. */
-function formatConfigValue(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
-}
-
 /** Preferred order for groups (unlisted groups sort alphabetically after these).
  *  Keys without metadata fall into 'Other' which is intentionally omitted here
  *  so they disappear rather than exposing raw JSON to the UI. */
@@ -679,13 +677,13 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const { data: configs = [], isLoading } = useQuery({
-    queryKey: ['config'],
+    queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
 
   // Fetch system models to get hardware info + catalog fit_detail
   const { data: systemModels } = useQuery<SystemModelsApi>({
-    queryKey: ['system-models'],
+    queryKey: QUERY_KEYS.config.systemModels(),
     queryFn: () => apiFetch<SystemModelsApi>('/api/system/models'),
     staleTime: 60_000,
   });
@@ -700,8 +698,8 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['config'] });
-      queryClient.invalidateQueries({ queryKey: ['system-models'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() });
       setEditingKey(null);
       setSaveError(null);
     },
@@ -776,116 +774,6 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
     );
   };
 
-  const renderEntry = (entry: ConfigEntry) => {
-    const meta = CONFIG_METADATA[entry.key];
-    const isLlm = entry.key.startsWith('llm.');
-
-    // Boolean entries get a Switch toggle (no edit-mode needed)
-    if (meta?.type === 'boolean') {
-      return (
-        <Card key={entry.key} className="rounded-md border-hair shadow-none">
-          <CardContent className="flex items-center justify-between p-4">
-            <div>
-              <Label className="text-sm font-medium">{meta.label}</Label>
-              {meta.description && (
-                <p className="text-xs text-muted-foreground">{meta.description}</p>
-              )}
-            </div>
-            <Switch
-              checked={entry.value === 'true' || entry.value === true}
-              onCheckedChange={(checked) => setMut.mutate({ key: entry.key, value: String(checked) })}
-              disabled={setMut.isPending}
-            />
-          </CardContent>
-        </Card>
-      );
-    }
-
-    // LLM model entries get a ModelSelector + Configure expander
-    if (isLlm) {
-      const role = entry.key.replace(/^llm\./, '').replace(/_model$/, '');
-      const catalogEntry = findCatalogEntry(entry.value, role);
-      return (
-        <LlmModelCard
-          key={entry.key}
-          entry={entry}
-          meta={{ label: meta?.label ?? entry.key, description: meta?.description ?? '' }}
-          machineId={machineId}
-          hardware={hardware}
-          catalogEntry={catalogEntry}
-          onSave={(key, value) => setMut.mutate({ key, value })}
-          isPending={setMut.isPending}
-          configs={configs}
-        />
-      );
-    }
-
-    return (
-      <Card key={entry.key}>
-        <CardContent className="flex items-center gap-4 p-4">
-          {editingKey === entry.key ? (
-            <div className="flex-1 space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="shrink-0 text-sm font-medium">
-                  {meta?.label ?? entry.key}
-                </span>
-                <Input
-                  type={meta?.type === 'number' ? 'number' : 'text'}
-                  min={meta?.type === 'number' ? meta.min : undefined}
-                  max={meta?.type === 'number' ? meta.max : undefined}
-                  step={meta?.type === 'number' ? meta.step : undefined}
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  className="flex-1"
-                />
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={saveEdit}
-                  disabled={setMut.isPending}
-                  aria-label="Save setting"
-                >
-                  <Check className="h-4 w-4" />
-                </Button>
-                <Button size="icon" variant="ghost" onClick={() => setEditingKey(null)} aria-label="Cancel edit">
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              {entry.key === 'fsrs.learning_steps' && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Enter as [min, max], e.g. [1, 10] means review after 1 min then 10 min.
-                </p>
-              )}
-              {saveError && (
-                <p className="text-sm text-destructive mt-1">{saveError}</p>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1 font-medium text-sm">
-                  {meta?.label ?? entry.key}
-                  {meta?.tooltip && <InfoTooltip content={meta.tooltip} />}
-                </div>
-                {meta?.description && (
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {meta.description}
-                  </p>
-                )}
-                <span className="text-sm text-muted-foreground mt-1 block">
-                  {formatConfigValue(entry.value)}
-                </span>
-              </div>
-              <Button size="icon" variant="ghost" onClick={() => startEdit(entry)} aria-label="Edit setting">
-                <Pencil className="h-4 w-4" />
-              </Button>
-            </>
-          )}
-        </CardContent>
-      </Card>
-    );
-  };
-
   const llmGroup = grouped['LLM Models'];
 
   return (
@@ -904,7 +792,44 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
             <HardwareRecommendationBanner recommendation={hardwareRecommendation} />
           )}
           <div className="space-y-2">
-            {(grouped[group] ?? []).map(renderEntry)}
+            {(grouped[group] ?? []).map((entry) => {
+              const meta = CONFIG_METADATA[entry.key];
+              const isLlm = entry.key.startsWith('llm.');
+              const customElement = isLlm ? (() => {
+                const role = entry.key.replace(/^llm\./, '').replace(/_model$/, '');
+                const catalogEntry = findCatalogEntry(entry.value, role);
+                return (
+                  <LlmModelCard
+                    key={entry.key}
+                    entry={entry}
+                    meta={{ label: meta?.label ?? entry.key, description: meta?.description ?? '' }}
+                    machineId={machineId}
+                    hardware={hardware}
+                    catalogEntry={catalogEntry}
+                    onSave={(key, value) => setMut.mutate({ key, value })}
+                    isPending={setMut.isPending}
+                    configs={configs}
+                  />
+                );
+              })() : undefined;
+              return (
+                <ConfigEntryCard
+                  key={entry.key}
+                  entry={entry}
+                  meta={meta}
+                  customElement={customElement}
+                  editingKey={editingKey}
+                  editValue={editValue}
+                  saveError={saveError}
+                  isMutPending={setMut.isPending}
+                  onMutate={(key, value) => setMut.mutate({ key, value })}
+                  onStartEdit={startEdit}
+                  onEditValueChange={setEditValue}
+                  onSaveEdit={saveEdit}
+                  onCancelEdit={() => setEditingKey(null)}
+                />
+              );
+            })}
           </div>
         </div>
       ))}

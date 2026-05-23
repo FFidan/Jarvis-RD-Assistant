@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { errorMessage } from '@/lib/errors';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -23,7 +24,7 @@ export function ExtractionTablePage() {
   const [selectedPaperIds, setSelectedPaperIds] = useState<number[]>([]);
 
   const templatesQuery = useQuery({
-    queryKey: ['extraction-templates'],
+    queryKey: QUERY_KEYS.extraction.templates(),
     queryFn: fetchExtractionTemplates,
   });
 
@@ -48,7 +49,7 @@ export function ExtractionTablePage() {
   );
 
   const tableQuery = useQuery({
-    queryKey: ['extraction-table', selectedTemplateId, selectedPaperIds],
+    queryKey: QUERY_KEYS.extraction.table(selectedTemplateId, selectedPaperIds),
     queryFn: () =>
       selectedTemplateId != null
         ? fetchExtractionTable(selectedTemplateId, selectedPaperIds)
@@ -62,7 +63,7 @@ export function ExtractionTablePage() {
       return batchExtract(selectedTemplateId, selectedPaperIds);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['extraction-table'] });
+      queryClient.invalidateQueries({ queryKey: ['extraction-table'] }); // Note: bare prefix for invalidation — no registry factory for all extraction-table entries
     },
   });
 

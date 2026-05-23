@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Plus, Library, Download, Play } from 'lucide-react';
 import type { Deck } from '@/types';
 import { fetchDecks, createDeck, exportAnki } from '@/lib/api';
@@ -34,14 +35,14 @@ export function DeckBrowser({ selectedDeckId, onSelectDeck, onStartReview }: Dec
   const [exportError, setExportError] = useState<string | null>(null);
 
   const { data: decks = [], isLoading } = useQuery({
-    queryKey: ['decks'],
+    queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
 
   const createMut = useMutation({
     mutationFn: () => createDeck({ name, description: description || undefined }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['decks'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.decks.list() });
       setShowCreate(false);
       setName('');
       setDescription('');

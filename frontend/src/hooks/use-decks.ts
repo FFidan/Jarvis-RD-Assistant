@@ -19,7 +19,7 @@ export function useDecks() {
  */
 export function useDeckCards(deckId: number) {
   return useQuery({
-    queryKey: QUERY_KEYS.decks.cards(deckId),
+    queryKey: QUERY_KEYS.cards.byDeck(deckId),
     queryFn: () => fetchCards(deckId),
     enabled: deckId > 0,
   });
@@ -31,7 +31,7 @@ export function useDeckCards(deckId: number) {
  */
 export function useCardStats() {
   return useQuery({
-    queryKey: QUERY_KEYS.decks.stats(),
+    queryKey: QUERY_KEYS.cards.stats(),
     queryFn: getStats,
     refetchInterval: 30_000,
   });

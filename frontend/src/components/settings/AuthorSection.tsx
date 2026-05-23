@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import {
   fetchTrackedAuthors,
   createTrackedAuthor,
@@ -34,14 +35,14 @@ export function AuthorSection() {
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 
   const { data: authors = [], isLoading } = useQuery({
-    queryKey: ['tracked-authors'],
+    queryKey: QUERY_KEYS.authors.tracked(),
     queryFn: fetchTrackedAuthors,
   });
 
   const createMut = useMutation({
     mutationFn: (data: Partial<TrackedAuthor>) => createTrackedAuthor(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tracked-authors'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.authors.tracked() });
       setShowAdd(false);
       setAddForm({ author_name: '', s2_author_id: '' });
     },
@@ -51,21 +52,21 @@ export function AuthorSection() {
     mutationFn: ({ id, data }: { id: number; data: Partial<TrackedAuthor> }) =>
       updateTrackedAuthor(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tracked-authors'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.authors.tracked() });
     },
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => deleteTrackedAuthor(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tracked-authors'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.authors.tracked() });
     },
   });
 
   const autoDetectMut = useMutation({
     mutationFn: autoDetectAuthors,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tracked-authors'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.authors.tracked() });
     },
   });
 

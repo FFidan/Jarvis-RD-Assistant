@@ -8,7 +8,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
  */
 export function useExtractionTemplates() {
   return useQuery({
-    queryKey: QUERY_KEYS.extractions.templates(),
+    queryKey: QUERY_KEYS.extraction.templates(),
     queryFn: fetchExtractionTemplates,
   });
 }
@@ -19,7 +19,7 @@ export function useExtractionTemplates() {
  */
 export function useExtractionTable(templateId: number | null, paperIds: number[]) {
   return useQuery({
-    queryKey: QUERY_KEYS.extractions.table(templateId, paperIds),
+    queryKey: QUERY_KEYS.extraction.table(templateId, paperIds),
     queryFn: () =>
       templateId != null
         ? fetchExtractionTable(templateId, paperIds)

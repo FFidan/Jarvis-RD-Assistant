@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { upsertAnnotations } from '@/lib/api';
 import type { UserState } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -46,7 +47,7 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
         flagged,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['paper-detail', paperId] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.detail(paperId) });
       setSaved(true);
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);

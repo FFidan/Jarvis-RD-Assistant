@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { RotateCcw, Loader2 } from 'lucide-react';
 import { fetchRecommendationFeedback, deleteRecommendationFeedback } from '@/lib/api';
@@ -34,7 +35,7 @@ function groupNegativeByTopic(items: FeedbackListItem[]): TopicGroup[] {
 export function RejectedTopicsPanel() {
   const queryClient = useQueryClient();
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['rejected-topics'],
+    queryKey: QUERY_KEYS.topics.rejected(),
     queryFn: () => fetchRecommendationFeedback({ limit: 200 }),
     staleTime: 60_000,
   });
@@ -42,7 +43,7 @@ export function RejectedTopicsPanel() {
   const resetMutation = useMutation({
     mutationFn: (topicId: number) => deleteRecommendationFeedback(topicId),
     onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ['rejected-topics'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.rejected() });
       toast.success(`Reset feedback for topic`, {
         description: `${res.deleted} feedback row(s) cleared.`,
       });

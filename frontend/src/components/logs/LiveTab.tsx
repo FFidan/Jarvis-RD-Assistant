@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { listJobs } from '@/lib/api';
 import { listEvents, streamCorrelation } from '@/lib/logs';
 import type { SystemEvent } from '@/lib/logs';
@@ -114,13 +115,13 @@ function JobStreamRow({ job }: JobStreamRowProps) {
 
 export function LiveTab() {
   const { data: jobs } = useQuery({
-    queryKey: ['jobs', 'running'],
+    queryKey: QUERY_KEYS.jobs.running(),
     queryFn: () => listJobs({ status: 'running' }),
     refetchInterval: 3_000,
   });
 
   const { data: recentData } = useQuery({
-    queryKey: ['logs', 'recent'],
+    queryKey: QUERY_KEYS.logs.recent(),
     queryFn: () => listEvents({ limit: 50 }),
     refetchInterval: 3_000,
   });

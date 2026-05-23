@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, InboxIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,7 +24,7 @@ export function ActionItemsCard() {
     isError,
     refetch,
   } = useQuery({
-    queryKey: ['action-items-unprocessed'],
+    queryKey: QUERY_KEYS.actionItems.unprocessed(),
     queryFn: () => fetchFeedPapers({ statuses: 'new', limit: 10 }),
     refetchInterval: 60_000,
   });
@@ -59,7 +60,7 @@ export function ActionItemsCard() {
         .map((p) => startJob('paper.process', { paper_id: p.id }).catch(() => {})),
     );
     // Refresh after queuing
-    queryClient.invalidateQueries({ queryKey: ['action-items-unprocessed'] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.actionItems.unprocessed() });
   }, [unprocessed, startJob, isRunning, queryClient]);
 
   const processable = unprocessed.filter((p) => p.pdf_downloaded);

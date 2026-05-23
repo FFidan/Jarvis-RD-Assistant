@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { downloadPdf, processPdf, summarizePaper, generateCardsJob, getJob, fetchDecks } from '@/lib/api';
 import { useJobStore, type Job } from '@/stores/job-store';
@@ -101,7 +102,7 @@ export function ActionsSidebar({
   }, []);
 
   const { data: decks = [] } = useQuery({
-    queryKey: ['decks'],
+    queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
 
@@ -134,7 +135,7 @@ export function ActionsSidebar({
           }
         } else if (event.type === 'complete') {
           setActionResult({ type: 'success', message: 'Analysis complete' });
-          queryClient.invalidateQueries({ queryKey: ['paper-detail', paperId] });
+          queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.detail(paperId) });
         } else if (event.type === 'error') {
           const failedStep = event.step || 'analysis';
           const stage = (event.step as 'downloading' | 'processing' | 'summarizing') || null;
@@ -180,7 +181,7 @@ export function ActionsSidebar({
     mutationFn: () => downloadPdf(paperId),
     onSuccess: () => {
       setActionResult({ type: 'success', message: 'PDF downloaded successfully' });
-      queryClient.invalidateQueries({ queryKey: ['paper-detail', paperId] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.detail(paperId) });
     },
     onError: (err) => {
       setActionResult({ type: 'error', message: err instanceof Error ? err.message : 'Download failed' });
@@ -243,8 +244,8 @@ export function ActionsSidebar({
               type: 'success',
               message: `Generated ${res.cards_created ?? '?'} cards (confidence: ${res.confidence ?? '?'})`,
             });
-            queryClient.invalidateQueries({ queryKey: ['cards'] });
-            queryClient.invalidateQueries({ queryKey: ['decks'] });
+            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.all() });
+            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.decks.list() });
           } else if (row.status === 'failed') {
             const errPayload = row.error;
             const msg = errPayload?.message ?? 'Generation failed';

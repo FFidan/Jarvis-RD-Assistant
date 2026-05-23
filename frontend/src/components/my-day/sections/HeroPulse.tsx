@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -19,7 +20,7 @@ export function HeroPulse() {
   const lastDeckIdRef = useRef<number | null>(null);
 
   const { data: deck, isLoading, isError, error } = useQuery<PulseDeck | null>({
-    queryKey: ['pulse-today'],
+    queryKey: QUERY_KEYS.pulse.today(),
     queryFn: fetchPulseToday,
   });
 
@@ -45,9 +46,9 @@ export function HeroPulse() {
     },
     onMutate: async ({ paperId, rating }) => {
       if (rating !== 'save') return undefined;
-      const prev = queryClient.getQueryData<PulseDeck>(['pulse-today']);
+      const prev = queryClient.getQueryData<PulseDeck>(QUERY_KEYS.pulse.today());
       if (prev) {
-        queryClient.setQueryData<PulseDeck>(['pulse-today'], {
+        queryClient.setQueryData<PulseDeck>(QUERY_KEYS.pulse.today(), {
           ...prev,
           cards: prev.cards.map((c: PulseCardItem) =>
             c.paper_id === paperId ? { ...c, user_state: 'to_read' } : c,
@@ -58,12 +59,12 @@ export function HeroPulse() {
     },
     onError: (err: Error, _vars, context) => {
       if (context?.prev !== undefined) {
-        queryClient.setQueryData(['pulse-today'], context.prev);
+        queryClient.setQueryData(QUERY_KEYS.pulse.today(), context.prev);
       }
       toast.error(`Failed to rate card: ${err.message ?? 'unknown error'}`);
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pulse.today() });
     },
   });
 

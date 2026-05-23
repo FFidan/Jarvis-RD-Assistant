@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { listJobs } from '@/lib/api';
 import type { Job } from '@/stores/job-store';
 import { CorrelationDrawer } from './CorrelationDrawer';
@@ -30,7 +31,7 @@ export function JobsTab() {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const { data: jobs, isLoading } = useQuery({
-    queryKey: ['jobs', statusFilter],
+    queryKey: QUERY_KEYS.jobs.list(statusFilter === 'all' ? undefined : statusFilter),
     queryFn: () =>
       listJobs(statusFilter === 'all' ? undefined : { status: statusFilter }),
     refetchInterval: 5_000,

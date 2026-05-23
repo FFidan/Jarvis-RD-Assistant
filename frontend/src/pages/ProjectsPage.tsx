@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useLocation } from 'react-router-dom';
 import { FolderKanban } from 'lucide-react';
 import { fetchProjects } from '@/lib/api';
@@ -13,7 +14,7 @@ export function ProjectsPage() {
   const location = useLocation();
 
   const { data: projects = [], isLoading, isError } = useQuery({
-    queryKey: ['projects'],
+    queryKey: QUERY_KEYS.projects.list(),
     queryFn: () => fetchProjects(),
   });
 

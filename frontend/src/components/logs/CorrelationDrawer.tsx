@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import {
   Sheet,
   SheetContent,
@@ -21,7 +22,7 @@ export function CorrelationDrawer({
   onOpenChange,
 }: CorrelationDrawerProps) {
   const { data: events, isLoading } = useQuery({
-    queryKey: ['logs', 'correlation', correlationId],
+    queryKey: QUERY_KEYS.logs.correlation(correlationId!),
     queryFn: () => getCorrelation(correlationId!),
     enabled: !!correlationId && open,
   });

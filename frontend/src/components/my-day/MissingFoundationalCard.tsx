@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Loader2, Plus } from 'lucide-react';
 import {
   fetchAndProcessFoundationalPaper,
@@ -14,7 +15,7 @@ export function MissingFoundationalCard() {
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
 
   const { data = [], isLoading, isError } = useQuery({
-    queryKey: ['analytics', 'missing-foundational'],
+    queryKey: QUERY_KEYS.analytics.missingFoundational(),
     queryFn: fetchMissingFoundationalPapers,
   });
 
@@ -29,7 +30,7 @@ export function MissingFoundationalCard() {
           status: 'queued',
         });
       }
-      queryClient.invalidateQueries({ queryKey: ['analytics', 'missing-foundational'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.analytics.missingFoundational() });
     },
   });
 

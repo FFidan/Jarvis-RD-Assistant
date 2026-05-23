@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { queryClient } from '@/lib/query-client';
 import * as sseReader from '@/lib/sse-reader';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 // --- Module mocks (hoisted before any imports) ---
 
@@ -147,8 +148,8 @@ describe('JobStore', () => {
 
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['zotero-linkage', 77] });
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['paper-detail', 77] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.zotero.linkage(77) });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.detail(77) });
     },
   );
 
@@ -177,8 +178,8 @@ describe('JobStore', () => {
 
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feed-counts'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.feedAll() });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.feed.counts() });
       // Must NOT invalidate the dead key
       const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
       expect(keys).not.toContain('zotero-library');
@@ -208,9 +209,9 @@ describe('JobStore', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feed-counts'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['action-items-unprocessed'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.feedAll() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.feed.counts() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.actionItems.unprocessed() });
     // Must NOT invalidate dead key
     const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
     expect(keys).not.toContain('papers');
@@ -239,7 +240,7 @@ describe('JobStore', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.feedAll() });
     const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
     expect(keys).not.toContain('papers');
   });
@@ -295,8 +296,8 @@ describe('JobStore', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pulse-today'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pulse-stats'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.pulse.today() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.pulse.statsAll() });
     const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
     expect(keys).not.toContain('pulse-history');
   });
@@ -324,8 +325,8 @@ describe('JobStore', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['contradictions', 77, 'verified'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['paper-detail', 77] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.contradictions.verified(77) });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.detail(77) });
   });
 
   it('subscribe: running + [DONE] reconciles and retries external Zotero jobs', async () => {
@@ -799,8 +800,8 @@ describe('JobStore', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     // Must invalidate the real feed keys used by FeedView and ResearchFeedPage
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feed-counts'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.feedAll() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.feed.counts() });
     // Must NOT invalidate the old stale key
     const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
     expect(keys).not.toContain('feed');

@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchMyDay } from '@/lib/api';
 import type { MyDayResponse } from '@/types';
 import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
@@ -17,7 +18,7 @@ export function ProjectsSection() {
   const navigate = useNavigate();
 
   const { data, isError } = useQuery<MyDayResponse>({
-    queryKey: ['my-day'],
+    queryKey: QUERY_KEYS.myDay.today(),
     queryFn: fetchMyDay,
     refetchInterval: 60_000,
   });

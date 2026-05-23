@@ -18,6 +18,7 @@ import {
   sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchSources } from '@/lib/api';
 import { SourceSection, SOURCE_DESCRIPTIONS } from './SourceSection';
 import { SourcesList } from './SourcesList';
@@ -29,7 +30,7 @@ interface SourceDetailPaneProps {
 
 export function SourceDetailPane({ sourceType }: SourceDetailPaneProps) {
   const { data: sources = [], isLoading } = useQuery<SourceConfig[]>({
-    queryKey: ['sources'],
+    queryKey: QUERY_KEYS.sources.list(),
     queryFn: fetchSources,
   });
 

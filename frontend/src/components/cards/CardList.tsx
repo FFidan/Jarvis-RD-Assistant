@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2, CreditCard } from 'lucide-react';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchCards, deleteCard } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -25,16 +26,16 @@ export function CardList({ deckId }: CardListProps) {
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
   const { data: cards = [], isLoading } = useQuery({
-    queryKey: ['cards', deckId],
+    queryKey: QUERY_KEYS.cards.byDeck(deckId),
     queryFn: () => fetchCards(deckId),
   });
 
   const delMut = useMutation({
     mutationFn: (id: number) => deleteCard(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['cards', deckId] });
-      queryClient.invalidateQueries({ queryKey: ['decks'] });
-      queryClient.invalidateQueries({ queryKey: ['card-stats'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.byDeck(deckId) });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.decks.list() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.stats() });
       setDeleteId(null);
     },
   });

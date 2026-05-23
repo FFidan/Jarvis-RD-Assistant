@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import {
   fetchExtractionTemplates,
   createExtractionTemplate,
@@ -55,14 +56,14 @@ export function ExtractionTemplateSection() {
   const [editFields, setEditFields] = useState('');
 
   const { data: templates = [], isLoading } = useQuery({
-    queryKey: ['extraction-templates'],
+    queryKey: QUERY_KEYS.extraction.templates(),
     queryFn: fetchExtractionTemplates,
   });
 
   const createMut = useMutation({
     mutationFn: (data: Partial<ExtractionTemplate>) => createExtractionTemplate(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['extraction-templates'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.extraction.templates() });
       setShowAdd(false);
       setAddForm({ name: '', description: '', fields: '' });
     },
@@ -72,7 +73,7 @@ export function ExtractionTemplateSection() {
     mutationFn: ({ id, data }: { id: number; data: Partial<ExtractionTemplate> }) =>
       updateExtractionTemplate(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['extraction-templates'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.extraction.templates() });
       setEditTemplate(null);
     },
   });
@@ -80,7 +81,7 @@ export function ExtractionTemplateSection() {
   const deleteMut = useMutation({
     mutationFn: (id: number) => deleteExtractionTemplate(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['extraction-templates'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.extraction.templates() });
     },
   });
 

@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Link } from 'react-router-dom';
 import {
   CheckCircle2, Circle, ArrowRight, X,
@@ -36,7 +37,7 @@ function BatchButton<T>({
   const mutation = useMutation({
     mutationFn,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['dashboard-metrics'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboard.metrics() });
     },
   });
 
@@ -89,7 +90,7 @@ function BatchButton<T>({
 
 export function HomePage() {
   const { data: metrics, isLoading } = useQuery({
-    queryKey: ['dashboard-metrics'],
+    queryKey: QUERY_KEYS.dashboard.metrics(),
     queryFn: fetchDashboardMetrics,
     refetchInterval: 60_000,
   });

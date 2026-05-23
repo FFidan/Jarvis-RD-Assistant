@@ -1,5 +1,6 @@
 import { useState, useMemo, Fragment } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { listEvents, getLogsSources } from '@/lib/logs';
 import { EventDetail } from './EventDetail';
 import { CorrelationGroup } from './CorrelationGroup';
@@ -96,7 +97,7 @@ export function EventsTab() {
   }
 
   const { data: sources } = useQuery({
-    queryKey: ['logs', 'sources'],
+    queryKey: QUERY_KEYS.logs.sources(),
     queryFn: getLogsSources,
     staleTime: 60_000,
   });
@@ -108,7 +109,7 @@ export function EventsTab() {
     isFetchingNextPage,
     isLoading,
   } = useInfiniteQuery({
-    queryKey: ['logs', 'events', levelFilter, categoryFilter, sourceFilter, since, until, query],
+    queryKey: QUERY_KEYS.logs.events(levelFilter, categoryFilter, sourceFilter, since, until, query),
     queryFn: ({ pageParam }) =>
       listEvents({
         level: levelFilter || undefined,

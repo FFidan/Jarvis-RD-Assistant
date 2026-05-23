@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { submitFeedback, clearFeedback } from '@/lib/api';
@@ -61,7 +62,7 @@ export function FeedbackButtons({
     mutationFn: () => clearFeedback(paperId, source),
     onSuccess: () => {
       setLastSignal(null);
-      void queryClient.invalidateQueries({ queryKey: ['recent-feedback', paperId] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papersBrief.recentFeedback(paperId) });
       onSuccess?.();
     },
     onError: (err) =>

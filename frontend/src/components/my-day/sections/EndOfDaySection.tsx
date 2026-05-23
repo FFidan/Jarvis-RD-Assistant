@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import {
@@ -32,13 +33,13 @@ export function EndOfDaySection() {
   const hasInitialized = useRef(false);
 
   const { data: journalEntry, error: loadQueryError } = useQuery({
-    queryKey: ['journalEntry', today],
+    queryKey: QUERY_KEYS.journal.entry(today),
     queryFn: ({ signal }) => getJournalEntry(today, { signal }),
   });
 
   // Day signals for prefill placeholders (mechanical, not generative).
   const { data: myDay } = useQuery<MyDayResponse>({
-    queryKey: ['my-day'],
+    queryKey: QUERY_KEYS.myDay.today(),
     queryFn: fetchMyDay,
   });
 

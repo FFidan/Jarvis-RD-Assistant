@@ -15,6 +15,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getFirstRunStatus, saveSetupMode } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -29,7 +30,7 @@ export function AccessModeSection() {
   const [pendingMode, setPendingMode] = useState<'single' | 'multi' | null>(null);
 
   const { data: status, isLoading } = useQuery({
-    queryKey: ['first-run-status'],
+    queryKey: QUERY_KEYS.setup.firstRun(),
     queryFn: getFirstRunStatus,
     staleTime: 60_000,
   });

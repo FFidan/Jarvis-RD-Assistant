@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { errorMessage } from '@/lib/errors';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
@@ -131,7 +132,7 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, list
   const selectedIds = useBulkSelection((s) => s.selectedIds);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['papers-feed', surface, filter, scope, limit, offset, sourceTypes ?? null],
+    queryKey: QUERY_KEYS.papers.feed(surface, filter ?? '', scope, limit, offset, (sourceTypes ?? null) as string[] | null),
     // fetchFeed accepts SurfaceView string
     queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes }),
   });
@@ -150,8 +151,8 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, list
   }, [data?.papers, listFilter]);
 
   const invalidateFeed = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-    void queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+    void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+    void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
   }, [queryClient]);
 
   // --- Lifecycle mutations (9 mutations, all with NI-3 onError) ---

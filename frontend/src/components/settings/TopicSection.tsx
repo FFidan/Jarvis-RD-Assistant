@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import {
   fetchTopics,
   createTopic,
@@ -42,23 +43,23 @@ export function TopicSection() {
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 
   const { data: topics = [], isLoading } = useQuery({
-    queryKey: ['topics'],
+    queryKey: QUERY_KEYS.topics.list(),
     queryFn: fetchTopics,
   });
 
   const { data: subscriptions = [] } = useQuery({
-    queryKey: ['topic-subscriptions'],
+    queryKey: QUERY_KEYS.topics.subscriptions(),
     queryFn: fetchMySubscriptions,
   });
 
   const subscribeMut = useMutation({
     mutationFn: (topicId: number) => subscribeToTopic(topicId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['topic-subscriptions'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.subscriptions() }),
   });
 
   const unsubscribeMut = useMutation({
     mutationFn: (topicId: number) => unsubscribeFromTopic(topicId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['topic-subscriptions'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.subscriptions() }),
   });
 
   const handleSubscriptionToggle = (topic: Topic, checked: boolean) => {
@@ -72,7 +73,7 @@ export function TopicSection() {
   const createMut = useMutation({
     mutationFn: (data: Partial<Topic>) => createTopic(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['topics'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.list() });
       setShowAdd(false);
       setAddForm({ name: '', query_terms: '', category: '', description: '' });
     },
@@ -81,7 +82,7 @@ export function TopicSection() {
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<Topic> }) => updateTopic(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['topics'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.list() });
       setEditingId(null);
     },
   });
@@ -89,7 +90,7 @@ export function TopicSection() {
   const deleteMut = useMutation({
     mutationFn: (id: number) => deleteTopic(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['topics'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.list() });
     },
   });
 

@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
@@ -69,7 +70,7 @@ export function HeroTask() {
   const doneMutation = useMutation({
     mutationFn: (taskId: number) => updateTask(taskId, { status: 'done' }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['my-day'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() });
       toast.success('Task marked done');
     },
     onError: (err: Error) => {
@@ -79,7 +80,7 @@ export function HeroTask() {
 
   const logMutation = useMutation({
     mutationFn: logFocusSession,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['my-day'] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() }),
   });
 
   const isActive = phase !== 'idle' && attachedItem !== null;

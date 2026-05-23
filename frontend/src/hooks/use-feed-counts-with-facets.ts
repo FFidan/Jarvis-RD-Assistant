@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchFeedCountsWithFacets } from '@/lib/api';
 import type { FeedCountsWithFacets } from '@/types';
 
@@ -16,7 +17,7 @@ import type { FeedCountsWithFacets } from '@/types';
  */
 export function useFeedCountsWithFacets(scope: 'library' | 'corpus' = 'library') {
   return useQuery<FeedCountsWithFacets>({
-    queryKey: ['feed-counts', scope],
+    queryKey: QUERY_KEYS.feed.counts(scope),
     queryFn: () => fetchFeedCountsWithFacets(scope),
     staleTime: 5_000,
   });

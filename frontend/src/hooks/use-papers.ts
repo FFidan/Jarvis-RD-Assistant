@@ -29,7 +29,7 @@ export function usePapersFeed(params: {
 }) {
   const { view, filter = null, scope, limit = 30, offset = 0, sourceTypes = null } = params;
   return useQuery({
-    queryKey: QUERY_KEYS.papers.list(view ?? null, filter, scope ?? null, limit, offset, sourceTypes),
+    queryKey: QUERY_KEYS.papers.feed(view ?? "", filter ?? "", scope ?? "", limit, offset, sourceTypes ? [sourceTypes] : null),
     queryFn: () => fetchFeed({ view, filter, scope, limit, offset, sourceTypes: sourceTypes ?? undefined }),
   });
 }

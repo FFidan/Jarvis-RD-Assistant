@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchMyDay, fetchPulseToday, fetchFeedPapers } from '@/lib/api';
 import type { MyDayResponse, PulseDeck } from '@/types';
 
@@ -60,18 +61,18 @@ export function DateMasthead() {
   });
 
   const { data: myDay } = useQuery<MyDayResponse>({
-    queryKey: ['my-day'],
+    queryKey: QUERY_KEYS.myDay.today(),
     queryFn: fetchMyDay,
     refetchInterval: 60_000,
   });
 
   const { data: pulseDeck } = useQuery<PulseDeck | null>({
-    queryKey: ['pulse-today'],
+    queryKey: QUERY_KEYS.pulse.today(),
     queryFn: fetchPulseToday,
   });
 
   const { data: unprocessedFeed } = useQuery({
-    queryKey: ['action-items-unprocessed'],
+    queryKey: QUERY_KEYS.actionItems.unprocessed(),
     queryFn: () => fetchFeedPapers({ statuses: 'new', limit: 10 }),
     refetchInterval: 60_000,
   });

@@ -15,6 +15,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getTelegramBotToken, saveTelegramBotToken } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,7 +31,7 @@ export function TelegramBotTokenSection() {
   const [formatError, setFormatError] = useState<string | null>(null);
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['telegram-bot-token-status'],
+    queryKey: QUERY_KEYS.pairing.botTokenStatus(),
     queryFn: getTelegramBotToken,
     staleTime: 60_000,
   });
@@ -38,7 +39,7 @@ export function TelegramBotTokenSection() {
   const saveMut = useMutation({
     mutationFn: saveTelegramBotToken,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['telegram-bot-token-status'] });
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.pairing.botTokenStatus() });
       setToken('');
     },
   });

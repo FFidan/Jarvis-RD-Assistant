@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchConfig, setProviderKey, testProvider } from '@/lib/api';
 import type { CloudProvider } from '@/lib/api';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -67,7 +68,7 @@ export function ProvidersSection() {
   const queryClient = useQueryClient();
 
   const { data: configs = [], isLoading } = useQuery({
-    queryKey: ['config'],
+    queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
 
@@ -80,7 +81,7 @@ export function ProvidersSection() {
     mutationFn: ({ provider, value }: { provider: CloudProvider; value: string }) =>
       setProviderKey(provider, value),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['config'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
     },
     onError: (err: Error) => {
       toast.error(err.message ?? 'Failed to save key');

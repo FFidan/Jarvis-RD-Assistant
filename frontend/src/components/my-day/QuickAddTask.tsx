@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { createQuickTask, fetchProjects } from '@/lib/api';
@@ -11,7 +12,7 @@ export function QuickAddTask() {
   const queryClient = useQueryClient();
 
   const { data: projects } = useQuery({
-    queryKey: ['projects', 'active'],
+    queryKey: QUERY_KEYS.projects.activeOnly(),
     queryFn: () => fetchProjects('active'),
   });
 
@@ -20,7 +21,7 @@ export function QuickAddTask() {
     onSuccess: () => {
       setTitle('');
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ['my-day'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() });
     },
     onError: () => setError('Failed to add task. Please try again.'),
   });

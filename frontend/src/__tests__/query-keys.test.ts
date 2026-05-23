@@ -38,8 +38,12 @@ describe('QUERY_KEYS registry', () => {
       expect(QUERY_KEYS.pulse.stats(7)).toEqual(['pulse-stats', 7]);
     });
 
-    it('debug() returns correct tuple', () => {
+    it('debug() returns bare key', () => {
       expect(QUERY_KEYS.pulse.debug()).toEqual(['pulse-debug']);
+    });
+
+    it('statsAll() returns bare prefix for invalidation', () => {
+      expect(QUERY_KEYS.pulse.statsAll()).toEqual(['pulse-stats']);
     });
 
     it('explain(cardId) returns correct tuple', () => {

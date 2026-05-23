@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Plus, FolderKanban, Search } from 'lucide-react';
 import type { Project } from '@/types';
 import { createProject } from '@/lib/api';
@@ -42,7 +43,7 @@ export function ProjectList({ projects, selectedId, onSelect }: ProjectListProps
   const createMut = useMutation({
     mutationFn: (data: { name: string; description?: string }) => createProject(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() });
       setShowCreate(false);
       setNewName('');
       setNewDesc('');

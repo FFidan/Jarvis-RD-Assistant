@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchPulseDebug } from '@/lib/api';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
@@ -13,7 +14,7 @@ import type { PulseDebugInfo } from '@/types';
 export function DiagnosticsPanel() {
   const [open, setOpen] = useState(false);
   const { data, isLoading, isError, refetch } = useQuery<PulseDebugInfo>({
-    queryKey: ['pulse-debug'],
+    queryKey: QUERY_KEYS.pulse.debug(),
     queryFn: fetchPulseDebug,
     enabled: open,
     staleTime: 30_000,

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,7 +39,7 @@ export function SetupWizard() {
   const markCompletedMut = useMutation({
     mutationFn: markSetupCompleted,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['setup-status'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.status() });
     },
     onError: (err: Error) => {
       console.error('Failed to mark setup completed', err);
@@ -149,8 +150,8 @@ function FirstTopicStep({ onBack, onNext }: { onBack: () => void; onNext: () => 
   const createMut = useMutation({
     mutationFn: (data: Partial<Topic>) => createTopic(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['topics'] });
-      queryClient.invalidateQueries({ queryKey: ['setup-status'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.topics.list() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.status() });
       setAdded(true);
       setName('');
       setDescription('');
@@ -238,7 +239,7 @@ function AutomationStep({ onBack, onNext }: { onBack: () => void; onNext: () => 
       await setConfig('pulse.enabled', pulseEnabled);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['config'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
       setSaved(true);
     },
     onError: (err: Error) => {
@@ -338,7 +339,7 @@ function DoneStep() {
   const markMut = useMutation({
     mutationFn: markSetupCompleted,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['setup-status'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.status() });
       navigate('/');
     },
     onError: (err: Error) => {

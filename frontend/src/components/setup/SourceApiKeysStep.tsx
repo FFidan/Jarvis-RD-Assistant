@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { ArrowRight, Pencil, Check, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,7 +38,7 @@ function SourceKeyRow({ source }: { source: SourceConfig }) {
     mutationFn: () =>
       updateSource(source.id, { config: { ...(source.config ?? {}), api_key: apiKey } }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sources'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.sources.list() });
       setEditing(false);
       setApiKey('');
     },
@@ -101,7 +102,7 @@ interface SourceApiKeysStepProps {
 
 export function SourceApiKeysStep({ onNext, onBack }: SourceApiKeysStepProps) {
   const { data: sources, isLoading } = useQuery({
-    queryKey: ['sources'],
+    queryKey: QUERY_KEYS.sources.list(),
     queryFn: fetchSources,
   });
 

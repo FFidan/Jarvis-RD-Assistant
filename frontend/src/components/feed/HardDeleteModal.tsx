@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import {
   AlertDialog,
@@ -92,8 +93,8 @@ function HardDeleteModalSingle({
   const mutation = useMutation({
     mutationFn: () => hardDeletePaper(paperId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-      queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
       toast.success('Paper deleted');
       onOpenChange(false);
       onDeleted?.();

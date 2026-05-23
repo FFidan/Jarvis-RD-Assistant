@@ -175,6 +175,9 @@ export const QUERY_KEYS = {
     today: () => ["pulse-today"] as const,
     /** Per-day pulse stats — `days` is encoded so per-window caches don't collide. */
     stats: (days: number) => ["pulse-stats", days] as const,
+    /** Bare prefix for `invalidateQueries` — matches all pulse-stats cache entries. */
+    statsAll: () => ["pulse-stats"] as const,
+    /** Pulse debug-only telemetry payload (admin diagnostics). */
     debug: () => ["pulse-debug"] as const,
     explain: (cardId: number) => ["pulse-explain", cardId] as const,
   },

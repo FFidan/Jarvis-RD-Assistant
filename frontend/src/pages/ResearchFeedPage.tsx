@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import {
   ApiError,
   searchPreview,
@@ -177,7 +178,7 @@ export function ResearchFeedPage() {
   const queryClient = useQueryClient();
 
   const { data: allSources } = useQuery<SourceConfig[]>({
-    queryKey: ['sources'],
+    queryKey: QUERY_KEYS.sources.list(),
     queryFn: fetchSources,
   });
 
@@ -240,8 +241,8 @@ export function ResearchFeedPage() {
           };
         }),
       );
-      void queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-      void queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
       toast.success(`Saved ${data.length} paper(s) to your library.`);
     },
     onError: (error) => {
@@ -665,8 +666,8 @@ export function ResearchFeedPage() {
                       Or upload a local PDF:
                     </p>
                     <PdfUploadZone onComplete={() => {
-                      void queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-                      void queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+                      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+                      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
                     }} />
                   </div>
                 </>

@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchPapersBrief } from '@/lib/api';
 import { PaperSearchSelect } from '@/components/shared/PaperSearchSelect';
 import type { PaperBrief } from '@/types';
@@ -19,7 +20,7 @@ export function CitationPaperSelector({
 
   // Keep a cache of papers for resolving ids back to PaperBrief objects
   const { data: allPapers = [] } = useQuery({
-    queryKey: ['papers-brief'],
+    queryKey: QUERY_KEYS.papersBrief.list(),
     queryFn: fetchPapersBrief,
   });
 

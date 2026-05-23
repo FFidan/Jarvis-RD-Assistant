@@ -13,6 +13,7 @@ import {
   sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchSources, reorderSources } from '@/lib/api';
 import type { SourceConfig } from '@/types';
 import { SourceSection } from './SourceSection';
@@ -20,7 +21,7 @@ import { SourceSection } from './SourceSection';
 export function SourcesList() {
   const qc = useQueryClient();
   const { data: sources = [], isLoading } = useQuery({
-    queryKey: ['sources'],
+    queryKey: QUERY_KEYS.sources.list(),
     queryFn: fetchSources,
   });
 
@@ -32,7 +33,7 @@ export function SourcesList() {
   const reorder = useMutation({
     mutationFn: reorderSources,
     onMutate: async (newTypes: string[]) => {
-      await qc.cancelQueries({ queryKey: ['sources'] });
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.sources.list() });
       const previous = qc.getQueryData<SourceConfig[]>(['sources']);
       if (previous) {
         const byType = new Map(previous.map((s) => [s.source_type, s]));
@@ -47,7 +48,7 @@ export function SourcesList() {
       if (ctx?.previous) qc.setQueryData(['sources'], ctx.previous);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['sources'] });
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.sources.list() });
     },
   });
 

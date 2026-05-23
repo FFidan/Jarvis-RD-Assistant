@@ -11,6 +11,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
@@ -113,7 +114,7 @@ export function HealthDots({ compact = false, adminLink }: HealthDotsProps) {
   const [expanded, setExpanded] = useState(false);
 
   const { data, isError } = useQuery({
-    queryKey: ['stack-health'],
+    queryKey: QUERY_KEYS.stack.health(),
     queryFn: fetchStackHealth,
     refetchInterval: 30_000,
     // Don't throw on individual probe failures — fetchStackHealth never rejects

@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Brain, Flame } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,7 +20,7 @@ function formatLastReview(iso: string | null | undefined): string {
 
 export function LearningCardsSummary() {
   const { data, isLoading } = useQuery<RetentionStats>({
-    queryKey: ['retention-stats'],
+    queryKey: QUERY_KEYS.retention.stats(),
     queryFn: getStats,
     refetchInterval: 120_000,
   });

@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useState } from 'react';
 import { Trash2, FolderKanban } from 'lucide-react';
 import type { Project } from '@/types';
@@ -32,7 +33,7 @@ export function ProjectDetail({ project, onDeleted }: ProjectDetailProps) {
   const deleteMut = useMutation({
     mutationFn: () => deleteProject(project!.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() });
       setShowDelete(false);
       onDeleted();
     },

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { logFocusSession } from '@/lib/api';
 
@@ -10,7 +11,7 @@ export function PomodoroAutoLogger() {
 
   const logMutation = useMutation({
     mutationFn: logFocusSession,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-day'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() }),
   });
 
   // Recover wall-clock time after page refresh

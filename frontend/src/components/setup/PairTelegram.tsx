@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { createPairingCode, getPairingStatus, unpairTelegram } from '@/lib/api';
@@ -37,7 +38,7 @@ export function PairTelegram({ onPaired }: PairTelegramProps) {
 
   // Seed initial state from the server: if we're already paired, jump straight there.
   const initialStatus = useQuery({
-    queryKey: ['pairing-status-initial'],
+    queryKey: QUERY_KEYS.pairing.statusInitial(),
     queryFn: getPairingStatus,
     staleTime: 0,
     refetchOnWindowFocus: false,
@@ -87,7 +88,7 @@ export function PairTelegram({ onPaired }: PairTelegramProps) {
   // Poll the pairing status while in polling state.
   const polling = state.kind === 'polling';
   const statusQuery = useQuery({
-    queryKey: ['pairing-status'],
+    queryKey: QUERY_KEYS.pairing.status(),
     queryFn: getPairingStatus,
     refetchInterval: 3000,
     enabled: polling,
@@ -100,7 +101,7 @@ export function PairTelegram({ onPaired }: PairTelegramProps) {
       clearExpiryTimer();
       setState({ kind: 'paired', chatId: statusQuery.data.chat_id });
       onPairedRef.current?.();
-      queryClient.invalidateQueries({ queryKey: ['setup-status'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.status() });
     }
   }, [statusQuery.data, state.kind, clearExpiryTimer, queryClient]);
 
@@ -108,8 +109,8 @@ export function PairTelegram({ onPaired }: PairTelegramProps) {
     mutationFn: unpairTelegram,
     onSuccess: () => {
       setState({ kind: 'idle' });
-      queryClient.invalidateQueries({ queryKey: ['setup-status'] });
-      queryClient.invalidateQueries({ queryKey: ['pairing-status-initial'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.status() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pairing.statusInitial() });
     },
     onError: (err: Error) => {
       console.error('Failed to unpair Telegram', err);

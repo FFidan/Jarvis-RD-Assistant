@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { setNavigate } from '@/lib/navigate-bridge';
 import { AppShell } from '@/components/layout/AppShell';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -96,7 +97,7 @@ function PageFallback() {
 function SetupGate({ children }: { children: ReactNode }) {
   const location = useLocation();
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['setup-status'],
+    queryKey: QUERY_KEYS.setup.status(),
     queryFn: getSetupStatus,
     staleTime: 30_000,
     retry: false,
@@ -139,7 +140,7 @@ function NavigateBridgeRegistrar() {
 function FirstRunGate({ children }: { children: ReactNode }) {
   const location = useLocation();
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['first-run-status'],
+    queryKey: QUERY_KEYS.setup.firstRun(),
     queryFn: getFirstRunStatus,
     staleTime: 30_000,
     retry: false,

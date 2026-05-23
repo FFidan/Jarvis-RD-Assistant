@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { BookOpen, Clock, Flame, Target, TrendingUp } from 'lucide-react';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getStats } from '@/lib/api';
 import { MetricTile } from '@/components/MetricTile';
 import { Skeleton } from '@/components/ui/skeleton';
 
 export function StatsHeader() {
   const { data: stats, isLoading } = useQuery({
-    queryKey: ['card-stats'],
+    queryKey: QUERY_KEYS.cards.stats(),
     queryFn: getStats,
     refetchInterval: 30_000,
   });

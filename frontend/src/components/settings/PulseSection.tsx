@@ -1,4 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
+import { toast } from 'sonner';
 import {
   fetchConfig,
   setConfig,
@@ -31,7 +33,7 @@ interface FeedbackSummary {
 
 function FavoriteTopicsPanel() {
   const { data } = useQuery<FeedbackSummary>({
-    queryKey: ['feedback-summary'],
+    queryKey: QUERY_KEYS.pulseHealth.feedback(),
     queryFn: () => apiFetch<FeedbackSummary>('/api/analytics/feedback-summary'),
     staleTime: 5 * 60_000,
   });
@@ -71,7 +73,7 @@ export function PulseSection() {
     isLoading: configLoading,
     isError: configError,
   } = useQuery<ConfigEntry[]>({
-    queryKey: ['config'],
+    queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
   const safeConfigs = configs ?? EMPTY_CONFIGS;
@@ -81,13 +83,13 @@ export function PulseSection() {
     isLoading: statsLoading,
     isError: statsError,
   } = useQuery<PulseStats>({
-    queryKey: ['pulse-stats'],
+    queryKey: QUERY_KEYS.pulse.statsAll(),
     queryFn: () => fetchPulseStats(),
     refetchInterval: 60_000,
   });
 
   const { data: capabilities } = useQuery({
-    queryKey: ['system-capabilities'],
+    queryKey: QUERY_KEYS.config.systemCapabilities(),
     queryFn: getSystemCapabilities,
     staleTime: 5 * 60_000,
   });
@@ -97,7 +99,12 @@ export function PulseSection() {
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['config'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() }),
+    onError: (err: Error) => {
+      toast.error('Failed to update Pulse settings', {
+        description: err.message,
+      });
+    },
   });
 
   const settingsUnavailable = configLoading || configError || configs === undefined;

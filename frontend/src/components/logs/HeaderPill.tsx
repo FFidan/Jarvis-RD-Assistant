@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getSummary } from '@/lib/logs';
 import { AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -14,7 +15,7 @@ export function HeaderPill() {
   const isLogsPage = pathname.startsWith('/logs');
 
   const { data } = useQuery({
-    queryKey: ['logs', 'summary', 'app-only'],
+    queryKey: QUERY_KEYS.logs.summaryAppOnly(),
     // exclude_infra=1 so nginx rate-limit 503s (category=infra) don't inflate
     // the badge — those are self-inflicted infra noise, not application errors.
     queryFn: () => getSummary({ excludeInfra: true }),

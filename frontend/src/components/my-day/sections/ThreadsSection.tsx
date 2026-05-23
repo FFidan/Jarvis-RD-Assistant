@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { toast } from 'sonner';
 import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { GradientProgressBar } from '@/components/my-day/primitives/GradientProgressBar';
@@ -24,7 +25,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
   const resumeMutation = useMutation({
     mutationFn: () => resumeThread(thread.id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['my-day', 'threads'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.threads() });
       toast.success('Thread resumed');
     },
     onError: (err: Error) => toast.error(`Couldn't resume: ${err.message}`),
@@ -70,7 +71,7 @@ export function ThreadsSection() {
   const [anchor, setAnchor] = useState('');
 
   const { data, isError } = useQuery<Thread[]>({
-    queryKey: ['my-day', 'threads'],
+    queryKey: QUERY_KEYS.myDay.threads(),
     queryFn: fetchThreads,
     staleTime: 60_000,
   });
@@ -79,7 +80,7 @@ export function ThreadsSection() {
     mutationFn: () =>
       createThread({ title: title.trim(), anchor: anchor.trim() || null }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['my-day', 'threads'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.threads() });
       setTitle('');
       setAnchor('');
       setAdding(false);

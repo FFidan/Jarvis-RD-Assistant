@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getPulseSourceHealth, getPulseSourceHistory } from '@/lib/api';
 import type { SourceHealth, SourceRunRecord } from '@/types/index';
 import { ChevronDown, ChevronRight, CheckCircle, XCircle, Clock } from 'lucide-react';
@@ -121,13 +122,13 @@ function SourceTimeline({ records }: { records: SourceRunRecord[] }) {
 
 export function SourcesTab() {
   const { data: healthData, isLoading: healthLoading } = useQuery({
-    queryKey: ['pulse', 'source-health'],
+    queryKey: QUERY_KEYS.pulseHealth.sourceHealth(),
     queryFn: getPulseSourceHealth,
     refetchInterval: 30_000,
   });
 
   const { data: historyData, isLoading: historyLoading } = useQuery({
-    queryKey: ['pulse', 'source-history', 7],
+    queryKey: QUERY_KEYS.pulseHealth.sourceHistory(7),
     queryFn: () => getPulseSourceHistory(7),
     refetchInterval: 60_000,
   });

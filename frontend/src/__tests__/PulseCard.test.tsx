@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { PulseCard } from '@/components/pulse/PulseCard';
 import * as api from '@/lib/api';
 import type { PulseCardItem } from '@/types';
@@ -258,7 +259,7 @@ describe('PulseCard', () => {
       });
       // Must invalidate pulse-today (the live key used by the useQuery)
       const calledKeys = invalidateSpy.mock.calls.map((call) => call[0]);
-      expect(calledKeys).toContainEqual({ queryKey: ['pulse-today'] });
+      expect(calledKeys).toContainEqual({ queryKey: QUERY_KEYS.pulse.today() });
       // Must NOT invalidate the dead key pulse-deck
       expect(calledKeys).not.toContainEqual({ queryKey: ['pulse-deck'] });
     });
@@ -281,7 +282,7 @@ describe('PulseCard', () => {
         expect(vi.mocked(api.unsavePaper)).toHaveBeenCalledWith(42);
       });
       const calledKeys = invalidateSpy.mock.calls.map((call) => call[0]);
-      expect(calledKeys).toContainEqual({ queryKey: ['pulse-today'] });
+      expect(calledKeys).toContainEqual({ queryKey: QUERY_KEYS.pulse.today() });
     });
 
     it('trashAndReject removes card from pulse-today cache optimistically', async () => {

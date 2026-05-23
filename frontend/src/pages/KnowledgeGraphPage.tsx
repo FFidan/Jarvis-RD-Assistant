@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { errorMessage } from '@/lib/errors';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getKnowledgeGraph, batchExtractEntities } from '@/lib/api';
 import { CytoscapeGraph } from '@/components/graph/CytoscapeGraph';
 import { GraphControls, type LayoutType } from '@/components/graph/GraphControls';
@@ -38,14 +39,14 @@ export function KnowledgeGraphPage() {
     isError,
     error,
   } = useQuery({
-    queryKey: ['knowledge-graph', filterType, minPaperCount],
+    queryKey: QUERY_KEYS.knowledge.graph(filterType, minPaperCount),
     queryFn: () => getKnowledgeGraph(filterType, minPaperCount),
   });
 
   const extractMut = useMutation({
     mutationFn: batchExtractEntities,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['knowledge-graph'] });
+      queryClient.invalidateQueries({ queryKey: ['knowledge-graph'] }); // Note: bare prefix for invalidation — no registry factory for all knowledge-graph entries
     },
   });
 

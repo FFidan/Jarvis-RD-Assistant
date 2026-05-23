@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { CalendarDays, CheckCircle2, ListTodo, Pencil, Target } from 'lucide-react';
 import type { Project } from '@/types';
 import { fetchTasks, updateProject } from '@/lib/api';
@@ -27,15 +28,15 @@ export function OverviewTab({ project }: OverviewTabProps) {
   const queryClient = useQueryClient();
 
   const { data: tasks = [] } = useQuery({
-    queryKey: ['tasks', project.id],
+    queryKey: QUERY_KEYS.tasks.byProject(project.id),
     queryFn: () => fetchTasks(project.id),
   });
 
   const updateMut = useMutation({
     mutationFn: (status: string) => updateProject(project.id, { status } as Partial<Project>),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.detail(project.id) });
     },
   });
 
@@ -59,8 +60,8 @@ export function OverviewTab({ project }: OverviewTabProps) {
 
   function updateDeadline(deadline: string | null) {
     updateProject(project.id, { deadline });
-    queryClient.invalidateQueries({ queryKey: ['projects'] });
-    queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.list() });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.detail(project.id) });
   }
 
   return (

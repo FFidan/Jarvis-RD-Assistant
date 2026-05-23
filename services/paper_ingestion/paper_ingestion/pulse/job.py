@@ -220,59 +220,11 @@ async def run_pulse(
         await ctx.update_progress(0.85, "Stage 2 LLM scoring")
         if await ctx.is_cancelled():
             raise asyncio.CancelledError()
-    stage2_out: list[ScoredCandidate]
-    if not stage1_out:
-        stage2_out = []
-    else:
-        try:
-            _stage2_total = len(stage1_out)
-
-            async def _stage2_with_progress() -> list[ScoredCandidate]:
-                """Score all candidates in one call; inner stage2 handles concurrency."""
-                services = get_services()
-                results = await stage2_llm_rerank(
-                    stage1_out,
-                    profile,
-                    verifier=services.verifier,
-                    openai_client=services.openai_client,
-                )
-                if ctx:
-                    await ctx.update_progress(
-                        0.95,
-                        f"Stage 2 LLM scoring ({_stage2_total}/{_stage2_total})",
-                    )
-                return results
-
-            stage2_out = await asyncio.wait_for(
-                _stage2_with_progress(),
-                timeout=_stage2_timeout(),
-            )
-            # Count actual LLM calls: candidates where llm_relevance was set
-            stats["llm_calls"] = sum(1 for sc in stage2_out if sc.llm_relevance is not None)
-        except Stage2ClientUnavailableError:
-            # W3-DRY-3: explicit sentinel — openai_client was None at stage2 entry
-            degraded_reason = "stage2 skipped: openai_client unavailable"
-            stats["degraded_reason"] = degraded_reason
-            logger.warning(
-                "pulse.stage2 skipped — openai_client is None; deck degraded to stage1 results"
-            )
-            stage2_out = _fallback_stage2(stage1_out)
-        except TimeoutError:
-            # B4: LLM timeout is degraded (deck still produced), not fatal
-            _timeout_s = _stage2_timeout()
-            degraded_reason = (
-                f"LLM scoring timed out at {_timeout_s}s; deck used embedding-only fallback."
-            )
-            stats["degraded_reason"] = degraded_reason
-            logger.warning("pulse.stage2 timed out — falling back to stage1")
-            stage2_out = _fallback_stage2(stage1_out)
-        except Exception as exc:  # broad: stage2 calls LLM over HTTP; fallback keeps deck viable
-            # B4: stage2 exception with fallback is degraded (deck still produced)
-            degraded_reason = f"stage2 error (embedding-only fallback used): {exc}"
-            stats["degraded_reason"] = degraded_reason
-            logger.exception("pulse.stage2 failed — falling back to stage1")
-            stage2_out = _fallback_stage2(stage1_out)
+    stage2_out, degraded_reason, llm_calls = await _run_stage2(stage1_out, profile, ctx)
     stats["stage2_scored"] = len(stage2_out)
+    stats["llm_calls"] = llm_calls
+    if degraded_reason:
+        stats["degraded_reason"] = degraded_reason
     logger.info("pulse.stage2", extra={"scored": len(stage2_out)})
 
     # --- 5. stage 3b/4 optional citation + classifier signals ------------
@@ -280,72 +232,12 @@ async def run_pulse(
         await ctx.update_progress(0.88, "Adding citation and classifier signals")
         if await ctx.is_cancelled():
             raise asyncio.CancelledError()
-    classifier_meta: dict[str, Any] = {}
-    try:
-        wants_citation = any(
-            profile.weights.get(name, 0.0) > 0
-            for name in ("citation_pagerank", "citation_count", "citation_adamic_adar")
-        )
-        citation_by_external_id = (
-            await compute_citation_signals(
-                db_pool,
-                [sc.paper.external_id for sc in stage2_out],
-                user_id=user_id,
-            )
-            if wants_citation
-            else {}
-        )
-        enriched: list[ScoredCandidate] = []
-        for sc in stage2_out:
-            new_signals = dict(sc.signals)
-            new_signals.update(citation_by_external_id.get(sc.paper.external_id, {}))
-            enriched.append(
-                ScoredCandidate(
-                    paper=sc.paper,
-                    signals=new_signals,
-                    llm_relevance=sc.llm_relevance,
-                    llm_novelty=sc.llm_novelty,
-                    reasoning=sc.reasoning,
-                    final_score=sc.final_score,
-                    reasoning_verified=sc.reasoning_verified,
-                    reasoning_confidence=sc.reasoning_confidence,
-                )
-            )
-        wants_classifier = profile.weights.get("classifier", 0.0) > 0
-        if wants_classifier:
-            classifier_values, classifier_meta = await classifier_scores(
-                db_pool,
-                [sc.signals for sc in enriched],
-                user_id=user_id,
-            )
-        else:
-            classifier_values = [0.0 for _ in enriched]
-            classifier_meta = {
-                "available": False,
-                "feature_names": FEATURE_NAMES,
-                "degradation_reason": "classifier weight is disabled",
-            }
-        stage2_out = [
-            ScoredCandidate(
-                paper=sc.paper,
-                signals={**sc.signals, "classifier": classifier_values[idx]},
-                llm_relevance=sc.llm_relevance,
-                llm_novelty=sc.llm_novelty,
-                reasoning=sc.reasoning,
-                final_score=sc.final_score,
-                reasoning_verified=sc.reasoning_verified,
-                reasoning_confidence=sc.reasoning_confidence,
-            )
-            for idx, sc in enumerate(enriched)
-        ]
-    except Exception as exc:  # broad: optional Phase 2 scoring must degrade cleanly
-        degraded_reason = degraded_reason or f"optional Pulse Phase 2 signals unavailable: {exc}"
+    stage2_out, classifier_meta, opt_degraded = await _run_optional_signals(
+        db_pool, stage2_out, profile, user_id
+    )
+    if opt_degraded:
+        degraded_reason = degraded_reason or opt_degraded
         stats["degraded_reason"] = degraded_reason
-        logger.warning(
-            "citation_signals failed; pulse degraded",
-            exc_info=exc,
-            extra={"stage": "citation_signals"},
-        )
     stats["classifier"] = classifier_meta or {
         "available": False,
         "feature_names": FEATURE_NAMES,
@@ -383,6 +275,174 @@ async def run_pulse(
     stats["degraded_reason"] = degraded_reason
 
     # --- 8. persist (upsert papers + persist deck in one transaction) ---
+    card_count = await _persist_pipeline(db_pool, deck, now, stats, degraded_reason, user_id)
+    stats["card_count"] = card_count
+
+    # --- 9. emit classifier training enqueue + verification telemetry ---
+    await _emit_post_run_telemetry(db_pool, ctx, stage2_out, stats, user_id)
+
+    logger.info("pulse.complete", extra=stats)
+    return stats
+
+
+async def _run_stage2(
+    stage1_out: list[ScoredCandidate],
+    profile: Any,
+    ctx: Any,
+) -> tuple[list[ScoredCandidate], str | None, int]:
+    """Stage 4 — LLM rerank with timeout + fallback.
+
+    Returns (stage2_out, degraded_reason, llm_calls).
+    """
+    if not stage1_out:
+        return [], None, 0
+
+    degraded_reason: str | None = None
+    stage2_out: list[ScoredCandidate]
+    llm_calls = 0
+
+    try:
+        _stage2_total = len(stage1_out)
+
+        async def _stage2_with_progress() -> list[ScoredCandidate]:
+            """Score all candidates in one call; inner stage2 handles concurrency."""
+            services = get_services()
+            results = await stage2_llm_rerank(
+                stage1_out,
+                profile,
+                verifier=services.verifier,
+                openai_client=services.openai_client,
+            )
+            if ctx:
+                await ctx.update_progress(
+                    0.95,
+                    f"Stage 2 LLM scoring ({_stage2_total}/{_stage2_total})",
+                )
+            return results
+
+        stage2_out = await asyncio.wait_for(
+            _stage2_with_progress(),
+            timeout=_stage2_timeout(),
+        )
+        # Count actual LLM calls: candidates where llm_relevance was set
+        llm_calls = sum(1 for sc in stage2_out if sc.llm_relevance is not None)
+    except Stage2ClientUnavailableError:
+        # W3-DRY-3: explicit sentinel — openai_client was None at stage2 entry
+        degraded_reason = "stage2 skipped: openai_client unavailable"
+        logger.warning(
+            "pulse.stage2 skipped — openai_client is None; deck degraded to stage1 results"
+        )
+        stage2_out = _fallback_stage2(stage1_out)
+    except TimeoutError:
+        # B4: LLM timeout is degraded (deck still produced), not fatal
+        _timeout_s = _stage2_timeout()
+        degraded_reason = (
+            f"LLM scoring timed out at {_timeout_s}s; deck used embedding-only fallback."
+        )
+        logger.warning("pulse.stage2 timed out — falling back to stage1")
+        stage2_out = _fallback_stage2(stage1_out)
+    except Exception as exc:  # broad: stage2 calls LLM over HTTP; fallback keeps deck viable
+        # B4: stage2 exception with fallback is degraded (deck still produced)
+        degraded_reason = f"stage2 error (embedding-only fallback used): {exc}"
+        logger.exception("pulse.stage2 failed — falling back to stage1")
+        stage2_out = _fallback_stage2(stage1_out)
+
+    return stage2_out, degraded_reason, llm_calls
+
+
+def _augment_signals(
+    candidates: list[ScoredCandidate],
+    extra_by_id: dict[str, dict[str, Any]],
+) -> list[ScoredCandidate]:
+    """Merge per-paper extra signals into candidate signal dicts. Returns a new list."""
+    return [
+        ScoredCandidate(
+            paper=sc.paper,
+            signals={**sc.signals, **extra_by_id.get(sc.paper.external_id, {})},
+            llm_relevance=sc.llm_relevance,
+            llm_novelty=sc.llm_novelty,
+            reasoning=sc.reasoning,
+            final_score=sc.final_score,
+            reasoning_verified=sc.reasoning_verified,
+            reasoning_confidence=sc.reasoning_confidence,
+        )
+        for sc in candidates
+    ]
+
+
+async def _run_optional_signals(
+    db_pool: Any,
+    stage2_out: list[ScoredCandidate],
+    profile: Any,
+    user_id: int | None,
+) -> tuple[list[ScoredCandidate], dict, str | None]:
+    """Stage 3b/4 — citation signals + classifier scores.
+
+    Returns (updated_candidates, classifier_meta, degraded_reason).
+    """
+    classifier_meta: dict[str, Any] = {}
+    degraded_reason: str | None = None
+
+    try:
+        wants_citation = any(
+            profile.weights.get(name, 0.0) > 0
+            for name in ("citation_pagerank", "citation_count", "citation_adamic_adar")
+        )
+        citation_by_external_id = (
+            await compute_citation_signals(
+                db_pool,
+                [sc.paper.external_id for sc in stage2_out],
+                user_id=user_id,
+            )
+            if wants_citation
+            else {}
+        )
+        enriched = _augment_signals(stage2_out, citation_by_external_id)
+
+        wants_classifier = profile.weights.get("classifier", 0.0) > 0
+        if wants_classifier:
+            classifier_values, classifier_meta = await classifier_scores(
+                db_pool,
+                [sc.signals for sc in enriched],
+                user_id=user_id,
+            )
+        else:
+            classifier_values = [0.0 for _ in enriched]
+            classifier_meta = {
+                "available": False,
+                "feature_names": FEATURE_NAMES,
+                "degradation_reason": "classifier weight is disabled",
+            }
+        stage2_out = _augment_signals(
+            enriched,
+            {
+                sc.paper.external_id: {"classifier": classifier_values[idx]}
+                for idx, sc in enumerate(enriched)
+            },
+        )
+    except Exception as exc:  # broad: optional Phase 2 scoring must degrade cleanly
+        degraded_reason = f"optional Pulse Phase 2 signals unavailable: {exc}"
+        logger.warning(
+            "citation_signals failed; pulse degraded",
+            exc_info=exc,
+            extra={"stage": "citation_signals"},
+        )
+
+    return stage2_out, classifier_meta, degraded_reason
+
+
+async def _persist_pipeline(
+    db_pool: Any,
+    deck: list,
+    now: datetime,
+    stats: dict[str, Any],
+    degraded_reason: str | None,
+    user_id: int | None,
+) -> int:
+    """Stage 8 — upsert papers + persist deck inside a single outer transaction.
+
+    Returns card_count.
+    """
     try:
         async with db_pool.acquire() as conn:
             async with conn.transaction():
@@ -423,13 +483,22 @@ async def run_pulse(
                     conn=conn,
                     user_id=user_id,
                 )
-        stats["card_count"] = persisted
         logger.info("pulse.persisted", extra={"persisted": persisted, "cards": len(deck)})
+        return persisted
     except Exception as exc:  # broad: outer txn failure (DB unreachable); stats already captured
         stats["last_error"] = f"persist: {exc}"
-        stats["card_count"] = 0
         logger.exception("pulse.persist failed")
+        return 0
 
+
+async def _emit_post_run_telemetry(
+    db_pool: Any,
+    ctx: Any,
+    stage2_out: list[ScoredCandidate],
+    stats: dict[str, Any],
+    user_id: int | None,
+) -> None:
+    """Stage 9 — enqueue classifier training + emit verification telemetry (best-effort)."""
     if ctx:
         try:
             classifier_job_id = str(uuid.uuid4())
@@ -474,9 +543,6 @@ async def run_pulse(
         )
     except Exception:  # noqa: BLE001 — telemetry must never crash the pipeline
         logger.warning("pulse: failed to emit verification_stats event", exc_info=True)
-
-    logger.info("pulse.complete", extra=stats)
-    return stats
 
 
 async def _pulse_generate_job(

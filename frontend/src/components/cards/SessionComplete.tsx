@@ -7,6 +7,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle, Flame, Target, TrendingUp } from 'lucide-react';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getStats } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -18,7 +19,7 @@ interface SessionCompleteProps {
 
 export function SessionComplete({ sessionReviewed, onNavigateToLibrary }: SessionCompleteProps) {
   const { data: stats, isLoading } = useQuery({
-    queryKey: ['card-stats'],
+    queryKey: QUERY_KEYS.cards.stats(),
     queryFn: getStats,
   });
 

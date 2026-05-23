@@ -12,6 +12,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useSearchParams } from 'react-router-dom';
 import { fetchAccount, updateAccount, confirmEmailChange } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -56,7 +57,7 @@ function useConfirmEmailToken(): ConfirmState {
     confirmEmailChange(token)
       .then((account: AccountResponse) => {
         setState({ status: 'ok', email: account.email });
-        qc.invalidateQueries({ queryKey: ['account'] });
+        qc.invalidateQueries({ queryKey: QUERY_KEYS.account.self() });
         // Strip the token from the URL without a full navigation
         const next = new URLSearchParams(searchParams);
         next.delete('confirm_email_token');
@@ -219,7 +220,7 @@ function EmailRow({ account }: { account: AccountResponse }) {
         setError(null);
       } else {
         // Unlikely (server should always send a link), but handle gracefully.
-        qc.invalidateQueries({ queryKey: ['account'] });
+        qc.invalidateQueries({ queryKey: QUERY_KEYS.account.self() });
         setState('idle');
       }
     },
@@ -332,7 +333,7 @@ export function AccountSection() {
   const confirmState = useConfirmEmailToken();
 
   const { data: account, isLoading, isError } = useQuery({
-    queryKey: ['account'],
+    queryKey: QUERY_KEYS.account.self(),
     queryFn: fetchAccount,
   });
 

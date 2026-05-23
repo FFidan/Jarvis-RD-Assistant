@@ -22,6 +22,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Plus, Sparkles, CloudOff } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { getStats, fetchDecks } from '@/lib/api';
 import { useOnlineStatus } from '@/hooks/use-online-status';
 import { useOfflineReviewQueue } from '@/components/cards/use-offline-review-queue';
@@ -55,14 +56,14 @@ export function LearningCardsPage() {
 
   // Fetch stats to determine default mode (review if due_now > 0).
   const { data: stats } = useQuery({
-    queryKey: ['card-stats'],
+    queryKey: QUERY_KEYS.cards.stats(),
     queryFn: getStats,
     refetchInterval: 30_000,
   });
 
   // Fetch decks for breadcrumb deck-name resolution.
   const { data: decks = [] } = useQuery({
-    queryKey: ['decks'],
+    queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
 

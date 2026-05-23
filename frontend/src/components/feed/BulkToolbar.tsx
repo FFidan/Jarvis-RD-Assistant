@@ -1,6 +1,7 @@
 import { useBulkSelection } from '@/stores/bulk-selection-store';
 import { bulkAction } from '@/lib/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 import {
   Tooltip,
@@ -71,8 +72,8 @@ export function BulkToolbar({ surface, papersOnPage }: BulkToolbarProps) {
       const fail = data.failed.length;
       const label = ACTION_CONFIG[vars.action].label;
       toast.success(`${label}: ${ok} succeeded${fail > 0 ? `, ${fail} failed` : ''}`);
-      void queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-      void queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
       clear();
     },
     onError: (err) => {

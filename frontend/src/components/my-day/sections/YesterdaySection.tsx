@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Check, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
@@ -17,7 +18,7 @@ export function YesterdaySection() {
   const tzOffsetMinutes = -new Date().getTimezoneOffset();
 
   const { data, isError } = useQuery<YesterdaySummary>({
-    queryKey: ['my-day', 'yesterday', tzOffsetMinutes],
+    queryKey: QUERY_KEYS.myDay.yesterday(tzOffsetMinutes),
     queryFn: () => fetchYesterday(tzOffsetMinutes),
     staleTime: 5 * 60_000,
   });
@@ -25,7 +26,7 @@ export function YesterdaySection() {
   const carryOverMutation = useMutation({
     mutationFn: (taskId: number) => updateTask(taskId, { status: 'todo' }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['my-day'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() });
       toast.success('Carried over to today');
     },
     onError: (err: Error) => toast.error(`Couldn't carry over: ${err.message}`),

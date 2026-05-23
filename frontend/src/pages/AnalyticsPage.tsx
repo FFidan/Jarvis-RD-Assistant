@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { errorMessage } from '@/lib/errors';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
@@ -64,44 +65,44 @@ export function AnalyticsPage() {
   // staleTime: 5 min — historical analytics data rarely changes mid-session;
   // revisits and `days` toggles read from cache instead of refetching.
   const summaryQuery = useQuery({
-    queryKey: ['analytics', 'summary', days],
+    queryKey: QUERY_KEYS.analytics.summary(days),
     queryFn: () => fetchAnalyticsSummary(days),
     staleTime: 5 * 60_000,
   });
 
   // ── existing chart queries (unchanged query keys + fetch fns) ───────────
   const activityQuery = useQuery({
-    queryKey: ['analytics', 'activity', days],
+    queryKey: QUERY_KEYS.analytics.activity(days),
     queryFn: () => fetchAnalyticsActivity(days),
     staleTime: 5 * 60_000,
   });
 
   const retentionQuery = useQuery({
-    queryKey: ['analytics', 'retention', days],
+    queryKey: QUERY_KEYS.analytics.retention(days),
     queryFn: () => fetchAnalyticsRetention(days),
     staleTime: 5 * 60_000,
   });
 
   const reviewsQuery = useQuery({
-    queryKey: ['analytics', 'reviews', days],
+    queryKey: QUERY_KEYS.analytics.reviews(days),
     queryFn: () => fetchAnalyticsReviews(days),
     staleTime: 5 * 60_000,
   });
 
   const llmCostQuery = useQuery({
-    queryKey: ['analytics', 'llm-cost', days],
+    queryKey: QUERY_KEYS.analytics.llmCost(days),
     queryFn: () => fetchAnalyticsLlmCost(days),
     staleTime: 5 * 60_000,
   });
 
   const sourceQuery = useQuery({
-    queryKey: ['analytics', 'papers-by-source'],
+    queryKey: QUERY_KEYS.analytics.papersBySource(),
     queryFn: fetchPapersBySource,
     staleTime: 5 * 60_000,
   });
 
   const statusQuery = useQuery({
-    queryKey: ['analytics', 'papers-by-status'],
+    queryKey: QUERY_KEYS.analytics.papersByStatus(),
     queryFn: fetchPapersByStatus,
     staleTime: 5 * 60_000,
   });

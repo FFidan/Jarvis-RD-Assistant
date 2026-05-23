@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { explainPulseCard } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
@@ -25,7 +26,7 @@ export function WhyPopover({ cardId, trigger }: WhyPopoverProps) {
   const [open, setOpen] = React.useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['pulse-explain', cardId],
+    queryKey: QUERY_KEYS.pulse.explain(cardId),
     queryFn: () => explainPulseCard(cardId),
     enabled: open,
     staleTime: 60_000,

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { FileText, Link2, Search, Unlink } from 'lucide-react';
 import { fetchProjectPapers, linkPaper, unlinkPaper, searchLibrary } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -19,12 +20,12 @@ export function LinkedPapersTab({ projectId }: LinkedPapersTabProps) {
   const [searching, setSearching] = useState(false);
 
   const { data: papers = [], isLoading } = useQuery({
-    queryKey: ['project-papers', projectId],
+    queryKey: QUERY_KEYS.projects.papers(projectId),
     queryFn: () => fetchProjectPapers(projectId),
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['project-papers', projectId] });
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects.papers(projectId) });
   };
 
   const linkMut = useMutation({

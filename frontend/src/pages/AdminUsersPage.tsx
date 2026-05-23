@@ -13,6 +13,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 import {
@@ -83,7 +84,7 @@ function InviteModal({ open, onClose }: InviteModalProps) {
   const { mutate, isPending } = useMutation({
     mutationFn: () => inviteUser(email.trim(), role),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.users() });
       setEmail('');
       setRole('user');
       setError(null);
@@ -214,7 +215,7 @@ export function AdminUsersPage() {
   const [pendingSendLinkUserId, setPendingSendLinkUserId] = useState<number | null>(null);
 
   const { data: users, isLoading, isError } = useQuery({
-    queryKey: ['admin', 'users'],
+    queryKey: QUERY_KEYS.admin.users(),
     queryFn: listUsers,
   });
 
@@ -224,7 +225,7 @@ export function AdminUsersPage() {
     onMutate: ({ userId }) => setPendingRoleUserId(userId),
     onSettled: () => setPendingRoleUserId(null),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.users() });
       setRoleError(null);
     },
     onError: (err) => {
@@ -241,7 +242,7 @@ export function AdminUsersPage() {
     onMutate: (userId) => setPendingDeleteUserId(userId),
     onSettled: () => setPendingDeleteUserId(null),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.users() });
       setPendingDelete(null);
     },
     onError: () => {

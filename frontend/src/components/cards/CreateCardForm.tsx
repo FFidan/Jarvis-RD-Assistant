@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Link } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
 import { createCard, generateCardsJob, getJob, fetchDecks } from '@/lib/api';
@@ -41,7 +42,7 @@ export function CreateCardForm({ open, onOpenChange, defaultDeckId }: CreateCard
   const [deckId, setDeckId] = useState<string>(() => (defaultDeckId != null ? String(defaultDeckId) : ''));
 
   const { data: decks = [] } = useQuery({
-    queryKey: ['decks'],
+    queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
 
@@ -54,9 +55,9 @@ export function CreateCardForm({ open, onOpenChange, defaultDeckId }: CreateCard
         back,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['cards'] });
-      queryClient.invalidateQueries({ queryKey: ['decks'] });
-      queryClient.invalidateQueries({ queryKey: ['card-stats'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.all() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.decks.list() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.stats() });
       onOpenChange(false);
       setFront('');
       setBack('');
@@ -156,7 +157,7 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: decks = [] } = useQuery({
-    queryKey: ['decks'],
+    queryKey: QUERY_KEYS.decks.list(),
     queryFn: fetchDecks,
   });
 
@@ -178,9 +179,9 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
         if (TERMINAL_STATUSES.includes(row.status)) {
           stopPolling();
           if (row.status === 'succeeded') {
-            queryClient.invalidateQueries({ queryKey: ['cards'] });
-            queryClient.invalidateQueries({ queryKey: ['decks'] });
-            queryClient.invalidateQueries({ queryKey: ['card-stats'] });
+            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.all() });
+            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.decks.list() });
+            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.stats() });
           }
         }
       } catch (err) {

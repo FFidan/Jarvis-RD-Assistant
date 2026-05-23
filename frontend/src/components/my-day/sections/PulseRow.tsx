@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useNavigate } from 'react-router-dom';
 import { ThumbsUp, ThumbsDown, Bookmark } from 'lucide-react';
 import { toast } from 'sonner';
@@ -24,7 +25,7 @@ export function PulseRow({ card, rank }: PulseRowProps) {
       toast.error(`Failed to rate card: ${err.message ?? 'unknown error'}`);
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pulse.today() });
     },
   });
 

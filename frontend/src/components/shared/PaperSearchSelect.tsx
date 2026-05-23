@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Search, X, FileText } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -34,7 +35,7 @@ export function PaperSearchSelect({
   }, [search]);
 
   const { data: papers = [] } = useQuery({
-    queryKey: ['papers-brief', debouncedSearch],
+    queryKey: QUERY_KEYS.papersBrief.list(debouncedSearch),
     queryFn: () =>
       debouncedSearch.length >= 2
         ? searchPapersBrief(debouncedSearch)

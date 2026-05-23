@@ -15,6 +15,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import {
   getSystemReadiness,
   fetchStackHealth,
@@ -120,7 +121,7 @@ function isDevMode(checks: ReadinessCheck[]): boolean {
 
 export function AdminSystemHealthPage() {
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['admin', 'system-health'],
+    queryKey: QUERY_KEYS.admin.systemHealth(),
     queryFn: getSystemReadiness,
   });
 
@@ -129,7 +130,7 @@ export function AdminSystemHealthPage() {
     isLoading: stackLoading,
     isError: stackError,
   } = useQuery({
-    queryKey: ['admin', 'stack-health'],
+    queryKey: QUERY_KEYS.admin.stackHealth(),
     queryFn: fetchStackHealth,
     refetchInterval: 30_000,
     retry: false,

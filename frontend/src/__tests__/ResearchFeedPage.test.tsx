@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { ApiError, useFeedCounts } from '@/lib/api';
@@ -1819,8 +1820,8 @@ describe('ResearchFeedPage', () => {
     await user.click(screen.getByRole('button', { name: /save 1 selected/i }));
 
     await waitFor(() => {
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feed-counts'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.feedAll() });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.feed.counts() });
     });
   });
 
