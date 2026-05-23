@@ -11,6 +11,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jarvis_common import JobCreateResponse, current_user_id, require_admin_or_api_key
+from jarvis_common.audit import log_audit
 from jarvis_common.hardware_fit import recommend_models
 from jarvis_common.model_catalog import Role
 from jarvis_common.serialization import _coerce_bool
@@ -216,14 +217,8 @@ async def get_setup_status(
 # ---------------------------------------------------------------------------
 
 
-@router.get(
-    "/models",
-    response_model=SystemModelsResponse,
-    dependencies=[Depends(require_admin_or_api_key)],
-)
-@limiter.limit("30/minute")
-async def get_system_models(request: Request) -> SystemModelsResponse:
-    """Return installed Ollama models + hardware info + current assignments."""
+async def _get_system_models_data(request: Request) -> SystemModelsResponse:
+    """Inner logic for /models — no auth check; callers must enforce admin gate."""
     ollama_url = get_paper_ingestion_settings().ollama_base_url
     http = request.app.state.http_client
     result: dict[str, Any] = {
@@ -360,21 +355,32 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
     return SystemModelsResponse.model_validate(result)
 
 
-@router.get("/hardware")
+@router.get(
+    "/models",
+    response_model=SystemModelsResponse,
+    dependencies=[Depends(require_admin_or_api_key)],
+)
+@limiter.limit("30/minute")
+async def get_system_models(request: Request) -> SystemModelsResponse:
+    """Return installed Ollama models + hardware info + current assignments."""
+    return await _get_system_models_data(request)
+
+
+@router.get("/hardware", dependencies=[Depends(require_admin_or_api_key)])
 @limiter.limit("10/minute")
 async def get_system_hardware(request: Request) -> dict[str, Any]:
     """Return local accelerator information for model selection."""
     return (await async_get_cached_hardware(request.app.state)).to_dict()
 
 
-@router.get("/models/recommendations")
+@router.get("/models/recommendations", dependencies=[Depends(require_admin_or_api_key)])
 @limiter.limit("30/minute")
 async def get_model_recommendations(
     request: Request,
     role: Role = "smart",
 ) -> dict[str, Any]:
     """Return catalog-backed model recommendations for one role."""
-    models = await get_system_models(request)
+    models = await _get_system_models_data(request)
     hardware = await async_get_cached_hardware(request.app.state)
     cloud_api_keys = await _cloud_key_presence(request.app.state.db_pool)
     return {
@@ -390,7 +396,10 @@ async def get_model_recommendations(
     }
 
 
-@router.post("/models/{tag:path}/pull")
+@router.post(
+    "/models/{tag:path}/pull",
+    dependencies=[Depends(require_admin_or_api_key)],
+)
 @limiter.limit("3/minute")
 async def pull_system_model(
     tag: str,
@@ -415,10 +424,22 @@ async def pull_system_model(
         ollama_tag=entry.ollama_tag or entry.id,
         ollama_url=get_paper_ingestion_settings().ollama_base_url,
     )
+    caller_id = getattr(request.state, "user_id", None)
+    await log_audit(
+        request.app.state.db_pool,
+        action="system.model.pull",
+        resource=f"models/{tag}",
+        user_id=str(caller_id) if caller_id is not None else None,
+    )
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
-@router.delete("/models/{tag:path}", status_code=204, response_class=Response)
+@router.delete(
+    "/models/{tag:path}",
+    status_code=204,
+    response_class=Response,
+    dependencies=[Depends(require_admin_or_api_key)],
+)
 @limiter.limit("3/minute")
 async def delete_system_model(tag: str, request: Request) -> Response:
     """Delete an inactive Ollama model tag."""
@@ -428,7 +449,7 @@ async def delete_system_model(tag: str, request: Request) -> Response:
     if entry is None or entry.provider != "ollama":
         raise HTTPException(status_code=404, detail="Unknown local catalog model")
 
-    models = await get_system_models(request)
+    models = await _get_system_models_data(request)
     if models.issues.get("current"):
         raise HTTPException(
             status_code=503,
@@ -454,6 +475,13 @@ async def delete_system_model(tag: str, request: Request) -> Response:
         raise HTTPException(status_code=502, detail="Could not reach Ollama delete API") from exc
     if resp.status_code >= 400:
         raise HTTPException(status_code=502, detail="Ollama model delete failed")
+    caller_id = getattr(request.state, "user_id", None)
+    await log_audit(
+        request.app.state.db_pool,
+        action="system.model.delete",
+        resource=f"models/{tag}",
+        user_id=str(caller_id) if caller_id is not None else None,
+    )
     return Response(status_code=204)
 
 

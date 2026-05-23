@@ -43,7 +43,7 @@ paper-ingestion = [
     "sentry-sdk>=2.0.0",
     "slowapi>=0.1.9",
     "tiktoken>=0.7.0",
-    "transformers>=4.45.2,<4.52.0",
+    "transformers>=4.53.0,<4.60.0",
     "uvicorn[standard]>=0.30.0",
     "uvloop>=0.19,<1",
 ]

@@ -89,16 +89,17 @@ async def _find_cross_references(
     If an embedder is provided, attempts semantic similarity search via Qdrant first.
     Falls back to keyword-based title overlap if semantic search fails or is unavailable.
     """
+    # Always fetch discovered_by so the keyword fallback can apply the visibility
+    # predicate even when no embedder is provided (W1-D2-005 fix).
+    abstract_row = await conn.fetchrow(
+        "SELECT abstract, discovered_by FROM papers WHERE id = $1", paper_id
+    )
+    abstract = abstract_row["abstract"] if abstract_row and abstract_row["abstract"] else ""
+    owner_id = abstract_row["discovered_by"] if abstract_row else None
+
     # --- Semantic similarity approach (preferred) ---
     if embedder is not None:
         try:
-            # Get paper's abstract for richer query; discovered_by scopes
-            # cross-reference search to the owner's library + canonical chunks.
-            abstract_row = await conn.fetchrow(
-                "SELECT abstract, discovered_by FROM papers WHERE id = $1", paper_id
-            )
-            abstract = abstract_row["abstract"] if abstract_row and abstract_row["abstract"] else ""
-            owner_id = abstract_row["discovered_by"] if abstract_row else None
             query_text = f"{title}. {abstract}"
 
             results = await embedder.search_similar(
@@ -145,8 +146,11 @@ async def _find_cross_references(
     # Build ILIKE conditions for each keyword
     # NOTE: Placeholder indices ($N) are computed from range(), never from user input -- safe
     patterns = [f"%{w.replace('%', r'\%').replace('_', r'\_')}%" for w in words]
-    params = [paper_id, patterns]
 
+    # Visibility predicate mirrors the semantic path: restrict to papers whose
+    # owner matches (discovered_by IS NULL = canonical/public, or same user,
+    # or the user has it in their library).  This prevents title-keyword leaks
+    # across user boundaries (W1-D2-005).
     rows = await conn.fetch(
         """
         SELECT id, title FROM papers
@@ -156,9 +160,19 @@ async def _find_cross_references(
               FROM unnest($2::text[]) AS pattern
               WHERE LOWER(title) LIKE pattern ESCAPE '\\'
           )
+          AND (
+              discovered_by IS NULL
+              OR discovered_by = $3
+              OR EXISTS (
+                  SELECT 1 FROM user_library ul
+                  WHERE ul.user_id = $3 AND ul.paper_id = papers.id
+              )
+          )
         LIMIT 5
         """,
-        *params,
+        paper_id,
+        patterns,
+        owner_id,
     )
 
     return [
@@ -179,6 +193,7 @@ async def generate_paper_summary(
     verifier: "QuoteVerifier",
     embedder,
     *,
+    user_id: int | None = None,
     openai_client: "openai.AsyncOpenAI | None" = None,
 ) -> SummaryResponse:
     """Generate an LLM summary for a paper with quote verification.
@@ -363,8 +378,8 @@ async def generate_paper_summary(
                 paper_id, summary_brief, summary_detailed, tldr, key_findings,
                 methodology, limitations, relevance_notes, confidence,
                 cross_references, llm_model, llm_prompt, llm_raw_response,
-                summary_verified
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                summary_verified, user_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (paper_id, user_id) DO UPDATE SET
                 summary_brief = EXCLUDED.summary_brief,
                 summary_detailed = EXCLUDED.summary_detailed,
@@ -397,6 +412,7 @@ async def generate_paper_summary(
             prompt,
             raw_content,
             report.confidence == Confidence.HIGH,
+            user_id,
         )
 
     return row_to_summary_response(row)

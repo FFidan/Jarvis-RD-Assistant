@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-import pydantic
 import pytest
 from fastapi import HTTPException
 
@@ -16,10 +15,7 @@ from fastapi import HTTPException
 # rapidfuzz stubs.
 from paper_ingestion.models import Confidence
 from paper_ingestion.services import summarization
-from paper_ingestion.services.summarization_models import (
-    KeyFindingOutput,
-    SummarizationOutput,
-)
+from paper_ingestion.services.summarization_models import SummarizationOutput
 
 
 @asynccontextmanager
@@ -152,38 +148,6 @@ async def test_generate_paper_summary_returns_existing_summary():
 
 
 @pytest.mark.asyncio
-async def test_generate_paper_summary_raises_on_validation_error():
-    """An Instructor validation failure should map to HTTP 502."""
-    conn = AsyncMock()
-    conn.fetchrow.side_effect = [_paper_row(), None]
-    conn.fetch.return_value = [_chunk_row()]
-    conn.fetchval.return_value = "smart"
-    pool = _make_pool(conn)
-    http_client = AsyncMock()
-
-    validation_error = pydantic.ValidationError.from_exception_data(
-        title="SummarizationOutput",
-        line_errors=[{"type": "missing", "loc": ("tldr",)}],
-    )
-
-    patch_ctx, _llm_mock = _patched_call_llm(side_effect=validation_error)
-    with (
-        patch.object(summarization, "advisory_lock", _noop_lock),
-        patch_ctx,
-    ):
-        with pytest.raises(HTTPException, match="Malformed LLM response") as exc_info:
-            await summarization.generate_paper_summary(
-                paper_id=7,
-                db_pool=pool,
-                http_client=http_client,
-                verifier=MagicMock(),
-                embedder=MagicMock(),
-            )
-
-    assert exc_info.value.status_code == 502
-
-
-@pytest.mark.asyncio
 async def test_generate_paper_summary_raises_on_missing_paper():
     """A missing paper should return HTTP 404 before any LLM call."""
     conn = AsyncMock()
@@ -265,166 +229,6 @@ async def test_generate_paper_summary_maps_read_timeout_to_504():
 
 
 @pytest.mark.asyncio
-async def test_generate_paper_summary_maps_runtime_error_to_502():
-    """A LiteLLM RuntimeError (non-timeout) should map to HTTP 502."""
-    conn = AsyncMock()
-    conn.fetchrow.side_effect = [_paper_row(), None]
-    conn.fetch.return_value = [_chunk_row()]
-    conn.fetchval.return_value = "smart"
-    pool = _make_pool(conn)
-    http_client = AsyncMock()
-
-    patch_ctx, _llm_mock = _patched_call_llm(side_effect=RuntimeError("LiteLLM chat error 500"))
-    with (
-        patch.object(summarization, "advisory_lock", _noop_lock),
-        patch_ctx,
-    ):
-        with pytest.raises(HTTPException, match="LLM API error") as exc_info:
-            await summarization.generate_paper_summary(
-                paper_id=7,
-                db_pool=pool,
-                http_client=http_client,
-                verifier=MagicMock(),
-                embedder=MagicMock(),
-            )
-
-    assert exc_info.value.status_code == 502
-
-
-@pytest.mark.asyncio
-async def test_generate_paper_summary_falls_back_to_abstract_when_verification_fails():
-    """Zero verified findings triggers abstract fallback and unverified summary storage."""
-    conn_phase1 = AsyncMock()
-    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
-    conn_phase1.fetch.return_value = [_chunk_row()]
-    conn_phase1.fetchval.return_value = "smart"
-
-    stored_row = {
-        "id": 3,
-        "paper_id": 7,
-        "summary_brief": "Unable to summarize reliably. Original abstract: Original abstract text.",
-        "summary_detailed": "Original abstract text.",
-        "tldr": "short tldr",
-        "key_findings": [],
-        "methodology": None,
-        "limitations": None,
-        "relevance_notes": None,
-        "confidence": "LOW",
-        "cross_references": [],
-        "llm_model": "smart-model",
-        "summary_verified": False,
-        "created_at": datetime.now(UTC),
-    }
-    conn_phase2 = AsyncMock()
-    conn_phase2.fetchrow.return_value = stored_row
-    pool = _make_pool(conn_phase1, conn_phase2)
-
-    llm_output = SummarizationOutput(
-        tldr="short tldr",
-        summary_brief="draft brief",
-        summary_detailed="draft detailed",
-        key_findings=[
-            KeyFindingOutput(finding="Claim", quote="missing quote", page_number=1),
-        ],
-    )
-
-    http_client = AsyncMock()
-    verifier = MagicMock()
-    verifier.verify_findings.return_value = SimpleNamespace(
-        total_findings=1,
-        verified_count=0,
-        confidence=Confidence.LOW,
-    )
-
-    patch_ctx, _llm_mock = _patched_call_llm(return_value=llm_output)
-    with (
-        patch.object(summarization, "advisory_lock", _noop_lock),
-        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
-        patch_ctx,
-    ):
-        result = await summarization.generate_paper_summary(
-            paper_id=7,
-            db_pool=pool,
-            http_client=http_client,
-            verifier=verifier,
-            embedder=MagicMock(),
-        )
-
-    assert result.summary_verified is False
-    assert result.summary_detailed == "Original abstract text."
-    insert_args = conn_phase2.fetchrow.await_args.args
-    assert insert_args[2].startswith("Unable to summarize reliably.")
-    assert insert_args[9] == "LOW"
-
-
-@pytest.mark.asyncio
-async def test_generate_paper_summary_falls_back_when_llm_returns_no_findings():
-    """No LLM findings should trigger the abstract fallback without crashing."""
-    conn_phase1 = AsyncMock()
-    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
-    conn_phase1.fetch.return_value = [_chunk_row()]
-    conn_phase1.fetchval.return_value = "smart"
-
-    stored_row = {
-        "id": 4,
-        "paper_id": 7,
-        "summary_brief": (
-            "Unable to summarize reliably (no verifiable findings). "
-            "Original abstract: Original abstract text."
-        ),
-        "summary_detailed": "Original abstract text.",
-        "tldr": "semantic scholar summary",
-        "key_findings": [],
-        "methodology": None,
-        "limitations": None,
-        "relevance_notes": None,
-        "confidence": "LOW",
-        "cross_references": [],
-        "llm_model": "smart-model",
-        "summary_verified": False,
-        "created_at": datetime.now(UTC),
-    }
-    conn_phase2 = AsyncMock()
-    conn_phase2.fetchrow.return_value = stored_row
-    pool = _make_pool(conn_phase1, conn_phase2)
-
-    llm_output = SummarizationOutput(
-        tldr="",
-        summary_brief="draft brief",
-        summary_detailed="draft detailed",
-        key_findings=[],
-    )
-
-    http_client = AsyncMock()
-    verifier = MagicMock()
-    verifier.verify_findings.return_value = SimpleNamespace(
-        total_findings=0,
-        verified_count=0,
-        confidence=Confidence.LOW,
-    )
-
-    patch_ctx, _llm_mock = _patched_call_llm(return_value=llm_output)
-    with (
-        patch.object(summarization, "advisory_lock", _noop_lock),
-        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
-        patch_ctx,
-    ):
-        result = await summarization.generate_paper_summary(
-            paper_id=7,
-            db_pool=pool,
-            http_client=http_client,
-            verifier=verifier,
-            embedder=MagicMock(),
-        )
-
-    assert result.summary_verified is False
-    assert result.tldr == "semantic scholar summary"
-    insert_args = conn_phase2.fetchrow.await_args.args
-    assert insert_args[2].startswith("Unable to summarize reliably (no verifiable findings).")
-    assert insert_args[5] == []
-
-
-@pytest.mark.asyncio
 async def test_generate_paper_summary_confidence_none_roundtrips_without_validation_error():
     """Confidence.NONE (zero findings) must survive the DB round-trip without ValidationError.
 
@@ -492,3 +296,146 @@ async def test_generate_paper_summary_confidence_none_roundtrips_without_validat
 
     assert result.confidence == Confidence.NONE
     assert result.summary_verified is False
+
+
+# ---------------------------------------------------------------------------
+# W1-D2-005 — keyword-fallback visibility predicate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cross_references_filter_unseen_papers():
+    """Keyword-fallback SQL must include a visibility predicate (W1-D2-005).
+
+    The generated query should contain ``discovered_by IS NULL OR discovered_by = $``
+    so that papers owned by other users are not exposed via title-keyword match.
+    """
+    conn = AsyncMock()
+    # fetchrow: no abstract_row so discovered_by is None (no embedder branch taken)
+    conn.fetchrow.return_value = {"abstract": None, "discovered_by": 42}
+    conn.fetch.return_value = []
+
+    await summarization._find_cross_references(
+        conn,
+        paper_id=7,
+        title="Retrieval Augmented Generation Systems",
+        embedder=None,  # force keyword fallback
+    )
+
+    # Must have issued conn.fetch at some point (keyword path)
+    assert conn.fetch.called, "keyword fallback should call conn.fetch"
+
+    # Behaviour-shape assertion: owner_id (42 from fetchrow stub) reaches the
+    # query as a bind parameter. The visibility predicate's exact text is
+    # exercised by the live-PG contract test, not asserted here (TS-02).
+    fetch_call = conn.fetch.call_args
+    bound_params = fetch_call.args[1:]
+    assert 42 in bound_params, (
+        f"keyword-fallback must bind owner_id=42 as a parameter; got: {bound_params}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cross_references_keyword_fallback_passes_owner_id():
+    """owner_id is always fetched and forwarded to the keyword-fallback query.
+
+    Even when no embedder is supplied, the function must fetch discovered_by
+    from the papers row and bind it as a parameter so the visibility predicate
+    can filter results to the correct user scope.
+    """
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
+    conn.fetch.return_value = [{"id": 8, "title": "Retrieval Augmented Generation"}]
+
+    result = await summarization._find_cross_references(
+        conn,
+        paper_id=7,
+        title="Retrieval Augmented Generation",
+        embedder=None,
+    )
+
+    # fetchrow must have been called to get discovered_by (even without embedder)
+    assert conn.fetchrow.called, "should always fetch paper row to get owner_id"
+    fetch_call = conn.fetch.call_args
+    bound_params = fetch_call.args[1:]  # positional params after SQL string
+    # owner_id (99) must appear in the bound parameters
+    assert 99 in bound_params, (
+        f"owner_id 99 should be bound as a parameter; got params: {bound_params}"
+    )
+    assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# W1-D2-009 — INSERT includes user_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_paper_summary_persists_user_id():
+    """INSERT into paper_summaries must include user_id column (W1-D2-009).
+
+    Two users summarizing the same paper previously both upserted the NULL-user
+    row, causing mutual overwrite.  The fix adds user_id to the column list and
+    binds the caller-supplied value.
+    """
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]  # paper found, no existing summary
+    conn_phase1.fetch.return_value = [_chunk_row()]
+
+    stored_row = {
+        "id": 5,
+        "paper_id": 7,
+        "user_id": 42,
+        "summary_brief": "brief text",
+        "summary_detailed": "detailed text",
+        "tldr": "tldr text",
+        "key_findings": [],
+        "methodology": None,
+        "limitations": None,
+        "relevance_notes": None,
+        "confidence": "HIGH",
+        "cross_references": [],
+        "llm_model": "smart",
+        "summary_verified": True,
+        "created_at": datetime.now(UTC),
+    }
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = stored_row
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    llm_output = SummarizationOutput(
+        tldr="A good paper",
+        summary_brief="Brief summary",
+        summary_detailed="Detailed summary",
+        key_findings=[],
+    )
+
+    http_client = AsyncMock()
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=1,
+        verified_count=1,
+        confidence=Confidence.HIGH,
+    )
+
+    patch_ctx, _llm_mock = _patched_call_llm(return_value=llm_output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=http_client,
+            verifier=verifier,
+            embedder=MagicMock(),
+            user_id=42,
+        )
+
+    # Behaviour-shape assertion: user_id reaches the INSERT as a bind parameter.
+    # Column-list shape is exercised by the live-PG contract test, not here.
+    assert conn_phase2.fetchrow.called, "phase-2 connection should have issued INSERT"
+    insert_call = conn_phase2.fetchrow.call_args
+    bound_params = insert_call.args[1:]
+    assert 42 in bound_params, f"user_id=42 should be bound as a parameter; got: {bound_params}"

@@ -1,8 +1,20 @@
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import 'katex/dist/katex.min.css';
 import type { ReactNode } from 'react';
+
+// Hardened sanitize schema: extends defaultSchema but restricts src protocol to
+// allow only http, https, and data: URIs (fine-grained data: filtering is done
+// in the img component override below — reject everything except data:image/*).
+const sanitizeSchema = {
+  ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    src: ['http', 'https', 'data'],
+  },
+};
 
 interface MarkdownContentProps {
   children: string;
@@ -90,7 +102,7 @@ export function MarkdownContent({ children, className, unverifiedSentences }: Ma
     <ReactMarkdown
       className={className ?? 'prose prose-sm dark:prose-invert max-w-none'}
       remarkPlugins={[remarkMath]}
-      rehypePlugins={[rehypeKatex]}
+      rehypePlugins={[rehypeKatex, [rehypeSanitize, sanitizeSchema]]}
       components={{
         a: ({ node: _node, href, children, ...props }) => {
           const hrefLower = (href ?? '').toLowerCase().trimStart();
@@ -106,6 +118,14 @@ export function MarkdownContent({ children, className, unverifiedSentences }: Ma
               {children}
             </a>
           );
+        },
+        img: ({ node: _node, src, alt, ...props }) => {
+          // Allow only http/https and safe data:image/* URIs; reject everything else.
+          const safe =
+            typeof src === 'string' &&
+            /^(https?:|data:image\/(png|jpe?g|gif|webp|svg\+xml);)/i.test(src);
+          if (!safe) return null;
+          return <img src={src} alt={alt ?? ''} loading="lazy" {...props} />;
         },
         ...(hasUnverified
           ? {

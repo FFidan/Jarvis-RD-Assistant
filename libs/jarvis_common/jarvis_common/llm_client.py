@@ -3,7 +3,6 @@
 import functools
 import logging
 import os
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, TypedDict, TypeVar, cast, overload
@@ -156,8 +155,35 @@ def build_litellm_headers(config: LiteLLMConfig) -> dict[str, str]:  # noqa: ARG
 
 
 def strip_think_blocks(raw: str) -> str:
-    """Strip thinking-model markup before downstream JSON parsing."""
-    return re.sub(r"<think>.*?(?:</think>|$)", "", raw, flags=re.DOTALL).strip()
+    """Strip thinking-model markup (including nested tags) before downstream JSON parsing."""
+    open_tag, close_tag = "<think>", "</think>"
+    out: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(raw):
+        if depth == 0:
+            j = raw.find(open_tag, i)
+            if j == -1:
+                out.append(raw[i:])
+                break
+            out.append(raw[i:j])
+            i = j + len(open_tag)
+            depth = 1
+        else:
+            open_j = raw.find(open_tag, i)
+            close_j = raw.find(close_tag, i)
+            if close_j == -1:
+                # Unterminated — discard everything remaining (including the open tag we entered).
+                break
+            if open_j != -1 and open_j < close_j:
+                # Nested open tag encountered first; increase depth.
+                i = open_j + len(open_tag)
+                depth += 1
+            else:
+                # Close tag encountered; decrease depth.
+                i = close_j + len(close_tag)
+                depth -= 1
+    return "".join(out).strip()
 
 
 def strip_think_streaming(chunk: str, in_think: bool, carry: str = "") -> tuple[str, bool, str]:

@@ -341,14 +341,16 @@ These boundaries MAY be mocked in test code at the carve-out edge (typically in 
 
 ### 5.1 Network / process boundaries
 
+Test populations updated 2026-05-22 after the W3 polish-wave deletions. Counts reflect tests REMAINING in the suite (not target deletions). Where a sidecar supersedes a row, the row stays in this registry but the population shrinks.
+
 | Boundary | Mock mechanism | Test population guarded |
 |---|---|---|
-| Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP; superseded where possible by faux-Ollama/LiteLLM sidecar (LIVE) | ~150 legacy tests, shrinking as sidecar survivors replace them |
-| Cross-encoder reranker (`rerank_chunks`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) | **DI-seam'd via `ScriptedReranker`** (`jarvis_common.testing`) — deterministic in-process stand-in with scripted scores; legacy `AsyncMock` on `EmbeddingSearchMixin.rerank_chunks` still present, migrate on rot-on-touch | ~80 tests (shrinking as `ScriptedReranker` replaces per-test `AsyncMock`) |
-| Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant`; superseded where possible by faux-Qdrant sidecar (LIVE) | ~120 legacy tests, shrinking as sidecar survivors replace them |
-| `respx.mock` / `httpx_mock` for source HTTP | respx routes | ~200 tests (Zotero, S2, OpenAlex, arXiv, PubMed) |
-| `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client` (LIVE — superseded by `FauxLiteLLMServer` sidecar for new non-streaming and Instructor-patched tests; legacy `MagicMock` path retained for error-path and Langfuse-specific tests) | ~80 tests |
-| Telegram Bot API (`bot.send_message`, `reply_text`, `Update`) | `make_telegram_update` + `AsyncMock` | ~120 tests |
+| Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP; **superseded by `FauxOllamaServer` for new success-path** (W0.2) | **~30 residual** legacy tests (was ~150 pre-W3); failure-branch + Langfuse-specific only |
+| Cross-encoder reranker (`rerank_chunks`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) | **DI-seam'd via `ScriptedReranker`** (`jarvis_common.testing`, W0.3); legacy `AsyncMock` on `EmbeddingSearchMixin.rerank_chunks` migrated on rot-on-touch | **0 legacy tests remaining** (was ~80); 4 `ScriptedReranker` char-tests in `test_testing_factories.py` |
+| Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant`; **superseded by `FauxQdrantClient` for new success-path** (W2.1, W2.2, W2.5) | **~25 residual** legacy tests (was ~120); failure-branch + dimension-mismatch only |
+| `respx.mock` / `httpx_mock` for source HTTP | respx routes | ~200 tests (Zotero, S2, OpenAlex, arXiv, PubMed) — unchanged |
+| `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client`; **superseded by `FauxLiteLLMServer` sidecar for new non-streaming and Instructor-patched tests** (W0.2, W2.3, W2.4); legacy `MagicMock` path retained for error-path and Langfuse-specific tests | **~15 residual** legacy tests (was ~80); error-path + observability boundary only |
+| Telegram Bot API (`bot.send_message`, `reply_text`, `Update`) | `make_telegram_update` + `AsyncMock` | ~120 tests — unchanged (PTB carve-out remains, W1B.1 adds HTTP-side contracts on top without removing PTB-side) |
 
 ### 5.2 Library boundaries
 

@@ -48,6 +48,7 @@ class Reranker:
     def __init__(self, model_name: str = "mixedbread-ai/mxbai-rerank-base-v2"):
         self._model_name = model_name
         self._model: Any | None = None
+        self._load_failed: bool = False
 
     def _load_model_if_needed(self) -> None:
         """Lazy-load the cross-encoder model on first use.
@@ -59,6 +60,8 @@ class Reranker:
         """
         if self._model is not None:
             return
+        if self._load_failed:
+            raise RuntimeError("reranker model load previously failed; not retrying within process")
         if CrossEncoder is None:  # sentence-transformers not installed
             raise RuntimeError("sentence-transformers is not installed; cannot load reranker")
 
@@ -97,15 +100,20 @@ class Reranker:
                 self._model = _load("cpu", _onnx_available)
                 backend_tag = "ONNX/CPU" if _onnx_available else "PyTorch/CPU"
                 logger.info("Cross-encoder loaded on %s: %s", backend_tag, self._model_name)
-            except Exception:
+            except (OSError, ImportError, RuntimeError, FileNotFoundError):
                 if _onnx_available:
                     logger.warning(
                         "ONNX backend failed; retrying with PyTorch CPU for cross-encoder",
                         exc_info=True,
                     )
-                    self._model = cross_encoder_cls(self._model_name, device="cpu")
-                    logger.info("Cross-encoder loaded on PyTorch/CPU: %s", self._model_name)
+                    try:
+                        self._model = cross_encoder_cls(self._model_name, device="cpu")
+                        logger.info("Cross-encoder loaded on PyTorch/CPU: %s", self._model_name)
+                    except Exception:
+                        self._load_failed = True
+                        raise
                 else:
+                    self._load_failed = True
                     raise
 
     def rerank(

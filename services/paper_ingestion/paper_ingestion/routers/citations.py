@@ -14,7 +14,11 @@ from jarvis_common.auth import current_user_id_strict
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.task_registry import KIND_TO_TASK
 
-from paper_ingestion.citations import build_citation_graph, sync_citations_for_paper
+from paper_ingestion.citations import (
+    _filter_visible_paper_ids,
+    build_citation_graph,
+    sync_citations_for_paper,
+)
 from paper_ingestion.deps import get_db_pool, get_s2_source, limiter
 from paper_ingestion.models import (
     BatchCitationFetchResponse,
@@ -44,7 +48,7 @@ async def get_citation_graph(
         # Per-id loop is O(n) DB round-trips but correct and simple (YAGNI).
         for pid in paper_ids:
             await assert_paper_ownership(conn, pid, user_id)
-        return await build_citation_graph(conn, paper_ids, depth)
+        return await build_citation_graph(conn, paper_ids, depth, user_id=user_id)
 
 
 @router.post("/batch-fetch", response_model=BatchCitationFetchResponse)
@@ -106,6 +110,23 @@ async def get_paper_citations(
             )
         except asyncpg.exceptions.UndefinedTableError:
             return []
+
+        # W1-D2-003: drop rows whose counter-party paper is not visible to
+        # the caller.  A single follow-up SELECT checks visibility in bulk.
+        if rows:
+            counter_party_ids = [
+                r["cited_paper_id"] if r["source_paper_id"] == paper_id else r["source_paper_id"]
+                for r in rows
+            ]
+            visible_ids = set(await _filter_visible_paper_ids(conn, counter_party_ids, user_id))
+            # The seed paper itself is always visible (ownership was asserted above).
+            visible_ids.add(paper_id)
+            rows = [
+                r
+                for r in rows
+                if r["cited_paper_id"] in visible_ids and r["source_paper_id"] in visible_ids
+            ]
+
     return [
         CitationRelation(
             source_paper_id=r["source_paper_id"],

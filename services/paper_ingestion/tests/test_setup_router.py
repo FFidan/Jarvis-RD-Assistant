@@ -27,6 +27,24 @@ def _build_request(pool: MagicMock) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
+async def test_system_check_requires_admin_when_configured() -> None:
+    """system_check must raise 403 when an admin exists and caller is not admin (W2-S1-001)."""
+    from fastapi import HTTPException
+
+    # admin_count > 0 → setup is complete; caller has no role (unauthenticated)
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)  # 1 admin exists
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+    # request.state has no user_role → non-admin caller
+
+    with pytest.raises(HTTPException) as exc_info:
+        await setup_router.system_check(request)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_setup_status_includes_hw_fields(monkeypatch) -> None:
     monkeypatch.setenv("JARVIS_HW_TIER", "ge-48")
     monkeypatch.setenv("JARVIS_LLM_BACKEND", "vllm")

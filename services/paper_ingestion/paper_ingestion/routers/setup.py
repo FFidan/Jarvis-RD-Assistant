@@ -305,6 +305,8 @@ async def system_check(request: Request) -> SystemCheckResponse:
     but reports per-service detail strings so the wizard can render
     actionable error states.
     """
+    await require_unconfigured_or_admin(request)
+
     import asyncio  # noqa: PLC0415
 
     from jarvis_common.llm_client import get_litellm_config  # noqa: PLC0415

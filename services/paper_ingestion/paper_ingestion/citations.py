@@ -256,10 +256,40 @@ async def sync_citations_for_paper(
     )
 
 
+async def _filter_visible_paper_ids(
+    conn: ConnLike,
+    candidate_ids: list[int],
+    user_id: int,
+) -> list[int]:
+    """Return the subset of *candidate_ids* visible to *user_id*.
+
+    A paper is visible when it is a stub (``discovered_by IS NULL``),
+    directly discovered by the caller, or held in their user_library.
+    Mirrors the visibility predicate used in knowledge_graph.py:309-315.
+    """
+    rows = await conn.fetch(
+        """SELECT id FROM papers
+           WHERE id = ANY($1)
+             AND (
+                 discovered_by IS NULL
+                 OR discovered_by = $2
+                 OR EXISTS (
+                     SELECT 1 FROM user_library ul
+                     WHERE ul.user_id = $2 AND ul.paper_id = papers.id
+                 )
+             )""",
+        candidate_ids,
+        user_id,
+    )
+    return [r["id"] for r in rows]
+
+
 async def build_citation_graph(
     conn: ConnLike,
     paper_ids: list[int],
     depth: int = 1,
+    *,
+    user_id: int | None = None,
 ) -> CitationGraphResponse:
     """Expand seed papers into a citation sub-graph up to *depth* hops.
 
@@ -275,6 +305,9 @@ async def build_citation_graph(
     * If the ``paper_citations`` table is missing, returns an empty graph
       without raising.
     * An empty *paper_ids* list short-circuits to an empty graph.
+    * When *user_id* is provided, BFS-discovered nodes are filtered to only
+      include papers visible to that user (W1-D1-002: prevents cross-user
+      paper enumeration at BFS depth ≥1).
     """
     if not paper_ids:
         return CitationGraphResponse(nodes=[], edges=[])
@@ -308,6 +341,13 @@ async def build_citation_graph(
 
     # Cap at 200 nodes
     all_ids = list(collected_ids)[:200]
+
+    # W1-D1-002: restrict node fetch to papers visible to the caller.
+    if user_id is not None:
+        all_ids = await _filter_visible_paper_ids(conn, all_ids, user_id)
+
+    if not all_ids:
+        return CitationGraphResponse(nodes=[], edges=[])
 
     # Fetch node data
     node_rows = await conn.fetch(

@@ -69,7 +69,7 @@ async def _refresh_recommendations_for_user(app: Any, user_id: int) -> int:
     liked_scores: dict[int, tuple[float, str]] = {}
     if starred_ids:
         results = await embedder.discover_from_seeds(
-            starred_ids, db_pool, limit=_MAX_RECOMMENDATIONS, score_threshold=0.3
+            starred_ids, db_pool, limit=_MAX_RECOMMENDATIONS, score_threshold=0.3, user_id=user_id
         )
         for paper_id, score in _aggregate_to_papers(results):
             liked_scores[paper_id] = (score, f"similar to {len(starred_ids)} starred paper(s)")

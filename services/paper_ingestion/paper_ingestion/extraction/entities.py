@@ -219,6 +219,12 @@ async def _find_or_create_entity(
     **before** calling this function (outside any DB connection scope) so
     that long-running HTTP calls do not hold a database connection.  Pass
     the pre-computed results via *embedding* and *similar_entity_id*.
+
+    ``paper_count`` is **not** incremented here.  The caller
+    (``extract_entities_for_paper``) is responsible for incrementing it
+    exactly once per distinct entity encountered in a single extraction run,
+    preventing double-counting when the LLM emits duplicate entity names or
+    when extraction is re-run for the same paper.
     """
     canonical = name.lower().strip()
 
@@ -228,32 +234,41 @@ async def _find_or_create_entity(
         entity_type,
     )
     if existing:
-        await conn.execute(
-            "UPDATE entities SET paper_count = paper_count + 1 WHERE id = $1",
-            existing["id"],
-        )
         return existing["id"], True
 
     # Use pre-computed similarity result from Qdrant (computed outside conn scope)
     if similar_entity_id is not None:
-        await conn.execute(
-            "UPDATE entities SET paper_count = paper_count + 1 WHERE id = $1",
-            similar_entity_id,
-        )
         return similar_entity_id, True
 
     row = await conn.fetchrow(
         """INSERT INTO entities (name, canonical_name, entity_type, description)
            VALUES ($1, $2, $3, $4)
-           ON CONFLICT (canonical_name, entity_type) DO UPDATE
-           SET paper_count = entities.paper_count + 1
+           ON CONFLICT (canonical_name, entity_type) DO NOTHING
            RETURNING id""",
         name,
         canonical,
         entity_type,
         description,
     )
-    entity_id: int = row["id"]  # type: ignore[index]
+
+    if row is None:
+        # Lost a concurrent INSERT race; fetch the winner's id.
+        row = await conn.fetchrow(
+            "SELECT id FROM entities WHERE canonical_name = $1 AND entity_type = $2",
+            canonical,
+            entity_type,
+        )
+
+    if row is None:
+        # Race recovery itself failed — e.g. a concurrent DELETE between the
+        # INSERT-DO-NOTHING and the recovery SELECT. Surface to the caller
+        # rather than crashing with a confusing NoneType subscript downstream.
+        raise RuntimeError(
+            f"failed to resolve entity after concurrent insert: "
+            f"canonical={canonical!r} type={entity_type!r}"
+        )
+
+    entity_id: int = row["id"]
 
     if embedding is not None and qdrant_client is not None:
         await _store_entity_embedding(
@@ -373,6 +388,14 @@ async def extract_entities_for_paper(
     quote_verifier = QuoteVerifier()
 
     # --- Phase 2: DB reads + writes (connection held, no external HTTP) ---
+    # Track entity ids already processed in this run so that paper_count is
+    # incremented at most once per entity per extraction call.  This prevents
+    # double-counting when the LLM emits the same entity name more than once,
+    # and prevents re-extraction from inflating counts a second time (the
+    # paper_entities INSERT is idempotent via ON CONFLICT DO UPDATE, so only
+    # the paper_count increment needs deduplication here).
+    paper_count_incremented: set[int] = set()
+
     async with db_pool.acquire() as conn:
         for ve, pc in zip(valid_entities, precomputed):
             entity_id, was_merged = await _find_or_create_entity(
@@ -390,6 +413,14 @@ async def extract_entities_for_paper(
                 entities_merged += 1
             else:
                 entities_added += 1
+
+            # Increment paper_count exactly once per distinct entity in this run.
+            if entity_id not in paper_count_incremented:
+                await conn.execute(
+                    "UPDATE entities SET paper_count = paper_count + 1 WHERE id = $1",
+                    entity_id,
+                )
+                paper_count_incremented.add(entity_id)
 
             entity_name_lower = ve["name"].lower()
             first_chunk_id = next(

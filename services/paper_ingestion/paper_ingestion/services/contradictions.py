@@ -262,6 +262,7 @@ async def _load_verified_findings(
     conn: ConnLike,
     *,
     paper_id: int | None = None,
+    user_id: int | None = None,
 ) -> list[VerifiedFinding]:
     rows = await conn.fetch(
         """
@@ -276,10 +277,12 @@ async def _load_verified_findings(
               WHERE ref->>'related_paper_id' ~ '^[0-9]+$'
                 AND (ref->>'related_paper_id')::integer = $1
           ))
+          AND ($2::integer IS NULL OR ps.user_id IS NULL OR ps.user_id = $2)
         ORDER BY ps.created_at DESC
         LIMIT 250
         """,
         paper_id,
+        user_id,
     )
     findings: list[VerifiedFinding] = []
     for row in rows:
@@ -446,6 +449,7 @@ async def _persist_contradiction(
     page_a: int | None,
     page_b: int | None,
     model: str,
+    user_id: int | None = None,
 ) -> int | None:
     paper_a = candidate.a
     paper_b = candidate.b
@@ -469,11 +473,11 @@ async def _persist_contradiction(
             INSERT INTO paper_contradictions (
                 paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
                 page_a, page_b, contradiction_type, explanation, confidence, status,
-                scanner_metadata, updated_at
+                scanner_metadata, updated_at, user_id
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'verified',
-                $12::jsonb, NOW()
+                $12::jsonb, NOW(), $13
             )
             RETURNING id
             """,
@@ -494,6 +498,7 @@ async def _persist_contradiction(
                 "candidate_reason": candidate.reason,
                 "model": model,
             },
+            user_id,
         )
         if row is not None:
             return row["id"]
@@ -551,6 +556,7 @@ async def scan_contradictions(
     openai_client: openai.AsyncOpenAI,
     paper_id: int | None = None,
     limit: int = 25,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """Scan verified findings for cross-paper contradictions.
 
@@ -559,7 +565,7 @@ async def scan_contradictions(
     """
     model = get_smart_model()
     async with db_pool.acquire() as conn:
-        findings = await _load_verified_findings(conn, paper_id=paper_id)
+        findings = await _load_verified_findings(conn, paper_id=paper_id, user_id=user_id)
     candidates = build_contradiction_candidates(findings, paper_id=paper_id, limit=limit)
 
     inserted_ids: list[int] = []
@@ -597,6 +603,7 @@ async def scan_contradictions(
                 page_a=page_a,
                 page_b=page_b,
                 model=model,
+                user_id=user_id,
             )
         if contradiction_id is not None and contradiction_id not in inserted_ids:
             inserted_ids.append(contradiction_id)
