@@ -53,10 +53,10 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
   const queryClient = useQueryClient();
   const [showDelete, setShowDelete] = useState(false);
 
-  const { data: questions = [], isError: questionsError } = useProjectQuestions(project?.id ?? 0);
-  const { data: activityItems = [], isError: activityError } = useProjectActivity(project?.id ?? 0);
-  const { data: milestones = [], isError: milestonesError } = useProjectMilestones(project?.id ?? 0);
-  const { data: tasks = [], isError: tasksError } = useProjectTasks(project?.id ?? 0);
+  const { data: questions = [] } = useProjectQuestions(project?.id ?? 0);
+  const { data: activityItems = [] } = useProjectActivity(project?.id ?? 0);
+  const { data: milestones = [] } = useProjectMilestones(project?.id ?? 0);
+  const { data: tasks = [] } = useProjectTasks(project?.id ?? 0);
 
   const deleteMut = useMutation({
     mutationFn: () => deleteProject(project!.id),
@@ -202,11 +202,9 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
       <ScrollArea className="flex-1">
         <div className="space-y-10 px-6 py-6">
           {/* § OPEN QUESTIONS */}
-          {questionsError && <p className="text-xs text-destructive">Failed to load questions.</p>}
           <QuestionsSection projectId={project.id} questions={questions} />
 
           {/* § RECENT ACTIVITY */}
-          {activityError && <p className="text-xs text-destructive">Failed to load activity.</p>}
           <RecentActivitySection items={activityItems} />
 
           {/* § MILESTONES */}
@@ -217,7 +215,6 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
             >
               § MILESTONES · {milestones.length}
             </h3>
-            {milestonesError && <p className="text-xs text-destructive">Failed to load milestones.</p>}
             <MilestonesTab projectId={project.id} />
           </section>
 
@@ -229,7 +226,6 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
             >
               § TASKS · {tasks.length}
             </h3>
-            {tasksError && <p className="text-xs text-destructive">Failed to load tasks.</p>}
             <TasksTab projectId={project.id} />
           </section>
 

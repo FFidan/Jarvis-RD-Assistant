@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { streamSSE } from '@/lib/sse';
+import { escapeMarkdownInline } from '@/lib/markdown-escape';
 import {
   useChatStore,
   useStreamRegistry,
@@ -97,7 +98,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
           } else if (event.type === 'done') {
             setModelUsed(event.model_used ?? null);
           } else if (event.type === 'error') {
-            appendToLastMessage(chatId, `\n\n**Error:** ${event.message || 'Unknown error'}`);
+            appendToLastMessage(chatId, `\n\n**Error:** ${escapeMarkdownInline(event.message || 'Unknown error')}`);
           }
         }
       } catch (err) {
@@ -105,7 +106,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
           ? (err as { name: unknown }).name === 'AbortError'
           : false;
         if (!isAbort) {
-          appendToLastMessage(chatId, `\n\n**Error:** ${err instanceof Error ? err.message : String(err)}`);
+          appendToLastMessage(chatId, `\n\n**Error:** ${escapeMarkdownInline(err instanceof Error ? err.message : String(err))}`);
         }
         // D.2 — if stopped before any token arrived, discard the empty placeholder
         // (cast: TS narrows phaseRef.current to its initial 'idle' literal from useRef<Phase>(phase) inference)
