@@ -92,21 +92,11 @@ async def prepare_single_paper_rag(
     paper_id: int,
     body: AskRequest,
     http_client: httpx.AsyncClient,
-    *,
-    user_id: int | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Retrieve chunks for a single paper, rerank, and build LLM messages.
 
     Returns ``(messages, sources_list)``.
     Raises 404 if paper not found, 422 if no relevant chunks.
-
-    Parameters
-    ----------
-    user_id:
-        Caller user ID. Primary user-scope is enforced upstream by
-        ``assert_paper_ownership`` at the route boundary; this parameter
-        is accepted for symmetry with ``prepare_cross_paper_rag`` and
-        future defense-in-depth Qdrant-payload filtering.
     """
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
