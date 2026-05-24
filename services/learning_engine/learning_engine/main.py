@@ -12,7 +12,6 @@ AnkiExporter) lives in ``custom_init_tasks`` hooks below.
 
 import asyncio
 import logging
-import os
 from typing import Any
 
 from fastapi import Depends, FastAPI
@@ -23,6 +22,7 @@ from jarvis_common import (
     configure_lifespan,
     configure_logging,
     configure_middleware_and_errors,
+    maybe_init_sentry,
     register_health_routes,
     verify_api_key,
 )
@@ -41,12 +41,7 @@ from learning_engine.fsrs_manager import FSRSManager
 
 configure_logging("learning_engine", log_level=get_core_settings().log_level)
 
-# Optional Sentry error reporting — completely silent unless SENTRY_DSN is set.
-_sentry_dsn = os.environ.get("SENTRY_DSN", "").strip()
-if _sentry_dsn:
-    import sentry_sdk
-
-    sentry_sdk.init(dsn=_sentry_dsn, traces_sample_rate=0.0, send_default_pii=False)
+maybe_init_sentry("learning_engine")
 
 logger = logging.getLogger(__name__)
 

@@ -32,6 +32,7 @@ from jarvis_common import (
     configure_lifespan,
     configure_logging,
     configure_middleware_and_errors,
+    maybe_init_sentry,
     register_health_routes,
     verify_api_key,
 )
@@ -72,13 +73,7 @@ if not os.environ.get("PYTEST_CURRENT_TEST"):
         pass
 
 configure_logging("paper_ingestion", log_level=get_core_settings().log_level)
-
-# Optional Sentry error reporting — completely silent unless SENTRY_DSN is set.
-_sentry_dsn = os.environ.get("SENTRY_DSN", "").strip()
-if _sentry_dsn:
-    import sentry_sdk
-
-    sentry_sdk.init(dsn=_sentry_dsn, traces_sample_rate=0.0, send_default_pii=False)
+maybe_init_sentry("paper_ingestion")
 
 logger = logging.getLogger(__name__)
 

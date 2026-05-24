@@ -80,6 +80,7 @@ from jarvis_common.models import (
 )
 from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
 from jarvis_common.request_id import RequestIDMiddleware
+from jarvis_common.sentry import maybe_init_sentry
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME, SessionMiddleware
 from jarvis_common.settings import SecretsSettings, get_secrets_settings
 from jarvis_common.source_rate_limiter import SourceRateLimiter
@@ -165,4 +166,5 @@ __all__ = [
     "KEEPALIVE_INTERVAL",
     "MAX_STREAM_SECONDS",
     "stream_job_events",
+    "maybe_init_sentry",
 ]

@@ -210,7 +210,7 @@ async def send_magic_link(
     message["From"] = smtp.sender
     message["To"] = email
     message["Subject"] = "Sign in to JARVIS"
-    message.set_content(_PLAIN_BODY_TEMPLATE.replace("{link}", link))
+    message.set_content(_PLAIN_BODY_TEMPLATE.format(link=link))
 
     # Port 465 → implicit TLS; everything else → STARTTLS where supported.
     use_tls = smtp.port == 465
