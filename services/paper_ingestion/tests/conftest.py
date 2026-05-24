@@ -135,73 +135,19 @@ def _clear_settings_caches():
 def _default_authenticated_user(request):
     """WS-CROSS-USER: default every router's strict user-id resolver to user 1.
 
-    The strict resolvers (``current_user_id_strict`` /
-    ``current_user_id_strict_with_owner_override``) hard-401 sessionless
-    callers. The vast majority of unit tests call route bodies directly with
-    a stub request and only assert SQL/response shape — they predate auth and
-    have no session. This fixture patches each router module's resolver symbol
-    to return a concrete test user so those tests exercise the real isolation
-    SQL path.
-
-    Auth/IDOR tests that need a specific user (or 401) re-patch the same
-    module attribute inside their own ``with patch(...)`` / ``monkeypatch``
-    scope, which takes precedence for the duration of the test body.
-
-    Tests marked ``@pytest.mark.real_auth`` opt OUT of this stub entirely:
-    they exercise the genuine ``SessionMiddleware`` -> ``request.state.user_id``
-    -> strict-resolver path against a real ``jarvis_session`` cookie. The
-    opt-out is inert (no behaviour change) when the marker is absent.
+    Delegates to ``jarvis_common.testing_auth._apply_default_authenticated_user``.
+    Tests marked ``@pytest.mark.real_auth`` opt out entirely.
     """
     if request.node.get_closest_marker("real_auth") is not None:
         yield
         return
 
-    import importlib
-    import pkgutil
-    from unittest.mock import AsyncMock
-
     import paper_ingestion.routers as routers_pkg
-    from jarvis_common.auth import current_user_id_strict_with_owner_override
+    from jarvis_common.testing_auth import _apply_default_authenticated_user
     from paper_ingestion.main import app
 
-    resolver_names = (
-        "current_user_id_strict",
-        "current_user_id_strict_with_owner_override",
-    )
-    saved: list[tuple[object, str, object]] = []
-    for mod_info in pkgutil.iter_modules(routers_pkg.__path__):
-        module = importlib.import_module(f"paper_ingestion.routers.{mod_info.name}")
-        for name in resolver_names:
-            if hasattr(module, name):
-                saved.append((module, name, getattr(module, name)))
-                setattr(module, name, AsyncMock(return_value=1))
-
-    # CC-03: handlers converted to ``Depends(get_current_user_id)`` resolve
-    # identity through FastAPI's dependency graph, which the symbol monkeypatch
-    # above cannot intercept (``Depends`` captured the function object at import
-    # time). ``get_current_user_id`` is a thin wrapper whose body is
-    # ``Depends(current_user_id_strict_with_owner_override)``, so overriding the
-    # *inner* resolver lets FastAPI's recursive override resolution default
-    # every converted route — and the pre-existing declarative
-    # ``Depends(current_user_id_strict_with_owner_override)`` routes
-    # (e.g. pulse ``explain_card``) — to user 1.
-    #
-    # Overriding the inner resolver (not the wrapper) is deliberate: a test that
-    # needs a specific attacker/owner id re-assigns this SAME dict key inside
-    # its own scope, and the last assignment wins — exactly the precedence the
-    # old per-router symbol monkeypatch provided. Overriding the wrapper instead
-    # would short-circuit FastAPI before it descends to the inner resolver, so
-    # such per-test re-overrides would be silently ignored.
-    override_added = current_user_id_strict_with_owner_override not in app.dependency_overrides
-    if override_added:
-        app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 1
-    try:
+    with _apply_default_authenticated_user(app, routers_pkg):
         yield
-    finally:
-        for module, name, original in saved:
-            setattr(module, name, original)
-        if override_added:
-            app.dependency_overrides.pop(current_user_id_strict_with_owner_override, None)
 
 
 @pytest.fixture()
