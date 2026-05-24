@@ -19,8 +19,9 @@ from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
     EmptyVisibleLLMContentError,
+    call_llm_structured,
     get_litellm_config,
-    request_chat_completion_content,
+    observe,
     strip_think_blocks,
 )
 from jarvis_common.sse import SSE_DONE, sse_event
@@ -91,6 +92,46 @@ def _strip_think_blocks(text: str) -> str:
     can resolve the symbol on import.
     """
     return strip_think_blocks(text)
+
+
+@observe()
+async def _call_rag_llm(
+    messages: list[dict[str, str]],
+    *,
+    smart_model: str,
+) -> "AskResponse":
+    """Call the LLM for a RAG answer and return a validated AskResponse.
+
+    Extracted from the ask_paper / ask_cross_paper handlers so that
+    Langfuse can instrument the LLM span via ``@observe()``.
+    Uses ``svc.openai_client`` set by the service lifespan.
+
+    Parameters
+    ----------
+    messages:
+        Fully-built message list (system + context + user).
+    smart_model:
+        Resolved model alias (e.g. ``"smart"`` or a concrete name).
+    """
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    _openai_client = svc.openai_client
+    if _openai_client is None:
+        raise RuntimeError(
+            "openai_client not initialized — check _init_langfuse_hook ran during lifespan"
+        )
+    return await call_llm_structured(
+        _openai_client,
+        response_model=AskResponse,
+        messages=messages,
+        options=ChatCompletionOptions(
+            model=smart_model,
+            max_tokens=700,
+            temperature=0.1,
+            timeout=LLM_TIMEOUT_DEFAULT,
+        ),
+        config=get_litellm_config(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -209,25 +250,13 @@ async def ask_paper(
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     messages, raw_sources = await prepare_single_paper_rag(
-        embedder, db_pool, paper_id, body, http_client
+        embedder, db_pool, paper_id, body, http_client, user_id=user_id
     )
 
     smart_model = get_smart_model()
 
-    litellm_config = get_litellm_config()
-
     try:
-        answer = await request_chat_completion_content(
-            http_client,
-            messages=messages,
-            options=ChatCompletionOptions(
-                model=smart_model,
-                max_tokens=700,
-                temperature=0.1,
-                timeout=LLM_TIMEOUT_DEFAULT,
-            ),
-            config=litellm_config,
-        )
+        ask_result = await _call_rag_llm(messages, smart_model=smart_model)
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="LLM request timed out") from exc
     except EmptyVisibleLLMContentError as exc:
@@ -242,7 +271,7 @@ async def ask_paper(
         logger.error("RAG LLM call failed for paper %d: %s", paper_id, exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc
 
-    answer = _strip_think_blocks(answer)
+    answer = _strip_think_blocks(ask_result.answer)
 
     # Enrich sources with paper_id for verification
     sources = [{**s, "paper_id": paper_id} for s in raw_sources]
@@ -391,20 +420,8 @@ async def ask_cross_paper(
 
     smart_model = get_smart_model()
 
-    litellm_config = get_litellm_config()
-
     try:
-        answer = await request_chat_completion_content(
-            http_client,
-            messages=messages,
-            options=ChatCompletionOptions(
-                model=smart_model,
-                max_tokens=700,
-                temperature=0.1,
-                timeout=LLM_TIMEOUT_DEFAULT,
-            ),
-            config=litellm_config,
-        )
+        ask_result = await _call_rag_llm(messages, smart_model=smart_model)
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="LLM request timed out") from exc
     except EmptyVisibleLLMContentError as exc:
@@ -419,7 +436,7 @@ async def ask_cross_paper(
         logger.error("Cross-paper RAG LLM call failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc
 
-    answer = _strip_think_blocks(answer)
+    answer = _strip_think_blocks(ask_result.answer)
 
     confidence: str | None = None
     verified_fraction: float | None = None

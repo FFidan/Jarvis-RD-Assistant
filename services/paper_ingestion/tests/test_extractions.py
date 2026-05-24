@@ -8,18 +8,25 @@ template).
 - non-admin session  → 403 on each CUD op
 - admin session      → success
 - read endpoint (GET /api/extraction-templates) is unaffected
+
+Schema guard (CFG-EXTPL-1): a live-PG test asserts ``extraction_templates``
+has NO ``user_id`` column so that accidental per-user column addition is caught
+before it causes a multi-tenancy design violation (requires a schema migration
++ design review to introduce).
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import asyncpg
 import httpx
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
+from tests.migration_helpers import apply_fresh_init
 
 
 def _template_row(id=1, name="Default Template", is_default=True):
@@ -171,3 +178,41 @@ async def test_list_templates_unaffected_by_admin_gate(_app):
         resp = await c.get("/api/extraction-templates")
     assert resp.status_code == 200, resp.text
     assert len(resp.json()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Schema guard: CFG-EXTPL-1 — extraction_templates is system-global (no user_id)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_pg
+async def test_extraction_templates_are_global_not_per_user(live_pg_dsn: str) -> None:
+    """extraction_templates has no user_id column — templates are global/system-scoped.
+
+    Guards against accidental addition of a per-user column which would require
+    a schema migration + multi-tenancy design review (CFG-EXTPL-1).  The query in
+    ``extract_fields_for_paper`` (SELECT ... WHERE id = $1) is intentionally
+    user-predicate-free; this test locks that contract at the schema level.
+    """
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            cols = {
+                r["column_name"]
+                for r in await conn.fetch(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'extraction_templates'"
+                )
+            }
+        assert "user_id" not in cols, (
+            "extraction_templates is intentionally global; "
+            "do not add user_id without a migration + multi-tenancy design review"
+        )
+        # Confirm expected system-global columns are present
+        assert "id" in cols
+        assert "name" in cols
+        assert "fields" in cols
+    finally:
+        await pool.close()

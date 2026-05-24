@@ -1,7 +1,12 @@
 """Structured data extraction from papers using LLM.
 
-Uses user-defined extraction templates to extract structured fields from
-papers. Each field includes a supporting quote verified against source text.
+Uses system-global extraction templates to extract structured fields from
+papers.  Templates are instance-wide (no ``user_id`` column on
+``extraction_templates``): all users share the same template catalogue.
+Do NOT add per-user filtering to template lookups — that would require a
+new schema column + multi-tenancy design review (see CFG-EXTPL-1 / db/init.sql).
+
+Each field includes a supporting quote verified against source text.
 
 Anti-hallucination strategy:
 1. Select relevant chunks per field using semantic search
@@ -96,7 +101,14 @@ async def extract_fields_for_paper(
     verifier: Any | None = None,
     openai_client: Any | None = None,
 ) -> ExtractionResponse:
-    """Extract template fields for one paper and persist the extraction payload."""
+    """Extract template fields for one paper and persist the extraction payload.
+
+    ``extraction_templates`` is **system-global** — the table has no ``user_id``
+    column and the ``name`` constraint is instance-wide UNIQUE.  The query below
+    (``SELECT * FROM extraction_templates WHERE id = $1``) is therefore correct
+    as-is and must NOT gain a user predicate.  Templates are visible to all
+    authenticated users; creation/update/deletion is admin-only (CFG-EXTPL-1).
+    """
     async with db_pool.acquire() as conn:
         try:
             template = await conn.fetchrow(

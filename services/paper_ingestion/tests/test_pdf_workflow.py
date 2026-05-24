@@ -362,6 +362,113 @@ async def test_pdf_workflow_preserves_embedding_error_for_httpx_failures():
         )
 
 
+# ---------------------------------------------------------------------------
+# CFG-PROGRESS-1: progress_callback threaded into pdf_processor.process
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_progress_callback_threaded_into_processor():
+    """pdf_processor.process must receive a progress_callback when ctx is provided."""
+    from types import SimpleNamespace
+
+    conn = AsyncMock()
+    conn.fetchval.return_value = 0  # no existing chunks → proceed to Phase 2
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    chunks = [SimpleNamespace(chunk_index=0, content="c", page_number=1, start_char=0, end_char=1)]
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(return_value=("text", chunks, ["vec-1"]))
+    embedder = MagicMock()
+
+    progress_calls: list[float] = []
+
+    class FakeCtx:
+        async def update_progress(self, pct: float, msg: str | None = None) -> None:
+            progress_calls.append(pct)
+
+    await run_process_pdf(
+        paper_id=100,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        ctx=FakeCtx(),
+    )
+
+    _, kwargs = pdf_processor.process.call_args
+    assert "progress_callback" in kwargs, (
+        "progress_callback must be forwarded to pdf_processor.process()"
+    )
+    callback = kwargs["progress_callback"]
+    assert callable(callback), "progress_callback must be callable"
+
+
+@pytest.mark.asyncio
+async def test_extraction_progress_maps_to_01_04_range():
+    """The extraction progress callback maps chunk progress to the 0.1-0.4 window."""
+    from types import SimpleNamespace
+
+    conn = AsyncMock()
+    conn.fetchval.return_value = 0
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    chunks = [SimpleNamespace(chunk_index=0, content="c", page_number=1, start_char=0, end_char=1)]
+
+    captured_callback: list = []
+
+    async def capture_and_succeed(pdf_path, paper_id, *, user_id=None, progress_callback=None):
+        if progress_callback is not None:
+            captured_callback.append(progress_callback)
+        return ("text", chunks, ["vec-1"])
+
+    pdf_processor = MagicMock()
+    pdf_processor.process = capture_and_succeed
+    embedder = MagicMock()
+
+    progress_calls: list[float] = []
+
+    class FakeCtx:
+        async def update_progress(self, pct: float, msg: str | None = None) -> None:
+            progress_calls.append(pct)
+
+    await run_process_pdf(
+        paper_id=101,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        ctx=FakeCtx(),
+    )
+
+    assert len(captured_callback) == 1, "progress_callback was not captured"
+    cb = captured_callback[0]
+
+    # Simulate: chunk 0 of 4 → 0.1 + 0.3*(0/4) = 0.1
+    await cb(0, 4)
+    assert abs(progress_calls[-1] - 0.1) < 1e-9, f"Expected 0.1, got {progress_calls[-1]}"
+
+    # chunk 2 of 4 → 0.1 + 0.3*(2/4) = 0.25
+    await cb(2, 4)
+    assert abs(progress_calls[-1] - 0.25) < 1e-9, f"Expected 0.25, got {progress_calls[-1]}"
+
+    # chunk 4 of 4 → 0.1 + 0.3*(4/4) = 0.4
+    await cb(4, 4)
+    assert abs(progress_calls[-1] - 0.4) < 1e-9, f"Expected 0.4, got {progress_calls[-1]}"
+
+
 @pytest.mark.parametrize("status_code", [400, 401, 500])
 @pytest.mark.asyncio
 async def test_pdf_workflow_embedding_http_status_stays_actionable(status_code: int):

@@ -294,9 +294,18 @@ async def run_process_pdf(
     await _maybe_progress(0.1, "Downloaded")
 
     # --- Phase 2: Extract text, chunk, embed (no lock, no connection held) ---
+
+    async def _extraction_progress(chunk_index: int, total_chunks: int) -> None:
+        """Map per-chunk extraction progress into the 0.1–0.4 phase window."""
+        if total_chunks > 0:
+            frac = chunk_index / total_chunks
+        else:
+            frac = 1.0
+        await _maybe_progress(0.1 + 0.3 * frac, f"Extracting chunk {chunk_index}/{total_chunks}")
+
     try:
         _full_text, chunks, point_ids = await pdf_processor.process(
-            pdf_path, paper_id, user_id=owner_id
+            pdf_path, paper_id, user_id=owner_id, progress_callback=_extraction_progress
         )
         # Subtract newly upserted IDs: deterministic uuid5 IDs are identical for
         # unchanged chunk indices, so deleting them would erase just-written vectors.

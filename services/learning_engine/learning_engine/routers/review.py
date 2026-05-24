@@ -185,8 +185,9 @@ async def sync_reviews(
     """Idempotently replay an offline review batch (contract 2026-05-16)."""
     synced = 0
     skipped = 0
+    already_synced = 0
     if not body.reviews:
-        return ReviewSyncResponse(synced=0, skipped=0)
+        return ReviewSyncResponse(synced=0, skipped=0, already_synced=0)
 
     # Pre-flight: resolve already-applied idempotency keys, then release connection.
     keys = [e.idempotency_key for e in body.reviews]
@@ -208,7 +209,7 @@ async def sync_reviews(
         async with db_pool.acquire() as conn:
             for event in batch:
                 if event.idempotency_key in applied:
-                    synced += 1
+                    already_synced += 1
                     continue
                 async with conn.transaction():
                     card = await conn.fetchrow(
@@ -243,9 +244,9 @@ async def sync_reviews(
                     if inserted_log_id is None:
                         # A concurrent request with the same idempotency_key won the
                         # INSERT (its row is durably recorded). Do NOT advance FSRS
-                        # again — count as synced per contract §4 and move on.
+                        # again — count as already_synced (not a new write) and move on.
                         applied.add(event.idempotency_key)
-                        synced += 1
+                        already_synced += 1
                         continue
                     await conn.execute(
                         "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
@@ -257,7 +258,7 @@ async def sync_reviews(
                 applied.add(event.idempotency_key)
                 synced += 1
 
-    return ReviewSyncResponse(synced=synced, skipped=skipped)
+    return ReviewSyncResponse(synced=synced, skipped=skipped, already_synced=already_synced)
 
 
 @router.get("/stats", response_model=RetentionStats)

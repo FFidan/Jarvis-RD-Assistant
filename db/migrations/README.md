@@ -1,5 +1,11 @@
 # db/migrations
 
+## Migration Naming Convention
+
+All migration files use a **4-digit zero-padded prefix**: `NNNN_description.sql` (e.g. `0089_drop_pdf_resolutions.sql`).
+Next available: scan the highest existing prefix and increment by 1.
+Baseline: `db/init.sql` (all schema through 0088). Migrations start at **0089**.
+
 ## What changed — 2026-05-19 Wave 1 squash
 
 The 88 incremental migration files (`001_*.sql` … `088_*.sql`) were collapsed

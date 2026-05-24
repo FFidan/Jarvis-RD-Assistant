@@ -124,7 +124,7 @@ async def test_ask_paper_stream_rejects_other_users_paper():
 async def test_ask_paper_returns_504_on_llm_timeout():
     """POST /api/papers/{id}/ask returns 504 when LiteLLM times out.
 
-    Evidenced by rag.py line 193-194:
+    Evidenced by rag.py try/except around _call_rag_llm:
         except httpx.TimeoutException:
             raise HTTPException(status_code=504, detail="LLM request timed out")
     """
@@ -146,7 +146,7 @@ async def test_ask_paper_returns_504_on_llm_timeout():
                     new=AsyncMock(return_value=(fake_messages, fake_sources)),
                 ),
                 patch(
-                    "paper_ingestion.routers.rag.request_chat_completion_content",
+                    "paper_ingestion.routers.rag._call_rag_llm",
                     new=AsyncMock(side_effect=httpx.TimeoutException("timeout")),
                 ),
             ):
@@ -169,7 +169,7 @@ async def test_ask_paper_returns_504_on_llm_timeout():
 async def test_ask_paper_returns_502_on_llm_error():
     """POST /api/papers/{id}/ask returns 502 when LiteLLM raises a runtime error.
 
-    Evidenced by rag.py lines 195-197:
+    Evidenced by rag.py try/except around _call_rag_llm:
         except Exception as exc:
             ...
             raise HTTPException(status_code=502, detail="LLM request failed") from exc
@@ -192,7 +192,7 @@ async def test_ask_paper_returns_502_on_llm_error():
                     new=AsyncMock(return_value=(fake_messages, fake_sources)),
                 ),
                 patch(
-                    "paper_ingestion.routers.rag.request_chat_completion_content",
+                    "paper_ingestion.routers.rag._call_rag_llm",
                     new=AsyncMock(side_effect=RuntimeError("LLM backend unavailable")),
                 ),
             ):

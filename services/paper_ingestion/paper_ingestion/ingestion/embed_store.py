@@ -286,9 +286,14 @@ class EmbeddingStoreMixin:
                 await self.qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
             except Exception as exc:
                 if not completed_point_ids:
-                    # Nothing persisted yet — surface the raw error so callers
-                    # that special-case dimension/HTTP failures still work.
-                    raise
+                    # Nothing persisted yet — wrap in EmbeddingBatchError so
+                    # pdf_workflow.py:310 handles first-batch failures uniformly
+                    # via the same resume logic as mid-batch failures.
+                    raise EmbeddingBatchError(
+                        f"Embedding failed at first batch (0 chunks persisted): {exc}",
+                        completed_chunks=[],
+                        completed_point_ids=[],
+                    ) from exc
                 logger.warning(
                     "Embedding batch %d failed for paper %d after %d/%d chunks persisted: %r",
                     i // batch_size,

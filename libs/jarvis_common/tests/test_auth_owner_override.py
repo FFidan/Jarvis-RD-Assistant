@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jarvis_common import auth
 
 
 def _make_request(
@@ -156,3 +157,36 @@ async def test_owner_override_failed_api_key_does_not_emit_audit_log() -> None:
 
     assert exc_info.value.status_code == 403
     mock_log_audit.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# CFG-OWNERCACHE-1: cache tests
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_allowed_networks_cache_exists() -> None:
+    """refresh_allowed_networks_cache() must be importable and not raise."""
+    from jarvis_common.auth import refresh_allowed_networks_cache
+
+    refresh_allowed_networks_cache()  # must not raise
+
+
+def test_allowed_networks_parsed_once_per_cache_fill(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_parse_allowed_networks must be called once per cache fill, not per _ip_in_allowlist call."""
+    call_count = 0
+    original = auth._parse_allowed_networks
+
+    def counting(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        return original(*args, **kwargs)
+
+    # Reset the cache so we start from a clean state.
+    monkeypatch.setattr(auth, "_CACHED_ALLOWED_NETWORKS", None)
+    monkeypatch.setattr(auth, "_parse_allowed_networks", counting)
+
+    auth.refresh_allowed_networks_cache()
+    auth._ip_in_allowlist("127.0.0.1")
+    auth._ip_in_allowlist("127.0.0.1")
+
+    assert call_count == 1, f"Networks must be parsed once, not per-call; got {call_count}"

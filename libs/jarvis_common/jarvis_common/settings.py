@@ -93,12 +93,6 @@ class CoreSettings(BaseSettings):
     dev_cors_open: bool = False
     dev_smtp_log_only: bool = False
     dev_crypto_relaxed: bool = False
-    # Wrapped in SecretStr so accidental ``repr(settings)`` / structured-log
-    # serialisations print ``SecretStr('**********')`` instead of the raw
-    # value. Call sites must use ``.get_secret_value()`` to obtain the
-    # plaintext for HTTP headers / Fernet keys.
-    jarvis_api_key: SecretStr | None = None
-    jarvis_config_key: SecretStr | None = None
     log_level: str = "INFO"
     environment: str = "development"
     # Comma-separated list of trusted proxy hostnames for ProxyHeadersMiddleware.

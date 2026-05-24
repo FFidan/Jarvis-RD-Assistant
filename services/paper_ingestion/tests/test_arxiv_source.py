@@ -350,3 +350,37 @@ def test_parse_entry_rejects_http_scheme_pdf(caplog):
         paper = source._parse_entry(entry)
 
     assert paper.pdf_url is None
+
+
+# ---------------------------------------------------------------------------
+# CFG-XML-1: safe_fromstring receives bytes (response.content), not str
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_xml_passes_bytes_to_safe_fromstring():
+    """_fetch_xml calls safe_fromstring with bytes (response.content), not str."""
+    fixture = _empty_xml()
+    respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, content=fixture))
+
+    source = _make_source()
+
+    captured: list[object] = []
+
+    def _capturing_fromstring(data, *args, **kwargs):
+        captured.append(data)
+        # Delegate to real lxml/stdlib so the call chain can complete
+        from lxml.etree import fromstring as _lxml_fromstring
+
+        return _lxml_fromstring(data, *args, **kwargs)
+
+    with patch(
+        "paper_ingestion.sources.arxiv_source.safe_fromstring",
+        side_effect=_capturing_fromstring,
+    ):
+        await source._fetch_xml({"search_query": "all:ml", "start": 0, "max_results": 1})
+
+    assert captured, "safe_fromstring was never called"
+    assert isinstance(captured[0], bytes), (
+        f"safe_fromstring must receive bytes, got {type(captured[0])!r}"
+    )

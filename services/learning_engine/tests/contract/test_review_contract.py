@@ -117,14 +117,15 @@ async def test_sync_reviews_idempotency_key_prevents_double_apply(
         f"First sync expected synced=1 skipped=0; got {body1}"
     )
 
-    # Second call with the same idempotency_key — must NOT create a second review_log row
+    # Second call with the same idempotency_key — must NOT create a second review_log row.
+    # The key is now in ``applied``; the event hits the idempotency fast-path and is
+    # counted as ``already_synced`` (not ``synced``) to distinguish replays from new writes.
     async with _client(_le_app, contract_two_users.cookie_a) as c:
         resp2 = await c.post("/api/review/sync", json={"reviews": [event]})
     assert resp2.status_code == 200, f"Second sync failed: {resp2.status_code}: {resp2.text[:300]}"
     body2 = resp2.json()
-    assert body2["synced"] == 1, (
-        f"Idempotency violated: second sync reported synced={body2['synced']} "
-        f"(expected 1). Full body: {body2}"
+    assert body2["synced"] == 0 and body2["already_synced"] == 1, (
+        f"Idempotency fast-path should report synced=0 already_synced=1; got {body2}"
     )
 
     # Verify only one review_log row exists with this key

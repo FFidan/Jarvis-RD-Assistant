@@ -173,10 +173,20 @@ class ReviewSyncRequest(BaseModel):
 
 
 class ReviewSyncResponse(BaseModel):
-    """Reconcile outcome: durably-recorded vs declined event counts."""
+    """Reconcile outcome: durably-recorded vs declined event counts.
+
+    Fields:
+    - synced: events newly written to review_logs in this call.
+    - skipped: events rejected (card not found / not owned by caller).
+    - already_synced: events skipped because their idempotency_key was
+      already present in review_logs (idempotency fast-path or concurrent
+      ON CONFLICT race). Not counted as ``synced`` to avoid inflating the
+      caller's perceived write throughput.
+    """
 
     synced: int = Field(..., ge=0)
     skipped: int = Field(..., ge=0)
+    already_synced: int = Field(default=0, ge=0)
 
 
 class RetentionStats(BaseModel):

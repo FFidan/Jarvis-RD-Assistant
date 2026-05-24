@@ -33,7 +33,7 @@ from jarvis_common.prompt_safety import safe_for_prompt
 from jarvis_common.time_utils import utc_now_iso
 from jarvis_common.verify import QuoteVerifier
 
-from paper_ingestion.weekly_summary_models import WeeklyDigestOutput
+from paper_ingestion.weekly_summary_models import ThemeOutput, WeeklyDigestOutput
 
 if TYPE_CHECKING:
     import openai
@@ -193,7 +193,7 @@ async def generate_weekly_summary(
                 f"\n  Summary: {safe_for_prompt(brief[:300], mode='escape')}\n"
             )
 
-        themes: list[dict] = []
+        themes: list[ThemeOutput] = []
         summary = f"{len(papers)} papers on {topic_name} this week."
 
         if len(papers) >= 2:
@@ -214,8 +214,8 @@ async def generate_weekly_summary(
                     ),
                     config=litellm_config,
                 )
-                # Convert ThemeOutput objects to dicts for backward-compatible output.
-                themes = [t.model_dump() for t in llm_data.themes]
+                # Keep ThemeOutput instances; convert to dicts only at response boundary.
+                themes = llm_data.themes
                 summary = llm_data.summary
             except Exception:
                 # weekly_summary generation degrades to the default summary if synthesis fails.
@@ -252,43 +252,47 @@ async def generate_weekly_summary(
             corpus = " ".join(part for part in corpus_parts if part).strip()
 
             for theme in themes:
-                theme_text = str(theme.get("theme", "") or "").strip()
+                # Attribute access on ThemeOutput — no dict.get() on LLM output.
+                theme_text = str(theme.theme or "").strip()
+                # Convert to dict at the annotation boundary (response payload shape).
+                theme_dict = theme.model_dump()
                 if not theme_text or not corpus:
-                    theme["verified"] = False
-                    theme["verification_reason"] = (
+                    theme_dict["verified"] = False
+                    theme_dict["verification_reason"] = (
                         "empty theme text" if not theme_text else "no source corpus available"
                     )
-                    unverified_themes.append(theme)
+                    unverified_themes.append(theme_dict)
                     continue
                 try:
                     result = await asyncio.to_thread(verifier.verify_quote, theme_text, corpus, [])
                 except Exception:
                     logger.warning("weekly_summary: theme verification raised", exc_info=True)
-                    theme["verified"] = False
-                    theme["verification_reason"] = "verifier raised an exception"
-                    unverified_themes.append(theme)
+                    theme_dict["verified"] = False
+                    theme_dict["verification_reason"] = "verifier raised an exception"
+                    unverified_themes.append(theme_dict)
                     continue
                 if result.verified:
-                    theme["verified"] = True
-                    theme["verification_reason"] = None
-                    verified_themes.append(theme)
+                    theme_dict["verified"] = True
+                    theme_dict["verification_reason"] = None
+                    verified_themes.append(theme_dict)
                 else:
-                    theme["verified"] = False
+                    theme_dict["verified"] = False
                     score_pct = (
                         f"{int(round(result.match_score * 100))}%"
                         if result.match_score is not None
                         else "no match"
                     )
-                    theme["verification_reason"] = (
+                    theme_dict["verification_reason"] = (
                         f"theme text not supported by source papers (best fuzzy match: {score_pct})"
                     )
-                    unverified_themes.append(theme)
+                    unverified_themes.append(theme_dict)
 
         result_topics.append(
             {
                 "name": topic_name,
                 "paper_count": len(papers),
-                "themes": themes,
+                # Response boundary: convert ThemeOutput instances to JSON-serializable dicts.
+                "themes": [t.model_dump() for t in themes],
                 "verified_themes": verified_themes,
                 "unverified_themes": unverified_themes,
                 "top_papers": top_papers,

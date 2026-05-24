@@ -5,10 +5,14 @@ We use ``pydantic.create_model`` to build a per-template response model
 so that ``call_llm_structured`` can validate field values at the schema level.
 """
 
+import keyword
+import re
 from functools import lru_cache
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, create_model
+
+_FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class ExtractedFieldOutput(BaseModel):
@@ -37,7 +41,28 @@ def _build_extraction_response_model(field_names: tuple[str, ...]) -> type[BaseM
     The cache key is an ordered tuple so that the same set of fields always
     returns the same class object — avoids re-compiling Pydantic validators
     on every extraction call.
+
+    Raises
+    ------
+    ValueError
+        If any name in *field_names* is not a valid Python identifier, is a
+        Python keyword, is a dunder name, or starts with ``model_`` (which
+        Pydantic reserves for its own methods).
     """
+    for name in field_names:
+        if not _FIELD_NAME_RE.match(name):
+            raise ValueError(f"Invalid field name {name!r}: must match [A-Za-z_][A-Za-z0-9_]*")
+        if keyword.iskeyword(name):
+            raise ValueError(f"Invalid field name {name!r}: Python keyword")
+        if name.startswith("__") and name.endswith("__"):
+            raise ValueError(f"Invalid field name {name!r}: dunder names reserved")
+        if name.startswith("_"):
+            raise ValueError(
+                f"Invalid field name {name!r}: underscore-prefixed names are treated as "
+                "Pydantic private attributes and would be silently dropped"
+            )
+        if name.startswith("model_"):
+            raise ValueError(f"Invalid field name {name!r}: 'model_*' names reserved by Pydantic")
     fields_kwargs: dict[str, Any] = {
         # pydantic create_model requires Optional[X] here; the PEP 604 X|None
         # form doesn't round-trip through dynamic model construction.

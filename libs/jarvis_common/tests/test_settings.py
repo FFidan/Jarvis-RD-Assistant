@@ -22,12 +22,20 @@ from pydantic import ValidationError
 # ---------------------------------------------------------------------------
 
 
+def test_core_settings_does_not_expose_api_key():
+    """CoreSettings must not have jarvis_api_key or jarvis_config_key; use get_secrets_settings()."""
+    assert "jarvis_api_key" not in CoreSettings.model_fields, (
+        "jarvis_api_key must live only in SecretsSettings"
+    )
+    assert "jarvis_config_key" not in CoreSettings.model_fields, (
+        "jarvis_config_key must live only in SecretsSettings"
+    )
+
+
 def test_core_settings_defaults(monkeypatch):
     """With no env vars set, CoreSettings returns documented defaults."""
     for key in (
         "DEV_MODE",
-        "JARVIS_API_KEY",
-        "JARVIS_CONFIG_KEY",
         "LOG_LEVEL",
         "ENVIRONMENT",
         "TRUSTED_PROXY_HOSTS",
@@ -36,8 +44,6 @@ def test_core_settings_defaults(monkeypatch):
 
     settings = CoreSettings()
     assert settings.dev_mode is False
-    assert settings.jarvis_api_key is None
-    assert settings.jarvis_config_key is None
     assert settings.log_level == "INFO"
     assert settings.environment == "development"
     assert settings.trusted_proxy_hosts == "dashboard"
@@ -45,34 +51,28 @@ def test_core_settings_defaults(monkeypatch):
 
 
 def test_core_settings_reads_env(monkeypatch):
-    """Env vars are picked up case-insensitively. Secrets are wrapped in SecretStr."""
+    """Env vars are picked up case-insensitively."""
     monkeypatch.setenv("DEV_MODE", "true")
-    monkeypatch.setenv("JARVIS_API_KEY", "secret-key")
-    monkeypatch.setenv("JARVIS_CONFIG_KEY", "fernet-key")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("TRUSTED_PROXY_HOSTS", "dashboard,nginx,cf")
 
     settings = CoreSettings()
     assert settings.dev_mode is True
-    assert settings.jarvis_api_key is not None
-    assert settings.jarvis_api_key.get_secret_value() == "secret-key"
-    assert settings.jarvis_config_key is not None
-    assert settings.jarvis_config_key.get_secret_value() == "fernet-key"
     assert settings.log_level == "DEBUG"
     assert settings.environment == "production"
     assert settings.trusted_proxy_hosts_list == ["dashboard", "nginx", "cf"]
 
 
-def test_core_settings_secrets_do_not_leak_in_repr(monkeypatch):
+def test_secrets_settings_do_not_leak_in_repr(monkeypatch):
     """SecretStr fields must mask their values in string representations."""
     monkeypatch.setenv("JARVIS_API_KEY", "leaky-key-value")
     monkeypatch.setenv("JARVIS_CONFIG_KEY", "leaky-fernet-value")
-    settings = CoreSettings()
+    secrets = SecretsSettings()
     # repr() and str() must not contain the raw secret
-    assert "leaky-key-value" not in repr(settings)
-    assert "leaky-fernet-value" not in repr(settings)
-    assert "leaky-key-value" not in str(settings)
+    assert "leaky-key-value" not in repr(secrets)
+    assert "leaky-fernet-value" not in repr(secrets)
+    assert "leaky-key-value" not in str(secrets)
 
 
 def test_core_settings_trusted_proxy_list_ignores_empties(monkeypatch):
@@ -88,13 +88,14 @@ def test_core_settings_dev_mode_invalid_raises(monkeypatch):
         CoreSettings()
 
 
-def test_core_settings_resolves_jarvis_api_key_file(tmp_path, monkeypatch):
-    """CoreSettings must honor JARVIS_API_KEY_FILE like SecretsSettings does."""
+def test_secrets_settings_resolves_jarvis_api_key_file(tmp_path, monkeypatch):
+    """SecretsSettings must honor JARVIS_API_KEY_FILE indirection."""
     key_file = tmp_path / "api_key"
     key_file.write_text("my-secret-test-value")
     monkeypatch.delenv("JARVIS_API_KEY", raising=False)
     monkeypatch.setenv("JARVIS_API_KEY_FILE", str(key_file))
-    s = CoreSettings()
+    get_secrets_settings.cache_clear()
+    s = SecretsSettings()
     assert s.jarvis_api_key is not None
     assert s.jarvis_api_key.get_secret_value() == "my-secret-test-value"
 
@@ -191,11 +192,12 @@ def test_factories_reflect_runtime_env_changes(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_env_file_indirection_shared_by_core_and_secrets(tmp_path, monkeypatch):
-    """Both CoreSettings and SecretsSettings use the same hoisted helper.
+def test_resolve_env_file_indirection_secrets_settings(tmp_path, monkeypatch):
+    """SecretsSettings uses the _resolve_env_file_indirection hoisted helper.
 
-    This test proves that a _FILE env var resolves correctly through both
-    classes — confirming the factored-out function is wired in both validators.
+    This test proves that a _FILE env var resolves correctly through
+    SecretsSettings — confirming the factored-out function is wired in its
+    model_validator.  CoreSettings no longer owns jarvis_api_key (CFG-DUP-1).
     """
     # Create a temp secret file
     secret_file = tmp_path / "api.key"
@@ -207,20 +209,13 @@ def test_resolve_env_file_indirection_shared_by_core_and_secrets(tmp_path, monke
 
     monkeypatch.setenv("JARVIS_API_KEY_FILE", str(secret_file))
 
-    # Both classes must resolve the _FILE indirection via the shared helper
-    core = CoreSettings()
-    assert core.jarvis_api_key is not None
-    assert core.jarvis_api_key.get_secret_value() == "shared-secret-value"
-
     get_secrets_settings.cache_clear()
     secrets = SecretsSettings()
     assert secrets.jarvis_api_key is not None
     assert secrets.jarvis_api_key.get_secret_value() == "shared-secret-value"
 
-    # Both classes also raise identically on a missing file
+    # Raises on a missing file
     monkeypatch.setenv("JARVIS_API_KEY_FILE", "/nonexistent/secret.key")
-    with pytest.raises((RuntimeError, OSError)):
-        CoreSettings()
     with pytest.raises((RuntimeError, OSError)):
         SecretsSettings()
 
@@ -232,5 +227,6 @@ def test_resolve_env_file_indirection_empty_file_resolves_to_none(tmp_path, monk
     for key in ("JARVIS_API_KEY", "JARVIS_API_KEY_FILE"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("JARVIS_API_KEY_FILE", str(empty_file))
-    settings = CoreSettings()
+    get_secrets_settings.cache_clear()
+    settings = SecretsSettings()
     assert settings.jarvis_api_key is None

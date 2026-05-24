@@ -5,7 +5,7 @@ import logging
 
 import asyncpg
 import httpx
-from jarvis_common.settings import get_core_settings, get_telegram_settings
+from jarvis_common.settings import get_secrets_settings, get_telegram_settings
 
 from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS
 from paper_ingestion.services.model_lifecycle import catalog_entry_for_model, normalize_model_tag
@@ -25,7 +25,7 @@ async def reload_telegram_nudges() -> None:
     if not telegram_url:
         logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
         return
-    api_key_secret = get_core_settings().jarvis_api_key
+    api_key_secret = get_secrets_settings().jarvis_api_key
     api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
     with contextlib.suppress(Exception):
         async with httpx.AsyncClient() as client:

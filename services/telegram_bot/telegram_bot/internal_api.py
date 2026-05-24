@@ -10,7 +10,7 @@ import logging
 import uvicorn
 from fastapi import Depends, FastAPI
 from jarvis_common.auth import verify_api_key
-from jarvis_common.settings import get_core_settings
+from jarvis_common.settings import get_core_settings, get_secrets_settings
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
     """
     # F-01: Refuse to start unauthenticated internal API in DEV_MODE
     core = get_core_settings()
-    api_key_secret = core.jarvis_api_key
+    api_key_secret = get_secrets_settings().jarvis_api_key
     api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
     if core.dev_mode and not api_key:
         logger.warning(
