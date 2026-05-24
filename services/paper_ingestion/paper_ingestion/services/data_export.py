@@ -14,20 +14,10 @@ __all__ = [
 # (table-in-zip name, SQL). Each query is scoped to the calling user via $1.
 # Structured data only: no PDF binaries, no embeddings (paper_chunks.embedding
 # / vectors are excluded — papers carries metadata + abstract, notes carry the
-# user's own annotations). papers is scoped via user_library join so that
-# multi-tenant reality is honoured: any user who has added a paper to their
-# library (regardless of who first discovered it) gets that paper in their
-# GDPR export.  discovered_by was the wrong predicate (CFG-GDPR-1 fix).
+# user's own annotations). papers is scoped by discovered_by (canonical-corpus
+# owner column, mig 072); everything else by user_id.
 _EXPORT_QUERIES: tuple[tuple[str, str], ...] = (
-    (
-        "papers",
-        "SELECT row_to_json(p) FROM papers p "
-        "WHERE EXISTS (SELECT 1 FROM user_library ul WHERE ul.paper_id = p.id AND ul.user_id = $1)",
-    ),
-    (
-        "user_library",
-        "SELECT row_to_json(t) FROM user_library t WHERE t.user_id = $1",
-    ),
+    ("papers", "SELECT row_to_json(p) FROM papers p WHERE p.discovered_by = $1"),
     ("paper_notes", "SELECT row_to_json(t) FROM paper_notes t WHERE t.user_id = $1"),
     ("paper_summaries", "SELECT row_to_json(t) FROM paper_summaries t WHERE t.user_id = $1"),
     ("cards", "SELECT row_to_json(t) FROM cards t WHERE t.user_id = $1"),
