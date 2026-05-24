@@ -447,22 +447,6 @@ async def current_user_id_with_owner_override(
             detail="DB error validating X-Owner-User-Id",
         ) from None
 
-    # SEC-OWNER-2: emit an audit event on every successful override so the
-    # operator can detect unexpected per-user identity substitution.  Best-effort:
-    # a transient pool failure must never block the request.
-    try:
-        audit_pool = _request_db_pool(request)
-        if audit_pool is not None:
-            await log_audit(
-                audit_pool,
-                action="auth.owner_override.used",
-                resource=request.url.path,
-                user_id=str(override_uid),
-                metadata={"client_ip": client_ip or "unknown"},
-            )
-    except Exception:  # noqa: BLE001
-        logger.debug("auth.owner_override audit log failed (non-fatal)", exc_info=True)
-
     return override_uid
 
 
