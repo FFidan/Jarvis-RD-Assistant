@@ -260,4 +260,10 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "llm.anthropic.api_key": _validate_nonempty_str,
     "llm.openai.api_key": _validate_nonempty_str,
     "llm.google.api_key": _validate_nonempty_str,
+    # SMTP outbound mail
+    "smtp.host": _validate_nonempty_str,
+    "smtp.port": _validate_positive_int,
+    "smtp.user": _validate_nonempty_str,
+    "smtp.from": _validate_nonempty_str,
+    "smtp.pass": _validate_nonempty_str,
 }
