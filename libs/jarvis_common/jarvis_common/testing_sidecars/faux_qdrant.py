@@ -192,6 +192,8 @@ def _vector_size(vectors_config: Any) -> int | None:
 def _cosine(query: list[float], vector: list[float]) -> float:
     if not query or not vector:
         return 0.0
+    if len(query) != len(vector):
+        raise ValueError(f"dimension mismatch: {len(query)} vs {len(vector)}")
     n = min(len(query), len(vector))
     dot = sum(query[i] * vector[i] for i in range(n))
     q_norm = math.sqrt(sum(v * v for v in query[:n]))
@@ -225,6 +227,8 @@ def _matches_condition(payload: dict[str, Any], condition: Any) -> bool:
     is_null = getattr(condition, "is_null", None)
     if is_null is not None:
         null_field = getattr(is_null, "key", None)
+        if null_field is None:
+            return False
         return payload.get(null_field) is None
 
     nested_filter = getattr(condition, "filter", None)

@@ -159,11 +159,8 @@ async def run_migrations(
             await conn.execute("SET LOCAL lock_timeout = '60s'")
             try:
                 await conn.execute("SELECT pg_advisory_xact_lock(42)")
-            except (asyncpg.LockNotAvailableError, asyncpg.PostgresError) as exc:
-                is_lock_timeout = not isinstance(exc, asyncpg.PostgresError) or (
-                    getattr(exc, "sqlstate", None) == "55P03"
-                )
-                if not is_lock_timeout:
+            except asyncpg.PostgresError as exc:
+                if getattr(exc, "sqlstate", None) != "55P03":
                     raise  # Not a lock-timeout error — let it propagate
                 message = "migration lock contended — another instance is running migrations"
                 if os.environ.get("JARVIS_MIGRATION_LOCK_CONTENDED_OK", "").lower() in {

@@ -545,7 +545,7 @@ async def test_fetch_new_since_calls_enforce_startup_grace():
 
     source = _make_source()
     grace_mock = AsyncMock()
-    with patch("paper_ingestion.sources.pubmed_source._enforce_startup_grace", grace_mock):
+    with patch("paper_ingestion.sources.base._enforce_startup_grace", grace_mock):
         await source.fetch_new_since(
             since=datetime(2026, 4, 1, tzinfo=UTC),
             topics=[TopicRef(id=1, name="AI", query_terms=["AI"])],

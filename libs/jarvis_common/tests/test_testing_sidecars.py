@@ -11,6 +11,7 @@ from jarvis_common.llm_client import (
     request_chat_completion_content,
 )
 from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+from jarvis_common.testing_sidecars.faux_qdrant import _cosine, _matches_condition
 from qdrant_client.models import (
     Distance,
     FieldCondition,
@@ -80,3 +81,23 @@ async def test_faux_qdrant_filters_scores_counts_and_deletes_points():
     await qdrant.delete(collection_name="paper_chunks", points_selector=Filter(must=[]))
     remaining = await qdrant.count(collection_name="paper_chunks")
     assert remaining.count == 0
+
+
+def test_cosine_raises_on_dimension_mismatch():
+    """_cosine must raise ValueError when query and vector lengths differ."""
+    with pytest.raises(ValueError, match="dimension mismatch"):
+        _cosine([1.0], [1.0, 2.0])
+
+
+def test_matches_condition_null_field_none_returns_false():
+    """_matches_condition with is_null.key=None must return False without TypeError."""
+    from types import SimpleNamespace
+
+    condition = SimpleNamespace(
+        key=None,
+        match=None,
+        is_null=SimpleNamespace(key=None),
+        filter=None,
+    )
+    result = _matches_condition({"some_field": "value"}, condition)
+    assert result is False

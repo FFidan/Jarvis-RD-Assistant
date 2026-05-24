@@ -22,7 +22,7 @@ violates the contract; the violations are the work items in the impl spec.
 
 **In scope.**
 - The single LLM choke point in `jarvis_common.llm_client`
-- Six structured-output call sites in services
+- Seven structured-output call sites in services
 - Retry / timeout / fallback policy
 - Anti-hallucination integration (QuoteVerifier)
 - Streaming exceptions (the one place raw streaming is allowed)
@@ -88,7 +88,7 @@ JSON-mode internally) — it remains for `request_chat_completion_content`.
 
 ## 2. Per-site catalog
 
-Seven LLM call sites. Each site has its own row below; details in §4.
+Eight LLM call sites. Each site has its own row below; details in §4.
 
 | # | Site | File:line | Model alias | Output Pydantic | QuoteVerifier? |
 |---|---|---|---|---|---|
@@ -99,6 +99,7 @@ Seven LLM call sites. Each site has its own row below; details in §4.
 | 5 | Contradiction classifier | [services/contradictions.py:516](../../services/paper_ingestion/paper_ingestion/services/contradictions.py#L516) | `get_smart_model()` | `ContradictionClassification` | Yes (post-LLM, on `quote_a` and `quote_b`) |
 | 6 | Weekly digest | [weekly_summary.py:178](../../services/paper_ingestion/paper_ingestion/weekly_summary.py#L178) | `get_smart_model()` | `WeeklyDigestOutput` | Optional (per-theme cheap fuzzy match against title+brief corpus) |
 | 7 | Paper summarization | [services/summarization.py:241](../../services/paper_ingestion/paper_ingestion/services/summarization.py#L241) | `get_smart_model()` | `SummarizationOutput` | Yes (per-finding quote verified against chunk text) |
+| 8 | Query decomposition | [rag/decomposition.py:75](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L75) | `"fast"` (default, caller-overridable) | `RootModel[list[str]]` | No (structural sub-queries; no scientific claim to verify) |
 
 There is also a non-call-site streaming path and a non-structured scalar
 path; both stay outside Instructor — see §6.

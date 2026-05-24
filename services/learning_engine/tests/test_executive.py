@@ -149,7 +149,7 @@ async def test_my_day_focus_streak_sql_live_pg(live_pg_dsn: str) -> None:
     try:
         async with pool.acquire() as conn:
             await conn.execute(init_sql)
-            from paper_ingestion.migrations_runner import run_migrations
+            from jarvis_common.migrations import run_migrations
 
         await run_migrations(pool)
 
