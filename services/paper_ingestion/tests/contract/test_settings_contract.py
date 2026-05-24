@@ -326,7 +326,7 @@ async def test_put_config_db_committed_before_litellm_called(
     Also verifies that when _write_config_row raises, _apply_litellm_runtime_update
     is never called.
     """
-    import paper_ingestion.services.settings_service as _svc
+    import paper_ingestion.services.config_write as _config_write
 
     # -- Part 1: LiteLLM fails → DB row still committed ----------------------
     litellm_called: list[str] = []
@@ -335,7 +335,7 @@ async def test_put_config_db_committed_before_litellm_called(
         litellm_called.append("called")
         raise RuntimeError("litellm-fail")
 
-    monkeypatch.setattr(_svc, "_apply_litellm_runtime_update", _litellm_fail)
+    monkeypatch.setattr(_config_write, "_apply_litellm_runtime_update", _litellm_fail)
 
     with pytest.raises(RuntimeError, match="litellm-fail"):
         await pi_settings_client.put(
@@ -361,8 +361,8 @@ async def test_put_config_db_committed_before_litellm_called(
     async def _db_fail(*args, **kwargs):  # noqa: ARG001
         raise RuntimeError("db-fail")
 
-    monkeypatch.setattr(_svc, "_write_config_row", _db_fail)
-    monkeypatch.setattr(_svc, "_apply_litellm_runtime_update", _litellm_spy)
+    monkeypatch.setattr(_config_write, "_write_config_row", _db_fail)
+    monkeypatch.setattr(_config_write, "_apply_litellm_runtime_update", _litellm_spy)
 
     with pytest.raises(RuntimeError, match="db-fail"):
         await pi_settings_client.put(

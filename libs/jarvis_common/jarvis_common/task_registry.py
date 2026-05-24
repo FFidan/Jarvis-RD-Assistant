@@ -75,6 +75,7 @@ class TaskDependencies:
         Async PostgreSQL pool shared with the FastAPI service instance.
     http_client:
         Shared HTTP client owned by the service lifespan.
+
     """
 
     pool: asyncpg.Pool
@@ -119,6 +120,7 @@ class TaskRegistry:
         *,
         task_map: dict[str, Any] | None = None,
     ) -> None:
+        """Bind a procrastinate App and an optional pre-populated kind→task mapping."""
         self.app = procrastinate_app
         self.kind_to_task = task_map if task_map is not None else {}
         self._dependencies: TaskDependencies | None = None
@@ -328,6 +330,7 @@ def register_tasks(
         Dict mapping JARVIS job kind strings to legacy handler callables.
     queue:
         The procrastinate queue name for this service (e.g. ``"paper_ingestion"``).
+
     """
     if procrastinate_app is _DEFAULT_REGISTRY.app:
         registry = _DEFAULT_REGISTRY

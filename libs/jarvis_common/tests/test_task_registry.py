@@ -191,7 +191,8 @@ def test_queue_assignments_match_owner_map() -> None:
 
 def test_ctx_shim_implements_jobcontext_protocol() -> None:
     """The shim must expose ``job_id``, ``update_progress``, ``is_cancelled``
-    matching the legacy ``jarvis_common.jobs.JobContext`` shape."""
+    matching the legacy ``jarvis_common.jobs.JobContext`` shape.
+    """
     from jarvis_common._ctx_shim import ProcrastinateJobContextShim, make_ctx_shim
 
     shim = make_ctx_shim(None, job_id="job-abc")
@@ -229,7 +230,8 @@ async def test_ctx_shim_methods_runnable() -> None:
 
 def test_set_dependencies_then_called_pre_worker() -> None:
     """``set_dependencies`` is only enforced at task-execution time.
-    Importing must succeed regardless; the public API is present on the module."""
+    Importing must succeed regardless; the public API is present on the module.
+    """
     import jarvis_common.task_registry as task_registry
 
     assert hasattr(task_registry, "app")
@@ -246,7 +248,8 @@ def test_set_dependencies_then_called_pre_worker() -> None:
 
 def test_require_dependencies_raises_before_set() -> None:
     """The task-body guard raises a clear RuntimeError when dependencies are
-    not yet set. We test the guard directly to avoid running the worker."""
+    not yet set. We test the guard directly to avoid running the worker.
+    """
     import jarvis_common.task_registry as task_registry
 
     # Snapshot + reset module-level deps

@@ -200,7 +200,7 @@ class TestValidateProductionConfigSmtpGate:
     """SMTP fields must be required when ENVIRONMENT=production and DEV_SMTP_LOG_ONLY=false."""
 
     def test_production_no_smtp_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """production + no SMTP → RuntimeError mentioning missing SMTP fields."""
+        """Production + no SMTP → RuntimeError mentioning missing SMTP fields."""
         _minimal_prod_env(monkeypatch)
         # No SMTP env vars set
 
@@ -208,7 +208,7 @@ class TestValidateProductionConfigSmtpGate:
             validate_production_config()
 
     def test_production_partial_smtp_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """production + only SMTP_HOST set (missing PORT + FROM) → RuntimeError."""
+        """Production + only SMTP_HOST set (missing PORT + FROM) → RuntimeError."""
         _minimal_prod_env(monkeypatch)
         monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
         # SMTP_PORT and SMTP_FROM missing
@@ -217,7 +217,7 @@ class TestValidateProductionConfigSmtpGate:
             validate_production_config()
 
     def test_production_with_full_smtp_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """production + SMTP_HOST + SMTP_PORT + SMTP_FROM → no error."""
+        """Production + SMTP_HOST + SMTP_PORT + SMTP_FROM → no error."""
         _minimal_prod_env(monkeypatch)
         monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
         monkeypatch.setenv("SMTP_PORT", "587")
@@ -237,7 +237,7 @@ class TestValidateProductionConfigSmtpGate:
         validate_production_config()
 
     def test_staging_without_smtp_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """staging environment is not subject to the SMTP gate."""
+        """Staging environment is not subject to the SMTP gate."""
         _clear_env(monkeypatch)
         monkeypatch.setenv("ENVIRONMENT", "staging")
         monkeypatch.setenv("DEV_MODE", "true")
@@ -356,7 +356,8 @@ class TestValidateProductionConfigPostgresPassword:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An exact-denylist value ('postgres') is rejected even though short
-        (the placeholder check fires before the length check)."""
+        (the placeholder check fires before the length check).
+        """
         _prod_env_with_smtp(monkeypatch)
         monkeypatch.setenv("POSTGRES_PASSWORD", "postgres")
 

@@ -42,12 +42,14 @@ class FauxOllamaServer:
 
     @property
     def url(self) -> str:
+        """Base URL of the running server; raises ``RuntimeError`` when not started."""
         if self._url is None:
             raise RuntimeError("FauxOllamaServer is not running")
         return self._url
 
     @property
     def base_url(self) -> str:
+        """Alias for ``url``; provided for compatibility with httpx ``base_url`` kwargs."""
         return self.url
 
     async def __aenter__(self) -> FauxOllamaServer:
@@ -58,6 +60,7 @@ class FauxOllamaServer:
         await self.stop()
 
     async def start(self) -> None:
+        """Bind the aiohttp server to a random loopback port and register routes."""
         if self._runner is not None:
             return
         app = web.Application()
@@ -81,6 +84,7 @@ class FauxOllamaServer:
         self._url = f"http://{self.host}:{port}"
 
     async def stop(self) -> None:
+        """Shut down the aiohttp runner and release the bound port."""
         runner = self._runner
         self._runner = None
         self._site = None

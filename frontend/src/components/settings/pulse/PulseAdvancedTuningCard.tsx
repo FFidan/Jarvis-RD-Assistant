@@ -36,12 +36,8 @@ import {
 } from './pulse-constants';
 import { useSyncedState } from './use-synced-state';
 import { useDebouncedConfig } from './use-debounced-config';
+import { getConfigValue } from './pulse-utils';
 import type { ConfigEntry } from '@/types';
-
-function getConfigValue<T>(entries: ConfigEntry[], key: string, fallback: T): T {
-  const entry = entries.find((c) => c.key === key);
-  return entry !== undefined ? (entry.value as T) : fallback;
-}
 
 function coerceWeights(raw: unknown): Record<PulseWeightKey, number> {
   const out = { ...DEFAULT_PULSE_WEIGHTS };
@@ -142,13 +138,13 @@ export function PulseAdvancedTuningCard({
 }: PulseAdvancedTuningCardProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  const likedWeightConfig = Number(getConfigValue(configs, 'recommendation.liked_weight', 0.6));
-  const projectWeightConfig = Number(getConfigValue(configs, 'recommendation.project_weight', 0.4));
-  const l2LambdaConfig = Number(getConfigValue(configs, 'pulse.l2_lambda', 0.5));
+  const likedWeightConfig = getConfigValue<number>(configs, 'recommendation.liked_weight', 0.6);
+  const projectWeightConfig = getConfigValue<number>(configs, 'recommendation.project_weight', 0.4);
+  const l2LambdaConfig = getConfigValue<number>(configs, 'pulse.l2_lambda', 0.5);
   const rawWeightsEntry = configs.find((c) => c.key === 'pulse.weights');
   const pulseWeightsServer = useMemo(
     () => coerceWeights(rawWeightsEntry?.value),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
     [rawWeightsEntry?.value],
   );
 

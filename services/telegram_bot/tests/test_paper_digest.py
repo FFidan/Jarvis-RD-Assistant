@@ -6,21 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from jarvis_common.testing import make_bot_config
 from pydantic import SecretStr
-from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import paper_digest
-
-
-def _make_config(api_key: str | None = "secret") -> BotConfig:
-    """Create a minimal bot config for digest tests."""
-    return BotConfig(
-        telegram_token="token",
-        telegram_chat_id=1234,
-        database_url="postgres://example",
-        paper_ingestion_url="http://paper-ingestion:8000",
-        learning_engine_url="http://learning-engine:8001",
-        jarvis_api_key=SecretStr(api_key) if api_key else None,
-    )
 
 
 @pytest.mark.asyncio
@@ -32,7 +20,9 @@ async def test_fetch_digest_from_api_returns_payload_and_auth_header():
     response.json.return_value = {"topics": [{"name": "LLMs"}]}
     http_client.get.return_value = response
 
-    result = await paper_digest._fetch_digest_from_api(http_client, _make_config())
+    result = await paper_digest._fetch_digest_from_api(
+        http_client, make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
+    )
 
     assert result == {"topics": [{"name": "LLMs"}]}
     _, kwargs = http_client.get.await_args
@@ -45,7 +35,9 @@ async def test_fetch_digest_from_api_returns_none_on_error():
     http_client = AsyncMock(spec=httpx.AsyncClient)
     http_client.get.side_effect = httpx.ConnectError("offline")
 
-    result = await paper_digest._fetch_digest_from_api(http_client, _make_config())
+    result = await paper_digest._fetch_digest_from_api(
+        http_client, make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
+    )
 
     assert result is None
 
@@ -59,7 +51,9 @@ async def test_fetch_digest_from_api_omits_auth_header_without_api_key():
     response.json.return_value = {"topics": []}
     http_client.get.return_value = response
 
-    result = await paper_digest._fetch_digest_from_api(http_client, _make_config(api_key=None))
+    result = await paper_digest._fetch_digest_from_api(
+        http_client, make_bot_config(telegram_chat_id=1234, jarvis_api_key=None)
+    )
 
     assert result == {"topics": []}
     _, kwargs = http_client.get.await_args
@@ -157,7 +151,7 @@ async def test_run_paper_digest_uses_llm_digest_when_topics_present():
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
 
     from telegram_bot.owner import UserPairing
 
@@ -198,7 +192,7 @@ async def test_run_paper_digest_warns_when_api_returns_no_data():
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
 
     from telegram_bot.owner import UserPairing
 
@@ -226,7 +220,7 @@ async def test_paper_digest_per_pairing_user_scope():
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
 
     from telegram_bot.owner import UserPairing
 
@@ -266,7 +260,7 @@ async def test_digest_continues_after_blocked_user():
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
 
     from telegram_bot.owner import UserPairing
 

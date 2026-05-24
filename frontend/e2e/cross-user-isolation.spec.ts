@@ -73,10 +73,10 @@ test.describe('@cross-user two-context data isolation (scaffolding)', () => {
       const bodyA = (await pageA.locator('body').textContent()) ?? '';
       const bodyB = (await pageB.locator('body').textContent()) ?? '';
       if (bodyA && bodyB && bodyA !== bodyB) {
-        // eslint-disable-next-line no-console
+         
         console.log('[cross-user] contexts rendered distinct content (good).');
       } else {
-        // eslint-disable-next-line no-console
+         
         console.log(
           '[cross-user] identical content — expected against mocked backend; ' +
             'authoritative gate is the Python integration suite.',

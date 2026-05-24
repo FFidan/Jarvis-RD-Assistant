@@ -66,7 +66,9 @@ JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "tele
 class ProgressContext(Protocol):
     """Minimum interface a job handler receives as its execution context."""
 
-    async def update_progress(self, progress: float, message: str | None = None) -> None: ...
+    async def update_progress(self, progress: float, message: str | None = None) -> None:
+        """Persist the current progress fraction (0.0–1.0) and optional status message."""
+        ...
 
 
 # SSE keepalive / max-stream constants shared across routers
@@ -472,6 +474,7 @@ class JobError(Exception):
     """Raise from a handler to produce a structured error with an optional link."""
 
     def __init__(self, message: str, *, action_link: dict[str, Any] | None = None) -> None:
+        """Store the error message and an optional ``{"label": ..., "url": ...}`` action link."""
         super().__init__(message)
         self.action_link = action_link
 

@@ -45,6 +45,7 @@ async def log_event(
     correlation_id:
         UUID carried from :data:`jarvis_common.logging_config.correlation_id_var`
         when ``None``; callers may supply an explicit value to override.
+
     """
     if correlation_id is None:
         correlation_id = correlation_id_var.get()

@@ -84,6 +84,7 @@ async def add_to_library(
     Conflicts (same ``(user_id, paper_id)`` already present) are silently
     ignored — the original ``added_via`` and ``added_at`` are preserved.
     Re-classification is not supported here; if you need it, write SQL.
+
     """
     if added_via not in ALLOWED_ADDED_VIA:
         raise ValueError(

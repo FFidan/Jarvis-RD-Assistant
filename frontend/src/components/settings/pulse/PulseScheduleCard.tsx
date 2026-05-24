@@ -18,17 +18,13 @@ import { cronToHumanReadable, cronToTime, timeToCron } from '@/lib/cron-utils';
 import { useSyncedState } from './use-synced-state';
 import { useDebouncedConfig } from './use-debounced-config';
 import { CRON_TOOLTIP } from './pulse-constants';
+import { getConfigValue } from './pulse-utils';
 import type { ConfigEntry } from '@/types';
 
 function isValidCron(s: string): boolean {
   const parts = s.trim().split(/\s+/);
   if (parts.length !== 5) return false;
   return parts.every((p) => /^[*/0-9,-]+$/.test(p));
-}
-
-function getConfigValue<T>(entries: ConfigEntry[], key: string, fallback: T): T {
-  const entry = entries.find((c) => c.key === key);
-  return entry !== undefined ? (entry.value as T) : fallback;
 }
 
 interface PulseScheduleCardProps {

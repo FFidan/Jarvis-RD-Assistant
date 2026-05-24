@@ -10,8 +10,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import SecretStr
-from telegram_bot.config import BotConfig
+from jarvis_common.testing import make_bot_config
 from telegram_bot.handlers.review_handler import (
     SHOWING_BACK,
     SHOWING_FRONT,
@@ -27,17 +26,6 @@ from telegram_bot.handlers.review_handler import (
 _STALE_USER_ID = 10
 _FRESH_USER_ID = 20
 _TEST_CHAT_ID = 99999
-
-
-def _make_config() -> BotConfig:
-    return BotConfig(
-        telegram_token="test-token",
-        telegram_chat_id=None,  # not the owner env-var path — force DB path
-        database_url="postgres://test",
-        paper_ingestion_url="http://paper:8000",
-        learning_engine_url="http://learn:8001",
-        jarvis_api_key=SecretStr("test-key"),
-    )
 
 
 def _make_command_update(chat_id: int = _TEST_CHAT_ID) -> MagicMock:
@@ -66,7 +54,7 @@ def _make_callback_update(callback_data: str, chat_id: int = _TEST_CHAT_ID) -> M
 def _make_context(user_data: dict | None = None) -> tuple[MagicMock, AsyncMock]:
     context = MagicMock()
     context.user_data = user_data if user_data is not None else {}
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=None)
     mock_http = AsyncMock()
     context.application = MagicMock()
     context.application.bot_data = {

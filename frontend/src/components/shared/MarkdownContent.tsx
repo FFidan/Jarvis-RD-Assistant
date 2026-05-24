@@ -1,4 +1,4 @@
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
@@ -15,6 +15,15 @@ const sanitizeSchema = {
     src: ['http', 'https', 'data'],
   },
 };
+
+// react-markdown's defaultUrlTransform blocks data: URIs (not in its safeProtocol
+// list). Extend it to pass data:image/* through so the img component override can
+// apply its own fine-grained regex check. data:image/* is XSS-safe because browsers
+// parse it as binary image data, not as HTML or script.
+function urlTransform(url: string, key: string): string {
+  if (key === 'src' && /^data:image\//i.test(url)) return url;
+  return defaultUrlTransform(url);
+}
 
 interface MarkdownContentProps {
   children: string;
@@ -103,6 +112,7 @@ export function MarkdownContent({ children, className, unverifiedSentences }: Ma
       className={className ?? 'prose prose-sm dark:prose-invert max-w-none'}
       remarkPlugins={[remarkMath]}
       rehypePlugins={[rehypeKatex, [rehypeSanitize, sanitizeSchema]]}
+      urlTransform={urlTransform}
       components={{
         a: ({ node: _node, href, children, ...props }) => {
           const hrefLower = (href ?? '').toLowerCase().trimStart();
@@ -113,7 +123,7 @@ export function MarkdownContent({ children, className, unverifiedSentences }: Ma
             return <span {...props}>{children}</span>;
           }
           return (
-            // eslint-disable-next-line react/jsx-no-target-blank
+             
             <a href={href} {...props} target="_blank" rel="noopener noreferrer">
               {children}
             </a>

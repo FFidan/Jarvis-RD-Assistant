@@ -114,3 +114,28 @@ def test_langfuse_dashboard_url_rejects_unsafe_values(value: object):
     validator = _CONFIG_VALIDATORS[_LANGFUSE_KEY]
     with pytest.raises(ValueError):
         validator(value)
+
+
+@pytest.mark.parametrize(
+    "unsafe_url",
+    [
+        "http://[::1]:3002",
+        "http://0.0.0.0:3002",
+        "http://127.0.0.2:3002",
+        "http://169.254.169.254",
+        "http://10.0.0.1",
+        "http://172.16.0.1",
+        "http://192.168.1.1",
+    ],
+)
+def test_validate_langfuse_dashboard_url_rejects_ssrf_boundaries(unsafe_url):
+    """SSRF-classic non-loopback HTTP hostnames must be rejected.
+
+    The validator only whitelists `http://localhost` and `http://127.0.0.1`;
+    every other HTTP host is treated as a potential SSRF vector to internal
+    services or cloud metadata endpoints.
+    """
+    from paper_ingestion.services.config_validators import _validate_langfuse_dashboard_url
+
+    with pytest.raises(ValueError, match=r"localhost|127\.0\.0\.1|https"):
+        _validate_langfuse_dashboard_url(unsafe_url)

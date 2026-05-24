@@ -282,7 +282,7 @@ These features shipped in the Sprint 6 remediation pass (audit findings C1/C2/H1
 - **Embedder shim cleanup**: stale `_COMPAT_SHIM` path in `paper_ingestion/ingestion/embedder.py` removed; all callers use the canonical `embed_texts()` interface.
 - **Migration 043 robustness**: duplicate-key handling added to the migration runner for constraint-already-exists errors so that re-running migrations on partially-applied databases does not abort startup.
 
-### Shipped in v0.2.0–v0.4.1 (2026-05-10 to 2026-05-23)
+### Shipped in v0.2.0–v0.5.0 (2026-05-10 to 2026-05-24)
 
 These features shipped after the Sprint 6 audit cycle:
 
@@ -291,6 +291,9 @@ These features shipped after the Sprint 6 audit cycle:
 - **Model Lifecycle UI + Hardware-Aware Settings**: `services/paper_ingestion/paper_ingestion/routers/system.py` exposes hardware-fit data (`HardwareInfo`, `recommend_models`, VRAM-aware tier selection). Frontend `SettingsAIPanel` + `ModelSelector` surface per-VRAM recommendations.
 - **Langfuse observability** (operator-provisioned): `@observe()` decorators on all structured LLM calls; `OBSERVABILITY_ENABLED` boot-gate in `main.py`; `SecretsSettings _FILE` pattern for keypair injection. Contract: `docs/contracts/04-observability.md`.
 - **Testing Contract + pre-commit guard**: `docs/contracts/07-testing.md` defines four legitimate test shapes and four prohibited anti-patterns. `scripts/check-test-shape.py` enforces rules TS-01..TS-08 as a pre-commit hook on every commit touching test files.
+- **2026-05-24 — Architectural decomposition (bloat-reduction program).** 5 god components decomposed: `settings_service.py` 1303→27 LOC re-export shim + 9 single-responsibility submodules; `routers/papers.py` 983→38 LOC aggregator + 5 sub-routers; `pulse/job.py` extracted 5 phase helpers; `PulseSection.tsx` 1384→168 LOC + 9 sibling components; `IngestionSection.tsx` 920→845 LOC + `ConfigEntryCard` extraction. 260 inline `queryKey:` callsites migrated to central `query-keys.ts` registry. 12 telegram tests migrated from local `_make_config` to `make_bot_config`. 55 substantive docstrings added to `jarvis_common`. Net +1963 LOC (typed-module decomposition cost). See `docs/audit/2026-05-24-bloat-reduction/LEDGER.md`.
+- **2026-05-24 — Dead-code purge program.** 7 orphan frontend hook/util files removed (`use-{decks,extractions,pagination,papers,pulse,tasks}.ts` + `error-utils.ts`; −213 LOC). All 7 B-list carry-forwards from bloat-reduction Wave-Gate reports closed (W1F5-F10 + W2GF3). See `docs/audit/2026-05-25-purge-closeout/LEDGER.md`.
+- **2026-05-24 — Polish wave (Waves 0-1 complete; remaining waves land separately).** Closed remaining rot-on-touch carry-forwards (CF-W0G1, CF-W0G2); removed zero-yield vulture tooling (wrong fit for decorator-heavy Python; `knip` retained for frontend); reorganized `docs/audit/` (13 loose 2026-05-22 closeouts bundled); fixed 2 pre-existing test failures (SettingsAIPanel TS2532, chat-confidence MarkdownContent vitest); cleared 11 auto-fixable lint warnings. Version metadata bump, v0.5.0 git tag, and `testing.py` decomposition (945 LOC → 5 submodules + facade) finalize in W4.T3 closeout; see `docs/audit/2026-05-26-polish-wave/LEDGER.md`.
 
 ### Multi-Tenant Status
 

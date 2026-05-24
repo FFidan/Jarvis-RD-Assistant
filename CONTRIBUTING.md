@@ -75,6 +75,18 @@ bash scripts/check-python-deps.sh
 python3 scripts/check_agent_docs.py
 ```
 
+### Docs site preview (optional but recommended before pushing docs changes)
+
+CI runs `mkdocs build --strict` on every push (`.github/workflows/docs.yml`). To catch broken links / unresolved refs / nav-config errors before pushing:
+
+```bash
+pip install -r requirements-docs.txt
+mkdocs build --strict
+mkdocs serve  # live preview at http://localhost:8000
+```
+
+The local dev container does NOT include mkdocs by default; install on demand.
+
 ---
 
 ## Adding a Database Migration

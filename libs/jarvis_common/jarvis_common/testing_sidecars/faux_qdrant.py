@@ -34,31 +34,38 @@ class FauxQdrantClient:
     """Small async stand-in for ``qdrant_client.AsyncQdrantClient``."""
 
     def __init__(self) -> None:
+        """Initialise with an empty in-memory collection store."""
         self._collections: dict[str, _Collection] = {}
 
     async def close(self) -> None:
+        """No-op; the in-memory store is simply garbage-collected."""
         return None
 
     async def collection_exists(self, collection_name: str) -> bool:
+        """Return ``True`` if a collection with this name has been created."""
         return collection_name in self._collections
 
     async def get_collections(self) -> SimpleNamespace:
+        """Return a namespace whose ``.collections`` lists all created collection names."""
         return SimpleNamespace(
             collections=[SimpleNamespace(name=name) for name in sorted(self._collections)]
         )
 
     async def create_collection(self, *, collection_name: str, vectors_config: Any) -> None:
+        """Create a named collection with the vector dimension extracted from *vectors_config*."""
         size = _vector_size(vectors_config)
         if size is None:
             raise ValueError("vectors_config must include a size")
         self._collections[collection_name] = _Collection(dimension=int(size))
 
     async def get_collection(self, *, collection_name: str) -> SimpleNamespace:
+        """Return a namespace mirroring the Qdrant ``CollectionInfo`` shape."""
         collection = self._require_collection(collection_name)
         vectors = SimpleNamespace(size=collection.dimension)
         return SimpleNamespace(config=SimpleNamespace(params=SimpleNamespace(vectors=vectors)))
 
     async def upsert(self, *, collection_name: str, points: list[Any], **_: Any) -> SimpleNamespace:
+        """Insert or overwrite *points* in the named collection; validates vector dimension."""
         collection = self._require_collection(collection_name)
         for point in points:
             vector = [float(v) for v in getattr(point, "vector")]
@@ -84,6 +91,7 @@ class FauxQdrantClient:
         with_payload: bool = True,
         **_: Any,
     ) -> SimpleNamespace:
+        """Score all matching points by cosine similarity and return the top *limit*."""
         collection = self._require_collection(collection_name)
         scored: list[FauxQdrantPoint] = []
         for point in collection.points.values():
@@ -113,6 +121,7 @@ class FauxQdrantClient:
         with_vectors: bool = False,
         **_: Any,
     ) -> tuple[list[FauxQdrantPoint], None]:
+        """Return up to *limit* filtered points; always returns ``None`` as the next-page token."""
         collection = self._require_collection(collection_name)
         points: list[FauxQdrantPoint] = []
         for point in collection.points.values():
@@ -135,6 +144,7 @@ class FauxQdrantClient:
         exact: bool = True,  # noqa: ARG002
         **_: Any,
     ) -> SimpleNamespace:
+        """Count points in the collection that match *count_filter*."""
         collection = self._require_collection(collection_name)
         total = sum(
             1
@@ -150,6 +160,7 @@ class FauxQdrantClient:
         points_selector: Any = None,
         **_: Any,
     ) -> SimpleNamespace:
+        """Delete points by ID list or filter from the named collection."""
         collection = self._require_collection(collection_name)
         ids = _selector_ids(points_selector)
         if ids is not None:

@@ -115,7 +115,7 @@ function JobStreamRow({ job }: JobStreamRowProps) {
 
 export function LiveTab() {
   const { data: jobs } = useQuery({
-    queryKey: QUERY_KEYS.jobs.running(),
+    queryKey: QUERY_KEYS.jobs.list('running'),
     queryFn: () => listJobs({ status: 'running' }),
     refetchInterval: 3_000,
   });

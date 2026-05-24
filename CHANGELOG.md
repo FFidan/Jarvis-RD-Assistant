@@ -4,6 +4,11 @@ All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 ## [unreleased]
 
+> An internal `v0.5.0` git tag was cut locally on 2026-05-24 for version-metadata alignment with `pyproject.toml` / `frontend/package.json`. The repo remains private; this release line stays semantically **unreleased** until a public release event. When that happens, this `[unreleased]` heading will be retitled to `[v0.5.0] - <release date>` (matching the existing `[vX.Y.Z]` style).
+
+### Upgrade Notes
+
+- **Migration baseline squashed.** The 88-file migration chain prior to v0.5.0 was consolidated into `db/init.sql` as the single baseline; new migrations start at 0089. The migration runner detects squashed-init state and applies forward without interruption — operators upgrading from v0.4.1 or earlier need no manual intervention. See `tests/test_baseline_invariants.py` for the schema invariants pinned.
 
 ### Bug Fixes
 - Narrow APIRoute for route-path assertions (RB-3 follow-up)
@@ -191,6 +196,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Style
 - Isort test_pulse_stale_fallback to project ruff norm (CC-03 follow-up)
+
+
+### Major Programs (2026-05-23 → 2026-05-24)
+
+- **Deep-Audit cycles 1+2+3** (2026-05-23) — 82 findings closed across 3 fix-waves. 8 cross-user leak fixes (W1-D1/D2), 5 admin gating gaps closed (W2-S1), 3 XSS/CSP fixes (SEC-XSS-001/002 + SEC-CSP-001), 14 transformers CVEs, FastAPI/Starlette 0.126.0/0.50.0 (closes CVE-2025-62727), Pulse correctness bugs, `contradiction_jobs` user_id propagation. See `docs/audit/2026-05-23-deep-audit/FIX_LEDGER.md`.
+- **Bloat-Reduction program** (2026-05-24) — 5 god components decomposed. 260 inline `queryKey:` migrations. 12 telegram test migrations. 55 jarvis_common docstrings. Net +1963 LOC structural. See `docs/audit/2026-05-24-bloat-reduction/LEDGER.md`.
+- **Dead-Code Purge program** (2026-05-24) — 7 orphan frontend hook/util files removed (−213 LOC). 7 B-list rot-on-touch carry-forwards closed. 5-partition dead-code inventory generated. See `docs/audit/2026-05-25-purge-closeout/LEDGER.md`.
+- **Polish Wave** (2026-05-24) — 2 final rot-on-touch carry-forwards (CF-W0G1, CF-W0G2). Vulture tooling removed (zero-yield, wrong fit for decorator-heavy Python; `knip` retained for frontend). `docs/audit/` reorganized (13 loose closeouts bundled). 4 pre-existing failures fixed (SettingsAIPanel TS2532, chat-confidence vitest, 11 auto-fixable lint warnings, mkdocs install advisory). Version metadata + CHANGELOG + v0.5.0 git tag. **`libs/jarvis_common/jarvis_common/testing.py` decomposed** (945 LOC → 5 submodules + thin facade). See `docs/audit/2026-05-26-polish-wave/LEDGER.md`.
 ## [v0.4.1] - 2026-05-15
 
 

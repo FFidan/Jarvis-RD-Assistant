@@ -61,7 +61,8 @@ def test_get_secrets_settings_is_cached(monkeypatch):
 
 def test_model_hmac_key_file_indirection(monkeypatch, tmp_path: Path):
     """HMAC-1: JARVIS_MODEL_HMAC_KEY_FILE resolves via the shared
-    _FILE-indirection machinery (no bespoke code)."""
+    _FILE-indirection machinery (no bespoke code).
+    """
     hex_key = "a" * 64
     secret_file = tmp_path / "model_hmac.key"
     secret_file.write_text(hex_key + "\n")

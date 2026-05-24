@@ -77,6 +77,7 @@ class JarvisCommonSettings(BaseSettings):
       on :class:`jarvis_common.settings.SecretsSettings` where they gain
       ``_FILE`` indirection support.  Only ``OBSERVABILITY_ENABLED`` (bool gate)
       and ``LANGFUSE_HOST`` (plain URL) are stored here.
+
     """
 
     model_config = _CONFIG

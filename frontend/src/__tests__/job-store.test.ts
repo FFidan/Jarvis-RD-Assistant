@@ -268,6 +268,7 @@ describe('JobStore', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
+    // Note: bare prefix for invalidation — mirrors production job-store.ts (no registry factory for all-extraction-table entries; QUERY_KEYS.extraction.table requires both templateId and paperIds args)
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['extraction-table'] });
     const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
     expect(keys).not.toContain('extractions');

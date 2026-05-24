@@ -108,7 +108,7 @@ function SystemCheckStep({ onNext }: { onNext: () => void }) {
 
   useEffect(() => {
     void run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   return (

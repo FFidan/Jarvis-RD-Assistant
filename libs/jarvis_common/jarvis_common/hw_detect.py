@@ -9,6 +9,7 @@ Tier = Literal["cpu", "lt-8", "8-16", "16-24", "24-48", "ge-48"]
 
 
 def classify_tier(vram_mb: int | None) -> Tier:
+    """Map raw VRAM megabytes to a named hardware tier used for model-routing decisions."""
     if vram_mb is None or vram_mb <= 0:
         return "cpu"
     if vram_mb < 8000:
@@ -44,4 +45,5 @@ def probe_vram_mb() -> int | None:
 
 
 def detect_tier() -> Tier:
+    """Convenience wrapper: probe VRAM then classify into a tier."""
     return classify_tier(probe_vram_mb())

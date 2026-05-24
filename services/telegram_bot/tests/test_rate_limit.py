@@ -15,7 +15,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from jarvis_common.testing import make_telegram_update
+from jarvis_common.testing import make_bot_config, make_telegram_update
 from telegram_bot.handlers.rate_limit import _locks, _timestamps, rate_limit
 
 # ---------------------------------------------------------------------------
@@ -368,9 +368,6 @@ _REVIEW_CARD = {
 
 def _make_review_update_and_context(callback_data: str, chat_id: int = 54321):
     """Build a minimal (update, context, mock_http) for review-handler rate-limit tests."""
-    from pydantic import SecretStr
-    from telegram_bot.config import BotConfig
-
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
@@ -388,14 +385,7 @@ def _make_review_update_and_context(callback_data: str, chat_id: int = 54321):
     context.user_data = {}
     context.application = MagicMock()
     context.application.bot_data = {
-        "config": BotConfig(
-            telegram_token="test-token",
-            telegram_chat_id=chat_id,
-            database_url="postgres://test",
-            paper_ingestion_url="http://paper:8000",
-            learning_engine_url="http://learn:8001",
-            jarvis_api_key=SecretStr("test-key"),
-        ),
+        "config": make_bot_config(telegram_chat_id=chat_id),
         "db_pool": AsyncMock(),
         "http_client": mock_http,
     }

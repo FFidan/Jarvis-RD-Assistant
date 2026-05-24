@@ -9,7 +9,7 @@
 - The autouse `_default_authenticated_user` stub in [services/paper_ingestion/tests/conftest.py](../../services/paper_ingestion/tests/conftest.py)
 - The pre-commit test-shape checker in [scripts/check-test-shape.py](../../scripts/check-test-shape.py)
 
-This contract describes **what a test in this repo must look like** — for every Python test added from 2026-05-22 onward. It is the steady-state counterpart to the [2026-05-22 recomposition closeout](../audit/2026-05-22-recomposition-closeout.md), which documented why the *existing* test suite drifted away from this shape.
+This contract describes **what a test in this repo must look like** — for every Python test added from 2026-05-22 onward. It is the steady-state counterpart to the [2026-05-22 recomposition closeout](../audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md), which documented why the *existing* test suite drifted away from this shape.
 
 The contract is **machine-enforceable** where practical (pre-commit hook), **policy-enforceable** otherwise (PR review against the rules in §4).
 
@@ -435,8 +435,8 @@ It does NOT defer the rules. As of 2026-05-22, no new PR may add a §2 anti-patt
 - [docs/ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md) — mechanics (where tests live, deselect rules)
 - [docs/AGENTS.md](../../AGENTS.md) — Stabilization Guardrails reference this contract
 - [docs/CLAUDE.md](../../CLAUDE.md) — Quality Gates reference this contract
-- [docs/audit/2026-05-22-recomposition-closeout.md](../audit/2026-05-22-recomposition-closeout.md) — why this contract exists (the structural ceiling proof)
-- [docs/audit/2026-05-22-recomposition-evidence.md](../audit/2026-05-22-recomposition-evidence.md) — carve-out floor calculation
+- [docs/audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md](../audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md) — why this contract exists (the structural ceiling proof)
+- [docs/audit/2026-05-22-polish-wave/2026-05-22-recomposition-evidence.md](../audit/2026-05-22-polish-wave/2026-05-22-recomposition-evidence.md) — carve-out floor calculation
 - [docs/audit/2026-05-21-coverage-map.md](../audit/2026-05-21-coverage-map.md) — 280 rows of endpoint × coverage (Phase A foundation)
 
 ---
@@ -461,7 +461,7 @@ Every cited symbol has been Read at HEAD `master` after the recomposition merge 
 | `pytest.mark.live_pg` registration | [pyproject.toml](../../pyproject.toml) | `"live_pg: requires Docker-backed PostgreSQL and JARVIS_RUN_LIVE_PG=1"` |
 | Default `addopts` excludes | [pyproject.toml](../../pyproject.toml) | `addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"` — `contract` tests are collected-but-skipped without `JARVIS_RUN_LIVE_PG=1`. |
 | `test_baseline_invariants.py` (DO NOT DELETE) | [services/paper_ingestion/tests/test_baseline_invariants.py](../../services/paper_ingestion/tests/test_baseline_invariants.py) | 16 post-W1-squash invariants gating the consolidated schema. Marked `live_pg`. |
-| Recomposition closeout (root-cause evidence) | [docs/audit/2026-05-22-recomposition-closeout.md](../audit/2026-05-22-recomposition-closeout.md) | Plan-vs-actual + structural ceiling analysis. |
+| Recomposition closeout (root-cause evidence) | [docs/audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md](../audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md) | Plan-vs-actual + structural ceiling analysis. |
 | `scripts/check-test-shape.py` (enforcement) | [scripts/check-test-shape.py](../../scripts/check-test-shape.py) | Pre-commit hook implementing TS-01..TS-07 invariants (TS-08 is review-only). |
 
 ---

@@ -117,7 +117,7 @@ describe('PaperTOC — pipeline tri-state icons', () => {
     // Lucide icons render as <svg>; the done step has exactly one SVG (CheckCircle2).
     const svgs = row.querySelectorAll('svg');
     expect(svgs.length).toBe(1);
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+     
     const svg = svgs[0]!;
     // CheckCircle2 carries the ok-status colour class.
     const iconClass = svg.className.baseVal ?? svg.getAttribute('class') ?? '';

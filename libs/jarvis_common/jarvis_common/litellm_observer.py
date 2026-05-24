@@ -28,6 +28,7 @@ def observed_share(alias: str) -> tuple[str | None, float]:
     tuple[str | None, float]
         ``(served_model, share)`` where *share* is in ``[0.0, 1.0]``.
         Returns ``(None, 0.0)`` when no observations exist for *alias*.
+
     """
     with _LOCK:
         items = [m for a, m in _RECENT if a == alias]

@@ -43,12 +43,15 @@ class RequestIDMiddleware:
     ----------
     app : ASGIApp
         The wrapped ASGI application.
+
     """
 
     def __init__(self, app: ASGIApp) -> None:
+        """Wrap *app* to add X-Request-ID propagation on every HTTP/WebSocket scope."""
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Extract or generate a request ID, set it in context, and echo it in the response."""
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return

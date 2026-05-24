@@ -34,6 +34,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
     -------
     JSONResponse
         ``{"detail": ..., "request_id": ...}`` with the original status code.
+
     """
     request_id = request_id_ctx.get("") or None
     return JSONResponse(
@@ -94,6 +95,7 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
     -------
     JSONResponse
         HTTP 500 with ``{"detail": "An internal error occurred.", "request_id": ...}``.
+
     """
     request_id = request_id_ctx.get("") or None
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)

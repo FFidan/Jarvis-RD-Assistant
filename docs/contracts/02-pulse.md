@@ -263,6 +263,7 @@ correct but still needs an explanation instead of looking healthy.
 | `source_diagnostics` | `dict[str, {status, message, status_code, retry_after_s, settings_hint}>` | Per-source operational state for rate limits, unconfigured sources, unsupported sources, and empty results | Stage 2 |
 | `classifier` | dict | Classifier metadata (`available`, `degradation_reason`, `sample_count`) | Stage 5 |
 | `classifier_training_enqueued` | bool | Whether the post-run training job was enqueued | End of pipeline |
+| `verification_stats` | `dict[str, int \| float]` | Per-run verification outcomes; keys: `pass_rate` (float 0-1), `total` (int), `passed` (int), `failed` (int) | End of pipeline ([job.py:524-529](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L524-L529)) |
 
 The `stats` dict is the **only** structured surface for Pulse
 observability today. After [04-observability.md](04-observability.md) ships,

@@ -91,6 +91,7 @@ def safe_for_prompt(text: str | None, mode: str = "escape") -> str:
     ------
     ValueError
         If *mode* is not one of the recognised values.
+
     """
     if text is None:
         text = ""
@@ -139,6 +140,7 @@ def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> tupl
     ------
     ValueError
         If *tag* contains characters outside ``[a-zA-Z_][a-zA-Z0-9_]*``.
+
     """
     if not _TAG_RE.match(tag):
         raise ValueError(f"Invalid tag {tag!r}: must match [a-zA-Z_][a-zA-Z0-9_]*")

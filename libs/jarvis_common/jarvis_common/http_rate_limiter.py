@@ -127,6 +127,7 @@ def create_limiter(
         When ``True`` (default) the key function returns ``user:<id>`` for
         authenticated requests and ``ip:<addr>`` for unauthenticated ones.
         Set to ``False`` to force pure IP-based keying (legacy behaviour).
+
     """
     if default_limits is None:
         default_limits = ["600/minute"]

@@ -89,13 +89,13 @@ describe('SettingsAIPanel', () => {
     render(wrap(<SettingsAIPanel />));
 
     expect(await screen.findByTestId('candidate-issues')).toHaveTextContent(/curated model catalog/i);
-    expect(screen.getByText('Configured').nextElementSibling as HTMLElement).toHaveTextContent(
+    expect(screen.getByText('Configured').nextElementSibling!).toHaveTextContent(
       'vllm / Qwen/Qwen3-14B-AWQ',
     );
-    expect(screen.getByText('Observed (recent)').nextElementSibling as HTMLElement).toHaveTextContent(
+    expect(screen.getByText('Observed (recent)').nextElementSibling!).toHaveTextContent(
       'vllm/Qwen/Qwen3-14B-AWQ (100%)',
     );
-    expect(screen.getAllByText('Recommended')[0].nextElementSibling as HTMLElement).toHaveTextContent(
+    expect(screen.getAllByText('Recommended')[0]!.nextElementSibling!).toHaveTextContent(
       'ollama / qwen3:72b',
     );
     expect(screen.getByRole('option', { name: /qwen3:72b/ })).toBeInTheDocument();

@@ -34,9 +34,11 @@ class AdvisoryLock:
         First 32-bit lock key.
     key2:
         Second 32-bit lock key (default ``0``).
+
     """
 
     def __init__(self, pool: asyncpg.Pool, key1: int, key2: int = 0) -> None:
+        """Store pool and the two 32-bit lock key halves; no I/O is performed here."""
         self._pool = pool
         self._key1 = key1
         self._key2 = key2
@@ -57,6 +59,7 @@ class AdvisoryLock:
         Acquires a **dedicated** connection from the pool.  If the lock is not
         obtained the connection is released immediately so it is not held idle.
         On exception the connection is always released.
+
         """
         self._conn = await self._pool.acquire()
         try:
@@ -118,5 +121,6 @@ def _kind_lock_key(kind: str) -> int:
     -------
     int
         A value in ``[0, 2**31 - 1]``.
+
     """
     return int.from_bytes(hashlib.sha256(kind.encode()).digest()[:4], "big") & 0x7FFF_FFFF

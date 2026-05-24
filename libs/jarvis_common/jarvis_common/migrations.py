@@ -151,6 +151,7 @@ async def run_migrations(
         If another instance holds the migration lock and
         ``JARVIS_MIGRATION_LOCK_CONTENDED_OK`` is not set, or if a duplicate
         migration version number is detected in the directory.
+
     """
     async with pool.acquire() as conn:
         async with conn.transaction():

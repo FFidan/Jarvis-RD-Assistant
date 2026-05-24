@@ -1,6 +1,5 @@
 """Scheduler side-effects: cron rescheduling with DB rollback, and interval updates."""
 
-import contextlib
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -96,12 +95,14 @@ async def apply_pulse_cron(
                 await conn.execute(
                     "DELETE FROM user_config WHERE key = 'pulse.cron' AND user_id IS NULL"
                 )
-        with contextlib.suppress(Exception):
+        try:
             if old_cron is not None:
                 scheduler.reschedule_job(
                     "pulse_overnight",
                     trigger=CronTrigger.from_crontab(old_cron),
                 )
+        except Exception:
+            logger.warning("pulse_overnight scheduler revert also failed", exc_info=True)
         raise HTTPException(
             status_code=400,
             detail="Cron expression produced an invalid next run time"

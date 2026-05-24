@@ -166,6 +166,7 @@ async def validate_encrypted_config_rows(
     -------
     int
         Number of encrypted rows checked.
+
     """
     if dev_mode is None:
         dev_mode = get_core_settings().dev_crypto_relaxed

@@ -5,6 +5,7 @@ Ensures ``_is_pulse_enabled`` / ``_get_pulse_cron`` behave correctly and that
 integration is exercised by ``test_scheduler_fixes``.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -215,3 +216,47 @@ async def test_start_scheduler_registers_classifier_and_weekly_jobs(scheduler_mo
         assert scheduler.get_job("weekly_digest") is not None
     finally:
         scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_apply_pulse_cron_rollback_also_fails_still_raises_http_400(caplog):
+    """Outer HTTPException must fire even if the inner rollback raises.
+
+    Pinned regression: previous code used contextlib.suppress(Exception) and
+    silently lost the secondary failure; we now log it at WARNING.
+    """
+    from fastapi import HTTPException
+
+    from paper_ingestion.services.scheduler_effects import apply_pulse_cron
+
+    call_count = 0
+
+    def _reschedule_job(job_id: str, *, trigger: object) -> None:
+        del job_id, trigger  # callback signature only; values unused in this stub
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 2:
+            raise RuntimeError("rollback scheduler also broken")
+
+    fake_job = SimpleNamespace(next_run_time=None)
+    stub_scheduler = SimpleNamespace(
+        reschedule_job=_reschedule_job,
+        get_job=lambda job_id: (job_id, fake_job)[1],
+    )
+
+    pool, _ = _make_pool_and_conn()
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.scheduler_effects"):
+        with pytest.raises(HTTPException) as exc_info:
+            await apply_pulse_cron(
+                db_pool=pool,
+                scheduler=stub_scheduler,
+                new_cron="0 3 * * *",
+                old_cron="0 4 * * *",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert any(
+        "scheduler revert also failed" in record.message and record.levelno == logging.WARNING
+        for record in caplog.records
+    )

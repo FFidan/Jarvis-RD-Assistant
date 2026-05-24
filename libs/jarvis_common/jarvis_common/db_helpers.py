@@ -40,7 +40,7 @@ def quote_ident(name: str) -> str:
 
 
 def escape_like(q: str) -> str:
-    """Escape user-supplied LIKE/ILIKE pattern metacharacters.
+    r"""Escape user-supplied LIKE/ILIKE pattern metacharacters.
 
     Escapes ``\\``, ``%``, and ``_`` so that the string is treated as a
     literal value rather than a wildcard pattern.  Use together with the
@@ -59,6 +59,7 @@ def escape_like(q: str) -> str:
     -------
     str
         The input with LIKE metacharacters escaped.
+
     """
     return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -83,6 +84,7 @@ def validated_model(model: str) -> str:
     --------
     validated_model_with_reason : Returns ``(alias, fallback_reason)`` so callers
         can surface the original model name (e.g. via ``X-LLM-Fallback`` header).
+
     """
     alias, _ = validated_model_with_reason(model)
     return alias
@@ -106,6 +108,7 @@ def validated_model_with_reason(model: str) -> tuple[str, str | None]:
         ``(resolved_alias, fallback_reason)`` — *fallback_reason* is ``None``
         when *model* was already a valid alias, or a human-readable message
         when a fallback was applied.
+
     """
     if model in _ALIAS_MODELS:
         return model, None
@@ -177,6 +180,7 @@ async def dynamic_update(
         If *updates* contains the ``"id"`` key (primary key must not be mutated).
     HTTPException(400)
         If *updates* contains a key not in *allowed_columns*.
+
     """
     if "id" in updates:
         raise ValueError(
@@ -269,6 +273,7 @@ async def assert_paper_ownership(
     user_id:
         The caller's user ID from ``current_user_id_or_none()``.
         ``None`` means single-user mode; all access is allowed.
+
     """
     if user_id is None:
         # Single-user mode: skip ownership check entirely.
@@ -377,6 +382,7 @@ async def delete_or_404(
         Positional bind parameters for the query.
     detail:
         Error message for the 404 response.
+
     """
     result = await db_pool_or_conn.execute(sql, *params)
     if result == "DELETE 0":

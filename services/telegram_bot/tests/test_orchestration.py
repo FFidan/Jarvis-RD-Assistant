@@ -14,9 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from jarvis_common.testing import make_pool_and_conn
+from jarvis_common.testing import make_bot_config, make_pool_and_conn
 from pydantic import SecretStr
-from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import author_alerts as author_alerts_mod
 from telegram_bot.orchestration import daily_briefing as daily_briefing_mod
 from telegram_bot.orchestration import deadline_warning as deadline_warning_mod
@@ -25,17 +24,6 @@ from telegram_bot.orchestration import review_reminder as review_reminder_mod
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_config() -> BotConfig:
-    return BotConfig(
-        telegram_token="token",
-        telegram_chat_id=9999,
-        database_url="postgres://example",
-        paper_ingestion_url="http://paper-ingestion:8000",
-        learning_engine_url="http://learning-engine:8001",
-        jarvis_api_key=SecretStr("secret"),
-    )
 
 
 def _async_cm(return_value):
@@ -56,7 +44,7 @@ async def test_author_alerts_sends_message_when_new_paper_found():
     """run_author_alerts sends an HTML alert when a tracked author has a new paper."""
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
 
     # Build a paper that matches the tracked author by name
     paper_id = 42
@@ -150,7 +138,12 @@ async def test_author_alerts_skips_when_no_owner():
     pool = AsyncMock()
 
     with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
-        await author_alerts_mod.run_author_alerts(http_client, pool, bot, _make_config())
+        await author_alerts_mod.run_author_alerts(
+            http_client,
+            pool,
+            bot,
+            make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+        )
 
     bot.send_message.assert_not_awaited()
 
@@ -164,7 +157,7 @@ async def test_author_alerts_skips_when_no_owner():
 async def test_daily_briefing_sends_briefing_with_two_papers():
     """run_daily_briefing sends an HTML morning briefing message that includes paper count."""
     bot = AsyncMock()
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
 
     now = datetime.now(UTC)
     conn = AsyncMock()
@@ -225,7 +218,7 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
 async def test_daily_briefing_stats_call_includes_api_key_header():
     """DOM-D-04: _run_briefing_for_chat passes X-API-Key header on /api/stats GET."""
     bot = AsyncMock()
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
 
     conn = AsyncMock()
     count_row = MagicMock()
@@ -262,7 +255,12 @@ async def test_daily_briefing_skips_when_no_owner():
     pool = AsyncMock()
 
     with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
-        await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, _make_config())
+        await daily_briefing_mod.run_daily_briefing(
+            http_client,
+            pool,
+            bot,
+            make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+        )
 
     bot.send_message.assert_not_awaited()
 
@@ -277,7 +275,7 @@ async def test_deadline_warning_sends_alert_for_upcoming_milestones():
     """run_deadline_warning sends a warning message listing imminent milestones."""
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
 
     now = datetime.now(UTC)
     milestone_row = MagicMock()
@@ -324,7 +322,12 @@ async def test_deadline_warning_silent_when_no_milestones():
         "telegram_bot.owner.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
-        await deadline_warning_mod.run_deadline_warning(http_client, pool, bot, _make_config())
+        await deadline_warning_mod.run_deadline_warning(
+            http_client,
+            pool,
+            bot,
+            make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+        )
 
     bot.send_message.assert_not_awaited()
 
@@ -338,7 +341,7 @@ async def test_deadline_warning_silent_when_no_milestones():
 async def test_review_reminder_sends_message_for_due_cards():
     """run_review_reminder sends an inline-button message when cards are due."""
     bot = AsyncMock()
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
     pool = AsyncMock()
 
     http_client = AsyncMock(spec=httpx.AsyncClient)
@@ -381,7 +384,12 @@ async def test_review_reminder_silent_when_no_cards_due():
         "telegram_bot.owner.list_user_pairings",
         AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
     ):
-        await review_reminder_mod.run_review_reminder(http_client, pool, bot, _make_config())
+        await review_reminder_mod.run_review_reminder(
+            http_client,
+            pool,
+            bot,
+            make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+        )
 
     bot.send_message.assert_not_awaited()
 
@@ -394,7 +402,12 @@ async def test_review_reminder_skips_when_no_owner():
     pool = AsyncMock()
 
     with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
-        await review_reminder_mod.run_review_reminder(http_client, pool, bot, _make_config())
+        await review_reminder_mod.run_review_reminder(
+            http_client,
+            pool,
+            bot,
+            make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret")),
+        )
 
     bot.send_message.assert_not_awaited()
 
@@ -425,7 +438,7 @@ def test_owner_headers_all_orchestrators_use_canonical():
     assert rr_mod._owner_headers is _owner_headers, "review_reminder has its own _owner_headers"
 
     # Smoke-test that the canonical helper produces correct output.
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
     headers_with_user = _owner_headers(config, 42)
     assert headers_with_user["X-API-Key"] == "secret"
     assert headers_with_user["X-Owner-User-Id"] == "42"

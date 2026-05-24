@@ -5,20 +5,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import SecretStr
-from telegram_bot.config import BotConfig
+from jarvis_common.testing import make_bot_config
 from telegram_bot.owner import resolve_owner_chat_id
-
-
-def _make_config(chat_id: int | None) -> BotConfig:
-    return BotConfig(
-        telegram_token="tok",
-        telegram_chat_id=chat_id,
-        database_url="postgres://localhost/test",
-        paper_ingestion_url="http://paper_ingestion:8000",
-        learning_engine_url="http://learning_engine:8001",
-        jarvis_api_key=SecretStr("key"),
-    )
 
 
 def _make_db_pool(fetchval_return) -> MagicMock:
@@ -31,7 +19,7 @@ def _make_db_pool(fetchval_return) -> MagicMock:
 @pytest.mark.asyncio
 async def test_resolve_env_only():
     """When config.telegram_chat_id is set, it is returned without hitting DB."""
-    config = _make_config(123)
+    config = make_bot_config(telegram_chat_id=123)
     db_pool = _make_db_pool(None)
 
     result = await resolve_owner_chat_id(db_pool, config)
@@ -43,7 +31,7 @@ async def test_resolve_env_only():
 @pytest.mark.asyncio
 async def test_resolve_db_only():
     """When config.telegram_chat_id is None, the DB row is queried and parsed."""
-    config = _make_config(None)
+    config = make_bot_config(telegram_chat_id=None)
     db_pool = _make_db_pool("456")
 
     result = await resolve_owner_chat_id(db_pool, config)
@@ -55,7 +43,7 @@ async def test_resolve_db_only():
 @pytest.mark.asyncio
 async def test_resolve_both_env_wins():
     """When both env and DB have values, the env value takes priority."""
-    config = _make_config(100)
+    config = make_bot_config(telegram_chat_id=100)
     # DB would return a different ID — it should never be consulted
     db_pool = _make_db_pool("999")
 
@@ -68,7 +56,7 @@ async def test_resolve_both_env_wins():
 @pytest.mark.asyncio
 async def test_resolve_neither_returns_none():
     """When both env and DB have no value, None is returned."""
-    config = _make_config(None)
+    config = make_bot_config(telegram_chat_id=None)
     db_pool = _make_db_pool(None)
 
     result = await resolve_owner_chat_id(db_pool, config)
@@ -79,7 +67,7 @@ async def test_resolve_neither_returns_none():
 @pytest.mark.asyncio
 async def test_resolve_db_null_string_returns_none():
     """DB value of literal 'null' (JSONB null serialised) must return None."""
-    config = _make_config(None)
+    config = make_bot_config(telegram_chat_id=None)
     db_pool = _make_db_pool("null")
 
     result = await resolve_owner_chat_id(db_pool, config)
@@ -90,7 +78,7 @@ async def test_resolve_db_null_string_returns_none():
 @pytest.mark.asyncio
 async def test_resolve_db_invalid_value_returns_none():
     """Non-integer DB values degrade gracefully to None."""
-    config = _make_config(None)
+    config = make_bot_config(telegram_chat_id=None)
     db_pool = _make_db_pool("not-an-int")
 
     result = await resolve_owner_chat_id(db_pool, config)
@@ -101,7 +89,7 @@ async def test_resolve_db_invalid_value_returns_none():
 @pytest.mark.asyncio
 async def test_resolve_db_exception_returns_none():
     """DB errors are swallowed and None is returned."""
-    config = _make_config(None)
+    config = make_bot_config(telegram_chat_id=None)
     db_pool = MagicMock()
     db_pool.fetchval = AsyncMock(side_effect=RuntimeError("connection lost"))
 

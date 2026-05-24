@@ -9,8 +9,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import SecretStr
-from telegram_bot.config import BotConfig
+from jarvis_common.testing import make_bot_config
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.commands import (  # noqa: E402
     briefing_command,
@@ -71,17 +70,6 @@ def _default_auth_patch():
 _TEST_CHAT_ID = 12345
 
 
-def _make_config() -> BotConfig:
-    return BotConfig(
-        telegram_token="test-token",
-        telegram_chat_id=_TEST_CHAT_ID,
-        database_url="postgres://test",
-        paper_ingestion_url="http://paper:8000",
-        learning_engine_url="http://learn:8001",
-        jarvis_api_key=SecretStr("test-key"),
-    )
-
-
 def _make_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
     """Build mock Update + Context for command handlers."""
     update = MagicMock()
@@ -97,7 +85,7 @@ def _make_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
     # paired user rather than None (which is now blocked by the B4 guard).
     context.user_data = {"jarvis_user_id": 1}
 
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=_TEST_CHAT_ID)
     mock_db = AsyncMock()
     mock_http = AsyncMock()
 
@@ -533,7 +521,7 @@ async def test_post_init_calls_set_my_commands():
     application = MagicMock()
     application.bot = bot_mock
     application.bot_data = {
-        "config": _make_config(),
+        "config": make_bot_config(telegram_chat_id=_TEST_CHAT_ID),
     }
 
     # Stub create_db_pool and JarvisScheduler so post_init doesn't blow up.

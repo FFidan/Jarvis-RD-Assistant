@@ -14,8 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import telegram
-from pydantic import SecretStr
-from telegram_bot.config import BotConfig
+from jarvis_common.testing import make_bot_config
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.callback_handler import (
     paper_action_callback,
@@ -51,17 +50,6 @@ def _clear_rate_limit_state():  # pyright: ignore[reportUnusedFunction]
 _TEST_CHAT_ID = 12345
 
 
-def _make_config() -> BotConfig:
-    return BotConfig(
-        telegram_token="test-token",
-        telegram_chat_id=_TEST_CHAT_ID,
-        database_url="postgres://test",
-        paper_ingestion_url="http://paper:8000",
-        learning_engine_url="http://learn:8001",
-        jarvis_api_key=SecretStr("test-key"),
-    )
-
-
 def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_CHAT_ID):
     """Build (Update, Context, mock_db, mock_http) tuple for callback tests."""
     update = MagicMock()
@@ -79,7 +67,7 @@ def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_C
     update.callback_query = query
 
     context = MagicMock()
-    config = _make_config()
+    config = make_bot_config(telegram_chat_id=_TEST_CHAT_ID)
     mock_db = AsyncMock()
     mock_http = AsyncMock()
 
@@ -404,7 +392,7 @@ async def test_paper_action_auth_fail_answers_query():
     Without this, the Telegram client spins indefinitely on auth-rejected
     callbacks (Wave-3 review SB-2).
     """
-    # Use a chat_id that does NOT match _make_config().telegram_chat_id so
+    # Use a chat_id that does NOT match make_bot_config().telegram_chat_id so
     # auth_check returns False against both the env path and the DB path.
     update, context, mock_db, mock_http = _make_callback_update_and_context(
         "paper:save:42", chat_id=99999
@@ -1035,7 +1023,7 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
     context = MagicMock()
     context.application = MagicMock()
     context.application.bot_data = {
-        "config": _make_config(),
+        "config": make_bot_config(telegram_chat_id=_TEST_CHAT_ID),
         "db_pool": AsyncMock(),
         "http_client": AsyncMock(),
     }

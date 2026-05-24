@@ -71,7 +71,8 @@ def test_allowed_added_via_matches_migration_check_constraint():
 @pytest.mark.asyncio
 async def test_add_to_library_idempotent_second_call_is_no_op_at_db_level():
     """Calling twice with same args still issues two INSERTs; conflict handling
-    is delegated to Postgres ON CONFLICT DO NOTHING."""
+    is delegated to Postgres ON CONFLICT DO NOTHING.
+    """
     conn = _make_conn()
 
     await add_to_library(conn, user_id=1, paper_id=2, added_via="manual_save")
@@ -109,7 +110,7 @@ async def test_list_users_with_topic_returns_empty_when_no_subscribers():
 
 @pytest.mark.asyncio
 async def test_list_users_subscribe_then_fan_out_inserts_library_row(monkeypatch):
-    """subscribe → fan_out_to_topic_users → user_library row exists (seam test)."""
+    """Subscribe → fan_out_to_topic_users → user_library row exists (seam test)."""
     conn = _make_conn()
 
     # Simulate one subscriber (user 5) for topic 10.

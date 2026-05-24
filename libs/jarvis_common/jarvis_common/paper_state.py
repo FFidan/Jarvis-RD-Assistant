@@ -108,6 +108,7 @@ async def upsert_paper_user_state(
     For ``update_partial``: an asyncpg ``Record`` with keys ``state``,
     ``state_before_trash``, ``starred``, ``rating``, ``user_notes``,
     ``flagged``, ``updated_at``.
+
     """
     if on_conflict == "update_dynamic":
         return await _upsert_dynamic(conn, paper_id, user_id, state=state, starred=starred)
@@ -349,6 +350,7 @@ async def restore_paper(
     ------
     HTTPException(404)
         If no row was updated — paper not found or not in trash for this caller.
+
     """
     status = await conn.execute(
         """UPDATE paper_user_state

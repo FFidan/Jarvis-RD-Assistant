@@ -138,6 +138,7 @@ def register_health_routes(
       exposes dependency details to unauthenticated callers (SEC-H09).
     * ``GET /health/internal`` requires ``verify_api_key`` and returns the
       full :class:`HealthCheckResponse` body.  Same 200/503 split.
+
     """
 
     def _exempt(fn: Any) -> Any:

@@ -19,6 +19,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
+        """Attach a correlation ID to the request context and response header."""
         header = request.headers.get("X-Correlation-Id")
         try:
             corr = uuid.UUID(header) if header else uuid.uuid4()

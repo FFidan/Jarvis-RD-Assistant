@@ -1,6 +1,6 @@
 name: CI
 
-# Public-launch CI. The `cross-user-isolation` job is the v0.4.0 merge gate.
+# Public-launch CI. The `cross-user-isolation` job is the release gate.
 #
 # BRANCH PROTECTION: mark the terminal `gate` job (defined at the bottom of
 # this file) as the ONLY required status check. It `needs:` all real jobs,
@@ -63,7 +63,7 @@ jobs:
         run: bash scripts/check-python-deps.sh
 
   cross-user-isolation:
-    name: Cross-user isolation (v0.4.0 merge gate)
+    name: Cross-user isolation (release gate)
     runs-on: ubuntu-latest
     # The live_pg fixture provisions its own throwaway PostgreSQL 16 (postgres:16.8)
     # container via the Docker CLI (preinstalled on ubuntu-latest) and tears it

@@ -78,6 +78,7 @@ class DictChunk:
     __slots__ = ("id", "content", "page_number")
 
     def __init__(self, data: dict) -> None:
+        """Unpack ``id``, ``content``, and ``page_number`` from a raw chunk dict."""
         self.id: int = data["id"]
         self.content: str = data["content"]
         self.page_number: int | None = data.get("page_number")

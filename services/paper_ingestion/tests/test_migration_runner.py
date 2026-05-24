@@ -5,7 +5,6 @@ resolves to the real db/migrations/ directory in the repo. This avoids
 fragile monkeypatching of Path internals.
 """
 
-from pathlib import Path
 from unittest.mock import ANY
 
 import asyncpg
@@ -13,9 +12,6 @@ import pytest
 
 from paper_ingestion.migrations_runner import _strip_outer_transaction_control
 from tests.conftest import _make_pool_and_conn
-
-# The real migrations directory in this repo (0089+ only post-squash)
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
 
 
 def _import_run_migrations():
@@ -41,14 +37,14 @@ async def test_creates_schema_migrations_table():
     assert any("CREATE TABLE IF NOT EXISTS schema_migrations" in c for c in all_calls)
 
 
-async def test_skips_already_applied_migrations():
+async def test_skips_already_applied_migrations(tmp_path):
     """Migrations already in schema_migrations should not be re-executed."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
     # Post-squash: all 1..88 are pre-seeded; no .sql files on disk.
     conn.fetch.return_value = [{"version": v} for v in range(1, 89)]
 
-    await run_migrations(pool)
+    await run_migrations(pool, migrations_dir=tmp_path)
 
     # Only the outer wrapping transaction should have been opened (no migration transactions).
     assert conn.transaction.call_count == 1
@@ -62,7 +58,7 @@ async def test_skips_already_applied_migrations():
 # chain-coupled: used _count_real_migrations() → 0 post-squash → expected_new = -10 FAIL.
 
 
-async def test_no_migrations_applied_when_all_fresh():
+async def test_no_migrations_applied_when_all_fresh(tmp_path):
     """When nothing is applied yet (fresh install), the runner applies zero SQL files.
 
     Post-squash contract: db/migrations/ has no .sql files (0089+ era, empty until next
@@ -73,9 +69,9 @@ async def test_no_migrations_applied_when_all_fresh():
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []  # Nothing applied yet
 
-    await run_migrations(pool)
+    await run_migrations(pool, migrations_dir=tmp_path)
 
-    # Post-squash: db/migrations/ is empty → only the outer wrapping transaction.
+    # Empty migrations_dir → only the outer wrapping transaction.
     assert conn.transaction.call_count == 1
 
 

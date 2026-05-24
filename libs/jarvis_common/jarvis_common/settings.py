@@ -19,6 +19,7 @@ Notes
   runtime) are **not** wrapped in the lru_cache'd factory — the call site
   builds a fresh ``JobsSettings()`` per invocation so runtime env changes are
   honoured.
+
 """
 
 from __future__ import annotations
@@ -127,7 +128,8 @@ class CoreSettings(BaseSettings):
     @model_validator(mode="after")
     def _promote_dev_flags(self) -> CoreSettings:
         """When dev_mode=True, promote any granular flag that was NOT explicitly
-        set in the environment to True.  An explicit env var always wins."""
+        set in the environment to True.  An explicit env var always wins.
+        """
         if not self.dev_mode:
             return self
         _flag_env_names = {

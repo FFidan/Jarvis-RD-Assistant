@@ -117,6 +117,7 @@ class FauxLiteLLMServer:
     """
 
     def __init__(self, *, dimension: int = 1024, host: str = "127.0.0.1") -> None:
+        """Configure the embedding dimension and bind host; no server is started yet."""
         self._dimension = dimension
         self._host = host
         self._queues: dict[str, deque[_QueueEntry]] = {}
@@ -170,6 +171,7 @@ class FauxLiteLLMServer:
 
     @property
     def url(self) -> str:
+        """Base URL of the running server; raises ``RuntimeError`` when not started."""
         if self._url is None:
             raise RuntimeError("FauxLiteLLMServer is not running")
         return self._url

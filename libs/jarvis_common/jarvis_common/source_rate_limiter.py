@@ -34,6 +34,7 @@ class SourceRateLimiter:
 
     Note: also accepts ``requests_per_minute`` as a convenience alias
     (converted to rate_per_second internally).
+
     """
 
     def __init__(
@@ -43,6 +44,7 @@ class SourceRateLimiter:
         *,
         requests_per_minute: float | None = None,
     ) -> None:
+        """Initialise the token bucket with the given rate and optional burst capacity."""
         if requests_per_minute is not None:
             rate_per_second = requests_per_minute / 60.0
         if rate_per_second <= 0:
@@ -92,6 +94,7 @@ class PersistentSourceRateLimiter:
         Optional in-memory :class:`SourceRateLimiter` used when Postgres is
         unreachable.  If omitted, a bare ``asyncio.sleep(min_interval_seconds)``
         is used instead.
+
     """
 
     def __init__(
@@ -102,6 +105,7 @@ class PersistentSourceRateLimiter:
         db_pool: Any,
         fallback: SourceRateLimiter | None = None,
     ) -> None:
+        """Store the (source_type, user_id) key, rate settings, pool, and optional fallback."""
         self._source_type = source_type
         self._user_id = user_id
         self._min_interval = min_interval_seconds
@@ -351,6 +355,7 @@ class PersistentSourceRateLimiter:
         -------
         tuple[bool, datetime | None]
             ``(True, cooldown_until)`` if in cooldown, ``(False, None)`` otherwise.
+
         """
         try:
             async with self._pool.acquire() as conn:
@@ -443,6 +448,7 @@ class PersistentSourceRateLimiter:
             * timestamps are ISO-8601 strings (or ``None``).
 
         On DB error a safe "no data" snapshot is returned (never raises).
+
         """
         safe: dict = {
             "in_cooldown": False,

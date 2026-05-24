@@ -132,7 +132,7 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, list
   const selectedIds = useBulkSelection((s) => s.selectedIds);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: QUERY_KEYS.papers.feed(surface, filter ?? '', scope, limit, offset, (sourceTypes ?? null) as string[] | null),
+    queryKey: QUERY_KEYS.papers.feed(surface, filter ?? '', scope, limit, offset, sourceTypes ? [sourceTypes] : null),
     // fetchFeed accepts SurfaceView string
     queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes }),
   });

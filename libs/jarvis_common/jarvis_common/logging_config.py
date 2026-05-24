@@ -31,13 +31,16 @@ class JSONFormatter(logging.Formatter):
     ----------
     service_name : str
         Name included in every log entry for service identification.
+
     """
 
     def __init__(self, service_name: str) -> None:
+        """Store the service name tag included in every JSON log entry."""
         super().__init__()
         self.service_name = service_name
 
     def format(self, record: logging.LogRecord) -> str:
+        """Render *record* as a single-line JSON string with service metadata."""
         corr = correlation_id_var.get()
         log_entry = {
             "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
@@ -70,6 +73,7 @@ class SystemEventHandler(logging.Handler):
         ring_buffer_size: int = 1000,
         flush_interval_s: float = 0.5,
     ) -> None:
+        """Configure the ring buffer and background drain task parameters; no I/O."""
         super().__init__()
         self.setLevel(logging.WARNING)
         self._pool = pool
@@ -80,6 +84,7 @@ class SystemEventHandler(logging.Handler):
         self._was_in_outage = False
 
     def emit(self, record: logging.LogRecord) -> None:
+        """Non-blocking: serialize *record* and enqueue it; start the drain task if idle."""
         if record.levelno < self.level:
             return
         try:
@@ -163,6 +168,7 @@ class SystemEventHandler(logging.Handler):
                     sys.stderr.write(f"[SystemEventHandler outage] {e}\n")
 
     async def aclose(self) -> None:
+        """Cancel the background drain task; call during shutdown to flush pending events."""
         if self._task is not None:
             self._task.cancel()
             try:
@@ -230,6 +236,7 @@ def configure_logging(
         Keys to scrub from structlog event dicts before rendering (L-07).
         ``None`` uses :data:`DEFAULT_PII_KEYS`; pass an explicit set to extend
         or override (most callers should accept the default).
+
     """
     keys = pii_keys if pii_keys is not None else DEFAULT_PII_KEYS
 

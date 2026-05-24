@@ -18,6 +18,8 @@ CatalogPhase = Literal["default", "advanced", "future"]
 
 @dataclass(frozen=True)
 class ModelCatalogEntry:
+    """Immutable descriptor for a single model in the bundled static catalog."""
+
     id: str
     name: str
     provider: Provider
@@ -41,6 +43,7 @@ class ModelCatalogEntry:
     supports_thinking: bool = False
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize this entry to a plain dict suitable for JSON responses."""
         return asdict(self)
 
 

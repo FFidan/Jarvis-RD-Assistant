@@ -171,6 +171,7 @@ async def send_magic_link(
     logged.  Only a SHA-256 hash of the recipient email is recorded so
     operators can correlate events without the log becoming a bearer-token
     store.
+
     """
     # Resolve the effective relay once: wizard-written user_config layered
     # over env. This is what makes a wizard-saved SMTP relay send mail with

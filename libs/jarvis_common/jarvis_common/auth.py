@@ -208,6 +208,7 @@ async def require_admin(request: Request) -> None:
     ------
     fastapi.HTTPException
         403 unless the caller has a session with ``role == 'admin'``.
+
     """
     role = getattr(request.state, "user_role", None)
     if role != "admin":
@@ -512,6 +513,7 @@ def validate_production_config() -> None:
     ------
     RuntimeError
         On the first failed gate encountered.
+
     """
     from jarvis_common.settings import get_core_settings, get_secrets_settings  # noqa: PLC0415
 

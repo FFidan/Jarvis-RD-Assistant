@@ -227,7 +227,7 @@ describe('FeedPaperRow onHardDelete stable callback (DOM-F-02 regression)', () =
     const stableOnHardDelete = vi.fn();
 
     // Confirm structural guarantee first.
-    // eslint-disable-next-line react/display-name
+     
     function Probe() { return null; }
     const memoType = (React.memo(Probe) as unknown as { $$typeof: symbol }).$$typeof;
     const rowType = (FeedPaperRow as unknown as { $$typeof: symbol }).$$typeof;
@@ -268,7 +268,7 @@ describe('FeedPaperRow memoization', () => {
     // React.memo wraps the inner function and sets $$typeof to Symbol(react.memo).
     // This is the canonical way to assert memoization without depending on
     // render-count infrastructure.
-    // eslint-disable-next-line react/display-name
+     
     function Probe() { return null; }
     const memoType = (React.memo(Probe) as unknown as { $$typeof: symbol }).$$typeof;
     const rowType = (FeedPaperRow as unknown as { $$typeof: symbol }).$$typeof;

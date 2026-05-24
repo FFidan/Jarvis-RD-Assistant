@@ -17,9 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.logging_config import correlation_id_var
-from jarvis_common.testing import make_telegram_update
-from pydantic import SecretStr
-from telegram_bot.config import BotConfig
+from jarvis_common.testing import make_bot_config, make_telegram_update
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.commands._auth import _SEEN_CHATS, _maybe_emit_auth_event
 
@@ -43,17 +41,6 @@ def _reset_state():
 # ---------------------------------------------------------------------------
 
 _TEST_CHAT_ID = 99001
-
-
-def _make_config(telegram_chat_id: int = _TEST_CHAT_ID) -> BotConfig:
-    return BotConfig(
-        telegram_token="test-token",
-        telegram_chat_id=telegram_chat_id,
-        database_url="postgres://test",
-        paper_ingestion_url="http://paper:8000",
-        learning_engine_url="http://learn:8001",
-        jarvis_api_key=SecretStr("test-key"),
-    )
 
 
 def _make_pool():
@@ -98,7 +85,7 @@ async def test_dispatcher_sets_correlation_id_per_command():
 
     pool = _make_pool()
     update = make_telegram_update(chat_id=_TEST_CHAT_ID)
-    context = _make_context(pool, _make_config())
+    context = _make_context(pool, make_bot_config(telegram_chat_id=_TEST_CHAT_ID))
     context.user_data = {"jarvis_user_id": _TEST_CHAT_ID}
 
     with (
@@ -210,7 +197,7 @@ async def test_dispatcher_emits_config_event_when_setting_changes():
     update.message.text = "/start PAIR_VALIDCODE"
     update.message.reply_text = AsyncMock()
 
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
+    context = _make_context(pool, make_bot_config(telegram_chat_id=None))
 
     mock_log_event = AsyncMock()
 

@@ -58,6 +58,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(self, app: ASGIApp) -> None:
+        """Pass *app* to ``BaseHTTPMiddleware``; no additional state is needed."""
         super().__init__(app)
 
     async def dispatch(
@@ -65,6 +66,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Any,
     ) -> Response:
+        """Populate ``request.state`` from the session cookie before forwarding the request."""
         token = request.cookies.get(SESSION_COOKIE_NAME)
         if token:
             await _populate_state_from_cookie(request, token)

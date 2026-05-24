@@ -119,7 +119,8 @@ def _is_well_formed_xml(body: bytes) -> bool:
 def _is_cacheable_body(host: str, body: bytes) -> bool:
     """Only genuine usable bodies enter the cache: never empty, and for XML
     source hosts the body must parse as well-formed XML (a transient bad/empty
-    arXiv response must not be served for the whole TTL)."""
+    arXiv response must not be served for the whole TTL).
+    """
     if not body:
         return False
     if host in _XML_SOURCE_HOSTS:
@@ -142,6 +143,7 @@ class CachingTransport(httpx.AsyncBaseTransport):
     """Caches GET+200 for source hosts only. Everything else is passthrough."""
 
     def __init__(self, inner: httpx.AsyncBaseTransport, *, max_entries: int = 512) -> None:
+        """Wrap *inner* transport with an LRU cache of at most *max_entries* entries."""
         self._inner = inner
         self._enabled = _env_enabled()
         self._ttl = _env_ttl()
@@ -153,6 +155,7 @@ class CachingTransport(httpx.AsyncBaseTransport):
         self.misses = 0
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """Return a cached response for eligible GET requests, or pass through to *inner*."""
         if not self._enabled or request.method != "GET" or request.url.host not in _SOURCE_HOSTS:
             return await self._inner.handle_async_request(request)
 
@@ -186,4 +189,5 @@ class CachingTransport(httpx.AsyncBaseTransport):
         return response
 
     async def aclose(self) -> None:
+        """Close the underlying transport; cache entries are discarded."""
         await self._inner.aclose()

@@ -191,7 +191,7 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
   };
 
   /** Clean up interval on unmount or dialog close. */
-  useEffect(() => () => stopPolling(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => stopPolling(), []);  
 
   const reset = () => {
     stopPolling();

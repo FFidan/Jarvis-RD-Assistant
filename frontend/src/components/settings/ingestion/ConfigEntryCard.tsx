@@ -57,12 +57,10 @@ export function ConfigEntryCard({
   onSaveEdit,
   onCancelEdit,
 }: ConfigEntryCardProps) {
-  // Custom element (e.g. LlmModelCard) takes priority
   if (customElement !== undefined) {
     return <>{customElement}</>;
   }
 
-  // Boolean entries get a Switch toggle (no edit-mode needed)
   if (meta?.type === 'boolean') {
     return (
       <Card className="rounded-md border-hair shadow-none">
@@ -83,7 +81,6 @@ export function ConfigEntryCard({
     );
   }
 
-  // Generic text/number entry with inline edit
   return (
     <Card>
       <CardContent className="flex items-center gap-4 p-4">

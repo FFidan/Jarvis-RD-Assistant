@@ -75,6 +75,7 @@ def build_database_url() -> str:
     ------
     RuntimeError
         If neither the secret file nor ``DATABASE_URL`` can be read.
+
     """
     from pathlib import Path  # noqa: PLC0415
 
@@ -160,6 +161,7 @@ class ServiceLifespanConfig:
         for shutting down APScheduler, Qdrant clients, etc.  Run in reverse
         (LIFO) order relative to their corresponding init hooks, matching the
         standard resource-stack cleanup convention.
+
     """
 
     service_name: str
@@ -327,6 +329,7 @@ def configure_middleware_and_errors(
         headers from.  Pass ``"*"`` to trust any (matches the
         learning_engine default); pass a comma-separated string or a list to
         restrict.
+
     """
     # 1. RequestIDMiddleware (innermost — emits X-Request-Id first).
     app.add_middleware(RequestIDMiddleware)
@@ -391,6 +394,7 @@ async def init_langfuse_hook(
         populate a per-service module-level holder (e.g. ``paper_ingestion._state.set_services``
         or ``learning_engine._state.set_services``).  When provided, called as
         ``set_services_callback(openai_client)``.
+
     """
     import instructor  # noqa: PLC0415
     import openai  # noqa: PLC0415

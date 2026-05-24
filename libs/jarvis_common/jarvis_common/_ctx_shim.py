@@ -204,6 +204,7 @@ def make_ctx_shim(
     -------
     ProcrastinateJobContextShim
         A shim with ``job_id`` resolved and the pool attached.
+
     """
     if job_id is None:
         if procrastinate_ctx is not None:

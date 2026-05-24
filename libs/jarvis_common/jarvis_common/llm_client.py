@@ -267,6 +267,7 @@ async def request_chat_completion_content(
         If the response only contains whitespace or stripped think-block text.
     ValueError
         If the response body does not contain ``choices[0].message.content``.
+
     """
     litellm = config or get_litellm_config()
     if messages is None:
@@ -355,6 +356,7 @@ async def call_llm_structured(
         LiteLLM config; defaults to env-resolved config.
     max_retries:
         Instructor retry budget (default 2).
+
     """
     _options = options or ChatCompletionOptions()
     _config = config or get_litellm_config()
@@ -471,6 +473,7 @@ async def embed_texts(
     ------
     RuntimeError
         On HTTP error, timeout, connection failure, or malformed response body.
+
     """
     if not texts:
         return []

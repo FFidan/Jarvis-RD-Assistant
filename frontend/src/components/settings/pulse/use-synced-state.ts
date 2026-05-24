@@ -9,7 +9,7 @@ export function useSyncedState<T>(serverValue: T): [T, React.Dispatch<React.SetS
 
   useEffect(() => {
     setLocal(serverValue);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [serverValue]);
 
   return [local, setLocal];

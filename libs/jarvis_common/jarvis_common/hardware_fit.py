@@ -221,6 +221,7 @@ def recommend_models(vram_mb: int | None) -> HardwareRecommendation:
     HardwareRecommendation
         Advisory recommendation.  Never raises.  ``confirm_on_target`` on
         individual aliases signals that a live bench is still outstanding.
+
     """
     if vram_mb is None:
         return HardwareRecommendation(

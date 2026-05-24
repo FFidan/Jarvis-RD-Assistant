@@ -141,6 +141,7 @@ def build_jobs_router(
     task_lookup:
         Optional callable returning the current kind→task mapping.  Defaults to
         the compatibility ``jarvis_common.task_registry.KIND_TO_TASK`` mapping.
+
     """
     # ``service_name`` is currently informational but kept on the closure so
     # future audit/log integrations can read it without adding a parameter.

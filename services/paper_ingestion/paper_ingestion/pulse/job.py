@@ -267,7 +267,7 @@ async def run_pulse(
         stats["last_error"] = f"assemble_deck: {exc}"
         logger.exception("pulse.assemble failed")
         deck = []
-    logger.info("pulse.assembled", extra={"cards": len(deck)}, exc_info=True)
+    logger.info("pulse.assembled", extra={"cards": len(deck)})
 
     # Compute duration before persist so it is available even if persist fails
     stats["duration_s"] = round(time.monotonic() - start, 3)

@@ -48,6 +48,24 @@ dispatching, gather context yourself and provide:
 If a subagent reports blocked tooling, inspect the denial chain and decide the
 next action in the parent session.
 
+### Parallel write dispatch
+
+For waves with **≥2 file-disjoint tasks that EDIT files**, follow
+`parallel-worktree-mode` (user-level skill at `~/.claude/skills/parallel-worktree-mode/SKILL.md`):
+
+- Each task runs in its OWN `git worktree` on its OWN branch off the integration branch
+- Symlink `.venv` / `node_modules` / `libs/jarvis_common/.venv` from the parent worktree
+- Subagents NEVER run `git add` / `commit` / `push` / `pull` / `merge` / `rebase` / `reset --hard` / `branch` / `checkout <branch>`
+- Subagents end with `STATUS: COMPLETE|BLOCKED` + `Files changed:` list
+- Parent orchestrator serially commits in each worktree path, then `merge --no-ff` into the integration branch from a pristine detached worktree
+- Teardown is mandatory: `git worktree remove` + `git branch -D` per task at wave-close
+
+**Halt-and-sequentialize** for tasks touching `docker-compose*.yml`, `.env*`,
+lockfiles (`uv.lock` / `package-lock.json`), or DB migrations. These share
+global state and can't safely run parallel.
+
+See `~/.claude/skills/parallel-worktree-mode/SKILL.md` for the full protocol.
+
 ## Desloppify
 
 Desloppify is useful for finding debt clusters, but it is not the release truth.

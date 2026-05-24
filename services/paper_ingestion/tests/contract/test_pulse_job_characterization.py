@@ -11,12 +11,12 @@ the existing contract/test_pulse_contract.py suite.
 Stats dict keys verified against docs/contracts/02-pulse.md §7:
   candidate_count, stage1_survivors, stage2_scored, llm_calls, duration_s,
   last_error, degraded_reason, deck_date, card_count, source_counts,
-  source_diagnostics, classifier, classifier_training_enqueued.
+  source_diagnostics, classifier, classifier_training_enqueued, verification_stats.
 
 Verified identifiers:
   pulse.job.run_pulse                job.py:100 — async pipeline, returns stats dict
   pulse.job._zero_candidate_degraded_reason  job.py:81 — builds degraded string
-  docs/contracts/02-pulse.md §7     — 13-key stats dict contract
+  docs/contracts/02-pulse.md §7     — 14-key stats dict contract
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ _CONTRACT_STATS_KEYS = frozenset(
         "source_diagnostics",
         "classifier",
         "classifier_training_enqueued",
+        "verification_stats",
     }
 )
 
@@ -118,7 +119,7 @@ def _zero_candidate_patches():
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — stats dict has all 13 contract keys when zero candidates returned
+# Test 1 — stats dict has all 14 contract keys when zero candidates returned
 # ---------------------------------------------------------------------------
 
 
@@ -131,9 +132,9 @@ async def test_run_pulse_returns_stats_with_all_contract_keys(
     Uses patched collaborators so no real LLM / embedder / sources are needed.
     Zero candidates → degraded path (card_count=0, deck_date set, all keys present).
 
-    Verified: pulse/job.py:133-147 (stats dict initialisation, 13 keys),
+    Verified: pulse/job.py:133-147 (stats dict initialisation, 14 keys),
               pulse/job.py:376-378 (deck_date + degraded_reason populated before return),
-              docs/contracts/02-pulse.md §7 (13-key contract).
+              docs/contracts/02-pulse.md §7 (14-key contract).
     """
     from paper_ingestion.pulse.job import run_pulse
 
@@ -204,3 +205,81 @@ async def test_run_pulse_zero_candidates_returns_degraded_reason(
     assert "candidates" in stats["degraded_reason"].lower(), (
         f"degraded_reason should reference 'candidates'; got: {stats['degraded_reason']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — classifier_training_enqueued=True path + verification_stats shape
+# ---------------------------------------------------------------------------
+
+
+async def test_run_pulse_classifier_training_enqueue_success_path(
+    contract_conn,
+    contract_two_users,
+    monkeypatch,
+):
+    """When defer_async succeeds, stats[classifier_training_enqueued]=True.
+
+    Also pins the verification_stats sub-dict shape (per 02-pulse.md §7).
+
+    Coverage gap closed: the other two characterization tests pass ctx=None to
+    run_pulse, which structurally skips the `if ctx:` guard at job.py:502 and
+    therefore never reaches the `stats["classifier_training_enqueued"] = True`
+    assignment at job.py:511. This test fabricates a minimal ctx stub and patches
+    KIND_TO_TASK so defer_async completes successfully, exercising that branch.
+
+    Verified: pulse/job.py:502-515 (ctx guard + defer_async success branch),
+              pulse/job.py:524-529 (verification_stats dict always set),
+              docs/contracts/02-pulse.md §7 (14-key contract).
+    """
+    from paper_ingestion.pulse.job import run_pulse
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+
+    # Fabricate a minimal ctx that satisfies the `if ctx:` guard.
+    # Both update_progress and is_cancelled are awaited by run_pulse; use
+    # AsyncMock so Python doesn't raise "object MagicMock can't be used in
+    # 'await' expression".  is_cancelled returns False so the pipeline
+    # continues normally rather than raising CancelledError.
+    mock_ctx = MagicMock()
+    mock_ctx.update_progress = AsyncMock(return_value=None)
+    mock_ctx.is_cancelled = AsyncMock(return_value=False)
+
+    # Stub the KIND_TO_TASK entry so defer_async returns successfully.
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "paper_ingestion.pulse.job.KIND_TO_TASK",
+        {"pulse.train_classifier": mock_task},
+    )
+
+    deck_date_t3 = datetime(2098, 12, 3, 4, 0, tzinfo=UTC)
+
+    with _zero_candidate_patches():
+        stats = await run_pulse(
+            db_pool=pool,
+            http_client=MagicMock(),
+            embedder=MagicMock(),
+            now=deck_date_t3,
+            user_id=user_id,
+            ctx=mock_ctx,
+        )
+
+    # Primary assertion: successful defer_async → enqueued=True
+    assert stats["classifier_training_enqueued"] is True, (
+        "run_pulse with a successful defer_async must set "
+        f"stats['classifier_training_enqueued']=True; got: {stats['classifier_training_enqueued']!r}"
+    )
+
+    # Pin verification_stats sub-dict shape (always set, regardless of ctx)
+    assert "verification_stats" in stats, (
+        "run_pulse must always set stats['verification_stats'] (job.py:524-529)"
+    )
+    vs = stats["verification_stats"]
+    assert set(vs.keys()) == {"pass_rate", "total", "passed", "failed"}, (
+        f"verification_stats must have exactly keys pass_rate/total/passed/failed; got: {set(vs.keys())}"
+    )
+    assert isinstance(vs["pass_rate"], float | int)
+    assert isinstance(vs["total"], int)
+    assert isinstance(vs["passed"], int)
+    assert isinstance(vs["failed"], int)

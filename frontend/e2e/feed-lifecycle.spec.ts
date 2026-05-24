@@ -204,7 +204,7 @@ test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
   // booleans). The new schema is `state` ENUM + orthogonal `starred`. Surface chip count badge
   // also routes through the new feed counts shape. Needs mock-data refresh + selector update.
   test.fixme('0. Inbox surface renders seeded paper', async ({ page }) => {
-    let feedPhase: 'inbox' = 'inbox';
+    const feedPhase: 'inbox' = 'inbox';
 
     await routeFeedAndCounts(
       page,

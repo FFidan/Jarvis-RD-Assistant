@@ -145,7 +145,6 @@ export const QUERY_KEYS = {
   jobs: {
     list: (statusFilter?: string) =>
       statusFilter ? (["jobs", statusFilter] as const) : (["jobs"] as const),
-    running: () => ["jobs", "running"] as const,
   },
 
   // ── My Day ────────────────────────────────────────────────────────────────
