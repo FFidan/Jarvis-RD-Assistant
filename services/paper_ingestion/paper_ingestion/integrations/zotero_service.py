@@ -567,7 +567,7 @@ async def poll_zotero_library(
 
         paper_create = PaperCreate(
             external_id=f"zotero:{item_key}",
-            source_type=SourceType.LOCAL,
+            source_type=SourceType.ZOTERO,
             title=title or f"Zotero item {item_key}",
             authors=authors,
             abstract=abstract or None,

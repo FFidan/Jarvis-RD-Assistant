@@ -565,6 +565,7 @@ async def test_poll_library_enqueues_new_items():
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     mock_analyze_defer.assert_awaited_once()
+    assert mock_analyze_defer.await_args is not None
     call_kwargs = mock_analyze_defer.await_args.kwargs
     # PI-002: job deferred via paper_analyze task with paper_id kwarg
     assert call_kwargs["paper_id"] == 99
@@ -1066,4 +1067,63 @@ async def test_push_paper_to_zotero_acquires_single_connection():
     # Exactly 2 acquire() calls: config + push body.
     assert pool.acquire.call_count == 2, (
         f"Expected 2 pool.acquire() calls (config + push), got {pool.acquire.call_count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BE-11: SourceType.ZOTERO enum value + Zotero poll uses source_type="zotero"
+# ---------------------------------------------------------------------------
+
+
+def test_source_type_zotero_enum_value():
+    """BE-11: SourceType.ZOTERO must exist and equal the string 'zotero'."""
+    from paper_ingestion.models.papers import SourceType
+
+    assert SourceType.ZOTERO == "zotero", (
+        f"Expected SourceType.ZOTERO == 'zotero', got {SourceType.ZOTERO!r}"
+    )
+    # Must be a member of the enum (not just a loose string match).
+    assert SourceType("zotero") is SourceType.ZOTERO
+
+
+async def test_poll_zotero_library_sets_source_type_zotero():
+    """BE-11: Zotero-imported papers must carry source_type='zotero', not 'local'.
+
+    poll_zotero_library calls upsert_paper with a PaperCreate whose source_type
+    must be SourceType.ZOTERO after the BE-11 fix.
+    """
+    from paper_ingestion.models.papers import SourceType
+
+    new_item = _zotero_item(key="ZTITEM1", title="Zotero Paper", doi="")
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 77}))
+    version_conn = _make_conn()
+    pool = _make_poll_pool(upsert_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    captured: list = []
+
+    async def _fake_upsert(conn, paper_create, *, discovered_by=None):
+        captured.append(paper_create)
+        return {"id": 77}
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([new_item], 5))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_task.defer_async = AsyncMock()
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            with patch(
+                "paper_ingestion.integrations.zotero_service.upsert_paper",
+                side_effect=_fake_upsert,
+            ):
+                result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    assert result["status"] == "ok"
+    assert len(captured) == 1, f"Expected exactly one upsert_paper call, got {len(captured)}"
+    paper_create = captured[0]
+    assert paper_create.source_type == SourceType.ZOTERO, (
+        f"Expected source_type=SourceType.ZOTERO ('zotero'), got {paper_create.source_type!r}"
     )

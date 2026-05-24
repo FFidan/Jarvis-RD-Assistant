@@ -27,6 +27,7 @@ class SourceType(str, Enum):
     LOCAL = "local"
     OPENALEX = "openalex"
     PUBMED = "pubmed"
+    ZOTERO = "zotero"
 
 
 class Confidence(str, Enum):
