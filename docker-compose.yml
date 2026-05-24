@@ -758,7 +758,8 @@ networks:
     ipam:
       config:
         - subnet: ${JARVIS_NET_SUBNET:-10.137.241.0/24}
-          gateway: 10.137.241.1
+          # gateway: auto-assigned by Docker (first host in subnet); omit to avoid
+          # hard-fail when JARVIS_NET_SUBNET is overridden to a different range.
 
 secrets:
   postgres_password:

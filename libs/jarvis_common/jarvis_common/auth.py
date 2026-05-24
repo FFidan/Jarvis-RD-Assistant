@@ -335,21 +335,6 @@ def _parse_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Netw
     return networks
 
 
-# Parsed once on first use (or on explicit refresh); avoids re-parsing CIDRs per request.
-_CACHED_ALLOWED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None
-
-
-def refresh_allowed_networks_cache() -> None:
-    """Re-parse ``OWNER_OVERRIDE_ALLOWED_CIDRS`` and update the module-level cache.
-
-    Mirror of :func:`refresh_api_key_cache`.  Call this at app lifespan startup
-    (or in tests that monkeypatch ``OWNER_OVERRIDE_ALLOWED_CIDRS``) so the
-    cached value reflects the current environment.
-    """
-    global _CACHED_ALLOWED_NETWORKS
-    _CACHED_ALLOWED_NETWORKS = _parse_allowed_networks()
-
-
 def _ip_in_allowlist(ip_str: str | None) -> bool:
     """Return True when *ip_str* falls within one of the allowed CIDRs."""
     if not ip_str:
@@ -358,12 +343,7 @@ def _ip_in_allowlist(ip_str: str | None) -> bool:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
-    networks = (
-        _CACHED_ALLOWED_NETWORKS
-        if _CACHED_ALLOWED_NETWORKS is not None
-        else _parse_allowed_networks()
-    )
-    for net in networks:
+    for net in _parse_allowed_networks():
         if addr in net:
             return True
     return False
