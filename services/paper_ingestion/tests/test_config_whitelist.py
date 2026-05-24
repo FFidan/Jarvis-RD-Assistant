@@ -171,3 +171,48 @@ def test_smtp_port_rejects_string():
     """smtp.port must reject a string — it must be a positive integer."""
     with pytest.raises(ValueError):
         _CONFIG_VALIDATORS["smtp.port"]("587")
+
+
+# --- fsrs.learning_steps boundary cases (CFG-RECVAL-1) ---
+
+
+from paper_ingestion.services.config_validators import _validate_fsrs_learning_steps  # noqa: E402
+
+
+def test_fsrs_learning_steps_single_step_accepted():
+    """A single-element list must be accepted — relaxed from the old 'exactly 2' rule."""
+    _validate_fsrs_learning_steps([1])  # must not raise
+
+
+def test_fsrs_learning_steps_two_steps_still_accepted():
+    """The canonical 2-step configuration must continue to be accepted."""
+    _validate_fsrs_learning_steps([1, 10])  # must not raise
+
+
+def test_fsrs_learning_steps_ten_steps_accepted():
+    """Upper bound of 10 elements is the maximum allowed."""
+    _validate_fsrs_learning_steps(list(range(1, 11)))  # 10 elements — must not raise
+
+
+def test_fsrs_learning_steps_empty_rejected():
+    """An empty list must be rejected with an 'at least 1' error message."""
+    with pytest.raises(ValueError, match="at least 1"):
+        _validate_fsrs_learning_steps([])
+
+
+def test_fsrs_learning_steps_oversize_rejected():
+    """A list with more than 10 elements must be rejected with an 'at most 10' message."""
+    with pytest.raises(ValueError, match="at most 10"):
+        _validate_fsrs_learning_steps(list(range(1, 12)))  # 11 elements
+
+
+def test_fsrs_learning_steps_non_list_rejected():
+    """A non-list value must be rejected."""
+    with pytest.raises(ValueError, match="must be a list"):
+        _validate_fsrs_learning_steps("1,10")
+
+
+def test_fsrs_learning_steps_zero_element_rejected():
+    """Zero is not a valid step duration — must be rejected."""
+    with pytest.raises(ValueError):
+        _validate_fsrs_learning_steps([0])

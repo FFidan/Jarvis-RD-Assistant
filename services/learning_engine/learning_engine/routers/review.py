@@ -69,7 +69,12 @@ async def _build_fsrs_manager_from_db(
                 steps_raw = (
                     json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
                 )
-                if isinstance(steps_raw, list) and len(steps_raw) == 2:
+                if isinstance(steps_raw, list) and len(steps_raw) >= 1:
+                    if len(steps_raw) < 2:
+                        logger.warning(
+                            "fsrs.learning_steps has %d element(s); FSRS default is 2 steps",
+                            len(steps_raw),
+                        )
                     learning_steps = [timedelta(minutes=int(s)) for s in steps_raw]
         except (ValueError, json.JSONDecodeError, TypeError):
             logger.warning(

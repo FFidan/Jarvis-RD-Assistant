@@ -216,11 +216,13 @@ def _validate_fsrs_retention(v: Any) -> None:
 
 
 def _validate_fsrs_learning_steps(v: Any) -> None:
-    """Validate fsrs.learning_steps — list of exactly 2 positive integers (minutes)."""
+    """Validate fsrs.learning_steps — list of 1–10 positive integers (minutes)."""
     if not isinstance(v, list):
         raise ValueError("fsrs.learning_steps must be a list")
-    if len(v) != 2:
-        raise ValueError("fsrs.learning_steps must have exactly 2 elements")
+    if len(v) < 1:
+        raise ValueError("fsrs.learning_steps must have at least 1 element")
+    if len(v) > 10:
+        raise ValueError("fsrs.learning_steps must have at most 10 elements")
     for i, step in enumerate(v):
         if isinstance(step, bool) or not isinstance(step, int) or step <= 0:
             raise ValueError(f"fsrs.learning_steps[{i}] must be a positive integer (minutes)")
