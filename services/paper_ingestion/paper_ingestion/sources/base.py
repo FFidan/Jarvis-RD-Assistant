@@ -25,11 +25,6 @@ logger = logging.getLogger(__name__)
 # Plugins return [] / None on these codes rather than raising.
 _TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
-# Maximum value returned by _retry_after_seconds.  Caps absurdly large
-# Retry-After header values (e.g. 99999999999) so the poller never blocks
-# for more than one hour due to a misbehaving upstream.
-_MAX_RETRY_AFTER_S: int = 3600
-
 # Module-level timestamp set at import time; used by _enforce_startup_grace.
 _STARTUP_AT: float = _time.monotonic()
 
@@ -144,7 +139,7 @@ class PaperSource(ABC):
         if retry_after is None:
             return None
         try:
-            return min(int(float(retry_after)), _MAX_RETRY_AFTER_S)
+            return int(float(retry_after))
         except (TypeError, ValueError):
             return None
 
