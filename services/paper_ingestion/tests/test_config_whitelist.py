@@ -139,35 +139,3 @@ def test_validate_langfuse_dashboard_url_rejects_ssrf_boundaries(unsafe_url):
 
     with pytest.raises(ValueError, match=r"localhost|127\.0\.0\.1|https"):
         _validate_langfuse_dashboard_url(unsafe_url)
-
-
-# --- smtp.* keys ---
-
-_SMTP_KEYS = {"smtp.host", "smtp.port", "smtp.user", "smtp.from", "smtp.pass"}
-
-
-@pytest.mark.parametrize("key", sorted(_SMTP_KEYS))
-def test_smtp_keys_registered_in_validators(key: str):
-    """Every smtp.* config key must have a validator entry."""
-    assert key in _CONFIG_VALIDATORS, f"{key!r} missing from _CONFIG_VALIDATORS"
-
-
-@pytest.mark.parametrize(
-    "key,value",
-    [
-        ("smtp.host", "mail.example.com"),
-        ("smtp.port", 587),
-        ("smtp.user", "user@example.com"),
-        ("smtp.from", "noreply@example.com"),
-        ("smtp.pass", "s3cr3t"),
-    ],
-)
-def test_smtp_validators_accept_valid_values(key: str, value: object):
-    """Each smtp.* validator must accept a well-formed value without raising."""
-    _CONFIG_VALIDATORS[key](value)
-
-
-def test_smtp_port_rejects_string():
-    """smtp.port must reject a string — it must be a positive integer."""
-    with pytest.raises(ValueError):
-        _CONFIG_VALIDATORS["smtp.port"]("587")

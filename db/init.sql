@@ -957,21 +957,6 @@ CREATE SEQUENCE public.papers_id_seq
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-CREATE TABLE public.pdf_resolutions (
-    id integer NOT NULL,
-    doi character varying(255),
-    arxiv_id character varying(50),
-    resolved_url text,
-    resolver_name character varying(32),
-    resolved_at timestamp with time zone DEFAULT now()
-);
-CREATE SEQUENCE public.pdf_resolutions_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
 CREATE TABLE public.procrastinate_events (
     id bigint NOT NULL,
     job_id bigint NOT NULL,
@@ -1414,7 +1399,6 @@ ALTER SEQUENCE public.paper_sources_id_seq OWNED BY public.paper_sources.id;
 ALTER SEQUENCE public.paper_summaries_id_seq OWNED BY public.paper_summaries.id;
 ALTER SEQUENCE public.paper_user_state_id_seq OWNED BY public.paper_user_state.id;
 ALTER SEQUENCE public.papers_id_seq OWNED BY public.papers.id;
-ALTER SEQUENCE public.pdf_resolutions_id_seq OWNED BY public.pdf_resolutions.id;
 ALTER SEQUENCE public.procrastinate_events_id_seq OWNED BY public.procrastinate_events.id;
 ALTER SEQUENCE public.procrastinate_jobs_id_seq OWNED BY public.procrastinate_jobs.id;
 ALTER SEQUENCE public.procrastinate_periodic_defers_id_seq OWNED BY public.procrastinate_periodic_defers.id;
@@ -1456,7 +1440,6 @@ ALTER TABLE ONLY public.paper_sources ALTER COLUMN id SET DEFAULT nextval('publi
 ALTER TABLE ONLY public.paper_summaries ALTER COLUMN id SET DEFAULT nextval('public.paper_summaries_id_seq'::regclass);
 ALTER TABLE ONLY public.paper_user_state ALTER COLUMN id SET DEFAULT nextval('public.paper_user_state_id_seq'::regclass);
 ALTER TABLE ONLY public.papers ALTER COLUMN id SET DEFAULT nextval('public.papers_id_seq'::regclass);
-ALTER TABLE ONLY public.pdf_resolutions ALTER COLUMN id SET DEFAULT nextval('public.pdf_resolutions_id_seq'::regclass);
 ALTER TABLE ONLY public.procrastinate_events ALTER COLUMN id SET DEFAULT nextval('public.procrastinate_events_id_seq'::regclass);
 ALTER TABLE ONLY public.procrastinate_jobs ALTER COLUMN id SET DEFAULT nextval('public.procrastinate_jobs_id_seq'::regclass);
 ALTER TABLE ONLY public.procrastinate_periodic_defers ALTER COLUMN id SET DEFAULT nextval('public.procrastinate_periodic_defers_id_seq'::regclass);
@@ -1556,10 +1539,6 @@ ALTER TABLE ONLY public.papers
     ADD CONSTRAINT papers_external_id_key UNIQUE (external_id);
 ALTER TABLE ONLY public.papers
     ADD CONSTRAINT papers_pkey PRIMARY KEY (id);
-ALTER TABLE ONLY public.pdf_resolutions
-    ADD CONSTRAINT pdf_resolutions_doi_arxiv_id_key UNIQUE NULLS NOT DISTINCT (doi, arxiv_id);
-ALTER TABLE ONLY public.pdf_resolutions
-    ADD CONSTRAINT pdf_resolutions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.procrastinate_events
     ADD CONSTRAINT procrastinate_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.procrastinate_jobs
@@ -1703,7 +1682,6 @@ CREATE INDEX idx_papers_priority ON public.papers USING btree (priority_score DE
 CREATE INDEX idx_papers_search_vector ON public.papers USING gin (search_vector);
 CREATE INDEX idx_papers_source_type ON public.papers USING btree (source_type);
 CREATE INDEX idx_papers_title_year_normalized ON public.papers USING btree (regexp_replace(lower(btrim(title)), '[^[:alnum:]_[:space:]]'::text, ' '::text, 'g'::text), EXTRACT(year FROM published_date)) WHERE ((title IS NOT NULL) AND (published_date IS NOT NULL));
-CREATE INDEX idx_pdf_resolutions_doi ON public.pdf_resolutions USING btree (doi) WHERE (doi IS NOT NULL);
 CREATE INDEX idx_procrastinate_jobs_worker_not_null ON public.procrastinate_jobs USING btree (worker_id) WHERE ((worker_id IS NOT NULL) AND (status = 'doing'::public.procrastinate_job_status));
 CREATE INDEX idx_procrastinate_workers_last_heartbeat ON public.procrastinate_workers USING btree (last_heartbeat);
 CREATE INDEX idx_project_papers_paper ON public.project_papers USING btree (paper_id);
