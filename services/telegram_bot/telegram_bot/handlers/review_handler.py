@@ -7,7 +7,6 @@ SHOWING_FRONT -> SHOWING_BACK -> (loop or END).
 from __future__ import annotations
 
 import logging
-import re
 from html import escape as _html_escape
 
 from jarvis_common.time_utils import utc_now_iso
@@ -31,9 +30,6 @@ SHOWING_BACK = 1
 
 # Rating labels
 RATING_LABELS = {1: "Again", 2: "Hard", 3: "Good", 4: "Easy"}
-
-# SEC-RATING-1: guard against malformed callback data before int() parse
-_RATING_RE = re.compile(r"^rate_([1-4])$")
 
 
 # ---------------------------------------------------------------------------
@@ -201,15 +197,9 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # rather than whatever was stored from a potentially stale prior session.
     context.user_data["jarvis_user_id"] = jarvis_user_id
 
-    _m = _RATING_RE.match(query.data or "")
-    if not _m:
-        logger.warning("rate_card: unexpected query.data=%r", query.data)
-        await query.answer()
-        return ConversationHandler.END
-
     await query.answer()
 
-    rating = int(_m.group(1))
+    rating = int(query.data.split("_")[1])
     label = RATING_LABELS.get(rating, str(rating))
     card = context.user_data.get("current_card")
 

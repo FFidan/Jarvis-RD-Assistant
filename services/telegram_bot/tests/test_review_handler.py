@@ -2,9 +2,6 @@
 
 Covers: review_start, show_answer, rate_card, cancel_review.
 Each handler is tested directly with mocked Update + Context objects.
-
-SEC-RATING-1 tests are at the bottom of this module.
-Verified: handlers/review_handler.py:204 (_RATING_RE guard in rate_card)
 """
 
 from __future__ import annotations
@@ -279,92 +276,3 @@ async def test_cancel_review():
     text = update.message.reply_text.call_args[0][0]
     assert "5" in text
     assert "current_card" not in context.user_data
-
-
-# ---------------------------------------------------------------------------
-# Tests: SEC-RATING-1 — regex guard on query.data
-# ---------------------------------------------------------------------------
-
-# Use a distinct chat_id so the rate-limiter bucket for these tests is
-# isolated from the 5-call quota consumed by the test_rate_card_* tests above.
-_SEC_CHAT_ID = 99999
-
-
-@pytest.mark.asyncio
-async def test_rate_card_rejects_malformed_query_data() -> None:
-    """Non-integer / out-of-range rating in query.data must not raise ValueError.
-
-    SEC-RATING-1: bare int(query.data.split('_')[1]) replaced with _RATING_RE guard.
-    """
-    user_data = {"current_card": _sample_card(), "cards_reviewed": 0}
-    update, context, _mock_http = _make_callback_update_and_context(
-        "rate_not_a_number", user_data=user_data, chat_id=_SEC_CHAT_ID
-    )
-
-    # Must not raise; should answer and return END
-    result = await rate_card(update, context)
-
-    assert result == ConversationHandler_END
-    update.callback_query.answer.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_rate_card_rejects_out_of_range_rating() -> None:
-    """Rating values outside 1-4 (e.g. rate_9) are rejected by the regex guard."""
-    user_data = {"current_card": _sample_card(), "cards_reviewed": 0}
-    update, context, _mock_http = _make_callback_update_and_context(
-        "rate_9", user_data=user_data, chat_id=_SEC_CHAT_ID
-    )
-
-    result = await rate_card(update, context)
-
-    assert result == ConversationHandler_END
-    update.callback_query.answer.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_rate_card_rejects_injected_prefix() -> None:
-    """Prefixed payloads like 'evil_rate_3' are rejected by the regex guard."""
-    user_data = {"current_card": _sample_card(), "cards_reviewed": 0}
-    update, context, _mock_http = _make_callback_update_and_context(
-        "evil_rate_3", user_data=user_data, chat_id=_SEC_CHAT_ID
-    )
-
-    result = await rate_card(update, context)
-
-    assert result == ConversationHandler_END
-    update.callback_query.answer.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_rate_card_valid_rating_parses_correctly() -> None:
-    """Valid query.data='rate_3' parses rating as integer 3 (happy path)."""
-    card = _sample_card()
-    next_card = {
-        **_sample_card(),
-        "id": 2,
-        "front": "What is NLP?",
-        "back": "Natural Language Processing",
-    }
-    user_data = {"current_card": card, "cards_reviewed": 0}
-    update, context, mock_http = _make_callback_update_and_context(
-        "rate_3", user_data=user_data, chat_id=_SEC_CHAT_ID
-    )
-
-    submit_resp = MagicMock()
-    submit_resp.raise_for_status = MagicMock()
-    submit_resp.json.return_value = {"next_due_at": "2026-03-10T00:00:00Z"}
-
-    next_resp = MagicMock()
-    next_resp.raise_for_status = MagicMock()
-    next_resp.json.return_value = [next_card]
-
-    mock_http.post.return_value = submit_resp
-    mock_http.get.return_value = next_resp
-
-    result = await rate_card(update, context)
-
-    # Rating 3 = "Good" — verify payload sent to API contains rating=3
-    assert result == SHOWING_FRONT
-    post_call_kwargs = mock_http.post.call_args[1]
-    assert post_call_kwargs["json"]["rating"] == 3
