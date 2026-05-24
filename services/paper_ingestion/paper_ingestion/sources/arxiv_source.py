@@ -278,7 +278,7 @@ class ArxivSource(PaperSource):
                     return None
                 response.raise_for_status()
                 try:
-                    root = safe_fromstring(response.content)
+                    root = safe_fromstring(response.text)
                 except Exception as exc:
                     self._set_poll_diagnostic(
                         status="error",
