@@ -115,12 +115,13 @@ async def run_author_alerts(
                         paper_id = paper["id"]
                         # Deduplicate via author_alert_log — INSERT ... ON CONFLICT is atomic
                         row = await conn.fetchrow(
-                            """INSERT INTO author_alert_log (tracked_author_id, paper_id)
-                            VALUES ($1, $2)
-                            ON CONFLICT (tracked_author_id, paper_id) DO NOTHING
+                            """INSERT INTO author_alert_log (tracked_author_id, paper_id, user_id)
+                            VALUES ($1, $2, $3)
+                            ON CONFLICT (tracked_author_id, paper_id, user_id) DO NOTHING
                             RETURNING tracked_author_id""",
                             author_id,
                             paper_id,
+                            pairing.user_id,
                         )
                         if row:
                             matched_papers.append(dict(paper))
