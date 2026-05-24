@@ -1237,6 +1237,14 @@ CREATE SEQUENCE public.system_events_id_seq
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_writer') THEN
+    -- Password set out-of-band via secret file at boot; placeholder role created here
+    EXECUTE format('CREATE ROLE vector_writer LOGIN PASSWORD %L', coalesce(current_setting('jarvis.vector_writer_password', true), 'change_me_at_boot'));
+  END IF;
+END $$;
+GRANT INSERT ON system_events TO vector_writer;
+GRANT USAGE, SELECT ON SEQUENCE system_events_id_seq TO vector_writer;
 CREATE TABLE public.task_paper_links (
     task_id integer NOT NULL,
     paper_id integer NOT NULL,

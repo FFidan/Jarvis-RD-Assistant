@@ -170,9 +170,6 @@ def build_feed_queries(
     params.append(user_id)
     param_idx += 1
 
-    if unread_only:
-        conditions.append(f"({VIEW_PREDICATES['active']})")
-
     note_query_param: int | None = None
     if q:
         if include_zotero_notes:
@@ -196,6 +193,12 @@ def build_feed_queries(
     # In corpus scope, the Library tab means "all non-trash canonical papers";
     # user library membership is only meaningful in library scope.
     effective_view = "all_non_trash" if scope == "corpus" and view == "library" else view
+
+    # unread_only is only applied when no explicit view is requested; an
+    # explicit view already encodes its own state predicate and must not be
+    # contradicted by the active-state guard.
+    if unread_only and effective_view is None:
+        conditions.append(f"({VIEW_PREDICATES['active']})")
 
     # view= takes precedence over the legacy statuses= filter
     if effective_view is not None:
