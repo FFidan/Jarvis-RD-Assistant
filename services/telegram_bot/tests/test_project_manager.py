@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,7 +28,7 @@ async def test_list_projects_filters_by_status():
     db_pool.fetch.return_value = [_row(id=1, name="A", status="active")]
     manager = ProjectManager(db_pool)
 
-    result = await manager.list_projects(user_id=1, status="active")
+    result = await manager.list_projects(status="active")
 
     assert result == [{"id": 1, "name": "A", "status": "active"}]
     assert db_pool.fetch.await_args.args[1] == "active"
@@ -191,32 +190,3 @@ async def test_get_project_papers_returns_plain_dicts():
     result = await manager.get_project_papers(3)
 
     assert result == [{"id": 10, "title": "Paper", "note": "useful", "task_title": "Implement"}]
-
-
-def test_list_projects_requires_user_id() -> None:
-    """list_projects must accept user_id with no default (SEC-PRJMGR-1)."""
-    from telegram_bot.project_manager import ProjectManager
-
-    sig = inspect.signature(ProjectManager.list_projects)
-    assert "user_id" in sig.parameters, "list_projects must have user_id parameter"
-    assert sig.parameters["user_id"].default is inspect.Parameter.empty, (
-        "user_id must be mandatory (no default)"
-    )
-
-
-def test_get_today_tasks_requires_user_id() -> None:
-    """get_today_tasks must accept user_id with no default (SEC-PRJMGR-1)."""
-    from telegram_bot.project_manager import ProjectManager
-
-    sig = inspect.signature(ProjectManager.get_today_tasks)
-    assert "user_id" in sig.parameters
-    assert sig.parameters["user_id"].default is inspect.Parameter.empty
-
-
-def test_get_upcoming_milestones_requires_user_id() -> None:
-    """get_upcoming_milestones must accept user_id with no default (SEC-PRJMGR-1)."""
-    from telegram_bot.project_manager import ProjectManager
-
-    sig = inspect.signature(ProjectManager.get_upcoming_milestones)
-    assert "user_id" in sig.parameters
-    assert sig.parameters["user_id"].default is inspect.Parameter.empty

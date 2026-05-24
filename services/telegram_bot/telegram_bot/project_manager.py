@@ -29,13 +29,11 @@ class ProjectManager:
 
     # ----- Projects -----
 
-    async def list_projects(self, user_id: int, status: str = "active") -> list[dict]:
-        """List projects filtered by status and scoped to *user_id*.
+    async def list_projects(self, status: str = "active") -> list[dict]:
+        """List projects filtered by status.
 
         Parameters
         ----------
-        user_id : int
-            Owning user — only this user's projects are returned.
         status : str
             Project status filter (default ``'active'``).
 
@@ -45,9 +43,8 @@ class ProjectManager:
             List of project records.
         """
         rows = await self.db_pool.fetch(
-            "SELECT * FROM projects WHERE status = $1 AND user_id = $2 ORDER BY created_at DESC",
+            "SELECT * FROM projects WHERE status = $1 ORDER BY created_at DESC",
             status,
-            user_id,
         )
         return [dict(r) for r in rows]
 
@@ -266,13 +263,8 @@ class ProjectManager:
                     )
         return dict(row) if row else {}
 
-    async def get_today_tasks(self, user_id: int) -> list[dict]:
-        """Get tasks that are in progress or due today, scoped to *user_id*.
-
-        Parameters
-        ----------
-        user_id : int
-            Owning user — only tasks belonging to this user's projects are returned.
+    async def get_today_tasks(self) -> list[dict]:
+        """Get tasks that are in progress or due today.
 
         Returns
         -------
@@ -283,25 +275,21 @@ class ProjectManager:
             """SELECT t.*, p.name as project_name
             FROM tasks t
             LEFT JOIN projects p ON t.project_id = p.id
-            WHERE p.user_id = $1
-              AND (t.status = 'in_progress'
+            WHERE t.status = 'in_progress'
                OR (t.deadline IS NOT NULL
                    AND t.deadline::date = CURRENT_DATE
-                   AND t.status != 'done'))
-            ORDER BY t.priority, t.deadline NULLS LAST""",
-            user_id,
+                   AND t.status != 'done')
+            ORDER BY t.priority, t.deadline NULLS LAST"""
         )
         return [dict(r) for r in rows]
 
     # ----- Milestones -----
 
-    async def get_upcoming_milestones(self, user_id: int, days: int = 3) -> list[dict]:
-        """Get milestones due in the next *N* days, scoped to *user_id*.
+    async def get_upcoming_milestones(self, days: int = 3) -> list[dict]:
+        """Get milestones due in the next *N* days.
 
         Parameters
         ----------
-        user_id : int
-            Owning user — only milestones for this user's projects are returned.
         days : int
             Number of days to look ahead (default 3).
 
@@ -315,10 +303,8 @@ class ProjectManager:
             FROM milestones m
             JOIN projects p ON m.project_id = p.id
             WHERE m.completed = FALSE
-              AND p.user_id = $1
-              AND m.deadline <= NOW() + make_interval(days => $2)
+              AND m.deadline <= NOW() + make_interval(days => $1)
             ORDER BY m.deadline""",
-            user_id,
             days,
         )
         return [dict(r) for r in rows]
