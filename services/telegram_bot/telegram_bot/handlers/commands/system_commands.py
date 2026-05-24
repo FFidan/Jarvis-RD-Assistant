@@ -136,11 +136,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(raw_text, str):
         parts = raw_text.split(maxsplit=1)
         if len(parts) > 1 and parts[1].startswith("PAIR_"):
-            code = parts[1][len("PAIR_") :]
-            if len(code) > 64:
-                logger.warning("Oversized pairing code rejected (len=%d)", len(code))
-                return
-            await _handle_pairing(update, context, code)
+            await _handle_pairing(update, context, parts[1][len("PAIR_") :])
             return
 
     config = get_config(context)
