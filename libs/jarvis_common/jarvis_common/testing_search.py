@@ -5,6 +5,8 @@ Cluster 9 of the 2026-05-24 polish-wave decomposition of ``jarvis_common.testing
 
 from __future__ import annotations
 
+__all__ = ["ScriptedReranker"]
+
 from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,13 @@ Clusters 7-8 of the 2026-05-24 polish-wave decomposition of ``jarvis_common.test
 
 from __future__ import annotations
 
+__all__ = [
+    "FakeAcquireCM",
+    "FakeTxnCM",
+    "make_telegram_update",
+    "make_bot_config",
+]
+
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 

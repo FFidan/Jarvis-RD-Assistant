@@ -5,6 +5,8 @@ Cluster 6 of the 2026-05-24 polish-wave decomposition of ``jarvis_common.testing
 
 from __future__ import annotations
 
+__all__ = ["RoleMiddleware"]
+
 from typing import Any
 
 
