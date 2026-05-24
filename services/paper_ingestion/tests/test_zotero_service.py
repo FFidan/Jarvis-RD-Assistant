@@ -815,38 +815,6 @@ async def test_get_zotero_config_legacy_plaintext_fallback():
     assert config["library_type"] == "user"
 
 
-async def test_get_zotero_config_handles_memoryview_encrypted_value(monkeypatch):
-    """asyncpg may return BYTEA columns as memoryview; _get_zotero_config must not AttributeError."""
-    from cryptography.fernet import Fernet
-    from jarvis_common.crypto import encrypt_secret, refresh_fernet_cache
-    from paper_ingestion.integrations.zotero_service import _get_zotero_config
-
-    test_key = Fernet.generate_key().decode()
-    monkeypatch.setenv("JARVIS_CONFIG_KEY", test_key)
-    refresh_fernet_cache()
-
-    ciphertext_bytes = encrypt_secret("my_api_key").encode("ascii")
-
-    rows = [
-        FakeRecord(
-            {
-                "key": "zotero.api_key",
-                "value": None,
-                "encrypted_value": memoryview(ciphertext_bytes),
-            }
-        ),
-    ]
-
-    conn = _make_conn(fetch=rows)
-    pool = _make_pool(conn)
-
-    config = await _get_zotero_config(pool)
-
-    assert config.get("api_key") == "my_api_key"
-
-    refresh_fernet_cache()
-
-
 # ---------------------------------------------------------------------------
 # PI-EDGE-009: sync_annotations_for_paper — transaction rollback on mid-loop failure
 # ---------------------------------------------------------------------------

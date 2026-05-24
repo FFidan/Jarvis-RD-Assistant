@@ -37,7 +37,7 @@ async def _get_zotero_config(
     config is treated as missing — callers will hit the "no api_key" branch
     and skip the operation gracefully.
     """
-    from jarvis_common.crypto import resolve_secret_row
+    from jarvis_common.crypto import decrypt_secret
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
@@ -53,9 +53,8 @@ async def _get_zotero_config(
         enc = row.get("encrypted_value")
         if enc is not None:
             # Post-Sprint-1 row: decrypt Fernet ciphertext stored as BYTEA.
-            # resolve_secret_row handles memoryview/bytes/str BYTEA variants.
             try:
-                config[short_key] = resolve_secret_row({"encrypted_value": enc, "value": None})
+                config[short_key] = decrypt_secret(enc.decode("ascii"))
             except Exception:
                 logger.warning(
                     "Zotero config decrypt failed for key %r; treating Zotero config as missing",

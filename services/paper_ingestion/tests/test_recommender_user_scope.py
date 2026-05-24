@@ -58,3 +58,37 @@ async def test_discover_from_seeds_receives_user_id() -> None:
     assert kwargs.get("user_id") == 42, (
         f"discover_from_seeds was not called with user_id=42; got kwargs={kwargs}"
     )
+
+
+@pytest.mark.asyncio
+async def test_project_query_is_scoped_to_user_id() -> None:
+    """Projects fetched for recommendation must be filtered to the requesting user.
+
+    If user B has an active project named 'secret-project', user A must not
+    see recommendation explanations containing 'secret-project'.
+    """
+    pool, conn = make_pool_and_conn()
+
+    # Simulate the conn.fetch chain in order: _read_weights, _get_starred_ids, projects query
+    conn.fetch = AsyncMock(
+        side_effect=[
+            [],  # _read_weights: defaults
+            [],  # _get_starred_ids: no starred papers
+            [{"name": "secret-project", "description": "user B only"}],  # projects
+        ]
+    )
+
+    embedder = MagicMock()
+    embedder.search_similar = AsyncMock(return_value=[])
+    embedder.discover_from_seeds = AsyncMock(return_value=[])
+
+    app = _make_app(pool, embedder)
+    requesting_user_id = 7  # user A
+
+    await _refresh_recommendations_for_user(app, requesting_user_id)
+
+    projects_call = conn.fetch.call_args_list[2]
+    bind_params = projects_call.args[1:]
+    assert requesting_user_id in bind_params
+    for call in embedder.search_similar.call_args_list:
+        assert call.kwargs.get("user_id") == requesting_user_id
