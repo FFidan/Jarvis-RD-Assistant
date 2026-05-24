@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 import asyncpg
 import httpx
 import pydantic
-from fastapi import HTTPException
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_LONG,
@@ -29,6 +28,7 @@ from paper_ingestion.converters import (
     row_to_chunk_response,
     row_to_summary_response,
 )
+from paper_ingestion.exceptions import EmptyChunksError, LLMError, PaperNotFoundError
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import (
     Confidence,
@@ -215,7 +215,7 @@ async def generate_paper_summary(
         async with advisory_lock(conn, 2, paper_id):
             paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
             if not paper_row:
-                raise HTTPException(status_code=404, detail="Paper not found")
+                raise PaperNotFoundError(f"Paper {paper_id} not found")
 
             # Idempotency: return existing summary
             existing = await conn.fetchrow(
@@ -228,8 +228,8 @@ async def generate_paper_summary(
                 "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index", paper_id
             )
             if not chunk_rows:
-                raise HTTPException(
-                    status_code=400, detail="Paper has no processed chunks. Run process-pdf first."
+                raise EmptyChunksError(
+                    f"Paper {paper_id} has no processed chunks. Run process-pdf first."
                 )
 
             chunks = [row_to_chunk_response(r) for r in chunk_rows]
@@ -277,22 +277,20 @@ async def generate_paper_summary(
             config=litellm_config,
         )
     except pydantic.ValidationError:
-        raise HTTPException(status_code=502, detail="Malformed LLM response") from None
+        raise LLMError("Malformed LLM response") from None
     except RuntimeError as exc:
         msg = str(exc)
         if "timed out" in msg.lower():
-            raise HTTPException(
-                status_code=504,
-                detail="LLM request timed out. Local models may need more time on first run.",
+            raise LLMError(
+                "LLM request timed out. Local models may need more time on first run."
             ) from None
-        raise HTTPException(status_code=502, detail="LLM API error during summarization") from None
+        raise LLMError("LLM API error during summarization") from None
     except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504,
-            detail="LLM request timed out. Local models may need more time on first run.",
+        raise LLMError(
+            "LLM request timed out. Local models may need more time on first run."
         ) from None
     except httpx.HTTPStatusError:
-        raise HTTPException(status_code=502, detail="LLM API error during summarization") from None
+        raise LLMError("LLM API error during summarization") from None
     except Exception as exc:  # noqa: BLE001 — openai.APIStatusError / InstructorRetryException
         import openai  # noqa: PLC0415
 
@@ -305,9 +303,7 @@ async def generate_paper_summary(
             pass
 
         if isinstance(exc, openai.APIStatusError) or _is_instructor_retry:
-            raise HTTPException(
-                status_code=502, detail="LLM API error during summarization"
-            ) from None
+            raise LLMError("LLM API error during summarization") from None
         raise
 
     raw_content = parsed.model_dump_json()

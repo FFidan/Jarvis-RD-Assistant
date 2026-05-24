@@ -7,6 +7,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import assert_paper_ownership, current_user_id_strict
+from jarvis_common.jobs import JobError
 from jarvis_common.sse import SSE_DONE, sse_event
 from starlette.responses import StreamingResponse
 
@@ -29,11 +30,11 @@ def safe_sse_error_message(exc: Exception) -> str:
     """Return a safe error message that doesn't leak implementation details.
 
     Only passes through messages from known safe exception types (ValueError,
-    HTTPException). All other exceptions return a generic message.
+    HTTPException, JobError). All other exceptions return a generic message.
     """
     if isinstance(exc, HTTPException):
         return str(exc.detail)
-    if isinstance(exc, ValueError):
+    if isinstance(exc, ValueError | JobError):
         return str(exc)
     return "Analysis failed. Please try again."
 

@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import HTTPException
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models /
 # rapidfuzz stubs.
+from paper_ingestion.exceptions import EmptyChunksError, LLMError, PaperNotFoundError
 from paper_ingestion.models import Confidence
 from paper_ingestion.services import summarization
 from paper_ingestion.services.summarization_models import SummarizationOutput
@@ -149,7 +149,7 @@ async def test_generate_paper_summary_returns_existing_summary():
 
 @pytest.mark.asyncio
 async def test_generate_paper_summary_raises_on_missing_paper():
-    """A missing paper should return HTTP 404 before any LLM call."""
+    """A missing paper must raise PaperNotFoundError (not HTTPException) before any LLM call."""
     conn = AsyncMock()
     conn.fetchrow.return_value = None
     pool = _make_pool(conn)
@@ -160,7 +160,7 @@ async def test_generate_paper_summary_raises_on_missing_paper():
         patch.object(summarization, "advisory_lock", _noop_lock),
         patch_ctx,
     ):
-        with pytest.raises(HTTPException, match="Paper not found") as exc_info:
+        with pytest.raises(PaperNotFoundError, match="7"):
             await summarization.generate_paper_summary(
                 paper_id=7,
                 db_pool=pool,
@@ -169,13 +169,12 @@ async def test_generate_paper_summary_raises_on_missing_paper():
                 embedder=MagicMock(),
             )
 
-    assert exc_info.value.status_code == 404
     llm_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_generate_paper_summary_raises_on_missing_chunks():
-    """Papers without processed chunks should return HTTP 400."""
+    """Papers without processed chunks must raise EmptyChunksError (not HTTPException)."""
     conn = AsyncMock()
     conn.fetchrow.side_effect = [_paper_row(), None]
     conn.fetch.return_value = []
@@ -188,7 +187,7 @@ async def test_generate_paper_summary_raises_on_missing_chunks():
         patch.object(summarization, "advisory_lock", _noop_lock),
         patch_ctx,
     ):
-        with pytest.raises(HTTPException, match="process-pdf first") as exc_info:
+        with pytest.raises(EmptyChunksError, match="process-pdf"):
             await summarization.generate_paper_summary(
                 paper_id=7,
                 db_pool=pool,
@@ -197,13 +196,12 @@ async def test_generate_paper_summary_raises_on_missing_chunks():
                 embedder=MagicMock(),
             )
 
-    assert exc_info.value.status_code == 400
     llm_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_generate_paper_summary_maps_read_timeout_to_504():
-    """ReadTimeout from LiteLLM should map to a stable HTTP 504."""
+async def test_generate_paper_summary_maps_read_timeout_to_llm_error():
+    """ReadTimeout from LiteLLM must raise LLMError (not HTTPException)."""
     conn = AsyncMock()
     conn.fetchrow.side_effect = [_paper_row(), None]
     conn.fetch.return_value = [_chunk_row()]
@@ -216,7 +214,7 @@ async def test_generate_paper_summary_maps_read_timeout_to_504():
         patch.object(summarization, "advisory_lock", _noop_lock),
         patch_ctx,
     ):
-        with pytest.raises(HTTPException, match="timed out") as exc_info:
+        with pytest.raises(LLMError, match="timed out"):
             await summarization.generate_paper_summary(
                 paper_id=7,
                 db_pool=pool,
@@ -224,8 +222,6 @@ async def test_generate_paper_summary_maps_read_timeout_to_504():
                 verifier=MagicMock(),
                 embedder=MagicMock(),
             )
-
-    assert exc_info.value.status_code == 504
 
 
 @pytest.mark.asyncio

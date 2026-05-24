@@ -1096,16 +1096,18 @@ async def test_rag_w2_summarize_http_error_degrades_gracefully(
     pi_contract_app_with_litellm_sidecar,
     contract_conn,
 ):
-    """generate_paper_summary raises HTTPException(502) when LLM returns persistent 502 errors.
+    """generate_paper_summary raises LLMError when LLM returns persistent 502 errors.
 
     # Verified: services/paper_ingestion/paper_ingestion/services/summarization.py:278-291
     # Survivor-of: test_summarization_service.py mock-unit 502 error path tests
 
     The OpenAI SDK retries HTTP 5xx (max_retries=2 → 3 total per SDK call) and
     Instructor retries validation failures (max_retries=2 → 3 total).  We queue
-    enough errors to exhaust all retry paths so HTTPException(502) is raised.
+    enough errors to exhaust all retry paths so LLMError is raised.
     """
-    from fastapi import HTTPException
+    import httpx
+
+    from paper_ingestion.exceptions import LLMError
     from paper_ingestion.services.summarization import generate_paper_summary
 
     app, faux = pi_contract_app_with_litellm_sidecar
@@ -1133,9 +1135,7 @@ async def test_rag_w2_summarize_http_error_degrades_gracefully(
     for _ in range(9):
         faux.add_error("smart", 502, "LiteLLM upstream error")
 
-    import httpx
-
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(LLMError):
         await generate_paper_summary(
             paper_id=paper_id,
             db_pool=app.state.db_pool,
@@ -1144,10 +1144,6 @@ async def test_rag_w2_summarize_http_error_degrades_gracefully(
             embedder=None,
             openai_client=app.state.openai_client,
         )
-
-    assert exc_info.value.status_code in (502, 504), (
-        f"LLM HTTP error must map to 502/504; got {exc_info.value.status_code}"
-    )
 
 
 async def test_rag_w2_batch_summarize_fan_out_persists_per_paper(
