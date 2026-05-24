@@ -323,6 +323,18 @@ class PaperSource(ABC):
                 exc_info=True,
             )
 
+    async def apply_startup_grace(self) -> None:
+        """Sleep until the configured startup grace period has elapsed.
+
+        Reads ``self.config.pulse.startup_grace_seconds`` (defaulting to 0.0
+        when the attribute chain is absent) and delegates to
+        :func:`_enforce_startup_grace`.  Call once at the top of every
+        ``fetch_new_since`` implementation instead of repeating the
+        three-line getattr chain inline.
+        """
+        grace = getattr(getattr(self.config, "pulse", None), "startup_grace_seconds", 0.0)
+        await _enforce_startup_grace(grace)
+
     async def fetch_new_since(
         self,
         since: datetime,

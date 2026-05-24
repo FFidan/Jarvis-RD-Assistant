@@ -2,12 +2,13 @@
 
 PR-A2: default consolidate_topics implementation and SourceQuery API.
 DRY-S1: _insert_run_history hoisted to base.
+F-10: apply_startup_grace() hoisted to PaperSource base.
 """
 
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
@@ -121,7 +122,7 @@ def test_consolidate_topics_each_query_has_exactly_one_topic(stub_source):
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_pool() -> MagicMock:
+def _make_mock_pool() -> tuple[MagicMock, AsyncMock]:
     """Shared helper: fake asyncpg pool that records execute calls."""
     mock_conn = AsyncMock()
     mock_conn.execute = AsyncMock()
@@ -181,3 +182,89 @@ async def test_insert_run_history_noops_when_db_pool_is_none():
         duration_ms=50,
         user_id=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# F-10: apply_startup_grace hoisted to PaperSource base
+# ---------------------------------------------------------------------------
+
+
+async def test_apply_startup_grace_exists_on_base():
+    """PaperSource.apply_startup_grace is an async method callable on any subclass."""
+    source = StubSource(config=MagicMock(), http_client=MagicMock())
+    assert hasattr(source, "apply_startup_grace"), "PaperSource must expose apply_startup_grace()"
+    import inspect
+
+    assert inspect.iscoroutinefunction(source.apply_startup_grace), (
+        "apply_startup_grace must be a coroutine function"
+    )
+
+
+async def test_apply_startup_grace_reads_config_grace_seconds():
+    """apply_startup_grace reads startup_grace_seconds from config.pulse and calls _enforce_startup_grace."""
+    pulse_cfg = MagicMock()
+    pulse_cfg.startup_grace_seconds = 5.0
+    config = MagicMock()
+    config.pulse = pulse_cfg
+
+    source = StubSource(config=config, http_client=MagicMock())
+
+    with patch(
+        "paper_ingestion.sources.base._enforce_startup_grace", new_callable=AsyncMock
+    ) as mock_enforce:
+        await source.apply_startup_grace()
+
+    mock_enforce.assert_awaited_once_with(5.0)
+
+
+async def test_apply_startup_grace_defaults_to_zero_when_pulse_absent():
+    """apply_startup_grace defaults to 0.0 when config has no pulse attribute."""
+    config = MagicMock(spec=[])  # no attributes — getattr returns default
+
+    source = StubSource(config=config, http_client=MagicMock())
+
+    with patch(
+        "paper_ingestion.sources.base._enforce_startup_grace", new_callable=AsyncMock
+    ) as mock_enforce:
+        await source.apply_startup_grace()
+
+    mock_enforce.assert_awaited_once_with(0.0)
+
+
+async def test_apply_startup_grace_defaults_to_zero_when_grace_seconds_absent():
+    """apply_startup_grace defaults to 0.0 when config.pulse has no startup_grace_seconds."""
+    pulse_cfg = MagicMock(spec=[])  # pulse exists but has no startup_grace_seconds
+    config = MagicMock()
+    config.pulse = pulse_cfg
+
+    source = StubSource(config=config, http_client=MagicMock())
+
+    with patch(
+        "paper_ingestion.sources.base._enforce_startup_grace", new_callable=AsyncMock
+    ) as mock_enforce:
+        await source.apply_startup_grace()
+
+    mock_enforce.assert_awaited_once_with(0.0)
+
+
+@pytest.mark.parametrize(
+    "source_cls,source_type_enum",
+    [
+        (ArxivSource, SourceType.ARXIV),
+        (OpenAlexSource, SourceType.OPENALEX),
+        (PubMedSource, SourceType.PUBMED),
+        (SemanticScholarSource, SourceType.SEMANTIC_SCHOLAR),
+    ],
+)
+async def test_apply_startup_grace_available_on_all_source_subclasses(source_cls, source_type_enum):
+    """apply_startup_grace is callable on all four concrete source subclasses."""
+    config = _make_config(source_type_enum)
+    source = source_cls(config=config, http_client=MagicMock(), db_pool=None)
+
+    with patch(
+        "paper_ingestion.sources.base._enforce_startup_grace", new_callable=AsyncMock
+    ) as mock_enforce:
+        await source.apply_startup_grace()
+
+    # grace_seconds is 0.0 since PaperSourceConfig has no pulse attr
+    mock_enforce.assert_awaited_once_with(0.0)
