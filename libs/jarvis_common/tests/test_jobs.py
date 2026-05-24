@@ -1,0 +1,310 @@
+"""Unit tests for stream_job_events adaptive poll throttle in jobs.py.
+
+Covers: W5-12 / BE-02 — ramp-up timing must be invariant to poll_interval growth.
+
+The old proxy `idle_ticks * poll_interval > 30` has a cascade defect:
+once the threshold is first crossed at tick ~16 (idle_ticks=16, poll_interval=2,
+16*2=32>30), the SAME tick sees poll_interval become 3.  On the next iteration
+idle_ticks is 17 and poll_interval is 3, so 17*3=51>30 — threshold already
+exceeded → immediate second increment to 4.  One tick later: 18*4=72>30 → 5.
+The ramp cascades from 2→3→4→5 in three consecutive ticks instead of waiting
+30 more seconds between each step.
+
+Fix: track `idle_start = loop.time()` at the idle transition and check
+`(loop.time() - idle_start) > 30`; reset `idle_start` after each ramp step so
+the next increment also requires 30 more elapsed seconds.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_row(status: str = "doing", progress_message: str | None = None) -> dict[str, Any]:
+    """Return a minimal procrastinate-normalised job row."""
+    return {
+        "status": status,
+        "progress": None,
+        "progress_message": progress_message,
+        "id": "test-job-id",
+        "user_id": "1",
+        "kind": "card.generate",
+        "payload": {},
+        "created_at": None,
+        "updated_at": None,
+        "result": None,
+        "error": None,
+    }
+
+
+async def _drain(ait: AsyncIterator[str], max_items: int = 300) -> list[str]:
+    """Collect up to *max_items* items from an async iterator."""
+    items: list[str] = []
+    async for item in ait:
+        items.append(item)
+        if len(items) >= max_items:
+            break
+    return items
+
+
+# ---------------------------------------------------------------------------
+# W5-12 / BE-02: ramp-up must not cascade on the same idle period
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_adaptive_throttle_does_not_cascade_ramp():
+    """BE-02: poll_interval must NOT jump 2→3→4→5 in consecutive ticks.
+
+    With the old proxy `idle_ticks * poll_interval > 30`:
+      - At tick 16: idle_ticks=16, poll_interval=2 → 32>30 → interval becomes 3
+      - At tick 17: idle_ticks=17, poll_interval=3 → 51>30 → interval becomes 4
+      - At tick 18: idle_ticks=18, poll_interval=4 → 72>30 → interval becomes 5
+      → Cascade: 2→3→4→5 in 3 consecutive ticks.
+
+    With the correct elapsed-seconds fix, each step requires 30 more seconds,
+    so increments are separated by many ticks, not consecutive.
+
+    This test steps loop.time() by `poll_interval` seconds per iteration
+    (simulating one real wait-period per tick) and asserts that the gap between
+    consecutive poll_interval increases is >= 5 ticks (i.e. not consecutive).
+    """
+    from jarvis_common import jobs
+
+    job_id = "test-job-id"
+    row = _make_row(status="doing")
+
+    # Controlled time: advances by poll_interval seconds each iteration.
+    # We capture `intervals_waited` to know what poll_interval was at each tick.
+    intervals_waited: list[float] = []
+
+    # time_values list — we'll populate it lazily during the mock
+    current_time = [0.0]
+
+    def next_time():
+        return current_time[0]
+
+    mock_loop = MagicMock()
+    mock_loop.time.side_effect = next_time
+
+    call_count = [0]
+
+    async def mock_get_proc(pool, jid):
+        call_count[0] += 1
+        if call_count[0] > 80:
+            r = dict(row)
+            r["status"] = "succeeded"
+            return r
+        return dict(row)
+
+    async def mock_wait(pool, job_id_, timeout):
+        # Advance simulated clock by the poll_interval used for this wait
+        intervals_waited.append(timeout)
+        current_time[0] += timeout
+
+    async def not_disconnected():
+        return False
+
+    pool = MagicMock()
+
+    with (
+        patch.object(asyncio, "get_running_loop", return_value=mock_loop),
+        patch.object(jobs, "get_procrastinate_job_for_jarvis_id", side_effect=mock_get_proc),
+        patch.object(jobs, "_wait_for_job_notification", side_effect=mock_wait),
+        patch.object(jobs, "procrastinate_row_to_jarvis_row", side_effect=lambda r: r),
+    ):
+        await _drain(
+            jobs.stream_job_events(pool, job_id, is_disconnected=not_disconnected),
+        )
+
+    # -------------------------------------------------------------------------
+    # Invariant 1: poll_interval must increase at some point (ramp exists).
+    # -------------------------------------------------------------------------
+    assert any(v > 2.0 for v in intervals_waited), (
+        "poll_interval never increased — ramp-up logic is missing or broken. "
+        f"All waited intervals: {intervals_waited[:30]}"
+    )
+
+    # -------------------------------------------------------------------------
+    # Invariant 2: no two consecutive increases in poll_interval.
+    # The old cascade bug produces three consecutive increases (ticks n, n+1, n+2).
+    # With elapsed-time fix, each increase requires 30+ s, so at 3.0 s/tick
+    # the next increase can't happen for at least 10 more ticks.
+    # We check: between any two poll_interval increases, there must be >= 5 ticks
+    # where the interval stays constant (i.e. the increases are not consecutive).
+    # -------------------------------------------------------------------------
+    increase_ticks = [
+        i for i in range(1, len(intervals_waited)) if intervals_waited[i] > intervals_waited[i - 1]
+    ]
+
+    if len(increase_ticks) >= 2:
+        for a, b in zip(increase_ticks, increase_ticks[1:]):
+            gap = b - a
+            assert gap >= 5, (
+                f"BE-02: consecutive poll_interval increases at ticks {a} and {b} "
+                f"(gap={gap}, < 5). This indicates the old idle_ticks*poll_interval "
+                f"proxy cascade is still present. "
+                f"Increase ticks: {increase_ticks}. "
+                f"Waited intervals (first 30): {intervals_waited[:30]}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_adaptive_throttle_first_ramp_requires_30_elapsed_seconds():
+    """BE-02: first poll_interval increase must not fire before 30 elapsed seconds.
+
+    At 2.0 s per tick, 30 s = 15 ticks.  The 16th tick is the first moment
+    past the 30-second boundary.  The ramp must NOT fire before tick 15.
+
+    With the old proxy this also passes (15*2=30 > 30 is False; 16*2=32 > 30 is True),
+    but combined with the cascade test this suite fully pins the correct invariant.
+    """
+    from jarvis_common import jobs
+
+    job_id = "test-job-id"
+    row = _make_row(status="doing")
+
+    # Fixed step: 2.0 s per tick
+    current_time = [0.0]
+
+    def next_time():
+        return current_time[0]
+
+    mock_loop = MagicMock()
+    mock_loop.time.side_effect = next_time
+
+    call_count = [0]
+
+    async def mock_get_proc(pool, jid):
+        call_count[0] += 1
+        if call_count[0] > 60:
+            r = dict(row)
+            r["status"] = "succeeded"
+            return r
+        return dict(row)
+
+    intervals_waited: list[float] = []
+
+    async def mock_wait(pool, job_id_, timeout):
+        intervals_waited.append(timeout)
+        current_time[0] += 2.0  # always step by 2s regardless of poll_interval
+
+    async def not_disconnected():
+        return False
+
+    pool = MagicMock()
+
+    with (
+        patch.object(asyncio, "get_running_loop", return_value=mock_loop),
+        patch.object(jobs, "get_procrastinate_job_for_jarvis_id", side_effect=mock_get_proc),
+        patch.object(jobs, "_wait_for_job_notification", side_effect=mock_wait),
+        patch.object(jobs, "procrastinate_row_to_jarvis_row", side_effect=lambda r: r),
+    ):
+        await _drain(
+            jobs.stream_job_events(pool, job_id, is_disconnected=not_disconnected),
+        )
+
+    first_ramp_index = next(
+        (i for i, v in enumerate(intervals_waited) if v > 2.0),
+        None,
+    )
+
+    assert first_ramp_index is not None, (
+        "poll_interval never increased — ramp-up logic is missing or broken. "
+        f"Waited intervals: {intervals_waited[:30]}"
+    )
+
+    # At 2 s/tick, ramp must not fire before tick 15 (30 s elapsed).
+    assert first_ramp_index >= 15, (
+        f"BE-02: first poll_interval increase at tick {first_ramp_index} "
+        f"(< 15 = 30 s / 2 s/tick). Either the threshold is wrong or the "
+        f"idle_ticks*poll_interval proxy is firing too early. "
+        f"Waited intervals (first 25): {intervals_waited[:25]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_adaptive_throttle_resets_idle_start_on_state_change():
+    """BE-02: idle_start resets when state changes, restarting the 30-s countdown.
+
+    A state change should reset poll_interval to 2.0 AND restart the 30-s window.
+    After the change, 30 more seconds must pass before the next ramp step.
+    """
+    from jarvis_common import jobs
+
+    job_id = "test-job-id"
+    row_a = _make_row(status="doing", progress_message=None)
+    row_b = _make_row(status="doing", progress_message="halfway")  # distinct state
+    row_done = _make_row(status="succeeded")
+
+    current_time = [0.0]
+
+    def next_time():
+        return current_time[0]
+
+    mock_loop = MagicMock()
+    mock_loop.time.side_effect = next_time
+
+    call_count = [0]
+
+    async def mock_get_proc(pool, jid):
+        call_count[0] += 1
+        if call_count[0] <= 20:
+            return dict(row_a)
+        if call_count[0] <= 50:
+            return dict(row_b)  # state change at tick 20
+        return dict(row_done)
+
+    intervals_waited: list[float] = []
+
+    async def mock_wait(pool, job_id_, timeout):
+        intervals_waited.append(timeout)
+        current_time[0] += 2.0  # 2s per tick
+
+    async def not_disconnected():
+        return False
+
+    pool = MagicMock()
+
+    with (
+        patch.object(asyncio, "get_running_loop", return_value=mock_loop),
+        patch.object(jobs, "get_procrastinate_job_for_jarvis_id", side_effect=mock_get_proc),
+        patch.object(jobs, "_wait_for_job_notification", side_effect=mock_wait),
+        patch.object(jobs, "procrastinate_row_to_jarvis_row", side_effect=lambda r: r),
+    ):
+        await _drain(
+            jobs.stream_job_events(pool, job_id, is_disconnected=not_disconnected),
+        )
+
+    # After tick 20 (state change), poll_interval resets to 2.0.
+    # The next 30s-window begins; 30s/2s = 15 ticks → ramp at tick 35+.
+    # Check that intervals_waited[20] == 2.0 (reset confirmed) and
+    # the ramp after the change doesn't happen before tick 35.
+    if len(intervals_waited) > 20:
+        assert intervals_waited[20] == 2.0, (
+            f"poll_interval did not reset to 2.0 on state change at tick 20. "
+            f"Got: {intervals_waited[20]}. Waited[18:25]: {intervals_waited[18:25]}"
+        )
+
+    # Find first ramp AFTER the state change (tick > 20)
+    post_change = intervals_waited[20:]
+    first_post_ramp = next(
+        (i for i, v in enumerate(post_change) if v > 2.0),
+        None,
+    )
+
+    if first_post_ramp is not None:
+        assert first_post_ramp >= 15, (
+            f"BE-02: After state change, poll_interval ramp fired at relative tick "
+            f"{first_post_ramp} (< 15 = 30 s / 2 s/tick). idle_start did not "
+            f"reset on state change. Post-change intervals: {post_change[:25]}"
+        )

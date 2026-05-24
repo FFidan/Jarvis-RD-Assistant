@@ -405,7 +405,7 @@ async def stream_job_events(
     last_keepalive = loop_start
 
     poll_interval = 2.0
-    idle_ticks = 0
+    idle_start: float = loop.time()
     last_state: tuple[Any, Any, Any] | None = None
 
     while True:
@@ -452,11 +452,11 @@ async def stream_job_events(
         )
         if current_state != last_state:
             last_state = current_state
-            idle_ticks = 0
+            idle_start = loop.time()
             poll_interval = 2.0
         else:
-            idle_ticks += 1
-            if idle_ticks * poll_interval > 30:
+            if loop.time() - idle_start > 30:
+                idle_start = loop.time()
                 poll_interval = min(poll_interval + 1.0, 5.0)
 
         if procrastinate_row["status"] in TERMINAL_STATUSES:

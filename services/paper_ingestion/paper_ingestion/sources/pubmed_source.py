@@ -43,7 +43,7 @@ from lxml import (
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources._xml_safe import safe_fromstring
-from paper_ingestion.sources.base import PaperSource
+from paper_ingestion.sources.base import PaperSource, _enforce_startup_grace
 from paper_ingestion.sources.registry import register_source
 
 
@@ -453,7 +453,8 @@ class PubMedSource(PaperSource):
             Papers published after *since*. Returns ``[]`` on HTTP errors.
         """
         # Startup grace — lets containers finish their warm-up before first burst.
-        await self.apply_startup_grace()
+        grace = getattr(getattr(self.config, "pulse", None), "startup_grace_seconds", 0.0)
+        await _enforce_startup_grace(grace)
 
         # Persistent rate limiter (no-op when db_pool is None).
         p_limiter: PersistentSourceRateLimiter | None = None

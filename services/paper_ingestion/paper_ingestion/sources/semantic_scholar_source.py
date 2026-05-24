@@ -22,7 +22,7 @@ from jarvis_common.text_utils import author_matches
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
-from paper_ingestion.sources.base import PaperSource, SourceQuery
+from paper_ingestion.sources.base import PaperSource, SourceQuery, _enforce_startup_grace
 from paper_ingestion.sources.registry import register_source
 
 logger = logging.getLogger(__name__)
@@ -320,7 +320,8 @@ class SemanticScholarSource(PaperSource):
     ) -> list[PaperCreate]:
         """Fetch recent Semantic Scholar papers matching Pulse topics."""
         # Startup grace — see ArxivSource.fetch_new_since for details.
-        await self.apply_startup_grace()
+        grace = getattr(getattr(self.config, "pulse", None), "startup_grace_seconds", 0.0)
+        await _enforce_startup_grace(grace)
 
         # Persistent rate limiter (no-op when db_pool is None).
         p_limiter: PersistentSourceRateLimiter | None = None
