@@ -30,7 +30,8 @@ from fastapi import Depends, FastAPI
 from jarvis_common.auth import refresh_api_key_cache, verify_api_key
 from jarvis_common.session_middleware import SessionMiddleware
 from jarvis_common.settings import get_secrets_settings
-from jarvis_common.testing import SharedConnPool, _seed_user
+from jarvis_common.testing import SharedConnPool
+from jarvis_common.testing_db import _seed_user
 
 pytestmark = [
     pytest.mark.contract,

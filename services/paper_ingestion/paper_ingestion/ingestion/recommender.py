@@ -62,7 +62,8 @@ async def _refresh_recommendations_for_user(app: Any, user_id: int) -> int:
     async with db_pool.acquire() as conn:
         starred_ids = await _get_starred_ids(conn, user_id)
         projects_raw = await conn.fetch(
-            "SELECT name, description FROM projects WHERE status = 'active'"
+            "SELECT name, description FROM projects WHERE status = 'active' AND user_id = $1",
+            user_id,
         )
 
     # --- HTTP / Qdrant calls (no DB connection held) ---

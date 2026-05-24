@@ -31,10 +31,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
-from jarvis_common.testing import SharedConnPool, _seed_user
+from jarvis_common.testing import SharedConnPool
 from jarvis_common.testing_contract_apps import (
     make_contract_client as _make_client,
 )
+from jarvis_common.testing_db import _seed_user
 
 pytestmark = [
     pytest.mark.contract,

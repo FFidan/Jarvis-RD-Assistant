@@ -48,8 +48,6 @@ __all__ = [
     "SharedConnPool",
     "TwoUsers",
     "_make_contract_two_users_fixture",
-    "_seed_user",
-    "_seed_resources",
     "A_PAPER_TITLE",
     "A_NOTE_TEXT",
     "A_PROJECT_NAME",
@@ -88,12 +86,16 @@ from jarvis_common.testing_db import (  # noqa: F401
     _make_contract_pool_fixture,
     _make_contract_two_users_fixture,
     _make_pool_and_conn,
-    _seed_resources,
-    _seed_user,
     make_contract_pg_dsn,
     make_live_pg_dsn,
     make_pool_and_conn,
     make_request,
+)
+from jarvis_common.testing_db import (
+    _seed_resources as _seed_resources,
+)
+from jarvis_common.testing_db import (
+    _seed_user as _seed_user,
 )
 from jarvis_common.testing_search import ScriptedReranker  # noqa: F401
 from jarvis_common.testing_telegram import (  # noqa: F401

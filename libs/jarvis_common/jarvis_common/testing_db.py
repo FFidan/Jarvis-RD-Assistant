@@ -177,6 +177,61 @@ def _docker_cli(
     )
 
 
+def _spin_pg_container(
+    container_prefix: str,
+    *,
+    container_suffix: str,
+    password_prefix: str,
+) -> Iterator[str]:
+    """Spin up a disposable postgres:16.8 container; yield its DSN; tear down on exit.
+
+    Docker invariant: ``--rm`` means the container self-removes when stopped,
+    but we still call ``docker rm -f`` in the finally block to ensure cleanup
+    even if the container was not stopped cleanly (e.g. on SIGKILL).
+    """
+    container = f"{container_prefix}{container_suffix}-{uuid.uuid4().hex[:12]}"
+    password = f"{password_prefix}-{uuid.uuid4().hex}"
+    image = os.environ.get("JARVIS_LIVE_PG_IMAGE", "postgres:16.8")
+    _docker_cli(
+        [
+            "run",
+            "--rm",
+            "-d",
+            "--name",
+            container,
+            "-e",
+            "POSTGRES_DB=jarvis",
+            "-e",
+            "POSTGRES_USER=jarvis",
+            "-e",
+            f"POSTGRES_PASSWORD={password}",
+            "-p",
+            "127.0.0.1::5432",
+            image,
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            ready = _docker_cli(
+                ["exec", container, "pg_isready", "-U", "jarvis", "-d", "jarvis"],
+                check=False,
+                timeout=5,
+            )
+            if ready.returncode == 0:
+                break
+            time.sleep(0.5)
+        else:
+            logs = _docker_cli(["logs", container], check=False, timeout=10)
+            pytest.fail(f"PostgreSQL container did not become ready:\n{logs.stdout}{logs.stderr}")
+
+        port_result = _docker_cli(["port", container, "5432/tcp"])
+        host_port = port_result.stdout.strip().rsplit(":", maxsplit=1)[-1]
+        yield f"postgresql://jarvis:{password}@127.0.0.1:{host_port}/jarvis"
+    finally:
+        _docker_cli(["rm", "-f", container], check=False, timeout=10)
+
+
 def make_live_pg_dsn(container_prefix: str):  # -> pytest fixture
     """Return a ``live_pg_dsn`` pytest fixture scoped to *container_prefix*.
 
@@ -198,49 +253,11 @@ def make_live_pg_dsn(container_prefix: str):  # -> pytest fixture
         if shutil.which("docker") is None:
             pytest.fail("Docker CLI is required for JARVIS_RUN_LIVE_PG=1 live PostgreSQL tests")
 
-        container = f"{container_prefix}-live-pg-{uuid.uuid4().hex[:12]}"
-        password = f"jarvis-test-{uuid.uuid4().hex}"
-        image = os.environ.get("JARVIS_LIVE_PG_IMAGE", "postgres:16.8")
-        _docker_cli(
-            [
-                "run",
-                "--rm",
-                "-d",
-                "--name",
-                container,
-                "-e",
-                "POSTGRES_DB=jarvis",
-                "-e",
-                "POSTGRES_USER=jarvis",
-                "-e",
-                f"POSTGRES_PASSWORD={password}",
-                "-p",
-                "127.0.0.1::5432",
-                image,
-            ]
+        yield from _spin_pg_container(
+            container_prefix,
+            container_suffix="-live-pg",
+            password_prefix="jarvis-test",
         )
-        try:
-            deadline = time.monotonic() + 45
-            while time.monotonic() < deadline:
-                ready = _docker_cli(
-                    ["exec", container, "pg_isready", "-U", "jarvis", "-d", "jarvis"],
-                    check=False,
-                    timeout=5,
-                )
-                if ready.returncode == 0:
-                    break
-                time.sleep(0.5)
-            else:
-                logs = _docker_cli(["logs", container], check=False, timeout=10)
-                pytest.fail(
-                    f"PostgreSQL container did not become ready:\n{logs.stdout}{logs.stderr}"
-                )
-
-            port_result = _docker_cli(["port", container, "5432/tcp"])
-            host_port = port_result.stdout.strip().rsplit(":", maxsplit=1)[-1]
-            yield f"postgresql://jarvis:{password}@127.0.0.1:{host_port}/jarvis"
-        finally:
-            _docker_cli(["rm", "-f", container], check=False, timeout=10)
 
     return live_pg_dsn
 
@@ -269,49 +286,11 @@ def make_contract_pg_dsn(container_prefix: str):  # -> pytest fixture (session s
         if shutil.which("docker") is None:
             pytest.fail("Docker CLI is required for contract-layer tests")
 
-        container = f"{container_prefix}-contract-{uuid.uuid4().hex[:12]}"
-        password = f"jarvis-contract-{uuid.uuid4().hex}"
-        image = os.environ.get("JARVIS_LIVE_PG_IMAGE", "postgres:16.8")
-        _docker_cli(
-            [
-                "run",
-                "--rm",
-                "-d",
-                "--name",
-                container,
-                "-e",
-                "POSTGRES_DB=jarvis",
-                "-e",
-                "POSTGRES_USER=jarvis",
-                "-e",
-                f"POSTGRES_PASSWORD={password}",
-                "-p",
-                "127.0.0.1::5432",
-                image,
-            ]
+        yield from _spin_pg_container(
+            container_prefix,
+            container_suffix="-contract",
+            password_prefix="jarvis-contract",
         )
-        try:
-            deadline = time.monotonic() + 45
-            while time.monotonic() < deadline:
-                ready = _docker_cli(
-                    ["exec", container, "pg_isready", "-U", "jarvis", "-d", "jarvis"],
-                    check=False,
-                    timeout=5,
-                )
-                if ready.returncode == 0:
-                    break
-                time.sleep(0.5)
-            else:
-                logs = _docker_cli(["logs", container], check=False, timeout=10)
-                pytest.fail(
-                    f"PostgreSQL container did not become ready:\n{logs.stdout}{logs.stderr}"
-                )
-            port_result = _docker_cli(["port", container, "5432/tcp"])
-            host_port = port_result.stdout.strip().rsplit(":", maxsplit=1)[-1]
-            dsn = f"postgresql://jarvis:{password}@127.0.0.1:{host_port}/jarvis"
-            yield dsn
-        finally:
-            _docker_cli(["rm", "-f", container], check=False, timeout=10)
 
     return contract_pg_dsn
 

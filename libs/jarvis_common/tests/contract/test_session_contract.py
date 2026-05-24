@@ -29,11 +29,12 @@ from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
-from jarvis_common.testing import SharedConnPool, _seed_user
+from jarvis_common.testing import SharedConnPool
 from jarvis_common.testing_contract_apps import (
     configure_contract_api_key,
     make_contract_client,
 )
+from jarvis_common.testing_db import _seed_user
 
 pytestmark = [
     pytest.mark.contract,
