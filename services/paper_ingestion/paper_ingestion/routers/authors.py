@@ -282,14 +282,15 @@ async def check_tracked_authors(
                                 break
 
                     if matched:
-                        # Deduplicate via author_alert_log
+                        # Deduplicate via author_alert_log (per-user since migration 0091)
                         row = await conn.fetchrow(
-                            """INSERT INTO author_alert_log (tracked_author_id, paper_id)
-                            VALUES ($1, $2)
-                            ON CONFLICT (tracked_author_id, paper_id) DO NOTHING
+                            """INSERT INTO author_alert_log (tracked_author_id, paper_id, user_id)
+                            VALUES ($1, $2, $3)
+                            ON CONFLICT (tracked_author_id, paper_id, user_id) DO NOTHING
                             RETURNING tracked_author_id""",
                             author_id,
                             paper_id,
+                            user_id,
                         )
                         if row:
                             total_new += 1

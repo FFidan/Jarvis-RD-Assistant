@@ -1,6 +1,7 @@
-"""Unit tests for telegram_bot.orchestration.author_alerts.
+"""Unit tests for author_alert_log dedupe scoping (SEC-AUTHALERT-1).
 
 # Verified: services/telegram_bot/telegram_bot/orchestration/author_alerts.py:117
+# Verified: services/paper_ingestion/paper_ingestion/routers/authors.py:286
 # Verified: db/migrations/0091_author_alert_log_user_dedupe.sql:11
 """
 
@@ -17,11 +18,25 @@ _DEDUPE_CONFLICT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_DEDUPE_SOURCES = (
+    "services/telegram_bot/telegram_bot/orchestration/author_alerts.py",
+    "services/paper_ingestion/paper_ingestion/routers/authors.py",
+)
+
 
 def test_author_alerts_module_uses_user_scoped_dedupe() -> None:
-    """author_alert_log dedupe must be scoped to (tracked_author_id, paper_id, user_id)."""
-    src = Path("services/telegram_bot/telegram_bot/orchestration/author_alerts.py").read_text()
-    assert _DEDUPE_COLUMNS_RE.search(src), "alert-log column list missing user_id (3-column form)"
-    assert _DEDUPE_CONFLICT_RE.search(src), (
-        "alert-log conflict target missing user_id (3-column form)"
-    )
+    """All INSERT sites must scope dedupe to (tracked_author_id, paper_id, user_id).
+
+    Migration 0091 drops the old 2-column unique constraint and creates a
+    3-column unique index; any 2-column ON CONFLICT after that point would
+    fail at runtime with `there is no unique or exclusion constraint matching
+    the ON CONFLICT specification`.
+    """
+    for relpath in _DEDUPE_SOURCES:
+        src = Path(relpath).read_text()
+        assert _DEDUPE_COLUMNS_RE.search(src), (
+            f"alert-log column list missing user_id (3-column form) in {relpath}"
+        )
+        assert _DEDUPE_CONFLICT_RE.search(src), (
+            f"alert-log conflict target missing user_id (3-column form) in {relpath}"
+        )

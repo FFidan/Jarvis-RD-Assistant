@@ -36,6 +36,9 @@ printf '%s\n' "smoke-n8n-encryption-key" > "$TMP_DIR/n8n_encryption_key.txt"
 printf '%s\n' "smoke-n8n-jwt-secret" > "$TMP_DIR/n8n_jwt_secret.txt"
 printf '%s\n' "smoke-cloudflare-tunnel-token" > "$TMP_DIR/cloudflare_tunnel_token.txt"
 printf '%s\n' "smoke-backup-encrypt-key" > "$TMP_DIR/backup_encrypt_key.txt"
+printf '%s\n' "$(openssl rand -hex 32)" > "$TMP_DIR/jarvis_model_hmac_key.txt"
+printf '%s\n' "smoke-langfuse-pk" > "$TMP_DIR/langfuse_init_pk.txt"
+printf '%s\n' "smoke-langfuse-sk" > "$TMP_DIR/langfuse_init_sk.txt"
 
 cat > "$OVERRIDE_FILE" <<YAML
 secrets:
@@ -65,6 +68,12 @@ secrets:
     file: $TMP_DIR/cloudflare_tunnel_token.txt
   backup_encrypt_key:
     file: $TMP_DIR/backup_encrypt_key.txt
+  jarvis_model_hmac_key:
+    file: $TMP_DIR/jarvis_model_hmac_key.txt
+  langfuse_init_pk:
+    file: $TMP_DIR/langfuse_init_pk.txt
+  langfuse_init_sk:
+    file: $TMP_DIR/langfuse_init_sk.txt
 YAML
 
 compose() {

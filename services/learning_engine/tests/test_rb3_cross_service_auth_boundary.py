@@ -131,3 +131,23 @@ def test_quick_add_task_is_session_only_by_design() -> None:
     dep = _user_id_dep(executive.quick_add_task)
     assert dep.dependency is current_user_id_strict
     assert dep.dependency is not current_user_id_strict_with_owner_override
+
+
+# ---------------------------------------------------------------------------
+# SEC-OWNER-1: executive My-Day routes — owner-override resolver pinned
+# ---------------------------------------------------------------------------
+
+
+def test_get_my_day_uses_owner_override_resolver() -> None:
+    """GET /api/executive/my-day is reached by the Telegram bot per-user — must use owner-override resolver."""
+    assert (
+        _user_id_dep(executive.get_my_day).dependency is current_user_id_strict_with_owner_override
+    )
+
+
+def test_get_my_day_bundle_uses_owner_override_resolver() -> None:
+    """GET /api/executive/my-day/bundle is reached by the Telegram bot per-user — must use owner-override resolver."""
+    assert (
+        _user_id_dep(executive.get_my_day_bundle).dependency
+        is current_user_id_strict_with_owner_override
+    )
