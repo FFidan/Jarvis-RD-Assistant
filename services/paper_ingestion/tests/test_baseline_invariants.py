@@ -789,27 +789,3 @@ async def test_pdf_resolutions_table_dropped(test_db_pool: asyncpg.Pool) -> None
             "SELECT 1 FROM information_schema.tables WHERE table_name = 'pdf_resolutions'"
         )
     assert row is None, "pdf_resolutions table should be dropped by migration 0089"
-
-
-# ---------------------------------------------------------------------------
-# CFG-MIG-1 — pdf_resolutions absent from both init.sql baseline and live DB.
-# Re-home form: schema-introspection via contract_conn (JARVIS_RUN_LIVE_PG=1).
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_pdf_resolutions_table_absent(contract_conn: asyncpg.Connection) -> None:
-    """pdf_resolutions must not exist in public schema.
-
-    Migration 0089 (DROP TABLE IF EXISTS pdf_resolutions CASCADE) removes the
-    table from live databases; db/init.sql no longer defines it (CFG-MIG-1).
-    This assertion verifies both: if the table reappears it fails here.
-    """
-    row = await contract_conn.fetchrow(
-        "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema='public' AND table_name='pdf_resolutions'"
-    )
-    assert row is None, (
-        "pdf_resolutions table must be absent — migration 0089 dropped it "
-        "and db/init.sql no longer defines it (CFG-MIG-1)"
-    )

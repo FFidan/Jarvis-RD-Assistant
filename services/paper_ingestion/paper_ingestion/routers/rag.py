@@ -209,7 +209,7 @@ async def ask_paper(
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     messages, raw_sources = await prepare_single_paper_rag(
-        embedder, db_pool, paper_id, body, http_client
+        embedder, db_pool, paper_id, body, http_client, user_id=user_id
     )
 
     smart_model = get_smart_model()
