@@ -213,15 +213,13 @@ print(recommend_models(${_vram_mb}).summary)
   if [ -n "$host_routes" ] && printf '%s' "$host_routes" | grep -qF "$subnet_prefix"; then
     warn "Host already has a route in ${pinned_subnet} — set JARVIS_NET_SUBNET in .env to a free range before starting."
   fi
-  # When the operator overrides JARVIS_NET_SUBNET to a non-default value, the
-  # hard-coded literals in frontend/nginx.conf must also be updated manually —
-  # otherwise the RB-4 rate-limit self-DoS protection silently regresses (Caddy
-  # IP no longer matches set_real_ip_from → all clients collapse to one bucket).
-  # Note: docker-compose.yml no longer contains a hardcoded gateway; Docker
-  # auto-assigns the first host in JARVIS_NET_SUBNET, so compose won't hard-fail.
-  # Network gateway is auto-assigned; set JARVIS_NET_SUBNET to change the subnet.
+  # When the operator overrides JARVIS_NET_SUBNET to a non-default value, two
+  # hard-coded literals in docker-compose.yml and frontend/nginx.conf must also
+  # be updated manually — otherwise compose fails (gateway outside the new /24)
+  # or the RB-4 rate-limit self-DoS protection silently regresses (Caddy IP
+  # no longer matches set_real_ip_from → all clients collapse to one bucket).
   if [ -n "${JARVIS_NET_SUBNET:-}" ] && [ "$JARVIS_NET_SUBNET" != "10.137.241.0/24" ]; then
-    warn "JARVIS_NET_SUBNET overridden to ${JARVIS_NET_SUBNET}: also update frontend/nginx.conf set_real_ip_from literals to the new range, or per-client rate limiting will regress."
+    warn "JARVIS_NET_SUBNET overridden to ${JARVIS_NET_SUBNET}: also update docker-compose.yml 'gateway:' and frontend/nginx.conf set_real_ip_from literals to the new range, or compose will hard-fail and per-client rate limiting will regress."
   fi
 
   if [ "$fail" -eq 0 ]; then ok "PREFLIGHT: PASS"; else err "PREFLIGHT: FAIL — fix the items above and re-run ./setup.sh --check"; fi

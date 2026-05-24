@@ -23,13 +23,17 @@ _DEFAULT_PROXY_CIDRS = [
 
 
 def _build_trusted_proxies() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
-    """Build the trusted proxy network list from env + defaults."""
+    """Build the trusted proxy network list from env + defaults.
+
+    When ``TRUSTED_PROXY_CIDRS`` is non-empty the env value is used **exclusively**
+    (override semantics).  This lets operators narrow the trusted range to
+    deployment-specific CIDRs without the broad RFC-1918 defaults leaking in.
+    When the env var is absent or empty the built-in ``_DEFAULT_PROXY_CIDRS`` are
+    used as a safe fallback.
+    """
     settings = get_jarvis_common_settings()
-    return [
-        ipaddress.ip_network(c.strip())
-        for c in (settings.trusted_proxy_cidrs_list + _DEFAULT_PROXY_CIDRS)
-        if c.strip()
-    ]
+    cidrs = settings.trusted_proxy_cidrs_list or _DEFAULT_PROXY_CIDRS
+    return [ipaddress.ip_network(c.strip()) for c in cidrs if c.strip()]
 
 
 _TRUSTED_PROXIES: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = _build_trusted_proxies()
