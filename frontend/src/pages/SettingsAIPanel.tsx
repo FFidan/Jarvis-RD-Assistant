@@ -21,10 +21,10 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAISettings, postAISettings, redetectHW, getFirstRunStatus, dismissBanner } from '@/lib/api';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 
 const QUERY_KEY = ['ai-settings'] as const;
-const SETUP_STATUS_KEY = ['setup-status'] as const;
 
 export function SettingsAIPanel() {
   const qc = useQueryClient();
@@ -36,7 +36,7 @@ export function SettingsAIPanel() {
   });
 
   const { data: setupStatus } = useQuery({
-    queryKey: SETUP_STATUS_KEY,
+    queryKey: QUERY_KEYS.setup.firstRun(),
     queryFn: getFirstRunStatus,
     staleTime: 60_000,
   });
@@ -47,7 +47,7 @@ export function SettingsAIPanel() {
       // Refetch so hw_tier_changed reflects the updated server state.
       // Note: the banner may reappear on next refresh until JARVIS_HW_TIER
       // is updated in .env — see file-level comment for the Phase-3 limitation.
-      void qc.invalidateQueries({ queryKey: SETUP_STATUS_KEY });
+      void qc.invalidateQueries({ queryKey: QUERY_KEYS.setup.firstRun() });
     },
   });
 

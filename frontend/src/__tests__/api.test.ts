@@ -4,6 +4,7 @@ import {
   apiFetchRaw,
   ApiError,
   fetchContradictions,
+  fetchSystemModels,
   promoteZoteroNote,
   scanContradictions,
   scanPaperContradictions,
@@ -316,5 +317,28 @@ describe('apiFetchRaw', () => {
     // Should NOT be an ApiError — it is a raw DOMException
     expect(err).toBeInstanceOf(DOMException);
     expect(err).not.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('fetchSystemModels', () => {
+  it('is exported from api.ts as a function', () => {
+    expect(typeof fetchSystemModels).toBe('function');
+  });
+
+  it('calls /api/system/models and passes the signal through', async () => {
+    const mockData = { status: 'ok', catalog: [], hardware: {} };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(mockData), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const controller = new AbortController();
+    const result = await fetchSystemModels(controller.signal);
+    expect(result).toEqual(mockData);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/system/models',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 });

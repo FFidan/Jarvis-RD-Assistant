@@ -15,7 +15,7 @@
  * The online implementation (`submitReview` from @/lib/api) is the default.
  */
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { RotateCcw } from 'lucide-react';
@@ -62,6 +62,8 @@ export function ReviewMode({
   const queryClient = useQueryClient();
   const [revealed, setRevealed] = useState(false);
   const startTime = useRef<number>(Date.now());
+  const isMountedRef = useRef(true);
+  useEffect(() => () => { isMountedRef.current = false; }, []);
 
   const reviewQueryKey = deckId != null
     ? ['review-next', { deckId }]
@@ -91,6 +93,7 @@ export function ReviewMode({
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.stats() });
       onReviewSuccess?.();
       refetch().then(({ data }) => {
+        if (!isMountedRef.current) return;
         if (!data || (data as CardType[]).length === 0) {
           onSessionEnd?.();
         }

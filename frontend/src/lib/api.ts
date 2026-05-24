@@ -425,6 +425,45 @@ export interface ReadinessResponse {
 export const getSystemReadiness = () =>
   apiFetch<ReadinessResponse>('/api/system/readiness');
 
+// --- System models (GET /api/system/models) ---
+// Canonical response shape for /api/system/models.
+// IngestionSection uses hardware/catalog/hardware_recommendation;
+// ModelSelector uses status/installed/current/issues/catalog/hardware.
+// Both call the same endpoint — this interface is the structural union.
+export interface SystemModelsResponse {
+  status?: 'ok' | 'degraded';
+  installed?: unknown[];
+  hardware?: {
+    vram_gb?: number;
+    vram_source?: string;
+    tier?: number;
+    detected_at?: string;
+    ollama_running?: number;
+    machine_id?: string;
+  };
+  current?: Record<string, string>;
+  issues?: Record<string, string>;
+  catalog?: unknown[];
+  recommendations?: Record<string, unknown>;
+  /** Advisory per-VRAM model recommendation. Optional — absent on older backends. */
+  hardware_recommendation?: {
+    vram_mb: number | null;
+    bucket: 'CPU_ONLY' | 'ENTRY' | 'MID' | 'MID_HIGH' | 'HIGH';
+    summary: string;
+    aliases: Array<{ alias: 'smart' | 'fast' | 'embed'; model: string; confirm_on_target: boolean; notes: string }>;
+  };
+}
+
+/**
+ * Fetch model catalog and hardware info. Pass TanStack Query's `signal` for abort-on-unmount.
+ *
+ * Generic so callers can narrow to a local interface (e.g. `fetchSystemModels<SystemModelsApi>`).
+ * The default `T` is `SystemModelsResponse` — the canonical structural union of all known shapes.
+ */
+export async function fetchSystemModels<T = SystemModelsResponse>(signal?: AbortSignal): Promise<T> {
+  return apiFetch<T>('/api/system/models', { signal });
+}
+
 // --- Dashboard ---
 export const fetchDashboardMetrics = () =>
   apiFetch<DashboardMetrics>('/api/dashboard/metrics');

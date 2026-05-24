@@ -74,4 +74,10 @@ describe('ThreadsSection', () => {
       anchor: null,
     });
   });
+
+  it('renders error sentinel when threads query fails', async () => {
+    vi.mocked(fetchThreads).mockRejectedValue(new Error('fail'));
+    renderSection();
+    expect(await screen.findByRole('status')).toHaveTextContent(/unable to load/i);
+  });
 });

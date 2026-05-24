@@ -25,7 +25,7 @@ interface StreamingChatProps {
 }
 
 export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
-  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat, modelUsed } =
+  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat, modelUsed, streamError } =
     useStreamingChat({ chatId, scope, paperId });
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -107,6 +107,13 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
           )}
         </div>
       </ScrollArea>
+
+      {/* SSE stream error banner */}
+      {streamError && (
+        <div role="alert" className="text-xs text-destructive px-3 py-1 rounded bg-destructive/10">
+          {streamError}
+        </div>
+      )}
 
       {/* Input */}
       <div className="border-t p-4">

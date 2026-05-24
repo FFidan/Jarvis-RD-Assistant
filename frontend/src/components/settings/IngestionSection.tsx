@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { fetchConfig, setConfig, apiFetch } from '@/lib/api';
+import { fetchConfig, setConfig, fetchSystemModels } from '@/lib/api';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
@@ -684,7 +684,7 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   // Fetch system models to get hardware info + catalog fit_detail
   const { data: systemModels } = useQuery<SystemModelsApi>({
     queryKey: QUERY_KEYS.config.systemModels(),
-    queryFn: () => apiFetch<SystemModelsApi>('/api/system/models'),
+    queryFn: ({ signal }) => fetchSystemModels<SystemModelsApi>(signal),
     staleTime: 60_000,
   });
 

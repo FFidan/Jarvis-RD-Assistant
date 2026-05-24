@@ -3,8 +3,21 @@ import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SettingsAIPanel } from '@/pages/SettingsAIPanel';
 import * as api from '@/lib/api';
+import fs from 'node:fs';
+import path from 'node:path';
 
 vi.mock('@/lib/api');
+
+// ── Structural contract: no inline literal keys ────────────────────────────
+const PANEL_SRC = fs.readFileSync(
+  path.resolve(__dirname, '../pages/SettingsAIPanel.tsx'),
+  'utf-8',
+);
+
+it('uses QUERY_KEYS.setup.firstRun() instead of literal ["setup-status"] for first-run status query', () => {
+  expect(PANEL_SRC).not.toMatch(/\['setup-status'\]/);
+  expect(PANEL_SRC).not.toMatch(/\["setup-status"\]/);
+});
 
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {

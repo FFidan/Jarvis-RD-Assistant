@@ -1,6 +1,7 @@
 /**
- * Unit tests for use-streaming-chat — D.2 finally-branch empty placeholder removal
- * and D.3 unmount does NOT abort (streams survive navigation); logout DOES abort.
+ * Unit tests for use-streaming-chat — D.2 finally-branch empty placeholder removal,
+ * D.3 unmount does NOT abort (streams survive navigation); logout DOES abort,
+ * and FE-SSE-1 streamError surface.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
@@ -46,6 +47,84 @@ async function* hangingStream(signal: AbortSignal): AsyncGenerator<StreamEvent, 
     signal.addEventListener('abort', () => reject(new DOMException('AbortError', 'AbortError')));
   });
 }
+
+// ---------------------------------------------------------------------------
+// FE-SSE-1 — streamError surfaced from SSE 'error' event
+// ---------------------------------------------------------------------------
+
+describe('use-streaming-chat — FE-SSE-1 streamError', () => {
+  beforeEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+  });
+
+  it('surfaces streamError when SSE event type=error fires', async () => {
+    mockStreamSSE.mockImplementation(async function* () {
+      yield { type: 'error', message: 'context too long' };
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'err1', scope: 'cross-paper' }),
+    );
+
+    expect(result.current.streamError).toBeNull();
+
+    act(() => {
+      void result.current.sendMessage('trigger error');
+    });
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    expect(result.current.streamError).toBe('context too long');
+  });
+
+  it('clears streamError when sendMessage is called again', async () => {
+    // First call: emit an error
+    mockStreamSSE.mockImplementationOnce(async function* () {
+      yield { type: 'error', message: 'context too long' };
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'err2', scope: 'cross-paper' }),
+    );
+
+    act(() => {
+      void result.current.sendMessage('first');
+    });
+
+    await waitFor(() => expect(result.current.streamError).toBe('context too long'));
+
+    // Second call: normal stream — streamError should be cleared at start
+    mockStreamSSE.mockImplementationOnce(async function* () {
+      yield { type: 'token', content: 'ok' };
+    });
+
+    act(() => {
+      void result.current.sendMessage('second');
+    });
+
+    // Immediately after sendMessage starts, streamError should clear
+    await waitFor(() => expect(result.current.streamError).toBeNull());
+  });
+
+  it('uses "Unknown streaming error" fallback when error event has no message', async () => {
+    mockStreamSSE.mockImplementation(async function* () {
+      yield { type: 'error' };
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'err3', scope: 'cross-paper' }),
+    );
+
+    act(() => {
+      void result.current.sendMessage('no message error');
+    });
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    expect(result.current.streamError).toBe('Unknown streaming error');
+  });
+});
 
 // ---------------------------------------------------------------------------
 // D.2 — empty placeholder removed on AbortError (Stop before any token)

@@ -125,14 +125,14 @@ export function TriageSection() {
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
 
   // Query 1 — unprocessed action items (reuses existing query key for dedup)
-  const { data: actionData } = useQuery({
+  const { data: actionData, isError: actionError } = useQuery({
     queryKey: QUERY_KEYS.actionItems.unprocessed(),
     queryFn: () => fetchFeedPapers({ statuses: 'new', limit: 10 }),
     refetchInterval: 60_000,
   });
 
   // Query 2 — missing foundational papers (reuses existing query key for dedup)
-  const { data: foundationalData = [] } = useQuery({
+  const { data: foundationalData = [], isError: foundationalError } = useQuery({
     queryKey: QUERY_KEYS.analytics.missingFoundational(),
     queryFn: fetchMissingFoundationalPapers,
   });
@@ -183,6 +183,10 @@ export function TriageSection() {
   );
 
   const totalCount = actionItems.length + foundational.length;
+
+  if (actionError || foundationalError) return (
+    <p role="status" className="text-xs text-destructive pl-1">Unable to load triage items.</p>
+  );
 
   // Empty state: return null per SPEC §"States & edge cases" → "Triage empty"
   if (actionItems.length === 0 && foundational.length === 0) return null;

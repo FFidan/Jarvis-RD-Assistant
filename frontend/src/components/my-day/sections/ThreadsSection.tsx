@@ -91,8 +91,9 @@ export function ThreadsSection() {
 
   const threads = (data ?? []).filter((t) => t.status === 'open');
 
-  // Nothing to show and no error: stay silent unless the user opens the form.
-  if (isError) return null;
+  if (isError) return (
+    <p role="status" className="text-xs text-destructive pl-1">Unable to load threads.</p>
+  );
   if (threads.length === 0 && !adding) {
     return (
       <section id="threads">

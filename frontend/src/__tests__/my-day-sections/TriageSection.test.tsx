@@ -117,6 +117,24 @@ describe('TriageSection', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('renders error sentinel when action items query fails', async () => {
+    vi.mocked(fetchFeedPapers).mockRejectedValue(new Error('500'));
+    vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([]);
+
+    renderWithProviders();
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/unable to load triage/i);
+  });
+
+  it('renders error sentinel when foundational papers query fails', async () => {
+    vi.mocked(fetchFeedPapers).mockResolvedValue({ papers: [], total: 0 });
+    vi.mocked(fetchMissingFoundationalPapers).mockRejectedValue(new Error('500'));
+
+    renderWithProviders();
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/unable to load triage/i);
+  });
+
   it('renders both action item and foundational paper rows when data is present', async () => {
     vi.mocked(fetchFeedPapers).mockResolvedValue({
       papers: [makeFeedPaper()],

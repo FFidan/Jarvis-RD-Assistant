@@ -31,6 +31,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
   const [phase, setPhase] = useState<Phase>('idle');
   const [sources, setSources] = useState<Source[]>([]);
   const [modelUsed, setModelUsed] = useState<string | null>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
   // D.3 — AbortController is now stored in the module-level activeStreams map
   // (keyed by chatId) so streams survive component unmount during navigation.
   // The ref here is only used by stopStreaming() to abort imperatively.
@@ -66,6 +67,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
       setPhase('searching');
       setSources([]);
       setModelUsed(null);
+      setStreamError(null);
 
       const url =
         scope === 'single-paper'
@@ -98,6 +100,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
           } else if (event.type === 'done') {
             setModelUsed(event.model_used ?? null);
           } else if (event.type === 'error') {
+            setStreamError(event.message || 'Unknown streaming error');
             appendToLastMessage(chatId, `\n\n**Error:** ${escapeMarkdownInline(event.message || 'Unknown error')}`);
           }
         }
@@ -142,5 +145,6 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
     stopStreaming,
     clearChat: () => clearChat(chatId),
     modelUsed,
+    streamError,
   };
 }

@@ -32,9 +32,10 @@ export function YesterdaySection() {
     onError: (err: Error) => toast.error(`Couldn't carry over: ${err.message}`),
   });
 
-  // Silent when the query failed or there is genuinely nothing to show —
-  // § Yesterday is a launchpad, not a placeholder.
-  if (isError || !data) return null;
+  if (isError) return (
+    <p role="status" className="text-xs text-destructive pl-1">Unable to load yesterday's summary.</p>
+  );
+  if (!data) return null;
 
   const { focused_hours, cards_reviewed, tasks_done, completed, deferred } = data;
   if (completed.length === 0 && deferred.length === 0) return null;

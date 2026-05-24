@@ -69,4 +69,10 @@ describe('YesterdaySection', () => {
 
     expect(vi.mocked(updateTask)).toHaveBeenCalledWith(2, { status: 'todo' });
   });
+
+  it('renders error sentinel when query fails', async () => {
+    vi.mocked(fetchYesterday).mockRejectedValue(new Error('network'));
+    renderSection();
+    expect(await screen.findByRole('status')).toHaveTextContent(/unable to load/i);
+  });
 });

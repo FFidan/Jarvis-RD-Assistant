@@ -44,9 +44,15 @@ vi.mock('@/components/ui/select', () => ({
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
+  const apiFetch = vi.fn().mockResolvedValue({});
+  // fetchSystemModels is the named export used by ModelSelector's queryFn.
+  // Wire it through to the same apiFetch mock so existing per-test
+  // `vi.mocked(apiFetch).mockResolvedValue(...)` calls control both.
+  const fetchSystemModels = vi.fn().mockImplementation((_signal?: AbortSignal) => apiFetch('/api/system/models'));
   return {
     ...orig,
-    apiFetch: vi.fn().mockResolvedValue({}),
+    apiFetch,
+    fetchSystemModels,
   };
 });
 

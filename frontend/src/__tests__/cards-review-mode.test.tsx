@@ -235,6 +235,44 @@ describe('ReviewMode', () => {
     expect(screen.queryByRole('button', { name: /skip/i })).not.toBeInTheDocument();
   });
 
+  it('does not call onSessionEnd after unmount (isMounted guard)', async () => {
+    // Use a controlled promise for the refetch so we can unmount before it resolves.
+    let resolveRefetch!: (cards: Card[]) => void;
+    const refetchPromise = new Promise<Card[]>(res => { resolveRefetch = res; });
+
+    mockGetNextReview
+      .mockResolvedValueOnce([CARD_FIXTURE]) // initial query load
+      .mockImplementationOnce(() => refetchPromise); // refetch after rating — deferred
+
+    const onSessionEnd = vi.fn();
+    const qc = makeQueryClient();
+    const { unmount } = render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ReviewMode
+            sessionCardIndex={1}
+            submitReviewFn={vi.fn().mockResolvedValue({})}
+            onSessionEnd={onSessionEnd}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => screen.getByText(CARD_FIXTURE.front));
+    await userEvent.click(screen.getByText(/click to reveal answer/i));
+    await userEvent.click(screen.getByRole('button', { name: /again/i }));
+
+    // At this point the mutation fired and onSuccess triggered refetch(),
+    // but refetchPromise is still pending. Unmount now — isMountedRef becomes false.
+    unmount();
+
+    // Now resolve the refetch with an empty array — onSessionEnd should be blocked.
+    resolveRefetch([]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(onSessionEnd).not.toHaveBeenCalled();
+  });
+
   it('error state is distinct from true-empty queue (empty returns null, not error UI)', async () => {
     mockGetNextReview.mockResolvedValue([]);
     const qc = makeQueryClient();

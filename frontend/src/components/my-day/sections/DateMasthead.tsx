@@ -69,6 +69,7 @@ export function DateMasthead() {
   const { data: pulseDeck } = useQuery<PulseDeck | null>({
     queryKey: QUERY_KEYS.pulse.today(),
     queryFn: fetchPulseToday,
+    staleTime: 60_000,
   });
 
   const { data: unprocessedFeed } = useQuery({

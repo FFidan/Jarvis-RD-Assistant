@@ -21,7 +21,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useConfirm } from '@/hooks/use-confirm';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, fetchSystemModels } from '@/lib/api';
 import type { ModelFitDetail } from '@/types';
 
 interface SystemModels {
@@ -197,7 +197,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
   const [pullTarget, setPullTarget] = useState<ModelCatalogEntry | null>(null);
   const { data, error } = useQuery<SystemModels>({
     queryKey: QUERY_KEYS.config.systemModels(),
-    queryFn: () => apiFetch<SystemModels>('/api/system/models'),
+    queryFn: ({ signal }) => fetchSystemModels<SystemModels>(signal),
     staleTime: 60_000,
   });
 

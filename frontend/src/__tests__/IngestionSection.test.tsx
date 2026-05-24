@@ -19,11 +19,17 @@ import { IngestionSection } from '@/components/settings/IngestionSection';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
+  const apiFetch = vi.fn();
+  // fetchSystemModels is the named export used by IngestionSection's queryFn.
+  // Wire it through to the same apiFetch mock so existing per-test
+  // `vi.mocked(apiFetch).mockResolvedValue(...)` calls control both.
+  const fetchSystemModels = vi.fn().mockImplementation((_signal?: AbortSignal) => apiFetch('/api/system/models'));
   return {
     ...orig,
     fetchConfig: vi.fn(),
     setConfig: vi.fn().mockResolvedValue({}),
-    apiFetch: vi.fn(),
+    apiFetch,
+    fetchSystemModels,
   };
 });
 
