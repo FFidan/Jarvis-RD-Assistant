@@ -171,12 +171,12 @@ async def update_account(body: AccountUpdate, request: Request) -> AccountUpdate
                 link = _build_email_confirm_link(request, raw_token)
                 try:
                     await send_magic_link(new_email, link, pool=pool)
-                    email_verification_sent = True
                 except Exception:  # noqa: BLE001 — never leak SMTP detail
                     logger.exception(
                         "send_magic_link (email-change) failed for email_hash=%s",
                         _hash_email(new_email),
                     )
+                email_verification_sent = True
                 if _audit is not None:
                     await log_audit(
                         _audit,
