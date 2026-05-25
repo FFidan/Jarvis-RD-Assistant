@@ -40,11 +40,11 @@ from paper_ingestion.models import (
     TopicFacetCount,
 )
 from paper_ingestion.queries.predicates import VIEW_PREDICATES
-from paper_ingestion.routers._paper_helpers import (
+from paper_ingestion.services.feed_query import fetch_feed_facet_counts
+from paper_ingestion.services.paper_state_helpers import (
     _upsert_recommendation_feedback,
     _upsert_state_and_starred,
 )
-from paper_ingestion.services.feed_query import fetch_feed_facet_counts
 
 __all__ = [
     "assert_paper_ownership",

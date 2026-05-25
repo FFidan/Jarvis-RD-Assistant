@@ -8,6 +8,8 @@ from typing import Any
 
 import asyncpg
 
+from paper_ingestion.queries.predicates import RECOMMENDER_EXCLUDE_SQL
+
 _logger = logging.getLogger(__name__)
 
 _DEFAULT_LIKED_WEIGHT = 0.6
@@ -225,13 +227,13 @@ async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int], user_id
     if not paper_ids:
         return set()
     rows = await conn.fetch(
-        """SELECT id FROM papers p
+        f"""SELECT id FROM papers p
                WHERE p.id = ANY($1)
                  AND NOT EXISTS (
                    SELECT 1 FROM paper_user_state pus
                     WHERE pus.paper_id = p.id
                       AND pus.user_id = $2
-                      AND COALESCE(pus.state, 'inbox') IN ('trash', 'done')
+                      AND {RECOMMENDER_EXCLUDE_SQL}
                  )
                  AND NOT EXISTS (
                    SELECT 1 FROM recommendation_feedback rf

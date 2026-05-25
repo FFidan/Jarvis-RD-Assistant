@@ -528,6 +528,45 @@ async def test_settings_ai_post_rejects_non_candidate_model(_ai_settings_client,
 
 
 # ---------------------------------------------------------------------------
+# test_settings_ai_apply_failure_returns_generic_502
+# Verified: routers/settings_ai.py:94-102 (apply_ai_settings 502 branch — MED-PI-04)
+# CF-W3-CF2: regression guard — exc message must NOT appear in response body
+# ---------------------------------------------------------------------------
+
+
+async def test_settings_ai_apply_failure_returns_generic_502(_ai_settings_client, monkeypatch):
+    """POST /api/settings/ai returns 502 with a generic detail when _APPLIER.apply raises.
+
+    Regression guard for MED-PI-04: the exception message must NOT be reflected
+    in the response body (no f-string leak of str(exc)).
+
+    # Verified: routers/settings_ai.py:94-102 (try/except → HTTPException 502)
+    """
+    from unittest.mock import patch
+
+    from paper_ingestion.routers import settings_ai as _sai_mod
+
+    sentinel = "SENSITIVE_INTERNAL_DETAIL_xyz_123"
+    monkeypatch.setenv("JARVIS_HW_TIER", "ge-48")
+
+    with patch.object(_sai_mod._APPLIER, "apply", side_effect=Exception(sentinel)):
+        resp = await _ai_settings_client.post(
+            "/api/settings/ai",
+            json={"backend": "ollama", "model": "qwen3:14b"},
+        )
+
+    assert resp.status_code == 502, (
+        f"Expected 502 when _APPLIER.apply raises; got {resp.status_code}: {resp.text}"
+    )
+    assert resp.json()["detail"] == "apply failed; previous config restored", (
+        f"502 detail must be generic; got: {resp.json().get('detail')!r}"
+    )
+    assert sentinel not in resp.text, (
+        "Exception message must NOT appear in the response body (MED-PI-04 regression)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # test_settings_ai_redetect_refreshes_overlay
 # Verified: routers/settings_ai.py:102-104 (redetect_hw → get_ai_settings)
 # Survivor-of: test_settings_ai.py::test_redetect_returns_settings

@@ -364,6 +364,29 @@ async def assert_papers_ownership(
             raise HTTPException(status_code=403, detail="paper not owned by current user")
 
 
+async def record_author_alert(
+    conn: asyncpg.Connection,
+    *,
+    tracked_author_id: int,
+    paper_id: int,
+    user_id: int,
+) -> bool:
+    """Insert (tracked_author_id, paper_id, user_id) into author_alert_log.
+
+    Returns True if the row was newly inserted, False if a conflict was skipped.
+    """
+    row = await conn.fetchrow(
+        """INSERT INTO author_alert_log (tracked_author_id, paper_id, user_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (tracked_author_id, paper_id, user_id) DO NOTHING
+           RETURNING tracked_author_id""",
+        tracked_author_id,
+        paper_id,
+        user_id,
+    )
+    return row is not None
+
+
 async def delete_or_404(
     db_pool_or_conn: Any,
     sql: str,

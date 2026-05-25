@@ -7,7 +7,8 @@ ARG PYTHON_BASE_IMAGE=python:3.12.9-slim
 FROM ${PYTHON_BASE_IMAGE} AS jarvis-common-builder
 WORKDIR /build
 COPY libs/jarvis_common/ ./jarvis_common/
-RUN pip install --no-cache-dir build==1.2.2.post1 \
+COPY services/_shared/constraints-builder.txt ./
+RUN pip install --no-cache-dir --require-hashes -r constraints-builder.txt \
     && python -m build --wheel --outdir /tmp/dist ./jarvis_common/
 
 # --- Stage 2: runtime

@@ -5,8 +5,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import asyncpg
 import paper_ingestion.routers.setup as setup_router
 import pytest
+from fastapi import HTTPException
 from jarvis_common.testing import make_pool_and_conn
 
 
@@ -59,3 +61,18 @@ async def test_setup_status_includes_hw_fields(monkeypatch) -> None:
     assert res.hw_tier_baseline == "ge-48"
     assert res.hw_tier_current is not None
     assert res.current_backend == "vllm"
+
+
+@pytest.mark.asyncio
+async def test_setup_status_returns_503_on_db_failure() -> None:
+    """get_status must raise HTTP 503 when the DB query fails (fail-closed; MED-PI-02)."""
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(side_effect=asyncpg.PostgresError("connection lost"))
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await setup_router.get_status(request)
+
+    assert exc_info.value.status_code == 503
+    assert "Setup status check failed" in exc_info.value.detail

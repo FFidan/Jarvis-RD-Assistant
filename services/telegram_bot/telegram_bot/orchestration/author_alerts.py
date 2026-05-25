@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import asyncpg
 import httpx
 from jarvis_common import author_matches
+from jarvis_common.db_helpers import record_author_alert
 from telegram import Bot
 
 from telegram_bot.config import BotConfig
@@ -114,16 +115,12 @@ async def run_author_alerts(
                     for paper in candidate_papers:
                         paper_id = paper["id"]
                         # Deduplicate via author_alert_log — INSERT ... ON CONFLICT is atomic
-                        row = await conn.fetchrow(
-                            """INSERT INTO author_alert_log (tracked_author_id, paper_id, user_id)
-                            VALUES ($1, $2, $3)
-                            ON CONFLICT (tracked_author_id, paper_id, user_id) DO NOTHING
-                            RETURNING tracked_author_id""",
-                            author_id,
-                            paper_id,
-                            pairing.user_id,
-                        )
-                        if row:
+                        if await record_author_alert(
+                            conn,
+                            tracked_author_id=author_id,
+                            paper_id=paper_id,
+                            user_id=pairing.user_id,
+                        ):
                             matched_papers.append(dict(paper))
 
                     # Update last_checked_at

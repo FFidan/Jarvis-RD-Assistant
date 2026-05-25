@@ -11,6 +11,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import author_matches, delete_or_404, dynamic_update, log_audit
 from jarvis_common.auth import current_user_id_strict
+from jarvis_common.db_helpers import record_author_alert
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
@@ -283,16 +284,13 @@ async def check_tracked_authors(
 
                     if matched:
                         # Deduplicate via author_alert_log (per-user since migration 0091)
-                        row = await conn.fetchrow(
-                            """INSERT INTO author_alert_log (tracked_author_id, paper_id, user_id)
-                            VALUES ($1, $2, $3)
-                            ON CONFLICT (tracked_author_id, paper_id, user_id) DO NOTHING
-                            RETURNING tracked_author_id""",
-                            author_id,
-                            paper_id,
-                            user_id,
+                        was_new = await record_author_alert(
+                            conn,
+                            tracked_author_id=author_id,
+                            paper_id=paper_id,
+                            user_id=user_id,
                         )
-                        if row:
+                        if was_new:
                             total_new += 1
 
                 # Update last_checked_at

@@ -6,7 +6,11 @@ authoritative copies, promoted from services/paper_ingestion/tests/_embedder_fak
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
+
+if TYPE_CHECKING:
+    from paper_ingestion.ingestion.embedder import Embedder
 
 
 class _FakeEncoding:
@@ -23,7 +27,7 @@ class _FakeEncoding:
         return "".join(tokens)
 
 
-def _make_embedder():  # type: ignore[return]
+def _make_embedder() -> Embedder:
     """Return an Embedder with mocked HTTP/Qdrant clients and _FakeEncoding."""
     from paper_ingestion.ingestion.embedder import Embedder
 

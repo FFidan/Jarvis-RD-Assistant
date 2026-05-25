@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 
 import asyncpg
 import httpx
-from fastapi import HTTPException
 from jarvis_common import get_fast_model
 from jarvis_common.llm_client import (
     build_litellm_headers,
@@ -26,6 +25,7 @@ from jarvis_common.sse import SSE_DONE, sse_event
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
 from paper_ingestion.perf_probe import probe_span
 from paper_ingestion.rag.decomposition import decompose_query
+from paper_ingestion.rag.exceptions import NoRelevantChunksError, PaperNotFoundError
 
 if TYPE_CHECKING:
     from jarvis_common.verify import QuoteVerifier
@@ -43,6 +43,8 @@ __all__ = [
     "sse_error_stream",
     "stream_rag_events",
     "_SEARCH_SCORE_THRESHOLD",
+    "PaperNotFoundError",
+    "NoRelevantChunksError",
 ]
 
 _SEARCH_SCORE_THRESHOLD = 0.05
@@ -111,7 +113,7 @@ async def prepare_single_paper_rag(
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
     if not paper:
-        raise HTTPException(status_code=404, detail="Paper not found")
+        raise PaperNotFoundError("Paper not found")
 
     # Retrieve top-k relevant chunks from this paper, over-fetch for reranking
     chunks = await embedder.search_chunks_in_paper(
@@ -123,12 +125,9 @@ async def prepare_single_paper_rag(
     # Cross-encoder rerank for quality, then trim to requested max_chunks
     chunks = await embedder.rerank_chunks(body.question, chunks, top_k=body.max_chunks)
     if not chunks:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "No relevant chunks found. Has this paper been processed? "
-                "Run 'Process PDF' first to extract and embed the paper text."
-            ),
+        raise NoRelevantChunksError(
+            "No relevant chunks found. Has this paper been processed? "
+            "Run 'Process PDF' first to extract and embed the paper text."
         )
 
     # Build RAG prompt — full chunk text flows through to the prompt.
