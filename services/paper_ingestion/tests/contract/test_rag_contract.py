@@ -380,9 +380,11 @@ async def test_ask_endpoint_cross_paper_real_db_structure(
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_llm(http_client, messages, options, config):
+    from paper_ingestion.models import AskResponse as _AskResponse
+
+    async def _stub_call_rag_llm(messages, *, smart_model):
         assert "Ask Contract Paper" in messages[0]["content"]
-        return "Transformers use self-attention."
+        return _AskResponse(answer="Transformers use self-attention.")
 
     from jarvis_common.testing_contract_apps import patch_dependency_overrides
 
@@ -400,8 +402,8 @@ async def test_ask_endpoint_cross_paper_real_db_structure(
                 },
             ),
             patch(
-                "paper_ingestion.routers.rag.request_chat_completion_content",
-                side_effect=_stub_llm,
+                "paper_ingestion.routers.rag._call_rag_llm",
+                side_effect=_stub_call_rag_llm,
             ),
         ):
             resp = await pi_test_client.post(
@@ -457,7 +459,7 @@ async def test_ask_endpoint_cross_paper_llm_timeout_maps_504(
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_llm(http_client, messages, options, config):
+    async def _stub_call_rag_llm(messages, *, smart_model):
         raise RuntimeError("LiteLLM chat request timed out") from httpx.ReadTimeout("timed out")
 
     from jarvis_common.testing_contract_apps import patch_dependency_overrides
@@ -476,8 +478,8 @@ async def test_ask_endpoint_cross_paper_llm_timeout_maps_504(
                 },
             ),
             patch(
-                "paper_ingestion.routers.rag.request_chat_completion_content",
-                side_effect=_stub_llm,
+                "paper_ingestion.routers.rag._call_rag_llm",
+                side_effect=_stub_call_rag_llm,
             ),
         ):
             resp = await pi_test_client.post(
@@ -527,7 +529,7 @@ async def test_ask_endpoint_cross_paper_empty_visible_llm_maps_degraded_502(
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_llm(http_client, messages, options, config):
+    async def _stub_call_rag_llm(messages, *, smart_model):
         raise EmptyVisibleLLMContentError(
             "LiteLLM chat response contained no visible content after think-block stripping"
         )
@@ -548,8 +550,8 @@ async def test_ask_endpoint_cross_paper_empty_visible_llm_maps_degraded_502(
                 },
             ),
             patch(
-                "paper_ingestion.routers.rag.request_chat_completion_content",
-                side_effect=_stub_llm,
+                "paper_ingestion.routers.rag._call_rag_llm",
+                side_effect=_stub_call_rag_llm,
             ),
         ):
             resp = await pi_test_client.post(
@@ -658,9 +660,11 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_llm(http_client, messages, options, config):
+    from paper_ingestion.models import AskResponse as _AskResponse
+
+    async def _stub_call_rag_llm(messages, *, smart_model):
         assert "A104 Ask Contract Paper" in messages[0]["content"]
-        return "This paper is about contract tests."
+        return _AskResponse(answer="This paper is about contract tests.")
 
     from jarvis_common.testing_contract_apps import patch_dependency_overrides
 
@@ -678,8 +682,8 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
                 },
             ),
             patch(
-                "paper_ingestion.routers.rag.request_chat_completion_content",
-                side_effect=_stub_llm,
+                "paper_ingestion.routers.rag._call_rag_llm",
+                side_effect=_stub_call_rag_llm,
             ),
         ):
             resp = await pi_test_client.post(
@@ -727,7 +731,7 @@ async def test_a104_per_paper_ask_llm_timeout_maps_504(contract_conn, pi_test_cl
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_llm(http_client, messages, options, config):
+    async def _stub_call_rag_llm(messages, *, smart_model):
         raise RuntimeError("LiteLLM chat request timed out") from httpx.ReadTimeout("timed out")
 
     from jarvis_common.testing_contract_apps import patch_dependency_overrides
@@ -746,8 +750,8 @@ async def test_a104_per_paper_ask_llm_timeout_maps_504(contract_conn, pi_test_cl
                 },
             ),
             patch(
-                "paper_ingestion.routers.rag.request_chat_completion_content",
-                side_effect=_stub_llm,
+                "paper_ingestion.routers.rag._call_rag_llm",
+                side_effect=_stub_call_rag_llm,
             ),
         ):
             resp = await pi_test_client.post(
@@ -791,7 +795,7 @@ async def test_a104_per_paper_ask_empty_visible_maps_degraded_502(contract_conn,
         rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
     )
 
-    async def _stub_llm(http_client, messages, options, config):
+    async def _stub_call_rag_llm(messages, *, smart_model):
         raise EmptyVisibleLLMContentError("no visible content")
 
     from jarvis_common.testing_contract_apps import patch_dependency_overrides
@@ -810,8 +814,8 @@ async def test_a104_per_paper_ask_empty_visible_maps_degraded_502(contract_conn,
                 },
             ),
             patch(
-                "paper_ingestion.routers.rag.request_chat_completion_content",
-                side_effect=_stub_llm,
+                "paper_ingestion.routers.rag._call_rag_llm",
+                side_effect=_stub_call_rag_llm,
             ),
         ):
             resp = await pi_test_client.post(
@@ -1280,3 +1284,135 @@ async def test_rag_w2_weekly_summary_aggregates_across_papers(
     assert "themes" in topic_entry or "summary" in topic_entry, (
         "topic entry must carry LLM-generated themes or summary"
     )
+
+
+# ---------------------------------------------------------------------------
+# W3-CF10. Null openai_client → 503 (not 502)
+#
+# Differentiates startup misconfiguration (_RagServiceNotReady → 503) from
+# runtime LLM failures (RuntimeError → 502).  Both /api/ask (cross-paper) and
+# /api/papers/{id}/ask (per-paper) must honour the distinction.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_ask_endpoint_returns_503_when_openai_client_not_initialized(
+    contract_conn, contract_two_users, pi_test_client
+):
+    """POST /api/ask returns 503 when svc.openai_client is None (startup misconfiguration)."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from jarvis_common.auth import verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url)"
+        " VALUES ('contract-503-cross-01', 'arxiv', '503 Cross Paper', '{}', 'http://503c')"
+        " RETURNING id"
+    )
+    chunks = [
+        {
+            "paper_id": paper_id,
+            "chunk_index": 0,
+            "content": "Relevant chunk.",
+            "page_number": 1,
+            "score": 0.9,
+        }
+    ]
+    embedder = SimpleNamespace(
+        search_chunks_global=AsyncMock(return_value=chunks),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+
+    from jarvis_common.testing_contract_apps import patch_dependency_overrides
+    import paper_ingestion._state as _state
+
+    pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_a)
+    app.state.limiter.enabled = False
+    orig_client = _state.svc.openai_client
+    _state.svc.openai_client = None
+    try:
+        with patch_dependency_overrides(
+            app,
+            set_overrides={
+                verify_api_key: lambda: None,
+                get_embedder: lambda: embedder,
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ):
+            resp = await pi_test_client.post(
+                "/api/ask",
+                json={"question": "Does RAG fail gracefully?", "decompose": False},
+            )
+    finally:
+        _state.svc.openai_client = orig_client
+        app.state.limiter.enabled = True
+        pi_test_client.cookies.clear()
+
+    assert resp.status_code == 503, (
+        f"Expected 503 for null client, got {resp.status_code}: {resp.text}"
+    )
+    assert "not initialized" in resp.json()["detail"]
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_ask_paper_endpoint_returns_503_when_openai_client_not_initialized(
+    contract_conn, pi_test_client
+):
+    """POST /api/papers/{id}/ask returns 503 when svc.openai_client is None."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('503-perpaper@contract.example.com', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('contract-503-per-01', 'arxiv', '503 Per-Paper', '{}', 'http://503p', $1)
+           RETURNING id""",
+        user_id,
+    )
+    chunks = [{"content": "Relevant chunk.", "page_number": 1, "score": 0.87}]
+    embedder = SimpleNamespace(
+        search_chunks_in_paper=AsyncMock(return_value=chunks),
+        rerank_chunks=AsyncMock(side_effect=lambda _q, candidates, top_k: candidates[:top_k]),
+    )
+
+    from jarvis_common.testing_contract_apps import patch_dependency_overrides
+    import paper_ingestion._state as _state
+
+    app.state.limiter.enabled = False
+    orig_client = _state.svc.openai_client
+    _state.svc.openai_client = None
+    try:
+        with patch_dependency_overrides(
+            app,
+            set_overrides={
+                verify_api_key: lambda: None,
+                get_current_user_id: lambda: user_id,
+                get_embedder: lambda: embedder,
+                get_http_client: lambda: AsyncMock(),
+                get_verifier: lambda: MagicMock(),
+            },
+        ):
+            resp = await pi_test_client.post(
+                f"/api/papers/{paper_id}/ask",
+                json={"question": "Does per-paper RAG fail gracefully?"},
+            )
+    finally:
+        _state.svc.openai_client = orig_client
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 503, (
+        f"Expected 503 for null client, got {resp.status_code}: {resp.text}"
+    )
+    assert "not initialized" in resp.json()["detail"]

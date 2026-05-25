@@ -12,15 +12,51 @@ isn't shared with infrastructure tooling.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from jarvis_common.auth import _client_ip
+from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/infra-events", tags=["infra"])
+
+_INFRA_CACHED_ALLOWED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None
+
+
+def _parse_infra_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    raw = get_core_settings().infra_ingest_allowed_cidrs
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning("INFRA_INGEST_ALLOWED_CIDRS: invalid CIDR %r — skipping", part)
+    return networks
+
+
+def _infra_ip_in_allowlist(ip_str: str | None) -> bool:
+    global _INFRA_CACHED_ALLOWED_NETWORKS
+    if not ip_str:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        logger.warning("infra-ingest: could not parse client IP %r as address — denying", ip_str)
+        return False
+    if _INFRA_CACHED_ALLOWED_NETWORKS is None:
+        _INFRA_CACHED_ALLOWED_NETWORKS = _parse_infra_allowed_networks()
+    for net in _INFRA_CACHED_ALLOWED_NETWORKS:
+        if addr in net:
+            return True
+    return False
 
 
 class InfraEvent(BaseModel):
@@ -47,7 +83,16 @@ def _load_ingest_key() -> str | None:
     return None
 
 
-def _check_auth(provided: str | None) -> None:
+def _check_auth(request: Request, provided: str | None) -> None:
+    # Default-deny: empty CIDR config means infra ingest is not provisioned.
+    # Distinct from "key not configured" (503 below): operator must explicitly
+    # opt-in to the source-IP surface by setting INFRA_INGEST_ALLOWED_CIDRS.
+    if not get_core_settings().infra_ingest_allowed_cidrs.strip():
+        raise HTTPException(status_code=503, detail="INFRA_INGEST_ALLOWED_CIDRS not configured")
+    client_ip = _client_ip(request)
+    if not _infra_ip_in_allowlist(client_ip):
+        logger.warning("infra-ingest: rejected request from %s (not in allowlist)", client_ip)
+        raise HTTPException(status_code=403, detail="source IP not in infra ingest allowlist")
     expected = _load_ingest_key()
     if not expected:
         # No key configured: refuse all writes. The Vector sidecar should
@@ -69,7 +114,7 @@ async def ingest_infra_events(
     with ``encoding.codec = "json"`` and ``framing.method = "newline_delimited"``
     produces NDJSON. Returns ``{"accepted": N}``.
     """
-    _check_auth(x_infra_key)
+    _check_auth(request, x_infra_key)
 
     body = await request.body()
     if not body.strip():

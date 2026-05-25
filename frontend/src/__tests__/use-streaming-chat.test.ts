@@ -127,6 +127,70 @@ describe('use-streaming-chat — FE-SSE-1 streamError', () => {
 });
 
 // ---------------------------------------------------------------------------
+// W4-CF1 — catch-block sets streamError on non-abort transport errors
+// ---------------------------------------------------------------------------
+
+describe('use-streaming-chat — W4-CF1 catch-block setStreamError', () => {
+  beforeEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+  });
+
+  it('sets streamError when the SSE generator throws a non-abort error', async () => {
+    mockStreamSSE.mockImplementation(async function* () {
+      throw new Error('network failure');
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'cf1', scope: 'cross-paper' }),
+    );
+
+    expect(result.current.streamError).toBeNull();
+
+    act(() => {
+      void result.current.sendMessage('trigger transport error');
+    });
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    expect(result.current.streamError).toBe('network failure');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W4-CF2 — clearChat resets streamError
+// ---------------------------------------------------------------------------
+
+describe('use-streaming-chat — W4-CF2 clearChat resets streamError', () => {
+  beforeEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+  });
+
+  it('resets streamError to null when clearChat is called', async () => {
+    mockStreamSSE.mockImplementation(async function* () {
+      yield { type: 'error', message: 'some error' };
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'cf2', scope: 'cross-paper' }),
+    );
+
+    act(() => {
+      void result.current.sendMessage('trigger error');
+    });
+
+    await waitFor(() => expect(result.current.streamError).toBe('some error'));
+
+    act(() => {
+      result.current.clearChat();
+    });
+
+    expect(result.current.streamError).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // D.2 — empty placeholder removed on AbortError (Stop before any token)
 // ---------------------------------------------------------------------------
 

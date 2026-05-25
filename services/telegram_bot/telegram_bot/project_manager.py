@@ -129,6 +129,8 @@ class ProjectManager:
         self,
         project_id: int | None = None,
         status: str | None = None,
+        *,
+        user_id: int | None = None,
     ) -> list[dict]:
         """List tasks with optional filters.
 
@@ -138,6 +140,9 @@ class ProjectManager:
             Filter by project.
         status : str or None
             Filter by status.
+        user_id : int or None
+            When provided, restricts results to tasks owned by this user
+            (NULL-safe via ``IS NOT DISTINCT FROM``).
 
         Returns
         -------
@@ -155,6 +160,10 @@ class ProjectManager:
         if status is not None:
             conditions.append(f"t.status = ${idx}")
             params.append(status)
+            idx += 1
+        if user_id is not None:
+            conditions.append(f"t.user_id IS NOT DISTINCT FROM ${idx}")
+            params.append(user_id)
             idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -175,6 +184,8 @@ class ProjectManager:
         title: str,
         priority: int = 3,
         deadline: datetime | None = None,
+        *,
+        user_id: int | None = None,
     ) -> dict:
         """Create a new task.
 
@@ -188,6 +199,8 @@ class ProjectManager:
             Priority (1=critical, 2=high, 3=medium, 4=low).
         deadline : datetime or None
             Optional deadline.
+        user_id : int or None
+            Owning user. ``None`` writes a NULL user_id (legacy owner mode).
 
         Returns
         -------
@@ -195,15 +208,16 @@ class ProjectManager:
             Created task record.
         """
         row = await self.db_pool.fetchrow(
-            """INSERT INTO tasks (project_id, title, priority, deadline)
-            VALUES ($1, $2, $3, $4)
+            """INSERT INTO tasks (project_id, title, priority, deadline, user_id)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING *""",
             project_id,
             title,
             priority,
             deadline,
+            user_id,
         )
-        logger.info("Created task: %s (id=%d)", title, row["id"])
+        logger.info("Created task: %s (id=%d, user_id=%s)", title, row["id"], user_id)
         return dict(row)
 
     async def complete_task(self, task_id: int, *, user_id: int | None = None) -> dict:
@@ -323,32 +337,47 @@ class ProjectManager:
         )
         return [dict(r) for r in rows]
 
-    async def complete_milestone(self, milestone_id: int) -> dict:
+    async def complete_milestone(self, milestone_id: int, *, user_id: int | None = None) -> dict:
         """Mark a milestone as completed.
 
         Parameters
         ----------
         milestone_id : int
             Milestone ID.
+        user_id : int or None
+            When provided, the UPDATE additionally requires the milestone row's
+            ``user_id`` to match (NULL-safe via ``IS NOT DISTINCT FROM``), so a
+            user cannot complete another user's milestone. ``None`` preserves
+            legacy single-tenant owner semantics.
 
         Returns
         -------
         dict
-            Updated milestone record, or empty dict if not found.
+            Updated milestone record, or empty dict if not found / not owned.
         """
-        row = await self.db_pool.fetchrow(
-            """UPDATE milestones
-            SET completed = TRUE, completed_at = NOW()
-            WHERE id = $1
-            RETURNING *""",
-            milestone_id,
-        )
+        if user_id is not None:
+            row = await self.db_pool.fetchrow(
+                """UPDATE milestones
+                SET completed = TRUE, completed_at = NOW()
+                WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2
+                RETURNING *""",
+                milestone_id,
+                user_id,
+            )
+        else:
+            row = await self.db_pool.fetchrow(
+                """UPDATE milestones
+                SET completed = TRUE, completed_at = NOW()
+                WHERE id = $1
+                RETURNING *""",
+                milestone_id,
+            )
         return dict(row) if row else {}
 
     # ----- Paper Links -----
 
     async def link_paper_to_task(
-        self, task_id: int, paper_id: int, note: str | None = None
+        self, task_id: int, paper_id: int, note: str | None = None, *, user_id: int | None = None
     ) -> None:
         """Link a paper to a task.
 
@@ -360,15 +389,35 @@ class ProjectManager:
             Paper ID.
         note : str or None
             Optional note about the link.
+        user_id : int or None
+            When provided, the INSERT is guarded by a subquery that verifies the
+            task is owned by this user (NULL-safe via ``IS NOT DISTINCT FROM``),
+            preventing cross-user paper links. ``None`` preserves legacy
+            single-tenant owner semantics.
         """
-        await self.db_pool.execute(
-            """INSERT INTO task_paper_links (task_id, paper_id, note)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (task_id, paper_id) DO UPDATE SET note = $3""",
-            task_id,
-            paper_id,
-            note,
-        )
+        if user_id is not None:
+            await self.db_pool.execute(
+                """INSERT INTO task_paper_links (task_id, paper_id, note)
+                SELECT $1, $2, $3
+                WHERE EXISTS (
+                    SELECT 1 FROM tasks
+                    WHERE id = $1 AND user_id IS NOT DISTINCT FROM $4
+                )
+                ON CONFLICT (task_id, paper_id) DO UPDATE SET note = $3""",
+                task_id,
+                paper_id,
+                note,
+                user_id,
+            )
+        else:
+            await self.db_pool.execute(
+                """INSERT INTO task_paper_links (task_id, paper_id, note)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (task_id, paper_id) DO UPDATE SET note = $3""",
+                task_id,
+                paper_id,
+                note,
+            )
 
     async def get_project_papers(self, project_id: int) -> list[dict]:
         """Get all papers linked to a project's tasks.

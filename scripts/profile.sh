@@ -123,7 +123,7 @@ log "Backend timings saved → ${OUT_DIR}/backend-timings.csv"
 # 3. py-spy flamegraph (best-effort)
 # ---------------------------------------------------------------------------
 if command -v py-spy >/dev/null 2>&1; then
-  PAPER_PID=$(docker top jarvis_rd_assistant-paper_ingestion-1 2>/dev/null \
+  PAPER_PID=$(docker top "$(docker compose ps -q paper_ingestion 2>/dev/null | head -n 1)" 2>/dev/null \
     | awk 'NR==2 {print $2}')
   if [[ -n "${PAPER_PID:-}" ]]; then
     log "Recording py-spy flamegraph (30s) on PID ${PAPER_PID}"
@@ -146,8 +146,8 @@ fi
 # ---------------------------------------------------------------------------
 # 4. pg_stat_statements top-N (best-effort)
 # ---------------------------------------------------------------------------
-PG_CONTAINER="jarvis_rd_assistant-postgres-1"
-if docker ps --format '{{.Names}}' | grep -q "^${PG_CONTAINER}$"; then
+PG_CONTAINER="$(docker compose ps -q postgres 2>/dev/null | head -n 1)"
+if [[ -n "$PG_CONTAINER" ]]; then
   if docker exec "${PG_CONTAINER}" psql -U jarvis -d jarvis -tAc \
        "SELECT count(*) FROM pg_stat_statements;" >/dev/null 2>&1; then
     log "Dumping pg_stat_statements top-20 by total_exec_time"

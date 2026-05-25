@@ -797,7 +797,7 @@ async def test_pdf_resolutions_table_dropped(test_db_pool: asyncpg.Pool) -> None
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 async def test_pdf_resolutions_table_absent(contract_conn: asyncpg.Connection) -> None:
     """pdf_resolutions must not exist in public schema.
 

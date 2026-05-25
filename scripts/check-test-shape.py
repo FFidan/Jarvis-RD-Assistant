@@ -12,6 +12,8 @@ Invariants enforced (ERROR = block commit, WARN = log only):
     TS-05 ERROR  Contract files must set loop_scope="session" on asyncio + asyncio fixtures
     TS-06 WARN   Contract tests should have at least one `# Verified: <file>:<line>` comment
     TS-07 WARN   Test files should not redefine inline `_make_pool`/`_mock_pool`/etc.
+    TS-08 ERROR  docs/contracts/07-testing.md must retain `## 5. Carve-out registry`
+                 heading with ≥3 table-row entries (deletion/weakening blocked)
 
 Grandfather rule: existing files that already violate TS-01/TS-02 are exempt
 UNLESS the violating lines are NEW in this diff. This implements the rot-on-touch
@@ -28,6 +30,7 @@ Exit codes:
 The check is scoped to files matching:
     services/*/tests/**/*.py
     libs/jarvis_common/tests/**/*.py
+    docs/contracts/07-testing.md
 """
 
 from __future__ import annotations
@@ -80,6 +83,27 @@ _TS07_INLINE_FACTORIES = re.compile(
 _TS07_BOTCONFIG_LITERAL = re.compile(r"\bBotConfig\s*\(")
 _TS07_NEXT_DEF = re.compile(r"^\s*(?:async\s+)?def\s+\w", re.MULTILINE)
 
+# TS-08: docs/contracts/07-testing.md must retain the carve-out registry section
+# with at least 3 table-row entries (lines starting with "| " that are not the
+# header or separator rows).
+_TS08_CARVEOUT_HEADING = re.compile(r"^## 5\. Carve-out registry\b", re.MULTILINE)
+# A Markdown table data row: starts with "| " and is NOT a separator line (---|---).
+_TS08_TABLE_ROW = re.compile(r"^\| (?![-:]+\|)", re.MULTILINE)
+
+# Canonical path of the testing contract (relative to repo root), normalised.
+_TS08_CONTRACT_PATH = "docs/contracts/07-testing.md"
+
+# TS-02 carve-out — files registered in 07-testing.md §5.5 SQL-shape regression
+# guards are exempt from TS-02 enforcement (W3-CF12 reconciliation: script-vs-
+# reviewer divergence resolved by single source of truth; the registry itself
+# is SACROSANCT per TS-08 so this list cannot be weakened silently).
+_TS02_CARVEOUT_PATHS: frozenset[str] = frozenset(
+    {
+        "services/paper_ingestion/tests/test_data_export.py",
+        "services/telegram_bot/tests/test_project_manager.py",
+    }
+)
+
 # ---------------------------------------------------------------------------
 # Scoping
 # ---------------------------------------------------------------------------
@@ -106,6 +130,11 @@ def _is_contract_file(path: str) -> bool:
 
 def _is_pi_contract_file(path: str) -> bool:
     return bool(_PI_CONTRACT_PATH_RE.match(path)) and not _is_package_init(path)
+
+
+def _is_ts02_carveout(path: str) -> bool:
+    norm = path.replace("\\", "/")
+    return any(norm == p or norm.endswith("/" + p) for p in _TS02_CARVEOUT_PATHS)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +213,65 @@ def _all_lines(path: str) -> list[tuple[int, str]]:
 # ---------------------------------------------------------------------------
 
 
+def check_contract_doc(path: str) -> tuple[list[str], list[str]]:
+    """TS-08: verify the carve-out registry section is intact in 07-testing.md.
+
+    Returns (errors, warnings).  Called when the input file IS the testing
+    contract (``docs/contracts/07-testing.md``), identified by normalised path
+    suffix so it works regardless of CWD.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # Normalise separators and check suffix
+    norm = path.replace("\\", "/")
+    if not (norm == _TS08_CONTRACT_PATH or norm.endswith("/" + _TS08_CONTRACT_PATH)):
+        return errors, warnings
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return errors, warnings
+
+    if not _TS08_CARVEOUT_HEADING.search(text):
+        errors.append(
+            f"{path}: TS-08 carve-out registry section (`## 5. Carve-out registry`) "
+            f"is MISSING — deletion or renaming of this section is prohibited without "
+            f"a paired contract update. See docs/contracts/07-testing.md §4"
+        )
+        return errors, warnings
+
+    # Count table data rows across the whole section 5 (all sub-sections).
+    # We slice from the heading to the next top-level `## ` heading (or EOF).
+    heading_match = _TS08_CARVEOUT_HEADING.search(text)
+    assert heading_match is not None  # already checked above
+    section_start = heading_match.start()
+    next_heading = re.search(r"^## ", text[heading_match.end() :], re.MULTILINE)
+    section_end = (heading_match.end() + next_heading.start()) if next_heading else len(text)
+    section_text = text[section_start:section_end]
+
+    data_rows = _TS08_TABLE_ROW.findall(section_text)
+    # Count carve-out data rows by deducting one header row per `### 5.x` sub-section
+    # table. A markdown-AST parse would be more precise but pulls in an extra dep —
+    # the conservative deduction is sufficient because the registry's stable shape
+    # (3 sub-sections, ≥1 row each) keeps this heuristic accurate within ±1.
+    n_sub_sections = len(re.findall(r"^### 5\.", section_text, re.MULTILINE))
+    header_allowance = max(n_sub_sections, 1)
+    n_data_rows = len(data_rows) - header_allowance
+
+    min_carveout_entries = 3
+    if n_data_rows < min_carveout_entries:
+        errors.append(
+            f"{path}: TS-08 carve-out registry has only {n_data_rows} entry/entries "
+            f"(minimum {min_carveout_entries} required) — weakening the registry "
+            f"requires a paired contract update. "
+            f"See docs/contracts/07-testing.md §4 and §5"
+        )
+
+    return errors, warnings
+
+
 def check_file(path: str) -> tuple[list[str], list[str]]:
     """Return (errors, warnings) for one test file."""
     errors: list[str] = []
@@ -207,7 +295,7 @@ def check_file(path: str) -> tuple[list[str], list[str]]:
                 f"{path}:{lineno}: TS-01 handler-bypass anti-pattern "
                 f"(`.__wrapped__()` call) — see docs/contracts/07-testing.md §2.1"
             )
-        if _TS02_SQL_SUBSTRING.search(content):
+        if _TS02_SQL_SUBSTRING.search(content) and not _is_ts02_carveout(path):
             errors.append(
                 f"{path}:{lineno}: TS-02 SQL-substring assertion — "
                 f"see docs/contracts/07-testing.md §2.3"
@@ -301,6 +389,10 @@ def main(argv: list[str]) -> int:
         errors, warnings = check_file(path)
         all_errors.extend(errors)
         all_warnings.extend(warnings)
+        # TS-08: additional check when the testing contract doc itself is passed
+        doc_errors, doc_warnings = check_contract_doc(path)
+        all_errors.extend(doc_errors)
+        all_warnings.extend(doc_warnings)
 
     if all_warnings:
         print("\n".join(f"warning: {w}" for w in all_warnings), file=sys.stderr)

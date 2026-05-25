@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { fetchYesterday, updateTask } from '@/lib/api';
 import type { YesterdaySummary } from '@/types';
+import { ErrorSentinel } from '@/components/shared/ErrorSentinel';
 
 /**
  * § Yesterday — on-the-fly rollup of yesterday's activity (prototype :72-91).
@@ -33,7 +34,7 @@ export function YesterdaySection() {
   });
 
   if (isError) return (
-    <p role="status" className="text-xs text-destructive pl-1">Unable to load yesterday's summary.</p>
+    <ErrorSentinel message="Unable to load yesterday's summary." />
   );
   if (!data) return null;
 

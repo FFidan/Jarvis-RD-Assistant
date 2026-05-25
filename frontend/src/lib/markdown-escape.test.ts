@@ -14,4 +14,13 @@ describe('escapeMarkdownInline', () => {
   it('returns empty string unchanged', () => {
     expect(escapeMarkdownInline('')).toBe('');
   });
+
+  it('escapeMarkdownInline is single-pass-only (calling twice double-escapes)', () => {
+    const input = '\\*x*';
+    const once = escapeMarkdownInline(input);
+    const twice = escapeMarkdownInline(once);
+    // Applying a second time re-escapes the already-escaped backslashes,
+    // proving this function is NOT idempotent and must be called only once.
+    expect(twice).not.toBe(once);
+  });
 });

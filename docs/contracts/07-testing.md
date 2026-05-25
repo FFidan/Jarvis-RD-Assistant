@@ -367,6 +367,17 @@ Test populations updated 2026-05-22 after the W3 polish-wave deletions. Counts r
 |---|---|---|
 | `services/paper_ingestion/tests/test_baseline_invariants.py` (post-W1-squash invariants) | none — runs against live Postgres | All 16 tests are LIVE; **NEVER delete** |
 
+### 5.5 SQL-shape regression guards (TS-02 carve-out)
+
+These files use SQL-substring assertions (`assert ... in sql`) to guard the structural shape of a query rather than its runtime behavior. This is the only legitimate use of TS-02-style patterns: the function under test has no runtime behavior to observe because its sole contract IS the SQL it encodes (a compile-time constant), and a boundary-adapter or contract test cannot distinguish `discovered_by` scoping from `user_library` JOIN scoping without seeding cross-user data in a live DB. The SQL-shape assertion is the cheapest reliable proof that the correct scoping predicate is present.
+
+| File | Assertion | Rationale |
+|---|---|---|
+| `services/paper_ingestion/tests/test_data_export.py` | `"discovered_by" not in papers_sql`, `"EXISTS" in papers_sql.upper()` | GDPR data-export query (CFG-GDPR-1): must use `EXISTS`/`user_library` join and must NOT scope by `discovered_by`. SQL-substring assertion is the only way to verify the constant `_EXPORT_QUERIES` tuple without a live DB. |
+| `services/telegram_bot/tests/test_project_manager.py` | `"user_id IS NOT DISTINCT FROM" in sql`, `"IS NOT DISTINCT FROM" not in sql`, `"INSERT INTO daily_log" in sql`, `"VALUES" in sql` | SEC-PRJMGR-1 / W2-CF8 ownership-scoping regression guards on `ProjectManager.{list_tasks,create_task,complete_milestone,link_paper_to_task,complete_task}`: the WHERE / INSERT shape IS the security contract (wrong predicate = cross-user leak). Behavioral coverage requires a live PG seed of two-user cross-tenancy data; SQL-shape guards are the cheapest proof the correct predicate is present and that the legacy `user_id=None` path remains predicate-free. |
+
+These entries are SACROSANCT per §4 TS-08: do not remove without a paired contract test that proves the same behavioral invariant against a live DB.
+
 ### 5.4 Why these are carve-outs
 
 The decision tree per boundary:

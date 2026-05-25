@@ -9,12 +9,24 @@ import logging
 
 import uvicorn
 from fastapi import Depends, FastAPI
+from jarvis_common.app_factory import configure_middleware_and_errors
 from jarvis_common.auth import verify_api_key
 from jarvis_common.settings import get_core_settings, get_secrets_settings
+from paper_ingestion.deps import limiter
 
 logger = logging.getLogger(__name__)
 
 _internal_app = FastAPI(title="JARVIS Telegram Bot Internal API", docs_url=None, redoc_url=None)
+
+configure_middleware_and_errors(
+    _internal_app,
+    limiter=limiter,
+    trusted_proxy_hosts=get_core_settings().trusted_proxy_hosts_list,
+)
+
+from jarvis_common.session_middleware import SessionMiddleware  # noqa: E402
+
+_internal_app.add_middleware(SessionMiddleware)
 
 
 class _ServerState:

@@ -171,6 +171,39 @@ def test_refresh_allowed_networks_cache_exists() -> None:
     refresh_allowed_networks_cache()  # must not raise
 
 
+# ---------------------------------------------------------------------------
+# W2-CF10: non-integer X-Owner-User-Id must return 403
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_owner_override_non_integer_header_raises_403() -> None:
+    """X-Owner-User-Id with a non-integer value must raise HTTPException(403).
+
+    Guards (a) API key and (b) IP allowlist are patched to pass so the parse
+    step (``int(raw_override)``) is reached and raises the 403 before any DB
+    access occurs.
+
+    Production path: auth.py current_user_id_with_owner_override — the
+    ``try: int(raw_override) / except (ValueError, TypeError)`` block raises
+    HTTPException(403, detail="X-Owner-User-Id must be an integer").
+    """
+    from fastapi import HTTPException
+    from jarvis_common.auth import current_user_id_with_owner_override
+
+    mock_request = _make_request(user_id_header="not-an-integer")
+
+    with (
+        patch("jarvis_common.auth._CACHED_API_KEY", "test-key"),
+        patch("jarvis_common.auth._ip_in_allowlist", return_value=True),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await current_user_id_with_owner_override(mock_request, api_key="test-key")
+
+    assert exc_info.value.status_code == 403
+    assert "integer" in exc_info.value.detail.lower()
+
+
 def test_allowed_networks_parsed_once_per_cache_fill(monkeypatch: pytest.MonkeyPatch) -> None:
     """_parse_allowed_networks must be called once per cache fill, not per _ip_in_allowlist call."""
     call_count = 0

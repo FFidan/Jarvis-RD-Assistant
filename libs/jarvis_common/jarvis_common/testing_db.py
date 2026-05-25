@@ -211,7 +211,12 @@ def _spin_pg_container(
         ]
     )
     try:
-        deadline = time.monotonic() + 45
+        # W6-01: bumped 45 → 90s deadline. pg_isready returns when the postmaster
+        # accepts UNIX-socket connections; the TCP/SSL backend has a brief
+        # follow-on window where asyncpg.create_pool can hit
+        # ``ConnectionResetError [Errno 104] Connection reset by peer``. The
+        # extended deadline + post-ready socket probe absorb that race.
+        deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             ready = _docker_cli(
                 ["exec", container, "pg_isready", "-U", "jarvis", "-d", "jarvis"],
@@ -227,6 +232,27 @@ def _spin_pg_container(
 
         port_result = _docker_cli(["port", container, "5432/tcp"])
         host_port = port_result.stdout.strip().rsplit(":", maxsplit=1)[-1]
+
+        # W6-01: socket probe — verify the TCP listener actually accepts a fresh
+        # connection. pg_isready only confirms the postmaster is alive; the
+        # network-facing TCP socket can lag by 100-500ms after that signal under
+        # CI load.
+        import socket as _socket
+
+        socket_deadline = time.monotonic() + 30
+        while time.monotonic() < socket_deadline:
+            try:
+                with _socket.create_connection(("127.0.0.1", int(host_port)), timeout=2):
+                    break
+            except (OSError, ConnectionResetError):
+                time.sleep(0.25)
+        else:
+            logs = _docker_cli(["logs", container], check=False, timeout=10)
+            pytest.fail(
+                f"PostgreSQL container ready per pg_isready but TCP socket {host_port} "
+                f"did not accept connections within 30s:\n{logs.stdout}{logs.stderr}"
+            )
+
         yield f"postgresql://jarvis:{password}@127.0.0.1:{host_port}/jarvis"
     finally:
         _docker_cli(["rm", "-f", container], check=False, timeout=10)

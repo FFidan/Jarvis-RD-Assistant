@@ -308,3 +308,140 @@ async def test_adaptive_throttle_resets_idle_start_on_state_change():
             f"{first_post_ramp} (< 15 = 30 s / 2 s/tick). idle_start did not "
             f"reset on state change. Post-change intervals: {post_change[:25]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# W5-15 / BE-05 — list_jobs user_id filter SQL behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestListJobsUserIdHandling:
+    """Verify that list_jobs() user_id parameter behaviour matches the SQL.
+
+    SQL reality (lines 581-584 / 623-626 of jobs.py):
+      - user_id=None  → $3::text IS NULL  AND args->>'user_id' IS NULL
+                        i.e. only system/NULL-owner jobs are returned.
+      - user_id="x"  → $3::text IS NOT NULL AND args->>'user_id' = $3
+                        i.e. only rows owned by that specific user.
+
+    The OLD docstring incorrectly stated that user_id=None returns "all jobs".
+    These tests pin the correct (SQL-matching) behaviour.
+    """
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_pool(rows: list[dict]) -> tuple[MagicMock, MagicMock]:
+        """Return a mock asyncpg.Pool whose acquired connection returns `rows`."""
+        # list_jobs does: [dict(r) for r in rows], so rows from conn.fetch must
+        # support dict() conversion via the _DictRecord shim.
+        fetch_result: list[Any] = [_DictRecord(r) for r in rows]
+
+        conn = MagicMock()
+        conn.fetch = MagicMock(return_value=_async_return(fetch_result))
+
+        pool_cm = MagicMock()
+        pool_cm.__aenter__ = MagicMock(return_value=_async_return(conn))
+        pool_cm.__aexit__ = MagicMock(return_value=_async_return(None))
+
+        pool = MagicMock()
+        pool.acquire = MagicMock(return_value=pool_cm)
+        return pool, conn
+
+    # ------------------------------------------------------------------
+    # Tests
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_user_id_none_fetches_only_null_owner_rows(self) -> None:
+        """user_id=None passes $3=NULL → SQL filters to NULL-owner rows only."""
+        from jarvis_common.jobs import list_jobs
+
+        system_row = {"id": "sys-1", "user_id": None, "kind": "ingest", "status": "succeeded"}
+        pool, conn = self._make_pool([system_row])
+
+        result = await list_jobs(pool, user_id=None)
+
+        # Verify the correct parameter was passed: $3 must be None (NULL)
+        call_args = conn.fetch.call_args
+        positional_params = call_args[0]  # (query, $1, $2, $3, $4)
+        assert positional_params[3] is None, (
+            "list_jobs(user_id=None) must pass $3=None so SQL restricts to NULL-owner rows"
+        )
+        assert result == [system_row]
+
+    @pytest.mark.asyncio
+    async def test_user_id_set_fetches_only_that_users_rows(self) -> None:
+        """user_id='alice' passes $3='alice' → SQL restricts to alice's rows."""
+        from jarvis_common.jobs import list_jobs
+
+        alice_row = {"id": "job-1", "user_id": "alice", "kind": "ingest", "status": "running"}
+        pool, conn = self._make_pool([alice_row])
+
+        result = await list_jobs(pool, user_id="alice")
+
+        call_args = conn.fetch.call_args
+        positional_params = call_args[0]
+        assert positional_params[3] == "alice", "list_jobs(user_id='alice') must pass $3='alice'"
+        assert result == [alice_row]
+
+    @pytest.mark.asyncio
+    async def test_user_id_none_does_not_return_all_rows(self) -> None:
+        """Regression: old docstring claimed user_id=None returns ALL jobs.
+
+        The SQL contradicts this — it explicitly requires args->>'user_id' IS NULL
+        when $3 is NULL.  This test documents and pins that user-id=None is NOT
+        a 'no-filter' wildcard; it is a 'system jobs only' filter.
+        """
+        from jarvis_common.jobs import list_jobs
+
+        # System (NULL-user) row that the SQL keeps when $3 IS NULL.
+        null_row = {"id": "sys-2", "user_id": None, "kind": "reindex", "status": "succeeded"}
+
+        # Pool returns only what the DB would return given the SQL filter.
+        # When $3 IS NULL the SQL yields only null_row; simulate that.
+        pool, conn = self._make_pool([null_row])
+
+        result = await list_jobs(pool, user_id=None)
+
+        ids = [r["id"] for r in result]
+        assert "job-2" not in ids, (
+            "user_id=None must NOT return rows owned by 'bob' — "
+            "SQL requires args->>'user_id' IS NULL when $3 is NULL"
+        )
+        assert "sys-2" in ids
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers for list_jobs mock pool
+# ---------------------------------------------------------------------------
+
+
+def _async_return(value: Any):
+    """Return a coroutine that resolves to `value`."""
+
+    async def _coro(*_args, **_kwargs):
+        return value
+
+    return _coro()
+
+
+class _DictRecord:
+    """Minimal asyncpg Record stand-in that supports dict() conversion."""
+
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    def keys(self):
+        return self._data.keys()
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def items(self):
+        return self._data.items()

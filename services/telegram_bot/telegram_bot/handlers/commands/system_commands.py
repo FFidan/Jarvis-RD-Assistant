@@ -139,6 +139,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             code = parts[1][len("PAIR_") :]
             if len(code) > 64:
                 logger.warning("Oversized pairing code rejected (len=%d)", len(code))
+                if message is not None:
+                    await message.reply_text(
+                        "This pairing link is invalid. Please request a new one."
+                    )
                 return
             await _handle_pairing(update, context, code)
             return

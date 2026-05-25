@@ -459,8 +459,10 @@ export interface SystemModelsResponse {
  *
  * Generic so callers can narrow to a local interface (e.g. `fetchSystemModels<SystemModelsApi>`).
  * The default `T` is `SystemModelsResponse` — the canonical structural union of all known shapes.
+ * `T extends Partial<SystemModelsResponse>` ensures callers only narrow to structurally compatible
+ * subsets; any call-site type with a property absent from `SystemModelsResponse` is a type error.
  */
-export async function fetchSystemModels<T = SystemModelsResponse>(signal?: AbortSignal): Promise<T> {
+export async function fetchSystemModels<T extends Partial<SystemModelsResponse> = SystemModelsResponse>(signal?: AbortSignal): Promise<T> {
   return apiFetch<T>('/api/system/models', { signal });
 }
 

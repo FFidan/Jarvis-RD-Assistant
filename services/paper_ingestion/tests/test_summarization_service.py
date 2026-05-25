@@ -435,3 +435,51 @@ async def test_generate_paper_summary_persists_user_id():
     insert_call = conn_phase2.fetchrow.call_args
     bound_params = insert_call.args[1:]
     assert 42 in bound_params, f"user_id=42 should be bound as a parameter; got: {bound_params}"
+
+
+# ---------------------------------------------------------------------------
+# W1-CF5: BUG-SUMMARIZER-1 — ValidationError → LLMError (not HTTPException)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_paper_summary_raises_llm_error_on_pydantic_validation_error():
+    """pydantic.ValidationError from LLM parsing must raise LLMError, not HTTPException.
+
+    BUG-SUMMARIZER-1 fix (commit 60d9b36d): call_llm_structured raising a
+    pydantic.ValidationError is caught and re-raised as LLMError("Malformed LLM response").
+    """
+    import pydantic
+
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [_paper_row(), None]
+    conn.fetch.return_value = [_chunk_row()]
+    pool = _make_pool(conn)
+
+    patch_ctx, _llm_mock = _patched_call_llm(
+        side_effect=pydantic.ValidationError.from_exception_data(
+            title="SummarizationOutput",
+            input_type="python",
+            line_errors=[
+                {
+                    "type": "missing",
+                    "loc": ("summary_brief",),
+                    "msg": "Field required",
+                    "input": {},
+                    "url": "https://errors.pydantic.dev/2/v/missing",
+                }
+            ],
+        )
+    )
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch_ctx,
+    ):
+        with pytest.raises(LLMError, match="Malformed LLM response"):
+            await summarization.generate_paper_summary(
+                paper_id=7,
+                db_pool=pool,
+                http_client=AsyncMock(),
+                verifier=MagicMock(),
+                embedder=MagicMock(),
+            )

@@ -256,3 +256,40 @@ async def test_e1_magic_link_invalid_token_returns_400(
     assert resp.status_code == 400, (
         f"Unknown token must return 400; got {resp.status_code}: {resp.text[:200]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# A2-email: PATCH /api/account with new email — email_verification_sent=True
+# ---------------------------------------------------------------------------
+
+
+async def test_a2_patch_account_email_verification_sent_true_when_smtp_succeeds(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+    monkeypatch,
+):
+    """PATCH /api/account with a fresh email → email_verification_sent=True in response.
+
+    send_magic_link is patched to succeed (return None), exercising the
+    success branch of account.py:166-168 (BUG-EMAIL-1 fix).
+    Verified: account.py:155-168 update_account email-change path at HEAD.
+    Carve-out: send_magic_link (SMTP) mocked — outbound email boundary.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    new_email = "smtp-success-contract@contract.example.com"
+
+    with patch(
+        "paper_ingestion.routers.account.send_magic_link",
+        new=AsyncMock(return_value=None),
+    ):
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+            resp = await c.patch("/api/account", json={"email": new_email})
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    assert body.get("email_verification_sent") is True, (
+        f"email_verification_sent must be True when SMTP succeeds; body={body}"
+    )

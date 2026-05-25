@@ -268,3 +268,106 @@ The deep-audit (commit af1af21) flagged two findings that direct re-Read against
 **Falsification:** `services/paper_ingestion/paper_ingestion/routers/papers.py:705-706` — `if body.star: extra["starred"] = True`. The backend ONLY writes `starred=TRUE` when truthy; `star=False` is a no-op for the starred flag. Existing payload is correct.
 
 These records exist so future auditors don't re-raise the same falsified findings.
+
+---
+
+## TELEGRAM-INTERNAL-API-1: internal_api.py lacks rate-limit / correlation middleware
+
+**Severity:** INFO — loopback-only scope; not user-reachable.
+
+**Scope:** `services/telegram_bot/telegram_bot/internal_api.py` binds to `127.0.0.1` and is consumed only by sibling services on the docker bridge. It currently skips the rate-limit + correlation-id middleware that all user-facing FastAPI apps wire via `configure_middleware_and_errors`.
+
+**Deferred until:** the internal API is ever exposed beyond loopback OR new endpoints are added that warrant request-shape observability. Reopen with a small PR adding `configure_middleware_and_errors(app, ...)` to the lifespan.
+
+**Source:** 2026-05-24 deep-audit F-5 finding (DOC-ONLY per W5-05 plan task).
+
+---
+
+## ARCH-AUTH-1: auth.py god-module split as deferred refactor program
+
+**Severity:** INFO — internal-cohesion debt; not a correctness risk.
+
+**Scope:** `libs/jarvis_common/jarvis_common/auth.py` is ~687 LOC mixing four discrete concerns: session-cookie validation, API-key resolution, owner-override allowlist, and production-mode auth gating. 52+ import sites depend on the current surface.
+
+**Proposed sub-modules:**
+- `auth_session.py` — `SessionMiddleware`, `current_user_id_strict`, cookie parsing.
+- `auth_api_key.py` — `verify_api_key`, `refresh_api_key_cache`, header lookup.
+- `auth_owner_override.py` — `current_user_id_strict_with_owner_override`, CIDR + role checks, audit log emit.
+- `auth_production_gate.py` — `assert_real_auth_in_production`, env-mode helpers.
+
+**Deferred until:** a dedicated refactor program is scheduled (touches every router import — needs full-suite re-run + careful PR sequencing). Not lumped into routine cleanup waves.
+
+**Source:** 2026-05-24 deep-audit F-6 finding (DOC-ONLY per W5-06 plan task).
+
+---
+
+## ARCH-ENTITIES-1: extraction/entities.py god-file split as deferred refactor program
+
+**Severity:** INFO — file-cohesion debt; no correctness risk.
+
+**Scope:** `services/paper_ingestion/paper_ingestion/extraction/entities.py` is 729 LOC mixing Qdrant KG-vector ops, SQL queries against `extracted_entities`, and entity-linking orchestration. Split candidates:
+
+**Proposed program structure:**
+- **A.** Map all symbols + cross-file import sites (audit pass).
+- **B.** Extract `kg_store.py` — Qdrant async ops (`upsert_vectors`, `delete_by_paper`, `search_neighbors`). New unit tests via `faux_qdrant`.
+- **C.** Extract `kg_queries.py` — raw SQL accessors (`fetch_entities_for_paper`, `bulk_insert_entities`). New contract tests.
+- **D.** Reduce `entities.py` to orchestration only (`extract_and_persist`, `link_to_papers`).
+- **E.** Update import sites; run full suite + integration.
+
+**Deferred until:** a dedicated refactor program is scheduled. Sequencing matters (B before D, etc.) — not safe for parallel-worktree dispatch as currently structured.
+
+**Source:** 2026-05-24 deep-audit F-9 finding (DOC-ONLY per W5-09 plan task).
+
+---
+
+## INFRA-INGEST-1: infra_events.py lacks IP-level restriction
+
+**Severity:** INFO — defense-in-depth gap; not exploitable in current deployment.
+
+**Scope:** `services/paper_ingestion/paper_ingestion/routers/infra_events.py` POST endpoint is gated by `INFRA_INGEST_KEY` HMAC + docker network isolation (only reachable from sibling containers on the bridge). Audit suggested adding nginx/Caddy IP allowlist as belt-and-suspenders.
+
+**Rationale for deferral:** the existing controls (HMAC + network isolation) are sufficient for the threat model; IP allowlist belongs at the reverse-proxy layer (`caddy/Caddyfile`) which is infra scope, not application scope. Adding it in FastAPI would duplicate concerns.
+
+**Deferred until:** the deployment shape changes such that the endpoint becomes reachable from a less-trusted network. Reopen by adding `allow ... ; deny all;` to the route definition in `caddy/Caddyfile`.
+
+**Source:** 2026-05-24 deep-audit BE-10 finding (DOC-ONLY per W5-20 plan task).
+
+---
+
+## CI-CROSS-USER-FLAKY-1: intermittent ConnectionResetError on live-PG container init
+
+**Severity:** MEDIUM — flakes CI gates; investigated and mitigated 2026-05-24 (W6-01).
+
+**Symptom:** the `cross-user-isolation` and `contract-tests` CI jobs occasionally fail with `ConnectionResetError: [Errno 104] Connection reset by peer` inside `asyncpg.create_pool` → `_create_ssl_connection`. Last observed run: GitHub Actions run 26347134466 (2026-05-24), step "Guard - squashed baseline schema invariants" on container `cont-` prefix.
+
+**Root cause analysis (W6-01):** `pg_isready` returns success the moment the postmaster accepts UNIX-socket connections, but the TCP backend's SSL listener has a 100-500ms grace window before it accepts external connections cleanly. `asyncpg.create_pool` opens a TCP+SSL connection and times out if the SSL handler is not yet ready — surfacing as `ConnectionResetError`. The race is rare locally (loopback, low contention) but common on GitHub Actions runners under simultaneous CPU/IO pressure.
+
+**Mitigation applied (W6-01 in `libs/jarvis_common/jarvis_common/testing_db.py`):**
+- Bumped `_spin_pg_container` ready-deadline 45s → 90s.
+- Added a post-`pg_isready` TCP socket probe (`socket.create_connection` against the host port) with 30s deadline + 250ms retries to confirm the TCP listener is actually accepting before yielding the DSN.
+
+**Reopen criteria:** rerun this analysis if CI flake rate on `cross-user-isolation` job exceeds 1 failure per 10 runs over a 2-week window. Next escalation: pin `asyncpg<known-good>` OR switch the cross-user-isolation job to a `services:` Postgres container (managed by GitHub Actions, healthcheck-gated) instead of fixture-owned Docker.
+
+**Source:** 2026-05-24 deep-audit Wave 6 (W6-01) investigation. Audit doc: `docs/audit/2026-05-24-deep-audit-security-review.md`.
+
+---
+
+## Pristine-pass (2026-05-24) batch C doc-deferrals
+
+- **W1-CF7** — `services/paper_ingestion/tests/test_account_router.py` uses handler-bypass shape (TS-01). Carve-out registered in `docs/contracts/07-testing.md` (pending a future contract-amendment pass). Reopen if the file undergoes substantive rewrite.
+- **W1-CF8** — Mixed facade vs direct `testing_db` imports across 3 contract test files. Reopen when test-infra policy is finalized.
+- **W1-CF9** — `test_testing_facade_all.py` mixes 2 concerns. Reopen during next test-infra cleanup.
+- **W3-CF3** — `_private` field-name expansion verified zero-production-impact at W3 ship; reopen only if dynamic field-name lists start including `_`-prefixed identifiers.
+- **W6-CF2** — `CI-CROSS-USER-FLAKY-1` hardening (asyncpg-pin / services-PG migration) deferred until reopen criteria fire.
+
+## SMTP-EMPTY-STRING-1 — empty-string SMTP env vars silently accepted
+
+**Symptom:** Setting any of `SMTP_HOST`, `SMTP_FROM`, `SMTP_USER`, or `SMTP_PASS` to an empty string is silently accepted by `SecretsSettings` (no Pydantic validator rejects `""`). `_EffectiveSmtp.deliverable` evaluates `bool("") == False`, so the magic-link sender falls through to the dev-mode logging path. **Operator sees nothing at startup; users do not receive magic-link emails; failure is silent.**
+
+**Detection:** `libs/jarvis_common/tests/test_secrets_settings.py` ships 4 `xfail(strict=False)` parametrized tests documenting the gap (W3-CF11). They will auto-green when validators are added.
+
+**Impact:** HIGH (operator-facing silent-failure, not data loss). Affects any deployment where SMTP env vars are mis-set to `""` rather than left unset (`""` and unset have different semantics; only unset is correctly handled).
+
+**Mitigation:** Add `@field_validator` to `SecretsSettings.smtp_host/from/user/pass` rejecting empty-string values OR add a startup-time health check that asserts the SMTP configuration is internally consistent.
+
+**Source:** Wave 2 W3-CF11 xfail-test surfacing; Wave-Gate-2 Axis 2 finding (confidence 88).

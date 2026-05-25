@@ -12,6 +12,7 @@ import {
   fetchAndProcessFoundationalPaper,
 } from '@/lib/api';
 import type { FeedPaper, MissingFoundationalPaper } from '@/types';
+import { ErrorSentinel } from '@/components/shared/ErrorSentinel';
 
 // ---------------------------------------------------------------------------
 // Pill component — small rounded label for the row type column
@@ -185,7 +186,7 @@ export function TriageSection() {
   const totalCount = actionItems.length + foundational.length;
 
   if (actionError || foundationalError) return (
-    <p role="status" className="text-xs text-destructive pl-1">Unable to load triage items.</p>
+    <ErrorSentinel message="Unable to load triage items." />
   );
 
   // Empty state: return null per SPEC §"States & edge cases" → "Triage empty"

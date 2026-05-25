@@ -103,4 +103,9 @@ describe('ChapterPane', () => {
       expect(screen.getByText(/failed to load tasks/i)).toBeInTheDocument();
     });
   });
+
+  it('renders empty state when project is null', () => {
+    renderPane(null);
+    expect(screen.getByText(/select a chapter/i)).toBeInTheDocument();
+  });
 });

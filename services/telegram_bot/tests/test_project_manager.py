@@ -193,30 +193,137 @@ async def test_get_project_papers_returns_plain_dicts():
     assert result == [{"id": 10, "title": "Paper", "note": "useful", "task_title": "Implement"}]
 
 
-def test_list_projects_requires_user_id() -> None:
-    """list_projects must accept user_id with no default (SEC-PRJMGR-1)."""
+@pytest.mark.parametrize(
+    "method_name,mandatory",
+    [
+        # SEC-PRJMGR-1 original 3: user_id is positional-mandatory (no default)
+        ("list_projects", True),
+        ("get_today_tasks", True),
+        ("get_upcoming_milestones", True),
+        # W2-CF8: user_id is keyword-only with default=None (backward-compat)
+        ("list_tasks", False),
+        ("create_task", False),
+        ("complete_milestone", False),
+        ("link_paper_to_task", False),
+    ],
+)
+def test_methods_accept_user_id(method_name: str, mandatory: bool) -> None:
+    """All 7 ProjectManager methods must expose a user_id parameter (SEC-PRJMGR-1 + W2-CF8)."""
     from telegram_bot.project_manager import ProjectManager
 
-    sig = inspect.signature(ProjectManager.list_projects)
-    assert "user_id" in sig.parameters, "list_projects must have user_id parameter"
-    assert sig.parameters["user_id"].default is inspect.Parameter.empty, (
-        "user_id must be mandatory (no default)"
-    )
+    sig = inspect.signature(getattr(ProjectManager, method_name))
+    assert "user_id" in sig.parameters, f"{method_name} must have user_id parameter"
+    param = sig.parameters["user_id"]
+    if mandatory:
+        assert param.default is inspect.Parameter.empty, (
+            f"{method_name}.user_id must be mandatory (no default)"
+        )
+    else:
+        assert param.default is None, (
+            f"{method_name}.user_id must default to None (backward-compat)"
+        )
+        assert param.kind is inspect.Parameter.KEYWORD_ONLY, (
+            f"{method_name}.user_id must be keyword-only"
+        )
 
 
-def test_get_today_tasks_requires_user_id() -> None:
-    """get_today_tasks must accept user_id with no default (SEC-PRJMGR-1)."""
-    from telegram_bot.project_manager import ProjectManager
+@pytest.mark.asyncio
+async def test_list_tasks_filters_by_user_id() -> None:
+    """list_tasks with user_id injects IS NOT DISTINCT FROM into the WHERE clause."""
+    db_pool = AsyncMock()
+    db_pool.fetch.return_value = [_row(id=1, title="T", status="todo", project_name="P")]
+    manager = ProjectManager(db_pool)
 
-    sig = inspect.signature(ProjectManager.get_today_tasks)
-    assert "user_id" in sig.parameters
-    assert sig.parameters["user_id"].default is inspect.Parameter.empty
+    result = await manager.list_tasks(user_id=5)
+
+    assert result == [{"id": 1, "title": "T", "status": "todo", "project_name": "P"}]
+    sql = db_pool.fetch.await_args.args[0]
+    params = db_pool.fetch.await_args.args[1:]
+    assert "user_id IS NOT DISTINCT FROM" in sql
+    assert 5 in params
 
 
-def test_get_upcoming_milestones_requires_user_id() -> None:
-    """get_upcoming_milestones must accept user_id with no default (SEC-PRJMGR-1)."""
-    from telegram_bot.project_manager import ProjectManager
+@pytest.mark.asyncio
+async def test_create_task_persists_user_id() -> None:
+    """create_task writes user_id into the tasks row (W2-CF8)."""
+    db_pool = AsyncMock()
+    db_pool.fetchrow.return_value = _row(id=10, title="Do it", user_id=3)
+    manager = ProjectManager(db_pool)
 
-    sig = inspect.signature(ProjectManager.get_upcoming_milestones)
-    assert "user_id" in sig.parameters
-    assert sig.parameters["user_id"].default is inspect.Parameter.empty
+    result = await manager.create_task(1, "Do it", user_id=3)
+
+    assert result["id"] == 10
+    sql = db_pool.fetchrow.await_args.args[0]
+    params = db_pool.fetchrow.await_args.args[1:]
+    assert "user_id" in sql
+    assert 3 in params
+
+
+@pytest.mark.asyncio
+async def test_create_task_defaults_user_id_to_null() -> None:
+    """create_task without user_id writes NULL — legacy owner semantics (W2-CF8)."""
+    db_pool = AsyncMock()
+    db_pool.fetchrow.return_value = _row(id=11, title="Legacy", user_id=None)
+    manager = ProjectManager(db_pool)
+
+    await manager.create_task(1, "Legacy")
+
+    params = db_pool.fetchrow.await_args.args[1:]
+    assert None in params
+
+
+@pytest.mark.asyncio
+async def test_complete_milestone_scopes_by_user_id() -> None:
+    """complete_milestone with user_id uses IS NOT DISTINCT FROM (W2-CF8)."""
+    db_pool = AsyncMock()
+    db_pool.fetchrow.return_value = None  # not owned by this user
+    manager = ProjectManager(db_pool)
+
+    result = await manager.complete_milestone(99, user_id=7)
+
+    assert result == {}
+    sql = db_pool.fetchrow.await_args.args[0]
+    params = db_pool.fetchrow.await_args.args[1:]
+    assert "user_id IS NOT DISTINCT FROM" in sql
+    assert 7 in params
+
+
+@pytest.mark.asyncio
+async def test_complete_milestone_legacy_no_user_id() -> None:
+    """complete_milestone without user_id updates without ownership filter (W2-CF8)."""
+    db_pool = AsyncMock()
+    db_pool.fetchrow.return_value = _row(id=99, completed=True)
+    manager = ProjectManager(db_pool)
+
+    result = await manager.complete_milestone(99)
+
+    assert result == {"id": 99, "completed": True}
+    sql = db_pool.fetchrow.await_args.args[0]
+    assert "IS NOT DISTINCT FROM" not in sql
+
+
+@pytest.mark.asyncio
+async def test_link_paper_to_task_guards_ownership() -> None:
+    """link_paper_to_task with user_id uses a subquery ownership guard (W2-CF8)."""
+    db_pool = AsyncMock()
+    manager = ProjectManager(db_pool)
+
+    await manager.link_paper_to_task(5, 10, note="useful", user_id=3)
+
+    sql = db_pool.execute.await_args.args[0]
+    params = db_pool.execute.await_args.args[1:]
+    assert "user_id IS NOT DISTINCT FROM" in sql
+    assert 3 in params
+
+
+@pytest.mark.asyncio
+async def test_link_paper_to_task_legacy_no_user_id() -> None:
+    """link_paper_to_task without user_id uses direct VALUES insert (W2-CF8)."""
+    db_pool = AsyncMock()
+    manager = ProjectManager(db_pool)
+
+    await manager.link_paper_to_task(5, 10)
+
+    sql = db_pool.execute.await_args.args[0]
+    assert "IS NOT DISTINCT FROM" not in sql
+    assert "VALUES" in sql

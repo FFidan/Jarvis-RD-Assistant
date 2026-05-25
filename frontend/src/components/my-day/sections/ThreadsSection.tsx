@@ -6,6 +6,7 @@ import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCa
 import { GradientProgressBar } from '@/components/my-day/primitives/GradientProgressBar';
 import { fetchThreads, createThread, resumeThread } from '@/lib/api';
 import type { Thread } from '@/types';
+import { ErrorSentinel } from '@/components/shared/ErrorSentinel';
 
 function formatLastAt(iso: string): string {
   try {
@@ -92,7 +93,7 @@ export function ThreadsSection() {
   const threads = (data ?? []).filter((t) => t.status === 'open');
 
   if (isError) return (
-    <p role="status" className="text-xs text-destructive pl-1">Unable to load threads.</p>
+    <ErrorSentinel message="Unable to load threads." />
   );
   if (threads.length === 0 && !adding) {
     return (

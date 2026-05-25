@@ -22,17 +22,22 @@ import {
 } from '@/components/ui/tooltip';
 import { useConfirm } from '@/hooks/use-confirm';
 import { apiFetch, fetchSystemModels } from '@/lib/api';
+import type { SystemModelsResponse } from '@/lib/api';
 import type { ModelFitDetail } from '@/types';
 
-interface SystemModels {
+/**
+ * Local refinement of `SystemModelsResponse` that narrows `catalog` and `hardware`
+ * to their concrete typed shapes used by this component.
+ * Derived from the canonical type so it remains structurally consistent.
+ */
+type SystemModels = Omit<SystemModelsResponse, 'catalog' | 'hardware' | 'installed' | 'status' | 'current' | 'issues'> & {
   status: 'ok' | 'degraded';
-  installed: unknown[];
-  hardware: HardwareInfo;
   current: Record<string, string>;
   issues: Record<string, string>;
-  catalog: ModelCatalogEntry[];
-  recommendations?: Record<string, unknown>;
-}
+  catalog?: ModelCatalogEntry[];
+  hardware?: HardwareInfo;
+  installed?: unknown[];
+};
 
 interface ModelSelectorProps {
   value: string;

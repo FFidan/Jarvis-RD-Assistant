@@ -14,12 +14,20 @@ from fastapi.testclient import TestClient
 def app_and_pool(monkeypatch):
     """FastAPI app mounting only the infra_events router with a mocked pool."""
     monkeypatch.setenv("INFRA_INGEST_KEY", "test-infra-secret")
-    # Force reload of the module so it picks up the env var path
+    # Opt in to infra-ingest with a non-empty CIDR config — the default is now
+    # "" (default-deny → 503), so existing tests need an explicit allowlist set
+    # before the module-level reload below.
+    monkeypatch.setenv("INFRA_INGEST_ALLOWED_CIDRS", "127.0.0.1/8,::1/128")
+    # Force reload of the module so it picks up the env var path and resets
+    # the module-level CIDR cache (_INFRA_CACHED_ALLOWED_NETWORKS = None).
     import importlib
 
     from paper_ingestion.routers import infra_events as infra_events_mod
 
     importlib.reload(infra_events_mod)
+    # TestClient uses "testclient" as host — not a valid IP. Bypass the IP
+    # allowlist check so existing tests exercise only auth-key logic.
+    monkeypatch.setattr(infra_events_mod, "_infra_ip_in_allowlist", lambda _ip: True)
 
     app = FastAPI()
     app.include_router(infra_events_mod.router)
@@ -179,3 +187,102 @@ def test_check_auth_uses_compare_digest(app_and_pool, monkeypatch):
     )
 
     mock_cd.assert_called_once_with(b"test-infra-secret", b"test-infra-secret")
+
+
+def test_infra_ip_allowlist_rejects_non_loopback(monkeypatch):
+    """_infra_ip_in_allowlist returns False for IPs outside the configured CIDRs."""
+    import importlib
+
+    monkeypatch.setenv("INFRA_INGEST_ALLOWED_CIDRS", "127.0.0.1/8,::1/128")
+
+    from paper_ingestion.routers import infra_events as m
+
+    importlib.reload(m)
+
+    assert m._infra_ip_in_allowlist("127.0.0.1") is True
+    assert m._infra_ip_in_allowlist("::1") is True
+    assert m._infra_ip_in_allowlist("10.0.0.1") is False
+    assert m._infra_ip_in_allowlist(None) is False
+
+
+def test_post_rejects_non_allowlisted_ip(monkeypatch):
+    """Requests from IPs not in INFRA_INGEST_ALLOWED_CIDRS receive 403."""
+    import importlib
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("INFRA_INGEST_KEY", "test-infra-secret")
+    monkeypatch.setenv("INFRA_INGEST_ALLOWED_CIDRS", "10.0.0.0/8")
+
+    from paper_ingestion.routers import infra_events as m
+
+    importlib.reload(m)
+
+    app = FastAPI()
+    app.include_router(m.router)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/infra-events",
+        json=[{"source": "x", "message": "y"}],
+        headers={"X-Infra-Key": "test-infra-secret"},
+    )
+    # TestClient IP ("testclient") is not a valid IP → rejected
+    assert resp.status_code == 403
+    assert "allowlist" in resp.json()["detail"]
+
+
+def test_post_returns_503_when_cidr_config_empty(monkeypatch):
+    """Default-deny: when INFRA_INGEST_ALLOWED_CIDRS is unset/empty, endpoint returns 503."""
+    import importlib
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("INFRA_INGEST_KEY", "test-infra-secret")
+    monkeypatch.setenv("INFRA_INGEST_ALLOWED_CIDRS", "")
+
+    from paper_ingestion.routers import infra_events as m
+
+    importlib.reload(m)
+
+    app = FastAPI()
+    app.include_router(m.router)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/infra-events",
+        json=[{"source": "x", "message": "y"}],
+        headers={"X-Infra-Key": "test-infra-secret"},
+    )
+    assert resp.status_code == 503
+    assert "not configured" in resp.json()["detail"]
+
+
+def test_parse_infra_allowed_networks_skips_invalid_cidr(monkeypatch):
+    """Invalid CIDR entries are skipped + logged; valid entries survive."""
+    import importlib
+
+    monkeypatch.setenv("INFRA_INGEST_ALLOWED_CIDRS", "127.0.0.1/8,notacidr,10.0.0.0/8")
+
+    from paper_ingestion.routers import infra_events as m
+
+    importlib.reload(m)
+
+    nets = m._parse_infra_allowed_networks()
+    assert len(nets) == 2  # "notacidr" silently dropped, two valid networks kept
+
+
+def test_infra_ip_in_allowlist_rejects_unparseable_string(monkeypatch):
+    """Unparseable IP string (e.g. 'testclient' from FastAPI TestClient) returns False."""
+    import importlib
+
+    monkeypatch.setenv("INFRA_INGEST_ALLOWED_CIDRS", "127.0.0.1/8")
+
+    from paper_ingestion.routers import infra_events as m
+
+    importlib.reload(m)
+
+    assert m._infra_ip_in_allowlist("testclient") is False
+    assert m._infra_ip_in_allowlist("not-an-ip") is False

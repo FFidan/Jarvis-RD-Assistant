@@ -95,6 +95,15 @@ async def push_paper_to_zotero(
 
     cfg = await _get_zotero_config(db_pool, user_id=owner_user_id)
 
+    if cfg.get("_decrypt_error"):
+        logger.warning(
+            "Zotero config decryption failed for paper %d push — "
+            "stored credentials are unreadable (key rotation?); "
+            "operator must re-save Zotero API key in Settings",
+            paper_id,
+        )
+        return
+
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
     library_type = cfg.get("library_type", "user")
@@ -337,6 +346,15 @@ async def sync_annotations_for_paper(
 
     cfg = await _get_zotero_config(db_pool, user_id=owner_user_id)
 
+    if cfg.get("_decrypt_error"):
+        logger.warning(
+            "Zotero config decryption failed for annotation sync (paper %d) — "
+            "stored credentials are unreadable (key rotation?); "
+            "operator must re-save Zotero API key in Settings",
+            paper_id,
+        )
+        return {"paper_id": paper_id, "imported": 0, "status": "config_decrypt_failed"}
+
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
     library_type = cfg.get("library_type", "user")
@@ -454,6 +472,13 @@ async def poll_zotero_library(
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
     cfg = await _get_zotero_config(db_pool, user_id=polling_user_id)
+
+    if cfg.get("_decrypt_error"):
+        logger.warning(
+            "Zotero poll: config decryption failed — stored credentials are unreadable "
+            "(key rotation?); operator must re-save Zotero API key in Settings"
+        )
+        return {"status": "config_decrypt_failed"}
 
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")

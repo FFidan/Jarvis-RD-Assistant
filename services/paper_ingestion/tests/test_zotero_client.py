@@ -434,3 +434,56 @@ def test_validate_bbt_base_url_accepts_host_docker_internal():
 def test_validate_bbt_base_url_accepts_https_public_host():
     """PI-EDGE-008: https:// with a public hostname is accepted."""
     validate_bbt_base_url("https://my-zotero-bbt.example.com:23119")
+
+
+# ---------------------------------------------------------------------------
+# W1-CF4: BUG-ZOTERO-1 — str BYTEA variant in _get_zotero_config
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_zotero_config_handles_str_encrypted_value(monkeypatch):
+    """_get_zotero_config decrypts encrypted_value when Postgres returns it as str (not bytes).
+
+    asyncpg may return BYTEA columns as str in certain session configurations.
+    resolve_secret_row must handle the str branch without AttributeError.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from cryptography.fernet import Fernet
+    from jarvis_common.crypto import encrypt_secret, refresh_fernet_cache
+    from jarvis_common.testing_db import FakeRecord
+    from paper_ingestion.integrations.zotero_service import _get_zotero_config
+
+    test_key = Fernet.generate_key().decode()
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", test_key)
+    refresh_fernet_cache()
+
+    plaintext = "str-variant-api-key-xyz"
+    # Ciphertext as a plain str (simulate Postgres returning BYTEA as text).
+    ciphertext_str = encrypt_secret(plaintext)
+
+    rows = [
+        FakeRecord(
+            {
+                "key": "zotero.api_key",
+                "value": None,
+                "encrypted_value": ciphertext_str,  # str, not bytes
+                "user_id": None,
+            }
+        ),
+    ]
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=rows)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=ctx)
+
+    config = await _get_zotero_config(pool)
+
+    assert config.get("api_key") == plaintext, "str BYTEA encrypted_value must be decrypted"
+
+    refresh_fernet_cache()

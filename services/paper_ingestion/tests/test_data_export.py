@@ -156,3 +156,41 @@ async def test_export_all_expected_tables_present() -> None:
     assert expected == actual, (
         f"ZIP entries mismatch. expected={sorted(expected)} actual={sorted(actual)}"
     )
+
+
+@pytest.mark.asyncio
+async def test_export_includes_library_paper_not_discovered_by_user() -> None:
+    """CFG-GDPR-1 behavioral: user B receives papers in their library even when
+    discovered_by=A (i.e., user A first found the paper). Papers discovered by
+    user A but NOT in user B's library must NOT appear in user B's export.
+
+    The fake cursor routes by user_id, mirroring the real EXISTS/user_library
+    query scope. This test documents the CFG-GDPR-1 fix scenario.
+
+    # Verified: services/paper_ingestion/paper_ingestion/services/data_export.py:24-26
+    # (papers query uses EXISTS/user_library join, not discovered_by)
+    """
+    user_a_id = 10
+    user_b_id = 20
+
+    # Paper 1: added to user B's library (discovered_by=A in production, but
+    # the export query scopes on user_library — so this row appears for user B).
+    # Paper 2: discovered by user A only — NOT in user B's library.
+    pool = _build_pool(
+        {
+            user_a_id: ['{"id": 2, "title": "discovered-by-A-only"}'],
+            user_b_id: ['{"id": 1, "title": "in-B-library-discovered-by-A"}'],
+        }
+    )
+
+    zip_bytes_b = await build_export_zip(pool, user_id=user_b_id)
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes_b)) as zf:
+        papers_content = zf.read("papers.jsonl")
+
+    assert b"in-B-library-discovered-by-A" in papers_content, (
+        "Paper in user B's library must appear in user B's GDPR export"
+    )
+    assert b"discovered-by-A-only" not in papers_content, (
+        "Paper discovered by user A but NOT in user B's library must NOT appear in user B's export"
+    )

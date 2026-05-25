@@ -204,7 +204,7 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     _m = _RATING_RE.match(query.data or "")
     if not _m:
         logger.warning("rate_card: unexpected query.data=%r", query.data)
-        await query.answer()
+        await query.answer(text="Invalid input. Use /review to restart.")
         return ConversationHandler.END
 
     await query.answer()

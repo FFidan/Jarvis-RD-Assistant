@@ -40,7 +40,11 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from jarvis_common.auth import refresh_api_key_cache, validate_production_config
+from jarvis_common.auth import (
+    refresh_allowed_networks_cache,
+    refresh_api_key_cache,
+    validate_production_config,
+)
 from jarvis_common.config import get_jarvis_common_settings
 from jarvis_common.correlation_middleware import CorrelationIdMiddleware
 from jarvis_common.crypto import reload_fernet_on_sighup, validate_encrypted_config_rows
@@ -192,11 +196,17 @@ def _resolve_db_pool_kwargs(overrides: dict[str, Any]) -> dict[str, Any]:
 def _log_auth_status() -> None:
     """Log the API-key/DEV_MODE configuration once at startup.
 
-    Also refreshes the module-level API-key cache so that any key rotation that
+    Also refreshes the module-level caches so that any key/CIDR rotation that
     happened between import time and startup (e.g. Docker secret mount settling)
     takes effect without a service restart.
     """
     refresh_api_key_cache()
+    try:
+        refresh_allowed_networks_cache()
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "refresh_allowed_networks_cache failed at startup (invalid CIDR?)", exc_info=True
+        )
     dev_mode = get_core_settings().dev_mode
     secret = get_secrets_settings().jarvis_api_key
     api_key = secret.get_secret_value() if secret else ""

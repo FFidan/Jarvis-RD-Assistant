@@ -99,7 +99,7 @@ sync_secret() {
 
   # Step 2+3 — create or sync the secrets file
   local val
-  val=$(grep "^${key}=" .env | cut -d'=' -f2- | tr -d '\n')
+  val=$(grep "^${key}=" .env | head -n 1 | cut -d'=' -f2- | tr -d '\n')
   if [ -z "$val" ]; then
     warn "Could not read ${key} from .env — skipping ${file}."
     return

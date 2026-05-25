@@ -73,7 +73,7 @@ def _stage2_max_retries() -> int:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class ScoredCandidate:
     """A candidate paper with accumulated signal scores from each pipeline stage."""
 

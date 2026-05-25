@@ -10,6 +10,34 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Migration baseline squashed.** The 88-file migration chain prior to v0.5.0 was consolidated into `db/init.sql` as the single baseline; new migrations start at 0089. The migration runner detects squashed-init state and applies forward without interruption — operators upgrading from v0.4.1 or earlier need no manual intervention. See `tests/test_baseline_invariants.py` for the schema invariants pinned.
 
+### Security
+- Cross-tenant project leak in recommender (`SEC-XTENANT-1`): `_refresh_recommendations_for_user` now scopes the projects query to `user_id`. Audit-remediation wave W1-T1.
+- Append-only `audit_log` (`SEC-AUDIT-1` / migration `0090_audit_log_append_only.sql`): blocks `DELETE`/`UPDATE` on the audit table via PG rule. W2-T9.
+- Per-user author-alert dedupe (`SEC-AUTHALERT-1` / migration `0091_author_alert_log_user_dedupe.sql`): `ON CONFLICT (user_id, tracked_author_id, paper_id)` prevents cross-user alert suppression. W2-T13.
+- Owner-override guard tests + audit-log emission (`SEC-OWNER-1` / `SEC-OWNER-2`). W2-T7, W2-T8.
+- Pairing-code length bound (`SEC-RC-1`), rate-card regex (`SEC-RATING-1`), mandatory `user_id` on 3 ProjectManager methods (`SEC-PRJMGR-1`). W2-T10..T12.
+
+### Bug Fixes (audit-remediation wave)
+- Email verification flag now respects SMTP exception path (`BUG-EMAIL-1`). W1-T2.
+- Zotero BYTEA decode uses `crypto.resolve_secret_row` (memoryview-safe) (`BUG-ZOTERO-1`). W1-T3.
+- Summarizer HTTPException propagation guarded at `paper_jobs.py:231, 270` (`BUG-SUMMARIZER-1`). W1-T4.
+- Unread guard in `feed_query.py` resolves contradictory WHERE composition (`BUG-FEED-1`). W2-T14.
+- `vector_writer` role boot-time password drop guard (`BUG-DBINIT-1`). W2-T15.
+- Three missing CI smoke secrets (`BUG-CISMOKE-1`). W2-T16.
+- `arxiv_source.py` parses `response.content` (bytes) instead of re-encoding `response.text` (`CFG-XML-1`). W3-T10.
+- `weekly_summary.py` ThemeOutput stays as Pydantic instance, no dict.get on LLM output (`CFG-LLMOUT-1`). W3-T13.
+- `pulse/job.py` degraded_reason OR-chain preserves earlier value (FALSIFIED CI-B per Phase A; no change needed).
+- 13 additional `CFG-*` MEDIUM fixes (config validation, GDPR scoping, dynamic model field-name validation, CIDR cache, etc.). W3-T1..T18.
+- 9 FRONTEND error-sentinel + per-tab error handling fixes (`FE-IDLE-1`, `FE-TRIAGE-1`, `FE-CHAP-1`, `FE-MD-1`, `FE-CP-1`, `FE-REVMODE-1`, `FE-DM-1`, `FE-API-1`, `FE-SSE-1`). W4-T1..T9.
+- 24 cross-cutting fixes: `decompose_query` doc catalog, sentry-init helper, fixture deduplication, `LockNotAvailableError` simplification, jobs throttle elapsed-seconds, `faux_qdrant` dim-mismatch + null-field guards, email format → replace, `_retry_after_seconds` cap at 3600, `_HAS_QWEN3` guard, `ScoredCandidate` frozen, scheduled `magic_link_tokens` purge, `SourceType.ZOTERO` enum, init-secrets.sh dedupe, profile.sh portable compose ps, TS-08 carve-out registry enforcement (`F-*`, `BE-*`). W5-T1..T24.
+
+### Hardening
+- CI-CROSS-USER-FLAKY-1 mitigation: `_spin_pg_container` adds post-`pg_isready` TCP socket probe (30s deadline + 250ms retries) to eliminate SSL-init race that produced `ConnectionResetError [Errno 104]` on GitHub Actions runners. W6-01.
+
+### Deferred / Documented
+- `## TELEGRAM-INTERNAL-API-1`, `## ARCH-AUTH-1`, `## ARCH-ENTITIES-1`, `## INFRA-INGEST-1`, `## CI-CROSS-USER-FLAKY-1` added to `docs/known-residual-risks.md` with reopen criteria.
+- `OBS-1-RESIDUAL` git-history secret-purge remains operator-deferred (runbook at `docs/SECURITY.md:165-210`; repo private).
+
 ### Bug Fixes
 - Narrow APIRoute for route-path assertions (RB-3 follow-up)
 - Owner-override resolver on Telegram-reachable LE endpoints + accurate cross-service boundary doc (RB-3)

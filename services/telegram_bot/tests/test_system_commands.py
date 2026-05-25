@@ -30,7 +30,7 @@ def _make_context(pool=None, config=None):
 
 @pytest.mark.asyncio
 async def test_start_rejects_oversized_pairing_code() -> None:
-    """PAIR_ codes longer than 64 chars after the prefix must be silently dropped."""
+    """PAIR_ codes longer than 64 chars after the prefix must be dropped and user notified."""
     from telegram_bot.handlers.commands.system_commands import start_command
 
     oversized_code = "PAIR_" + "A" * 100  # 105 chars total; 100-char body exceeds 64 limit
@@ -43,6 +43,9 @@ async def test_start_rejects_oversized_pairing_code() -> None:
     ) as mock_pair:
         await start_command(update, context)
         mock_pair.assert_not_called()
+        update.message.reply_text.assert_awaited_once_with(
+            "This pairing link is invalid. Please request a new one."
+        )
 
 
 @pytest.mark.asyncio

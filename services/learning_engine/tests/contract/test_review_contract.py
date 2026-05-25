@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -423,10 +424,9 @@ async def test_sync_reviews_releases_connection_between_batches(
 
     assert resp2.status_code == 200, f"Re-send failed: {resp2.status_code}: {resp2.text[:300]}"
     body2 = resp2.json()
-    # All 100 events are already applied — reported as synced (idempotent re-play).
-    # No new review_log rows must be created (ON CONFLICT DO NOTHING guarantees this).
-    assert body2["synced"] == n_events and body2["skipped"] == 0, (
-        f"Idempotency broken on re-send: expected synced={n_events} skipped=0; got {body2}"
+    # All 100 events are already applied — expect synced=0, already_synced=100.
+    assert body2["synced"] == 0 and body2["already_synced"] == n_events and body2["skipped"] == 0, (
+        f"Idempotency broken on re-send: expected synced=0 already_synced={n_events} skipped=0; got {body2}"
     )
     # Confirm no double-insert: total row count for these keys must still be n_events.
     idem_keys = [e["idempotency_key"] for e in events]
@@ -436,4 +436,107 @@ async def test_sync_reviews_releases_connection_between_batches(
     )
     assert row_count == n_events, (
         f"Double-insert detected: expected {n_events} review_log rows; found {row_count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §A219-race — POST /api/review/sync — concurrent INSERT RETURNING None branch
+# ---------------------------------------------------------------------------
+
+
+async def test_sync_reviews_concurrent_on_conflict_returns_already_synced(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/review/sync counts already_synced=1 when RETURNING is None due to ON CONFLICT.
+
+    Exercises the ``inserted_log_id is None`` branch (review.py:249-254) that handles
+    the race between two concurrent requests sharing the same (user_id, idempotency_key).
+    The second request's INSERT ... ON CONFLICT DO NOTHING RETURNING id yields NULL
+    because the first request's row already exists, but it was NOT in the pre-flight
+    applied-set (the race window between the pre-flight SELECT and the per-event INSERT).
+
+    Strategy: bypass true concurrency by patching pool.acquire so that the chunk-phase
+    connection's fetchval returns None for the INSERT call, simulating the lost race.
+    The pre-flight acquire (first call) is left unpatched so the key is NOT in ``applied``.
+    """
+    card_id_a = contract_two_users.card_id_a
+    idem_key = f"race-cf9-{uuid.uuid4()}"
+    reviewed_at = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    event = {
+        "idempotency_key": idem_key,
+        "card_id": card_id_a,
+        "rating": 3,
+        "reviewed_at": reviewed_at,
+        "review_duration_ms": 900,
+    }
+
+    pool = _le_app.state.db_pool
+    original_acquire = pool.acquire
+    acquire_call_count = 0
+
+    # PoolConnectionProxy.fetchval is read-only (asyncpg C extension), so we cannot
+    # monkey-patch the instance.  Instead we patch at the module level: intercept
+    # pool.acquire so that on the second call (chunk phase) we substitute the
+    # pool's acquire with one whose connection is wrapped in a lightweight proxy
+    # that delegates everything except fetchval for INSERT ... review_logs queries.
+
+    class _FetchvalProxy:
+        """Thin wrapper around a PoolConnectionProxy that intercepts fetchval."""
+
+        def __init__(self, conn):
+            self._conn = conn
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        async def fetchval(self, query, *args, **kwargs):
+            if "INSERT INTO review_logs" in query:
+                return None
+            return await self._conn.fetchval(query, *args, **kwargs)
+
+        # asyncpg's transaction() returns a Transaction tied to the underlying conn;
+        # proxy it so the handler's ``async with conn.transaction()`` works correctly.
+        def transaction(self, *args, **kwargs):
+            return self._conn.transaction(*args, **kwargs)
+
+        async def fetchrow(self, *args, **kwargs):
+            return await self._conn.fetchrow(*args, **kwargs)
+
+        async def fetch(self, *args, **kwargs):
+            return await self._conn.fetch(*args, **kwargs)
+
+        async def execute(self, *args, **kwargs):
+            return await self._conn.execute(*args, **kwargs)
+
+    @asynccontextmanager
+    async def patched_acquire():
+        nonlocal acquire_call_count
+        acquire_call_count += 1
+        call_index = acquire_call_count
+
+        async with original_acquire() as conn:
+            if call_index == 1:
+                # Pre-flight acquire — leave unpatched so the key is NOT in ``applied``.
+                yield conn
+            else:
+                # Chunk-phase acquire — yield the proxy so fetchval returns None for INSERT.
+                yield _FetchvalProxy(conn)
+
+    pool.acquire = patched_acquire
+
+    try:
+        async with _client(_le_app, contract_two_users.cookie_a) as c:
+            resp = await c.post("/api/review/sync", json={"reviews": [event]})
+    finally:
+        pool.acquire = original_acquire
+
+    assert resp.status_code == 200, f"Sync failed: {resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    assert body["synced"] == 0 and body["already_synced"] == 1 and body["skipped"] == 0, (
+        f"Expected synced=0 already_synced=1 skipped=0 (RETURNING-None branch); got {body}"
+    )
+    # The chunk-phase connection must have been acquired (acquire_call_count >= 2).
+    assert acquire_call_count >= 2, (
+        f"Patch never applied — expected >= 2 pool.acquire() calls; got {acquire_call_count}. "
+        "Handler may have changed structure."
     )

@@ -109,7 +109,9 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
           ? (err as { name: unknown }).name === 'AbortError'
           : false;
         if (!isAbort) {
-          appendToLastMessage(chatId, `\n\n**Error:** ${escapeMarkdownInline(err instanceof Error ? err.message : String(err))}`);
+          const msg = err instanceof Error ? err.message : String(err);
+          setStreamError(msg);
+          appendToLastMessage(chatId, `\n\n**Error:** ${escapeMarkdownInline(msg)}`);
         }
         // D.2 — if stopped before any token arrived, discard the empty placeholder
         // (cast: TS narrows phaseRef.current to its initial 'idle' literal from useRef<Phase>(phase) inference)
@@ -143,7 +145,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
     phase,
     sendMessage,
     stopStreaming,
-    clearChat: () => clearChat(chatId),
+    clearChat: () => { setStreamError(null); clearChat(chatId); },
     modelUsed,
     streamError,
   };

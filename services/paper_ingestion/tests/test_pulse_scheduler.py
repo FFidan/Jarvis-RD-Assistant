@@ -214,6 +214,7 @@ async def test_start_scheduler_registers_classifier_and_weekly_jobs(scheduler_mo
     try:
         assert scheduler.get_job("pulse_classifier_training") is not None
         assert scheduler.get_job("weekly_digest") is not None
+        assert scheduler.get_job("purge_magic_link_tokens") is not None
     finally:
         scheduler.shutdown(wait=False)
 

@@ -336,6 +336,32 @@ async def test_rate_card_rejects_injected_prefix() -> None:
     update.callback_query.answer.assert_awaited()
 
 
+# Distinct chat_id bucket so this test doesn't tip the 5-call rate-limiter
+# quota shared by the three SEC-RATING-1 regex-guard tests above (which would
+# bleed quota exhaustion into test_review_handler_reauth.py order-dependent).
+_W2_CF4_CHAT_ID = 77777
+
+
+@pytest.mark.asyncio
+async def test_rate_card_malformed_data_answers_with_text() -> None:
+    """Malformed query.data must answer with user-facing text (W2-CF4 / SEC-RATING-1).
+
+    Bare query.answer() leaves Telegram UI showing live (now non-functional) buttons.
+    The fix passes text= so Telegram dismisses the spinner with a visible message.
+    """
+    user_data = {"current_card": _sample_card(), "cards_reviewed": 0}
+    update, context, _mock_http = _make_callback_update_and_context(
+        "garbage", user_data=user_data, chat_id=_W2_CF4_CHAT_ID
+    )
+
+    result = await rate_card(update, context)
+
+    assert result == ConversationHandler_END
+    update.callback_query.answer.assert_awaited_once_with(
+        text="Invalid input. Use /review to restart."
+    )
+
+
 @pytest.mark.asyncio
 async def test_rate_card_valid_rating_parses_correctly() -> None:
     """Valid query.data='rate_3' parses rating as integer 3 (happy path)."""
@@ -368,3 +394,67 @@ async def test_rate_card_valid_rating_parses_correctly() -> None:
     assert result == SHOWING_FRONT
     post_call_kwargs = mock_http.post.call_args[1]
     assert post_call_kwargs["json"]["rating"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Tests: SEC-RATING-1 behavioral coverage for ratings 1 and 2 (W2-CF9)
+# ---------------------------------------------------------------------------
+
+# Separate chat_id bucket so the 5-call rate-limiter quota from _TEST_CHAT_ID
+# and _SEC_CHAT_ID tests does not bleed into these two tests.
+_RATING_12_CHAT_ID = 88888
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rating, expected_label",
+    [
+        (1, "Again"),
+        (2, "Hard"),
+    ],
+)
+async def test_rate_card_ratings_1_and_2_send_correct_payload(
+    rating: int, expected_label: str
+) -> None:
+    """Ratings 1 ('Again') and 2 ('Hard') POST the correct integer to the API.
+
+    W2-CF9: behavioral coverage for ratings 1 and 2, mirroring the rating-3
+    test in test_rate_card_valid_rating_parses_correctly.
+    """
+    card = _sample_card()
+    next_card = {
+        **_sample_card(),
+        "id": 2,
+        "front": "What is NLP?",
+        "back": "Natural Language Processing",
+    }
+    user_data = {"current_card": card, "cards_reviewed": 0}
+    update, context, mock_http = _make_callback_update_and_context(
+        f"rate_{rating}", user_data=user_data, chat_id=_RATING_12_CHAT_ID
+    )
+
+    submit_resp = MagicMock()
+    submit_resp.raise_for_status = MagicMock()
+    submit_resp.json.return_value = {"next_due_at": "2026-06-01T00:00:00Z"}
+
+    next_resp = MagicMock()
+    next_resp.raise_for_status = MagicMock()
+    next_resp.json.return_value = [next_card]
+
+    mock_http.post.return_value = submit_resp
+    mock_http.get.return_value = next_resp
+
+    result = await rate_card(update, context)
+
+    # Handler must advance to next card
+    assert result == SHOWING_FRONT
+    assert context.user_data["current_card"] == next_card
+    assert context.user_data["cards_reviewed"] == 1
+
+    # API POST body must carry the exact integer rating (not a string or wrong value)
+    post_call_kwargs = mock_http.post.call_args[1]
+    assert post_call_kwargs["json"]["rating"] == rating
+
+    # Response text must contain the human-readable label for the rating
+    edit_text = update.callback_query.edit_message_text.call_args[0][0]
+    assert expected_label in edit_text

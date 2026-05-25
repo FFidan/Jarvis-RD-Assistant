@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchConfig, setConfig, fetchSystemModels } from '@/lib/api';
+import type { SystemModelsResponse } from '@/lib/api';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
@@ -57,12 +58,15 @@ interface HardwareRecommendation {
   aliases: HardwareRecommendationAlias[];
 }
 
-interface SystemModelsApi {
+/**
+ * Local refinement of `SystemModelsResponse` that narrows `hardware` and `catalog`
+ * to the concrete typed shapes used by this component.
+ * Derived from the canonical type so it remains structurally consistent.
+ */
+type SystemModelsApi = Pick<SystemModelsResponse, 'hardware_recommendation'> & {
   hardware?: HardwareInfoApi;
   catalog?: ModelCatalogEntryApi[];
-  /** Advisory per-VRAM model recommendation. Optional — absent on older backends. */
-  hardware_recommendation?: HardwareRecommendation;
-}
+};
 
 type FitDetailWithBaseline = ModelFitDetail & {
   base_vram_gb?: number | null;

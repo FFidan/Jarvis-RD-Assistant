@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/select';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EmptyState } from '@/components/EmptyState';
+import { ErrorSentinel } from '@/components/shared/ErrorSentinel';
 import { MilestonesTab } from './MilestonesTab';
 import { TasksTab } from './TasksTab';
 import { LinkedPapersTab } from './LinkedPapersTab';
@@ -202,11 +203,11 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
       <ScrollArea className="flex-1">
         <div className="space-y-10 px-6 py-6">
           {/* § OPEN QUESTIONS */}
-          {questionsError && <p className="text-xs text-destructive">Failed to load questions.</p>}
+          {questionsError && <ErrorSentinel message="Failed to load questions." />}
           <QuestionsSection projectId={project.id} questions={questions} />
 
           {/* § RECENT ACTIVITY */}
-          {activityError && <p className="text-xs text-destructive">Failed to load activity.</p>}
+          {activityError && <ErrorSentinel message="Failed to load activity." />}
           <RecentActivitySection items={activityItems} />
 
           {/* § MILESTONES */}
@@ -217,7 +218,7 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
             >
               § MILESTONES · {milestones.length}
             </h3>
-            {milestonesError && <p className="text-xs text-destructive">Failed to load milestones.</p>}
+            {milestonesError && <ErrorSentinel message="Failed to load milestones." />}
             <MilestonesTab projectId={project.id} />
           </section>
 
@@ -229,7 +230,7 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
             >
               § TASKS · {tasks.length}
             </h3>
-            {tasksError && <p className="text-xs text-destructive">Failed to load tasks.</p>}
+            {tasksError && <ErrorSentinel message="Failed to load tasks." />}
             <TasksTab projectId={project.id} />
           </section>
 

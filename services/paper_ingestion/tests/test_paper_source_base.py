@@ -3,6 +3,7 @@
 PR-A2: default consolidate_topics implementation and SourceQuery API.
 DRY-S1: _insert_run_history hoisted to base.
 F-10: apply_startup_grace() hoisted to PaperSource base.
+BE-06: _retry_after_seconds cap + attempt-1 guard (N/A — no persistent writer).
 """
 
 from __future__ import annotations
@@ -11,9 +12,10 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import httpx
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.arxiv_source import ArxivSource
-from paper_ingestion.sources.base import PaperSource, SourceQuery
+from paper_ingestion.sources.base import PaperSource, SourceQuery, _MAX_RETRY_AFTER_S
 from paper_ingestion.sources.openalex_source import OpenAlexSource
 from paper_ingestion.sources.pubmed_source import PubMedSource
 from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
@@ -268,3 +270,49 @@ async def test_apply_startup_grace_available_on_all_source_subclasses(source_cls
 
     # grace_seconds is 0.0 since PaperSourceConfig has no pulse attr
     mock_enforce.assert_awaited_once_with(0.0)
+
+
+# ---------------------------------------------------------------------------
+# BE-06: _retry_after_seconds cap
+# Attempt-1 guard: N/A — base.py has no persistent rate-limiter writer.
+# Only source_run_history (an audit log) uses db_pool; no retry-slot persistence
+# exists in this file, so there is no concurrent-insert race to guard.
+# ---------------------------------------------------------------------------
+
+
+def _make_response_with_retry_after(value: str) -> httpx.Response:
+    """Build a minimal httpx.Response carrying a Retry-After header."""
+    return httpx.Response(
+        status_code=429,
+        headers={"Retry-After": value},
+    )
+
+
+def test_retry_after_seconds_caps_absurdly_large_header(stub_source):
+    """A Retry-After header value far exceeding _MAX_RETRY_AFTER_S is capped.
+
+    BE-06: Ensures that a malicious or misbehaving upstream cannot force the
+    poller to wait billions of seconds by sending ``Retry-After: 99999999999``.
+    The returned value must be <= _MAX_RETRY_AFTER_S (3600 s).
+    """
+    response = _make_response_with_retry_after("99999999999")
+    result = stub_source._retry_after_seconds(response)
+    assert result is not None
+    assert result <= _MAX_RETRY_AFTER_S, (
+        f"Expected capped value <= {_MAX_RETRY_AFTER_S}, got {result}"
+    )
+
+
+def test_retry_after_seconds_preserves_reasonable_value(stub_source):
+    """A Retry-After value within the cap is returned unchanged.
+
+    Values <= _MAX_RETRY_AFTER_S (3600 s) must not be clamped down.
+    """
+    response = _make_response_with_retry_after("60")
+    result = stub_source._retry_after_seconds(response)
+    assert result == 60
+
+
+def test_retry_after_seconds_cap_equals_one_hour():
+    """_MAX_RETRY_AFTER_S module constant equals 3600 (one hour)."""
+    assert _MAX_RETRY_AFTER_S == 3600

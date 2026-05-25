@@ -173,7 +173,7 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
                         metadata={"ip": _ip},
                     )
             except Exception:  # noqa: BLE001
-                logger.debug("auth event log_event failed (non-fatal)", exc_info=True)
+                logger.warning("auth event log failed (non-fatal)", exc_info=True)
             raise HTTPException(status_code=403, detail="Invalid or missing API key")
         return
     # No key configured — fall back to dev_auth_bypass check
@@ -352,18 +352,16 @@ def refresh_allowed_networks_cache() -> None:
 
 def _ip_in_allowlist(ip_str: str | None) -> bool:
     """Return True when *ip_str* falls within one of the allowed CIDRs."""
+    global _CACHED_ALLOWED_NETWORKS
     if not ip_str:
         return False
     try:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
-    networks = (
-        _CACHED_ALLOWED_NETWORKS
-        if _CACHED_ALLOWED_NETWORKS is not None
-        else _parse_allowed_networks()
-    )
-    for net in networks:
+    if _CACHED_ALLOWED_NETWORKS is None:
+        _CACHED_ALLOWED_NETWORKS = _parse_allowed_networks()
+    for net in _CACHED_ALLOWED_NETWORKS:
         if addr in net:
             return True
     return False

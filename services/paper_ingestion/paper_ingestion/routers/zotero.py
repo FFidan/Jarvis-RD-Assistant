@@ -48,6 +48,21 @@ async def test_zotero_connection(
     user_id_for_config = await current_user_id_strict(request)
     cfg = await _get_zotero_config(db_pool, user_id=user_id_for_config)
 
+    if cfg.get("_decrypt_error"):
+        logger.warning(
+            "test_zotero_connection: stored credentials unreadable for user_id=%s "
+            "(key rotation?); operator must re-save Zotero API key in Settings",
+            user_id_for_config,
+        )
+        return {
+            "ok": False,
+            "detail": (
+                "Zotero credentials could not be decrypted — "
+                "the stored API key is unreadable (possible key rotation). "
+                "Please re-enter your Zotero API key in Settings."
+            ),
+        }
+
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
     library_type = cfg.get("library_type", "user")

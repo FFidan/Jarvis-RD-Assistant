@@ -96,7 +96,7 @@ async def test_review_start_refreshes_user_id():
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
     mock_resp.json.return_value = [card]
-    mock_http.get.return_value = mock_resp
+    mock_http.get = AsyncMock(return_value=mock_resp)
 
     with patch(
         "telegram_bot.handlers.review_handler.auth_check",
@@ -120,7 +120,7 @@ async def test_review_start_sets_user_id_when_previously_absent():
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
     mock_resp.json.return_value = [card]
-    mock_http.get.return_value = mock_resp
+    mock_http.get = AsyncMock(return_value=mock_resp)
 
     with patch(
         "telegram_bot.handlers.review_handler.auth_check",
@@ -214,8 +214,8 @@ async def test_rate_card_uses_fresh_user_id_in_http_request():
     next_resp = MagicMock()
     next_resp.raise_for_status = MagicMock()
     next_resp.json.return_value = []
-    mock_http.post.return_value = submit_resp
-    mock_http.get.return_value = next_resp
+    mock_http.post = AsyncMock(return_value=submit_resp)
+    mock_http.get = AsyncMock(return_value=next_resp)
 
     with patch(
         "telegram_bot.handlers.review_handler.auth_check",
@@ -251,8 +251,8 @@ async def test_rate_card_refreshes_cached_user_id():
     next_resp = MagicMock()
     next_resp.raise_for_status = MagicMock()
     next_resp.json.return_value = []
-    mock_http.post.return_value = submit_resp
-    mock_http.get.return_value = next_resp
+    mock_http.post = AsyncMock(return_value=submit_resp)
+    mock_http.get = AsyncMock(return_value=next_resp)
 
     with patch(
         "telegram_bot.handlers.review_handler.auth_check",

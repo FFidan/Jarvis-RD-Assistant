@@ -219,6 +219,59 @@ async def test_run_process_pdf_embedding_batch_error_with_no_completed_chunks_sk
     assert "0 chunks saved" in str(exc_info.value)
 
 
+@pytest.mark.asyncio
+async def test_extraction_progress_zero_chunks_returns_0_4_without_division_error():
+    """_extraction_progress zero-chunks guard: when total_chunks=0, progress
+    must be mapped to 0.4 (frac=1.0 → 0.1 + 0.3*1.0) and no ZeroDivisionError
+    must be raised.
+
+    # Verified: services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:298-304
+    # (_extraction_progress: if total_chunks > 0: frac = chunk_index/total_chunks
+    #  else: frac = 1.0 → _maybe_progress(0.1 + 0.3*frac, ...) → 0.4)
+    """
+    captured_progress: list[float] = []
+
+    ctx = MagicMock()
+    ctx.update_progress = AsyncMock(side_effect=lambda p, msg=None: captured_progress.append(p))
+
+    conn = AsyncMock()
+    # First fetchval: existing_count → 0 (no short-circuit).
+    # Second fetchval: owner_id → None.
+    conn.fetchval.side_effect = [0, None]
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    async def _invoke_callback_with_zero_chunks(pdf_path, paper_id, *, user_id, progress_callback):
+        # Simulate the extractor calling back once with zero total chunks.
+        await progress_callback(chunk_index=0, total_chunks=0)
+        return ("", [], [])
+
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(side_effect=_invoke_callback_with_zero_chunks)
+    embedder = MagicMock()
+    embedder.qdrant = MagicMock()
+
+    await run_process_pdf(
+        paper_id=42,
+        pdf_path=Path("/tmp/zero-chunks.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        ctx=ctx,
+    )
+
+    zero_chunk_progress_calls = [p for p in captured_progress if abs(p - 0.4) < 1e-9]
+    assert zero_chunk_progress_calls, (
+        f"Expected _extraction_progress(0, 0) to emit progress=0.4; "
+        f"captured progress calls: {captured_progress}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # ING-001: total_batches ceiling division
 # ---------------------------------------------------------------------------

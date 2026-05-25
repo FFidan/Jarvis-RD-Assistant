@@ -123,3 +123,44 @@ def test_apply_default_authenticated_user_preserves_existing_override(
         assert fake_app.dependency_overrides[current_user_id_strict_with_owner_override] is sentinel
 
     assert fake_app.dependency_overrides[current_user_id_strict_with_owner_override] is sentinel
+
+
+# ---------------------------------------------------------------------------
+# W5-CF-COVERAGE-2: exception path — overrides restored on RuntimeError
+# ---------------------------------------------------------------------------
+
+
+def test_apply_default_authenticated_user_restores_overrides_on_exception(
+    monkeypatch: pytest.MonkeyPatch, fake_app: Any
+) -> None:
+    """Context manager must restore dependency_overrides to pre-state when an exception escapes.
+
+    Production path: _apply_default_authenticated_user (testing_auth.py:39-82)
+    uses a try/finally block — the ``finally`` clause restores both
+    module-level symbols and the ``app.dependency_overrides`` entry regardless
+    of how the ``with`` block exits.
+    """
+    import pkgutil
+
+    from jarvis_common.auth import current_user_id_strict_with_owner_override
+
+    routers_pkg = _make_fake_routers_pkg(())
+    monkeypatch.setattr(
+        pkgutil,
+        "iter_modules",
+        lambda _paths: [pkgutil.ModuleInfo(cast(Any, _FakeFinder()), "sub", False)],
+    )
+
+    # Record the pre-state: override dict should be empty before entering.
+    assert current_user_id_strict_with_owner_override not in fake_app.dependency_overrides
+    pre_state_keys = set(fake_app.dependency_overrides.keys())
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with _apply_default_authenticated_user(fake_app, routers_pkg):
+            # Override is active inside the block.
+            assert current_user_id_strict_with_owner_override in fake_app.dependency_overrides
+            raise RuntimeError("boom")
+
+    # Post-exit: dependency_overrides must be back to the pre-state.
+    assert set(fake_app.dependency_overrides.keys()) == pre_state_keys
+    assert current_user_id_strict_with_owner_override not in fake_app.dependency_overrides

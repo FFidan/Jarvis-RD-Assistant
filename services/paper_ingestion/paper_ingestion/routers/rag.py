@@ -65,6 +65,10 @@ router = APIRouter(
 _ASK_RATE_LIMIT = os.getenv("ASK_RATE_LIMIT", "10/minute")
 
 
+class _RagServiceNotReadyError(RuntimeError):
+    """Raised when the OpenAI client is not yet initialised (startup misconfiguration)."""
+
+
 def _is_timeout_failure(exc: BaseException) -> bool:
     """Return True when an exception chain came from an httpx timeout."""
     seen: set[int] = set()
@@ -117,7 +121,7 @@ async def _call_rag_llm(
 
     _openai_client = svc.openai_client
     if _openai_client is None:
-        raise RuntimeError(
+        raise _RagServiceNotReadyError(
             "openai_client not initialized — check _init_langfuse_hook ran during lifespan"
         )
     return await call_llm_structured(
@@ -262,6 +266,8 @@ async def ask_paper(
     except EmptyVisibleLLMContentError as exc:
         logger.warning("RAG LLM returned no visible content for paper %d", paper_id, exc_info=True)
         raise HTTPException(status_code=502, detail=_empty_visible_detail()) from exc
+    except _RagServiceNotReadyError as exc:
+        raise HTTPException(status_code=503, detail="RAG service not initialized") from exc
     except RuntimeError as exc:
         if _is_timeout_failure(exc):
             raise HTTPException(status_code=504, detail="LLM request timed out") from exc
@@ -427,6 +433,8 @@ async def ask_cross_paper(
     except EmptyVisibleLLMContentError as exc:
         logger.warning("Cross-paper RAG LLM returned no visible content", exc_info=True)
         raise HTTPException(status_code=502, detail=_empty_visible_detail()) from exc
+    except _RagServiceNotReadyError as exc:
+        raise HTTPException(status_code=503, detail="RAG service not initialized") from exc
     except RuntimeError as exc:
         if _is_timeout_failure(exc):
             raise HTTPException(status_code=504, detail="LLM request timed out") from exc

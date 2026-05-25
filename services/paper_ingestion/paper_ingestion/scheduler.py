@@ -494,6 +494,11 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
 
     register_data_purge(scheduler, app)
 
+    # BE-09: daily purge of expired magic_link_tokens rows.
+    from paper_ingestion.jobs.purge_tokens import register_purge_tokens  # noqa: PLC0415
+
+    register_purge_tokens(scheduler, app)
+
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)
     return scheduler

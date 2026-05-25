@@ -1,6 +1,5 @@
 """Model assignment validation and Telegram nudge reload side-effect."""
 
-import contextlib
 import logging
 
 import asyncpg
@@ -27,13 +26,15 @@ async def reload_telegram_nudges() -> None:
         return
     api_key_secret = get_secrets_settings().jarvis_api_key
     api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
-    with contextlib.suppress(Exception):
+    try:
         async with httpx.AsyncClient() as client:
             await client.post(
                 f"{telegram_url}/internal/reload-nudges",
                 headers={"X-API-Key": api_key},
                 timeout=2.0,
             )
+    except httpx.HTTPError:
+        logger.warning("Telegram nudge-reload failed (non-fatal)", exc_info=True)
 
 
 async def cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> bool:

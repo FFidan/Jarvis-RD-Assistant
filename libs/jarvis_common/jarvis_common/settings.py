@@ -102,6 +102,11 @@ class CoreSettings(BaseSettings):
     # Comma-separated CIDRs allowed to use X-Owner-User-Id override.
     # Defaults to loopback + docker-bridge ranges.
     owner_override_allowed_cidrs: str = "127.0.0.0/8,172.16.0.0/12"
+    # Comma-separated CIDRs allowed to POST to the infra-ingest endpoint.
+    # Default-deny: empty means infra-ingest is unprovisioned and _check_auth
+    # returns 503. Operator must explicitly opt in by setting the env var,
+    # e.g. INFRA_INGEST_ALLOWED_CIDRS="127.0.0.1/8,::1/128".
+    infra_ingest_allowed_cidrs: str = ""
     # WS-AUTH-KEY-SESSION: explicit owner user for the API-key→session mint.
     # When set, that user id is bound to the minted session. When unset, the
     # endpoint resolves the lowest-id non-deleted admin user. Never synthesises

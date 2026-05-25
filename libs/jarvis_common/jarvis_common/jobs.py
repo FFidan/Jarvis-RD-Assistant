@@ -529,9 +529,11 @@ async def list_jobs(
     column with value ``"procrastinate"`` is added to every row for API
     compatibility.
 
-    When ``user_id`` is provided only jobs owned by that user (or jobs with a
-    NULL user_id, i.e. system jobs) are returned.  Passing ``user_id=None``
-    returns all jobs (single-tenant / no-ownership mode).
+    When ``user_id`` is provided only jobs owned by that user are returned
+    (rows where ``args->>'user_id' = user_id``).  Passing ``user_id=None``
+    returns only system jobs — rows where ``args->>'user_id' IS NULL``.
+    There is no "return all jobs" mode; to list jobs across all users, query
+    the table directly or call this function once per known user.
     """
     # Fixed-position parameters (matches the $1/$2/$3/$4 placeholders in the query).
     # NULL params cause the corresponding WHERE clause to be skipped via IS NULL guard.
