@@ -1,0 +1,46 @@
+# langfuse/Dockerfile.langfuse — hardening wrapper for the upstream Langfuse v2
+# image (W9-T1 / SEC-HIGH-02).
+#
+# Why this exists
+# ---------------
+# Langfuse v2 reads DATABASE_URL, NEXTAUTH_SECRET, and SALT from environment
+# variables only — there is no `_FILE` convention upstream. Previously these
+# were interpolated as plaintext env vars on the `langfuse:` compose service,
+# which made them readable via `docker inspect` to anything with the Docker
+# socket (including the `vector` log shipper). The upstream image runs as the
+# non-root `nextjs` user (uid 1001, gid 65533 / nogroup) while the host secret
+# files are 0600 owned by uid 1000 (operator), so a naive in-container
+# `cat /run/secrets/*` shim run as `nextjs` cannot read them.
+#
+# This wrapper switches the entrypoint back to root just long enough to read
+# the three secret files, exports them into the process environment of the
+# child process, then drops privileges to `nextjs` via `setpriv` (already
+# present in the upstream Alpine 3.20 base — no extra packages installed) and
+# execs the upstream entrypoint. Secrets never leak via `docker inspect`
+# because they are no longer set as compose-level env vars.
+#
+# Inputs
+# ------
+# Pin matches versions.env:LANGFUSE_IMAGE. The build arg lets a future bump
+# pin a new digest from a single source.
+ARG LANGFUSE_BASE_IMAGE=langfuse/langfuse@sha256:85c278dcab96c15db94191a5c1664f85aba2d7fb6771a00e99681c902c4b7015
+FROM ${LANGFUSE_BASE_IMAGE}
+
+# Need root to (a) install the entrypoint script with the right perms,
+# (b) install `su-exec` for the final privilege drop (BusyBox's `setpriv`
+# applet that ships with this Alpine base does NOT support --reuid/--regid,
+# unlike util-linux's setpriv — verified: `setpriv --reuid=1001 ...` prints
+# only the BusyBox usage banner), and (c) run the shim on startup so it can
+# read the 0600/uid-1000 secret mounts.
+USER root
+
+RUN apk add --no-cache su-exec
+
+COPY entrypoint.sh /usr/local/bin/langfuse-secrets-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/langfuse-secrets-entrypoint.sh
+
+# Replace the upstream entrypoint (`dumb-init -- ./web/entrypoint.sh`) with our
+# shim. The shim re-execs the upstream chain under setpriv after exporting
+# secrets, so the final process tree and signal-handling are identical.
+ENTRYPOINT ["/usr/local/bin/langfuse-secrets-entrypoint.sh"]
+# CMD is inherited from the base image (node ./web/server.js ...).

@@ -80,11 +80,14 @@ check: no-tracked-secrets secure-secrets deps-check lint typecheck test
 
 ## Bring up Langfuse + JARVIS services with observability tracing enabled.
 ## Keys are loaded from .env (written by gen-langfuse-keys.sh) so they never
-## appear in the process environment or docker inspect output.
+## appear in the process environment or docker inspect output. DATABASE_URL /
+## NEXTAUTH_SECRET / SALT are read from /run/secrets/* by the wrapper image at
+## ./langfuse/ (W9-T1 / SEC-HIGH-02 — they are no longer exposed via
+## `docker inspect`). First boot builds the wrapper image (~30s); subsequent
+## boots use the cached layer.
 observability-up: gen-langfuse-keys
-	@echo "WARNING: Langfuse DB/NextAuth/Salt are plaintext env (Langfuse v2 has no _FILE support) — single-operator host only; 'docker inspect' exposes them."
 	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 \
-	  $(COMPOSE) --profile observability up -d langfuse paper_ingestion learning_engine
+	  $(COMPOSE) --profile observability up -d --build langfuse paper_ingestion learning_engine
 
 ## Docker shortcuts
 up: gen-langfuse-keys

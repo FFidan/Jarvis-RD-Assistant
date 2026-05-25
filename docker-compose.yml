@@ -162,6 +162,8 @@ services:
   ollama-bootstrap:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.23.1}
     security_opt: ["no-new-privileges:true"]
+    # Pull-only task — no capabilities required.
+    cap_drop: [ALL]
     depends_on:
       ollama:
         condition: service_healthy
@@ -463,7 +465,7 @@ services:
       context: ./frontend
       args:
         NODE_BUILD_IMAGE: ${NODE_BUILD_IMAGE:-node:22.14-alpine3.21}
-        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:1.27-alpine3.21}
+        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginxinc/nginx-unprivileged:1.27-alpine3.21}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     ports:
@@ -563,15 +565,31 @@ services:
       - jarvis
 
   langfuse:
-    image: ${LANGFUSE_IMAGE:-langfuse/langfuse@sha256:85c278dcab96c15db94191a5c1664f85aba2d7fb6771a00e99681c902c4b7015}
+    # W9-T1 / SEC-HIGH-02: a thin wrapper image runs as root, reads
+    # DATABASE_URL / NEXTAUTH_SECRET / SALT from /run/secrets/* (langfuse v2
+    # has no _FILE convention), exports them, then drops to the upstream
+    # `nextjs` user via `setpriv` and execs the upstream entrypoint
+    # (`dumb-init -- ./web/entrypoint.sh`). The three high-value secrets are
+    # therefore no longer exposed via `docker inspect`. Compose builds the
+    # wrapper on first `make observability-up` (~30s) and caches it
+    # thereafter; the upstream image digest stays the single source of truth
+    # via the LANGFUSE_IMAGE build-arg from versions.env. See
+    # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.2.1}
+    build:
+      context: ./langfuse
+      dockerfile: Dockerfile.langfuse
+      args:
+        LANGFUSE_BASE_IMAGE: ${LANGFUSE_IMAGE:-langfuse/langfuse@sha256:85c278dcab96c15db94191a5c1664f85aba2d7fb6771a00e99681c902c4b7015}
     profiles: [observability]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     ports:
       - "${LANGFUSE_BIND_HOST:-127.0.0.1}:${LANGFUSE_HOST_PORT:-3002}:3000"
-    # S5-05: DATABASE_URL/NEXTAUTH_SECRET/SALT are interpolated from .env (plaintext).
-    # Langfuse v2 has no _FILE convention for these vars; accepted risk for
-    # single-tenant self-hosted deployments where the host is the trust boundary.
+    secrets:
+      - langfuse_pg_password
+      - langfuse_nextauth_secret
+      - langfuse_salt
     environment:
       NEXTAUTH_URL: http://localhost:${LANGFUSE_HOST_PORT:-3002}
       TELEMETRY_ENABLED: "false"
@@ -580,14 +598,6 @@ services:
       # false-report `unhealthy`. Pin to 0.0.0.0 so it binds all interfaces and
       # the loopback healthcheck (and depends_on: service_healthy) is correct.
       HOSTNAME: "0.0.0.0"
-      # Langfuse v2 reads these from env only (no _FILE convention — which is
-      # why the old entrypoint shim existed). Interpolated from .env, whose
-      # values are kept byte-identical to ./secrets/langfuse_*.txt; the
-      # langfuse-postgres service initialised its DB from that same password
-      # file, so there is no credential divergence. Local-dev, loopback-bound.
-      DATABASE_URL: postgresql://langfuse:${LANGFUSE_PG_PASSWORD}@langfuse-postgres:5432/langfuse
-      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
-      SALT: ${LANGFUSE_SALT}
       AUTH_DISABLE_SIGNUP: "true"
       LANGFUSE_INIT_ORG_ID: jarvis
       LANGFUSE_INIT_ORG_NAME: JARVIS
@@ -596,15 +606,14 @@ services:
       LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-operator@jarvis.local}
       LANGFUSE_INIT_USER_NAME: JARVIS Operator
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-}
-      # The langfuse image runs as non-root `nextjs` (uid 1001) and Docker
-      # Compose `file:` secrets preserve the host file's 0600/uid-1000 perms,
-      # so an in-container `cat /run/secrets/*` shim is unreadable here (the
-      # exact failure the earlier crash-fix removed). Langfuse's headless-init
-      # contract is env-only, so `make observability-up` injects the keypair
-      # from the same secrets/langfuse_init_*.txt files (single source of
-      # truth) as these env vars, and the image's native entrypoint runs
-      # unmodified. JARVIS services still read the files via the _FILE →
-      # SecretsSettings path (their appuser=uid 1000 can read them).
+      # LANGFUSE_INIT_PROJECT_{PUBLIC,SECRET}_KEY are the headless-init
+      # keypair, not application secrets — they are written by
+      # scripts/gen-langfuse-keys.sh, mirrored into .env, and JARVIS services
+      # consume them via the _FILE → SecretsSettings path (appuser uid=1000 can
+      # read the 0600/uid-1000 mounts). The image's init logic still reads
+      # them from env, so they remain interpolated here. Their exposure via
+      # `docker inspect` is bounded to this single self-hosted operator's
+      # Langfuse project and is rotated by the gen-langfuse-keys script.
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
     healthcheck:
@@ -714,6 +723,8 @@ services:
     profiles: [observability]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    # docker.sock is mounted RO for log scraping only — no capabilities needed.
+    cap_drop: [ALL]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./infra/vector.toml:/etc/vector/vector.toml:ro

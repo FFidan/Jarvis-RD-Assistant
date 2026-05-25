@@ -51,7 +51,7 @@ jobs:
       - run: npm ci
 
       - name: Generate Node SBOM
-        run: npx --yes @cyclonedx/cyclonedx-npm --output-format JSON --output-file sbom-node.json
+        run: npx --yes @cyclonedx/cyclonedx-npm@4.2.1 --output-format JSON --output-file sbom-node.json
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:

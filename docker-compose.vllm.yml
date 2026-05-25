@@ -68,6 +68,10 @@ services:
     image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.11.0}
     profiles: [vllm]
     restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    # vLLM upstream image (vllm/vllm-openai) runs as uid 0. Running as 1000:1000
+    # is preferred; verify the image accepts it before deploying on a new release.
+    user: "1000:1000"
     # Loopback-bind only — same security posture as the ollama service
     # (127.0.0.1:${host_port}:${container_port}).
     ports:
@@ -97,10 +101,12 @@ services:
       # Persist downloaded model weights across container restarts.
       # Reuses the same cache convention as the hf_cache volume in
       # paper_ingestion (Marker/Surya models).
-      - vllm_model_cache:/root/.cache/huggingface
+      # /tmp/hf-cache is world-writable, ensuring uid 1000 can write without
+      # needing a chown step that would require root.
+      - vllm_model_cache:/tmp/hf-cache/huggingface
     environment:
-      # HuggingFace cache: keep model weights out of the writable container layer.
-      HF_HOME: /root/.cache/huggingface
+      # HuggingFace cache: keep model weights out of /root (non-root runtime).
+      HF_HOME: /tmp/hf-cache/huggingface
       # Suppress HF token warning — model is public, no token needed.
       TRANSFORMERS_OFFLINE: "0"
     deploy:
