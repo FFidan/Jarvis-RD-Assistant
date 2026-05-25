@@ -35,6 +35,11 @@ _BBT_ALLOWED_PRIVATE_HOSTS: frozenset[str] = frozenset({"host.docker.internal"})
 # returning "Retry-After: 86400" which would block the worker for a day.
 _MAX_RETRY_AFTER_SECONDS = 60.0
 
+# Defensive cap on the number of items fetched by any paginator.  A Zotero
+# library with more than 10 000 items in a single list is almost certainly a
+# Zotero bug or a runaway loop rather than legitimate data.
+_MAX_ZOTERO_PAGES_ITEMS = 10_000
+
 
 def _parse_retry_after(value: str | None) -> float | None:
     """Parse a Retry-After header value (delta-seconds OR HTTP-date).
@@ -194,7 +199,7 @@ class ZoteroClient:
         self.user_id = user_id
         self.library_type: Literal["user", "group"] = library_type
         self.group_id = group_id
-        self._http = http_client or httpx.AsyncClient()
+        self._http = http_client or httpx.AsyncClient(timeout=httpx.Timeout(30.0))
         # URL structure:
         #   personal library → https://api.zotero.org/users/{user_id}/...
         #   group library    → https://api.zotero.org/groups/{group_id}/...
@@ -265,6 +270,11 @@ class ZoteroClient:
             resp.raise_for_status()
             items = resp.json()
             all_collections.extend(items)
+            if len(all_collections) > _MAX_ZOTERO_PAGES_ITEMS:
+                raise RuntimeError(
+                    f"Zotero collections paginator exceeded {_MAX_ZOTERO_PAGES_ITEMS} items; "
+                    "this indicates a Zotero bug or a runaway loop."
+                )
             total = int(resp.headers.get("Total-Results", "0"))
             if len(items) < 100 or len(all_collections) >= total:
                 break
@@ -356,6 +366,11 @@ class ZoteroClient:
             page = resp.json()
             new_version = int(resp.headers.get("Zotero-Last-Modified-Version", new_version))
             all_items.extend(page)
+            if len(all_items) > _MAX_ZOTERO_PAGES_ITEMS:
+                raise RuntimeError(
+                    f"Zotero items paginator exceeded {_MAX_ZOTERO_PAGES_ITEMS} items; "
+                    "this indicates a Zotero bug or a runaway loop."
+                )
             total = int(resp.headers.get("Total-Results", "0"))
             if len(page) < 100 or len(all_items) >= total:
                 break
@@ -397,6 +412,11 @@ class ZoteroClient:
             resp.raise_for_status()
             items = resp.json()
             all_items.extend(items)
+            if len(all_items) > _MAX_ZOTERO_PAGES_ITEMS:
+                raise RuntimeError(
+                    f"Zotero children paginator exceeded {_MAX_ZOTERO_PAGES_ITEMS} items; "
+                    "this indicates a Zotero bug or a runaway loop."
+                )
             total = int(resp.headers.get("Total-Results", "0"))
             if len(items) < 100 or len(all_items) >= total:
                 break

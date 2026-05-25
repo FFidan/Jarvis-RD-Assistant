@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 S2_API_URL = "https://api.semanticscholar.org/graph/v1"
 RATE_LIMIT_DELAY = 1.05  # seconds between requests (free tier: 1 req/sec)
+# Descriptive User-Agent for S2 abuse attribution; no API key / higher tier exists.
+_S2_USER_AGENT = (
+    "JARVIS-RD/0 (research paper assistant; +https://github.com/ferhatfidan/JARVIS_RD_Assistant)"
+)
 S2_FIELDS = (
     "paperId,externalIds,title,authors,authors.authorId,abstract,year,"
     "publicationDate,url,citationCount,openAccessPdf,tldr"
@@ -72,8 +76,8 @@ class SemanticScholarSource(PaperSource):
         await self._rate_limiter.acquire()
 
     def _build_headers(self) -> dict[str, str]:
-        """Build request headers, including API key if configured."""
-        headers: dict[str, str] = {}
+        """Build request headers, including API key and User-Agent."""
+        headers: dict[str, str] = {"User-Agent": _S2_USER_AGENT}
         if self._api_key:
             headers["x-api-key"] = self._api_key
         return headers

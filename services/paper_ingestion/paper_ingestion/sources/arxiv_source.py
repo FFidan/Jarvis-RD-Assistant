@@ -38,6 +38,9 @@ ARXIV_API_URL = "https://export.arxiv.org/api/query"
 RATE_LIMIT_DELAY = 3.0
 _MAX_FETCH_ATTEMPTS = 3
 _ARXIV_FIELD_PREFIX = re.compile(r"\b(ti|au|abs|co|jr|cat|rn|id|all):")
+# Cap Retry-After waits so a misbehaving upstream cannot block the worker for
+# more than one minute (matches zotero_client._MAX_RETRY_AFTER_SECONDS policy).
+_MAX_RETRY_AFTER_SECONDS = 60.0
 # Module-level lock ensures all ArxivSource instances share one connection slot,
 # matching arXiv's "one connection at a time" policy across the whole process.
 _ARXIV_REQUEST_LOCK: asyncio.Lock = asyncio.Lock()
@@ -259,8 +262,11 @@ class ArxivSource(PaperSource):
                     )
                 if response.status_code in (429, 500, 502, 503, 504):
                     if attempt < _MAX_FETCH_ATTEMPTS - 1:
-                        wait_s = _retry_after_s(response.headers.get("Retry-After")) or min(
-                            30.0, 3.0 * (2**attempt)
+                        _ra = _retry_after_s(response.headers.get("Retry-After"))
+                        wait_s = (
+                            min(_ra, _MAX_RETRY_AFTER_SECONDS)
+                            if _ra is not None
+                            else min(30.0, 3.0 * (2**attempt))
                         )
                         logger.warning(
                             "arXiv fetch returned %d; retrying in %.1fs",

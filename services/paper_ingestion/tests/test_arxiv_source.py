@@ -384,3 +384,50 @@ async def test_fetch_xml_passes_bytes_to_safe_fromstring():
     assert isinstance(captured[0], bytes), (
         f"safe_fromstring must receive bytes, got {type(captured[0])!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# MED-PI-EXT-01: Retry-After wait capped at _MAX_RETRY_AFTER_SECONDS (60 s)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_xml_retry_after_capped_at_60s():
+    """When Retry-After header is 7200 s, the actual sleep is capped at 60 s.
+
+    The first GET returns 429 with Retry-After: 7200; the second returns a
+    valid empty feed.  asyncio.sleep must be called with a value <= 60.
+    """
+    from unittest.mock import patch
+
+    from paper_ingestion.sources.arxiv_source import _MAX_RETRY_AFTER_SECONDS
+
+    empty_feed = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <totalResults xmlns="http://a9.com/-/spec/opensearch/1.1/">0</totalResults>
+</feed>"""
+
+    call_count = 0
+
+    def _side_effect(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(429, headers={"Retry-After": "7200"})
+        return httpx.Response(200, content=empty_feed)
+
+    respx.get(ARXIV_API_URL).mock(side_effect=_side_effect)
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    source = _make_source()
+    with patch("paper_ingestion.sources.arxiv_source.asyncio.sleep", side_effect=_fake_sleep):
+        await source._fetch_xml({"search_query": "all:ml", "start": 0, "max_results": 1})
+
+    assert sleep_calls, "asyncio.sleep must be called at least once for the 429 retry"
+    assert all(s <= _MAX_RETRY_AFTER_SECONDS for s in sleep_calls), (
+        f"Sleep must be capped at {_MAX_RETRY_AFTER_SECONDS}s; got {sleep_calls}"
+    )

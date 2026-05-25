@@ -487,3 +487,94 @@ async def test_get_zotero_config_handles_str_encrypted_value(monkeypatch):
     assert config.get("api_key") == plaintext, "str BYTEA encrypted_value must be decrypted"
 
     refresh_fernet_cache()
+
+
+# ---------------------------------------------------------------------------
+# MED-PI-EXT-03: httpx.AsyncClient constructed with explicit Timeout
+# ---------------------------------------------------------------------------
+
+
+def test_zotero_client_default_http_client_has_timeout():
+    """ZoteroClient() without an http_client creates one with a Timeout object.
+
+    Ensures no request can hang indefinitely when the caller does not provide
+    a pre-configured httpx.AsyncClient.
+    """
+    zc = ZoteroClient(api_key="k", user_id="42")
+    assert isinstance(zc._http.timeout, httpx.Timeout), (
+        "Default httpx.AsyncClient must be constructed with an explicit Timeout"
+    )
+    # Default timeout should be 30 seconds on all axes.
+    assert zc._http.timeout.read == 30.0
+
+
+# ---------------------------------------------------------------------------
+# MED-PI-EXT-03: Paginator cap at _MAX_ZOTERO_PAGES_ITEMS
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_items_since_raises_on_runaway_pagination(client):
+    """fetch_items_since raises RuntimeError when total exceeds _MAX_ZOTERO_PAGES_ITEMS.
+
+    Simulates a Zotero server that always says there are more items, causing
+    the paginator to loop until the cap is hit.
+    """
+    from paper_ingestion.integrations.zotero_client import _MAX_ZOTERO_PAGES_ITEMS
+
+    page_size = 100
+    # Lie: claim there are always more items than fetched.
+    fake_total = _MAX_ZOTERO_PAGES_ITEMS + 1
+
+    def _side_effect(request):
+        page = [{"key": f"ITEM{i}"} for i in range(page_size)]
+        return httpx.Response(
+            200,
+            json=page,
+            headers={
+                "Total-Results": str(fake_total),
+                "Zotero-Last-Modified-Version": "1",
+            },
+        )
+
+    respx.get(f"{BASE}/items").mock(side_effect=_side_effect)
+
+    with pytest.raises(RuntimeError, match="paginator exceeded"):
+        await client.fetch_items_since(version=0)
+
+
+@respx.mock
+async def test_ensure_collection_raises_on_runaway_pagination(client):
+    """ensure_collection raises RuntimeError when collections exceed _MAX_ZOTERO_PAGES_ITEMS."""
+    from paper_ingestion.integrations.zotero_client import _MAX_ZOTERO_PAGES_ITEMS
+
+    page_size = 100
+    fake_total = _MAX_ZOTERO_PAGES_ITEMS + 1
+
+    def _side_effect(request):
+        page = [{"key": f"COL{i}", "data": {"name": f"Collection {i}"}} for i in range(page_size)]
+        return httpx.Response(200, json=page, headers={"Total-Results": str(fake_total)})
+
+    respx.get(f"{BASE}/collections").mock(side_effect=_side_effect)
+
+    with pytest.raises(RuntimeError, match="paginator exceeded"):
+        await client.ensure_collection("DoesNotMatter")
+
+
+@respx.mock
+async def test_get_item_children_raises_on_runaway_pagination(client):
+    """get_item_children raises RuntimeError when children exceed _MAX_ZOTERO_PAGES_ITEMS."""
+    from paper_ingestion.integrations.zotero_client import _MAX_ZOTERO_PAGES_ITEMS
+
+    page_size = 100
+    fake_total = _MAX_ZOTERO_PAGES_ITEMS + 1
+    item_key = "TESTKEY"
+
+    def _side_effect(request):
+        page = [{"key": f"CHILD{i}"} for i in range(page_size)]
+        return httpx.Response(200, json=page, headers={"Total-Results": str(fake_total)})
+
+    respx.get(f"{BASE}/items/{item_key}/children").mock(side_effect=_side_effect)
+
+    with pytest.raises(RuntimeError, match="paginator exceeded"):
+        await client.get_item_children(item_key)

@@ -442,3 +442,48 @@ async def test_openalex_pdf_url_validated_against_allowlist(caplog):
     assert papers_allowed[0].pdf_url == allowed_url
     # No ALLOWED_PDF_DOMAINS log for an accepted URL
     assert not any("ALLOWED_PDF_DOMAINS" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# MED-PI-EXT-02: HTTP 503 + Retry-After → rate_limit (not server_error)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_new_since_503_with_retry_after_classified_as_rate_limit():
+    """503 + Retry-After header is classified as rate_limit, not error.
+
+    When OpenAlex returns HTTP 503 with a Retry-After header the error should
+    be classified as ``rate_limit`` (matching 429 behaviour) so the Pulse
+    scheduler applies a backoff rather than an immediate retry.
+    """
+    respx.get(OPENALEX_API_URL).mock(
+        return_value=httpx.Response(503, headers={"Retry-After": "30"})
+    )
+
+    source = _make_source()
+    since = datetime(2026, 4, 1, tzinfo=UTC)
+    papers = await source.fetch_new_since(since=since, topics=[], limit=10)
+
+    assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] == "rate_limit", (
+        f"Expected 'rate_limit', got {source.last_poll_diagnostic['status']!r}"
+    )
+    assert source.last_poll_diagnostic["status_code"] == 503
+
+
+@respx.mock
+async def test_fetch_new_since_503_without_retry_after_classified_as_error():
+    """503 WITHOUT Retry-After stays classified as error (not rate_limit)."""
+    respx.get(OPENALEX_API_URL).mock(return_value=httpx.Response(503))
+
+    source = _make_source()
+    since = datetime(2026, 4, 1, tzinfo=UTC)
+    papers = await source.fetch_new_since(since=since, topics=[], limit=10)
+
+    assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] != "rate_limit", (
+        "503 without Retry-After must NOT be classified as rate_limit"
+    )

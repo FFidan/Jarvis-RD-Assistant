@@ -519,13 +519,31 @@ class OpenAlexSource(PaperSource):
             try:
                 response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
                 if response.status_code in (429, 500, 502, 503, 504):
-                    self._record_transient_poll_diagnostic(response)
+                    retry_after = self._retry_after_seconds(response)
+                    # 503 + Retry-After means OpenAlex is throttling, not broken.
+                    # Classify as rate_limit so the scheduler applies backoff.
+                    p_status = (
+                        "rate_limit"
+                        if response.status_code == 429
+                        or (response.status_code == 503 and retry_after is not None)
+                        else "error"
+                    )
+                    if p_status == "rate_limit":
+                        self._set_poll_diagnostic(
+                            status="rate_limit",
+                            message=(
+                                "OpenAlex rate limit reached. It will retry automatically later."
+                            ),
+                            status_code=response.status_code,
+                            retry_after_s=retry_after,
+                            settings_hint=None,
+                        )
+                    else:
+                        self._record_transient_poll_diagnostic(response)
                     logger.warning(
                         "OpenAlex fetch_new_since returned %d; skipping query",
                         response.status_code,
                     )
-                    p_status = "rate_limit" if response.status_code == 429 else "error"
-                    retry_after = self._retry_after_seconds(response)
                     if p_limiter is not None:
                         await p_limiter.update_last_request(p_status, retry_after_s=retry_after)
                     await self._insert_run_history(
