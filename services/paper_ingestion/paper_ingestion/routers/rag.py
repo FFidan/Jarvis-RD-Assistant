@@ -41,7 +41,6 @@ from paper_ingestion.models import (
     CrossPaperAskRequest,
     WeeklyDigestResponse,
 )
-from paper_ingestion.rag.exceptions import NoRelevantChunksError, PaperNotFoundError
 from paper_ingestion.rag.streaming import (
     CrossPaperRagNoResults,
     prepare_cross_paper_rag,
@@ -254,14 +253,9 @@ async def ask_paper(
     """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-    try:
-        messages, raw_sources = await prepare_single_paper_rag(
-            embedder, db_pool, paper_id, body, http_client, user_id=user_id
-        )
-    except PaperNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Paper not found") from exc
-    except NoRelevantChunksError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    messages, raw_sources = await prepare_single_paper_rag(
+        embedder, db_pool, paper_id, body, http_client, user_id=user_id
+    )
 
     smart_model = get_smart_model()
 
@@ -347,10 +341,8 @@ async def ask_paper_stream(
         messages, raw_sources = await prepare_single_paper_rag(
             embedder, db_pool, paper_id, body, http_client, user_id=user_id
         )
-    except PaperNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Paper not found") from exc
-    except NoRelevantChunksError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(
             "Streaming RAG preparation failed for paper %d: %r", paper_id, exc, exc_info=True

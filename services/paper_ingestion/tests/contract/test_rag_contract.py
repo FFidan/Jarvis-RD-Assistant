@@ -142,14 +142,14 @@ async def test_prepare_single_paper_rag_title_from_real_db(contract_conn):
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
 async def test_prepare_single_paper_rag_404_on_missing_paper(contract_conn):
-    """prepare_single_paper_rag raises PaperNotFoundError when the paper_id does not exist in the real DB."""
+    """prepare_single_paper_rag raises 404 when the paper_id does not exist in the real DB."""
     from unittest.mock import AsyncMock
 
     import httpx
+    from fastapi import HTTPException
 
     from paper_ingestion.ingestion.embedder import Embedder
     from paper_ingestion.models import AskRequest
-    from paper_ingestion.rag.exceptions import PaperNotFoundError
     from paper_ingestion.rag.streaming import prepare_single_paper_rag
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
@@ -161,7 +161,7 @@ async def test_prepare_single_paper_rag_404_on_missing_paper(contract_conn):
 
     body = AskRequest(question="anything?", max_chunks=5)
 
-    with pytest.raises(PaperNotFoundError):
+    with pytest.raises(HTTPException) as exc_info:
         await prepare_single_paper_rag(
             embedder,
             SharedConnPool(contract_conn),
@@ -169,6 +169,7 @@ async def test_prepare_single_paper_rag_404_on_missing_paper(contract_conn):
             body=body,
             http_client=mock_http,
         )
+    assert exc_info.value.status_code == 404
 
 
 # ---------------------------------------------------------------------------
