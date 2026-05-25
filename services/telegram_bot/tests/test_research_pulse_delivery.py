@@ -17,6 +17,7 @@ import httpx
 import pytest
 from jarvis_common.testing import make_bot_config
 from pydantic import SecretStr
+from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import research_pulse
 from telegram_bot.owner import UserPairing
 
@@ -70,7 +71,7 @@ async def test_fetches_pulse_today_and_sends_cards():
             http_client,
             db_pool,
             bot,
-            make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
         )
 
     # One GET to /api/pulse/today with auth header
@@ -105,7 +106,7 @@ async def test_empty_deck_sends_fallback_message():
             http_client,
             db_pool,
             bot,
-            make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_awaited()
@@ -129,7 +130,7 @@ async def test_api_failure_sends_diagnostic(caplog):
             http_client,
             db_pool,
             bot,
-            make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
         )
 
     bot.send_message.assert_awaited()
@@ -172,7 +173,7 @@ async def test_card_message_has_three_inline_buttons(monkeypatch):
             http_client,
             db_pool,
             bot,
-            make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
         )
 
     assert len(captured_keyboards) == 2
@@ -211,7 +212,7 @@ async def test_deck_is_capped_to_top_n():
             http_client,
             db_pool,
             bot,
-            make_bot_config(telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
         )
 
     # PULSE_TELEGRAM_TOP_N is 5 (brevity). With optional header, up to 6 sends.

@@ -16,6 +16,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from telegram_bot.config import BotConfig
 
 pytestmark = [
     pytest.mark.contract,
@@ -125,7 +126,7 @@ def _make_context(pool: Any, config: Any = None, *, args: list[str] | None = Non
     ctx.bot.send_message = AsyncMock()
     ctx.application = MagicMock()
     ctx.application.bot_data = {
-        "config": config or make_bot_config(telegram_chat_id=None),
+        "config": config or make_bot_config(BotConfig, telegram_chat_id=None),
         "db_pool": pool,
         "http_client": AsyncMock(),
     }
@@ -251,7 +252,7 @@ async def test_whoami_command_reads_real_pairing(contract_conn):
     pool = TgContractPool(contract_conn)
     update = make_telegram_update(chat_id=9901)
     # telegram_chat_id=None so the legacy-owner branch is not taken
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     context = _make_context(pool, config=config)
 
     await whoami_command(update, context)
@@ -459,7 +460,7 @@ async def test_a233_briefing_command_reads_tasks_from_real_db(contract_conn, con
     update = _make_update_with_text("/briefing", chat_id=4401)
     from jarvis_common.testing import make_bot_config
 
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     context = _make_context(pool, config)
     context.user_data = {"jarvis_user_id": user_a_id}
 
@@ -722,7 +723,7 @@ async def test_a246_project_detail_callback_reads_project_scoped_to_user(
     pool = TgContractPool(contract_conn)
     from jarvis_common.testing import make_bot_config
 
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
 
     # Build callback update for user A (can see own project)
     update_a = _make_callback_update(chat_id=9901, callback_data=f"project_detail_{project_id_a}")
@@ -796,7 +797,7 @@ async def test_a247_task_done_callback_marks_task_done_in_db(contract_conn, cont
     pool = TgContractPool(contract_conn)
     from jarvis_common.testing import make_bot_config
 
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     update = _make_callback_update(chat_id=11001, callback_data=f"task_done_{task_id_a}")
     context = _make_context(pool, config)
 
@@ -878,7 +879,7 @@ async def test_tg_paper_detail_callback_owner_sees_paper(contract_conn, contract
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = _make_http_mock(
         method="get",
         json_data={
@@ -935,7 +936,7 @@ async def test_tg_paper_detail_callback_other_user_404(contract_conn, contract_t
     chat_id_b_unpaired = 20099
 
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = AsyncMock()
 
     update = _make_callback_update(
@@ -977,7 +978,7 @@ async def test_tg_paper_action_save_transitions_state(contract_conn, contract_tw
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = _make_http_mock()
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:save:{paper_id_a}")
@@ -1016,7 +1017,7 @@ async def test_tg_paper_action_done_transitions_state(contract_conn, contract_tw
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = _make_http_mock()
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:done:{paper_id_a}")
@@ -1054,7 +1055,7 @@ async def test_tg_paper_action_trash_transitions_state(contract_conn, contract_t
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = _make_http_mock()
 
     update = _make_callback_update(chat_id=chat_id, callback_data=f"paper:trash:{paper_id_a}")
@@ -1093,7 +1094,7 @@ async def test_tg_paper_feedback_persists_with_correct_source(contract_conn, con
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = _make_http_mock(method="post")
 
     update = _make_callback_update(
@@ -1140,7 +1141,7 @@ async def test_tg_paper_feedback_idor_rejected(contract_conn, contract_two_users
     chat_id_unpaired = 20098
 
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = AsyncMock()
 
     update = _make_callback_update(
@@ -1184,7 +1185,7 @@ async def test_tg_stats_command_returns_user_scoped_counts(contract_conn, contra
     await _seed_tg_pairing(contract_conn, user_b_id, chat_id_b)
 
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
 
     for user_id, chat_id in [(user_a_id, chat_id_a), (user_b_id, chat_id_b)]:
         _timestamps.clear()
@@ -1246,7 +1247,7 @@ async def test_tg_focus_command_logs_focus_event(contract_conn, contract_two_use
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
 
     update = _make_update_with_text("/focus 25", chat_id=chat_id)
     context = _make_context(pool, config)
@@ -1298,7 +1299,7 @@ async def test_tg_pulse_now_command_enqueues_pulse_job(contract_conn, contract_t
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = _make_http_mock(method="post")
 
     update = _make_update_with_text("/pulse_now", chat_id=chat_id)
@@ -1355,7 +1356,7 @@ async def test_tg_start_command_welcome_path_no_pair_token(contract_conn, contra
 
     await _seed_tg_pairing(contract_conn, user_a_id, chat_id)
     pool = TgContractPool(contract_conn)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
 
     update = _make_update_with_text("/start", chat_id=chat_id)
     context = _make_context(pool, config)

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.testing import make_bot_config
+from telegram_bot.config import BotConfig
 from telegram_bot.handlers.review_handler import (
     SHOWING_BACK,
     SHOWING_FRONT,
@@ -54,7 +55,7 @@ def _make_callback_update(callback_data: str, chat_id: int = _TEST_CHAT_ID) -> M
 def _make_context(user_data: dict | None = None) -> tuple[MagicMock, AsyncMock]:
     context = MagicMock()
     context.user_data = user_data if user_data is not None else {}
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
     mock_http = AsyncMock()
     context.application = MagicMock()
     context.application.bot_data = {

@@ -11,11 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.testing import make_bot_config, make_telegram_update
+from telegram_bot.config import BotConfig
 
 
 def _make_context(pool=None, config=None):
     if config is None:
-        config = make_bot_config(telegram_chat_id=None)
+        config = make_bot_config(BotConfig, telegram_chat_id=None)
     if pool is None:
         pool = MagicMock()
     context = MagicMock()

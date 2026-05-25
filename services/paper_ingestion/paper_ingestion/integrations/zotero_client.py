@@ -16,16 +16,10 @@ import httpx
 from paper_ingestion.config import get_paper_ingestion_settings
 
 ZOTERO_API_BASE = "https://api.zotero.org"
+BBT_BASE_URL = get_paper_ingestion_settings().bbt_base_url
+BBT_LOCAL_BASE = f"{BBT_BASE_URL}/better-bibtex"
 
 logger = logging.getLogger(__name__)
-
-
-def __getattr__(name: str) -> str:
-    """Lazy module attributes — resolved on first access, not at import time."""
-    if name == "BBT_LOCAL_BASE":
-        return f"{get_paper_ingestion_settings().bbt_base_url}/better-bibtex"
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 
 # Hostnames that are intentionally private/docker-internal and explicitly allowed.
 _BBT_ALLOWED_PRIVATE_HOSTS: frozenset[str] = frozenset({"host.docker.internal"})
@@ -103,7 +97,7 @@ async def _zotero_request_with_retry(
     return await http.request(method, url, **kwargs)
 
 
-def validate_bbt_base_url(url: str | None = None) -> None:
+def validate_bbt_base_url(url: str = BBT_BASE_URL) -> None:
     """Validate BBT_BASE_URL at startup to block unsafe schemes or private IPs.
 
     Raises ``ValueError`` if the URL has an unsupported scheme (not http/https)
@@ -117,8 +111,8 @@ def validate_bbt_base_url(url: str | None = None) -> None:
     Parameters
     ----------
     url:
-        The BBT base URL to validate. Defaults to ``bbt_base_url`` from
-        settings (resolved lazily at call time, not at import time).
+        The BBT base URL to validate. Defaults to the module-level constant so
+        the function can be called with no arguments at startup.
 
     Raises
     ------
@@ -317,9 +311,8 @@ class ZoteroClient:
         """
         try:
             encoded_key = urllib.parse.quote(item_key, safe="")
-            bbt_base = get_paper_ingestion_settings().bbt_base_url
             resp = await self._http.get(
-                f"{bbt_base}/better-bibtex/export/item?itemKey={encoded_key}&translator=csljson",
+                f"{BBT_LOCAL_BASE}/export/item?itemKey={encoded_key}&translator=csljson",
                 timeout=3.0,
             )
             if resp.status_code == 200:

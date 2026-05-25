@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import asyncpg
 import pytest
 from jarvis_common.testing import FakeAcquireCM, FakeTxnCM, make_bot_config, make_telegram_update
+from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands.pairing_commands import (
     pair_command,
     unpair_command,
@@ -33,7 +34,7 @@ from telegram_bot.handlers.commands.pairing_commands import (
 
 
 def _make_config(telegram_chat_id: int | None = 777):
-    return make_bot_config(telegram_chat_id=telegram_chat_id)
+    return make_bot_config(BotConfig, telegram_chat_id=telegram_chat_id)
 
 
 def _make_conn(

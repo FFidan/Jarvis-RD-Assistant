@@ -116,8 +116,12 @@ async def _le_app(contract_conn):
 from jarvis_common.testing import (  # noqa: E402, F401
     _make_le_contract_app_with_litellm_sidecar,
 )
+from learning_engine._state import reset_services as _le_reset_services  # noqa: E402
+from learning_engine._state import set_services as _le_set_services  # noqa: E402
 
-le_contract_app_with_litellm_sidecar = _make_le_contract_app_with_litellm_sidecar()
+le_contract_app_with_litellm_sidecar = _make_le_contract_app_with_litellm_sidecar(
+    _le_set_services, _le_reset_services
+)
 
 
 @pytest.fixture()

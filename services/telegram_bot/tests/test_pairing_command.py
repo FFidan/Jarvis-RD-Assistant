@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarvis_common.testing import FakeAcquireCM, FakeTxnCM, make_bot_config, make_telegram_update
+from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands import start_command  # noqa: E402
 from telegram_bot.handlers.commands.pairing_commands import pair_command  # noqa: E402
 from telegram_bot.handlers.commands.system_commands import _handle_pairing  # noqa: E402
@@ -29,7 +30,7 @@ def _make_config(telegram_chat_id: int | None = _OWNER_CHAT_ID):
     # BotConfig is frozen and types telegram_chat_id as int, but at runtime
     # dataclass(frozen=True) doesn't enforce type hints, so passing None works
     # for the auth-fallback path tests.
-    return make_bot_config(telegram_chat_id=telegram_chat_id)
+    return make_bot_config(BotConfig, telegram_chat_id=telegram_chat_id)
 
 
 def _make_conn(fetchrow_return=None, fetchrow_side_effect=None, fetchval_return=None):

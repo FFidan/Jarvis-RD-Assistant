@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import telegram
 from jarvis_common.testing import make_bot_config
+from telegram_bot.config import BotConfig
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.callback_handler import (
     paper_action_callback,
@@ -67,7 +68,7 @@ def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_C
     update.callback_query = query
 
     context = MagicMock()
-    config = make_bot_config(telegram_chat_id=_TEST_CHAT_ID)
+    config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
     mock_db = AsyncMock()
     mock_http = AsyncMock()
 
@@ -392,7 +393,7 @@ async def test_paper_action_auth_fail_answers_query():
     Without this, the Telegram client spins indefinitely on auth-rejected
     callbacks (Wave-3 review SB-2).
     """
-    # Use a chat_id that does NOT match make_bot_config().telegram_chat_id so
+    # Use a chat_id that does NOT match make_bot_config(BotConfig, ).telegram_chat_id so
     # auth_check returns False against both the env path and the DB path.
     update, context, mock_db, mock_http = _make_callback_update_and_context(
         "paper:save:42", chat_id=99999
@@ -1023,7 +1024,7 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
     context = MagicMock()
     context.application = MagicMock()
     context.application.bot_data = {
-        "config": make_bot_config(telegram_chat_id=_TEST_CHAT_ID),
+        "config": make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID),
         "db_pool": AsyncMock(),
         "http_client": AsyncMock(),
     }

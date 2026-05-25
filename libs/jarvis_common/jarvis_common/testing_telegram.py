@@ -89,20 +89,18 @@ def make_telegram_update(
     return update
 
 
-def make_bot_config(**overrides: Any) -> Any:
+def make_bot_config(bot_config_cls: Any, **overrides: Any) -> Any:
     """Build a minimal ``BotConfig`` for telegram_bot unit tests.
+
+    ``bot_config_cls`` is the ``BotConfig`` class (or a compatible class) from
+    the calling service — injected by the caller so that this library function
+    does not import from any service package.
 
     Defaults match the canonical ``_make_config`` in ``test_pairing.py``;
     pass ``**overrides`` to change individual fields (e.g.
     ``telegram_chat_id=None`` for pairing-flow tests).
-
-    Import is deferred so that ``jarvis_common.testing`` can be imported by
-    all services — even those that don't have ``telegram_bot`` on sys.path.
-    The call will fail with an ImportError only if telegram_bot is absent
-    AND the caller actually invokes this function.
     """
     from pydantic import SecretStr
-    from telegram_bot.config import BotConfig
 
     defaults: dict[str, Any] = dict(
         telegram_token="test-token",
@@ -113,4 +111,4 @@ def make_bot_config(**overrides: Any) -> Any:
         jarvis_api_key=SecretStr("test-key"),
     )
     defaults.update(overrides)
-    return BotConfig(**defaults)
+    return bot_config_cls(**defaults)

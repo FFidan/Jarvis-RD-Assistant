@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.testing import make_bot_config
+from telegram_bot.config import BotConfig
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.commands import (  # noqa: E402
     briefing_command,
@@ -85,7 +86,7 @@ def _make_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
     # paired user rather than None (which is now blocked by the B4 guard).
     context.user_data = {"jarvis_user_id": 1}
 
-    config = make_bot_config(telegram_chat_id=_TEST_CHAT_ID)
+    config = make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID)
     mock_db = AsyncMock()
     mock_http = AsyncMock()
 
@@ -521,7 +522,7 @@ async def test_post_init_calls_set_my_commands():
     application = MagicMock()
     application.bot = bot_mock
     application.bot_data = {
-        "config": make_bot_config(telegram_chat_id=_TEST_CHAT_ID),
+        "config": make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID),
     }
 
     # Stub create_db_pool and JarvisScheduler so post_init doesn't blow up.

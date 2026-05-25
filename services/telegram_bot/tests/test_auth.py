@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarvis_common.testing import make_bot_config, make_telegram_update
+from telegram_bot.config import BotConfig
 from telegram_bot.handlers.helpers import auth_check as _auth_check
 
 
@@ -34,7 +35,7 @@ async def test_auth_check_accepts_paired_user():
     pairing_row = {"user_id": 1}
     pool = _make_pool(fetchval_return=None, fetchrow_return=pairing_row)
     update = make_telegram_update(chat_id=999)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
 
     authorized, user_id = await _auth_check(update, config, pool)
 
@@ -52,7 +53,7 @@ async def test_auth_check_rejects_unpaired_unknown_chat():
     """chat_id absent from env, user_config, and pairings table -> False."""
     pool = _make_pool(fetchval_return=None, fetchrow_return=None)
     update = make_telegram_update(chat_id=12345)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
 
     authorized, user_id = await _auth_check(update, config, pool)
 
@@ -68,7 +69,7 @@ async def test_auth_check_returns_user_id_for_paired_chat():
     """Wave-0 C1: paired chats expose the DB user_id for downstream scoping."""
     pool = _make_pool(fetchval_return=None, fetchrow_return={"user_id": 7})
     update = make_telegram_update(chat_id=999)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
 
     assert await _auth_check(update, config, pool) == (True, 7)
 
@@ -78,7 +79,7 @@ async def test_auth_check_returns_none_for_owner_match():
     """Wave-0 C1: legacy single-tenant owner_chat_id match returns user_id=None."""
     pool = _make_pool(fetchval_return=999, fetchrow_return=None)
     update = make_telegram_update(chat_id=999)
-    config = make_bot_config(telegram_chat_id=None)
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
 
     assert await _auth_check(update, config, pool) == (True, None)
 
@@ -88,6 +89,6 @@ async def test_auth_check_returns_none_for_env_var_match():
     """Wave-0 C1: env-var TELEGRAM_CHAT_ID match returns user_id=None (owner)."""
     pool = _make_pool()
     update = make_telegram_update(chat_id=12345)
-    config = make_bot_config(telegram_chat_id=12345)
+    config = make_bot_config(BotConfig, telegram_chat_id=12345)
 
     assert await _auth_check(update, config, pool) == (True, None)

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.testing import make_bot_config
+from telegram_bot.config import BotConfig
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.commands.project_commands import projects_command
 from telegram_bot.handlers.commands.task_commands import tasks_command
@@ -26,7 +27,7 @@ def _make_update_and_context(args=None):
     db = AsyncMock()
     context.application = MagicMock()
     context.application.bot_data = {
-        "config": make_bot_config(telegram_chat_id=_TEST_CHAT_ID),
+        "config": make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID),
         "db_pool": db,
         "http_client": AsyncMock(),
     }

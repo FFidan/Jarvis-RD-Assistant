@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarvis_common.testing import make_bot_config, make_telegram_update
+from telegram_bot.config import BotConfig
 from telegram_bot.handlers.rate_limit import _locks, _timestamps, rate_limit
 
 # ---------------------------------------------------------------------------
@@ -385,7 +386,7 @@ def _make_review_update_and_context(callback_data: str, chat_id: int = 54321):
     context.user_data = {}
     context.application = MagicMock()
     context.application.bot_data = {
-        "config": make_bot_config(telegram_chat_id=chat_id),
+        "config": make_bot_config(BotConfig, telegram_chat_id=chat_id),
         "db_pool": AsyncMock(),
         "http_client": mock_http,
     }

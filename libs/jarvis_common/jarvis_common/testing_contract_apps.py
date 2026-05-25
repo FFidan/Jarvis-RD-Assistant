@@ -185,7 +185,7 @@ def _make_pi_contract_app_with_litellm_sidecar():
     return pi_contract_app_with_litellm_sidecar
 
 
-def _make_le_contract_app_with_litellm_sidecar():
+def _make_le_contract_app_with_litellm_sidecar(set_services_fn, reset_services_fn):
     """Same shape as _make_pi_contract_app_with_litellm_sidecar but for LE app.
 
     Yields ``(app, faux_server)`` so LE contract tests can script LLM responses
@@ -196,6 +196,10 @@ def _make_le_contract_app_with_litellm_sidecar():
     connection and standard LE collaborators.  The faux server overrides
     ``LITELLM_BASE_URL`` so every call to ``get_litellm_config()`` inside the
     app routes to the sidecar.
+
+    ``set_services_fn`` and ``reset_services_fn`` are callables injected by the
+    service conftest (from ``learning_engine._state``) so that this library
+    function does not import from any service package.
     """
     import pytest_asyncio
 
@@ -217,6 +221,9 @@ def _make_le_contract_app_with_litellm_sidecar():
 
         from jarvis_common.testing_sidecars import FauxLiteLLMServer
 
+        _le_set_services = set_services_fn
+        _le_reset_services = reset_services_fn
+
         async with FauxLiteLLMServer() as srv:
             monkeypatch.setenv("LITELLM_BASE_URL", srv.url)
             oc = instructor.from_openai(
@@ -226,9 +233,6 @@ def _make_le_contract_app_with_litellm_sidecar():
             # Patch both app.state.openai_client (for router deps) and
             # learning_engine._state.svc.openai_client (for generate_cards_core
             # which calls get_services().openai_client directly).
-            from learning_engine._state import reset_services as _le_reset_services  # noqa: PLC0415
-            from learning_engine._state import set_services as _le_set_services  # noqa: PLC0415
-
             _le_set_services(openai_client=oc)
             try:
                 with patch_app_state(_le_app, {"openai_client": oc}):
