@@ -339,7 +339,7 @@ async def ask_paper_stream(
         await assert_paper_ownership(conn, paper_id, user_id)
     try:
         messages, raw_sources = await prepare_single_paper_rag(
-            embedder, db_pool, paper_id, body, http_client, user_id=user_id
+            embedder, db_pool, paper_id, body, http_client
         )
     except HTTPException:
         raise
