@@ -91,7 +91,13 @@ class ProjectManager:
 
     VALID_PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
 
-    async def update_project_status(self, project_id: int, status: str) -> dict:
+    async def update_project_status(
+        self,
+        project_id: int,
+        status: str,
+        *,
+        user_id: int | None = None,
+    ) -> dict:
         """Update a project's status.
 
         Parameters
@@ -100,11 +106,14 @@ class ProjectManager:
             Project ID.
         status : str
             New status (``active``, ``paused``, ``completed``, ``archived``).
+        user_id : int | None
+            When provided, only updates the project if it belongs to this user.
+            Pass ``None`` (default) to skip the ownership check (system/legacy paths).
 
         Returns
         -------
         dict
-            Updated project record, or empty dict if not found.
+            Updated project record, or empty dict if not found or not owned.
 
         Raises
         ------
@@ -117,9 +126,12 @@ class ProjectManager:
             )
         row = await self.db_pool.fetchrow(
             """UPDATE projects SET status = $1, updated_at = NOW()
-            WHERE id = $2 RETURNING *""",
+            WHERE id = $2
+              AND ($3::bigint IS NULL OR user_id IS NOT DISTINCT FROM $3)
+            RETURNING *""",
             status,
             project_id,
+            user_id,
         )
         return dict(row) if row else {}
 

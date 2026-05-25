@@ -38,10 +38,11 @@ async def export_anki(
             SELECT c.*, p.title AS paper_title, p.authors AS paper_authors
             FROM cards c
             LEFT JOIN papers p ON p.id = c.paper_id
-            WHERE c.deck_id = $1
+            WHERE c.deck_id = $1 AND c.user_id = $2
             ORDER BY c.created_at
             """,
             deck_id,
+            user_id,
         )
 
     if not rows:

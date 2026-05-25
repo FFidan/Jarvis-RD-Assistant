@@ -272,13 +272,16 @@ async def get_status(request: Request) -> SetupStatusResponse:
 
     try:
         admins = await _admin_count(pool)
-    except Exception:
+    except Exception as exc:
+        # Fail-closed: a DB failure must NOT report configured=False, because
+        # that would let the setup wizard re-open and a second admin could be
+        # created when one already exists (MED-PI-02).
         logger.exception("setup status: admin count query failed")
-        # Fail-open: report unconfigured so the wizard can run / the operator
-        # can recover. The DB error itself will surface in /api/setup/system-check.
-        configured = False
-    else:
-        configured = admins > 0
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Setup status check failed",
+        ) from exc
+    configured = admins > 0
     return SetupStatusResponse(
         configured=configured,
         setup_mode=mode,

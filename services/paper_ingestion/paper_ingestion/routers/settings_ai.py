@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -18,6 +19,8 @@ from paper_ingestion.services.ai_settings import (
     find_candidate_config_path,
     resolve_candidates_for_tier,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings/ai", tags=["settings"])
 
@@ -43,12 +46,12 @@ class AISettingsResponse(BaseModel):
 
 
 class ApplyRequest(BaseModel):
-    backend: str
-    model: str
+    backend: str = Field(max_length=64)
+    model: str = Field(max_length=128)
 
 
 class DismissRequest(BaseModel):
-    banner_kind: str
+    banner_kind: str = Field(max_length=64)
 
 
 def _effective_tier() -> str:
@@ -85,15 +88,18 @@ async def apply_ai_settings(
     selection = resolve_candidates_for_tier(tier, config_path=_CONFIG_PATH)
     if not candidate_is_allowed(selection, backend=req.backend, model=req.model):
         raise HTTPException(
-            422,
-            f"model is not a resolved candidates_for_tier entry for {tier}: "
-            f"{req.backend}/{req.model}; issues={selection.issues}",
+            422, "backend/model is not an allowed candidate for current hardware tier"
         )
 
     try:
         _APPLIER.apply(backend=req.backend, model=req.model, tier=tier)
     except Exception as exc:
-        raise HTTPException(502, f"apply failed; reverted: {exc}") from exc
+        # str(exc) would reflect provider/admin-push internals to the API
+        # consumer; log server-side and surface a generic 502 (MED-PI-04).
+        logger.exception(
+            "settings_ai apply failed", extra={"backend": req.backend, "model": req.model}
+        )
+        raise HTTPException(502, "apply failed; previous config restored") from exc
 
     return await get_ai_settings()
 

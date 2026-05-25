@@ -255,10 +255,11 @@ async def sync_reviews(
                         continue
                     await conn.execute(
                         "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
-                        "WHERE id = $3",
+                        "WHERE id = $3 AND user_id = $4",
                         new_state,
                         next_due,
                         event.card_id,
+                        user_id,
                     )
                 applied.add(event.idempotency_key)
                 synced += 1
@@ -283,19 +284,19 @@ async def get_stats(
                         COUNT(*) AS total_cards,
                         COUNT(*) FILTER (WHERE due_at <= NOW()) AS due_now
                     FROM cards
-                    WHERE user_id IS NOT DISTINCT FROM $1
+                    WHERE user_id = $1
                 ),
                 today_stats AS (
                     SELECT COUNT(*) AS reviewed_today
                     FROM review_logs
                     WHERE (reviewed_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date
-                      AND user_id IS NOT DISTINCT FROM $1
+                      AND user_id = $1
                 ),
                 rating_stats AS (
                     SELECT rating, COUNT(*) AS cnt
                     FROM review_logs
                     WHERE reviewed_at >= NOW() - INTERVAL '30 days'
-                      AND user_id IS NOT DISTINCT FROM $1
+                      AND user_id = $1
                     GROUP BY rating
                 ),
                 rating_agg AS (

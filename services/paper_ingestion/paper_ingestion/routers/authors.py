@@ -197,7 +197,7 @@ async def auto_detect_authors(
                     new_row = await conn.fetchrow(
                         """INSERT INTO tracked_authors (author_name, source, user_id)
                         VALUES ($1, $2, $3)
-                        ON CONFLICT (author_name, s2_author_id) DO NOTHING
+                        ON CONFLICT (user_id, author_name, s2_author_id) DO NOTHING
                         RETURNING *""",
                         author_name,
                         source,
@@ -297,9 +297,11 @@ async def check_tracked_authors(
 
                 # Update last_checked_at
                 await conn.execute(
-                    "UPDATE tracked_authors SET last_checked_at = $1 WHERE id = $2",
+                    "UPDATE tracked_authors SET last_checked_at = $1"
+                    " WHERE id = $2 AND user_id IS NOT DISTINCT FROM $3",
                     datetime.now(UTC),
                     author_id,
+                    user_id,
                 )
 
     return AuthorCheckResponse(new_papers=total_new, authors_checked=len(authors))

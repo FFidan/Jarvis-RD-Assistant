@@ -233,3 +233,52 @@ async def test_a24_check_authors_returns_only_own_user_results(
     assert "authors_checked" in body, f"Missing 'authors_checked' key: {body}"
     assert isinstance(body["new_papers"], int) and body["new_papers"] >= 0
     assert isinstance(body["authors_checked"], int) and body["authors_checked"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# A25: Multi-tenant isolation — (user_id, author_name, s2_author_id) unique
+# ---------------------------------------------------------------------------
+
+
+async def test_a25_tracked_authors_per_user_unique_constraint(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Covers HIGH-PI-01: tracked_authors unique constraint is per-user.
+
+    User A and user B both track "Alice Smith" (s2_author_id=None).
+    Each must get their own row — cross-user conflict must NOT fire.
+    A second attempt by the same user must return 409.
+
+    Verified: db/init.sql tracked_authors_name_s2_unique UNIQUE (user_id, author_name, s2_author_id).
+    Verified: authors.py:55-82 create_tracked_author — pre-check + INSERT.
+    """
+    payload = {"author_name": "Alice Smith", "s2_author_id": None}
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_a = await c.post("/api/authors", json=payload)
+    assert resp_a.status_code == 201, f"User A create failed: {resp_a.text[:300]}"
+    id_a = resp_a.json()["id"]
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp_b = await c.post("/api/authors", json=payload)
+    assert resp_b.status_code == 201, (
+        f"User B must get their own row (no cross-user conflict), got {resp_b.status_code}: "
+        f"{resp_b.text[:300]}"
+    )
+    id_b = resp_b.json()["id"]
+    assert id_a != id_b, "User A and user B must have separate tracked_authors rows"
+
+    row_a = await contract_conn.fetchrow("SELECT user_id FROM tracked_authors WHERE id = $1", id_a)
+    row_b = await contract_conn.fetchrow("SELECT user_id FROM tracked_authors WHERE id = $1", id_b)
+    assert row_a["user_id"] == contract_two_users.user_a_id
+    assert row_b["user_id"] == contract_two_users.user_b_id
+
+    # Same user, same author → 409
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_dup = await c.post("/api/authors", json=payload)
+    assert resp_dup.status_code == 409, (
+        f"Duplicate for same user must be 409, got {resp_dup.status_code}"
+    )
