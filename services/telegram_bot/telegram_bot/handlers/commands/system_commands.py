@@ -94,7 +94,7 @@ async def _do_pairing(
                     return
                 await conn.execute(
                     "INSERT INTO user_config (user_id, key, value) "
-                    "VALUES (NULL, 'telegram.owner_chat_id', $1::jsonb) "
+                    "VALUES (NULL, 'telegram.owner_chat_id', to_jsonb($1::bigint)) "
                     "ON CONFLICT (user_id, key) DO UPDATE "
                     "SET value = EXCLUDED.value, updated_at = NOW()",
                     chat.id,

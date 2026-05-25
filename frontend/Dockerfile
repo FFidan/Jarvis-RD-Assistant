@@ -1,5 +1,8 @@
 ARG NODE_BUILD_IMAGE=node:22.14-alpine3.21
-ARG NGINX_RUNTIME_IMAGE=nginx:1.27-alpine3.21
+# nginxinc/nginx-unprivileged runs as uid 101 (nginx) — no root at runtime.
+# Default upstream port is 8080, but our nginx.conf template binds to 3000
+# explicitly, so the host mapping (127.0.0.1:3001:3000) is unchanged.
+ARG NGINX_RUNTIME_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine3.21
 
 FROM ${NODE_BUILD_IMAGE} AS build
 WORKDIR /app
@@ -13,6 +16,8 @@ COPY . .
 RUN npm run build
 
 FROM ${NGINX_RUNTIME_IMAGE}
+# Switch to root only for package install + file setup; drop back to nginx after.
+USER root
 RUN apk add --no-cache openssl
 COPY scripts/generate-certs.sh /docker-entrypoint.d/00-generate-certs.sh
 RUN chmod +x /docker-entrypoint.d/00-generate-certs.sh
@@ -24,4 +29,5 @@ COPY nginx-security-headers.conf /etc/nginx/nginx-security-headers.conf
 # sequentially in alphabetical order within each glob).
 COPY nginx-rate-limit.conf /etc/nginx/conf.d/00-nginx-rate-limit.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+USER nginx
 EXPOSE 3000

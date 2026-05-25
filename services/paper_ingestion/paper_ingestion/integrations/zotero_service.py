@@ -28,6 +28,12 @@ class ZoteroConfigDecryptError(Exception):
     """Raised when stored Zotero config cannot be Fernet-decrypted."""
 
 
+# Keys whose decrypt failure should abort config loading entirely.
+# Non-listed encrypted keys are logged and skipped so callers still receive
+# the partial config (e.g. last_library_version read failures are non-fatal).
+_CRITICAL_ZOTERO_CONFIG_KEYS: frozenset[str] = frozenset({"api_key"})
+
+
 async def _get_zotero_config(
     db_pool: asyncpg.Pool,
     user_id: int | None = None,
@@ -52,6 +58,8 @@ async def _get_zotero_config(
             user_id,
         )
     config: dict[str, Any] = {}
+    failed_critical: list[str] = []
+    failed_non_critical: list[str] = []
     for row in rows:
         short_key = row["key"][len("zotero.") :]
         enc = row.get("encrypted_value")
@@ -61,17 +69,28 @@ async def _get_zotero_config(
             try:
                 config[short_key] = resolve_secret_row({"encrypted_value": enc, "value": None})
             except Exception:
-                logger.warning(
-                    "Zotero config decrypt failed for key %r; treating Zotero config as missing",
-                    short_key,
-                    exc_info=True,
-                )
-                raise ZoteroConfigDecryptError(short_key)
+                if short_key in _CRITICAL_ZOTERO_CONFIG_KEYS:
+                    logger.warning(
+                        "Zotero config decrypt failed for critical key %r; "
+                        "operator must re-save Zotero API key in Settings",
+                        short_key,
+                        exc_info=True,
+                    )
+                    failed_critical.append(short_key)
+                else:
+                    logger.warning(
+                        "Zotero config decrypt failed for non-critical key %r; skipping",
+                        short_key,
+                        exc_info=True,
+                    )
+                    failed_non_critical.append(short_key)
         else:
             # Legacy plaintext row (or non-secret scalar).
             # asyncpg JSONB codec auto-decodes objects/arrays/booleans;
             # scalar strings come back as str — no manual json.loads() needed.
             config[short_key] = row["value"]
+    if failed_critical:
+        raise ZoteroConfigDecryptError(failed_critical[0])
     return config
 
 
@@ -670,19 +689,22 @@ async def poll_zotero_library(
             MAX_ENQUEUE_PER_SYNC,
         )
     if new_version != last_version:
-        try:
-            async with db_pool.acquire() as conn:
-                await conn.execute(
-                    """
+        if polling_user_id is None:
+            logger.info("Zotero poll: skipping last_library_version upsert (polling_user_id=None)")
+        else:
+            try:
+                async with db_pool.acquire() as conn:
+                    await conn.execute(
+                        """
                     INSERT INTO user_config (user_id, key, value)
                     VALUES ($2, 'zotero.last_library_version', $1::jsonb)
                     ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value
                     """,
-                    new_version,
-                    polling_user_id,
-                )
-        except Exception:
-            logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)
+                        new_version,
+                        polling_user_id,
+                    )
+            except Exception:
+                logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)
 
     logger.info(
         "Zotero poll complete: new=%d linked=%d enqueued=%d version=%d→%d",

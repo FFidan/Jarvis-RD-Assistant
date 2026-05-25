@@ -1,0 +1,32 @@
+# docker-compose.override.yml.example
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-machine override template. Copy to docker-compose.override.yml (gitignored)
+# and customise for your local setup.
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#
+# This file ships the socat proxy that forwards container traffic to the shared
+# Ollama daemon running in ~/ai-infra (see ~/ai-infra/README.md).  Instead of
+# each project running its own ollama instance, a single shared daemon serves
+# all projects on this host.  The socat container bridges the project's jarvis
+# network to the ai-infra network where that daemon listens.
+#
+# Only the socat pattern is shown here.  Add further service overrides below
+# as needed for your machine (e.g. extra port bindings, GPU resource changes).
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  ollama:
+    # Replace the local ollama service with a socat proxy to the shared daemon.
+    # alpine/socat:1.8.0.0 pinned for reproducibility.
+    image: alpine/socat:1.8.0.0@sha256:a6be4c0262b339c53ddad723cdd178a1a13271e1137c65e27f90a08c16de02b8
+    command: TCP-LISTEN:11434,fork,reuseaddr TCP:ollama:11434
+    networks:
+      - jarvis
+      - ai-infra-net
+    restart: unless-stopped
+
+networks:
+  ai-infra-net:
+    external: true
+    name: ai-infra-net

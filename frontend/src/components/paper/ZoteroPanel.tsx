@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
@@ -12,7 +12,12 @@ interface ZoteroPanelProps {
 
 export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
   const queryClient = useQueryClient();
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+  }, []);
 
   const { data: linkage, isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.zotero.linkage(paperId),
@@ -29,10 +34,15 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.zotero.linkage(paperId) }),
   });
 
-  const copyKey = (key: string) => {
-    navigator.clipboard.writeText(key);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyKey = async (key: string) => {
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    try {
+      await navigator.clipboard.writeText(key);
+      setCopyState('copied');
+    } catch {
+      setCopyState('error');
+    }
+    copyTimerRef.current = setTimeout(() => setCopyState('idle'), 2000);
   };
 
   if (isLoading) return <div className="text-sm text-muted-foreground">Loading Zotero status…</div>;
@@ -74,7 +84,8 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
               <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => copyKey(linkage.zotero_citation_key!)} aria-label="Copy citation key">
                 <Copy className="h-3 w-3" />
               </Button>
-              {copied && <span className="text-xs text-muted-foreground">Copied!</span>}
+              {copyState === 'copied' && <span className="text-xs text-muted-foreground">Copied!</span>}
+              {copyState === 'error' && <span className="text-xs text-destructive">Copy failed</span>}
             </div>
           )}
           {!linkage.zotero_citation_key && (

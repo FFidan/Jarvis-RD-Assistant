@@ -61,11 +61,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     bulkAction: vi.fn().mockResolvedValue({ succeeded: [7], failed: [] }),
     fetchSources: vi.fn().mockResolvedValue([]),
     fetchTopics: vi.fn().mockResolvedValue([]),
-    useFeedCounts: vi.fn().mockReturnValue({
-      data: { inbox: 1, library: 1, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 2 },
-      isLoading: false,
-      isPending: false,
-    }),
     fetchFeedCounts: vi.fn().mockResolvedValue({
       inbox: 1, library: 1, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 2,
     }),

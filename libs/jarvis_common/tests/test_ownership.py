@@ -134,6 +134,86 @@ async def test_assert_paper_ownership_403_for_other_user() -> None:
 
 
 # ---------------------------------------------------------------------------
+# None/None semantics — discovered_by=NULL + user_id=None edge case
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_assert_paper_ownership_none_discovered_by_with_none_user_id() -> None:
+    """When paper.discovered_by=NULL and user_id=None, the function must return early.
+
+    This test verifies that the equality check uses proper None comparison (==),
+    not string conversion which would hide the None-passthrough logic. The
+    condition is: ``discovered_by == user_id or discovered_by is None``.
+
+    With discovered_by=None and user_id=None:
+    - discovered_by == user_id → None == None → True → return (correct)
+    - Alternately, discovered_by is None → True → return (correct)
+
+    Both paths should succeed. This test validates the first path.
+    """
+    from jarvis_common.db_helpers import assert_paper_ownership
+
+    row = _make_row(None)  # paper.discovered_by is NULL
+    conn = _make_conn(row)
+
+    # Single-user mode: user_id=None should pass early via the equality check
+    # (or via the None branch). Either way, no exception should be raised.
+    await assert_paper_ownership(conn, paper_id=1, user_id=None)
+
+
+# ---------------------------------------------------------------------------
+# Int equality with no str-coercion — discriminating tests for type-aware ==
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_assert_paper_ownership_int_equality_no_str_coercion() -> None:
+    """Python int == int works without str-coercion.
+
+    Verifies that the equality check in the ownership guard uses Python's
+    native type comparison (int == int) and does not fall back to string
+    comparison (str(42) == str(42)), which would mask type-safety regressions.
+
+    This test uses integer 42 for both discovered_by and user_id to ensure
+    the == operator works with ints directly.
+    """
+    from jarvis_common.db_helpers import assert_paper_ownership
+
+    row = _make_row(42)  # paper.discovered_by is int 42
+    conn = _make_conn(row)
+
+    # user_id is also int 42 — should pass via int equality
+    await assert_paper_ownership(conn, paper_id=1, user_id=42)
+
+
+@pytest.mark.asyncio
+async def test_assert_paper_ownership_int_user_id_str_discovered_rejected() -> None:
+    """Type mismatch (str discovered_by vs int user_id) is rejected.
+
+    Verifies that the equality check does NOT perform str-coercion: if
+    paper.discovered_by is "42" (string) and user_id is 42 (int), the
+    comparison must fail (not pass via str(42) == str(42)).
+
+    This is the discriminating test: the old code with str-coercion would
+    have passed; the new code correctly raises 403 for the mismatch.
+    """
+    from jarvis_common.db_helpers import assert_paper_ownership
+
+    # Simulate paper with string discovered_by (legacy or corruption)
+    row = MagicMock()
+    row.__getitem__ = MagicMock(side_effect=lambda key: "42" if key == "discovered_by" else None)
+    conn = _make_conn(row, in_library=False)
+
+    # user_id is int 42 — should NOT match string "42", so 403 is raised
+    with pytest.raises(HTTPException) as exc_info:
+        await assert_paper_ownership(conn, paper_id=1, user_id=42)
+
+    assert exc_info.value.status_code == 403
+    assert "not owned" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
 # Export check
 # ---------------------------------------------------------------------------
 

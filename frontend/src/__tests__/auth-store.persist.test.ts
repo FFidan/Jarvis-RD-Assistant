@@ -43,7 +43,8 @@ describe('auth-store — sessionStorage persistence (W2.4)', () => {
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw!);
     expect(parsed.state.user).toEqual({ id: 7, email: 'owner@example.com', role: 'admin' });
-    expect(parsed.state.apiKey).toBeNull();
+    // MED-FE-02: apiKey must not be persisted to sessionStorage at all.
+    expect('apiKey' in (parsed.state as Record<string, unknown>)).toBe(false);
 
     // localStorage must NOT contain the auth entry.
     expect(localStorage.getItem('jarvis-auth')).toBeNull();
@@ -87,5 +88,30 @@ describe('auth-store — sessionStorage persistence (W2.4)', () => {
     useAuthStore.getState().logout();
 
     expect(localStorage.getItem('jarvis-ui')).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // MED-FE-02: partialize must never include apiKey (in-memory only)
+  // -------------------------------------------------------------------------
+  it('MED-FE-02: apiKey is absent from the partialized state even when set in-memory', () => {
+    // Force an apiKey into in-memory state (simulates a legacy/edge-case path).
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      apiKey: 'should-never-be-persisted',
+      user: { id: 1, email: 'x@example.com', role: 'user' },
+    });
+
+    // Trigger a write to sessionStorage by reading the persisted key.
+    // The persist middleware writes on any setState, so the key is already there.
+    const raw = sessionStorage.getItem('jarvis-auth');
+    expect(raw).not.toBeNull();
+    const persisted = JSON.parse(raw!) as { state: Record<string, unknown> };
+
+    // The apiKey field must not appear in the persisted payload.
+    expect('apiKey' in persisted.state).toBe(false);
+    // Non-sensitive fields are still persisted.
+    expect(persisted.state.isAuthenticated).toBe(true);
+    expect(persisted.state.user).toEqual({ id: 1, email: 'x@example.com', role: 'user' });
   });
 });

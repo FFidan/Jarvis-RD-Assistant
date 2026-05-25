@@ -243,17 +243,33 @@ class PubMedSource(PaperSource):
         # rate: 10 req/s with API key, ~3 req/s otherwise
         self._rate_interval = 0.1 if self._api_key else 0.34
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / self._rate_interval)
+        # NCBI E-utilities best-practice: identify the calling application.
+        self._ncbi_tool: str = _cfg.ncbi_tool
+        self._ncbi_email: str = _cfg.ncbi_email
+        self._ncbi_user_agent: str = (
+            f"JARVIS-RD/1.0 (tool={self._ncbi_tool}; contact={self._ncbi_email or 'unset'})"
+        )
 
     async def _rate_limit(self) -> None:
         """Enforce NCBI rate limit: 10 req/s with API key, ~3 req/s otherwise."""
         await self._rate_limiter.acquire()
 
     def _base_params(self) -> dict:
-        """Build common NCBI E-utilities parameters."""
-        params: dict = {"db": "pubmed", "retmode": "xml"}
+        """Build common NCBI E-utilities parameters.
+
+        Includes ``tool`` and ``email`` per NCBI best-practice so NCBI can
+        attribute and contact the calling application rather than blanket-block.
+        """
+        params: dict = {"db": "pubmed", "retmode": "xml", "tool": self._ncbi_tool}
+        if self._ncbi_email:
+            params["email"] = self._ncbi_email
         if self._api_key:
             params["api_key"] = self._api_key
         return params
+
+    def _ncbi_headers(self) -> dict[str, str]:
+        """Return HTTP headers for NCBI E-utilities requests."""
+        return {"User-Agent": self._ncbi_user_agent}
 
     async def _esearch(self, term: str, retmax: int, extra: dict | None = None) -> list[str]:
         """Run an esearch query and return a list of PMIDs.
@@ -278,7 +294,9 @@ class PubMedSource(PaperSource):
         if extra:
             params.update(extra)
         try:
-            response = await self.http_client.get(ESEARCH_URL, params=params, timeout=30.0)
+            response = await self.http_client.get(
+                ESEARCH_URL, params=params, headers=self._ncbi_headers(), timeout=30.0
+            )
             if response.status_code in (429, 500, 502, 503, 504):
                 logger.warning("PubMed esearch returned %d", response.status_code)
                 self._record_transient_poll_diagnostic(response)
@@ -323,7 +341,9 @@ class PubMedSource(PaperSource):
         params = self._base_params()
         params["id"] = ",".join(pmids)
         try:
-            response = await self.http_client.get(EFETCH_URL, params=params, timeout=60.0)
+            response = await self.http_client.get(
+                EFETCH_URL, params=params, headers=self._ncbi_headers(), timeout=60.0
+            )
             if response.status_code in (429, 500, 502, 503, 504):
                 logger.warning("PubMed efetch returned %d", response.status_code)
                 self._record_transient_poll_diagnostic(response)
@@ -485,13 +505,12 @@ class PubMedSource(PaperSource):
         started_at = _time.monotonic()
         candidate_count = 0
 
-        if p_limiter is not None:
-            await p_limiter.acquire()
-
         try:
             for term in term_queries:
                 if len(papers) >= limit:
                     break
+                if p_limiter is not None:
+                    await p_limiter.acquire()
                 pmids = await self._esearch(term or "pubmed[sb]", retmax=per_q, extra=date_params)
                 new_pmids = [p for p in pmids if p not in seen_pmids]
                 if not new_pmids:
@@ -525,7 +544,7 @@ class PubMedSource(PaperSource):
                     )
                 except Exception as exc:
                     logger.warning("pubmed: log_event write failed for fetch_failed", exc_info=exc)
-            raise
+            return papers[:limit]
 
         duration_ms = int((_time.monotonic() - started_at) * 1000)
         if p_limiter is not None:

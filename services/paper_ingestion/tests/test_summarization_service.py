@@ -483,3 +483,116 @@ async def test_generate_paper_summary_raises_llm_error_on_pydantic_validation_er
                 verifier=MagicMock(),
                 embedder=MagicMock(),
             )
+
+
+# ---------------------------------------------------------------------------
+# W6-T2 — RuntimeError guard when openai_client is None
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_paper_summary_raises_runtime_error_when_client_none(monkeypatch):
+    """RuntimeError is raised when both openai_client arg and svc.openai_client are None.
+
+    Guard added in W6-T2 (HIGH-PI-07): if the lifespan never ran (or client
+    was not wired), the function must fail fast with a clear message rather
+    than passing None into call_llm_structured.
+    """
+    # Override the autouse fixture: set svc.openai_client to None explicitly.
+    monkeypatch.setattr(summarization.svc, "openai_client", None)
+
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [_paper_row(), None]
+    conn.fetch.return_value = [_chunk_row()]
+    pool = _make_pool(conn)
+
+    with patch.object(summarization, "advisory_lock", _noop_lock):
+        with pytest.raises(RuntimeError, match="openai_client not initialized"):
+            await summarization.generate_paper_summary(
+                paper_id=7,
+                db_pool=pool,
+                http_client=AsyncMock(),
+                verifier=MagicMock(),
+                embedder=MagicMock(),
+                openai_client=None,  # explicit None — both paths exhausted
+            )
+
+
+@pytest.mark.asyncio
+async def test_generate_paper_summary_uses_arg_client_when_svc_client_none(monkeypatch):
+    """When svc.openai_client is None, an explicit openai_client arg is used.
+
+    Companion to test_generate_paper_summary_raises_runtime_error_when_client_none.
+    Verifies the positive case: if svc.openai_client is None but an explicit
+    client is passed as an argument, the function uses that client without
+    raising RuntimeError. The mock client is passed through to call_llm_structured.
+    """
+    # Override the autouse fixture: set svc.openai_client to None.
+    monkeypatch.setattr(summarization.svc, "openai_client", None)
+
+    # Mock the arg client
+    arg_client = AsyncMock()
+
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [_paper_row(), None]
+    conn.fetch.return_value = [_chunk_row()]
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = {
+        "id": 1,
+        "paper_id": 7,
+        "summary_brief": "Test brief",
+        "summary_detailed": "Test detailed",
+        "tldr": "Test TLDR",
+        "key_findings": [],
+        "cross_references": [],
+        "methodology": "Test methodology",
+        "limitations": "Test limitations",
+        "relevance_notes": "Test notes",
+        "confidence": Confidence.MEDIUM,
+        "llm_model": "test-model",
+        "summary_verified": False,
+        "created_at": datetime.now(UTC),
+    }
+    pool = _make_pool(conn, conn_phase2)
+
+    # Set up a mock LLM output
+    llm_output = SummarizationOutput(
+        summary="Test summary",
+        key_findings=[],
+    )
+
+    # Set up the verifier mock
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=0,
+        verified_count=0,
+        confidence=Confidence.NONE,
+    )
+
+    # Mock call_llm_structured to avoid actual LLM calls and to verify
+    # that the arg_client is passed through
+    patch_ctx, mock_call_llm = _patched_call_llm(return_value=llm_output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        # Should NOT raise — uses the arg_client
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+            openai_client=arg_client,
+        )
+
+        # Verify the arg_client was passed to call_llm_structured
+        mock_call_llm.assert_called_once()
+        # The client is passed as the first positional argument to call_llm_structured
+        call_args = mock_call_llm.call_args.args
+        assert len(call_args) > 0 and call_args[0] is arg_client, (
+            f"call_llm_structured must receive arg_client as first positional arg, "
+            f"got: {call_args[0] if call_args else 'no args'}"
+        )
+        assert result is not None

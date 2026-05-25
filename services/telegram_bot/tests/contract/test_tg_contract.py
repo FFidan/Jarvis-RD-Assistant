@@ -429,6 +429,69 @@ async def test_a227_start_command_pairs_owner_via_telegram_pairing(contract_conn
 
 
 # ---------------------------------------------------------------------------
+# MED-TG-01: to_jsonb($1::bigint) cast regression — chat_id → jsonb scalar
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_med_tg_01_do_pairing_chat_id_to_jsonb_cast(contract_conn):
+    """MED-TG-01: _do_pairing must convert chat.id (int) to jsonb via to_jsonb($1::bigint).
+
+    PostgreSQL has no implicit integer→jsonb cast. The fix ensures the SQL
+    uses to_jsonb($1::bigint) so chat_id is encoded as a jsonb number scalar.
+
+    This test verifies:
+    1. The INSERT succeeds (no DataError / ProgrammingError)
+    2. The stored value is a jsonb number matching the chat_id
+    """
+    from telegram_bot.handlers.commands.system_commands import _do_pairing
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    # GIVEN: a valid pairing code in telegram_pairing
+    code = "MEDTG01TEST"
+    await contract_conn.execute(
+        "INSERT INTO telegram_pairing (code, expires_at) VALUES ($1, NOW() + INTERVAL '1 hour')",
+        code,
+    )
+
+    pool = TgContractPool(contract_conn)
+    chat_id = 5432
+    update = _make_update_with_text(f"/start PAIR_{code}", chat_id=chat_id)
+    context = _make_context(pool)
+
+    # WHEN: _do_pairing executes
+    await _do_pairing(update, context, code)
+
+    # THEN: user_config row exists with value = jsonb number
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
+    )
+    assert row is not None, "user_config telegram.owner_chat_id must be created"
+    value = row["value"]
+
+    # Verify the value is a jsonb number (can be extracted and converted to int)
+    assert isinstance(value, int), (
+        f"MED-TG-01: value must be jsonb-encoded as a number (got {type(value).__name__}); "
+        f"check that SQL uses to_jsonb($1::bigint)"
+    )
+    assert value == chat_id, f"MED-TG-01: value must match chat_id={chat_id}, got {value}"
+
+    # AND: the pairing code is consumed (deleted)
+    code_row = await contract_conn.fetchrow(
+        "SELECT code FROM telegram_pairing WHERE code = $1", code
+    )
+    assert code_row is None, "telegram_pairing code must be deleted after pairing"
+
+    # PTB boundary: success reply sent
+    update.message.reply_text.assert_awaited_once()
+    reply_text: str = update.message.reply_text.call_args[0][0]
+    assert "Paired" in reply_text, f"Expected 'Paired' in reply; got: {reply_text!r}"
+
+
+# ---------------------------------------------------------------------------
 # A233: briefing_command — direct DB reads under user scope
 # ---------------------------------------------------------------------------
 

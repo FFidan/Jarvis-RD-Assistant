@@ -462,3 +462,61 @@ async def test_rate_card_ratings_1_and_2_send_correct_payload(
     # Response text must contain the human-readable label for the rating
     edit_text = update.callback_query.edit_message_text.call_args[0][0]
     assert expected_label in edit_text
+
+
+# ---------------------------------------------------------------------------
+# Tests: HIGH-TG-01 — query.answer() on auth-fail branches
+# ---------------------------------------------------------------------------
+
+# Separate chat_id bucket to avoid bleed from other rate-limiter quotas.
+_AUTH_FAIL_CHAT_ID = 11111
+
+
+@pytest.mark.asyncio
+async def test_show_answer_auth_fail_calls_query_answer() -> None:
+    """show_answer must call query.answer() before returning END on auth failure.
+
+    HIGH-TG-01: without this call Telegram leaves a permanent loading spinner
+    on the inline button even though the bot rejected the action.
+    """
+    from unittest.mock import patch
+
+    from telegram.ext import ConversationHandler
+
+    update, context, _mock_http = _make_callback_update_and_context(
+        "show_answer", chat_id=_AUTH_FAIL_CHAT_ID
+    )
+
+    with patch(
+        "telegram_bot.handlers.review_handler.auth_check",
+        new=AsyncMock(return_value=(False, None)),
+    ):
+        result = await show_answer(update, context)
+
+    assert result == ConversationHandler.END
+    update.callback_query.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rate_card_auth_fail_calls_query_answer() -> None:
+    """rate_card must call query.answer() before returning END on auth failure.
+
+    HIGH-TG-01: without this call Telegram leaves a permanent loading spinner
+    on the inline button even though the bot rejected the action.
+    """
+    from unittest.mock import patch
+
+    from telegram.ext import ConversationHandler
+
+    update, context, _mock_http = _make_callback_update_and_context(
+        "rate_3", chat_id=_AUTH_FAIL_CHAT_ID
+    )
+
+    with patch(
+        "telegram_bot.handlers.review_handler.auth_check",
+        new=AsyncMock(return_value=(False, None)),
+    ):
+        result = await rate_card(update, context)
+
+    assert result == ConversationHandler.END
+    update.callback_query.answer.assert_awaited_once()

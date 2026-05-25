@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Trash2, FolderKanban, Pencil } from 'lucide-react';
 import type { Project } from '@/types';
-import { deleteProject, updateProject } from '@/lib/api';
+import { deleteProject, updateProject, fetchTasks, fetchMilestones, fetchProjectQuestions, fetchProjectActivity } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -22,10 +22,6 @@ import { TasksTab } from './TasksTab';
 import { LinkedPapersTab } from './LinkedPapersTab';
 import { QuestionsSection } from './QuestionsSection';
 import { RecentActivitySection } from './RecentActivitySection';
-import { useProjectQuestions } from '@/hooks/use-project-questions';
-import { useProjectActivity } from '@/hooks/use-project-activity';
-import { useProjectMilestones } from '@/hooks/use-project-milestones';
-import { useProjectTasks } from '@/hooks/use-project-tasks';
 
 /** §3.2 — map backend status values to display chip labels. */
 const STATUS_DISPLAY: Record<string, string> = {
@@ -54,10 +50,26 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
   const queryClient = useQueryClient();
   const [showDelete, setShowDelete] = useState(false);
 
-  const { data: questions = [], isError: questionsError } = useProjectQuestions(project?.id ?? 0);
-  const { data: activityItems = [], isError: activityError } = useProjectActivity(project?.id ?? 0);
-  const { data: milestones = [], isError: milestonesError } = useProjectMilestones(project?.id ?? 0);
-  const { data: tasks = [], isError: tasksError } = useProjectTasks(project?.id ?? 0);
+  const { data: questions = [], isError: questionsError } = useQuery({
+    queryKey: QUERY_KEYS.projects.questions(project?.id ?? 0),
+    queryFn: () => fetchProjectQuestions(project?.id ?? 0),
+    enabled: (project?.id ?? 0) > 0,
+  });
+  const { data: activityItems = [], isError: activityError } = useQuery({
+    queryKey: QUERY_KEYS.projects.activity(project?.id ?? 0),
+    queryFn: () => fetchProjectActivity(project?.id ?? 0),
+    enabled: (project?.id ?? 0) > 0,
+  });
+  const { data: milestones = [], isError: milestonesError } = useQuery({
+    queryKey: QUERY_KEYS.projects.milestones(project?.id ?? 0),
+    queryFn: () => fetchMilestones(project?.id ?? 0),
+    enabled: (project?.id ?? 0) > 0,
+  });
+  const { data: tasks = [], isError: tasksError } = useQuery({
+    queryKey: QUERY_KEYS.tasks.byProject(project?.id ?? 0),
+    queryFn: () => fetchTasks(project?.id ?? 0),
+    enabled: (project?.id ?? 0) > 0,
+  });
 
   const deleteMut = useMutation({
     mutationFn: () => deleteProject(project!.id),

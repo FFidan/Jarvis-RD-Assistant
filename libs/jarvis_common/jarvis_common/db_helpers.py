@@ -301,7 +301,7 @@ async def assert_paper_ownership(
     # D4 decision: discovered_by IS NULL == system/instance paper, globally
     # readable by all authenticated users. Behavior pinned by
     # tests/test_ownership_canonical_invariant.py.
-    if str(discovered_by) == str(user_id) or discovered_by is None:
+    if discovered_by == user_id or discovered_by is None:
         return
 
     in_library = await conn.fetchval(
@@ -346,7 +346,7 @@ async def assert_papers_ownership(
     for paper_id in unique_ids:
         discovered_by = by_id[paper_id]["discovered_by"]
         # Fast-grant: same owner, or NULL (shared canonical paper — D4 decided).
-        if str(discovered_by) == str(user_id) or discovered_by is None:
+        if discovered_by == user_id or discovered_by is None:
             continue
         candidate_ids.append(paper_id)
 

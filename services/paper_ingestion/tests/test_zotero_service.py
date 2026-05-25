@@ -576,7 +576,10 @@ async def test_poll_library_enqueues_new_items():
 
 
 async def test_poll_library_updates_version():
-    """zotero.last_library_version updated in user_config after poll."""
+    """zotero.last_library_version updated in user_config after poll.
+
+    HIGH-PI-14: polling_user_id must be non-None for the upsert to fire.
+    """
     item = _zotero_item(key="VER0001", doi="")
     # upsert conn for the item
     upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 55}))
@@ -595,7 +598,8 @@ async def test_poll_library_updates_version():
         mock_analyze_task = MagicMock()
         mock_analyze_task.defer_async = AsyncMock()
         with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
-            result = await poll_zotero_library(db_pool=pool, http_client=http)
+            # Pass a real user_id so the version upsert runs (HIGH-PI-14 guard).
+            result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
 
     # The version-persist connection should have had execute called
     version_conn.execute.assert_called_once()
@@ -1202,3 +1206,172 @@ async def test_poll_zotero_library_handles_decrypt_error(caplog):
 
     assert result == {"status": "config_decrypt_failed"}
     assert any("decryption failed" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# HIGH-PI-13: non-critical decrypt failure → partial config returned, no raise
+# HIGH-PI-13: critical decrypt failure (api_key) → ZoteroConfigDecryptError raised
+# ---------------------------------------------------------------------------
+
+
+async def test_get_zotero_config_non_critical_decrypt_failure_does_not_raise(caplog):
+    """HIGH-PI-13: decrypt failure on a non-critical key (last_library_version) must not raise.
+
+    The function should log a warning, skip the failed key, and return the
+    remaining config (api_key and user_id from plaintext rows).
+    """
+    import logging
+
+    from paper_ingestion.integrations.zotero_service import _get_zotero_config
+
+    rows = [
+        FakeRecord(
+            {
+                "key": "zotero.api_key",
+                "value": "plaintext-api-key",
+                "encrypted_value": None,
+            }
+        ),
+        FakeRecord(
+            {
+                "key": "zotero.user_id",
+                "value": "55555",
+                "encrypted_value": None,
+            }
+        ),
+        # Non-critical key with a corrupted ciphertext.
+        FakeRecord(
+            {
+                "key": "zotero.last_library_version",
+                "value": None,
+                "encrypted_value": b"bad-ciphertext-for-non-critical",
+            }
+        ),
+    ]
+
+    conn = _make_conn(fetch=rows)
+    pool = _make_pool(conn)
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
+        # Must NOT raise — non-critical key failure is tolerated.
+        config = await _get_zotero_config(pool)
+
+    # Partial config: plaintext keys must be present.
+    assert config["api_key"] == "plaintext-api-key"
+    assert config["user_id"] == "55555"
+    # The failed non-critical key must be absent from the config.
+    assert "last_library_version" not in config
+
+    # A warning must be logged mentioning the non-critical key.
+    assert any("last_library_version" in r.message for r in caplog.records), (
+        f"Expected warning for last_library_version; got: {[r.message for r in caplog.records]}"
+    )
+
+
+async def test_get_zotero_config_critical_decrypt_failure_raises(caplog):
+    """HIGH-PI-13: decrypt failure on api_key (a critical key) must raise ZoteroConfigDecryptError.
+
+    Also verifies that a WARNING log is emitted with the expected text about
+    the api_key and operator responsibility to re-save in Settings.
+    """
+    import logging
+
+    import pytest
+
+    from paper_ingestion.integrations.zotero_service import (
+        ZoteroConfigDecryptError,
+        _get_zotero_config,
+    )
+
+    rows = [
+        # Critical key with corrupted ciphertext.
+        FakeRecord(
+            {
+                "key": "zotero.api_key",
+                "value": None,
+                "encrypted_value": b"bad-ciphertext-critical",
+            }
+        ),
+        FakeRecord(
+            {
+                "key": "zotero.user_id",
+                "value": "12345",
+                "encrypted_value": None,
+            }
+        ),
+    ]
+
+    conn = _make_conn(fetch=rows)
+    pool = _make_pool(conn)
+
+    # Capture WARNING and higher severity logs
+    caplog.set_level(logging.WARNING)
+
+    with pytest.raises(ZoteroConfigDecryptError):
+        await _get_zotero_config(pool)
+
+    # Verify that a WARNING was logged with the expected content
+    warning_records = [rec for rec in caplog.records if rec.levelname == "WARNING"]
+    assert any(
+        "api_key" in rec.message and "operator must re-save" in rec.message
+        for rec in warning_records
+    ), (
+        f"Expected WARNING log with 'api_key' and 'operator must re-save', "
+        f"got: {[rec.message for rec in warning_records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# HIGH-PI-14: poll_zotero_library with polling_user_id=None must not upsert version
+# ---------------------------------------------------------------------------
+
+
+async def test_poll_library_skips_version_upsert_when_polling_user_id_is_none(caplog):
+    """HIGH-PI-14: when polling_user_id is None, last_library_version must not be upserted.
+
+    A ghost row with user_id=NULL would be inserted into user_config on every
+    anonymous cron poll. The fix gates the upsert on polling_user_id is not None.
+    """
+    import logging
+
+    new_item = _zotero_item(key="NULLUSER1", doi="")
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 101}))
+    # version_conn would only be used if the upsert runs; we give it a spy.
+    version_conn = _make_conn()
+
+    # _make_poll_pool prepends a config conn; remaining conns go to poll body.
+    pool = _make_poll_pool(upsert_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        # version 99 != 0 → would normally trigger the upsert
+        mock_client.fetch_items_since = AsyncMock(return_value=([new_item], 99))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_task.defer_async = AsyncMock()
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            with caplog.at_level(
+                logging.INFO, logger="paper_ingestion.integrations.zotero_service"
+            ):
+                result = await poll_zotero_library(
+                    db_pool=pool, http_client=http, polling_user_id=None
+                )
+
+    # The version_conn must NOT have had execute called with last_library_version.
+    version_persist_calls = [
+        c for c in version_conn.execute.call_args_list if "zotero.last_library_version" in str(c)
+    ]
+    assert not version_persist_calls, (
+        "last_library_version must not be upserted when polling_user_id=None; "
+        f"found: {version_persist_calls}"
+    )
+
+    # A log message must announce the skip.
+    assert any("skipping last_library_version" in r.message for r in caplog.records), (
+        f"Expected skip log; got: {[r.message for r in caplog.records]}"
+    )
+
+    assert result["status"] == "ok"

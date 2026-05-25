@@ -85,7 +85,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchFeedCounts: vi.fn().mockResolvedValue(RICH_COUNTS),
     fetchFeedCountsWithFacets: vi.fn().mockResolvedValue(RICH_COUNTS),
-    useFeedCounts: vi.fn().mockReturnValue({ data: RICH_COUNTS, isLoading: false }),
     fetchFeed: vi.fn().mockResolvedValue({ papers: [INBOX_PAPER], total: 1 }),
     fetchSources: vi.fn().mockResolvedValue([
       { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },

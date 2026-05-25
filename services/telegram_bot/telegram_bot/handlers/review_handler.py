@@ -160,6 +160,7 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     db_pool = get_db(context)
     authorized, jarvis_user_id = await auth_check(update, config, db_pool)
     if not authorized:
+        await query.answer()
         return ConversationHandler.END
 
     # Keep cached identity current in case pairing changed mid-session.
@@ -195,6 +196,7 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     db_pool = get_db(context)
     authorized, jarvis_user_id = await auth_check(update, config, db_pool)
     if not authorized:
+        await query.answer()
         return ConversationHandler.END
 
     # Refresh cached identity — use the freshly resolved id for this request

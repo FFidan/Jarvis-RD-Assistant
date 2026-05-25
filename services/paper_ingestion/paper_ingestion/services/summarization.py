@@ -262,6 +262,8 @@ async def generate_paper_summary(
 
     # --- Phase 2: call LiteLLM via Instructor (no connection held) ---
     client = openai_client if openai_client is not None else svc.openai_client
+    if client is None:
+        raise RuntimeError("openai_client not initialized — check lifespan ran")
     litellm_config = get_litellm_config()
     try:
         parsed = await call_llm_structured(

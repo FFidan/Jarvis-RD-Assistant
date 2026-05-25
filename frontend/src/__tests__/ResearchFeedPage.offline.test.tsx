@@ -42,9 +42,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchFeedPapers: vi.fn().mockResolvedValue({ papers: [], total: 0, offset: 0, limit: 20 }),
-    useFeedCounts: vi.fn().mockReturnValue({
-      data: { inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0 },
-      isLoading: false,
+    fetchFeedCounts: vi.fn().mockResolvedValue({
+      inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
+      active: 5, kept: 5, all_non_trash: 5,
     }),
     fetchSources: vi.fn().mockResolvedValue([]),
     fetchFeedCountsWithFacets: vi.fn().mockResolvedValue({
@@ -57,16 +57,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
-vi.mock('@/hooks/use-feed-counts-with-facets', () => ({
-  useFeedCountsWithFacets: vi.fn().mockReturnValue({
-    data: {
-      inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
-      active: 5, kept: 5, all_non_trash: 5,
-      by_source: {}, by_topic: [], untagged: 0,
-    },
-    isLoading: false,
-  }),
-}));
 
 vi.mock('@/stores/bulk-selection-store', () => ({
   useBulkSelection: Object.assign(vi.fn().mockReturnValue([]), {

@@ -1,4 +1,6 @@
-import { useFeedCounts } from '@/lib/api';
+import { useQuery } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
+import { fetchFeedCounts } from '@/lib/api';
 import type { FeedCountsResponse } from '@/types';
 
 interface CountsBadgeProps {
@@ -6,7 +8,11 @@ interface CountsBadgeProps {
 }
 
 export function CountsBadge({ surface }: CountsBadgeProps) {
-  const { data, isLoading } = useFeedCounts();
+  const { data, isLoading } = useQuery({
+    queryKey: QUERY_KEYS.feed.counts(),
+    queryFn: fetchFeedCounts,
+    staleTime: 5_000,
+  });
   if (isLoading || !data) return null;
   const count = data[surface];
   if (count === 0) return null;

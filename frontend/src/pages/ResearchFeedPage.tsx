@@ -7,7 +7,8 @@ import {
   searchPreview,
   batchSavePapers,
   fetchSources,
-  useFeedCounts,
+  fetchFeedCounts,
+  fetchFeedCountsWithFacets,
 } from '@/lib/api';
 import { useOnlineStatus } from '@/hooks/use-online-status';
 import { getPersistedCacheTimestamp } from '@/lib/query-persister';
@@ -17,8 +18,12 @@ import type {
   SearchPreviewResult,
   SearchPreviewSourceError,
   SourceConfig,
+  SurfaceView,
+  LibraryFilter,
+  InboxSourceFilter,
+  FeedScope,
+  FeedCountsWithFacets,
 } from '@/types';
-import type { SurfaceView, LibraryFilter, InboxSourceFilter, FeedScope } from '@/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { SearchBar } from '@/components/feed/SearchBar';
@@ -31,7 +36,6 @@ import type { FacetSelection } from '@/components/feed/FacetRail';
 import { FeedListFilter } from '@/components/feed/FeedListFilter';
 import { PdfUploadZone } from '@/components/feed/PdfUploadZone';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
-import { useFeedCountsWithFacets } from '@/hooks/use-feed-counts-with-facets';
 import { BookOpen as BookOpenIcon, Upload, Compass } from 'lucide-react';
 
 // ─── URL-param helpers ───────────────────────────────────────────────────────
@@ -132,12 +136,20 @@ export function ResearchFeedPage() {
   }, [surface, feedScope]);
 
   // ── feed counts (numeric only — CountsBadge consumers) ───────────────────
-  const { data: counts } = useFeedCounts();
+  const { data: counts } = useQuery({
+    queryKey: QUERY_KEYS.feed.counts(),
+    queryFn: fetchFeedCounts,
+    staleTime: 5_000,
+  });
 
   // ── feed counts with facets (§-facet rail) — scoped to active feedScope ──
   // C-FACET-BE: backend get_feed_counts accepts ?scope= and honours it for
   // by_source / by_topic / untagged facet counts via fetch_feed_facet_counts.
-  const { data: countsWithFacets } = useFeedCountsWithFacets(feedScope);
+  const { data: countsWithFacets } = useQuery<FeedCountsWithFacets>({
+    queryKey: QUERY_KEYS.feed.counts(feedScope),
+    queryFn: () => fetchFeedCountsWithFacets(feedScope),
+    staleTime: 5_000,
+  });
 
   // ── default-landing redirect — spec §3.5 + offline contract ─────────────
   // Online: default → Inbox. Offline: default → Library (cached read surface).

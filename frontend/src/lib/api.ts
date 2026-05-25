@@ -1683,6 +1683,3 @@ export const saveSetupMode = (mode: 'single' | 'multi') =>
     method: 'POST',
     body: JSON.stringify({ mode }),
   });
-
-// --- React Query hooks ---
-export { useFeedCounts } from '@/hooks/use-feed-counts';

@@ -6,7 +6,14 @@ search/fetch interface.  This stub exists so that ``source_type="local"``
 is present in the source registry.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import httpx
+
+if TYPE_CHECKING:
+    import asyncpg
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig
 from paper_ingestion.sources.base import PaperSource
@@ -26,8 +33,13 @@ class LocalSource(PaperSource):
     source_type = "local"
     supports_pulse_polling = False
 
-    def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
-        super().__init__(config, http_client)
+    def __init__(
+        self,
+        config: PaperSourceConfig,
+        http_client: httpx.AsyncClient,
+        db_pool: asyncpg.Pool | None = None,
+    ) -> None:
+        super().__init__(config, http_client, db_pool)
 
     async def search(
         self,

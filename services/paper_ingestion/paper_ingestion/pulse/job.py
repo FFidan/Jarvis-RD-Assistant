@@ -507,20 +507,19 @@ async def _emit_post_run_telemetry(
     user_id: int | None,
 ) -> None:
     """Stage 9 — enqueue classifier training + emit verification telemetry (best-effort)."""
-    if ctx:
-        try:
-            classifier_job_id = str(uuid.uuid4())
-            # Sprint B / Wave-2: thread the deck owner's user_id so the
-            # follow-up classifier-training job is attributable.
-            await KIND_TO_TASK["pulse.train_classifier"].defer_async(
-                job_id=classifier_job_id,
-                user_id=user_id,
-            )
-            stats["classifier_training_enqueued"] = True
-            stats["classifier_training_job_id"] = classifier_job_id
-        except Exception:
-            stats["classifier_training_enqueued"] = False
-            logger.debug("pulse: classifier training enqueue skipped", exc_info=True)
+    try:
+        classifier_job_id = str(uuid.uuid4())
+        # Sprint B / Wave-2: thread the deck owner's user_id so the
+        # follow-up classifier-training job is attributable.
+        await KIND_TO_TASK["pulse.train_classifier"].defer_async(
+            job_id=classifier_job_id,
+            user_id=user_id,
+        )
+        stats["classifier_training_enqueued"] = True
+        stats["classifier_training_job_id"] = classifier_job_id
+    except Exception:
+        stats["classifier_training_enqueued"] = False
+        logger.debug("pulse: classifier training enqueue skipped", exc_info=True)
     if ctx:
         await ctx.update_progress(1.0, "Done")
 

@@ -162,6 +162,8 @@ services:
   ollama-bootstrap:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.23.1}
     security_opt: ["no-new-privileges:true"]
+    # Pull-only task — no capabilities required.
+    cap_drop: [ALL]
     depends_on:
       ollama:
         condition: service_healthy
@@ -430,9 +432,11 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     secrets:
       - jarvis_api_key
+      - langfuse_init_pk
+      - langfuse_init_sk
+      - litellm_master_key
       - postgres_password
       - telegram_bot_token
-      - litellm_master_key
     mem_limit: 1g
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8002/health\", timeout=5).read()'"]
@@ -461,7 +465,7 @@ services:
       context: ./frontend
       args:
         NODE_BUILD_IMAGE: ${NODE_BUILD_IMAGE:-node:22.14-alpine3.21}
-        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:1.27-alpine3.21}
+        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginxinc/nginx-unprivileged:1.27-alpine3.21}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     ports:
@@ -712,6 +716,8 @@ services:
     profiles: [observability]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    # docker.sock is mounted RO for log scraping only — no capabilities needed.
+    cap_drop: [ALL]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./infra/vector.toml:/etc/vector/vector.toml:ro

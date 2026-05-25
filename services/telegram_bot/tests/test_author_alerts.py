@@ -1,8 +1,9 @@
 """Unit tests for author_alert_log dedupe scoping (SEC-AUTHALERT-1).
 
-# Verified: services/telegram_bot/telegram_bot/orchestration/author_alerts.py:117
-# Verified: services/paper_ingestion/paper_ingestion/routers/authors.py:286
-# Verified: db/migrations/0091_author_alert_log_user_dedupe.sql:11
+W4-T8 (HIGH-XC-02) consolidated both insert sites into
+``libs/jarvis_common.db_helpers.record_author_alert``; the SQL string now
+lives in one place. The 3-col unique index lives in db/init.sql (the
+former 0091 migration was folded into init.sql by W1-T1).
 """
 
 from __future__ import annotations
@@ -18,10 +19,7 @@ _DEDUPE_CONFLICT_RE = re.compile(
     re.IGNORECASE,
 )
 
-_DEDUPE_SOURCES = (
-    "services/telegram_bot/telegram_bot/orchestration/author_alerts.py",
-    "services/paper_ingestion/paper_ingestion/routers/authors.py",
-)
+_DEDUPE_SOURCES = ("libs/jarvis_common/jarvis_common/db_helpers.py",)
 
 
 def test_author_alerts_module_uses_user_scoped_dedupe() -> None:

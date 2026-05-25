@@ -108,4 +108,27 @@ describe('ChapterPane', () => {
     renderPane(null);
     expect(screen.getByText(/select a chapter/i)).toBeInTheDocument();
   });
+
+  it('shows section headings with resolved data counts when project is supplied', async () => {
+    mockFetchTasks.mockResolvedValue([
+      { id: 1, title: 'Task A', status: 'todo', project_id: 1, created_at: '2026-01-01T00:00:00Z' },
+      { id: 2, title: 'Task B', status: 'in_progress', project_id: 1, created_at: '2026-01-01T00:00:00Z' },
+      { id: 3, title: 'Task C', status: 'done', project_id: 1, created_at: '2026-01-01T00:00:00Z' },
+    ]);
+    mockFetchMilestones.mockResolvedValue([
+      { id: 1, title: 'M1', project_id: 1, status: 'pending', due_date: null, created_at: '2026-01-01T00:00:00Z' },
+      { id: 2, title: 'M2', project_id: 1, status: 'completed', due_date: null, created_at: '2026-01-01T00:00:00Z' },
+    ]);
+    mockFetchQuestions.mockResolvedValue([
+      { id: 1, question: 'Q1?', project_id: 1, created_at: '2026-01-01T00:00:00Z' },
+    ]);
+    mockFetchActivity.mockResolvedValue([]);
+
+    renderPane();
+
+    await waitFor(() => {
+      expect(screen.getByText(/§ TASKS · 3/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/§ MILESTONES · 2/i)).toBeInTheDocument();
+  });
 });

@@ -825,7 +825,11 @@ async def test_a104_per_paper_ask_empty_visible_maps_degraded_502(contract_conn,
         app.state.limiter.enabled = True
 
     assert resp.status_code == 502, resp.text
-    assert resp.json()["detail"]["code"] == "llm_empty_visible_content"
+    assert resp.json()["detail"] == {
+        "status": "degraded",
+        "code": "llm_empty_visible_content",
+        "message": "LLM response contained no visible answer.",
+    }
 
 
 @pytest.mark.contract
@@ -1415,6 +1419,153 @@ async def test_ask_paper_endpoint_returns_503_when_openai_client_not_initialized
         f"Expected 503 for null client, got {resp.status_code}: {resp.text}"
     )
     assert "not initialized" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# W4-CF1. POST /api/papers/{paper_id}/ask/stream — exception-to-HTTP mapping
+#
+# Regression guard: if the explicit PaperNotFoundError/NoRelevantChunksError
+# handlers (rag.py:350-353) are removed, the stream endpoint falls through to
+# the catch-all and returns an SSE error event instead of a proper 4xx response.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a105_ask_stream_paper_not_found_maps_404(contract_conn, pi_test_client):
+    """POST /api/papers/{paper_id}/ask/stream: PaperNotFoundError maps to HTTP 404.
+
+    Monkeypatches prepare_single_paper_rag to raise PaperNotFoundError (bypassing
+    the assert_paper_ownership ownership check which runs before prepare) and
+    asserts the response status is 404 — NOT an SSE stream error event.
+
+    Verified: services/paper_ingestion/paper_ingestion/routers/rag.py:350-351
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+    from paper_ingestion.rag.exceptions import PaperNotFoundError
+
+    # Seed a real user + paper so that assert_paper_ownership passes; the
+    # PaperNotFoundError is triggered later in prepare_single_paper_rag.
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('w4cf1-notfound@contract.example.com', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('contract-w4cf1-nf', 'arxiv', 'W4CF1 Not Found Paper', '{}',
+                   'http://w4cf1-nf', $1) RETURNING id""",
+        user_id,
+    )
+
+    async def _raise_not_found(embedder, db_pool, paper_id_, body, http_client, **kwargs):
+        raise PaperNotFoundError("paper gone")
+
+    from jarvis_common.testing_contract_apps import patch_dependency_overrides
+
+    app.state.limiter.enabled = False
+    try:
+        with (
+            patch_dependency_overrides(
+                app,
+                set_overrides={
+                    verify_api_key: lambda: None,
+                    get_current_user_id: lambda: user_id,
+                    get_embedder: lambda: AsyncMock(),
+                    get_http_client: lambda: AsyncMock(),
+                    get_verifier: lambda: MagicMock(),
+                },
+            ),
+            patch(
+                "paper_ingestion.routers.rag.prepare_single_paper_rag",
+                side_effect=_raise_not_found,
+            ),
+        ):
+            resp = await pi_test_client.post(
+                f"/api/papers/{paper_id}/ask/stream",
+                json={"question": "Where did the paper go?"},
+            )
+    finally:
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 404, (
+        f"PaperNotFoundError must map to HTTP 404, got {resp.status_code}: {resp.text}"
+    )
+    assert resp.headers.get("content-type", "").startswith("application/json"), (
+        "404 response must be JSON (not an SSE stream)"
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a105_ask_stream_no_relevant_chunks_maps_422(contract_conn, pi_test_client):
+    """POST /api/papers/{paper_id}/ask/stream: NoRelevantChunksError maps to HTTP 422.
+
+    Monkeypatches prepare_single_paper_rag to raise NoRelevantChunksError and
+    asserts the response status is 422 with the original error detail — NOT an
+    SSE stream error event.
+
+    Verified: services/paper_ingestion/paper_ingestion/routers/rag.py:352-353
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_embedder, get_http_client, get_verifier
+    from paper_ingestion.main import app
+    from paper_ingestion.rag.exceptions import NoRelevantChunksError
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('w4cf1-nochunks@contract.example.com', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('contract-w4cf1-nc', 'arxiv', 'W4CF1 No Chunks Paper', '{}',
+                   'http://w4cf1-nc', $1) RETURNING id""",
+        user_id,
+    )
+
+    _error_detail = "No relevant chunks found for this question."
+
+    async def _raise_no_chunks(embedder, db_pool, paper_id_, body, http_client, **kwargs):
+        raise NoRelevantChunksError(_error_detail)
+
+    from jarvis_common.testing_contract_apps import patch_dependency_overrides
+
+    app.state.limiter.enabled = False
+    try:
+        with (
+            patch_dependency_overrides(
+                app,
+                set_overrides={
+                    verify_api_key: lambda: None,
+                    get_current_user_id: lambda: user_id,
+                    get_embedder: lambda: AsyncMock(),
+                    get_http_client: lambda: AsyncMock(),
+                    get_verifier: lambda: MagicMock(),
+                },
+            ),
+            patch(
+                "paper_ingestion.routers.rag.prepare_single_paper_rag",
+                side_effect=_raise_no_chunks,
+            ),
+        ):
+            resp = await pi_test_client.post(
+                f"/api/papers/{paper_id}/ask/stream",
+                json={"question": "Any relevant chunks here?"},
+            )
+    finally:
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 422, (
+        f"NoRelevantChunksError must map to HTTP 422, got {resp.status_code}: {resp.text}"
+    )
+    assert resp.json()["detail"] == _error_detail, (
+        "422 detail must carry the original NoRelevantChunksError message"
+    )
 
 
 @pytest.mark.asyncio(loop_scope="session")

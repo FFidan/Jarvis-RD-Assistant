@@ -89,7 +89,7 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
             </p>
           )}
           {messages.map((msg, i) => (
-            <div key={`${msg.role}:${msg.content.slice(0, 8)}:${i}`}>
+            <div key={`${msg.role}:${i}`}>
               {/* D.1 — pass phase so in-bubble spinner reflects search vs stream */}
               <ChatMessage
                 message={msg}

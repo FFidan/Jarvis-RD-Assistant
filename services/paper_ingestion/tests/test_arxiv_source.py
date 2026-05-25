@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from xml.etree.ElementTree import fromstring
 
 import httpx
+import pytest
 import respx
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ATOM_NS, ArxivSource
@@ -430,4 +431,53 @@ async def test_fetch_xml_retry_after_capped_at_60s():
     assert sleep_calls, "asyncio.sleep must be called at least once for the 429 retry"
     assert all(s <= _MAX_RETRY_AFTER_SECONDS for s in sleep_calls), (
         f"Sleep must be capped at {_MAX_RETRY_AFTER_SECONDS}s; got {sleep_calls}"
+    )
+
+
+@pytest.mark.parametrize(
+    "header_value,expected_sleep",
+    [
+        ("59", 59.0),
+        ("60", 60.0),
+        ("61", 60.0),
+    ],
+)
+@respx.mock
+async def test_fetch_xml_retry_after_boundary(header_value: str, expected_sleep: float):
+    """Parametrized test for Retry-After boundary cases: 59s, 60s, 61s.
+
+    Cases:
+    - "59" → sleep(59.0) [below cap]
+    - "60" → sleep(60.0) [exact cap]
+    - "61" → sleep(60.0) [capped]
+    """
+    from unittest.mock import patch
+
+    empty_feed = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <totalResults xmlns="http://a9.com/-/spec/opensearch/1.1/">0</totalResults>
+</feed>"""
+
+    call_count = 0
+
+    def _side_effect(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(429, headers={"Retry-After": header_value})
+        return httpx.Response(200, content=empty_feed)
+
+    respx.get(ARXIV_API_URL).mock(side_effect=_side_effect)
+
+    source = _make_source()
+    with patch("paper_ingestion.sources.arxiv_source.asyncio.sleep") as mock_sleep:
+        mock_sleep.return_value = None
+        await source._fetch_xml({"search_query": "all:ml", "start": 0, "max_results": 1})
+
+    mock_sleep.assert_called()
+    # Find the sleep call that matches expected_sleep (with small tolerance for timing jitter).
+    # Rate limiter adds ~3.0s sleep calls; we're asserting the Retry-After cap.
+    matching_calls = [c for c in mock_sleep.call_args_list if abs(c[0][0] - expected_sleep) < 0.1]
+    assert matching_calls, (
+        f"Expected sleep call with {expected_sleep}s, got calls: {mock_sleep.call_args_list}"
     )

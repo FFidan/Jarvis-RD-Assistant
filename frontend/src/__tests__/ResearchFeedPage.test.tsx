@@ -5,7 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
-import { ApiError, useFeedCounts } from '@/lib/api';
+import { ApiError } from '@/lib/api';
 import { queryClient as appQueryClient } from '@/lib/query-client';
 import { useJobStore } from '@/stores/job-store';
 
@@ -137,7 +137,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
       inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
       by_source: {}, by_topic: [], untagged: 0,
     }),
-    useFeedCounts: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
     fetchPulseHistory: vi.fn().mockResolvedValue([]),
     zoteroGetLinkage: vi.fn().mockResolvedValue({
       zotero_item_key: null,
@@ -275,11 +274,10 @@ describe('ResearchFeedPage', () => {
   });
 
   it('shows empty-library Discover CTA when library count is 0 and scope=library', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0 },
-      isLoading: false,
-      isPending: false,
-    } as ReturnType<typeof useFeedCounts>);
+    const { fetchFeedCounts } = await import('@/lib/api');
+    vi.mocked(fetchFeedCounts).mockResolvedValue({
+      inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
+    });
     // Render on library surface directly
     const { container: _c } = render(
       <QueryClientProvider client={appQueryClient}>
@@ -316,11 +314,10 @@ describe('ResearchFeedPage', () => {
   });
 
   it('defaults to Inbox surface active (spec §3.5: Inbox-first)', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5 },
-      isLoading: false,
-      isPending: false,
-    } as ReturnType<typeof useFeedCounts>);
+    const { fetchFeedCounts } = await import('@/lib/api');
+    vi.mocked(fetchFeedCounts).mockResolvedValue({
+      inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
+    });
     renderPage();
     await waitFor(() => {
       // F1 3-pane IA: §Status facet buttons use aria-pressed (not aria-selected)
@@ -1893,11 +1890,10 @@ describe('ResearchFeedPage', () => {
 
   // F1 3-pane IA: clicking Library §Status facet shows the library surface content
   it('clicking Library §Status facet navigates to the library surface and shows section info', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 2, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 2, kept: 2, all_non_trash: 2 },
-      isLoading: false,
-      isPending: false,
-    } as ReturnType<typeof useFeedCounts>);
+    const { fetchFeedCounts } = await import('@/lib/api');
+    vi.mocked(fetchFeedCounts).mockResolvedValue({
+      inbox: 0, library: 2, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 2, kept: 2, all_non_trash: 2,
+    });
     const user = userEvent.setup();
     renderPage();
 
@@ -1916,7 +1912,6 @@ describe('ResearchFeedPage', () => {
   // ── F1 3-pane IA — §Status facet items replace surface chips ─────────────
 
   it('renders §Status facet items: Inbox | Library | Reading | Reading List | Done | Trash', () => {
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     renderPage();
     // F1 3-pane IA: §Status facet buttons (aria-pressed)
     expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
@@ -1931,13 +1926,8 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByRole('tab', { name: 'Ask' })).not.toBeInTheDocument();
   });
 
-  it('§Status facet uses useFeedCounts data for count badge rendering in FacetRail', () => {
-    // When useFeedCounts (via useFeedCountsWithFacets) returns counts, FacetRail renders them
-    vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 3, library: 5, reading_list: 0, reading: 2, done: 0, starred: 1, trash: 0, active: 10, kept: 10, all_non_trash: 10 },
-      isLoading: false,
-      isPending: false,
-    } as ReturnType<typeof useFeedCounts>);
+  it('§Status facet uses fetchFeedCounts data for count badge rendering in FacetRail', () => {
+    // When fetchFeedCounts returns counts via useQuery, FacetRail renders them
     renderPage();
     // Inbox facet is present in the rail
     expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
@@ -1946,11 +1936,10 @@ describe('ResearchFeedPage', () => {
   });
 
   it('default landing redirects to ?surface=inbox when inbox > 0', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 2, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 7, kept: 7, all_non_trash: 7 },
-      isLoading: false,
-      isPending: false,
-    } as ReturnType<typeof useFeedCounts>);
+    const { fetchFeedCounts } = await import('@/lib/api');
+    vi.mocked(fetchFeedCounts).mockResolvedValue({
+      inbox: 2, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 7, kept: 7, all_non_trash: 7,
+    });
     renderPage();
     await waitFor(() => {
       // After redirect, Inbox §Status facet should be aria-pressed
@@ -1959,11 +1948,10 @@ describe('ResearchFeedPage', () => {
   });
 
   it('default landing redirects to ?surface=inbox (spec §3.5: Inbox-first always)', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5 },
-      isLoading: false,
-      isPending: false,
-    } as ReturnType<typeof useFeedCounts>);
+    const { fetchFeedCounts } = await import('@/lib/api');
+    vi.mocked(fetchFeedCounts).mockResolvedValue({
+      inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
+    });
     renderPage();
     await waitFor(() => {
       // F1 §3.5: default landing = Inbox (not library-first)
@@ -1972,7 +1960,6 @@ describe('ResearchFeedPage', () => {
   });
 
   it('?tab=pulse legacy deep-link causes navigate to /my-day', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     // Render with the legacy ?tab=pulse query param
     render(
       <QueryClientProvider client={appQueryClient}>
@@ -1992,7 +1979,6 @@ describe('ResearchFeedPage', () => {
   // ── F1 3-pane IA: §Status facet click → surface update ───────────────────
 
   it('clicking §Status facets makes the clicked facet aria-pressed=true', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     const user = userEvent.setup();
     renderPage();
 
@@ -2018,7 +2004,6 @@ describe('ResearchFeedPage', () => {
   // ── W2-T3: ?surface=garbage URL fallback ───────────────────────────────────
 
   it('?surface=garbage falls back to Inbox surface (VALID_SURFACES guard)', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     render(
       <QueryClientProvider client={appQueryClient}>
         <MemoryRouter initialEntries={['/feed?surface=garbage']}>
@@ -2036,7 +2021,6 @@ describe('ResearchFeedPage', () => {
   // ── T3.1 Phase-A: VALID_SURFACES tighten — ?surface=starred is no longer a surface ──
 
   it('?surface=starred falls back to Inbox (VALID_SURFACES tightened — starred is sub-filter only)', () => {
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     render(
       <QueryClientProvider client={appQueryClient}>
         <MemoryRouter initialEntries={['/feed?surface=starred']}>
@@ -2056,7 +2040,6 @@ describe('ResearchFeedPage', () => {
   it('F1 IA: Library sub-filters are now §Status facet items in the rail (Reading/Reading List/Done)', async () => {
     // F1 3-pane IA: old Library sub-chips replaced by §Status facets in FacetRail
     // Reading, Reading List, Done appear as §Status facet items for all surfaces
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     renderPage();
 
     // All §Status facet items are always visible in the rail
@@ -2074,7 +2057,6 @@ describe('ResearchFeedPage', () => {
   // ── T3.1 Phase-A: Amber banner inlined for trash surface ──────────────────
 
   it('renders amber banner when surface=trash', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     const user = userEvent.setup();
     renderPage();
 
@@ -2092,7 +2074,6 @@ describe('ResearchFeedPage', () => {
 
   it('H5: switching surface via URL clears bulk selection', async () => {
     const { useBulkSelection } = await import('@/stores/bulk-selection-store');
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     const user = userEvent.setup();
     renderPage();
 
@@ -2114,7 +2095,6 @@ describe('ResearchFeedPage', () => {
   it('W1.8-D / F1 IA: §Source facet in FacetRail replaces old source-type sub-chips', async () => {
     // F1 3-pane IA: source-type filtering is via §Source facets in FacetRail
     // Old horizontal sub-chip row is removed; §Source rail is always visible
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     renderPage();
     // §Source section header is present in the rail
     expect(screen.getByText('Source')).toBeInTheDocument();
@@ -2123,7 +2103,6 @@ describe('ResearchFeedPage', () => {
   });
 
   it('W1.8-D / F1 IA: source filtering via §Source FacetRail is surface-agnostic (no old sub-chip rows)', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     const user = userEvent.setup();
     renderPage();
 
@@ -2143,12 +2122,10 @@ describe('ResearchFeedPage', () => {
     // The FacetRail uses fetchFeedCountsWithFacets; the source facet drives ?facet_source= in URL
     // which feeds into effectiveSourceTypes → FeedView sourceTypes prop.
     // This test verifies the §Source facet renders from by_source data.
-    const { fetchFeedCountsWithFacets } = await import('@/lib/api');
-    vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15 },
-      isLoading: false,
-      isPending: false,
-    } as ReturnType<typeof useFeedCounts>);
+    const { fetchFeedCountsWithFacets, fetchFeedCounts } = await import('@/lib/api');
+    vi.mocked(fetchFeedCounts).mockResolvedValue({
+      inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15,
+    });
     // Mock fetchFeedCountsWithFacets to return by_source data
     vi.mocked(fetchFeedCountsWithFacets).mockResolvedValue({
       inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15,

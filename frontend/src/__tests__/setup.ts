@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import '@testing-library/jest-dom';
+import { vi } from 'vitest';
 
 // jsdom does not implement IntersectionObserver — stub for usePaperScrollSpy and similar.
 if (typeof IntersectionObserver === 'undefined') {
@@ -30,6 +31,18 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
     addEventListener: () => {},
     removeEventListener: () => {},
     dispatchEvent: () => false,
+  });
+}
+
+// jsdom does not implement the Clipboard API — stub so tests can spy on writeText.
+if (!navigator.clipboard) {
+  Object.defineProperty(navigator, 'clipboard', {
+    value: {
+      writeText: vi.fn().mockResolvedValue(undefined),
+      readText: vi.fn().mockResolvedValue(''),
+    },
+    configurable: true,
+    writable: true,
   });
 }
 

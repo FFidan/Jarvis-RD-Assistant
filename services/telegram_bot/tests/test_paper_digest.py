@@ -10,6 +10,7 @@ from jarvis_common.testing import make_bot_config
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import paper_digest
+from telegram_bot.orchestration.paper_digest import _balance_chunk
 
 
 @pytest.mark.asyncio
@@ -92,6 +93,28 @@ async def test_send_chunked_splits_long_messages():
     sent_text = "\n".join(call.kwargs["text"] for call in bot.send_message.await_args_list)
     assert "line-0-" in sent_text
     assert "line-4-" in sent_text
+
+
+def test_balance_chunk_no_double_count_inherited_tags():
+    """Inherited tags must not be closed in the suffix, preventing malformed HTML.
+
+    Regression test for HIGH-TG-02: when a chunk inherits tags from the previous
+    chunk, those inherited tags are re-opened in the prefix but must NOT be closed
+    in the suffix. This prevents the double-close bug where tags get closed at the
+    end of one chunk and then re-opened/re-closed at the start of the next.
+    """
+    # Chunk that inherits an italic tag but doesn't open/close any new tags
+    balanced, updated_stack = _balance_chunk("<b>hello</b>", open_stack=["<i>"])
+
+    # The inherited <i> is re-opened in the prefix, the chunk is added.
+    # The suffix is empty because no new tags are open at chunk end.
+    # Result: italic stays open, bold is properly paired.
+    assert balanced == "<i><b>hello</b>", f"Expected '<i><b>hello</b>', got {balanced!r}"
+
+    # No new tags opened in this chunk, so the updated stack is empty.
+    # The inherited italic is NOT returned here; it stays active due to the
+    # prefix mechanism and will be re-specified in the next chunk's open_stack.
+    assert updated_stack == [], f"Expected [], got {updated_stack!r}"
 
 
 @pytest.mark.asyncio

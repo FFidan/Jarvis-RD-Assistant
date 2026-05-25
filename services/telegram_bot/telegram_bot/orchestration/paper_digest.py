@@ -50,7 +50,7 @@ def _balance_chunk(chunk: str, open_stack: list[str]) -> tuple[str, list[str]]:
 
     # Scan for opens/closes inside this chunk to track what is opened or
     # closed here.
-    local_stack: list[str] = list(open_stack)
+    local_stack: list[str] = []
     pos = 0
     while pos < len(chunk):
         open_match = _OPEN_TAG_RE.search(chunk, pos)

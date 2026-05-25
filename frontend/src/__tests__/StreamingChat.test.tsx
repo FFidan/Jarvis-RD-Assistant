@@ -83,3 +83,35 @@ describe('StreamingChat — FE-SSE-1 error banner', () => {
     expect(alert.textContent).toBe('context too long');
   });
 });
+
+describe('StreamingChat — HIGH-FE-01 key stability', () => {
+  beforeEach(() => {
+    mockUseStreamingChat.mockReturnValue(baseHookReturn());
+  });
+
+  it('maintains DOM identity for the streaming message across token appends', () => {
+    const initialMessages = [
+      { role: 'user' as const, content: 'test query', sources: [] },
+      { role: 'assistant' as const, content: 'Hel', sources: [] },
+    ];
+    mockUseStreamingChat.mockReturnValue(baseHookReturn({ messages: initialMessages }));
+
+    const { container, rerender } = render(<StreamingChat chatId="c1" scope="cross-paper" />);
+
+    // Capture the DOM node for the assistant message BEFORE the token append
+    const beforeNode = container.querySelector('.space-y-4 > div:last-child');
+    expect(beforeNode).toBeTruthy();
+
+    // Simulate a streaming-token append: same role+index, growing content
+    const appendedMessages = [
+      { role: 'user' as const, content: 'test query', sources: [] },
+      { role: 'assistant' as const, content: 'Hello', sources: [] },
+    ];
+    mockUseStreamingChat.mockReturnValue(baseHookReturn({ messages: appendedMessages }));
+    rerender(<StreamingChat chatId="c1" scope="cross-paper" />);
+
+    // Strict identity — same DOM node, not a remount caused by a content-keyed key
+    const afterNode = container.querySelector('.space-y-4 > div:last-child');
+    expect(afterNode).toBe(beforeNode);
+  });
+});
