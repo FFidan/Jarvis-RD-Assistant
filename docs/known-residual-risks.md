@@ -321,3 +321,29 @@ The 2026-05-24 pristine-pass review found `libs/jarvis_common/jarvis_common/auth
 **Mitigation:** Add `@field_validator` to `SecretsSettings.smtp_host/from/user/pass` rejecting empty-string values OR add a startup-time health check that asserts the SMTP configuration is internally consistent.
 
 **Source:** Wave 2 W3-CF11 xfail-test surfacing; Wave-Gate-2 Axis 2 finding (confidence 88).
+
+## BUILDER-STAGE-BUILD-UNHASHED-1 — Dockerfile jarvis-common-builder installs `build` without `--require-hashes`
+
+**Symptom:** All three service Dockerfiles (`paper_ingestion`, `learning_engine`, `telegram_bot`) introduced a Stage 1 `jarvis-common-builder` that runs `pip install --no-cache-dir build==1.2.2.post1` to produce the jarvis_common wheel. The `build` package itself and its transitives (`pyproject_hooks`, `packaging`) are installed without `--require-hashes` in the builder stage. If PyPI / its CDN were tampered with for that exact version while a runtime image is being rebuilt, the wheel artifact `build` produces could be silently subverted.
+
+**Bounded by:** Stage 1 is ephemeral — its filesystem is discarded after `COPY --from=jarvis-common-builder /tmp/dist/*.whl /tmp/dist/` lifts only the wheel into Stage 2. No `build`-stage packages exist in the runtime image. Stage 2's `pip install --require-hashes -r constraints.txt` covers every runtime dep; the wheel itself enters via `pip install --no-deps`, which means the wheel's declared transitives never trigger a fresh unverified resolution.
+
+**Residual surface:** the wheel build TOOLCHAIN, not the runtime dependency surface.
+
+**Operator attestation pattern (if hardening to zero unhashed pip invocations is desired):**
+1. Generate a hashed constraint set for the builder toolchain:
+   ```
+   echo "build==1.2.2.post1" > /tmp/builder-req.in
+   uv pip compile --generate-hashes /tmp/builder-req.in -o services/_shared/constraints-builder.txt
+   ```
+2. Add `COPY services/_shared/constraints-builder.txt ./` and change the builder-stage RUN to `pip install --require-hashes -r constraints-builder.txt`.
+
+Deferred per YAGNI — Stage 1's build environment is not user-reachable and the wheel produced is internally signed via the runtime hash gate's `--no-deps` install pattern.
+
+**Source:** Wave-Gate 2 R-SECURITY T3 finding (confidence 80).
+
+## W2-CARRY-FORWARDS — Wave-Gate 2 surfaced gaps (deferred-with-rationale)
+
+- **W2-CF1** — `libs/jarvis_common/jarvis_common/testing_embedder.py:_make_embedder` lost its `-> Embedder` return annotation (replaced with `# type: ignore[return]`). Cleaner pattern is `if TYPE_CHECKING: from paper_ingestion... import Embedder` + quoted forward-ref. Defer — `_make_embedder` is `_`-private; downstream callers in the test suite all access the returned object dynamically (AsyncMock attributes), so type-checker coverage loss is negligible. Reopen if `_make_embedder` is promoted to a public API.
+
+- **W2-CF2** — No CI `docker build` smoke step for the three new multi-stage Dockerfiles (`paper_ingestion`, `learning_engine`, `telegram_bot`). The Wave 2 implementer ran local `docker build` smoke for all 3 services and verified `--require-hashes` is on every runtime-stage pip install. Defer to **Wave 11 (CI hardening)** — that wave already plans `pip-audit + npm audit + osv-scanner` jobs; a `docker-build-smoke` matrix entry can land in the same workflow edit.

@@ -9,10 +9,12 @@ import logging
 
 import uvicorn
 from fastapi import Depends, FastAPI
+from jarvis_common import create_limiter
 from jarvis_common.app_factory import configure_middleware_and_errors
 from jarvis_common.auth import verify_api_key
 from jarvis_common.settings import get_core_settings, get_secrets_settings
-from paper_ingestion.deps import limiter
+
+limiter = create_limiter(default_limits=["600/minute"], user_aware=False)
 
 logger = logging.getLogger(__name__)
 
