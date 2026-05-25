@@ -162,8 +162,6 @@ services:
   ollama-bootstrap:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.23.1}
     security_opt: ["no-new-privileges:true"]
-    # Pull-only task — no capabilities required.
-    cap_drop: [ALL]
     depends_on:
       ollama:
         condition: service_healthy
@@ -465,7 +463,7 @@ services:
       context: ./frontend
       args:
         NODE_BUILD_IMAGE: ${NODE_BUILD_IMAGE:-node:22.14-alpine3.21}
-        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginxinc/nginx-unprivileged:1.27-alpine3.21}
+        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:1.27-alpine3.21}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     ports:
@@ -716,8 +714,6 @@ services:
     profiles: [observability]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
-    # docker.sock is mounted RO for log scraping only — no capabilities needed.
-    cap_drop: [ALL]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./infra/vector.toml:/etc/vector/vector.toml:ro

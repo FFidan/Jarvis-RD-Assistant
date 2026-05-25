@@ -1,0 +1,23 @@
+title = "JARVIS RD Assistant - Gitleaks configuration"
+
+[extend]
+# Extend the default ruleset built into the binary.
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Allowlist: known non-secret strings in tracked documentation
+#
+# Context: The historical Langfuse burn event (OBS-1) left the burned key
+# prefixes documented in docs/audit/**/*.md files. These are redacted
+# references that document what WAS leaked (the files are not the keys
+# themselves). The actual secret files (secrets/langfuse_init_*.txt) are
+# gitignored and never committed.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Historical burned Langfuse key prefixes referenced in audit docs"
+# Scope: only .md files under docs/audit/ (precise path, not a blanket allow)
+paths = ['''docs/audit/.*\.md$''']
+regexes = [
+  '''pk-lf-35d525''',
+  '''sk-lf-031360''',
+]
