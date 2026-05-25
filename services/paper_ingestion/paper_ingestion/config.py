@@ -206,6 +206,22 @@ class PaperIngestionSettings(JarvisCommonSettings):
         default=None,
         description="NCBI/PubMed API key (PUBMED_API_KEY).  Optional.",
     )
+    ncbi_tool: str = Field(
+        default="JARVIS-RD",
+        description=(
+            "Tool name passed to NCBI E-utilities via the 'tool' query parameter "
+            "(NCBI_TOOL).  NCBI best-practice: identify your application so they "
+            "can contact you rather than blanket-block.  Default 'JARVIS-RD'."
+        ),
+    )
+    ncbi_email: str = Field(
+        default="",
+        description=(
+            "Contact email passed to NCBI E-utilities via the 'email' query parameter "
+            "(NCBI_EMAIL).  NCBI best-practice: provide a valid address for abuse "
+            "contact.  Blank = omitted from requests."
+        ),
+    )
     openalex_api_key: SecretStr | None = Field(
         default=None,
         description="OpenAlex API key (OPENALEX_API_KEY).  Optional.",

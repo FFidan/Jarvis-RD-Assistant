@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-import pytest
 import respx
 from lxml import etree
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
@@ -653,7 +652,7 @@ async def test_fetch_new_since_calls_log_event_on_success():
 
 @respx.mock
 async def test_fetch_new_since_records_run_history_status_error_on_exception():
-    """fetch_new_since inserts source_run_history with status='error' when an unexpected exception propagates."""
+    """fetch_new_since inserts source_run_history with status='error' and returns [] (no re-raise)."""
     from unittest.mock import AsyncMock, patch
 
     respx.get(ESEARCH_URL).mock(side_effect=RuntimeError("unexpected upstream failure"))
@@ -672,14 +671,16 @@ async def test_fetch_new_since_records_run_history_status_error_on_exception():
             return_value=mock_limiter,
         ),
         patch("paper_ingestion.sources.pubmed_source.log_event", log_event_mock),
-        pytest.raises(RuntimeError, match="unexpected upstream failure"),
     ):
-        await source.fetch_new_since(
+        result = await source.fetch_new_since(
             since=datetime(2026, 4, 1, tzinfo=UTC),
             topics=[TopicRef(id=1, name="AI", query_terms=["AI"])],
             limit=10,
             user_id=7,
         )
+
+    # HIGH-PI-09: exception is caught and partial results returned; no re-raise.
+    assert result == []
 
     all_calls = mock_conn.execute.call_args_list
     run_history_calls = [c for c in all_calls if "source_run_history" in c.args[0]]
@@ -689,3 +690,131 @@ async def test_fetch_new_since_records_run_history_status_error_on_exception():
     call_kwargs = log_event_mock.call_args.kwargs
     assert call_kwargs.get("message") == "fetch_failed"
     assert call_kwargs.get("source") == "pubmed"
+
+
+# ---------------------------------------------------------------------------
+# HIGH-PI-09: per-term failure returns partial results, no exception propagated
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_new_since_partial_results_on_per_term_failure():
+    """HIGH-PI-09: second term raising must not abort; term-1 results are returned."""
+    term1_esearch = b"""<?xml version="1.0"?>
+<eSearchResult>
+  <Count>1</Count>
+  <IdList><Id>11111111</Id></IdList>
+</eSearchResult>"""
+    single_paper_xml = b"""<?xml version="1.0"?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID>11111111</PMID>
+      <Article>
+        <ArticleTitle>Term One Paper</ArticleTitle>
+        <AuthorList/>
+      </Article>
+      <ArticleIdList><ArticleId IdType="pubmed">11111111</ArticleId></ArticleIdList>
+    </MedlineCitation>
+  </PubmedArticle>
+</PubmedArticleSet>"""
+
+    # First call to esearch (term-1): succeeds.  Second call (term-2): raises.
+    esearch_route = respx.get(ESEARCH_URL)
+    call_count = {"n": 0}
+
+    def esearch_side_effect(request):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return httpx.Response(200, content=term1_esearch)
+        raise RuntimeError("simulated upstream failure on term-2")
+
+    esearch_route.mock(side_effect=esearch_side_effect)
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=single_paper_xml))
+
+    source = _make_source()
+    papers = await source.fetch_new_since(
+        since=datetime(2026, 4, 1, tzinfo=UTC),
+        topics=[
+            TopicRef(id=1, name="Topic A", query_terms=["topic_a"]),
+            TopicRef(id=2, name="Topic B", query_terms=["topic_b"]),
+        ],
+        limit=50,
+    )
+
+    # Term-1 paper is returned; no exception propagated.
+    assert len(papers) == 1
+    assert papers[0].external_id == "pubmed:11111111"
+
+
+# ---------------------------------------------------------------------------
+# HIGH-PI-10: rate limiter acquire called once per term in the loop
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_new_since_rate_limiter_acquired_per_term():
+    """HIGH-PI-10: p_limiter.acquire() must fire once per term, not once per call."""
+    from unittest.mock import AsyncMock, patch
+
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    mock_pool, _ = _make_mock_pool()
+    source = _make_source_with_pool(mock_pool)
+
+    mock_limiter = AsyncMock()
+    mock_limiter.acquire = AsyncMock()
+    mock_limiter.update_last_request = AsyncMock()
+
+    with patch(
+        "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+        return_value=mock_limiter,
+    ):
+        await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC),
+            topics=[
+                TopicRef(id=1, name="A", query_terms=["alpha"]),
+                TopicRef(id=2, name="B", query_terms=["beta"]),
+            ],
+            limit=100,
+        )
+
+    # Two terms → acquire must have been called exactly twice.
+    assert mock_limiter.acquire.call_count == 2, (
+        f"Expected 2 acquire() calls (one per term), got {mock_limiter.acquire.call_count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# MED-PI-EXT-05: NCBI User-Agent + tool + email query params
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_esearch_carries_ncbi_identification_headers_and_params():
+    """MED-PI-EXT-05: esearch request must carry User-Agent header + tool= + email= params."""
+    route = respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    # Inject a known email so we can assert it is forwarded.
+    source._ncbi_email = "test@example.com"
+    source._ncbi_tool = "TestTool"
+    source._ncbi_user_agent = "TestTool/1.0 (tool=TestTool; contact=test@example.com)"
+
+    await source.search("neural networks", max_results=5)
+
+    assert route.call_count >= 1
+    request = route.calls[0].request
+
+    # User-Agent header must be set.
+    ua = request.headers.get("user-agent", "")
+    assert "TestTool" in ua, f"Expected 'TestTool' in User-Agent, got: {ua!r}"
+
+    # tool= and email= query params must be present.
+    params = dict(request.url.params)
+    assert params.get("tool") == "TestTool", f"Expected tool=TestTool, got: {params.get('tool')!r}"
+    assert params.get("email") == "test@example.com", (
+        f"Expected email=test@example.com, got: {params.get('email')!r}"
+    )
