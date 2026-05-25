@@ -21,7 +21,6 @@ DELETE /api/admin/users/{id}      — soft-delete; cannot delete yourself
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -29,10 +28,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
+from jarvis_common.auth import require_admin
 from jarvis_common.email import send_magic_link
 from pydantic import BaseModel, EmailStr, Field
 
-from paper_ingestion.routers.auth import MAGIC_LINK_TTL
+from paper_ingestion.routers.auth import MAGIC_LINK_TTL, _hash_token
 
 logger = logging.getLogger(__name__)
 
@@ -68,36 +68,6 @@ class InviteUserBody(BaseModel):
 
 class UpdateRoleBody(BaseModel):
     role: Annotated[str, Field(pattern="^(user|admin)$")]
-
-
-# ---------------------------------------------------------------------------
-# Admin dependency
-# ---------------------------------------------------------------------------
-
-
-async def require_admin(request: Request) -> None:
-    """Raise HTTP 403 if the caller is not authenticated with admin role.
-
-    Reads ``request.state.user_role`` set by SessionMiddleware.  Missing state
-    (no session cookie) also yields 403 — this endpoint requires a real browser
-    session with admin role, not just a raw API key, because raw-API-key callers
-    are not associated with a user row.
-    """
-    role = getattr(request.state, "user_role", None)
-    if role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required",
-        )
-
-
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
-
-
-def _hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def _build_invite_link(request: Request, token: str) -> str:

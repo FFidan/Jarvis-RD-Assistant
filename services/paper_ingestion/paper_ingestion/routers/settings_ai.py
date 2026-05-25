@@ -6,12 +6,12 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from jarvis_common.auth import require_admin
 from jarvis_common.hw_detect import detect_tier
 from jarvis_common.litellm_observer import observed_share
 from pydantic import BaseModel, Field
 
 from paper_ingestion.deps import get_db_pool
-from paper_ingestion.routers.admin import require_admin
 from paper_ingestion.services.ai_settings import (
     AISettingsApplier,
     candidate_is_allowed,
