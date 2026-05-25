@@ -255,11 +255,10 @@ async def sync_reviews(
                         continue
                     await conn.execute(
                         "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
-                        "WHERE id = $3 AND user_id = $4",
+                        "WHERE id = $3",
                         new_state,
                         next_due,
                         event.card_id,
-                        user_id,
                     )
                 applied.add(event.idempotency_key)
                 synced += 1
