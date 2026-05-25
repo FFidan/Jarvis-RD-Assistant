@@ -1604,7 +1604,7 @@ ALTER TABLE ONLY public.thread
 ALTER TABLE ONLY public.topics
     ADD CONSTRAINT topics_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.tracked_authors
-    ADD CONSTRAINT tracked_authors_name_s2_unique UNIQUE NULLS NOT DISTINCT (user_id, author_name, s2_author_id);
+    ADD CONSTRAINT tracked_authors_name_s2_unique UNIQUE NULLS NOT DISTINCT (author_name, s2_author_id);
 ALTER TABLE ONLY public.tracked_authors
     ADD CONSTRAINT tracked_authors_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.paper_recommendations
