@@ -192,24 +192,48 @@ def _spin_pg_container(
     container = f"{container_prefix}{container_suffix}-{uuid.uuid4().hex[:12]}"
     password = f"{password_prefix}-{uuid.uuid4().hex}"
     image = os.environ.get("JARVIS_LIVE_PG_IMAGE", "postgres:16.8")
-    _docker_cli(
-        [
-            "run",
-            "--rm",
-            "-d",
-            "--name",
-            container,
-            "-e",
-            "POSTGRES_DB=jarvis",
-            "-e",
-            "POSTGRES_USER=jarvis",
-            "-e",
-            f"POSTGRES_PASSWORD={password}",
-            "-p",
-            "127.0.0.1::5432",
-            image,
-        ]
-    )
+
+    # Pre-cleanup: remove any zombie container from a prior run (e.g. CI job
+    # killed between `docker run` and the `finally: docker rm -f` teardown).
+    # Exit 125 = daemon refused to start because the name already exists.
+    # `docker rm -f` is a no-op when the name is not found (exit 1, ignored).
+    _docker_cli(["rm", "-f", container], check=False, timeout=10)
+
+    # Retry loop: handles transient daemon refusals (exit 125) after pre-clean.
+    # Two attempts with 1s backoff is sufficient for the CI name-collision flake
+    # without adding a general retry framework.
+    last_exc: subprocess.CalledProcessError | None = None
+    for attempt in range(2):
+        try:
+            _docker_cli(
+                [
+                    "run",
+                    "--rm",
+                    "-d",
+                    "--name",
+                    container,
+                    "-e",
+                    "POSTGRES_DB=jarvis",
+                    "-e",
+                    "POSTGRES_USER=jarvis",
+                    "-e",
+                    f"POSTGRES_PASSWORD={password}",
+                    "-p",
+                    "127.0.0.1::5432",
+                    image,
+                ]
+            )
+            last_exc = None
+            break
+        except subprocess.CalledProcessError as exc:
+            if exc.returncode != 125 or attempt == 1:
+                raise
+            last_exc = exc
+            # Force-remove the conflicting container then retry once.
+            _docker_cli(["rm", "-f", container], check=False, timeout=10)
+            time.sleep(1)
+    if last_exc is not None:
+        raise last_exc
     try:
         # W6-01: bumped 45 → 90s deadline. pg_isready returns when the postmaster
         # accepts UNIX-socket connections; the TCP/SSL backend has a brief
@@ -251,6 +275,45 @@ def _spin_pg_container(
             pytest.fail(
                 f"PostgreSQL container ready per pg_isready but TCP socket {host_port} "
                 f"did not accept connections within 30s:\n{logs.stdout}{logs.stderr}"
+            )
+
+        # CI-E: protocol-level probe — the TCP socket accepting a connection does
+        # NOT guarantee the PostgreSQL startup-packet handshake is ready.  asyncpg
+        # receives ConnectionResetError [Errno 104] when PG resets the connection
+        # mid-handshake (backend not yet initialised).  The TCP probe only checks
+        # the OS-level accept(); we must verify the actual PG protocol is ready
+        # before yielding the DSN so that test-body asyncpg.create_pool() calls
+        # (which carry zero retry) cannot race this window.
+        #
+        # `psql -c "SELECT 1"` runs inside the container (no host asyncpg import
+        # needed in a sync generator context) and exits 0 only when PG has
+        # completed its startup and accepts a full query round-trip.
+        proto_deadline = time.monotonic() + 30
+        while time.monotonic() < proto_deadline:
+            proto = _docker_cli(
+                [
+                    "exec",
+                    container,
+                    "psql",
+                    "-U",
+                    "jarvis",
+                    "-d",
+                    "jarvis",
+                    "-c",
+                    "SELECT 1",
+                ],
+                check=False,
+                timeout=5,
+            )
+            if proto.returncode == 0:
+                break
+            time.sleep(0.25)
+        else:
+            logs = _docker_cli(["logs", container], check=False, timeout=10)
+            pytest.fail(
+                f"PostgreSQL container TCP-ready on {host_port} but protocol "
+                f"(psql SELECT 1) did not succeed within 30s:\n"
+                f"{logs.stdout}{logs.stderr}"
             )
 
         yield f"postgresql://jarvis:{password}@127.0.0.1:{host_port}/jarvis"

@@ -272,10 +272,18 @@ async def run_pulse(
     # Compute duration before persist so it is available even if persist fails
     stats["duration_s"] = round(time.monotonic() - start, 3)
     stats["deck_date"] = now.date().isoformat()
-    stats["degraded_reason"] = degraded_reason
+    # Preserve the first degraded_reason set (e.g. zero-candidates); only overwrite if a later
+    # stage produced a reason and no earlier reason was already recorded.
+    if degraded_reason is not None:
+        stats["degraded_reason"] = degraded_reason
 
     # --- 8. persist (upsert papers + persist deck in one transaction) ---
-    card_count = await _persist_pipeline(db_pool, deck, now, stats, degraded_reason, user_id)
+    # Use stats["degraded_reason"] — the local `degraded_reason` variable may have been
+    # clobbered to None by _run_stage2's return (stage1 empty → stage2 returns None reason),
+    # while stats["degraded_reason"] correctly holds the earlier zero-candidates reason.
+    card_count = await _persist_pipeline(
+        db_pool, deck, now, stats, stats["degraded_reason"], user_id
+    )
     stats["card_count"] = card_count
 
     # --- 9. emit classifier training enqueue + verification telemetry ---

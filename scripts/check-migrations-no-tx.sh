@@ -13,6 +13,7 @@ cd "$(dirname "$0")/.." || { echo "fatal: cannot cd to repo root" >&2; exit 1; }
 
 VIOLATIONS=()
 for f in db/migrations/*.sql; do
+  [ -f "$f" ] || continue
   base=$(basename "$f")
   num="${base%%_*}"
   case "$num" in (''|*[!0-9]*) continue ;; esac  # skip non-numeric-prefixed files
@@ -41,6 +42,7 @@ fi
 # ---------------------------------------------------------------------------
 DUP_VIOLATIONS=()
 for f in db/migrations/*.sql; do
+  [ -f "$f" ] || continue
   # Quick two-grep pre-filter: file must contain both patterns to be a candidate.
   if grep -q "ADD CONSTRAINT" "$f" && grep -qiE "WHEN duplicate_table" "$f"; then
     DUP_VIOLATIONS+=("$f")

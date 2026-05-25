@@ -43,12 +43,15 @@ async def test_zotero_connection(
     ``{"ok": false, "detail": "..."}`` otherwise.
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient
-    from paper_ingestion.integrations.zotero_service import _get_zotero_config
+    from paper_ingestion.integrations.zotero_service import (
+        ZoteroConfigDecryptError,
+        _get_zotero_config,
+    )
 
     user_id_for_config = await current_user_id_strict(request)
-    cfg = await _get_zotero_config(db_pool, user_id=user_id_for_config)
-
-    if cfg.get("_decrypt_error"):
+    try:
+        cfg = await _get_zotero_config(db_pool, user_id=user_id_for_config)
+    except ZoteroConfigDecryptError:
         logger.warning(
             "test_zotero_connection: stored credentials unreadable for user_id=%s "
             "(key rotation?); operator must re-save Zotero API key in Settings",

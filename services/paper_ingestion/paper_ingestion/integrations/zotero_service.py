@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 MAX_ENQUEUE_PER_SYNC = 20
 
 
+class ZoteroConfigDecryptError(Exception):
+    """Raised when stored Zotero config cannot be Fernet-decrypted."""
+
+
 async def _get_zotero_config(
     db_pool: asyncpg.Pool,
     user_id: int | None = None,
@@ -62,7 +66,7 @@ async def _get_zotero_config(
                     short_key,
                     exc_info=True,
                 )
-                return {"_decrypt_error": True}
+                raise ZoteroConfigDecryptError(short_key)
         else:
             # Legacy plaintext row (or non-secret scalar).
             # asyncpg JSONB codec auto-decodes objects/arrays/booleans;
@@ -93,9 +97,9 @@ async def push_paper_to_zotero(
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
-    cfg = await _get_zotero_config(db_pool, user_id=owner_user_id)
-
-    if cfg.get("_decrypt_error"):
+    try:
+        cfg = await _get_zotero_config(db_pool, user_id=owner_user_id)
+    except ZoteroConfigDecryptError:
         logger.warning(
             "Zotero config decryption failed for paper %d push — "
             "stored credentials are unreadable (key rotation?); "
@@ -344,9 +348,9 @@ async def sync_annotations_for_paper(
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
-    cfg = await _get_zotero_config(db_pool, user_id=owner_user_id)
-
-    if cfg.get("_decrypt_error"):
+    try:
+        cfg = await _get_zotero_config(db_pool, user_id=owner_user_id)
+    except ZoteroConfigDecryptError:
         logger.warning(
             "Zotero config decryption failed for annotation sync (paper %d) — "
             "stored credentials are unreadable (key rotation?); "
@@ -471,9 +475,9 @@ async def poll_zotero_library(
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
-    cfg = await _get_zotero_config(db_pool, user_id=polling_user_id)
-
-    if cfg.get("_decrypt_error"):
+    try:
+        cfg = await _get_zotero_config(db_pool, user_id=polling_user_id)
+    except ZoteroConfigDecryptError:
         logger.warning(
             "Zotero poll: config decryption failed — stored credentials are unreadable "
             "(key rotation?); operator must re-save Zotero API key in Settings"

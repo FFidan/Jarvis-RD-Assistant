@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
@@ -32,5 +31,5 @@ async def run_boot_probe(pool: asyncpg.Pool) -> None:
             "infra",
             "hw_probe",
             f"hw tier changed: {baseline} -> {current}",
-            json.dumps({"from": baseline, "to": current}),
+            {"from": baseline, "to": current},
         )

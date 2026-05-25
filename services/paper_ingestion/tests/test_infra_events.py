@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -72,7 +74,7 @@ def test_post_accepts_json_array(app_and_pool):
         headers={"X-Infra-Key": "test-infra-secret"},
     )
     assert resp.status_code == 200
-    assert resp.json() == {"accepted": 2}
+    assert resp.json() == {"accepted": 2, "skipped": 0}
     conn.executemany.assert_awaited_once()
     rows = conn.executemany.call_args[0][1]
     assert rows[0][0] == "warning"  # level
@@ -100,7 +102,7 @@ def test_post_accepts_ndjson(app_and_pool):
         },
     )
     assert resp.status_code == 200
-    assert resp.json() == {"accepted": 2}
+    assert resp.json() == {"accepted": 2, "skipped": 0}
 
 
 def test_post_empty_body_returns_zero(app_and_pool):
@@ -115,7 +117,7 @@ def test_post_empty_body_returns_zero(app_and_pool):
         },
     )
     assert resp.status_code == 200
-    assert resp.json() == {"accepted": 0}
+    assert resp.json() == {"accepted": 0, "skipped": 0}
 
 
 def test_unknown_level_falls_back_to_info(app_and_pool):
@@ -286,3 +288,67 @@ def test_infra_ip_in_allowlist_rejects_unparseable_string(monkeypatch):
 
     assert m._infra_ip_in_allowlist("testclient") is False
     assert m._infra_ip_in_allowlist("not-an-ip") is False
+
+
+def test_load_ingest_key_logs_on_oserror(monkeypatch, caplog):
+    import importlib
+
+    from paper_ingestion.routers import infra_events as m
+
+    importlib.reload(m)
+
+    monkeypatch.setenv("INFRA_INGEST_KEY", "")
+    monkeypatch.setenv("INFRA_INGEST_KEY_FILE", "/run/secrets/infra_ingest_key")
+
+    # Reload config to pick up the new env vars
+    from paper_ingestion import config as cfg_mod
+
+    importlib.reload(cfg_mod)
+
+    # Make the file appear to exist but fail on read
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        Path, "read_text", lambda self, **kw: (_ for _ in ()).throw(OSError("permission denied"))
+    )
+
+    with caplog.at_level(logging.ERROR, logger="paper_ingestion.routers.infra_events"):
+        result = m._load_ingest_key()
+
+    assert result is None
+    assert any(
+        "/run/secrets/infra_ingest_key" in r.message
+        for r in caplog.records
+        if r.levelno == logging.ERROR
+    )
+
+
+def test_ingest_infra_events_counts_skipped_malformed_lines(app_and_pool, caplog):
+    app, _pool, _conn = app_and_pool
+    client = TestClient(app)
+
+    body = "\n".join(
+        [
+            json.dumps({"source": "a", "message": "1"}),
+            "not json {{{",
+            json.dumps({"source": "b", "message": "2"}),
+            "also bad",
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.infra_events"):
+        resp = client.post(
+            "/infra-events",
+            content=body,
+            headers={
+                "Content-Type": "application/x-ndjson",
+                "X-Infra-Key": "test-infra-secret",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"accepted": 2, "skipped": 2}
+    warning_records = [
+        r for r in caplog.records if r.levelno == logging.WARNING and "skipped" in r.message
+    ]
+    assert len(warning_records) == 1
+    assert "2" in warning_records[0].message

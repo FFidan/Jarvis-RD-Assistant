@@ -78,7 +78,8 @@ def _load_ingest_key() -> str | None:
     if file_path and Path(file_path).is_file():
         try:
             return Path(file_path).read_text().strip() or None
-        except OSError:
+        except OSError as exc:
+            logger.error("infra-ingest: could not read key file %r: %s", file_path, exc)
             return None
     return None
 
@@ -112,15 +113,16 @@ async def ingest_infra_events(
     Accepts either a JSON array (``application/json``) or NDJSON
     (``application/x-ndjson``, one event per line) — Vector's ``http`` sink
     with ``encoding.codec = "json"`` and ``framing.method = "newline_delimited"``
-    produces NDJSON. Returns ``{"accepted": N}``.
+    produces NDJSON. Returns ``{"accepted": N, "skipped": M}``.
     """
     _check_auth(request, x_infra_key)
 
     body = await request.body()
     if not body.strip():
-        return {"accepted": 0}
+        return {"accepted": 0, "skipped": 0}
 
     parsed: list[dict] = []
+    skipped = 0
     text = body.decode("utf-8", errors="replace").strip()
     if text.startswith("["):
         try:
@@ -137,12 +139,16 @@ async def ingest_infra_events(
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
+                skipped += 1
                 continue
             if isinstance(obj, dict):
                 parsed.append(obj)
 
+    if skipped:
+        logger.warning("infra-events: skipped %d malformed NDJSON lines", skipped)
+
     if not parsed:
-        return {"accepted": 0}
+        return {"accepted": 0, "skipped": skipped}
 
     events = [InfraEvent(**raw) for raw in parsed]
     pool = request.app.state.db_pool
@@ -168,4 +174,4 @@ async def ingest_infra_events(
     except Exception:
         logger.exception("infra-events bulk insert failed")
         raise HTTPException(status_code=500, detail="ingest failed") from None
-    return {"accepted": len(rows)}
+    return {"accepted": len(rows), "skipped": skipped}

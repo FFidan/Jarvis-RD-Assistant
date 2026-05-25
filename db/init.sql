@@ -1464,8 +1464,6 @@ ALTER TABLE ONLY public.audit_log
     ADD CONSTRAINT audit_log_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.author_alert_log
     ADD CONSTRAINT author_alert_log_pkey PRIMARY KEY (id);
-ALTER TABLE ONLY public.author_alert_log
-    ADD CONSTRAINT author_alert_log_tracked_author_id_paper_id_key UNIQUE (tracked_author_id, paper_id);
 ALTER TABLE ONLY public.cards
     ADD CONSTRAINT cards_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.daily_log
@@ -1632,7 +1630,10 @@ CREATE INDEX idx_audit_log_action ON public.audit_log USING btree (action, "time
 CREATE INDEX idx_audit_log_action_created ON public.audit_log USING btree (action, "timestamp" DESC);
 CREATE INDEX idx_audit_log_timestamp ON public.audit_log USING btree ("timestamp" DESC);
 CREATE INDEX idx_audit_log_user ON public.audit_log USING btree (user_id, "timestamp" DESC);
+CREATE OR REPLACE RULE no_delete_audit_log AS ON DELETE TO public.audit_log DO INSTEAD NOTHING;
+CREATE OR REPLACE RULE no_update_audit_log AS ON UPDATE TO public.audit_log DO INSTEAD NOTHING;
 CREATE INDEX idx_author_alert_log_user ON public.author_alert_log USING btree (user_id) WHERE (user_id IS NOT NULL);
+CREATE UNIQUE INDEX author_alert_log_dedupe ON public.author_alert_log USING btree (tracked_author_id, paper_id, user_id);
 CREATE INDEX idx_cards_deck ON public.cards USING btree (deck_id);
 CREATE INDEX idx_cards_due ON public.cards USING btree (due_at) WHERE (due_at IS NOT NULL);
 CREATE INDEX idx_cards_paper ON public.cards USING btree (paper_id);
@@ -1755,7 +1756,7 @@ ALTER TABLE ONLY public.author_alert_log
 ALTER TABLE ONLY public.author_alert_log
     ADD CONSTRAINT author_alert_log_tracked_author_id_fkey FOREIGN KEY (tracked_author_id) REFERENCES public.tracked_authors(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.author_alert_log
-    ADD CONSTRAINT author_alert_log_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT author_alert_log_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
 ALTER TABLE ONLY public.cards
     ADD CONSTRAINT cards_deck_id_fkey FOREIGN KEY (deck_id) REFERENCES public.decks(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.cards
@@ -1983,11 +1984,15 @@ ON CONFLICT (user_id, key) DO NOTHING;
 -- files were collapsed into this single regenerated baseline. This file was
 -- machine-generated from the real fresh-install path (HEAD db/init.sql +
 -- 069_auth.sql + run_migrations() over the full 1..88 chain, then pg_dump
--- --schema-only), so it now embodies EVERY migration 1 through 88. We
--- therefore pre-mark all 88 versions applied so the runtime runner is a no-op
--- on a fresh install. The runner (libs/jarvis_common/jarvis_common/
--- migrations.py) is KEPT unchanged: the NEXT runtime migration is 0089, which
--- the runner will apply on first boot when db/migrations/0089_*.sql lands.
+-- --schema-only), so it now embodies EVERY migration 1 through 88.
+--
+-- POST-PRISTINE AUDIT-REMEDIATION (2026-05-26): migrations 0089/0090/0091
+-- were folded directly into this baseline (the repo had never been publicly
+-- deployed at that point, so a clean baseline beats fold-forward-keep-as-noop).
+-- We therefore pre-mark all 91 versions applied so the runtime runner is a
+-- no-op on a fresh install. The runner (libs/jarvis_common/jarvis_common/
+-- migrations.py) is KEPT unchanged: the NEXT runtime migration is 0092, which
+-- the runner will apply on first boot when db/migrations/0092_*.sql lands.
 -- Do not use generate_series (CI-enforced: scripts/check-migrations-no-tx.sh
 -- Check 3) -- the explicit contiguous list is the audit trail that init.sql
 -- truly embodies each version.
@@ -2008,5 +2013,6 @@ INSERT INTO schema_migrations (version) VALUES
     (57), (58), (59), (60), (61), (62), (63), (64),
     (65), (66), (67), (68), (69), (70), (71), (72),
     (73), (74), (75), (76), (77), (78), (79), (80),
-    (81), (82), (83), (84), (85), (86), (87), (88)
+    (81), (82), (83), (84), (85), (86), (87), (88),
+    (89), (90), (91)
 ON CONFLICT (version) DO NOTHING;

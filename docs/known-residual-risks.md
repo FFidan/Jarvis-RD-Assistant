@@ -271,66 +271,16 @@ These records exist so future auditors don't re-raise the same falsified finding
 
 ---
 
-## TELEGRAM-INTERNAL-API-1: internal_api.py lacks rate-limit / correlation middleware
+## ARCH-AUTH-1: auth.py module split — closed (YAGNI; no coupling defect)
 
-**Severity:** INFO — loopback-only scope; not user-reachable.
-
-**Scope:** `services/telegram_bot/telegram_bot/internal_api.py` binds to `127.0.0.1` and is consumed only by sibling services on the docker bridge. It currently skips the rate-limit + correlation-id middleware that all user-facing FastAPI apps wire via `configure_middleware_and_errors`.
-
-**Deferred until:** the internal API is ever exposed beyond loopback OR new endpoints are added that warrant request-shape observability. Reopen with a small PR adding `configure_middleware_and_errors(app, ...)` to the lifespan.
-
-**Source:** 2026-05-24 deep-audit F-5 finding (DOC-ONLY per W5-05 plan task).
+The 2026-05-24 pristine-pass review found `libs/jarvis_common/jarvis_common/auth.py` (~687 LOC, 52+ importers) has no coupling defect, modification-pressure trigger, or measured maintainability cost justifying the previously-proposed 4-module split (session / api_key / owner_override / production_gate). Reopen only if a future change repeatedly trips over the file's size (e.g. >3 PRs need to coordinate edits within a quarter).
 
 ---
 
-## ARCH-AUTH-1: auth.py god-module split as deferred refactor program
-
-**Severity:** INFO — internal-cohesion debt; not a correctness risk.
-
-**Scope:** `libs/jarvis_common/jarvis_common/auth.py` is ~687 LOC mixing four discrete concerns: session-cookie validation, API-key resolution, owner-override allowlist, and production-mode auth gating. 52+ import sites depend on the current surface.
-
-**Proposed sub-modules:**
-- `auth_session.py` — `SessionMiddleware`, `current_user_id_strict`, cookie parsing.
-- `auth_api_key.py` — `verify_api_key`, `refresh_api_key_cache`, header lookup.
-- `auth_owner_override.py` — `current_user_id_strict_with_owner_override`, CIDR + role checks, audit log emit.
-- `auth_production_gate.py` — `assert_real_auth_in_production`, env-mode helpers.
-
-**Deferred until:** a dedicated refactor program is scheduled (touches every router import — needs full-suite re-run + careful PR sequencing). Not lumped into routine cleanup waves.
-
-**Source:** 2026-05-24 deep-audit F-6 finding (DOC-ONLY per W5-06 plan task).
-
----
-
-## ARCH-ENTITIES-1: extraction/entities.py god-file split as deferred refactor program
-
-**Severity:** INFO — file-cohesion debt; no correctness risk.
-
-**Scope:** `services/paper_ingestion/paper_ingestion/extraction/entities.py` is 729 LOC mixing Qdrant KG-vector ops, SQL queries against `extracted_entities`, and entity-linking orchestration. Split candidates:
-
-**Proposed program structure:**
-- **A.** Map all symbols + cross-file import sites (audit pass).
-- **B.** Extract `kg_store.py` — Qdrant async ops (`upsert_vectors`, `delete_by_paper`, `search_neighbors`). New unit tests via `faux_qdrant`.
-- **C.** Extract `kg_queries.py` — raw SQL accessors (`fetch_entities_for_paper`, `bulk_insert_entities`). New contract tests.
-- **D.** Reduce `entities.py` to orchestration only (`extract_and_persist`, `link_to_papers`).
-- **E.** Update import sites; run full suite + integration.
-
-**Deferred until:** a dedicated refactor program is scheduled. Sequencing matters (B before D, etc.) — not safe for parallel-worktree dispatch as currently structured.
-
-**Source:** 2026-05-24 deep-audit F-9 finding (DOC-ONLY per W5-09 plan task).
-
----
-
-## INFRA-INGEST-1: infra_events.py lacks IP-level restriction
-
-**Severity:** INFO — defense-in-depth gap; not exploitable in current deployment.
-
-**Scope:** `services/paper_ingestion/paper_ingestion/routers/infra_events.py` POST endpoint is gated by `INFRA_INGEST_KEY` HMAC + docker network isolation (only reachable from sibling containers on the bridge). Audit suggested adding nginx/Caddy IP allowlist as belt-and-suspenders.
-
-**Rationale for deferral:** the existing controls (HMAC + network isolation) are sufficient for the threat model; IP allowlist belongs at the reverse-proxy layer (`caddy/Caddyfile`) which is infra scope, not application scope. Adding it in FastAPI would duplicate concerns.
-
-**Deferred until:** the deployment shape changes such that the endpoint becomes reachable from a less-trusted network. Reopen by adding `allow ... ; deny all;` to the route definition in `caddy/Caddyfile`.
-
-**Source:** 2026-05-24 deep-audit BE-10 finding (DOC-ONLY per W5-20 plan task).
+> **Resolved by 2026-05-25 pristine pass** (see CHANGELOG `[unreleased]` > Pristine pass):
+> - **TELEGRAM-INTERNAL-API-1** — `configure_middleware_and_errors` + `SessionMiddleware` wired into `internal_api.py` (W5-T1). Smoke test asserts both `SessionMiddleware` + `SlowAPIMiddleware` are present (W6.5-T6).
+> - **INFRA-INGEST-1** — IP allowlist guard added via `INFRA_INGEST_ALLOWED_CIDRS` `CoreSettings` field + default-deny 503 (W5-T2 + wave5-fix); XFF/proxy-trust risk documented in `docs/SECURITY.md` § Proxy-Trust and Source-IP Allowlisting (W6.5-T7).
+> - **ARCH-ENTITIES-1** — `extraction/entities.py` 814→329 LOC (orchestration only); `entities_qdrant.py` + `entities_sql.py` extracted; orchestrator owns `_store_entity_embedding` call (one-way orchestration→adapter); `_user_scope_paper_entities_exists` local helper consolidates 4 inlined SQL predicates (W6 + W6.5-T4).
 
 ---
 

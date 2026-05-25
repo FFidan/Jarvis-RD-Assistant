@@ -570,7 +570,6 @@ _INV080_CASCADE_TABLES: tuple[str, ...] = (
     "decks",
     "review_logs",
     "tracked_authors",
-    "author_alert_log",
 )
 
 
@@ -594,9 +593,11 @@ async def _fk_delete_rule(conn: asyncpg.Connection, table: str, constraint: str)
 async def test_baseline_owned_data_cascades_on_user_delete(
     live_pg_dsn: str,
 ) -> None:
-    """All 17 owned-data tables FK users(id) ON DELETE CASCADE; papers'
+    """All 16 owned-data tables FK users(id) ON DELETE CASCADE; papers'
     discovered_by FK is explicitly SET NULL (shared/system papers survive a
-    user deletion under the canonical-corpus model)."""
+    user deletion under the canonical-corpus model). author_alert_log was
+    removed from this set when its user_id FK was flipped to SET NULL by
+    the 0091 fold-in (per-user dedupe; rows are not user-owned data)."""
     pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
     try:
         await apply_fresh_init(pool)
@@ -813,3 +814,123 @@ async def test_pdf_resolutions_table_absent(contract_conn: asyncpg.Connection) -
         "pdf_resolutions table must be absent — migration 0089 dropped it "
         "and db/init.sql no longer defines it (CFG-MIG-1)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Migration 0090 — audit_log append-only rules (folded into init.sql 2026-05-26).
+# DELETE and UPDATE on audit_log become silent no-ops; INSERT and TRUNCATE pass.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audit_log_append_only_rules_present(live_pg_dsn: str) -> None:
+    """audit_log must carry the DO-INSTEAD-NOTHING rules for DELETE and UPDATE
+    (migration 0090, folded into init.sql)."""
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT rulename, ev_type
+                  FROM pg_rewrite
+                  JOIN pg_class ON pg_rewrite.ev_class = pg_class.oid
+                 WHERE pg_class.relname = 'audit_log'
+                   AND rulename IN ('no_delete_audit_log', 'no_update_audit_log')
+                """,
+            )
+            names = {r["rulename"] for r in rows}
+            assert names == {"no_delete_audit_log", "no_update_audit_log"}, (
+                f"audit_log must have both append-only rules, found {names!r}"
+            )
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_audit_log_delete_is_silent_noop(live_pg_dsn: str) -> None:
+    """DELETE FROM audit_log returns successfully but removes nothing
+    (DO INSTEAD NOTHING rule from migration 0090)."""
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO audit_log (user_id, action, resource) "
+                "VALUES ('u1', 'baseline-0090', 'r1')"
+            )
+            await conn.execute("DELETE FROM audit_log WHERE action = 'baseline-0090'")
+            remaining = await conn.fetchval(
+                "SELECT COUNT(*) FROM audit_log WHERE action = 'baseline-0090'"
+            )
+            assert remaining == 1, "audit_log DELETE must be a silent no-op"
+    finally:
+        await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0091 — author_alert_log per-user dedupe (folded into init.sql).
+# 2-col unique constraint replaced by 3-col unique index;
+# user_id FK flipped from CASCADE to SET NULL.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_author_alert_log_three_col_unique_present(live_pg_dsn: str) -> None:
+    """author_alert_log must carry the (tracked_author_id, paper_id, user_id)
+    unique index (migration 0091, folded into init.sql)."""
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT indexdef FROM pg_indexes
+                 WHERE tablename = 'author_alert_log'
+                   AND indexdef LIKE '%(tracked_author_id, paper_id, user_id)%'
+                """,
+            )
+            assert row is not None, (
+                "author_alert_log must have a 3-col unique index "
+                "(tracked_author_id, paper_id, user_id)"
+            )
+            assert "UNIQUE" in row["indexdef"], (
+                f"3-col index must be UNIQUE, got: {row['indexdef']}"
+            )
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_author_alert_log_two_col_unique_absent(live_pg_dsn: str) -> None:
+    """The pre-0091 2-col (tracked_author_id, paper_id) unique constraint
+    must be gone — keeping it would suppress alerts for other users."""
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT conname FROM pg_constraint
+                 WHERE conrelid = 'public.author_alert_log'::regclass
+                   AND contype = 'u'
+                   AND conname = 'author_alert_log_tracked_author_id_paper_id_key'
+                """,
+            )
+            assert row is None, f"pre-0091 2-col unique constraint must be absent; got {row!r}"
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_author_alert_log_user_id_fk_set_null(live_pg_dsn: str) -> None:
+    """author_alert_log.user_id FK delete rule must be SET NULL post-0091:
+    a deleted user does not erase the per-user dedupe history."""
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            rule = await _fk_delete_rule(conn, "author_alert_log", "author_alert_log_user_id_fkey")
+            assert rule == "SET NULL", f"author_alert_log.user_id FK must be SET NULL, got {rule!r}"
+    finally:
+        await pool.close()

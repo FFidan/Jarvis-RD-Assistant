@@ -287,7 +287,10 @@ async def test_cancel_review():
 
 # Use a distinct chat_id so the rate-limiter bucket for these tests is
 # isolated from the 5-call quota consumed by the test_rate_card_* tests above.
-_SEC_CHAT_ID = 99999
+# NOTE: must NOT be 99999 — that is _TEST_CHAT_ID in test_review_handler_reauth.py,
+# and the shared module-level _timestamps dict in rate_limit.py is not reset between
+# test files, so reusing 99999 here fills the 5-call quota before the reauth tests run.
+_SEC_CHAT_ID = 55555
 
 
 @pytest.mark.asyncio

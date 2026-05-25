@@ -209,11 +209,20 @@ async def extract_entities_for_paper(
                 ve["name"],
                 ve["type"],
                 ve["description"],
-                qdrant_client,
                 embedding=pc["embedding"],
                 similar_entity_id=pc["similar_entity_id"],
             )
             entity_map[ve["name"].lower()] = entity_id
+
+            if not was_merged and pc["embedding"] is not None and qdrant_client is not None:
+                await _store_entity_embedding(
+                    conn,
+                    qdrant_client,
+                    entity_id,
+                    ve["name"],
+                    ve["type"],
+                    pc["embedding"],
+                )
 
             if was_merged:
                 entities_merged += 1

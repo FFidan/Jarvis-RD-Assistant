@@ -142,6 +142,37 @@ To rotate `JARVIS_CONFIG_KEY` without downtime:
 
 ---
 
+## Proxy-Trust and Source-IP Allowlisting
+
+Two auth surfaces use `request.client.host` to determine source IP for
+allowlist checks. The reported IP is rewritten by `ProxyHeadersMiddleware`
+when the request originates from a host in `trusted_proxy_hosts` (see
+`configure_middleware_and_errors` in
+`libs/jarvis_common/jarvis_common/app_factory.py`). If `trusted_proxy_hosts`
+is broader than the actual reverse-proxy fleet, an attacker behind any
+included host could spoof `X-Forwarded-For` to forge the source IP.
+
+The IP-allowlist call sites are:
+
+- `_ip_in_allowlist` (`libs/jarvis_common/jarvis_common/auth.py`) — backs
+  `OWNER_OVERRIDE_ALLOWED_CIDRS` for the `X-Owner-User-Id` header bypass;
+  mis-trusted XFF forges the operator's IP guard.
+- `_infra_ip_in_allowlist`
+  (`services/paper_ingestion/paper_ingestion/routers/infra_events.py`) —
+  backs `INFRA_INGEST_ALLOWED_CIDRS` for the Vector sidecar ingest
+  endpoint; mis-trusted XFF forges the sidecar's IP and reduces the
+  defense-in-depth to the HMAC challenge alone.
+
+**Deployment requirement:** keep `trusted_proxy_hosts` scoped to the
+actual reverse-proxy host(s) — in this stack that is the Caddy container's
+bridge IP only. Do NOT set `trusted_proxy_hosts="*"` in any production
+deployment. The setting is exposed via `TRUSTED_PROXY_HOSTS` in
+`CoreSettings`; the historical `learning_engine` default of `"*"` is
+acceptable for single-host loopback but NOT for any deployment exposed
+beyond loopback.
+
+---
+
 ## Audit Log
 
 Security-relevant events are written to the `audit_log` table by
@@ -161,6 +192,17 @@ The audit log is readable by admins at `GET /api/admin/audit-log`
 ## Leaked-secret remediation (one-time, before public)
 
 *(agent: claude-code, 2026-05-17; corrected 2026-05-18)*
+
+**OBS-1 status: RESOLVED (verified 2026-05-25, Wave 7 of pristine pass).**
+`git log origin/master --all --full-history --diff-filter=ACMRT -- secrets/langfuse_init_pk.txt secrets/langfuse_init_sk.txt` returns ZERO commits — the
+two secret-files are not present on any reachable ref of `origin/master`
+(commit `4587e9ab` at verification time). Prefix grep
+(`pk-lf-35d525` / `sk-lf-031360`) on `origin/master` returns 8 file hits,
+ALL in intentional CI-guard / documentation / audit references (this
+runbook, `scripts/check-burned-secrets.sh:15-16`,
+`scripts/gen-langfuse-keys.sh:29-30`, and 5 dated audit artifacts).
+No further `git filter-repo` or force-push is required for the
+public-launch transition.
 
 `secrets/langfuse_init_pk.txt` and `secrets/langfuse_init_sk.txt` were
 accidentally git-tracked in early development despite the `secrets/*.txt`

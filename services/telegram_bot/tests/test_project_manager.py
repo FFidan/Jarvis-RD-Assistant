@@ -290,7 +290,7 @@ async def test_complete_milestone_scopes_by_user_id() -> None:
 
 @pytest.mark.asyncio
 async def test_complete_milestone_legacy_no_user_id() -> None:
-    """complete_milestone without user_id updates without ownership filter (W2-CF8)."""
+    """complete_milestone without user_id passes NULL — single-SQL NULL-safe predicate (W6.5-T3)."""
     db_pool = AsyncMock()
     db_pool.fetchrow.return_value = _row(id=99, completed=True)
     manager = ProjectManager(db_pool)
@@ -299,31 +299,99 @@ async def test_complete_milestone_legacy_no_user_id() -> None:
 
     assert result == {"id": 99, "completed": True}
     sql = db_pool.fetchrow.await_args.args[0]
-    assert "IS NOT DISTINCT FROM" not in sql
+    params = db_pool.fetchrow.await_args.args[1:]
+    assert "IS NOT DISTINCT FROM" in sql
+    assert params == (99, None)
 
 
 @pytest.mark.asyncio
 async def test_link_paper_to_task_guards_ownership() -> None:
     """link_paper_to_task with user_id uses a subquery ownership guard (W2-CF8)."""
     db_pool = AsyncMock()
+    db_pool.fetchval.return_value = 1
     manager = ProjectManager(db_pool)
 
     await manager.link_paper_to_task(5, 10, note="useful", user_id=3)
 
-    sql = db_pool.execute.await_args.args[0]
-    params = db_pool.execute.await_args.args[1:]
+    sql = db_pool.fetchval.await_args.args[0]
+    params = db_pool.fetchval.await_args.args[1:]
     assert "user_id IS NOT DISTINCT FROM" in sql
     assert 3 in params
 
 
 @pytest.mark.asyncio
 async def test_link_paper_to_task_legacy_no_user_id() -> None:
-    """link_paper_to_task without user_id uses direct VALUES insert (W2-CF8)."""
+    """link_paper_to_task without user_id passes NULL — single-SQL NULL-safe predicate (W6.5-T3)."""
     db_pool = AsyncMock()
+    db_pool.fetchval.return_value = 1
     manager = ProjectManager(db_pool)
 
     await manager.link_paper_to_task(5, 10)
 
-    sql = db_pool.execute.await_args.args[0]
-    assert "IS NOT DISTINCT FROM" not in sql
-    assert "VALUES" in sql
+    sql = db_pool.fetchval.await_args.args[0]
+    params = db_pool.fetchval.await_args.args[1:]
+    assert "IS NOT DISTINCT FROM" in sql
+    assert params == (5, 10, None, None)
+
+
+# W6.5-T3: collapsed SQL tests
+
+
+@pytest.mark.asyncio
+async def test_complete_milestone_legacy_null_branch() -> None:
+    """complete_milestone without user_id issues UPDATE with params (milestone_id, None)."""
+    db_pool = AsyncMock()
+    db_pool.fetchrow.return_value = _row(id=5, completed=True)
+    manager = ProjectManager(db_pool)
+
+    await manager.complete_milestone(5)
+
+    params = db_pool.fetchrow.await_args.args[1:]
+    assert params == (5, None)
+
+
+@pytest.mark.asyncio
+async def test_complete_milestone_scopes_by_user_id_collapsed() -> None:
+    """complete_milestone user_id=7 with no match returns empty dict via single SQL."""
+    db_pool = AsyncMock()
+    db_pool.fetchrow.return_value = None
+    manager = ProjectManager(db_pool)
+
+    result = await manager.complete_milestone(42, user_id=7)
+
+    assert result == {}
+    params = db_pool.fetchrow.await_args.args[1:]
+    assert params == (42, 7)
+
+
+@pytest.mark.asyncio
+async def test_link_paper_to_task_legacy_null_branch() -> None:
+    """link_paper_to_task without user_id calls fetchval with 4 params ending in None."""
+    db_pool = AsyncMock()
+    db_pool.fetchval.return_value = 1
+    manager = ProjectManager(db_pool)
+
+    await manager.link_paper_to_task(5, 10, note="see fig 3")
+
+    params = db_pool.fetchval.await_args.args[1:]
+    assert params == (5, 10, "see fig 3", None)
+
+
+@pytest.mark.asyncio
+async def test_link_paper_to_task_scopes_by_user_id_collapsed(caplog) -> None:
+    """link_paper_to_task user_id=7 calls fetchval; on None result emits owner-mismatch warning."""
+    import logging
+
+    db_pool = AsyncMock()
+    db_pool.fetchval.return_value = None  # simulate WHERE-rejected (owner mismatch)
+    manager = ProjectManager(db_pool)
+
+    with caplog.at_level(logging.WARNING, logger="telegram_bot.project_manager"):
+        await manager.link_paper_to_task(5, 10, note="ref", user_id=7)
+
+    sql = db_pool.fetchval.await_args.args[0]
+    params = db_pool.fetchval.await_args.args[1:]
+    assert "WHERE id = $1" in sql
+    assert "user_id IS NOT DISTINCT FROM $4" in sql
+    assert params == (5, 10, "ref", 7)
+    assert any("owner mismatch" in r.message for r in caplog.records)

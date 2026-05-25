@@ -242,24 +242,15 @@ class ProjectManager:
         """
         async with self.db_pool.acquire() as conn:
             async with conn.transaction():
-                if user_id is not None:
-                    row = await conn.fetchrow(
-                        """UPDATE tasks
-                        SET status = 'done', completed_at = NOW(), updated_at = NOW()
-                        WHERE id = $1 AND status != 'done'
-                          AND user_id IS NOT DISTINCT FROM $2
-                        RETURNING *""",
-                        task_id,
-                        user_id,
-                    )
-                else:
-                    row = await conn.fetchrow(
-                        """UPDATE tasks
-                        SET status = 'done', completed_at = NOW(), updated_at = NOW()
-                        WHERE id = $1 AND status != 'done'
-                        RETURNING *""",
-                        task_id,
-                    )
+                row = await conn.fetchrow(
+                    """UPDATE tasks
+                    SET status = 'done', completed_at = NOW(), updated_at = NOW()
+                    WHERE id = $1 AND status != 'done'
+                      AND ($2::bigint IS NULL OR user_id IS NOT DISTINCT FROM $2)
+                    RETURNING *""",
+                    task_id,
+                    user_id,
+                )
                 if row:
                     today = datetime.now(UTC).date()
                     # daily_log PK is (user_id, log_date) with UNIQUE NULLS NOT
@@ -355,24 +346,23 @@ class ProjectManager:
         dict
             Updated milestone record, or empty dict if not found / not owned.
         """
-        if user_id is not None:
-            row = await self.db_pool.fetchrow(
-                """UPDATE milestones
-                SET completed = TRUE, completed_at = NOW()
-                WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2
-                RETURNING *""",
+        row = await self.db_pool.fetchrow(
+            """UPDATE milestones
+            SET completed = TRUE, completed_at = NOW()
+            WHERE id = $1
+              AND ($2::bigint IS NULL OR user_id IS NOT DISTINCT FROM $2)
+            RETURNING *""",
+            milestone_id,
+            user_id,
+        )
+        if row is None:
+            logger.warning(
+                "complete_milestone: id=%s not updated — not found or not owned by user_id=%s",
                 milestone_id,
                 user_id,
             )
-        else:
-            row = await self.db_pool.fetchrow(
-                """UPDATE milestones
-                SET completed = TRUE, completed_at = NOW()
-                WHERE id = $1
-                RETURNING *""",
-                milestone_id,
-            )
-        return dict(row) if row else {}
+            return {}
+        return dict(row)
 
     # ----- Paper Links -----
 
@@ -395,28 +385,25 @@ class ProjectManager:
             preventing cross-user paper links. ``None`` preserves legacy
             single-tenant owner semantics.
         """
-        if user_id is not None:
-            await self.db_pool.execute(
-                """INSERT INTO task_paper_links (task_id, paper_id, note)
-                SELECT $1, $2, $3
-                WHERE EXISTS (
-                    SELECT 1 FROM tasks
-                    WHERE id = $1 AND user_id IS NOT DISTINCT FROM $4
-                )
-                ON CONFLICT (task_id, paper_id) DO UPDATE SET note = $3""",
+        result = await self.db_pool.fetchval(
+            """INSERT INTO task_paper_links (task_id, paper_id, note)
+            SELECT $1, $2, $3
+            WHERE ($4::bigint IS NULL OR EXISTS (
+                SELECT 1 FROM tasks WHERE id = $1
+                  AND user_id IS NOT DISTINCT FROM $4
+            ))
+            ON CONFLICT (task_id, paper_id) DO UPDATE SET note = $3
+            RETURNING 1""",
+            task_id,
+            paper_id,
+            note,
+            user_id,
+        )
+        if result is None and user_id is not None:
+            logger.warning(
+                "link_paper_to_task: task_id=%s not linked — owner mismatch for user_id=%s",
                 task_id,
-                paper_id,
-                note,
                 user_id,
-            )
-        else:
-            await self.db_pool.execute(
-                """INSERT INTO task_paper_links (task_id, paper_id, note)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (task_id, paper_id) DO UPDATE SET note = $3""",
-                task_id,
-                paper_id,
-                note,
             )
 
     async def get_project_papers(self, project_id: int) -> list[dict]:

@@ -905,11 +905,16 @@ async def test_sync_annotations_rolls_back_on_mid_loop_failure():
 # ---------------------------------------------------------------------------
 
 
-async def test_get_zotero_config_returns_empty_dict_on_decrypt_failure(caplog):
-    """PI-EDGE-011: if decrypt_secret raises, _get_zotero_config returns {} and warns."""
+async def test_get_zotero_config_raises_on_decrypt_failure(caplog):
+    """PI-EDGE-011: if decrypt_secret raises, _get_zotero_config raises ZoteroConfigDecryptError and warns."""
     import logging
 
-    from paper_ingestion.integrations.zotero_service import _get_zotero_config
+    import pytest
+
+    from paper_ingestion.integrations.zotero_service import (
+        ZoteroConfigDecryptError,
+        _get_zotero_config,
+    )
 
     # One encrypted row — decrypt will fail.
     rows = [
@@ -928,11 +933,9 @@ async def test_get_zotero_config_returns_empty_dict_on_decrypt_failure(caplog):
     # decrypt_secret is imported inside _get_zotero_config from jarvis_common.crypto.
     with patch("jarvis_common.crypto.decrypt_secret", side_effect=ValueError("bad token")):
         with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
-            result = await _get_zotero_config(pool)
+            with pytest.raises(ZoteroConfigDecryptError):
+                await _get_zotero_config(pool)
 
-    assert result == {"_decrypt_error": True}, (
-        f"Expected {{'_decrypt_error': True}} on decrypt failure, got {result}"
-    )
     assert any("decrypt failed" in record.message for record in caplog.records), (
         f"Expected warning about decrypt failure; got: {[r.message for r in caplog.records]}"
     )
@@ -994,7 +997,12 @@ async def test_get_zotero_config_does_not_log_exc_string(caplog):
     """
     import logging
 
-    from paper_ingestion.integrations.zotero_service import _get_zotero_config
+    import pytest
+
+    from paper_ingestion.integrations.zotero_service import (
+        ZoteroConfigDecryptError,
+        _get_zotero_config,
+    )
 
     rows = [
         FakeRecord(
@@ -1013,10 +1021,8 @@ async def test_get_zotero_config_does_not_log_exc_string(caplog):
 
     with patch("jarvis_common.crypto.decrypt_secret", side_effect=ValueError(exc_message)):
         with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
-            result = await _get_zotero_config(pool)
-
-    # Result must be the sentinel dict (H11).
-    assert result == {"_decrypt_error": True}, f"Expected {{'_decrypt_error': True}}, got {result}"
+            with pytest.raises(ZoteroConfigDecryptError):
+                await _get_zotero_config(pool)
 
     # The raw exc message string must NOT appear in any log record.
     for record in caplog.records:
@@ -1127,3 +1133,72 @@ async def test_poll_zotero_library_sets_source_type_zotero():
     assert paper_create.source_type == SourceType.ZOTERO, (
         f"Expected source_type=SourceType.ZOTERO ('zotero'), got {paper_create.source_type!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ZoteroConfigDecryptError — caller-site handling
+# ---------------------------------------------------------------------------
+
+
+async def test_push_paper_to_zotero_handles_decrypt_error_silently(caplog):
+    """push_paper_to_zotero returns early and warns when config decryption fails."""
+    import logging
+
+    from paper_ingestion.integrations.zotero_service import ZoteroConfigDecryptError
+
+    pool = MagicMock()
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch(
+        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        AsyncMock(side_effect=ZoteroConfigDecryptError("api_key")),
+    ):
+        with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+            with caplog.at_level(
+                logging.WARNING, logger="paper_ingestion.integrations.zotero_service"
+            ):
+                result = await push_paper_to_zotero(paper_id=5, db_pool=pool, http_client=http)
+
+    assert result is None
+    assert any("decryption failed" in r.message for r in caplog.records)
+    mock_client.assert_not_called()
+
+
+async def test_sync_annotations_for_paper_handles_decrypt_error(caplog):
+    """sync_annotations_for_paper returns config_decrypt_failed when config decryption fails."""
+    import logging
+
+    from paper_ingestion.integrations.zotero_service import ZoteroConfigDecryptError
+
+    pool = MagicMock()
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch(
+        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        AsyncMock(side_effect=ZoteroConfigDecryptError("api_key")),
+    ):
+        with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
+            result = await sync_annotations_for_paper(paper_id=7, db_pool=pool, http_client=http)
+
+    assert result == {"paper_id": 7, "imported": 0, "status": "config_decrypt_failed"}
+    assert any("decryption failed" in r.message for r in caplog.records)
+
+
+async def test_poll_zotero_library_handles_decrypt_error(caplog):
+    """poll_zotero_library returns config_decrypt_failed when config decryption fails."""
+    import logging
+
+    from paper_ingestion.integrations.zotero_service import ZoteroConfigDecryptError
+
+    pool = MagicMock()
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch(
+        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        AsyncMock(side_effect=ZoteroConfigDecryptError("api_key")),
+    ):
+        with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
+            result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    assert result == {"status": "config_decrypt_failed"}
+    assert any("decryption failed" in r.message for r in caplog.records)

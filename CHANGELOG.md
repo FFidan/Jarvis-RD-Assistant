@@ -6,6 +6,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 > An internal `v0.5.0` git tag was cut locally on 2026-05-24 for version-metadata alignment with `pyproject.toml` / `frontend/package.json`. The repo remains private; this release line stays semantically **unreleased** until a public release event. When that happens, this `[unreleased]` heading will be retitled to `[v0.5.0] - <release date>` (matching the existing `[vX.Y.Z]` style).
 
+### Pristine pass (2026-05-25)
+
+Pre-public-launch pristine pass landed at `cadf8305`. 53 commits across 9 waves + 3 sub-waves; full LEDGER at `docs/audit/2026-05-24-pristine-pass/LEDGER.md`.
+
+- **W1–W6**: closed audit-remediation carry-forwards (CI green unstick, 28 trivial CFs, 3 FE CFs, 14 backend CFs incl. HIGH/MED), shipped TELEGRAM-INTERNAL-API-1 + INFRA-INGEST-1, and split ARCH-ENTITIES-1 (entities.py 814→329 LOC + entities_qdrant.py + entities_sql.py).
+- **W6.5** (pre-pristine CF burn-down, YAGNI lens): 10 actionable CF fixes (`469bb978`..`55bfe9ef`) + wave6.5-fix (`e2466c02`) addressing Wave-Gate Axis 2/4/5 findings + 5 DEFERRED-INTENTIONAL downgrades; ARCH-AUTH-1 closed in `docs/known-residual-risks.md` (YAGNI, no coupling defect).
+- **W7** (OBS-1 RESOLVED, `e7d8687a`): `git log origin/master --all --full-history --diff-filter=ACMRT -- secrets/langfuse_init_pk.txt secrets/langfuse_init_sk.txt` returns ZERO commits; verified no `git filter-repo` / force-push required for public-launch.
+- **W8** (push + CI): pristine/main fast-forward-pushed to `origin/master` after all local pristine gates green (ruff / pyright / check-test-shape / check_agent_docs / check-burned-secrets / check-python-deps / pytest 2647/0/1-skip / FE lint+test+build / mkdocs --strict).
+- **W8.5** (baseline failure fixes): pulse `degraded_reason` clobber root-cause (`069e798c` + `46f299ce` refinement: pass `stats[degraded_reason]` to persist not the clobbered local var); reauth rate-limit-cache cross-file `_TEST_CHAT_ID` collision (`595ed887`: 99999 → 55555); 2 jsonb-double-encode guard violations in hw_probe + settings_ai (`36befbde`: drop `json.dumps()` wrappers before `$N::jsonb`).
+- **W8.6** (CI flake + speed-up): protocol-level `psql` round-trip probe in `_spin_pg_container` (`be2b4c1e`) supplements the W6-01 TCP probe to close the handshake-race window; zombie-container pre-clean + exit-125 retry in `_spin_pg_container` (`f1f12d80`) handles CI-retry zombie collisions; CI workflow upgraded to `astral-sh/setup-uv@v6.8.0` + `python-version: "3.12"` pin + `uv sync --frozen` (`466c6841`), cutting CI wall-clock from ~8-15min to ~4-5min.
+- **Post-push CI**: 3 consecutive green runs on master (`36befbde` post CI-E retry, `e52591f7` attempt 1 first-try, `cadf8305` first-try). Both flake fixes (psql probe + docker-125 retry) validated by live CI.
+
 ### Upgrade Notes
 
 - **Migration baseline squashed.** The 88-file migration chain prior to v0.5.0 was consolidated into `db/init.sql` as the single baseline; new migrations start at 0089. The migration runner detects squashed-init state and applies forward without interruption — operators upgrading from v0.4.1 or earlier need no manual intervention. See `tests/test_baseline_invariants.py` for the schema invariants pinned.

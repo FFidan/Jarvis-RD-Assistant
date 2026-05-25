@@ -2,6 +2,7 @@
 name = "jarvis-rd-assistant"
 version = "0.5.0"
 description = "Self-hosted AI-powered research assistant"
+authors = [{ name = "Ferhat Fidan", email = "ferhat.fidan@tuhh.de" }]
 requires-python = ">=3.12"
 license = "MIT"
 

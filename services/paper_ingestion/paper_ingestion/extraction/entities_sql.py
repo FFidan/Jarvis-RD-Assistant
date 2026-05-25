@@ -6,11 +6,22 @@ from typing import Any
 import asyncpg
 from jarvis_common import escape_like
 
-from paper_ingestion.extraction.entities_qdrant import _store_entity_embedding
-
-ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy
+from paper_ingestion.extraction.entities_qdrant import ConnLike
 
 logger = logging.getLogger(__name__)
+
+
+def _user_scope_paper_entities_exists(entity_alias: str, param_idx: int) -> str:
+    """SQL fragment: EXISTS scoping paper_entities to caller's user_id.
+
+    Callers hard-code entity_alias (SQL identifier) and param_idx (literal int),
+    never user input — f-string interpolation is safe.
+    """
+    return (
+        f"EXISTS (SELECT 1 FROM paper_entities pe "
+        f"WHERE pe.entity_id = {entity_alias} "
+        f"AND pe.user_id IS NOT DISTINCT FROM ${param_idx})"
+    )
 
 
 async def _find_or_create_entity(
@@ -18,7 +29,6 @@ async def _find_or_create_entity(
     name: str,
     entity_type: str,
     description: str | None,
-    qdrant_client: Any | None,
     *,
     embedding: list[float] | None = None,
     similar_entity_id: int | None = None,
@@ -80,16 +90,6 @@ async def _find_or_create_entity(
 
     entity_id: int = row["id"]
 
-    if embedding is not None and qdrant_client is not None:
-        await _store_entity_embedding(
-            conn,
-            qdrant_client,
-            entity_id,
-            name,
-            entity_type,
-            embedding,
-        )
-
     return entity_id, False
 
 
@@ -110,15 +110,11 @@ async def get_knowledge_graph(
         if entity_type:
             if user_id is not None:
                 entities = await conn.fetch(
-                    """SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
+                    f"""SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
                               e.metadata, e.embedding_id, e.paper_count, e.created_at
                        FROM entities e
                        WHERE e.entity_type = $1 AND e.paper_count >= $2
-                         AND EXISTS (
-                             SELECT 1 FROM paper_entities pe
-                             WHERE pe.entity_id = e.id
-                               AND pe.user_id IS NOT DISTINCT FROM $4
-                         )
+                         AND {_user_scope_paper_entities_exists("e.id", 4)}
                        ORDER BY e.paper_count DESC LIMIT $3""",
                     entity_type,
                     min_paper_count,
@@ -138,15 +134,11 @@ async def get_knowledge_graph(
         else:
             if user_id is not None:
                 entities = await conn.fetch(
-                    """SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
+                    f"""SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
                               e.metadata, e.embedding_id, e.paper_count, e.created_at
                        FROM entities e
                        WHERE e.paper_count >= $1
-                         AND EXISTS (
-                             SELECT 1 FROM paper_entities pe
-                             WHERE pe.entity_id = e.id
-                               AND pe.user_id IS NOT DISTINCT FROM $3
-                         )
+                         AND {_user_scope_paper_entities_exists("e.id", 3)}
                        ORDER BY e.paper_count DESC LIMIT $2""",
                     min_paper_count,
                     limit,
@@ -242,6 +234,11 @@ async def query_knowledge_graph(
 ) -> list[dict]:
     """Answer a knowledge graph query using SQL pattern matching on entities.
 
+    Dispatch table (each branch has scoped/unscoped SQL variants on ``user_id``):
+      1. "used on" | "applied to" → relationship search filtered by target entity name
+      2. "outperforms" | "better than" → outperformance relationship search
+      3. else → generic name LIKE search across entities joined to paper_entities
+
     When *user_id* is provided the result is scoped to entities and
     relationships the caller has ``paper_entities`` rows for (M-04).
     Passing ``None`` preserves the legacy owner/server path (unscoped).
@@ -262,7 +259,7 @@ async def query_knowledge_graph(
 
             if user_id is not None:
                 rows = await conn.fetch(
-                    """SELECT e1.name AS method_name, e1.entity_type AS method_type,
+                    f"""SELECT e1.name AS method_name, e1.entity_type AS method_type,
                               e2.name AS target_name, e2.entity_type AS target_type,
                               er.relationship_type, er.evidence_quote, er.confidence
                        FROM entity_relationships er
@@ -270,11 +267,7 @@ async def query_knowledge_graph(
                        JOIN entities e2 ON er.target_entity_id = e2.id
                        WHERE LOWER(e2.name) LIKE $1 ESCAPE '\\'
                          AND er.relationship_type IN ('used_on', 'evaluates', 'applied_to')
-                         AND EXISTS (
-                             SELECT 1 FROM paper_entities pe
-                             WHERE pe.entity_id = e1.id
-                               AND pe.user_id IS NOT DISTINCT FROM $2
-                         )
+                         AND {_user_scope_paper_entities_exists("e1.id", 2)}
                          AND (
                              er.paper_id IS NULL
                              OR EXISTS (
@@ -311,17 +304,13 @@ async def query_knowledge_graph(
         elif "outperforms" in query_lower or "better than" in query_lower:
             if user_id is not None:
                 rows = await conn.fetch(
-                    """SELECT e1.name AS method_name, e2.name AS compared_to,
+                    f"""SELECT e1.name AS method_name, e2.name AS compared_to,
                               er.evidence_quote, er.confidence
                        FROM entity_relationships er
                        JOIN entities e1 ON er.source_entity_id = e1.id
                        JOIN entities e2 ON er.target_entity_id = e2.id
                        WHERE er.relationship_type = 'outperforms'
-                         AND EXISTS (
-                             SELECT 1 FROM paper_entities pe
-                             WHERE pe.entity_id = e1.id
-                               AND pe.user_id IS NOT DISTINCT FROM $1
-                         )
+                         AND {_user_scope_paper_entities_exists("e1.id", 1)}
                          AND (
                              er.paper_id IS NULL
                              OR EXISTS (

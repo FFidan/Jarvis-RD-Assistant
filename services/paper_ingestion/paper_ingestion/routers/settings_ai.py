@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -122,6 +121,6 @@ async def dismiss_banner(
             "config",
             "settings_ai",
             f"banner dismissed: {req.banner_kind}",
-            json.dumps({"banner_kind": req.banner_kind}),
+            {"banner_kind": req.banner_kind},
         )
     return {"ok": True}

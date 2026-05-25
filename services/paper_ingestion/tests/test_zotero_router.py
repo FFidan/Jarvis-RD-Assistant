@@ -191,3 +191,49 @@ async def test_poll_now_response_shape(_app):
     assert set(body.keys()) >= {"job_id", "status"}
     assert isinstance(body["job_id"], str)
     assert isinstance(body["status"], str)
+
+
+# ---------------------------------------------------------------------------
+# ZoteroConfigDecryptError — test_zotero_connection router handler
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_test_zotero_connection_returns_user_visible_detail_on_decrypt_error(
+    monkeypatch, caplog, _app
+):
+    """test_zotero_connection returns {ok: False, detail: ...} and warns on decrypt error.
+
+    Uses the FastAPI test client via dependency_overrides + monkeypatch so the full
+    router stack (rate-limiter, exception handling) is exercised without bypassing
+    the handler via __wrapped__.
+    """
+    import logging
+
+    from paper_ingestion.integrations.zotero_service import ZoteroConfigDecryptError
+    from paper_ingestion.routers import zotero
+
+    app, _conn = _app
+
+    # Patch current_user_id_strict on the router module (called as a plain coroutine,
+    # not via Depends, so module-level monkeypatch is the correct seam).
+    monkeypatch.setattr(zotero, "current_user_id_strict", AsyncMock(return_value=99))
+    monkeypatch.setattr(
+        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        AsyncMock(side_effect=ZoteroConfigDecryptError("api_key")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.zotero"):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/api/zotero/test",
+                headers={"X-API-Key": "test"},
+            )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is False
+    assert "detail" in body
+    assert any("unreadable" in r.message for r in caplog.records)
