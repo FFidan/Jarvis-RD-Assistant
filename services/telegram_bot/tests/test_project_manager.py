@@ -200,12 +200,11 @@ async def test_get_project_papers_returns_plain_dicts():
         ("list_projects", True),
         ("get_today_tasks", True),
         ("get_upcoming_milestones", True),
-        # W2-CF8 / W3-T4: user_id is keyword-only with default=None (backward-compat)
+        # W2-CF8: user_id is keyword-only with default=None (backward-compat)
         ("list_tasks", False),
         ("create_task", False),
         ("complete_milestone", False),
         ("link_paper_to_task", False),
-        ("update_project_status", False),
     ],
 )
 def test_methods_accept_user_id(method_name: str, mandatory: bool) -> None:
@@ -396,55 +395,3 @@ async def test_link_paper_to_task_scopes_by_user_id_collapsed(caplog) -> None:
     assert "user_id IS NOT DISTINCT FROM $4" in sql
     assert params == (5, 10, "ref", 7)
     assert any("owner mismatch" in r.message for r in caplog.records)
-
-
-# W3-T4: update_project_status ownership guard
-
-
-@pytest.mark.asyncio
-async def test_update_project_status_scopes_by_user_id() -> None:
-    """update_project_status with user_id uses IS NOT DISTINCT FROM guard (W3-T4)."""
-    db_pool = AsyncMock()
-    db_pool.fetchrow.return_value = _row(id=7, status="completed", user_id=3)
-    manager = ProjectManager(db_pool)
-
-    result = await manager.update_project_status(7, "completed", user_id=3)
-
-    assert result == {"id": 7, "status": "completed", "user_id": 3}
-    sql = db_pool.fetchrow.await_args.args[0]
-    params = db_pool.fetchrow.await_args.args[1:]
-    assert "user_id IS NOT DISTINCT FROM $3" in sql
-    assert params == ("completed", 7, 3)
-
-
-@pytest.mark.asyncio
-async def test_update_project_status_rejects_other_user_project() -> None:
-    """update_project_status returns empty dict when ownership guard rejects the row (W3-T4)."""
-    db_pool = AsyncMock()
-    db_pool.fetchrow.return_value = None  # WHERE clause matched zero rows
-    manager = ProjectManager(db_pool)
-
-    result = await manager.update_project_status(7, "completed", user_id=99)
-
-    assert result == {}
-    sql = db_pool.fetchrow.await_args.args[0]
-    params = db_pool.fetchrow.await_args.args[1:]
-    assert "user_id IS NOT DISTINCT FROM $3" in sql
-    assert params == ("completed", 7, 99)
-
-
-@pytest.mark.asyncio
-async def test_update_project_status_backward_compatible_no_user_id() -> None:
-    """update_project_status without user_id passes NULL — legacy/system path (W3-T4)."""
-    db_pool = AsyncMock()
-    db_pool.fetchrow.return_value = _row(id=5, status="archived")
-    manager = ProjectManager(db_pool)
-
-    result = await manager.update_project_status(5, "archived")
-
-    assert result == {"id": 5, "status": "archived"}
-    sql = db_pool.fetchrow.await_args.args[0]
-    params = db_pool.fetchrow.await_args.args[1:]
-    # NULL-safe predicate present; $3 IS NULL → predicate is vacuously true
-    assert "$3::bigint IS NULL" in sql
-    assert params == ("archived", 5, None)

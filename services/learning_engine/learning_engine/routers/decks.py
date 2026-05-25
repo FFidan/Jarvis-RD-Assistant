@@ -50,7 +50,7 @@ async def list_decks(
                    COUNT(c.id) AS card_count,
                    COUNT(c.id) FILTER (WHERE c.due_at <= NOW()) AS due_count
             FROM decks d
-            LEFT JOIN cards c ON c.deck_id = d.id
+            LEFT JOIN cards c ON c.deck_id = d.id AND c.user_id = $1
             WHERE d.user_id = $1
             GROUP BY d.id
             ORDER BY d.created_at DESC
