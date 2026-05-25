@@ -1,0 +1,47 @@
+# Secrets + env
+secrets/
+.env
+.env.*
+
+# Git internals
+.git/
+
+# Agent runtime artifacts (untracked but defense-in-depth)
+handoff/
+graphify-out/
+tests/_artifacts/
+
+# Python caches + virtualenvs
+**/__pycache__/
+**/*.pyc
+**/.venv/
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+
+# Node + frontend build artifacts
+**/node_modules/
+**/dist/
+frontend/build/
+
+# Docs (operator-only at build context; not needed in image)
+docs/
+
+# Big binary artifacts
+*.zip
+*.tar.gz
+*.log
+*.png
+Jarvis_RD.zip
+
+# Agentic tooling (defense-in-depth — these are also gitignored)
+.serena/
+.desloppify/
+.codeboarding/
+.ralph/
+.superpowers/
+.claude/
+.gemini/
+.codex
+AGENTS.md
+CLAUDE.md

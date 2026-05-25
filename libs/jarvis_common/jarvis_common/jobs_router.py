@@ -84,13 +84,17 @@ def _owner_matches(row_user_id: Any, caller_user_id: int | None) -> bool:
     (legacy schemas). Coercing both sides to ``str`` keeps the comparison
     correct in either case (LE-002 fix preserved).
 
-    Wave-3 multi-tenant: NULL-row jobs are now system-only. Public access
-    removed. Pre-Wave-4 callers (caller_user_id is None) match system rows.
+    NULL-row jobs are system-only and require an authenticated caller.
+    Anonymous callers (caller_user_id is None) are always rejected — this
+    closes the SSE auth bypass where NULL-row jobs matched unauthenticated
+    requests (SEC-CRIT-01 / H-05).
     """
+    if caller_user_id is None:
+        return False
     if row_user_id is None:
-        # Wave-3 multi-tenant: NULL-row jobs are now system-only. Public access removed.
-        # Pre-Wave-4 callers (caller_user_id is None) match.
-        return caller_user_id is None
+        # System-only job: authenticated callers may reach here (above guard
+        # already filtered None), but system rows are not user-owned.
+        return False
     return str(row_user_id) == str(caller_user_id)
 
 
@@ -263,7 +267,7 @@ def build_jobs_router(
         kind: str | None = Query(default=None),
         limit: int = Query(default=50, ge=1, le=500),
         db_pool: asyncpg.Pool = Depends(get_db_pool),
-        user_id: int | None = Depends(current_user_id),
+        user_id: int = Depends(current_user_id_strict),
     ) -> list[dict[str, Any]]:
         """Return a list of jobs, optionally filtered by status and/or kind."""
         rows = await jobs_lib.list_jobs(
@@ -271,7 +275,7 @@ def build_jobs_router(
             status=status,
             kind=kind,
             limit=limit,
-            user_id=str(user_id) if user_id is not None else None,
+            user_id=str(user_id),
         )
         return [serialise_row(r) for r in rows]
 
@@ -284,7 +288,7 @@ def build_jobs_router(
         request: Request,
         job_id: str,
         db_pool: asyncpg.Pool = Depends(get_db_pool),
-        user_id: int | None = Depends(current_user_id),
+        user_id: int = Depends(current_user_id_strict),
     ) -> StreamingResponse:
         """SSE stream of progress updates for the given job.
 

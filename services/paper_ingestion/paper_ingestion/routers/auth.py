@@ -263,7 +263,7 @@ async def verify(
                 action="auth.magic_link.verify.failure",
                 resource="magic_link_token",
                 metadata={
-                    "ip": request.client.host if getattr(request, "client", None) else None,
+                    "ip": request.client.host if request.client else None,
                     "ua_prefix": ua[:80],
                 },
             )
@@ -358,7 +358,7 @@ async def api_key_session(
                 action="auth.api_key.session.failure",
                 resource="api_key_session",
                 metadata={
-                    "ip": request.client.host if getattr(request, "client", None) else None,
+                    "ip": request.client.host if request.client else None,
                     "ua_prefix": ua[:80],
                 },
             )
@@ -442,7 +442,7 @@ async def api_key_session(
             resource="api_key_session",
             user_id=str(owner_id),
             metadata={
-                "ip": request.client.host if getattr(request, "client", None) else None,
+                "ip": request.client.host if request.client else None,
             },
         )
 

@@ -1,0 +1,17 @@
+# PII allowlist for scripts/check-pii-allowlist.sh
+# Format: one file:line:pattern per line. Lines starting with # are comments.
+# Format: file_path<TAB>regex_pattern  (or just file_path to allow any PII match in that file)
+#
+# Acceptable hits (legitimate author/contact info in public surfaces):
+
+# Author metadata in build-time configuration
+pyproject.toml	ferhat\.fidan@tuhh\.de
+frontend/package.json	ferhat\.fidan@tuhh\.de
+CODE_OF_CONDUCT.md	ferhat\.fidan@tuhh\.de
+
+# arxiv source User-Agent contact (legitimate public crawler etiquette)
+services/paper_ingestion/paper_ingestion/sources/arxiv_source.py	ferhat\.fidan@tuhh\.de
+
+# CHANGELOG / LICENSE (legitimate author attribution)
+LICENSE	Ferhat Fidan
+CHANGELOG.md	Ferhat Fidan

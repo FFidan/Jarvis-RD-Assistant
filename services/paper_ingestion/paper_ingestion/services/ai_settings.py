@@ -272,7 +272,7 @@ class EnvFileStore:
                 self.environ[key] = value
 
     def _read_env_file_values(self, keys: Sequence[str]) -> dict[str, str | None]:
-        values = {key: None for key in keys}
+        values: dict[str, str | None] = {key: None for key in keys}
         if not self.path.exists():
             return values
         for line in self.path.read_text().splitlines():

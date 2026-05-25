@@ -39,6 +39,9 @@ jobs:
       - name: Ruff
         run: uv run ruff check services/ libs/ scripts/
 
+      - name: Test-shape check
+        run: uv run python3 scripts/check-test-shape.py
+
       - name: Fast test suite
         run: uv run pytest
 
@@ -200,6 +203,9 @@ jobs:
 
       - name: Lint
         run: npm --prefix frontend run lint
+
+      - name: Frontend typecheck
+        run: npm --prefix frontend run typecheck
 
       - name: Unit tests
         run: npm --prefix frontend run test -- --run

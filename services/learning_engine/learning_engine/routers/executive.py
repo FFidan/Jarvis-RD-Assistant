@@ -342,6 +342,7 @@ async def get_my_day_bundle(
         _fetch(db_pool, _YDAY_DEFERRED_SQL, user_id, start_utc, end_utc),
         _fetchrow(db_pool, _YDAY_LOG_SQL, user_id, yesterday_local_date),
     )
+    yday_log: Any = yday_log
 
     yesterday = {
         "date": yesterday_local_date.isoformat(),

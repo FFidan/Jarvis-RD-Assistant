@@ -10,6 +10,7 @@ import functools
 import ipaddress
 import logging
 import socket
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -335,6 +336,7 @@ class PDFProcessor:
         paper_id: int,
         *,
         user_id: int | None = None,
+        progress_callback: Callable[..., Awaitable[None]] | None = None,
     ) -> tuple[str, list[ChunkForEmbedding], list[str]]:
         """Full PDF processing pipeline: extract, chunk, snapshot, embed.
 
