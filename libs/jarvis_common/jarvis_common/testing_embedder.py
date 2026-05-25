@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from paper_ingestion.ingestion.embedder import Embedder
-
 
 class _FakeEncoding:
     """Character-level tiktoken stand-in (1 char == 1 token).
@@ -25,8 +23,10 @@ class _FakeEncoding:
         return "".join(tokens)
 
 
-def _make_embedder() -> Embedder:
+def _make_embedder():  # type: ignore[return]
     """Return an Embedder with mocked HTTP/Qdrant clients and _FakeEncoding."""
+    from paper_ingestion.ingestion.embedder import Embedder
+
     e = Embedder(AsyncMock(), AsyncMock())
     e._encoding = _FakeEncoding()  # type: ignore[assignment]
     return e
