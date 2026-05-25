@@ -12,10 +12,7 @@ from fastapi import Depends, FastAPI
 from jarvis_common.app_factory import configure_middleware_and_errors
 from jarvis_common.auth import verify_api_key
 from jarvis_common.settings import get_core_settings, get_secrets_settings
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-limiter = Limiter(key_func=get_remote_address)
+from paper_ingestion.deps import limiter
 
 logger = logging.getLogger(__name__)
 
