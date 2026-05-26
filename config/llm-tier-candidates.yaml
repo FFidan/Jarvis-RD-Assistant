@@ -10,9 +10,7 @@
 # Phase 3 fixed the unclosed-<think> regex bug (strip_think_blocks at
 # libs/jarvis_common/jarvis_common/llm_client.py:156) plus two Phase 2 bench
 # infrastructure bugs (settings_ai container-path + render-litellm-config
-# api_base). Bench bundles: vllm-confirmatory-{20260522T123333Z (REDACTED-HOST ge-48),
-# 20260522T134039Z (FF-PC 8-16), 20260522T144456Z (REDACTED-HOST sim-only)} archived
-# on NAS at /mnt/backup/jarvis-rd-archive-{ff-pc,redacted-host}/bench-bundles/.
+# api_base). Bench bundles archived on operator-controlled NAS storage.
 #
 # Re-generate by running scripts/perf/aggregate_judge.py over a bench bundle,
 # then hand-translating its tier-rankings.json into this schema.
@@ -159,9 +157,9 @@ tiers:
 #    ordering is inconsistent. Out-of-scope for Phase 3 streaming-strip
 #    work; tracked as a separate RAG-grounding follow-up.
 
-# Bench bundles (NAS-archived 2026-05-22):
-#   /mnt/backup/jarvis-rd-archive-redacted-host/bench-bundles/
+# Bench bundles (operator NAS-archived 2026-05-22):
+#   high-VRAM host:
 #     vllm-confirmatory-20260522T123333Z.tar.gz  (ge-48: Qwen3-14B + Qwen3-8B + 2 failures)
 #     vllm-confirmatory-20260522T144456Z.tar.gz  (sim-only: 16-24 Qwen2.5-7B succeeded; 2 failures)
-#   /mnt/backup/jarvis-rd-archive-ff-pc/bench-bundles/
+#   low-VRAM host:
 #     vllm-confirmatory-20260522T134039Z.tar.gz  (8-16: deepseek-r1:7b)

@@ -70,6 +70,8 @@ validation:
 # resolves them against docs_dir — producing hundreds of broken-link warnings.
 exclude_docs: |
   /README.md
+  AGENTIC_WORKFLOW.md
+  agents-shim.md
   archive/
   plans/
   specs/
@@ -98,10 +100,7 @@ nav:
       - Architecture: ARCHITECTURE.md
       - Product Requirements: PRD.md
       - Engineering Standards: ENGINEERING_STANDARDS.md
-      - Typography Contract: typography-contract.md
-      - Agentic Workflow: AGENTIC_WORKFLOW.md
       - Migrations: migrations-shim.md
-      - Agent Guide: agents-shim.md
   - System Contracts:
       - Overview: contracts/README.md
       - Settings: contracts/01-settings.md
@@ -111,6 +110,8 @@ nav:
       - Model Lifecycle: contracts/05-model-lifecycle.md
       - Hardware-Aware Settings: contracts/06-hardware-aware-settings.md
       - Testing Contract: contracts/07-testing.md
+      - Typography: contracts/08-typography.md
+      - LLM Prompt Shape: contracts/09-llm-prompt-shape.md
   - User Guide:
       - Quick Reference: USER_GUIDE.md
       - Overview: manual/index.md

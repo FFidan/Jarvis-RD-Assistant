@@ -42,7 +42,7 @@ Section markers (`MarkerCaption`) and inline small-caps labels
 (`MarkerLabel`) live in `frontend/src/components/typography/`. There is no
 ESLint enforcement; reviewers run the hand-checklist in the contract doc
 against headline-touching diffs. Canonical source:
-[`typography-contract.md`](typography-contract.md).
+[`contracts/08-typography.md`](contracts/08-typography.md).
 
 ## API
 

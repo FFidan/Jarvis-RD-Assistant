@@ -100,3 +100,21 @@ artifacts/
 
 # MkDocs build output (generated; deploy target is gh-pages branch)
 site/
+Jarvis_RD.zip
+
+# Internal handoff bundles + agent-internal plans (operator-only)
+handoff/
+docs/superpowers/
+*.tar.gz
+codeboarding_*.log
+
+# Internal dev-process artifacts (operator-only)
+docs/audit/
+docs/archive/
+
+# Agent / operator tooling (per user constraint: zero agentic-tooling visible in public repo)
+AGENTS.md
+CLAUDE.md
+.codex
+docs/agents-shim.md
+docs/AGENTIC_WORKFLOW.md
