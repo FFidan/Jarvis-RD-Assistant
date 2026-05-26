@@ -141,6 +141,18 @@ jobs:
             -t smoke-dashboard:test \
             frontend/
 
+      - name: Build langfuse hardened wrapper image
+        run: |
+          # Source versions.env to get the upstream image build-arg.
+          set -a; . ./versions.env; set +a
+          docker build \
+            --no-cache \
+            --progress=plain \
+            --build-arg LANGFUSE_BASE_IMAGE="${LANGFUSE_IMAGE}" \
+            -t smoke-langfuse-hardened:test \
+            -f langfuse/Dockerfile.langfuse \
+            langfuse/
+
   # ---------------------------------------------------------------------------
   # security-gate — Terminal job; add to ci.yml gate.needs in W11 follow-up
   # ---------------------------------------------------------------------------

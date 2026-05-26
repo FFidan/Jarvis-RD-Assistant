@@ -14,10 +14,11 @@
 #
 # This wrapper switches the entrypoint back to root just long enough to read
 # the three secret files, exports them into the process environment of the
-# child process, then drops privileges to `nextjs` via `setpriv` (already
-# present in the upstream Alpine 3.20 base — no extra packages installed) and
-# execs the upstream entrypoint. Secrets never leak via `docker inspect`
-# because they are no longer set as compose-level env vars.
+# child process, then drops privileges to `nextjs` via `su-exec` (installed
+# via `apk add` because BusyBox's `setpriv` in the upstream Alpine base lacks
+# --reuid/--regid — see the comment above the RUN line) and execs the upstream
+# entrypoint. Secrets never leak via `docker inspect` because they are no
+# longer set as compose-level env vars.
 #
 # Inputs
 # ------
@@ -40,7 +41,7 @@ COPY entrypoint.sh /usr/local/bin/langfuse-secrets-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/langfuse-secrets-entrypoint.sh
 
 # Replace the upstream entrypoint (`dumb-init -- ./web/entrypoint.sh`) with our
-# shim. The shim re-execs the upstream chain under setpriv after exporting
+# shim. The shim re-execs the upstream chain under su-exec after exporting
 # secrets, so the final process tree and signal-handling are identical.
 ENTRYPOINT ["/usr/local/bin/langfuse-secrets-entrypoint.sh"]
 # CMD is inherited from the base image (node ./web/server.js ...).

@@ -15,8 +15,14 @@ useDefault = true
 # ---------------------------------------------------------------------------
 [[allowlists]]
 description = "Historical burned Langfuse key prefixes referenced in audit docs"
-# Scope: only .md files under docs/audit/ (precise path, not a blanket allow)
-paths = ['''docs/audit/.*\.md$''']
+# Scope: only .md files under docs/audit/, docs/archive/, and the SECURITY.md
+# runbook (which also documents the burn for operators). Precise paths, not a
+# blanket allow.
+paths = [
+  '''docs/audit/.*\.md$''',
+  '''docs/archive/.*\.md$''',
+  '''docs/SECURITY\.md$''',
+]
 regexes = [
   '''pk-lf-35d525''',
   '''sk-lf-031360''',

@@ -568,7 +568,7 @@ services:
     # W9-T1 / SEC-HIGH-02: a thin wrapper image runs as root, reads
     # DATABASE_URL / NEXTAUTH_SECRET / SALT from /run/secrets/* (langfuse v2
     # has no _FILE convention), exports them, then drops to the upstream
-    # `nextjs` user via `setpriv` and execs the upstream entrypoint
+    # `nextjs` user via `su-exec` and execs the upstream entrypoint
     # (`dumb-init -- ./web/entrypoint.sh`). The three high-value secrets are
     # therefore no longer exposed via `docker inspect`. Compose builds the
     # wrapper on first `make observability-up` (~30s) and caches it
@@ -619,7 +619,10 @@ services:
     healthcheck:
       # 127.0.0.1, not localhost: busybox wget resolves localhost to ::1 first
       # but the Next.js server listens IPv4-only on 0.0.0.0:3000.
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/public/health || exit 1"]
+      # SEC-MED-08 (C-08): ?failIfDatabaseUnavailable=true makes /api/public/health
+      # return 503 when the DB connection is down, not just when the HTTP layer is.
+      # Verified upstream contract: https://langfuse.com/self-hosting/configuration
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:3000/api/public/health?failIfDatabaseUnavailable=true' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5

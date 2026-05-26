@@ -29,7 +29,7 @@ from jarvis_common.llm_client import (
     get_litellm_config,
     observe,
 )
-from jarvis_common.prompt_safety import safe_for_prompt
+from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
 from jarvis_common.time_utils import utc_now_iso
 from jarvis_common.verify import QuoteVerifier
 
@@ -41,31 +41,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DIGEST_PROMPT = """\
-You are a research digest assistant. \
-Analyze these {count} papers on the topic "{topic}" \
-and identify 3-5 key themes or findings that emerge across them.
-
-For each theme:
-- State the theme clearly in one sentence
-- Reference which papers support it by their number [Paper N]
-- Note any contradictions or open questions
-
-Papers:
-{papers_context}
-
-Respond in JSON format:
-{{
-    "themes": [
-        {{
-            "theme": "One-sentence theme description",
-            "supporting_papers": [1, 3],
-            "notes": "Optional additional context or contradictions"
-        }}
-    ],
-    "summary": "2-3 sentence overview of the topic's state this week"
-}}
-"""
+_SYSTEM_WEEKLY_DIGEST = (
+    "You are a research digest assistant. "
+    "Analyze the papers provided in the <topic> and <papers> blocks and identify "
+    "3-5 key themes or findings that emerge across them. "
+    "For each theme: state it clearly in one sentence, reference supporting papers "
+    "by their number [Paper N], and note any contradictions or open questions. "
+    "Respond in JSON format: "
+    '{"themes": [{"theme": "One-sentence theme description", '
+    '"supporting_papers": [1, 3], "notes": "Optional context"}], '
+    '"summary": "2-3 sentence overview of the topic\'s state this week"}'
+)
 
 
 @observe()
@@ -194,20 +180,23 @@ async def generate_weekly_summary(
             )
 
         themes: list[ThemeOutput] = []
-        summary = f"{len(papers)} papers on {topic_name} this week."
+        safe_topic = safe_for_prompt(topic_name, mode="escape")
+        summary = f"{len(papers)} papers on {safe_topic} this week."
 
         if len(papers) >= 2:
+            topic_block, _ = wrap_delimited("topic", topic_name)
+            papers_block, _ = wrap_delimited("papers", papers_context)
             try:
                 llm_data = await call_llm_structured(
                     openai_client,  # type: ignore[arg-type]
                     response_model=WeeklyDigestOutput,
-                    prompt=DIGEST_PROMPT.format(
-                        count=len(papers[:10]),
-                        topic=safe_for_prompt(topic_name, mode="escape"),
-                        papers_context=papers_context,
+                    prompt=(
+                        f"Analyze these {len(papers[:10])} papers."
+                        f"\n\n{topic_block}\n\n{papers_block}"
                     ),
                     options=ChatCompletionOptions(
                         model=smart_model,
+                        system=_SYSTEM_WEEKLY_DIGEST,
                         max_tokens=600,
                         temperature=0.2,
                         timeout=LLM_TIMEOUT_DEFAULT,
