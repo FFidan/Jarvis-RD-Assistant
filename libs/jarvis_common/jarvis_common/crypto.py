@@ -91,9 +91,15 @@ def reload_fernet_on_sighup() -> None:
 
     try:
         signal.signal(signal.SIGHUP, lambda *_: _load_fernet.cache_clear())
-    except (ValueError, OSError):
-        # Not in main thread, or platform without SIGHUP (Windows).
-        pass
+        logger.info("fernet_sighup_registered")
+    except ValueError:
+        # Not in main thread.
+        reason = "non_main_thread"
+        logger.info("fernet_sighup_skipped reason=%s", reason)
+    except OSError:
+        # Platform without SIGHUP (Windows).
+        reason = "unsupported_platform"
+        logger.info("fernet_sighup_skipped reason=%s", reason)
 
 
 def encrypt_secret(plaintext: str) -> str:

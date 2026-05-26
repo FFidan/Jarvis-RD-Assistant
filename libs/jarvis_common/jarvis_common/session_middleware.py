@@ -45,6 +45,7 @@ SELECT
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.id = $1::uuid
+    AND s.expires_at IS NOT NULL
 """
 
 
@@ -99,7 +100,9 @@ async def _populate_state_from_cookie(request: Request, session_id: str) -> None
     # identity (no renewal here — refresh stays the auth layer's job) so
     # reviews queued offline reconcile after a realistic offline gap.
     expires_at = row["expires_at"]
-    if expires_at is not None and expires_at <= datetime.now(UTC) - SESSION_GRACE:
+    if expires_at is None:
+        return
+    if expires_at <= datetime.now(UTC) - SESSION_GRACE:
         return
     request.state.user_id = int(row["user_id"])
     request.state.user_email = row["email"]

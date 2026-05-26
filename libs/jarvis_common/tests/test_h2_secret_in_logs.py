@@ -18,7 +18,11 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import FastAPI
+from jarvis_common.app_factory import configure_middleware_and_errors
 from jarvis_common.auth import validate_production_config
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -409,6 +413,51 @@ class TestValidateProductionConfigAppBaseUrl:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# validate_production_config — SEC-HIGH-07: dev_cors_open gate
+# ---------------------------------------------------------------------------
+
+
+class TestValidateProductionConfigDevCorsOpen:
+    """SEC-HIGH-07 — dev_cors_open=true must be rejected in ENVIRONMENT=production."""
+
+    def test_dev_cors_open_in_production_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """dev_cors_open=true with ENVIRONMENT=production must raise RuntimeError."""
+        _minimal_prod_env(monkeypatch)
+        monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+        monkeypatch.setenv("SMTP_PORT", "587")
+        monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+        monkeypatch.setenv("DEV_CORS_OPEN", "true")
+
+        with pytest.raises(RuntimeError, match="dev_cors_open"):
+            validate_production_config()
+
+    def test_dev_cors_open_false_in_production_passes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dev_cors_open=false (default) does not trip the gate in production."""
+        _minimal_prod_env(monkeypatch)
+        monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+        monkeypatch.setenv("SMTP_PORT", "587")
+        monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+        monkeypatch.setenv("DEV_CORS_OPEN", "false")
+
+        # Must not raise
+        validate_production_config()
+
+    def test_dev_cors_open_in_development_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dev_cors_open=true is allowed in non-production environments."""
+        _clear_env(monkeypatch)
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("DEV_MODE", "true")
+        monkeypatch.setenv("DEV_CORS_OPEN", "true")
+
+        # Must not raise
+        validate_production_config()
+
+
 @pytest.mark.parametrize(
     "env,dev_mode",
     [
@@ -433,3 +482,34 @@ def test_non_production_unaffected_parametrized(
     monkeypatch.setenv("DEV_MODE", dev_mode)
 
     validate_production_config()
+
+
+# ---------------------------------------------------------------------------
+# H-06: CORS wildcard guard — fail-fast BEFORE middleware install
+# ---------------------------------------------------------------------------
+
+
+def test_cors_wildcard_blocked_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("DEV_CORS_OPEN", "false")
+
+    app = FastAPI()
+    limiter = Limiter(key_func=get_remote_address)
+
+    with pytest.raises(RuntimeError, match="CORS wildcard"):
+        configure_middleware_and_errors(app, limiter=limiter, cors_origins=["*"])
+
+    from starlette.middleware.cors import CORSMiddleware
+
+    middleware_classes = [m.cls for m in app.user_middleware]
+    assert CORSMiddleware not in middleware_classes
+
+
+def test_cors_wildcard_allowed_in_development(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("DEV_CORS_OPEN", "true")
+
+    app = FastAPI()
+    limiter = Limiter(key_func=get_remote_address)
+
+    configure_middleware_and_errors(app, limiter=limiter, cors_origins=["*"])
