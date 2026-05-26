@@ -140,25 +140,9 @@ def create_limiter(
 
 
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
-    """Handle rate limit exceeded errors with a JSON 429 response.
-
-    RFC 6585 §4 requires Retry-After header on 429 responses to indicate
-    when the client may retry. We extract the granularity period from the
-    limit's GRANULARITY.seconds (e.g. 60 for "5/minute").
-    """
+    """Handle rate limit exceeded errors with a JSON 429 response."""
     _ = request  # Starlette requires (request, exc) interface; path not needed in 429 body
-
-    # Extract reset_seconds from exc.limit.limit.GRANULARITY.seconds, with safe fallback.
-    reset_seconds = 60
-    try:
-        if exc.limit and exc.limit.limit and hasattr(exc.limit.limit, "GRANULARITY"):
-            reset_seconds = exc.limit.limit.GRANULARITY.seconds
-    except (AttributeError, TypeError):
-        # Fallback to 60s if structure is unexpected; this is a safety net.
-        pass
-
     return JSONResponse(
         status_code=429,
         content={"detail": f"Rate limit exceeded ({exc.limit}). Please try again later."},
-        headers={"Retry-After": str(reset_seconds)},
     )

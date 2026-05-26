@@ -409,6 +409,51 @@ class TestValidateProductionConfigAppBaseUrl:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# validate_production_config — SEC-HIGH-07: dev_cors_open gate
+# ---------------------------------------------------------------------------
+
+
+class TestValidateProductionConfigDevCorsOpen:
+    """SEC-HIGH-07 — dev_cors_open=true must be rejected in ENVIRONMENT=production."""
+
+    def test_dev_cors_open_in_production_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """dev_cors_open=true with ENVIRONMENT=production must raise RuntimeError."""
+        _minimal_prod_env(monkeypatch)
+        monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+        monkeypatch.setenv("SMTP_PORT", "587")
+        monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+        monkeypatch.setenv("DEV_CORS_OPEN", "true")
+
+        with pytest.raises(RuntimeError, match="dev_cors_open"):
+            validate_production_config()
+
+    def test_dev_cors_open_false_in_production_passes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dev_cors_open=false (default) does not trip the gate in production."""
+        _minimal_prod_env(monkeypatch)
+        monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+        monkeypatch.setenv("SMTP_PORT", "587")
+        monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+        monkeypatch.setenv("DEV_CORS_OPEN", "false")
+
+        # Must not raise
+        validate_production_config()
+
+    def test_dev_cors_open_in_development_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dev_cors_open=true is allowed in non-production environments."""
+        _clear_env(monkeypatch)
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("DEV_MODE", "true")
+        monkeypatch.setenv("DEV_CORS_OPEN", "true")
+
+        # Must not raise
+        validate_production_config()
+
+
 @pytest.mark.parametrize(
     "env,dev_mode",
     [

@@ -109,3 +109,45 @@ def test_correlation_middleware_registered_and_emits_header(monkeypatch):
     generated = resp2.headers.get("x-correlation-id")
     assert generated is not None
     uuid.UUID(generated)  # raises if not valid UUID
+
+
+# ---------------------------------------------------------------------------
+# H-06: CORS wildcard guard — fail-fast BEFORE middleware install
+# ---------------------------------------------------------------------------
+
+
+import pytest  # noqa: E402 (appended after existing imports)
+
+
+def test_cors_wildcard_blocked_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """H-06: cors_origins=['*'] must raise RuntimeError in ENVIRONMENT=production.
+
+    The guard fires BEFORE CORSMiddleware is added, so the app user_middleware
+    stack must remain empty (no CORSMiddleware installed) when we catch the error.
+    """
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("DEV_CORS_OPEN", "false")
+
+    app = FastAPI()
+    limiter = Limiter(key_func=get_remote_address)
+
+    with pytest.raises(RuntimeError, match="CORS wildcard"):
+        configure_middleware_and_errors(app, limiter=limiter, cors_origins=["*"])
+
+    # Guard must fire before CORSMiddleware is installed
+    from starlette.middleware.cors import CORSMiddleware
+
+    middleware_classes = [m.cls for m in app.user_middleware]
+    assert CORSMiddleware not in middleware_classes
+
+
+def test_cors_wildcard_allowed_in_development(monkeypatch: pytest.MonkeyPatch) -> None:
+    """H-06 guard must not fire in non-production environments."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("DEV_CORS_OPEN", "true")
+
+    app = FastAPI()
+    limiter = Limiter(key_func=get_remote_address)
+
+    # Must not raise — dev environment may use wildcard CORS
+    configure_middleware_and_errors(app, limiter=limiter, cors_origins=["*"])
