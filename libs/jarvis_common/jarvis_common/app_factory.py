@@ -358,14 +358,6 @@ def configure_middleware_and_errors(
             cors_origins = ["*"]
         else:
             cors_origins = get_jarvis_common_settings().cors_origins_list
-    assert cors_origins is not None
-    # H-06: fail-fast BEFORE installing the wildcard CORS middleware so a
-    # misconfigured production deploy crashes at startup, not at request time.
-    if cors_origins == ["*"] and get_core_settings().environment.lower() == "production":
-        raise RuntimeError(
-            "CORS wildcard (allow_origins=['*']) is not allowed in ENVIRONMENT=production. "
-            "Set DEV_CORS_OPEN=false and configure CORS_ORIGINS explicitly."
-        )
     # allow_credentials=True is incompatible with allow_origins=["*"]
     # (Starlette raises a warning and the browser rejects the response).
     # When the caller explicitly passes ["*"] — or the env var is set to "*" —

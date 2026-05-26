@@ -46,6 +46,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 router.auth_exempt = True  # type: ignore[attr-defined]
 
 MAGIC_LINK_TTL = timedelta(minutes=15)
+MAGIC_LINK_COOLDOWN = timedelta(minutes=2)
 SESSION_TTL = timedelta(days=30)
 MAX_EMAIL_LEN = 320  # RFC 5321 cap
 
@@ -160,6 +161,18 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
     expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
 
     async with pool.acquire() as conn:
+        recent = await conn.fetchval(
+            "SELECT created_at FROM magic_link_tokens"
+            " WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+            user_id,
+        )
+        if (
+            recent is not None
+            and datetime.now(UTC) - recent.replace(tzinfo=UTC) < MAGIC_LINK_COOLDOWN
+        ):
+            logger.info("auth_request_link_cooldown email_hash=%s", _hash_email(email_norm))
+            return RequestLinkResponse(sent=True)
+
         await conn.execute(
             """
             INSERT INTO magic_link_tokens (token_hash, user_id, expires_at)
