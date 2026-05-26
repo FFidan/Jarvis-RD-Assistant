@@ -68,7 +68,7 @@ class RagVerificationReport:
 
 _PLACEHOLDER_DT = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
 
-_SENTENCE_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z\d"\'"])')
+_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 _ALPHANUM_RE = re.compile(r"[a-zA-Z0-9]")
 
 

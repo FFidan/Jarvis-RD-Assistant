@@ -49,16 +49,6 @@ __all__ = [
 
 _SEARCH_SCORE_THRESHOLD = 0.05
 
-_SYSTEM_SINGLE_PAPER_RAG = "Answer using ONLY the excerpts provided. If not covered, say so."
-
-_SYSTEM_CROSS_PAPER_RAG = (
-    "You are a research assistant answering questions using evidence "
-    "from multiple papers.\n"
-    "Answer ONLY based on the provided excerpts. Cite each claim with "
-    "[Paper N] where N is the paper number.\n"
-    "If the excerpts don't contain enough information, say so."
-)
-
 
 # ---------------------------------------------------------------------------
 # Return-type dataclasses for _prepare_cross_paper_rag
@@ -150,16 +140,14 @@ async def prepare_single_paper_rag(
         for c in chunks
     )
     safe_title, _ = wrap_delimited("title", paper["title"])
-    user_content = (
+    prompt = (
         f"Paper: {safe_title}\n\n"
+        "Answer using ONLY these excerpts. If not covered, say so.\n\n"
         f"EXCERPTS:\n{context_blocks}\n\n"
         f"<question>{safe_question}</question>\n\nANSWER:"
     )
 
-    messages = [
-        {"role": "system", "content": _SYSTEM_SINGLE_PAPER_RAG},
-        {"role": "user", "content": user_content},
-    ]
+    messages = [{"role": "user", "content": prompt}]
     sources_list = [
         {
             "content": c["content"],
@@ -335,12 +323,17 @@ async def prepare_cross_paper_rag(
             context_sections.append(f"--- Paper {i}: {title} ---\n{excerpts}")
 
         context_block = "\n\n".join(context_sections)
-        user_content = f"{context_block}\n\n<question>{safe_question}</question>\n\nANSWER:"
+        prompt = (
+            "You are a research assistant answering questions using evidence "
+            "from multiple papers.\n"
+            "Answer ONLY based on the provided excerpts. Cite each claim with "
+            "[Paper N] where N is the paper number.\n"
+            "If the excerpts don't contain enough information, say so.\n\n"
+            f"{context_block}\n\n"
+            f"<question>{safe_question}</question>\n\nANSWER:"
+        )
 
-        messages = [
-            {"role": "system", "content": _SYSTEM_CROSS_PAPER_RAG},
-            {"role": "user", "content": user_content},
-        ]
+        messages = [{"role": "user", "content": prompt}]
         sources_list = [
             {
                 "paper_id": c["paper_id"],
@@ -433,10 +426,6 @@ async def stream_rag_events(
     yield sse_event({"type": "sources", "sources": sources_list})
     yield sse_event({"type": "done", "full_answer": full_answer, "model_used": model_used})
     # Sentence-level verification — runs after tokens have streamed (additive latency only)
-    if verifier is None:
-        logger.warning(
-            "stream_rag_events called with verifier=None; confidence event will be omitted"
-        )
     if verifier is not None and db_pool is not None:
         try:
             from paper_ingestion.rag.verification import verify_answer_sentences
