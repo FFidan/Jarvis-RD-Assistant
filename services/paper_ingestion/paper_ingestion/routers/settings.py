@@ -7,6 +7,9 @@ Route handlers are thin:  parse → auth check → delegate → return.
 
 Symbols that tests patch via ``paper_ingestion.routers.settings.*`` are
 re-exported here so existing patch-paths remain stable after the extraction.
+
+Sub-routers:
+- ``settings_sources.router`` — /api/nudges/* and /api/sources/*
 """
 
 import logging
@@ -16,7 +19,7 @@ import asyncpg
 import httpx  # noqa: F401 — in namespace so tests can patch routers.settings.httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from jarvis_common import dynamic_update, log_audit
+from jarvis_common import log_audit
 from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
 from jarvis_common.crypto import (
     decrypt_secret,  # noqa: F401 — in namespace for test patch-path compat
@@ -30,12 +33,14 @@ from pydantic import BaseModel
 from paper_ingestion.deps import get_db_pool, get_scheduler, limiter
 from paper_ingestion.models import (
     ConfigEntry,
-    NudgeResponse,
-    NudgeUpdate,
     PapersBySourceItem,
     PapersByStatusItem,
-    SourceResponse,
-    SourceUpdate,
+)
+
+# Re-export ReorderRequest from sources sub-router for backward compat
+from paper_ingestion.routers.settings_sources import (  # noqa: F401
+    ReorderRequest,
+    sources_router,
 )
 
 # update_litellm_model is passed to write_config so the router-module symbol is
@@ -103,6 +108,9 @@ from paper_ingestion.services.settings_service import (  # noqa: F401
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
 
+# Include sub-routers (no prefix — sub-files already define full paths under /api)
+router.include_router(sources_router)
+
 
 # ---------------------------------------------------------------------------
 # Response models (router-local; not part of the service contract)
@@ -112,10 +120,6 @@ router = APIRouter(prefix="/api", tags=["settings"])
 class ProviderTestResponse(BaseModel):
     ok: bool
     error: str | None = None
-
-
-class ReorderRequest(BaseModel):
-    source_types: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -260,134 +264,6 @@ async def set_config(
         logger.debug("config event log_event failed (non-fatal)", exc_info=True)
 
     return ConfigEntry(key=key, value=display_value)
-
-
-# ---------------------------------------------------------------------------
-# Scheduled Nudges
-# ---------------------------------------------------------------------------
-
-
-@router.get("/nudges", response_model=list[NudgeResponse], dependencies=[Depends(require_admin)])
-@limiter.limit("60/minute")
-async def list_nudges(
-    request: Request,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> list[NudgeResponse]:
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM scheduled_nudges ORDER BY id")
-    return [NudgeResponse(**dict(r)) for r in rows]
-
-
-@router.put("/nudges/{nudge_id}", response_model=NudgeResponse)
-@limiter.limit("30/minute")
-async def update_nudge(
-    request: Request,
-    nudge_id: int,
-    body: NudgeUpdate,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    _admin: None = Depends(require_admin),
-) -> NudgeResponse:
-    async with db_pool.acquire() as conn:
-        existing = await conn.fetchrow("SELECT * FROM scheduled_nudges WHERE id = $1", nudge_id)
-        if not existing:
-            raise HTTPException(404, f"Nudge {nudge_id} not found")
-
-        updates = body.model_dump(exclude_unset=True, include=_NUDGE_ALLOWED_COLUMNS)
-        if not updates:
-            return NudgeResponse(**dict(existing))
-
-        if "cron_expression" in updates:
-            try:
-                _validate_zotero_cron(updates["cron_expression"])
-            except ValueError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-        row = await dynamic_update(
-            conn,
-            "scheduled_nudges",
-            nudge_id,
-            updates,
-            _NUDGE_ALLOWED_COLUMNS,
-            jsonb_columns=_NUDGE_JSONB_COLUMNS,
-        )
-
-    # Best-effort: notify telegram_bot to reload its nudge jobs
-    await reload_telegram_nudges()
-
-    return NudgeResponse(**dict(row))
-
-
-# ---------------------------------------------------------------------------
-# Paper Sources
-# ---------------------------------------------------------------------------
-
-
-@router.get("/sources", response_model=list[SourceResponse])
-@limiter.limit("60/minute")
-async def list_sources(
-    request: Request,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> list[SourceResponse]:
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM paper_sources ORDER BY display_order ASC, id ASC")
-    return [SourceResponse(**dict(r)) for r in rows]
-
-
-@router.patch("/sources/reorder", response_model=list[SourceResponse])
-@limiter.limit("10/minute")
-async def reorder_sources(
-    request: Request,
-    body: ReorderRequest,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    _admin: None = Depends(require_admin),
-) -> list[SourceResponse]:
-    """Persist UI drag-and-drop order by assigning display_order = position index."""
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT source_type FROM paper_sources")
-    existing = {r["source_type"] for r in rows}
-    missing = set(body.source_types) - existing
-    if missing:
-        raise HTTPException(400, detail=f"Unknown sources: {sorted(missing)}")
-    async with db_pool.acquire() as conn:
-        async with conn.transaction():
-            for idx, stype in enumerate(body.source_types, start=1):
-                await conn.execute(
-                    "UPDATE paper_sources SET display_order = $1 WHERE source_type = $2",
-                    idx,
-                    stype,
-                )
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM paper_sources ORDER BY display_order ASC, id ASC")
-    return [SourceResponse(**dict(r)) for r in rows]
-
-
-@router.put("/sources/{source_id}", response_model=SourceResponse)
-@limiter.limit("30/minute")
-async def update_source(
-    request: Request,
-    source_id: int,
-    body: SourceUpdate,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    _admin: None = Depends(require_admin),
-) -> SourceResponse:
-    async with db_pool.acquire() as conn:
-        existing = await conn.fetchrow("SELECT * FROM paper_sources WHERE id = $1", source_id)
-        if not existing:
-            raise HTTPException(404, f"Source {source_id} not found")
-
-        updates = body.model_dump(exclude_unset=True, include=_SOURCE_ALLOWED_COLUMNS)
-        if not updates:
-            return SourceResponse(**dict(existing))
-
-        row = await dynamic_update(
-            conn,
-            "paper_sources",
-            source_id,
-            updates,
-            _SOURCE_ALLOWED_COLUMNS,
-            jsonb_columns=_SOURCE_JSONB_COLUMNS,
-        )
-    return SourceResponse(**dict(row))
 
 
 # ---------------------------------------------------------------------------

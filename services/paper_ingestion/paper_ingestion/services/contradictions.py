@@ -3,16 +3,13 @@
 The scanner is intentionally conservative: it asks the LLM to classify only
 pre-filtered pairs of already verified summary findings, then persists a
 contradiction only when both returned quotes verify against the source chunks.
-
-Module layout:
-- ``contradictions_extract`` — data loading, dataclasses, lexical primitives.
-- ``contradictions_persist`` — INSERT/list helpers.
-- this file — pair scoring, quote verification, LLM classify, scan orchestration.
 """
 
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import asyncpg
@@ -25,6 +22,7 @@ from jarvis_common.llm_client import (
     get_litellm_config,
     observe,
 )
+from jarvis_common.prompt_safety import wrap_delimited
 
 if TYPE_CHECKING:
     import openai
@@ -33,30 +31,17 @@ if TYPE_CHECKING:
 from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.converters import row_to_chunk_response
-from paper_ingestion.models import ChunkResponse
+from paper_ingestion.models import (
+    ChunkResponse,
+    PaperContradictionResponse,
+)
 from paper_ingestion.services.contradiction_models import ContradictionClassification
-from paper_ingestion.services.contradictions_extract import (
-    _NEGATIVE_RE_CUES,
-    _POSITIVE_RE,
-    ContradictionCandidate,
-    VerifiedFinding,
-    _build_prompt,
-    _cross_reference_ids,
-    _jaccard,
-    _load_verified_findings,
-    _parse_findings,
-    _terms,
-)
-from paper_ingestion.services.contradictions_persist import (
-    SCANNER_VERSION,
-    _persist_contradiction,
-    list_contradictions,
-)
 
 logger = logging.getLogger(__name__)
 
 ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
 
+SCANNER_VERSION = "paper_contradictions_v1"
 _SYSTEM_CONTRADICTIONS = """\
 You are checking whether two quote-backed research findings contradict each other.
 
@@ -77,6 +62,122 @@ Respond as JSON:
   "confidence": 0.0
 }
 """
+_STOP_WORDS = {
+    "about",
+    "after",
+    "also",
+    "among",
+    "from",
+    "have",
+    "into",
+    "paper",
+    "result",
+    "results",
+    "show",
+    "shows",
+    "study",
+    "that",
+    "their",
+    "there",
+    "these",
+    "this",
+    "using",
+    "with",
+}
+_WORD_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_-]{2,}")
+_POSITIVE_CUES = {
+    "better",
+    "benefit",
+    "beneficial",
+    "boost",
+    "effective",
+    "higher",
+    "improve",
+    "improved",
+    "improves",
+    "improvement",
+    "increase",
+    "increased",
+    "increases",
+    "outperform",
+    "outperformed",
+    "outperforms",
+    "positive",
+    "reduces error",
+    "significant",
+    "supports",
+    "works",
+}
+_NEGATIVE_CUES = {
+    "decrease",
+    "decreased",
+    "decreases",
+    "harm",
+    "harmful",
+    "lower",
+    "negative",
+    "no benefit",
+    "no improvement",
+    "not significant",
+    "reduce",
+    "reduced",
+    "reduces",
+    "worse",
+    "worsen",
+    "worsened",
+    "worsens",
+}
+# Build word-boundary regexes with longest-first alternation to prevent shorter cues
+# (e.g. "reduces") from shadowing longer multi-word cues (e.g. "reduces error").
+_POSITIVE_RE = re.compile(
+    r"(?<!\w)("
+    + "|".join(re.escape(c) for c in sorted(_POSITIVE_CUES, key=len, reverse=True))
+    + r")(?!\w)",
+    re.IGNORECASE,
+)
+_NEGATIVE_RE_CUES = re.compile(
+    r"(?<!\w)("
+    + "|".join(re.escape(c) for c in sorted(_NEGATIVE_CUES, key=len, reverse=True))
+    + r")(?!\w)",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class VerifiedFinding:
+    """A quote-verified summary finding used as scanner input."""
+
+    paper_id: int
+    title: str
+    finding: str
+    quote: str
+    page_number: int | None
+    cross_reference_ids: frozenset[int]
+
+
+@dataclass(frozen=True)
+class ContradictionCandidate:
+    """A narrowed pair of findings worth sending to the classifier."""
+
+    a: VerifiedFinding
+    b: VerifiedFinding
+    score: float
+    reason: str
+
+
+def _terms(text: str) -> set[str]:
+    return {
+        word.lower()
+        for word in _WORD_RE.findall(text)
+        if len(word) > 3 and word.lower() not in _STOP_WORDS
+    }
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    """Return lexical-set similarity as a cheap semantic proxy."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
 
 
 def _polarity_score(text: str) -> int:
@@ -134,6 +235,78 @@ def _polarity_adjustment(a: VerifiedFinding, b: VerifiedFinding) -> tuple[float,
     if polarity_a != polarity_b:
         return 0.25, "opposite_polarity"
     return -0.1, "same_polarity"
+
+
+def _cross_reference_ids(raw: Any) -> frozenset[int]:
+    if not isinstance(raw, list):
+        return frozenset()
+    ids: set[int] = set()
+    for item in raw:
+        if isinstance(item, dict) and isinstance(item.get("related_paper_id"), int):
+            ids.add(item["related_paper_id"])
+    return frozenset(ids)
+
+
+def _parse_findings(row: asyncpg.Record) -> list[VerifiedFinding]:
+    raw_findings = row["key_findings"] or []
+    if not isinstance(raw_findings, list):
+        return []
+    cross_reference_ids = _cross_reference_ids(row["cross_references"] or [])
+    parsed: list[VerifiedFinding] = []
+    for item in raw_findings:
+        if not isinstance(item, dict):
+            continue
+        if item.get("verified") is False:
+            continue
+        finding = str(item.get("finding") or "").strip()
+        quote = str(item.get("quote") or "").strip()
+        if not finding or not quote:
+            continue
+        parsed.append(
+            VerifiedFinding(
+                paper_id=row["paper_id"],
+                title=row["title"],
+                finding=finding,
+                quote=quote,
+                page_number=item.get("page_number")
+                if isinstance(item.get("page_number"), int)
+                else None,
+                cross_reference_ids=cross_reference_ids,
+            )
+        )
+    return parsed
+
+
+async def _load_verified_findings(
+    conn: ConnLike,
+    *,
+    paper_id: int | None = None,
+    user_id: int | None = None,
+) -> list[VerifiedFinding]:
+    rows = await conn.fetch(
+        """
+        SELECT p.id AS paper_id, p.title, ps.key_findings, ps.cross_references
+        FROM paper_summaries ps
+        JOIN papers p ON p.id = ps.paper_id
+        WHERE jsonb_typeof(ps.key_findings) = 'array'
+          AND jsonb_array_length(ps.key_findings) > 0
+          AND ($1::integer IS NULL OR p.id = $1 OR EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(COALESCE(ps.cross_references, '[]'::jsonb)) AS ref
+              WHERE ref->>'related_paper_id' ~ '^[0-9]+$'
+                AND (ref->>'related_paper_id')::integer = $1
+          ))
+          AND ($2::integer IS NULL OR ps.user_id IS NULL OR ps.user_id = $2)
+        ORDER BY ps.created_at DESC
+        LIMIT 250
+        """,
+        paper_id,
+        user_id,
+    )
+    findings: list[VerifiedFinding] = []
+    for row in rows:
+        findings.extend(_parse_findings(row))
+    return findings
 
 
 def _score_pair(
@@ -220,6 +393,26 @@ def build_contradiction_candidates(
     return sorted(candidates, key=lambda item: item.score, reverse=True)[:limit]
 
 
+def _build_prompt(candidate: ContradictionCandidate) -> str:
+    title_a, _ = wrap_delimited("title_a", candidate.a.title)
+    finding_a, _ = wrap_delimited("finding_a", candidate.a.finding)
+    quote_a, _ = wrap_delimited("quote_a", candidate.a.quote)
+    title_b, _ = wrap_delimited("title_b", candidate.b.title)
+    finding_b, _ = wrap_delimited("finding_b", candidate.b.finding)
+    quote_b, _ = wrap_delimited("quote_b", candidate.b.quote)
+    return f"""\
+Paper A:
+{title_a}
+{finding_a}
+{quote_a}
+
+Paper B:
+{title_b}
+{finding_b}
+{quote_b}
+"""
+
+
 async def _fetch_chunks(conn: ConnLike, paper_id: int) -> list[ChunkResponse]:
     rows = await conn.fetch(
         "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
@@ -253,6 +446,87 @@ async def _quotes_verify(
     if not result_a.verified or not result_b.verified:
         return False, None, None
     return True, result_a.page_number, result_b.page_number
+
+
+async def _persist_contradiction(
+    conn: ConnLike,
+    candidate: ContradictionCandidate,
+    parsed: ContradictionClassification,
+    *,
+    page_a: int | None,
+    page_b: int | None,
+    model: str,
+    user_id: int | None = None,
+) -> int | None:
+    paper_a = candidate.a
+    paper_b = candidate.b
+    quote_a = parsed.quote_a.strip()
+    quote_b = parsed.quote_b.strip()
+    contradiction_type = parsed.contradiction_type
+    confidence = parsed.confidence
+    explanation = parsed.explanation.strip()
+    if not explanation:
+        explanation = "The verified findings make conflicting claims."
+
+    # Canonicalize paper ordering for stable uniqueness.
+    if paper_a.paper_id > paper_b.paper_id:
+        paper_a, paper_b = paper_b, paper_a
+        quote_a, quote_b = quote_b, quote_a
+        page_a, page_b = page_b, page_a
+
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO paper_contradictions (
+                paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
+                page_a, page_b, contradiction_type, explanation, confidence, status,
+                scanner_metadata, updated_at, user_id
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'verified',
+                $12::jsonb, NOW(), $13
+            )
+            RETURNING id
+            """,
+            paper_a.paper_id,
+            paper_b.paper_id,
+            paper_a.finding,
+            paper_b.finding,
+            quote_a,
+            quote_b,
+            page_a,
+            page_b,
+            contradiction_type,
+            explanation,
+            confidence,
+            {
+                "scanner_version": SCANNER_VERSION,
+                "candidate_score": candidate.score,
+                "candidate_reason": candidate.reason,
+                "model": model,
+            },
+            user_id,
+        )
+        if row is not None:
+            return row["id"]
+    except asyncpg.UniqueViolationError:
+        pass
+
+    row = await conn.fetchrow(
+        """
+        SELECT id FROM paper_contradictions
+        WHERE LEAST(paper_a_id, paper_b_id) = LEAST($1::integer, $2::integer)
+          AND GREATEST(paper_a_id, paper_b_id) = GREATEST($1::integer, $2::integer)
+          AND quote_a = $3
+          AND quote_b = $4
+        LIMIT 1
+        """,
+        paper_a.paper_id,
+        paper_b.paper_id,
+        quote_a,
+        quote_b,
+    )
+    return row["id"] if row else None
 
 
 @observe()
@@ -352,25 +626,74 @@ async def scan_contradictions(
     }
 
 
-__all__ = [
-    "SCANNER_VERSION",
-    "ContradictionCandidate",
-    "VerifiedFinding",
-    "_SYSTEM_CONTRADICTIONS",
-    "_build_prompt",
-    "_classify_candidate",
-    "_cross_reference_ids",
-    "_fetch_chunks",
-    "_jaccard",
-    "_load_verified_findings",
-    "_parse_findings",
-    "_persist_contradiction",
-    "_polarity_adjustment",
-    "_polarity_score",
-    "_quotes_verify",
-    "_score_pair",
-    "_terms",
-    "build_contradiction_candidates",
-    "list_contradictions",
-    "scan_contradictions",
-]
+async def list_contradictions(
+    conn: ConnLike,
+    *,
+    user_id: int,
+    paper_id: int | None = None,
+    status: str | None = "verified",
+    limit: int = 20,
+) -> tuple[list[PaperContradictionResponse], int]:
+    """List persisted contradictions scoped to the caller's library."""
+    conditions: list[str] = []
+    params: list[Any] = []
+    idx = 1
+    # Scope to papers in the caller's user_library (both sides of contradiction).
+    conditions.append(
+        f"("
+        f"EXISTS (SELECT 1 FROM user_library ul"
+        f" WHERE ul.paper_id = pc.paper_a_id AND ul.user_id = ${idx})"
+        f" OR EXISTS (SELECT 1 FROM user_library ul"
+        f" WHERE ul.paper_id = pc.paper_b_id AND ul.user_id = ${idx})"
+        f")"
+    )
+    params.append(user_id)
+    idx += 1
+    if paper_id is not None:
+        conditions.append(f"(pc.paper_a_id = ${idx} OR pc.paper_b_id = ${idx})")
+        params.append(paper_id)
+        idx += 1
+    if status is not None:
+        conditions.append(f"pc.status = ${idx}")
+        params.append(status)
+        idx += 1
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    params.append(limit)
+    rows = await conn.fetch(
+        f"""
+        SELECT pc.*, pa.title AS paper_a_title, pb.title AS paper_b_title,
+               COUNT(*) OVER() AS total_count
+        FROM paper_contradictions pc
+        JOIN papers pa ON pa.id = pc.paper_a_id
+        JOIN papers pb ON pb.id = pc.paper_b_id
+        {where}
+        ORDER BY pc.created_at DESC
+        LIMIT ${idx}
+        """,
+        *params,
+    )
+    total = rows[0]["total_count"] if rows else 0
+    return (
+        [
+            PaperContradictionResponse(
+                id=row["id"],
+                paper_a_id=row["paper_a_id"],
+                paper_b_id=row["paper_b_id"],
+                paper_a_title=row["paper_a_title"],
+                paper_b_title=row["paper_b_title"],
+                finding_a=row["finding_a"],
+                finding_b=row["finding_b"],
+                quote_a=row["quote_a"],
+                quote_b=row["quote_b"],
+                page_a=row["page_a"],
+                page_b=row["page_b"],
+                contradiction_type=row["contradiction_type"],
+                explanation=row["explanation"],
+                confidence=row["confidence"],
+                status=row["status"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ],
+        total,
+    )
