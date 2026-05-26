@@ -429,11 +429,6 @@ async def _quotes_verify(
     quote_b: str,
 ) -> tuple[bool, int | None, int | None]:
     if not quote_a.strip() or not quote_b.strip():
-        logger.info(
-            "quotes_verify_empty_quote candidate=(%d,%d)",
-            candidate.a.paper_id,
-            candidate.b.paper_id,
-        )
         return False, None, None
     chunks_a = await _fetch_chunks(conn, candidate.a.paper_id)
     chunks_b = await _fetch_chunks(conn, candidate.b.paper_id)
