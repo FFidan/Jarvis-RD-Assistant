@@ -16,7 +16,7 @@ import re
 
 # Control characters to strip in 'strip' mode (C0, C1, and a few unicode specials).
 _CTRL_RE = re.compile(
-    r"[\x00-\x08\x0b\x0c\x0d\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
 )
 
 # BIDI override + isolate characters and zero-width characters that can be used
@@ -98,9 +98,7 @@ def safe_for_prompt(text: str | None, mode: str = "escape") -> str:
     # _CTRL_RE removes BIDI + zero-width chars in both escape and strip modes;
     # no separate _strip_bidi_zw pass needed.
     if mode == "escape":
-        return (
-            _CTRL_RE.sub("", text).replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-        )
+        return _CTRL_RE.sub("", text).replace("<", "&lt;").replace(">", "&gt;")
     if mode == "strip":
         return _CTRL_RE.sub("", text)
     if mode == "delimit":
