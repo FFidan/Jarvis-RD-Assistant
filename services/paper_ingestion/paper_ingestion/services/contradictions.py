@@ -42,26 +42,6 @@ logger = logging.getLogger(__name__)
 ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
 
 SCANNER_VERSION = "paper_contradictions_v1"
-_SYSTEM_CONTRADICTIONS = """\
-You are checking whether two quote-backed research findings contradict each other.
-
-Rules:
-1. Decide only from the provided findings and quotes.
-2. Return is_contradiction=false when the papers merely differ in scope,
-   method, dataset, or emphasis.
-3. If is_contradiction=true, quote_a and quote_b must be copied exactly from the provided quotes.
-4. Do not invent supporting text.
-
-Respond as JSON:
-{
-  "is_contradiction": true,
-  "contradiction_type": "direct|methodological|result|interpretation",
-  "explanation": "one concise sentence",
-  "quote_a": "exact copied quote from Paper A",
-  "quote_b": "exact copied quote from Paper B",
-  "confidence": 0.0
-}
-"""
 _ALLOWED_TYPES = {"direct", "methodological", "result", "interpretation"}
 _STOP_WORDS = {
     "about",
@@ -402,6 +382,15 @@ def _build_prompt(candidate: ContradictionCandidate) -> str:
     finding_b, _ = wrap_delimited("finding_b", candidate.b.finding)
     quote_b, _ = wrap_delimited("quote_b", candidate.b.quote)
     return f"""\
+You are checking whether two quote-backed research findings contradict each other.
+
+Rules:
+1. Decide only from the provided findings and quotes.
+2. Return is_contradiction=false when the papers merely differ in scope,
+   method, dataset, or emphasis.
+3. If is_contradiction=true, quote_a and quote_b must be copied exactly from the provided quotes.
+4. Do not invent supporting text.
+
 Paper A:
 {title_a}
 {finding_a}
@@ -411,6 +400,16 @@ Paper B:
 {title_b}
 {finding_b}
 {quote_b}
+
+Respond as JSON:
+{{
+  "is_contradiction": true,
+  "contradiction_type": "direct|methodological|result|interpretation",
+  "explanation": "one concise sentence",
+  "quote_a": "exact copied quote from Paper A",
+  "quote_b": "exact copied quote from Paper B",
+  "confidence": 0.0
+}}
 """
 
 
@@ -429,8 +428,6 @@ async def _quotes_verify(
     quote_a: str,
     quote_b: str,
 ) -> tuple[bool, int | None, int | None]:
-    if not quote_a.strip() or not quote_b.strip():
-        return False, None, None
     chunks_a = await _fetch_chunks(conn, candidate.a.paper_id)
     chunks_b = await _fetch_chunks(conn, candidate.b.paper_id)
     if not chunks_a or not chunks_b:
@@ -542,7 +539,6 @@ async def _classify_candidate(
             max_tokens=500,
             temperature=0.0,
             timeout=LLM_TIMEOUT_DEFAULT,
-            system=_SYSTEM_CONTRADICTIONS,
         ),
         config=get_litellm_config(),
     )

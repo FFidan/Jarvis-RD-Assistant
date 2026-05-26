@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import signal
+import threading
+
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 from jarvis_common.crypto import (
@@ -9,6 +12,7 @@ from jarvis_common.crypto import (
     encrypt_secret,
     mask_secret,
     refresh_fernet_cache,
+    reload_fernet_on_sighup,
     resolve_secret_row,
     validate_encrypted_config_rows,
 )
@@ -262,6 +266,41 @@ def test_resolve_secret_row_dict_legacy_plaintext(valid_key) -> None:
 def test_resolve_secret_row_none_input() -> None:
     """Passing None returns None without raising."""
     assert resolve_secret_row(None) is None
+
+
+# ---------------------------------------------------------------------------
+# reload_fernet_on_sighup — idempotency + thread-safety guard
+# ---------------------------------------------------------------------------
+
+
+def test_reload_fernet_on_sighup_idempotent() -> None:
+    """Calling reload_fernet_on_sighup multiple times does not raise."""
+    reload_fernet_on_sighup()
+    reload_fernet_on_sighup()
+    reload_fernet_on_sighup()
+
+
+def test_reload_fernet_on_sighup_registers_handler() -> None:
+    """After registration, SIGHUP handler is not SIG_DFL."""
+    reload_fernet_on_sighup()
+    handler = signal.getsignal(signal.SIGHUP)
+    assert handler not in (signal.SIG_DFL, signal.SIG_IGN)
+
+
+def test_reload_fernet_on_sighup_safe_from_non_main_thread() -> None:
+    """reload_fernet_on_sighup must not raise when called from a non-main thread."""
+    errors: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            reload_fernet_on_sighup()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join()
+    assert errors == []
 
 
 def test_resolve_secret_row_custom_mapping(valid_key) -> None:

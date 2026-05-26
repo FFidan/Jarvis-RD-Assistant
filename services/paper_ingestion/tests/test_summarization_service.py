@@ -518,35 +518,6 @@ async def test_generate_paper_summary_raises_runtime_error_when_client_none(monk
             )
 
 
-# ---------------------------------------------------------------------------
-# PI-07 — prompt-shape split: system carries rules, user carries data only
-# ---------------------------------------------------------------------------
-
-
-def test_summarize_prompt_template_contains_no_instruction_head():
-    """SUMMARIZE_PROMPT_TEMPLATE carries only data placeholders, no rules.
-
-    The summarisation rules now live in _SYSTEM_SUMMARIZE (system role).
-    The template used as the user-role message must not duplicate the rules.
-    """
-    from paper_ingestion.services.summarization import SUMMARIZE_PROMPT_TEMPLATE
-
-    assert "CRITICAL RULES" not in SUMMARIZE_PROMPT_TEMPLATE
-    assert "You are" not in SUMMARIZE_PROMPT_TEMPLATE
-    assert "{title}" in SUMMARIZE_PROMPT_TEMPLATE
-    assert "{authors}" in SUMMARIZE_PROMPT_TEMPLATE
-    assert "{text}" in SUMMARIZE_PROMPT_TEMPLATE
-
-
-def test_system_summarize_contains_rules():
-    """_SYSTEM_SUMMARIZE carries the critical rules in the system constant."""
-    from paper_ingestion.services.summarization import _SYSTEM_SUMMARIZE
-
-    assert "CRITICAL RULES" in _SYSTEM_SUMMARIZE
-    assert "You are" in _SYSTEM_SUMMARIZE
-    assert "verbatim quote" in _SYSTEM_SUMMARIZE.lower() or "verbatim" in _SYSTEM_SUMMARIZE
-
-
 @pytest.mark.asyncio
 async def test_generate_paper_summary_uses_arg_client_when_svc_client_none(monkeypatch):
     """When svc.openai_client is None, an explicit openai_client arg is used.

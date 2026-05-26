@@ -9,6 +9,7 @@ import logging
 import sys
 
 import httpx
+from jarvis_common.crypto import reload_fernet_on_sighup
 from jarvis_common.logging_config import configure_logging
 from jarvis_common.settings import get_core_settings
 from telegram import BotCommand
@@ -138,6 +139,8 @@ def main() -> None:
     callback handlers, and runs the event loop with ``run_polling``.
     Exits with code 1 when configuration is invalid.
     """
+    reload_fernet_on_sighup()
+
     try:
         config = BotConfig.from_env()
     except SystemExit:
