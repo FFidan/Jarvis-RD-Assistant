@@ -34,3 +34,9 @@ repos:
         language: system
         pass_filenames: true
         files: ^(services/[^/]+/tests/|libs/jarvis_common/tests/).*\.py$|^docs/contracts/07-testing\.md$
+      - id: check-llm-prompt-shape
+        name: Enforce docs/contracts/09-llm-prompt-shape.md (call_llm_structured shape)
+        entry: uv run python3 scripts/check-llm-prompt-shape.py services/ libs/
+        language: system
+        pass_filenames: false
+        files: \.py$

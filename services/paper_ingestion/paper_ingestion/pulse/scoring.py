@@ -39,7 +39,7 @@ from paper_ingestion.models import PaperCreate
 from paper_ingestion.perf_probe import probe_span
 from paper_ingestion.pulse.models import PulseScoringOutput
 from paper_ingestion.pulse.profile import UserProfile
-from paper_ingestion.pulse.prompts import build_scoring_prompt
+from paper_ingestion.pulse.prompts import PULSE_SCORING_SYSTEM_PROMPT, build_scoring_prompt
 from paper_ingestion.pulse.verification import verify_pulse_reasoning
 from paper_ingestion.rag.verification import RagConfidence
 
@@ -311,12 +311,13 @@ async def stage2_llm_rerank(
                     model=_llm_model(),
                     max_tokens=_LLM_MAX_TOKENS,
                     temperature=_LLM_TEMPERATURE,
+                    system=PULSE_SCORING_SYSTEM_PROMPT,
                 )
                 with probe_span("pulse_stage2_llm", model=_llm_model()):
                     output: PulseScoringOutput = await call_llm_structured(
                         openai_client,  # type: ignore[arg-type]
                         response_model=PulseScoringOutput,
-                        messages=scoring_messages,
+                        prompt=scoring_messages[1]["content"],
                         options=options,
                         max_retries=_stage2_max_retries(),
                     )

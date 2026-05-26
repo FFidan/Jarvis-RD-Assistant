@@ -706,3 +706,187 @@ async def test_contradiction_job_extracts_user_id_from_payload_str_or_absent(
     scan_mock.assert_awaited_once()
     assert result == {"found": 0, "inserted": 0}
     assert scan_mock.call_args.kwargs["user_id"] == expected
+
+
+# ---------------------------------------------------------------------------
+# PI-06 — prompt-shape split: system carries rubric, user carries data only
+# ---------------------------------------------------------------------------
+
+
+def test_build_prompt_contains_no_instruction_head():
+    """_build_prompt returns only wrapped data — no instruction prose.
+
+    The contradiction-detection rubric now lives in _SYSTEM_CONTRADICTIONS
+    (system role).  The user-role message returned by _build_prompt must not
+    include the rubric keywords so it cannot be used to trick the LLM via
+    prompt injection.
+    """
+    from paper_ingestion.services.contradictions import (
+        ContradictionCandidate,
+        VerifiedFinding,
+        _build_prompt,
+    )
+
+    candidate = ContradictionCandidate(
+        a=VerifiedFinding(
+            paper_id=1,
+            title="Paper A",
+            finding="Method improves accuracy.",
+            quote="Method improves accuracy.",
+            page_number=1,
+            cross_reference_ids=frozenset(),
+        ),
+        b=VerifiedFinding(
+            paper_id=2,
+            title="Paper B",
+            finding="Method reduces accuracy.",
+            quote="Method reduces accuracy.",
+            page_number=2,
+            cross_reference_ids=frozenset(),
+        ),
+        score=0.9,
+        reason="cross_reference",
+    )
+    prompt = _build_prompt(candidate)
+
+    assert "You are" not in prompt
+    assert "Rules:" not in prompt
+    assert "Do not invent" not in prompt
+    assert "<title_a>" in prompt
+    assert "<finding_a>" in prompt
+    assert "<quote_a>" in prompt
+    assert "<title_b>" in prompt
+    assert "<finding_b>" in prompt
+    assert "<quote_b>" in prompt
+
+
+def test_system_contradictions_contains_rubric():
+    """_SYSTEM_CONTRADICTIONS carries the full rubric in the system constant."""
+    from paper_ingestion.services.contradictions import _SYSTEM_CONTRADICTIONS
+
+    assert "You are" in _SYSTEM_CONTRADICTIONS
+    assert "Rules:" in _SYSTEM_CONTRADICTIONS
+    assert "Do not invent" in _SYSTEM_CONTRADICTIONS
+    assert "is_contradiction" in _SYSTEM_CONTRADICTIONS
+
+
+# ---------------------------------------------------------------------------
+# PI-12 — _quotes_verify rejects empty-string quotes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_quotes_verify_rejects_empty_quote_a():
+    """_quotes_verify returns (False, None, None) when quote_a is empty."""
+    from jarvis_common.verify import QuoteVerifier
+
+    from paper_ingestion.services.contradictions import (
+        ContradictionCandidate,
+        VerifiedFinding,
+        _quotes_verify,
+    )
+
+    _, conn = _make_pool_and_conn()
+    verifier = QuoteVerifier()
+    candidate = ContradictionCandidate(
+        a=VerifiedFinding(
+            paper_id=1,
+            title="A",
+            finding="f",
+            quote="q",
+            page_number=1,
+            cross_reference_ids=frozenset(),
+        ),
+        b=VerifiedFinding(
+            paper_id=2,
+            title="B",
+            finding="f",
+            quote="q",
+            page_number=2,
+            cross_reference_ids=frozenset(),
+        ),
+        score=0.5,
+        reason="test",
+    )
+
+    result = await _quotes_verify(conn, verifier, candidate, quote_a="", quote_b="some quote")
+    assert result == (False, None, None)
+    conn.fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quotes_verify_rejects_empty_quote_b():
+    """_quotes_verify returns (False, None, None) when quote_b is empty."""
+    from jarvis_common.verify import QuoteVerifier
+
+    from paper_ingestion.services.contradictions import (
+        ContradictionCandidate,
+        VerifiedFinding,
+        _quotes_verify,
+    )
+
+    _, conn = _make_pool_and_conn()
+    verifier = QuoteVerifier()
+    candidate = ContradictionCandidate(
+        a=VerifiedFinding(
+            paper_id=1,
+            title="A",
+            finding="f",
+            quote="q",
+            page_number=1,
+            cross_reference_ids=frozenset(),
+        ),
+        b=VerifiedFinding(
+            paper_id=2,
+            title="B",
+            finding="f",
+            quote="q",
+            page_number=2,
+            cross_reference_ids=frozenset(),
+        ),
+        score=0.5,
+        reason="test",
+    )
+
+    result = await _quotes_verify(conn, verifier, candidate, quote_a="some quote", quote_b="")
+    assert result == (False, None, None)
+    conn.fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quotes_verify_rejects_whitespace_only_quotes():
+    """_quotes_verify returns (False, None, None) for whitespace-only quotes."""
+    from jarvis_common.verify import QuoteVerifier
+
+    from paper_ingestion.services.contradictions import (
+        ContradictionCandidate,
+        VerifiedFinding,
+        _quotes_verify,
+    )
+
+    _, conn = _make_pool_and_conn()
+    verifier = QuoteVerifier()
+    candidate = ContradictionCandidate(
+        a=VerifiedFinding(
+            paper_id=1,
+            title="A",
+            finding="f",
+            quote="q",
+            page_number=1,
+            cross_reference_ids=frozenset(),
+        ),
+        b=VerifiedFinding(
+            paper_id=2,
+            title="B",
+            finding="f",
+            quote="q",
+            page_number=2,
+            cross_reference_ids=frozenset(),
+        ),
+        score=0.5,
+        reason="test",
+    )
+
+    result = await _quotes_verify(conn, verifier, candidate, quote_a="   ", quote_b="  \t  ")
+    assert result == (False, None, None)
+    conn.fetch.assert_not_awaited()

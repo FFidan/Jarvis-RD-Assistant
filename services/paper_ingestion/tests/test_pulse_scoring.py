@@ -81,3 +81,28 @@ class TestScoredCandidateFrozen:
         )
         assert candidate.llm_relevance is None
         assert candidate.final_score is None
+
+
+def test_pulse_scoring_shape_a_system_prompt_is_non_empty() -> None:
+    """Shape A regression: stage2_llm_rerank uses a split-role prompt.
+
+    Confirms that PULSE_SCORING_SYSTEM_PROMPT (the instruction head) is non-empty
+    and is distinct from the user-content portion built by build_scoring_prompt.
+    """
+    from paper_ingestion.pulse.prompts import PULSE_SCORING_SYSTEM_PROMPT, build_scoring_prompt
+    from paper_ingestion.pulse import scoring as scoring_module
+
+    assert PULSE_SCORING_SYSTEM_PROMPT, "PULSE_SCORING_SYSTEM_PROMPT must be non-empty"
+    assert "relevance scoring assistant" in PULSE_SCORING_SYSTEM_PROMPT
+    assert scoring_module.PULSE_SCORING_SYSTEM_PROMPT is PULSE_SCORING_SYSTEM_PROMPT
+
+    messages = build_scoring_prompt(
+        topic_context=[],
+        positive_examples=[],
+        negative_examples=[],
+        candidate=_make_paper(),
+    )
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert messages[0]["content"] == PULSE_SCORING_SYSTEM_PROMPT

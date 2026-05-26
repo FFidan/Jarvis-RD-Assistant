@@ -37,6 +37,25 @@ from paper_ingestion.models import (
 
 logger = logging.getLogger(__name__)
 
+_SYSTEM_EXTRACTION = """\
+You are a precise research paper data extractor. Extract structured data from the following paper.
+
+RULES:
+1. For each field, provide:
+   - "value": the extracted value (string for text, number for numeric, null if not found)
+   - "quote": a VERBATIM quote from the paper that supports this value (copy-paste exact text)
+2. If a field cannot be determined from the text, set value to null and quote to null
+3. Do NOT invent or paraphrase quotes — they must be exact substrings of the source text
+4. Be conservative: prefer null over uncertain values
+
+Respond with ONLY a JSON object where keys are field names and values are objects
+with "value" and "quote" keys.
+Example format:
+{"methodology": {"value": "RCT", "quote": "We conducted a randomized controlled trial..."}}
+
+JSON:\
+"""
+
 
 def _escape_field_attr(s: object) -> str:
     """HTML-encode angle-brackets in user-controlled field attributes.
@@ -54,7 +73,14 @@ def _escape_field_attr(s: object) -> str:
 
 
 def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
-    """Build the LLM prompt for field extraction."""
+    """Build the LLM user-role prompt for field extraction.
+
+    The instruction head lives in ``_SYSTEM_EXTRACTION`` (system role).
+    This function returns only the data payload wrapped via ``wrap_delimited``
+    so untrusted paper text cannot escape into the instruction layer.
+    ``wrap_delimited`` applies ``max_chars=15000`` truncation; do NOT pre-truncate
+    ``text`` before calling this function (PI-09).
+    """
     field_specs = "\n".join(
         f'- "{_escape_field_attr(f["name"])}" '
         f"({_escape_field_attr(f.get('type', 'text'))}): "
@@ -66,28 +92,9 @@ def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
     safe_body, _ = wrap_delimited("paper_text", text, max_chars=15000)
 
     return (
-        f"You are a precise research paper data extractor."
-        f" Extract structured data from the following paper.\n\n"
         f"PAPER TITLE:\n{safe_title}\n\n"
         f"FIELDS TO EXTRACT:\n{field_specs}\n\n"
-        f"RULES:\n"
-        f"1. For each field, provide:\n"
-        f'   - "value": the extracted value'
-        f" (string for text, number for numeric, null if not found)\n"
-        f'   - "quote": a VERBATIM quote from the paper that supports this value'
-        f" (copy-paste exact text)\n"
-        f"2. If a field cannot be determined from the text,"
-        f" set value to null and quote to null\n"
-        f"3. Do NOT invent or paraphrase quotes —"
-        f" they must be exact substrings of the source text\n"
-        f"4. Be conservative: prefer null over uncertain values\n\n"
-        f"PAPER TEXT:\n{safe_body}\n\n"
-        f"Respond with ONLY a JSON object where keys are field names"
-        f' and values are objects with "value" and "quote" keys.\n'
-        f"Example format:\n"
-        f'{{"methodology": {{"value": "randomized controlled trial",'
-        f' "quote": "We conducted a randomized controlled trial..."}}}}\n\n'
-        f"JSON:"
+        f"PAPER TEXT:\n{safe_body}\n"
     )
 
 
@@ -166,8 +173,6 @@ async def extract_fields_for_paper(
                 chunks = [c for c in chunks if c["chunk_index"] in selected_chunks]
 
     full_text = "\n\n".join(c["content"] for c in chunks)
-    if len(full_text) > 15000:
-        full_text = full_text[:15000]
 
     prompt = build_extraction_prompt(fields, paper["title"], full_text)
     from paper_ingestion._state import svc  # noqa: PLC0415
@@ -184,7 +189,7 @@ async def extract_fields_for_paper(
             _openai_client,
             response_model=response_model,
             prompt=prompt,
-            options=ChatCompletionOptions(model=smart_model),
+            options=ChatCompletionOptions(model=smart_model, system=_SYSTEM_EXTRACTION),
         )
     except Exception:
         logger.exception("LLM extraction failed for paper %d", paper_id)

@@ -158,7 +158,7 @@ Every Shape B callsite — the entire population, not a sample — MUST appear h
 
 | File:line | Function | Rationale |
 |---|---|---|
-| _(to be populated by Wave 10 sub-wave 10b)_ | — | — |
+| `services/paper_ingestion/paper_ingestion/routers/rag.py:132` | `_call_rag_llm` | `messages` is constructed upstream by `prepare_single_paper_rag` / `prepare_cross_paper_rag` which already emit Shape A `[system, user]` pairs (PI-02 / PI-03). The static checker cannot follow the variable reference across functions; the carve-out documents that the role-firewall is satisfied one frame up. |
 
 If you find a Shape B callsite that is NOT in this table, that is itself a contract violation: either add the row in the same patch or migrate the callsite to Shape A.
 
@@ -168,8 +168,8 @@ If you find a Shape B callsite that is NOT in this table, that is itself a contr
 
 The AST checker [scripts/check-llm-prompt-shape.py](../../scripts/check-llm-prompt-shape.py) walks every `.py` file under `services/` and `libs/` (skipping tests) and classifies each `call_llm_structured` invocation as Shape A, Shape B, or a violation. It runs:
 
+- **Pre-commit** — the `check-llm-prompt-shape` local hook in [.pre-commit-config.yaml](../../.pre-commit-config.yaml) fires on every `.py`-touching commit. Exit code 1 blocks the commit.
 - **CI full-gate** — the post-W10 wave-gate runs `uv run python3 scripts/check-llm-prompt-shape.py services/ libs/` and expects exit 0.
-- **Pre-commit** — the `check-llm-prompt-shape` local hook in [.pre-commit-config.yaml](../../.pre-commit-config.yaml) activates once the Wave 10 baseline reaches zero violations (sub-wave 10b closes the existing 9). Until then the script is invoked manually or via the W16 full-gate. Exit code 1 blocks the commit once activated.
 
 The check is structural, not semantic. It does NOT detect:
 
@@ -292,7 +292,7 @@ Every cited symbol has been Read at HEAD `f6ef8870` on `post-pristine/remediatio
 | `wrap_delimited` | [libs/jarvis_common/jarvis_common/prompt_safety.py](../../libs/jarvis_common/jarvis_common/prompt_safety.py) | Escapes the text via `safe_for_prompt(mode='escape')` and wraps in `<tag>...</tag>`. Returns `(delimited_text, truncated)`. |
 | `safe_for_prompt` | [libs/jarvis_common/jarvis_common/prompt_safety.py](../../libs/jarvis_common/jarvis_common/prompt_safety.py) | Escape / sanitise primitive for untrusted prompt fragments. |
 | AST checker | [scripts/check-llm-prompt-shape.py](../../scripts/check-llm-prompt-shape.py) | Walks Python under given roots; classifies every `call_llm_structured` callsite as Shape A, Shape B, or violation; emits `path:line: ...` and exits 1 on any violation. |
-| Pre-commit hook (deferred to W10-T6) | [.pre-commit-config.yaml](../../.pre-commit-config.yaml) | Activation gated on baseline reaching zero violations; until then enforcement is W16 full-gate only. |
+| Pre-commit hook | [.pre-commit-config.yaml](../../.pre-commit-config.yaml) | `check-llm-prompt-shape` local hook runs the AST checker against `services/` and `libs/` on every `.py`-touching commit. |
 
 ---
 
