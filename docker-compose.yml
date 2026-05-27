@@ -403,8 +403,6 @@ services:
         condition: service_healthy
       litellm:
         condition: service_healthy
-      paper_ingestion:
-        condition: service_healthy
     logging:
       driver: json-file
       options:

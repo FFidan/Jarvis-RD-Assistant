@@ -5,7 +5,6 @@ import uuid
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
 from jarvis_common import assert_paper_ownership, log_audit
 from jarvis_common.auth import current_user_id_strict
 from jarvis_common.library import add_to_library
@@ -63,7 +62,7 @@ async def link_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
-) -> dict | JSONResponse:
+) -> dict:
     """Link a paper to a project."""
     should_push_zotero = False
     async with db_pool.acquire() as conn:
@@ -92,14 +91,7 @@ async def link_paper(
             # result is e.g. "INSERT 0 1" (inserted) or "INSERT 0 0" (no-op)
             if result and result == "INSERT 0 0":
                 # Paper already linked — return early before enqueuing any job.
-                return JSONResponse(
-                    content={
-                        "project_id": project_id,
-                        "paper_id": paper_id,
-                        "message": "Paper already linked",
-                    },
-                    status_code=200,
-                )
+                return {"project_id": project_id, "paper_id": paper_id}
 
             # Trigger Zotero push when a paper is linked to a project if it is starred
             # or was previously pushed to Zotero.  The job handler checks credentials at
