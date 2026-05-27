@@ -945,11 +945,15 @@ CREATE TABLE public.papers (
     search_vector tsvector,
     discovered_by integer,
     discovery_origin text DEFAULT 'user_initiated'::text NOT NULL,
+    zotero_item_key text,
+    zotero_last_pushed_at timestamp with time zone,
     CONSTRAINT papers_discovery_origin_check CHECK ((discovery_origin = ANY (ARRAY['user_initiated'::text, 'pulse'::text, 'recommender'::text, 'citation_batch'::text])))
 );
 COMMENT ON TABLE public.papers IS 'All ingested papers. Metadata comes from source APIs, never from LLMs.';
 COMMENT ON COLUMN public.papers.discovered_by IS 'Audit only: which user (or NULL for system) first discovered this paper. Library membership lives in user_library, not here. Sprint B (migration 072).';
 COMMENT ON COLUMN public.papers.discovery_origin IS 'How the paper first entered the system. Immutable. Values: user_initiated (manual search/upload/Zotero/citation graph), pulse (overnight discovery), recommender (paper_recommendations), citation_batch (citation graph batch save).';
+COMMENT ON COLUMN public.papers.zotero_item_key IS 'Zotero item key set by zotero_service.push_paper_to_zotero after a successful push, cleared by force-repush, and used by sync_from_zotero to short-circuit DOI matches. NULL = not yet pushed.';
+COMMENT ON COLUMN public.papers.zotero_last_pushed_at IS 'Timestamp of the last successful Zotero push for this paper. Set together with zotero_item_key; never modified by sync_from_zotero (which leaves the original push timestamp intact).';
 CREATE SEQUENCE public.papers_id_seq
     AS integer
     START WITH 1

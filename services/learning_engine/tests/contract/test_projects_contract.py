@@ -248,6 +248,35 @@ async def test_project_papers_attach_validates_paper_ownership(
     )
 
 
+async def test_project_papers_attach_idempotent_envelope(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/projects/{id}/papers/{paper_id} twice → identical
+    {project_id, paper_id} envelope on both calls.
+
+    Pins the W14 MED-XC-02 envelope-consistency contract: the already-linked
+    early-return path returns the same two-key shape as the freshly-linked
+    path and no longer carries a ``message`` field. Exercises the link_paper
+    success path, which queries ``papers.zotero_item_key`` (W14.5 schema
+    recovery added the missing column to the bedrock).
+    """
+    project_id = contract_two_users.project_id_a
+    paper_id = contract_two_users.paper_id_a
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        first = await c.post(f"/api/projects/{project_id}/papers/{paper_id}")
+        second = await c.post(f"/api/projects/{project_id}/papers/{paper_id}")
+
+    assert first.status_code == 201, (
+        f"first link expected 201, got {first.status_code}: {first.text[:200]}"
+    )
+    assert second.status_code == 201, (
+        f"already-linked expected 201, got {second.status_code}: {second.text[:200]}"
+    )
+    assert first.json() == {"project_id": project_id, "paper_id": paper_id}
+    assert second.json() == {"project_id": project_id, "paper_id": paper_id}
+
+
 async def test_project_papers_detach_idor_rejected(
     contract_two_users, contract_conn, _le_app, _configure_api_key
 ):

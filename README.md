@@ -148,7 +148,7 @@ Open **http://localhost:3001**. The first-run web wizard walks you through:
 
 First boot pulls ~14 GB of Ollama models (`qwen3:14b`, `qwen3:4b`, `qwen3-embedding:4b`) in the background; you can use the dashboard while they download. **Upgrading later:** `git pull && ./update.sh`.
 
-> The legacy interactive `./setup.sh` (which asks about LAN access mode and Telegram up-front) is still supported. Use it instead of `./scripts/jarvis-setup.sh` if you prefer being prompted rather than configuring through the web wizard.
+> `./scripts/jarvis-setup.sh` defers all config to the web wizard. The top-of-README `./setup.sh` is equivalent but asks about LAN access mode and Telegram up-front in the shell instead. Pick whichever style you prefer; both produce the same Compose stack.
 
 ### "I'm joining a hosted JARVIS instance" — end-user
 

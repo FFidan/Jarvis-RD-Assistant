@@ -944,6 +944,50 @@ async def test_author_alert_log_user_id_fk_set_null(live_pg_dsn: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_baseline_papers_zotero_columns_present(live_pg_dsn: str) -> None:
+    """papers.zotero_item_key and papers.zotero_last_pushed_at must exist in
+    the regenerated baseline.
+
+    The pre-squash migration chain added these columns to back the Zotero
+    push/sync integration in services/paper_ingestion/.../zotero_service.py
+    (push_paper_to_zotero stores the key; force_repush clears it;
+    sync_from_zotero reads it to skip already-pushed papers) and the
+    project_papers link path (services/learning_engine/.../project_papers.py
+    reads ``p.zotero_item_key`` to decide whether to fire a Zotero push job).
+    The W14 audit surfaced that the columns were dropped by the squash; this
+    invariant guards against a regression that would break every Zotero
+    operation with `column "zotero_item_key" does not exist`.
+    """
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await apply_fresh_init(pool)
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT column_name, data_type, is_nullable
+                  FROM information_schema.columns
+                 WHERE table_name = 'papers'
+                   AND column_name IN ('zotero_item_key', 'zotero_last_pushed_at')
+                """
+            )
+            by_name = {r["column_name"]: r for r in rows}
+            assert "zotero_item_key" in by_name, (
+                "papers.zotero_item_key must exist (Zotero push/sync stores the item key here)"
+            )
+            assert by_name["zotero_item_key"]["data_type"] == "text"
+            assert by_name["zotero_item_key"]["is_nullable"] == "YES", (
+                "zotero_item_key NULL = not yet pushed; column must remain nullable"
+            )
+            assert "zotero_last_pushed_at" in by_name, (
+                "papers.zotero_last_pushed_at must exist (set by push_paper_to_zotero)"
+            )
+            assert by_name["zotero_last_pushed_at"]["data_type"] == "timestamp with time zone"
+            assert by_name["zotero_last_pushed_at"]["is_nullable"] == "YES"
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_tracked_authors_three_col_unique_constraint(live_pg_dsn: str) -> None:
     """tracked_authors_name_s2_unique must be a 3-col UNIQUE NULLS NOT DISTINCT
     on (user_id, author_name, s2_author_id).
