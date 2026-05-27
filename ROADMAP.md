@@ -68,10 +68,7 @@ Current release: **v0.4.1**.
 
 CI-Green + Verified-Real Gap Closure shipped to master `a7bfb18f` (GitHub CI GREEN).
 This is a **sequenced** backlog: each item carries its decision and the one-line *why*,
-because several were flat "open questions" that have since been decided. Tracker of
-record for outstanding code findings is **`docs/audit/2026-05-17-deep-audit-security-doc.md`**
-(it supersedes the 2026-05-16 QA audit; the 2026-05-15 audit is historical — its RBs
-were verified closed).
+because several were flat "open questions" that have since been decided.
 
 **Active — handed off this session (in flight):**
 

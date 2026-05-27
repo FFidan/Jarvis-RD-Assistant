@@ -29,5 +29,4 @@ below outrank archived notes.
 ## Historical Material
 
 Older plans and audits remain useful context but are not source of truth unless
-the current roadmap links to them explicitly. Prefer moving superseded docs into
-`docs/archive/` with a replacement pointer over deleting them outright.
+the current roadmap links to them explicitly.

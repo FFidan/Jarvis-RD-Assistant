@@ -29,10 +29,9 @@ and developers.
 | [Architecture](ARCHITECTURE.md) | Service topology, runtime boundaries, data flows |
 | [Product Requirements](PRD.md) | Feature scope, personas, acceptance criteria |
 | [Engineering Standards](ENGINEERING_STANDARDS.md) | Coding conventions, API rules, DB rules, testing |
-| [Typography Contract](typography-contract.md) | UI text formatting invariants |
-| [Agentic Workflow](AGENTIC_WORKFLOW.md) | Evidence rules, Desloppify, agent closeout |
+| [Typography Contract](contracts/08-typography.md) | UI text formatting invariants |
+| [LLM Prompt Shape](contracts/09-llm-prompt-shape.md) | Prompt-construction contract enforced by AST check |
 | [Migrations](migrations-shim.md) | Migration convention, runner, multi-tenant history |
-| [Agent Guide](agents-shim.md) | Harness map and doc routing for coding agents |
 
 ## System Contracts
 
@@ -54,5 +53,3 @@ End-user documentation lives under [User Guide](manual/index.md).
 
 > Canonical edit targets are the Markdown files in the repository.
 > This site is a generated read-only view — always edit the source, not the HTML.
->
-> Historical plans, audits, and perf snapshots live in `docs/archive/`.

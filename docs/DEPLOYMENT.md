@@ -259,7 +259,7 @@ JARVIS_CONFIG_KEY=<Fernet key from: python -c "from cryptography.fernet import F
 
 - `DEV_MODE=true` does **not** bypass auth when a `JARVIS_API_KEY` is configured; the flag only helps unauthenticated local development.
 - `DEV_MODE=true` is a meta-flag: it promotes any granular dev flag (`DEV_AUTH_BYPASS`, `DEV_ERROR_DETAIL`, `DEV_CORS_OPEN`, `DEV_SMTP_LOG_ONLY`, `DEV_CRYPTO_RELAXED`) to `true` unless that flag is explicitly set in the environment. An explicit value always wins. In production, set each flag independently; none are permitted in `ENVIRONMENT=production` (startup will crash if any is `true`).
-- `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`. See finding S-7.4 in `docs/archive/2026-05/CODE_SECURITY_REVIEW_2026-04-14.md`.
+- `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`.
 
 ### Rate-limit client-IP trust (automatic)
 
@@ -791,8 +791,7 @@ bash scripts/production-readiness-check.sh; echo "exit=$?"
 ## See also
 
 - [README.md](../README.md) — quick start and high-level orientation.
-- [AGENTS.md](../AGENTS.md) — repository conventions and architecture.
 - [docs/PRD.md](PRD.md) — product requirements; §4.1 security NFRs.
-- [docs/archive/2026-05/CODE_SECURITY_REVIEW_2026-04-14.md](archive/2026-05/CODE_SECURITY_REVIEW_2026-04-14.md) — security posture and known residual findings.
+- [docs/SECURITY.md](SECURITY.md) — threat model, auth boundaries, hardening checklist.
 - [docs/known-residual-risks.md](known-residual-risks.md) — acknowledged-but-deferred risks and their reopen criteria.
 - `PERSONAL-SETUP.md` (gitignored) — your own environment notes; not committed.

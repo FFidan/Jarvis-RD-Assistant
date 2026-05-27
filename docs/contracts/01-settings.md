@@ -286,7 +286,7 @@ The implementation MUST satisfy these. Testable.
 
 ### 9.1 Resolved 2026-05-02 (Settings cleanup sprint)
 
-Plan: [docs/archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md](../archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md). All seven historical GHOST entries plus the `fsrs.desired_retention` PARTIAL and the `zotero.enabled` ANOMALY were resolved.
+All seven historical GHOST entries plus the `fsrs.desired_retention` PARTIAL and the `zotero.enabled` ANOMALY were resolved.
 
 | Item | Disposition | Implementation |
 |---|---|---|
@@ -316,7 +316,7 @@ Plan: [docs/archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md](.
 - **[02-pulse.md](02-pulse.md) §3** — the four GHOST weights inside `pulse.weights` (`citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier`) — UI-exposed, validator-accepted, but no signal computation populates them.
 - **[03-llm.md](03-llm.md) §2** — `llm.{smart,fast,embed}_model` and the cloud-provider keys behave at the LiteLLM layer; this contract documents only the `user_config` storage plane.
 - **[04-observability.md](04-observability.md)** — privacy rules forbid logging raw `user_config.value` for any key in `_SECRET_KEYS` / `_ENCRYPTED_KEYS`.
-- **[docs/archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md](../archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md)** — `paper_user_state` columns (state, starred, state_before_trash) are NOT in this contract; they are per-paper user state, not user-controllable settings.
+- **Note:** `paper_user_state` columns (state, starred, state_before_trash) are NOT in this contract; they are per-paper user state, not user-controllable settings.
 
 ---
 

@@ -291,10 +291,10 @@ These features shipped after the Sprint 6 audit cycle:
 - **Model Lifecycle UI + Hardware-Aware Settings**: `services/paper_ingestion/paper_ingestion/routers/system.py` exposes hardware-fit data (`HardwareInfo`, `recommend_models`, VRAM-aware tier selection). Frontend `SettingsAIPanel` + `ModelSelector` surface per-VRAM recommendations.
 - **Langfuse observability** (operator-provisioned): `@observe()` decorators on all structured LLM calls; `OBSERVABILITY_ENABLED` boot-gate in `main.py`; `SecretsSettings _FILE` pattern for keypair injection. Contract: `docs/contracts/04-observability.md`.
 - **Testing Contract + pre-commit guard**: `docs/contracts/07-testing.md` defines four legitimate test shapes and four prohibited anti-patterns. `scripts/check-test-shape.py` enforces rules TS-01..TS-08 as a pre-commit hook on every commit touching test files.
-- **2026-05-24 — Architectural decomposition (bloat-reduction program).** 5 god components decomposed: `settings_service.py` 1303→27 LOC re-export shim + 9 single-responsibility submodules; `routers/papers.py` 983→38 LOC aggregator + 5 sub-routers; `pulse/job.py` extracted 5 phase helpers; `PulseSection.tsx` 1384→168 LOC + 9 sibling components; `IngestionSection.tsx` 920→845 LOC + `ConfigEntryCard` extraction. 260 inline `queryKey:` callsites migrated to central `query-keys.ts` registry. 12 telegram tests migrated from local `_make_config` to `make_bot_config`. 55 substantive docstrings added to `jarvis_common`. Net +1963 LOC (typed-module decomposition cost). See `docs/audit/2026-05-24-bloat-reduction/LEDGER.md`.
-- **2026-05-24 — Dead-code purge program.** 7 orphan frontend hook/util files removed (`use-{decks,extractions,pagination,papers,pulse,tasks}.ts` + `error-utils.ts`; −213 LOC). All 7 B-list carry-forwards from bloat-reduction Wave-Gate reports closed (W1F5-F10 + W2GF3). See `docs/audit/2026-05-25-purge-closeout/LEDGER.md`.
-- **2026-05-24 — Polish wave.** Closed remaining rot-on-touch carry-forwards (CF-W0G1, CF-W0G2); removed zero-yield vulture tooling (wrong fit for decorator-heavy Python; `knip` retained for frontend); reorganized `docs/audit/` (13 loose 2026-05-22 closeouts bundled); fixed 2 pre-existing test failures (SettingsAIPanel TS2532, chat-confidence MarkdownContent vitest); cleared 11 auto-fixable lint warnings; bumped version metadata (pyproject + frontend/package.json 0.2.1 → 0.5.0) and cut an INTERNAL `v0.5.0` git tag (local-only — repo remains private; CHANGELOG kept under `[unreleased]`); decomposed `libs/jarvis_common/jarvis_common/testing.py` (945 LOC → 5 submodules + thin facade with `__all__` re-exports); folded in 2 simple CI test fixes (test_migration_runner + test_settings_contract). Productive-LOC: −271 net. See `docs/audit/2026-05-26-polish-wave/LEDGER.md`.
-- **2026-05-26 — Audit remediation wave.** 4 CRITICAL + 10 HIGH + 18 MEDIUM + 9 FRONTEND + 24 cross-cutting fixes from the 2026-05-24 deep audit. Two new DB migrations (`0090_audit_log_append_only.sql` append-only RULE on audit_log; `0091_author_alert_log_user_dedupe.sql` per-user dedupe key). One time-boxed CI flakiness mitigation (CI-CROSS-USER-FLAKY-1: `_spin_pg_container` TCP probe absorbs SSL-init race). 49 carry-forwards registered across 6 wave-gate reports. See `docs/audit/2026-05-26-audit-remediation/LEDGER.md`.
+- **2026-05-24 — Architectural decomposition (bloat-reduction program).** 5 god components decomposed: `settings_service.py` 1303→27 LOC re-export shim + 9 single-responsibility submodules; `routers/papers.py` 983→38 LOC aggregator + 5 sub-routers; `pulse/job.py` extracted 5 phase helpers; `PulseSection.tsx` 1384→168 LOC + 9 sibling components; `IngestionSection.tsx` 920→845 LOC + `ConfigEntryCard` extraction. 260 inline `queryKey:` callsites migrated to central `query-keys.ts` registry. 12 telegram tests migrated from local `_make_config` to `make_bot_config`. 55 substantive docstrings added to `jarvis_common`. Net +1963 LOC (typed-module decomposition cost).
+- **2026-05-24 — Dead-code purge program.** 7 orphan frontend hook/util files removed (`use-{decks,extractions,pagination,papers,pulse,tasks}.ts` + `error-utils.ts`; −213 LOC). All 7 B-list carry-forwards from bloat-reduction Wave-Gate reports closed.
+- **2026-05-24 — Polish wave.** Closed remaining rot-on-touch carry-forwards; removed zero-yield vulture tooling (wrong fit for decorator-heavy Python; `knip` retained for frontend); fixed 2 pre-existing test failures (SettingsAIPanel TS2532, chat-confidence MarkdownContent vitest); cleared 11 auto-fixable lint warnings; bumped version metadata (pyproject + frontend/package.json 0.2.1 → 0.5.0); decomposed `libs/jarvis_common/jarvis_common/testing.py` (945 LOC → 5 submodules + thin facade with `__all__` re-exports). Productive-LOC: −271 net.
+- **2026-05-26 — Audit remediation wave.** 4 CRITICAL + 10 HIGH + 18 MEDIUM + 9 FRONTEND + 24 cross-cutting fixes from the 2026-05-24 deep audit. Two new DB migrations (`0090_audit_log_append_only.sql` append-only RULE on audit_log; `0091_author_alert_log_user_dedupe.sql` per-user dedupe key). One time-boxed CI flakiness mitigation (CI-CROSS-USER-FLAKY-1: `_spin_pg_container` TCP probe absorbs SSL-init race).
 
 ### Multi-Tenant Status
 
@@ -403,10 +403,8 @@ verifiability over fluency.
 >   contradictions, but embedding-based pair narrowing and explicit polarity
 >   heuristics remain future polish.
 >
-> Remaining hardening work is tracked in
-> [`docs/archive/2026-05/old-plans/2026-04-24-post-r14-roadmap.md`](archive/2026-05/old-plans/2026-04-24-post-r14-roadmap.md) WS-2
-> (anti-hallucination hardening). The aspirational requirements below remain
-> the target state.
+> Remaining anti-hallucination hardening work is tracked internally; the
+> aspirational requirements below remain the target state.
 
 ### 5.1 Citation Rules
 
@@ -609,7 +607,7 @@ captures the roadmap phasing, acceptance criteria, and attribution.
 
 **Goal.** A natural-language control plane over the JARVIS REST API. A user should be able to say *"find last week's AI safety Pulse cards I haven't rated"* and have the agent compose the right API calls, present results, and honor the anti-hallucination policy end-to-end.
 
-**Architectural pattern.** Agent-as-client over the existing REST surface. JARVIS services stay authoritative for data, verification, and persistence — the agent is never the system of record. See [`docs/archive/2026-05/old-plans/2026-04-24-post-r14-roadmap.md`](archive/2026-05/old-plans/2026-04-24-post-r14-roadmap.md) WS-7 for the spike scope.
+**Architectural pattern.** Agent-as-client over the existing REST surface. JARVIS services stay authoritative for data, verification, and persistence — the agent is never the system of record.
 
 **Decision point.** Adopt [`NousResearch/hermes-agent`](https://github.com/NousResearch) (MIT, 2026) as-is, or build natively on LiteLLM tool-calling plus our existing prompt harness. The WS-7 spike will resolve this.
 

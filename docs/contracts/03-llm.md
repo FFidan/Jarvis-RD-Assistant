@@ -7,10 +7,10 @@
 - The Pydantic response models in §4
 - The retry / fallback policy
 
-This contract is the **evergreen counterpart** to the implementation spec at
-[docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md). The spec describes the
-*transition* (Wave 1 canary → Wave 2 bulk → Wave 3 cleanup); this contract
-describes the *steady state* the transition produces.
+This contract describes the steady-state LLM call surface. The historical
+Instructor + Langfuse integration transition (Wave 1 canary → Wave 2 bulk →
+Wave 3 cleanup) has completed; only the end-state described here is in scope
+for new work.
 
 While the transition is in flight, this contract describes the **target
 state**. Pre-transition code that still uses `call_llm` / `call_llm_json_value`
@@ -400,8 +400,6 @@ The implementation MUST satisfy these. Testable.
 - **[02-pulse.md §5](02-pulse.md#5-timeout-concurrency-and-budget-policy)** — Pulse Stage-2 owns the 600 s wall-clock cap; per-call timeout is 120 s, owned here.
 - **[04-observability.md §3](04-observability.md)** — every site here gets a `@observe(as_type="generation")` wrap on the choke-point function; per-site spans live on the surrounding `@observe()` boundary.
 - **[docs/ENGINEERING_STANDARDS.md "Anti-Hallucination"](../ENGINEERING_STANDARDS.md#anti-hallucination-invariants)** — verifier requirements that this contract embeds in §5.
-- **[docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md)** — archived implementation spec; the
-  contract above describes its endpoint state.
 
 ---
 

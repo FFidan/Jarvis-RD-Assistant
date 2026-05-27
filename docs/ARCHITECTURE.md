@@ -231,17 +231,6 @@ Fresh schema is defined in `db/init.sql`; existing installs advance through
 Fresh-install validation must replay `db/init.sql` and migrations against live
 Docker Postgres when schema duplication risk is in scope.
 
-## Specs
-
-Durable behavioral contracts for cross-cutting workflows live in `docs/specs/`:
-
-- [archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) — authoritative spec for paper lifecycle states, transitions, action contracts, feed information architecture, recommendation feedback loop (L1+L2+L3), Zotero interplay, and Telegram parity. Replaces the legacy paper-lifecycle-contract.md and feed-information-architecture.md, which were deleted as part of the Phase A atomic cutover.
-
-When changing paper status logic, lifecycle transitions, feed filtering, or the
-recommender feedback loop, verify the implementation against this spec before
-shipping. The spec ships in phases (see
-[docs/archive/2026-05/plans/](archive/2026-05/plans/) for the META plan and per-phase implementation plans).
-
 ## Frontend Contract Boundary
 
 The React dashboard contains meaningful workflow logic and API assumptions.
