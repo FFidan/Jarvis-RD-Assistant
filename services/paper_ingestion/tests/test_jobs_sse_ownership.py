@@ -80,7 +80,9 @@ def _make_pool_with_job(user_id: int | None, *, terminal: bool = True) -> MagicM
 @pytest.fixture()
 def _app_with_pool():
     """Yield a factory that creates a ready-to-test app for a given job user_id."""
-    from jarvis_common import current_user_id, verify_api_key
+    from fastapi import HTTPException
+
+    from jarvis_common import current_user_id_strict, verify_api_key
     from paper_ingestion.main import app
 
     def _make(job_user_id: int | None, caller_user_id: int | None = None):
@@ -94,8 +96,16 @@ def _app_with_pool():
 
         # Bypass API key auth
         app.dependency_overrides[verify_api_key] = lambda: None
-        # Stub current_user_id to return the specified caller identity
-        app.dependency_overrides[current_user_id] = lambda: caller_user_id
+        # Stub current_user_id_strict: return caller id when set, raise 401 when None.
+        # stream_job uses Depends(current_user_id_strict) which raises 401 on None.
+        if caller_user_id is not None:
+            app.dependency_overrides[current_user_id_strict] = lambda: caller_user_id
+        else:
+
+            async def _raise_401():
+                raise HTTPException(status_code=401, detail="Not authenticated")
+
+            app.dependency_overrides[current_user_id_strict] = _raise_401
 
         return app, pool
 
@@ -110,8 +120,13 @@ def _app_with_pool():
 
 
 @pytest.mark.asyncio
-async def test_stream_job_with_user_id_and_no_caller_returns_404(_app_with_pool) -> None:
-    """Job seeded with user_id=42, caller is None (single-tenant) → 404."""
+async def test_stream_job_with_user_id_and_no_caller_returns_401(_app_with_pool) -> None:
+    """Job seeded with user_id=42, caller is unauthenticated → 401.
+
+    stream_job uses current_user_id_strict which raises 401 before the
+    ownership check runs, so an anonymous caller is rejected at the auth
+    layer regardless of the job's user_id (SEC-CRIT-01 / H-05).
+    """
     app, _pool = _app_with_pool(job_user_id=42, caller_user_id=None)
 
     async with httpx.AsyncClient(
@@ -119,24 +134,29 @@ async def test_stream_job_with_user_id_and_no_caller_returns_404(_app_with_pool)
     ) as client:
         resp = await client.get(f"/api/jobs/{_JOB_UUID}/stream")
 
-    assert resp.status_code == 404, (
-        f"Expected 404 for job with user_id=42 accessed by caller None, got {resp.status_code}"
+    assert resp.status_code == 401, (
+        f"Expected 401 for unauthenticated caller on job with user_id=42, got {resp.status_code}"
     )
 
 
 @pytest.mark.asyncio
-async def test_stream_job_with_null_user_id_and_no_caller_is_allowed(_app_with_pool) -> None:
-    """Job seeded with user_id=NULL, caller is None → SSE stream starts (200)."""
+async def test_stream_job_with_null_user_id_and_no_caller_returns_401(_app_with_pool) -> None:
+    """Job seeded with user_id=NULL, caller is unauthenticated → 401.
+
+    current_user_id_strict raises 401 before ownership is checked.
+    System-only (NULL-row) jobs require an authenticated caller; even then
+    _owner_matches returns False for NULL row_user_id (SEC-CRIT-01).
+    """
     app, _pool = _app_with_pool(job_user_id=None, caller_user_id=None)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        # Use stream=True to avoid waiting for the generator to close
-        async with client.stream("GET", f"/api/jobs/{_JOB_UUID}/stream") as resp:
-            assert resp.status_code == 200, (
-                f"Expected 200 for job with user_id=NULL, got {resp.status_code}"
-            )
+        resp = await client.get(f"/api/jobs/{_JOB_UUID}/stream")
+
+    assert resp.status_code == 401, (
+        f"Expected 401 for unauthenticated caller on NULL-row job, got {resp.status_code}"
+    )
 
 
 @pytest.mark.asyncio

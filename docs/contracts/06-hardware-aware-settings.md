@@ -4,7 +4,7 @@
 **Date:** 2026-05-07
 **Scope:** Per-machine VRAM transparency in Settings — fit indicators, `num_ctx` slider per role, thinking-mode toggle for thinking-capable models, support for the user's two machines (RTX 5060 Ti 16 GB and a separate 48 GB box).
 **Depends on:** Contract 05 (Model Lifecycle) — additive only; does not contradict it.
-**Related:** [`docs/contracts/01-settings.md`](01-settings.md), [`docs/contracts/03-llm.md`](03-llm.md), [`docs/contracts/05-model-lifecycle.md`](05-model-lifecycle.md), [W3-SMOKE-03/04/05](../archive/2026-05/2026-05-07-deep-audit-security-review.md#l898-l1046).
+**Related:** [`docs/contracts/01-settings.md`](01-settings.md), [`docs/contracts/03-llm.md`](03-llm.md), [`docs/contracts/05-model-lifecycle.md`](05-model-lifecycle.md).
 
 This contract was reviewed and ratified by the user on 2026-05-07. The
 six open questions in §10 have all been resolved; recommendations the user
@@ -521,6 +521,6 @@ before consuming this contract as evidence for implementation.
 | `IngestionSection` | `frontend/src/components/settings/IngestionSection.tsx:97-305` | Renders LLM model dropdowns via `ModelSelector`; no slider today. T3-C adds in-card expander. |
 | `ModelSelector` | `frontend/src/components/shared/ModelSelector.tsx:152-464` | Wraps `<Select>` with hardware summary at lines 192-199 (VRAM + Tier display today). T3-C feeds it `fit_detail` per option. |
 | `litellm/config.yaml smart` | `litellm/config.yaml:25-37` | Today's hand-tuned mitigation: `num_ctx: 8192`, `extra_body.think: false`. T3-B replaces hardcoded num_ctx with the user-configured value. |
-| W3-SMOKE-03 root cause | `docs/plans/2026-05-07-deep-audit-security-review.md:898-963` | qwen3:14b VRAM oversubscription; ~20 GB at 32k → 76% CPU offload on 16 GB box; mitigated to 8 192. |
-| W3-SMOKE-04 root cause | `docs/plans/2026-05-07-deep-audit-security-review.md:965-1004` | Qwen-thinking burns output budget; solved by `extra_body.think: false` already shipped. Out of scope here. |
-| W3-SMOKE-05 user request | `docs/plans/2026-05-07-deep-audit-security-review.md:1007-1046` | The hardware-aware Settings request that motivates this contract. |
+| 16 GB VRAM oversubscription finding | qwen3:14b at 32k context → ~20 GB → 76% CPU offload on 16 GB box; mitigated by setting `num_ctx: 8192`. |
+| Qwen-thinking output-budget finding | Thinking-mode burns output budget; solved by `extra_body.think: false` (already shipped). Out of scope here. |
+| Hardware-aware Settings user request | The user request that motivates this contract. |

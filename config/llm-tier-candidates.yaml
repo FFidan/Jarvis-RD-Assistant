@@ -119,7 +119,7 @@ tiers:
         evidence: bench
         reasoning: "Phase 3 IMPROVED from Phase 1 baseline (63 → 84, +21 points). Strip-fix yields visible improvement. Same 3-prompt pipeline-failure pattern as 14B (q08-q10 empty answers). Recommended when 14B too slow or VRAM-constrained."
 
-# Carry-forward Phase 3 known issues + future-cycle candidates:
+# Phase 3 known issues + future-cycle candidates:
 #
 # 1. P0 streaming <think> leak — FIXED in Phase 3 (commit e1aedb4d).
 #    strip_think_blocks now matches <think>.*?(?:</think>|$) so unclosed

@@ -1,13 +1,10 @@
 # Engineering Standards
 
 This document is the durable engineering standard for JARVIS RD Assistant.
-`AGENTS.md` links here instead of duplicating these rules.
 
 Related docs:
 
-- [../AGENTS.md](../AGENTS.md) - short injected guide and truth hierarchy.
 - [ARCHITECTURE.md](ARCHITECTURE.md) - where these standards apply across services.
-- [AGENTIC_WORKFLOW.md](AGENTIC_WORKFLOW.md) - evidence and verification workflow for agents.
 - [PRD.md](PRD.md) - product requirements behind user-facing behavior.
 
 ## Python

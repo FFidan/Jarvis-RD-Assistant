@@ -3,7 +3,6 @@
 #
 # Never auto-rollbacks. On failure, prints the exact command the operator
 # should run. macOS-safe: no `sed -i`, no GNU-only flags.
-# See docs/superpowers/specs/2026-04-12-setup-simplification-design.md
 set -euo pipefail
 
 # -----------------------------------------------------------------------------

@@ -71,8 +71,11 @@ def test_main_returns_one_when_stale_token_injected(tmp_path: Path, monkeypatch)
     """main() must return 1 and surface the offending token when a stale path is present."""
     stale_token = check_agent_docs.STALE_PATTERNS[0]
 
-    # Stub out every file the checker iterates over.
-    for rel_path in check_agent_docs.DOC_PATHS:
+    # Stub out every file the checker iterates over (W13 split PUBLIC vs OPERATOR_ONLY).
+    for rel_path in (
+        *check_agent_docs.PUBLIC_DOC_PATHS,
+        *check_agent_docs.OPERATOR_ONLY_DOC_PATHS,
+    ):
         stub = tmp_path / rel_path
         stub.parent.mkdir(parents=True, exist_ok=True)
         stub.write_text("clean content\n", encoding="utf-8")
@@ -84,9 +87,14 @@ def test_main_returns_one_when_stale_token_injected(tmp_path: Path, monkeypatch)
         encoding="utf-8",
     )
 
-    # Inject the stale token into a doc that is NOT AGENTS.md (DOC_PATHS[0]).
-    # Use CLAUDE.md (DOC_PATHS[1]) so the AGENTS.md overwrite above doesn't clobber it.
-    non_agents_doc = next(rel for rel in check_agent_docs.DOC_PATHS if str(rel) != "AGENTS.md")
+    # Inject the stale token into a doc that is NOT AGENTS.md.
+    # Use any OPERATOR_ONLY_DOC_PATHS entry so the AGENTS.md overwrite above
+    # doesn't clobber it.
+    all_doc_paths = (
+        *check_agent_docs.PUBLIC_DOC_PATHS,
+        *check_agent_docs.OPERATOR_ONLY_DOC_PATHS,
+    )
+    non_agents_doc = next(rel for rel in all_doc_paths if str(rel) != "AGENTS.md")
     (tmp_path / non_agents_doc).write_text(
         f"content containing {stale_token} here\n", encoding="utf-8"
     )

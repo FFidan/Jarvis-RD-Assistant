@@ -131,6 +131,8 @@ def validate_bbt_base_url(url: str | None = None) -> None:
         If the URL scheme is unsupported or the host is a private IP not in
         the explicit allowlist.
     """
+    if url is None:
+        url = get_paper_ingestion_settings().bbt_base_url
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
     if scheme not in ("http", "https"):

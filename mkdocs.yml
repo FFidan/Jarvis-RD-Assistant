@@ -10,10 +10,9 @@
 #
 # Exceptions — files that live outside docs/:
 #   README.md        (repo root)
-#   AGENTS.md        (repo root)
 #   db/migrations/README.md
 #
-# For those three, thin shim files live in docs/ and use the
+# For those two, thin shim files live in docs/ and use the
 # mkdocs-include-markdown-plugin directive:
 #
 #   {% include-markdown "../<path>" rewrite-relative-urls=false %}
@@ -27,8 +26,8 @@
 
 site_name: JARVIS RD Assistant — Operator & Developer Docs
 site_description: >-
-  Deployment, architecture, engineering standards, security, API contracts,
-  and agentic workflow for JARVIS RD Assistant operators and developers.
+  Deployment, architecture, engineering standards, security, and API contracts
+  for JARVIS RD Assistant operators and developers.
 site_url: ""   # default *.github.io — no custom domain, no CNAME
 
 # Repo link shown in the Material theme header
@@ -42,9 +41,7 @@ docs_dir: docs
 #
 # The contract docs (docs/contracts/*.md) link to source-code paths like
 # ../../services/paper_ingestion/... which are valid on disk but don't exist
-# as MkDocs pages (they're Python/SQL files, not docs).  Several operator
-# docs also cross-link to AGENTS.md / CLAUDE.md at the repo root via
-# relative paths like ../AGENTS.md — again valid on disk, not as MkDocs pages.
+# as MkDocs pages (they're Python/SQL files, not docs).
 #
 # Setting links.not_found to 'ignore' suppresses the "target not found among
 # documentation files" warning for those cases.  This keeps `--strict` green

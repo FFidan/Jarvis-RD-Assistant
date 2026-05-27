@@ -347,8 +347,8 @@ is to surface the choices.
 - **[01-settings.md §2.1](01-settings.md#21-live-keys-written-and-read-by-code-that-affects-user-visible-behavior)** — `pulse.*` and `recommendation.*` user_config keys; runtime read sites.
 - **[03-llm.md §2 / §4](03-llm.md)** — Stage-2 LLM rerank is one of the 6 LLM call sites; per-site contract there governs the `PulseScoringOutput` Pydantic shape, retry policy, and timeout.
 - **[04-observability.md §2](04-observability.md)** — `run_pulse` is the canonical "one trace per Pulse run" boundary.
-- **[docs/specs/archive/2026-05-02-instructor-langfuse-integration.md §4.1](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md)** — archived implementation spec for the Stage-2 canary refactor; transitions code to `call_llm_structured(response_model=PulseScoringOutput)`.
-- **[docs/specs/archive/2026-04-29-paper-lifecycle-redesign.md §7](../archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md)** — archived recommendation-feedback write design that feeds L1/L2/L3 dampening; this contract reads the resulting state but does not own its writes.
+- **instructor-langfuse-integration spec §4.1** (archived, not in public tree) — archived implementation spec for the Stage-2 canary refactor; transitions code to `call_llm_structured(response_model=PulseScoringOutput)`.
+- **paper-lifecycle-redesign spec §7** (archived, not in public tree) — archived recommendation-feedback write design that feeds L1/L2/L3 dampening; this contract reads the resulting state but does not own its writes.
 
 ---
 

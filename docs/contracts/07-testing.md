@@ -9,7 +9,7 @@
 - The autouse `_default_authenticated_user` stub in [services/paper_ingestion/tests/conftest.py](../../services/paper_ingestion/tests/conftest.py)
 - The pre-commit test-shape checker in [scripts/check-test-shape.py](../../scripts/check-test-shape.py)
 
-This contract describes **what a test in this repo must look like** — for every Python test added from 2026-05-22 onward. It is the steady-state counterpart to the [2026-05-22 recomposition closeout](../audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md), which documented why the *existing* test suite drifted away from this shape.
+This contract describes **what a test in this repo must look like** — for every Python test added from 2026-05-22 onward. It is the steady-state counterpart to the 2026-05-22 recomposition closeout (archived, not in public tree), which documented why the *existing* test suite drifted away from this shape.
 
 The contract is **machine-enforceable** where practical (pre-commit hook), **policy-enforceable** otherwise (PR review against the rules in §4).
 
@@ -321,7 +321,7 @@ Rules TS-01..TS-07 are machine-checked by [scripts/check-test-shape.py](../../sc
 | TS-03 | New contract test files (under `tests/contract/`) MUST declare `pytest.mark.contract` in their `pytestmark` | ERROR | Required by [pyproject.toml addopts](../../pyproject.toml) marker registration |
 | TS-04 | New contract test files under `services/paper_ingestion/tests/contract/` MUST declare `pytest.mark.real_auth` in their `pytestmark` | ERROR | The autouse `_default_authenticated_user` fixture would otherwise resolve `cookie_b` as user 1 (silent IDOR-test failure) |
 | TS-05 | New contract test files MUST set `loop_scope="session"` on `pytest.mark.asyncio` and on any `@pytest_asyncio.fixture` | ERROR | Fixture loop-mismatch causes "Task attached to a different loop" failures (Phase B tech debt the recomposition program cleaned up) |
-| TS-06 | New contract test files MUST contain at least one `# Verified: <file>:<line>` comment per `def test_*` | WARN | Grounding rule (per [CLAUDE.md](../../CLAUDE.md)) — every cited production symbol must be Read at HEAD |
+| TS-06 | New contract test files MUST contain at least one `# Verified: <file>:<line>` comment per `def test_*` | WARN | Grounding rule (per CLAUDE.md, operator-only) — every cited production symbol must be Read at HEAD |
 | TS-07 | Test files MUST NOT redefine inline `_make_pool` / `_mock_pool` / `_make_embedder` / `_build_request` / `FakeRecord` / `_make_telegram_update` / `make_config` when the canonical version exists in [libs/jarvis_common/jarvis_common/testing.py](../../libs/jarvis_common/jarvis_common/testing.py) (canonical replacement for `make_config`: `jarvis_common.testing.make_bot_config` at [libs/jarvis_common/jarvis_common/testing.py:773](../../libs/jarvis_common/jarvis_common/testing.py)) | WARN | Factory dedup — keep [jarvis_common.testing](../../libs/jarvis_common/jarvis_common/testing.py) the single source of truth |
 | TS-08 | The carve-out registry (§5) MUST NOT be deleted or weakened without a paired contract update | ERROR (enforced by review) | Carve-outs protect CI cost + reliability — deleting one without a replacement plan is a real regression |
 
@@ -444,11 +444,6 @@ It does NOT defer the rules. As of 2026-05-22, no new PR may add a §2 anti-patt
 - [docs/contracts/05-model-lifecycle.md](05-model-lifecycle.md) — model defaults (mock the curated catalog; contract test the resolver)
 - [docs/contracts/06-hardware-aware-settings.md](06-hardware-aware-settings.md) — per-machine fit indicators (pure-unit tests for the math; contract test for the API)
 - [docs/ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md) — mechanics (where tests live, deselect rules)
-- [docs/AGENTS.md](../../AGENTS.md) — Stabilization Guardrails reference this contract
-- [docs/CLAUDE.md](../../CLAUDE.md) — Quality Gates reference this contract
-- [docs/audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md](../audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md) — why this contract exists (the structural ceiling proof)
-- [docs/audit/2026-05-22-polish-wave/2026-05-22-recomposition-evidence.md](../audit/2026-05-22-polish-wave/2026-05-22-recomposition-evidence.md) — carve-out floor calculation
-- [docs/audit/2026-05-21-coverage-map.md](../audit/2026-05-21-coverage-map.md) — 280 rows of endpoint × coverage (Phase A foundation)
 
 ---
 
@@ -472,7 +467,7 @@ Every cited symbol has been Read at HEAD `master` after the recomposition merge 
 | `pytest.mark.live_pg` registration | [pyproject.toml](../../pyproject.toml) | `"live_pg: requires Docker-backed PostgreSQL and JARVIS_RUN_LIVE_PG=1"` |
 | Default `addopts` excludes | [pyproject.toml](../../pyproject.toml) | `addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"` — `contract` tests are collected-but-skipped without `JARVIS_RUN_LIVE_PG=1`. |
 | `test_baseline_invariants.py` (DO NOT DELETE) | [services/paper_ingestion/tests/test_baseline_invariants.py](../../services/paper_ingestion/tests/test_baseline_invariants.py) | 16 post-W1-squash invariants gating the consolidated schema. Marked `live_pg`. |
-| Recomposition closeout (root-cause evidence) | [docs/audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md](../audit/2026-05-22-polish-wave/2026-05-22-recomposition-closeout.md) | Plan-vs-actual + structural ceiling analysis. |
+| Recomposition closeout (root-cause evidence) | 2026-05-22-recomposition-closeout.md (archived, not in public tree) | Plan-vs-actual + structural ceiling analysis. |
 | `scripts/check-test-shape.py` (enforcement) | [scripts/check-test-shape.py](../../scripts/check-test-shape.py) | Pre-commit hook implementing TS-01..TS-07 invariants (TS-08 is review-only). |
 
 ---

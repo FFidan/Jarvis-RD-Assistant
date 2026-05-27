@@ -38,12 +38,19 @@ def test_no_duplicate_migration_versions() -> None:
     assert not duplicates, "Duplicate migration versions found:\n" + "\n".join(duplicates)
 
 
+_BOOTSTRAP_SEED_LO = 1
+_BOOTSTRAP_SEED_HI = 92  # next runner-owned migration; init.sql owns 1..(HI-1)
+
+
 def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     """init.sql bootstrap must use an explicit version list, not generate_series.
 
-    Post-squash (Wave-1 2026-05-19) contract: the seeded set must be exactly
-    set(range(1, 89)) — all 88 versions, contiguous, no gaps, no deferred subset.
-    Every version 1..88 is now embodied in db/init.sql; the runner owns 89+.
+    Post-squash (Wave-1 2026-05-19) + post-pristine fold-ins (2026-05-26:
+    89=pdf_resolutions drop; 90=audit_log append-only; 91=author_alert_log
+    per-user dedupe; all folded into init.sql per db/migrations/README.md):
+    the seeded set must be exactly set(range(_BOOTSTRAP_SEED_LO,
+    _BOOTSTRAP_SEED_HI)) — contiguous, no gaps. The runner owns
+    _BOOTSTRAP_SEED_HI+.
     """
     repo_root = Path(__file__).resolve().parents[3]
     init_sql = (repo_root / "db" / "init.sql").read_text(encoding="utf-8")
@@ -55,22 +62,24 @@ def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     assert "generate_series" not in executable_bootstrap_sql
 
     seeded_versions = {int(value) for value in re.findall(r"\((\d+)\)", executable_bootstrap_sql)}
-    # Post-squash: exactly 1..88, contiguous, complete — no version is deferred.
-    assert seeded_versions == set(range(1, 89)), (
-        f"init.sql bootstrap must seed exactly versions 1..88 (post-squash). "
-        f"Missing: {sorted(set(range(1, 89)) - seeded_versions)}. "
-        f"Extra: {sorted(seeded_versions - set(range(1, 89)))}."
+    expected = set(range(_BOOTSTRAP_SEED_LO, _BOOTSTRAP_SEED_HI))
+    assert seeded_versions == expected, (
+        f"init.sql bootstrap must seed exactly versions "
+        f"{_BOOTSTRAP_SEED_LO}..{_BOOTSTRAP_SEED_HI - 1}. "
+        f"Missing: {sorted(expected - seeded_versions)}. "
+        f"Extra: {sorted(seeded_versions - expected)}."
     )
 
 
 def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
-    """The schema_migrations seed in init.sql must own exactly versions 1..88.
+    """The schema_migrations seed in init.sql must own the squashed + folded-in
+    versions; any on-disk migration file must use a higher number.
 
-    Post-squash (Wave-1 2026-05-19) contract:
-    - init.sql owns ALL of 1..88 — no deferred set.
-    - Any on-disk migration file in db/migrations/ must have version >= 89
-      (runner-applied, never pre-seeded).
-    - No gaps in 1..88; no version > 88 in the seed list.
+    Post-squash (Wave-1 2026-05-19) + post-pristine fold-ins (2026-05-26):
+    - init.sql owns _BOOTSTRAP_SEED_LO.._BOOTSTRAP_SEED_HI-1.
+    - Any on-disk migration file in db/migrations/ must have version
+      >= _BOOTSTRAP_SEED_HI (runner-applied, never pre-seeded).
+    - No gaps in the seeded range.
     """
     repo_root = Path(__file__).resolve().parents[3]
     migrations_dir = repo_root / "db" / "migrations"
@@ -82,14 +91,14 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     )
     seeded_versions = {int(v) for v in re.findall(r"\((\d+)\)", executable_bootstrap_sql)}
 
-    # Post-squash: seed must be exactly 1..88, no gaps, no extras.
-    assert seeded_versions == set(range(1, 89)), (
-        f"init.sql seed list must be exactly {{1..88}} post-squash. "
-        f"Missing: {sorted(set(range(1, 89)) - seeded_versions)}. "
-        f"Extra: {sorted(seeded_versions - set(range(1, 89)))}."
+    expected = set(range(_BOOTSTRAP_SEED_LO, _BOOTSTRAP_SEED_HI))
+    assert seeded_versions == expected, (
+        f"init.sql seed list must be exactly "
+        f"{{{_BOOTSTRAP_SEED_LO}..{_BOOTSTRAP_SEED_HI - 1}}}. "
+        f"Missing: {sorted(expected - seeded_versions)}. "
+        f"Extra: {sorted(seeded_versions - expected)}."
     )
 
-    # Any on-disk migration file must be version 89+ (runner territory).
     file_versions: list[int] = []
     for sql_file in migrations_dir.glob("*.sql"):
         try:
@@ -97,10 +106,11 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
         except (ValueError, IndexError):
             continue
 
-    pre_89 = [v for v in file_versions if v < 89]
-    assert not pre_89, (
-        f"db/migrations/ contains squashed migration files (v < 89): {sorted(pre_89)}. "
-        "These should have been deleted by the Wave-1 squash."
+    pre_seeded = [v for v in file_versions if v < _BOOTSTRAP_SEED_HI]
+    assert not pre_seeded, (
+        f"db/migrations/ contains pre-seeded migration files "
+        f"(v < {_BOOTSTRAP_SEED_HI}): {sorted(pre_seeded)}. "
+        "These should have been deleted by the squash or fold-in."
     )
 
 

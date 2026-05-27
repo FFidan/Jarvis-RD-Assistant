@@ -16,7 +16,7 @@ who writes it, who reads it, and current LIVE/GHOST/PARTIAL status.
 
 **Out of scope.**
 - Per-paper user state (`paper_user_state` columns) — covered by the
-  [paper-lifecycle redesign spec](../archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md).
+  paper-lifecycle redesign spec (archived, not in public tree).
 - Pomodoro timer settings (`usePomodoroStore` Zustand) — UI-local only,
   never persisted server-side.
 - Authentication (`JARVIS_API_KEY` from Docker Secret / env fallback /
@@ -109,7 +109,7 @@ validation and is an intentional non-regression: the omission is by design, not 
 ### 2.3 GHOST keys (allowed by API; no consumer reads them)
 
 **Empty as of 2026-05-02.** All seven historical GHOST entries were resolved in
-the [Settings cleanup sprint](../archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md):
+the Settings cleanup sprint (archived, not in public tree):
 five were deleted from `_ALLOWED_CONFIG_KEYS` and the seed (see §9.1) and two
 (`fsrs.learning_steps`, `zotero.auto_push_on_star`) were promoted to LIVE in
 §2.1.

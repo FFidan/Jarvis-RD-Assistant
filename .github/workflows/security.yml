@@ -86,7 +86,7 @@ jobs:
         run: |
           go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.0.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          osv-scanner --version
+          "$(go env GOPATH)/bin/osv-scanner" --version
 
       - name: Scan lockfiles (recursive)
         # Exits 1 if vulnerabilities are found; exits 2 on internal error.

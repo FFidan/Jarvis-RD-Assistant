@@ -112,7 +112,7 @@ because several were flat "open questions" that have since been decided.
 
 **Sequenced future work (order matters — do not reorder casually):**
 
-1. **Performance & hardware-fit — phased, own /deep-plan:**
+1. **Performance & hardware-fit — phased:**
    - *Phase 1 (do-next; hardware-agnostic, bounded):* profiling/bench harness
      instrumenting the hot paths (Pulse stage-2 scoring, embedding throughput,
      feed/facet queries, VRAM residency under concurrent load). Produces the evidence

@@ -98,7 +98,7 @@ class Qwen3Reranker:
             model_name,
             torch_dtype=self._dtype,
             revision=QWEN3_RERANKER_REVISION,
-        ).to(self._device)
+        ).to(self._device)  # type: ignore[arg-type]
         self._model.eval()
 
         # Cache token IDs for "yes" and "no" once at construction time.
@@ -175,7 +175,9 @@ class Qwen3Reranker:
                 # output.scores is a tuple of length max_new_tokens; each
                 # element has shape [batch_size, vocab_size].  We take the
                 # first (and only) step, then squeeze the batch dimension.
-                logits = output.scores[0][0]  # shape: [vocab_size]
+                # output.scores typed as Optional[LongTensor] in transformers stubs
+                # but is always tuple[Tensor, ...] when output_scores=True.
+                logits = output.scores[0][0]  # type: ignore[index,union-attr]  # shape: [vocab_size]
                 score = float(logits[self._yes_id] - logits[self._no_id])
                 indexed_scores.append((idx, score))
 

@@ -19,7 +19,6 @@
 		max_size 50MB
 	}
 	# Rate limiting: not in scope for single-user pre-launch.
-	# See docs/plans/2026-05-07-deep-audit-security-review-v2.md W2-25.
 	# HSTS belongs at the TLS terminator only, not at the inner nginx listener.
 	header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 	header >X-Frame-Options "DENY"

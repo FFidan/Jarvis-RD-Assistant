@@ -118,3 +118,4 @@ CLAUDE.md
 .codex
 docs/agents-shim.md
 docs/AGENTIC_WORKFLOW.md
+scripts/verify-edits.sh

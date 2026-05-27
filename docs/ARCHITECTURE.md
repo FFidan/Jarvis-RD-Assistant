@@ -6,10 +6,8 @@ Telegram delivery.
 
 Related docs:
 
-- [../AGENTS.md](../AGENTS.md) - harness boot order and stabilization guardrails.
 - [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) - coding, API, DB, anti-hallucination, and testing
   standards.
-- [AGENTIC_WORKFLOW.md](AGENTIC_WORKFLOW.md) - agent evidence rules and Desloppify workflow.
 - [PRD.md](PRD.md) - product requirements and durable Pulse design.
 - [known-residual-risks.md](known-residual-risks.md) - accepted risks and reopen criteria.
 

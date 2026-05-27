@@ -6,33 +6,7 @@ This document tracks acknowledged-but-deferred risks. Each entry links the origi
 
 Related docs:
 
-- [../AGENTS.md](../AGENTS.md) - when agents must consult this file.
-- [AGENTIC_WORKFLOW.md](AGENTIC_WORKFLOW.md) - how residual risks affect planning and closeout.
 - [ARCHITECTURE.md](ARCHITECTURE.md) - runtime boundaries affected by residual risks.
-- [archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md](archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md) - archived manual
-  score-work plan after the Desloppify refresh (PAUSED 2026-05-02).
-
-## DESLOPPIFY-TRIAGE-001 — review issue IDs cannot pass observe confirmation
-
-**Current state:** the 2026-04-29 Desloppify refresh imported 62 current review
-issues, and the staged observe runner analysed them. Confirmation failed because
-Desloppify's observe citation parser only accepts issue IDs shaped like
-`review::deadbeef` or bare hex suffixes, while current review IDs are
-descriptive strings such as `review::.::holistic::type_safety::...`.
-
-**Impact:** staged triage can produce useful output, but the confirmation gate
-cannot be completed for the refreshed review queue without a Desloppify parser
-fix or a changed issue-ID format.
-
-**Mitigation:** keep the run artifacts under `.desloppify/triage_runs/` and use
-[docs/archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md](archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md) as the current
-manual score-work plan.
-
-**Reopen criteria:** before relying on Desloppify staged triage as an automated
-gate again, update the parser to accept descriptive review IDs and rerun
-`desloppify plan triage --run-stages --runner codex`.
-
----
 
 ## PI-EDGE-002 / PI-EDGE-004 — paper-ownership row enforcement — CLOSED (Sprint 4)
 
@@ -247,13 +221,13 @@ All items below were raised in the 2026-04-29 deep audit and closed in commits
 | NI-6 | Migration-lint script anchors its `cwd` to the repo root, not the caller's shell cwd | 6b8b83e |
 **Still open from Sprint 6:** zotero.remove handler, inbox auto-prune cron, trash auto-purge cron, bulk-dismiss-by-topic, saved-search alerts, and migration 046 transition guard retirement — all tracked in the Sprint 6 deferrals section above. M1 (multi-tenant user resolver) is now CLOSED — see Sprint 6 deferrals.
 
-**Phase A — Paper Lifecycle Redesign — LANDED (2026-05-01, version 1.3.0):** the WS-AH2 sprint shipped on top of the *legacy* lifecycle schema (saved/dismissed/starred/archived booleans + status enum). [docs/archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) collapsed that schema to a single `state` ENUM + orthogonal `starred` flag + separate `recommendation_feedback` table (migrations 047 + 048 + 049). The legacy contract docs `docs/specs/paper-lifecycle-contract.md` and `docs/specs/feed-information-architecture.md` were **deleted** (per spec §11 — clean cut, no deprecated stubs). The WS-AH2 fixes above are *preserved* (NEW-H2, NI-1, NI-2, NI-3, H5, NI-4, NI-5, NI-6) or *structurally superseded* (NEW-M8, DRY-1, L12) by the redesign — see redesign spec §15 for the full disposition table. Phase B sprints (Instructor / Langfuse / mxbai-rerank / Taskiq) follow; see the META plan at [docs/archive/2026-05/old-plans/2026-04-30-marathon-meta.md](archive/2026-05/old-plans/2026-04-30-marathon-meta.md).
+**Phase A — Paper Lifecycle Redesign — LANDED (2026-05-01, version 1.3.0):** the WS-AH2 sprint shipped on top of the *legacy* lifecycle schema (saved/dismissed/starred/archived booleans + status enum). The paper-lifecycle-redesign spec (archived, not in public tree) collapsed that schema to a single `state` ENUM + orthogonal `starred` flag + separate `recommendation_feedback` table (migrations 047 + 048 + 049). The legacy contract docs `docs/specs/paper-lifecycle-contract.md` and `docs/specs/feed-information-architecture.md` were **deleted** (per spec §11 — clean cut, no deprecated stubs). The WS-AH2 fixes above are *preserved* (NEW-H2, NI-1, NI-2, NI-3, H5, NI-4, NI-5, NI-6) or *structurally superseded* (NEW-M8, DRY-1, L12) by the redesign — see redesign spec §15 for the full disposition table. Phase B sprints (Instructor / Langfuse / mxbai-rerank / Taskiq) follow; see the META plan (marathon-meta, archived, not in public tree).
 
 ---
 
 ## Falsified findings — 2026-04-29 audit
 
-The deep-audit (commit af1af21) flagged two findings that direct re-Read against HEAD falsified:
+The 2026-04-29 audit (commit af1af21) flagged two findings that direct re-Read against HEAD falsified:
 
 ### M5 — `safe_for_prompt(mode="strip")` does NOT silently pass BIDI
 
@@ -298,7 +272,7 @@ The 2026-05-24 pristine-pass review found `libs/jarvis_common/jarvis_common/auth
 
 **Reopen criteria:** rerun this analysis if CI flake rate on `cross-user-isolation` job exceeds 1 failure per 10 runs over a 2-week window. Next escalation: pin `asyncpg<known-good>` OR switch the cross-user-isolation job to a `services:` Postgres container (managed by GitHub Actions, healthcheck-gated) instead of fixture-owned Docker.
 
-**Source:** 2026-05-24 deep-audit Wave 6 (W6-01) investigation. Audit doc: `docs/audit/2026-05-24-deep-audit-security-review.md`.
+**Source:** 2026-05-24 audit round 6 (W6-01) investigation.
 
 ---
 
@@ -320,7 +294,7 @@ The 2026-05-24 pristine-pass review found `libs/jarvis_common/jarvis_common/auth
 
 **Mitigation:** Add `@field_validator` to `SecretsSettings.smtp_host/from/user/pass` rejecting empty-string values OR add a startup-time health check that asserts the SMTP configuration is internally consistent.
 
-**Source:** Wave 2 W3-CF11 xfail-test surfacing; Wave-Gate-2 Axis 2 finding (confidence 88).
+**Source:** W3-CF11 xfail-test surfacing during the 2026-05 audit round 2.
 
 ## BUILDER-STAGE-BUILD-UNHASHED-1 — Dockerfile jarvis-common-builder installs `build` without `--require-hashes`
 
@@ -340,37 +314,35 @@ The 2026-05-24 pristine-pass review found `libs/jarvis_common/jarvis_common/auth
 
 Deferred per YAGNI — Stage 1's build environment is not user-reachable and the wheel produced is internally signed via the runtime hash gate's `--no-deps` install pattern.
 
-**Source:** Wave-Gate 2 R-SECURITY T3 finding (confidence 80).
+**Source:** 2026-05 audit round 2 R-SECURITY T3 finding.
 
-## W2-CARRY-FORWARDS — Wave-Gate 2 surfaced gaps (deferred-with-rationale)
+## Deferred items from the 2026-05 audit round 2
 
-- **W2-CF1** — `libs/jarvis_common/jarvis_common/testing_embedder.py:_make_embedder` lost its `-> Embedder` return annotation (replaced with `# type: ignore[return]`). Cleaner pattern is `if TYPE_CHECKING: from paper_ingestion... import Embedder` + quoted forward-ref. Defer — `_make_embedder` is `_`-private; downstream callers in the test suite all access the returned object dynamically (AsyncMock attributes), so type-checker coverage loss is negligible. Reopen if `_make_embedder` is promoted to a public API.
+- **AR2-01** — `libs/jarvis_common/jarvis_common/testing_embedder.py:_make_embedder` lost its `-> Embedder` return annotation (replaced with `# type: ignore[return]`). Cleaner pattern is `if TYPE_CHECKING: from paper_ingestion... import Embedder` + quoted forward-ref. Defer — `_make_embedder` is `_`-private; downstream callers in the test suite all access the returned object dynamically (AsyncMock attributes), so type-checker coverage loss is negligible. Reopen if `_make_embedder` is promoted to a public API.
 
-- **W2-CF2** — No CI `docker build` smoke step for the three new multi-stage Dockerfiles (`paper_ingestion`, `learning_engine`, `telegram_bot`). The Wave 2 implementer ran local `docker build` smoke for all 3 services and verified `--require-hashes` is on every runtime-stage pip install. Defer to **Wave 11 (CI hardening)** — that wave already plans `pip-audit + npm audit + osv-scanner` jobs; a `docker-build-smoke` matrix entry can land in the same workflow edit.
+- **AR2-02** — No CI `docker build` smoke step for the three new multi-stage Dockerfiles (`paper_ingestion`, `learning_engine`, `telegram_bot`). The round-2 implementer ran local `docker build` smoke for all 3 services and verified `--require-hashes` is on every runtime-stage pip install. A `docker-build-smoke` matrix entry should land alongside the planned `pip-audit + npm audit + osv-scanner` jobs.
 
-## W3-CARRY-FORWARDS — Wave-Gate 3 surfaced gaps (deferred-with-rationale)
+## Deferred items from the 2026-05 audit round 3
 
-- **W3-CF1** — `services/paper_ingestion/paper_ingestion/routers/setup.py` 503 fail-closed path has no test. A regression back to fail-open (`configured = False` on DB error) would re-enable a duplicate-admin path silently. Add unit test in next test-infra cleanup.
-- **W3-CF2** — `services/paper_ingestion/paper_ingestion/routers/settings_ai.py` 502 path has no test asserting (a) the new generic detail string and (b) that `str(exc)` is NOT reflected. Reopen with next testing-pass.
-- **W3-CF3** — `sync_reviews` UPDATE concurrent-race coverage gap. The new contract test exercises sequential cross-user calls, where the fetchrow guard returns `skipped=1` BEFORE the UPDATE predicate is reached. The UPDATE's `AND user_id = $4` is therefore defense-in-depth — structurally untestable at unit / contract level without simulating concurrent transactions. Reopens W3-CF9 from the prior cycle.
-- **W3-CF4 — deep-execute skill enhancement** — Wave 3 surfaced a "ghost-edit" failure mode in haiku-model subagents (W3-T7 and W3-T8). Both reported `STATUS: COMPLETE` with detailed file-by-file outcomes, but no worktree showed actual on-disk edits. Recovery cost: ~2 inline orchestrator passes. Reopen as a deep-execute skill enhancement: have parent verify `git diff` shows the claimed `Files changed:` BEFORE Stage 1 review fires, not just at post-edit verification.
-- **MED-LE-05 plan defect** — the plan's `{} → None` recommendation for `cards.py:54` was incompatible with the schema (`evidence jsonb DEFAULT '{}'::jsonb NOT NULL`). Reverted inline in wave3-fix. The audit finding (cosmetic "use None for empty evidence") was over-zealous; the column's NOT NULL constraint is the source of truth.
+- **AR3-01** — `services/paper_ingestion/paper_ingestion/routers/setup.py` 503 fail-closed path has no test. A regression back to fail-open (`configured = False` on DB error) would re-enable a duplicate-admin path silently. Add unit test in next test-infra cleanup.
+- **AR3-02** — `services/paper_ingestion/paper_ingestion/routers/settings_ai.py` 502 path has no test asserting (a) the new generic detail string and (b) that `str(exc)` is NOT reflected. Reopen with next testing-pass.
+- **AR3-03** — `sync_reviews` UPDATE concurrent-race coverage gap. The new contract test exercises sequential cross-user calls, where the fetchrow guard returns `skipped=1` BEFORE the UPDATE predicate is reached. The UPDATE's `AND user_id = $4` is therefore defense-in-depth — structurally untestable at unit / contract level without simulating concurrent transactions.
+- **AR3-04 — plan defect** — the plan's `{} → None` recommendation for `cards.py:54` was incompatible with the schema (`evidence jsonb DEFAULT '{}'::jsonb NOT NULL`). Reverted inline. The audit finding (cosmetic "use None for empty evidence") was over-zealous; the column's NOT NULL constraint is the source of truth.
 
-## W4-CARRY-FORWARDS — Wave-Gate 4 surfaced gaps (deferred-with-rationale)
+## Deferred items from the 2026-05 audit round 4
 
-- **W4-CF1** (Sev 8) — `/api/papers/{id}/ask/stream` 404/422 router-path test missing. Wave 4 added explicit `except PaperNotFoundError → 404` / `except NoRelevantChunksError → 422` handlers in `ask_paper_stream` (rag.py:350-353), structurally verified, but no contract test exercises the stream endpoint end-to-end for these branches. Add a test that POSTs to the stream endpoint with a non-existent paper id and asserts `status_code == 404` (not an SSE error event).
-- **W4-CF2** (Sev 8) — `record_author_alert` ON CONFLICT semantics use AsyncMock only. The unit test in `libs/jarvis_common/tests/test_record_author_alert.py` mocks the connection and verifies Python-side return-value logic but cannot exercise the DB-level unique constraint behaviour. Add a live-PG contract test calling the helper twice with the same triple; assert second returns `False` and only one row exists in `author_alert_log`.
-- **W4-CF3** (Sev 7) — Per-paper 502 detail assertion in `services/paper_ingestion/tests/contract/test_rag_contract.py:829` only checks `code`; the cross-paper companion at 566-570 checks full dict (`status` + `message` + `code`). Expand to match cross-paper shape so a future divergence of the per-paper `detail` shape is caught.
-- **W4-CF4** (Sev 7) — `make_bot_config` callable injection has no negative test for wrong-shape `bot_config_cls`. Add a parametrized test that passes `object` (or another non-callable) and asserts a clear TypeError, plus the positive case verifying `BotConfig` produces a usable instance.
-- **W4-CF5** (Sev 7) — `BBT_LOCAL_BASE` lazy `__getattr__` resolution path is untested. Add (a) a test asserting `from ... import BBT_LOCAL_BASE` returns a non-stale value after a settings monkeypatch and (b) a test asserting `zotero_client.__getattr__("nonexistent")` raises `AttributeError`.
-- **W4-CF6 — process observation** — All 6 Wave-Gate 4 sonnet reviewers triaged the wave diff against the WRONG on-disk path (`<repo-root>/` parent master worktree, HEAD `c4b63c10`) instead of `<repo-root>.post-pristine/` (execution worktree, HEAD `82c26711`). Every axis except Test Coverage produced false-positive FAILs needing re-triage. Cost: ~2 orchestrator re-verification passes. Reopen as a deep-execute skill enhancement: inject the execution worktree path verbatim into every Wave-Gate reviewer prompt. **Wave 5 confirmed the mitigation works** — reviewers were given the worktree path explicitly and produced zero false-positives.
-- **W4-CF1..CF5 — CLOSED in Wave 5** (cf/w4cf1..cf5 commits 7514c5f7..beb0c95a). Streaming endpoint 404/422 test, record_author_alert live-PG contract, per-paper 502 detail parity, make_bot_config negative test, BBT_LOCAL_BASE lazy resolution test — all landed.
+- **AR4-01** (Sev 8) — `/api/papers/{id}/ask/stream` 404/422 router-path test missing. Round 4 added explicit `except PaperNotFoundError → 404` / `except NoRelevantChunksError → 422` handlers in `ask_paper_stream` (rag.py:350-353), structurally verified, but no contract test exercises the stream endpoint end-to-end for these branches. Add a test that POSTs to the stream endpoint with a non-existent paper id and asserts `status_code == 404` (not an SSE error event).
+- **AR4-02** (Sev 8) — `record_author_alert` ON CONFLICT semantics use AsyncMock only. The unit test in `libs/jarvis_common/tests/test_record_author_alert.py` mocks the connection and verifies Python-side return-value logic but cannot exercise the DB-level unique constraint behaviour. Add a live-PG contract test calling the helper twice with the same triple; assert second returns `False` and only one row exists in `author_alert_log`.
+- **AR4-03** (Sev 7) — Per-paper 502 detail assertion in `services/paper_ingestion/tests/contract/test_rag_contract.py:829` only checks `code`; the cross-paper companion at 566-570 checks full dict (`status` + `message` + `code`). Expand to match cross-paper shape so a future divergence of the per-paper `detail` shape is caught.
+- **AR4-04** (Sev 7) — `make_bot_config` callable injection has no negative test for wrong-shape `bot_config_cls`. Add a parametrized test that passes `object` (or another non-callable) and asserts a clear TypeError, plus the positive case verifying `BotConfig` produces a usable instance.
+- **AR4-05** (Sev 7) — `BBT_LOCAL_BASE` lazy `__getattr__` resolution path is untested. Add (a) a test asserting `from ... import BBT_LOCAL_BASE` returns a non-stale value after a settings monkeypatch and (b) a test asserting `zotero_client.__getattr__("nonexistent")` raises `AttributeError`.
+- **AR4-01..AR4-05 — CLOSED in round 5** (commits 7514c5f7..beb0c95a). Streaming endpoint 404/422 test, record_author_alert live-PG contract, per-paper 502 detail parity, make_bot_config negative test, BBT_LOCAL_BASE lazy resolution test — all landed.
 
-## W5-CARRY-FORWARDS — Wave-Gate 5 surfaced gaps (deferred-with-rationale)
+## Deferred items from the 2026-05 audit round 5
 
-- **W5-CF1** (Sev 7) — NCBI empty-email branch in `pubmed_source._base_params` (default `ncbi_email=""`) untested. The branch `if self._ncbi_email: params["email"] = self._ncbi_email` gates whether the `email` query param is sent. The existing test injects a non-empty `_ncbi_email` and asserts `email IS present`; no companion asserts `email IS ABSENT` when the default empty string is used. A regression removing the guard would not be caught.
-- **W5-CF2** (Sev 7) — Arxiv Retry-After cap boundary tests missing. Current test uses `Retry-After: 7200` (far above the 60s cap). Add parametrized boundary cases for 59s (passes through uncapped), 60s (exact match), 61s (capped to 60s) — protects against off-by-one in `min()` direction or `_MAX_RETRY_AFTER_SECONDS` constant drift.
-- **W5-CF3** (Sev 7) — CF-W4-CF1 `NoRelevantChunksError` 422 test asserts `status_code == 422` + JSON content-type but does NOT assert the response body. A regression where the handler returns 422 with an empty body would pass. Add `assert resp.json()["detail"] == <expected message>` matching the production raise.
+- **AR5-01** (Sev 7) — NCBI empty-email branch in `pubmed_source._base_params` (default `ncbi_email=""`) untested. The branch `if self._ncbi_email: params["email"] = self._ncbi_email` gates whether the `email` query param is sent. The existing test injects a non-empty `_ncbi_email` and asserts `email IS present`; no companion asserts `email IS ABSENT` when the default empty string is used. A regression removing the guard would not be caught.
+- **AR5-02** (Sev 7) — Arxiv Retry-After cap boundary tests missing. Current test uses `Retry-After: 7200` (far above the 60s cap). Add parametrized boundary cases for 59s (passes through uncapped), 60s (exact match), 61s (capped to 60s) — protects against off-by-one in `min()` direction or `_MAX_RETRY_AFTER_SECONDS` constant drift.
+- **AR5-03** (Sev 7) — AR4-01 `NoRelevantChunksError` 422 test asserts `status_code == 422` + JSON content-type but does NOT assert the response body. A regression where the handler returns 422 with an empty body would pass. Add `assert resp.json()["detail"] == <expected message>` matching the production raise.
 
 ## Container Hardening Exceptions (W9 — 2026-05-26)
 

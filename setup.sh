@@ -3,7 +3,6 @@
 #
 # Idempotent: second run with an existing .env prompts before clobbering.
 # macOS-safe: no `sed -i`, no GNU-only flags. Uses tempfile + mv.
-# See docs/superpowers/specs/2026-04-12-setup-simplification-design.md
 #
 # Non-interactive mode (CI / unattended installs):
 #   ./setup.sh --non-interactive [OPTIONS]

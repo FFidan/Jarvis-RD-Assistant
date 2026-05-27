@@ -12,12 +12,6 @@ below outrank archived notes.
 - [Contracts](contracts/README.md) — evergreen subsystem contracts.
 - [Known Residual Risks](known-residual-risks.md) — accepted risks and reopen criteria.
 
-## Current Roadmaps And Closeouts
-
-- [Post-v0.2.0 Roadmap](archive/2026-05/plans/2026-05-10-post-v02-roadmap.md) — remaining deferred work and closeout state.
-- [Deferred Roadmap Closeout Plan](archive/2026-05/superpowers-plans/2026-05-12-deferred-roadmap-closeout.md) — execution plan for Buckets C/E1/E2/G/H.
-- [Audit Gap Closeout](archive/2026-05/2026-05-12-audit-gap-closeout.md) — latest audit-gap implementation report.
-
 ## Operations
 
 - [User Guide](USER_GUIDE.md) — end-user reference: sign-in, surfaces, account recovery.

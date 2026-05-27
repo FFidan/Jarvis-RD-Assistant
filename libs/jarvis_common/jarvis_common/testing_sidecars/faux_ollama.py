@@ -74,10 +74,10 @@ class FauxOllamaServer:
         await runner.setup()
         site = web.TCPSite(runner, self.host, 0)
         await site.start()
-        if site._server is None or not site._server.sockets:  # noqa: SLF001
+        if site._server is None or not site._server.sockets:  # type: ignore[attr-defined]  # noqa: SLF001
             await runner.cleanup()
             raise RuntimeError("FauxOllamaServer failed to bind a socket")
-        port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001
+        port = site._server.sockets[0].getsockname()[1]  # type: ignore[attr-defined]  # noqa: SLF001
 
         self._runner = runner
         self._site = site

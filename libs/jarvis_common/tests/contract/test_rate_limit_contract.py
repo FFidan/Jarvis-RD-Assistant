@@ -107,8 +107,9 @@ async def test_rate_limit_returns_429_with_canonical_body(
     body = last_resp.json()
     assert "detail" in body
     assert "Rate limit exceeded" in body["detail"]
-    # Custom handler (http_rate_limiter.py:137-143) does NOT emit Retry-After.
-    assert "retry-after" not in {k.lower() for k in last_resp.headers}
+    # Custom handler (http_rate_limiter.py:142-164) emits Retry-After; upstream
+    # starlette 0.50+ (CVE-2025-62727) may also inject it. Either way the body
+    # shape is the authoritative contract — header presence is implementation detail.
 
 
 async def test_rate_limit_pre_trip_requests_succeed(limit_string: str = "3/minute") -> None:

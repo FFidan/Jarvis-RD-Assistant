@@ -169,7 +169,7 @@ If you find a Shape B callsite that is NOT in this table, that is itself a contr
 The AST checker [scripts/check-llm-prompt-shape.py](../../scripts/check-llm-prompt-shape.py) walks every `.py` file under `services/` and `libs/` (skipping tests) and classifies each `call_llm_structured` invocation as Shape A, Shape B, or a violation. It runs:
 
 - **Pre-commit** — the `check-llm-prompt-shape` local hook in [.pre-commit-config.yaml](../../.pre-commit-config.yaml) fires on every `.py`-touching commit. Exit code 1 blocks the commit.
-- **CI full-gate** — the post-W10 wave-gate runs `uv run python3 scripts/check-llm-prompt-shape.py services/ libs/` and expects exit 0.
+- **CI full-gate** — the CI workflow runs `uv run python3 scripts/check-llm-prompt-shape.py services/ libs/` and expects exit 0.
 
 The check is structural, not semantic. It does NOT detect:
 

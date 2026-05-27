@@ -110,17 +110,28 @@ describe('ChapterPane', () => {
   });
 
   it('shows section headings with resolved data counts when project is supplied', async () => {
+    const taskDefaults = {
+      parent_task_id: null,
+      description: null,
+      priority: 0,
+      deadline: null,
+      estimated_hours: null,
+      actual_hours: null,
+      sort_order: 0,
+      completed_at: null,
+      updated_at: '2026-01-01T00:00:00Z',
+    };
     mockFetchTasks.mockResolvedValue([
-      { id: 1, title: 'Task A', status: 'todo', project_id: 1, created_at: '2026-01-01T00:00:00Z' },
-      { id: 2, title: 'Task B', status: 'in_progress', project_id: 1, created_at: '2026-01-01T00:00:00Z' },
-      { id: 3, title: 'Task C', status: 'done', project_id: 1, created_at: '2026-01-01T00:00:00Z' },
+      { id: 1, title: 'Task A', status: 'todo', project_id: 1, created_at: '2026-01-01T00:00:00Z', ...taskDefaults },
+      { id: 2, title: 'Task B', status: 'in_progress', project_id: 1, created_at: '2026-01-01T00:00:00Z', ...taskDefaults },
+      { id: 3, title: 'Task C', status: 'done', project_id: 1, created_at: '2026-01-01T00:00:00Z', ...taskDefaults },
     ]);
     mockFetchMilestones.mockResolvedValue([
-      { id: 1, title: 'M1', project_id: 1, status: 'pending', due_date: null, created_at: '2026-01-01T00:00:00Z' },
-      { id: 2, title: 'M2', project_id: 1, status: 'completed', due_date: null, created_at: '2026-01-01T00:00:00Z' },
+      { id: 1, name: 'M1', project_id: 1, completed: false, deadline: null, description: null, completed_at: null, created_at: '2026-01-01T00:00:00Z' },
+      { id: 2, name: 'M2', project_id: 1, completed: true, deadline: null, description: null, completed_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z' },
     ]);
     mockFetchQuestions.mockResolvedValue([
-      { id: 1, question: 'Q1?', project_id: 1, created_at: '2026-01-01T00:00:00Z' },
+      { id: 1, body: 'Q1?', project_id: 1, created_at: '2026-01-01T00:00:00Z' },
     ]);
     mockFetchActivity.mockResolvedValue([]);
 
