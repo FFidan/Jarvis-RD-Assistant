@@ -1,24 +1,22 @@
 """PDF processing pipeline.
 
-Downloads PDFs via httpx, extracts text with Marker (Markdown + LaTeX math),
-generates page snapshots at 150 DPI via PyMuPDF, and orchestrates chunking +
-embedding storage.
+Downloads PDFs via httpx, extracts text with Docling (Markdown + per-page
+provenance), generates page snapshots at 150 DPI via PyMuPDF, and orchestrates
+page-bounded chunking + embedding storage.
 """
 
 import asyncio
-import functools
 import ipaddress
 import logging
 import socket
+import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-import fitz  # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Marker
+import fitz  # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Docling
 import httpx
 from jarvis_common.settings import get_core_settings
-from marker.converters.pdf import PdfConverter
-from marker.models import create_model_dict
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.ingestion.embedder import Embedder
@@ -34,9 +32,6 @@ __all__ = [
     "MAX_PDF_SIZE",
     "SNAPSHOT_DPI",
     "SNAPSHOT_STORAGE_PATH",
-    "extract_text",
-    "_extract_text_sync",
-    "_get_marker_models",
     "_validate_pdf_url",
 ]
 
@@ -58,73 +53,90 @@ ALLOWED_PDF_DOMAINS: frozenset[str] = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# Marker PDF text extraction (replaces fitz-based text extraction)
+# Docling PDF text extraction (page-bounded provenance; replaces Marker)
 # ---------------------------------------------------------------------------
 
+# Separator between per-page markdown segments in the assembled full_text.
+_PAGE_SEP = "\n\n"
 
-@functools.lru_cache(maxsize=1)
-def _get_marker_models():
-    """Lazy-load Marker models (expensive, cached after first call).
+_converter = None
+_converter_lock = threading.Lock()
 
-    ``@lru_cache(maxsize=1)`` ensures the expensive ``create_model_dict()``
-    call runs at most once per process. Python's GIL plus lru_cache's internal
-    lock makes this safe under concurrent calls without a separate threading.Lock.
+
+def _build_converter():
+    """Construct the Docling converter (RapidOCR; optional offline model dir)."""
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
+    options = PdfPipelineOptions(
+        do_ocr=True,
+        ocr_options=RapidOcrOptions(),
+        artifacts_path=get_paper_ingestion_settings().docling_artifacts_path,
+    )
+    logger.info("Building Docling converter (first call may download models, ~30s)...")
+    return DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
+    )
+
+
+def _get_docling_converter():
+    """Return the process-wide Docling converter, building it once on first use.
+
+    Double-checked locking: the converter loads layout/OCR models (expensive)
+    but is reusable once built; this serializes the one-time build without
+    locking steady-state conversions.
     """
-    logger.info("Loading Marker PDF models (first call, may take ~30s)...")
-    models = create_model_dict()
-    logger.info("Marker models loaded.")
-    return models
+    global _converter
+    if _converter is None:
+        with _converter_lock:
+            if _converter is None:
+                _converter = _build_converter()
+    return _converter
 
 
-def _extract_text_sync(pdf_path: Path) -> tuple[str, list[tuple[int, int]]]:
-    """Synchronous Marker extraction (runs in thread pool).
+def _extract_text_sync(pdf_path: Path) -> tuple[str, list[tuple[int, int, int]]]:
+    """Synchronous Docling extraction (runs in thread pool).
+
+    Assembles ``full_text`` by concatenating each page's Markdown export and
+    records an exact char-range anchor per page, so page numbers come straight
+    from Docling provenance (the 1-indexed physical page, matching snapshots).
 
     Returns
     -------
-    tuple[str, list[tuple[int, int]]]
-        ``(full_text, page_boundaries)`` where full_text is Markdown with
-        LaTeX math and page_boundaries is a list of ``(start_char, end_char)``
-        tuples (index 0 = page 1).
+    tuple[str, list[tuple[int, int, int]]]
+        ``(full_text, page_anchors)`` where each anchor is
+        ``(start_char, end_char, page_no)`` over ``full_text`` in ascending
+        ``start_char`` order.
     """
-    models = _get_marker_models()
-    converter = PdfConverter(artifact_dict=models)
-    rendered = converter(str(pdf_path))
-    full_text = rendered.markdown
+    document = _get_docling_converter().convert(str(pdf_path)).document
 
-    # Build page boundaries from metadata
-    page_boundaries: list[tuple[int, int]] = []
-    if hasattr(rendered, "metadata") and rendered.metadata:
-        page_stats = rendered.metadata.get("page_stats", [])
-        if not page_stats:
-            page_boundaries = [(0, len(full_text))]
-        else:
-            # Approximate: divide text evenly across pages
-            total_pages = len(page_stats)
-            chars_per_page = len(full_text) // max(total_pages, 1)
-            for i in range(total_pages):
-                start = i * chars_per_page
-                end = len(full_text) if i == total_pages - 1 else (i + 1) * chars_per_page
-                page_boundaries.append((start, end))
-    else:
-        page_boundaries = [(0, len(full_text))]
+    parts: list[str] = []
+    page_anchors: list[tuple[int, int, int]] = []
+    cursor = 0
+    for page_no in sorted(document.pages):
+        page_md = document.export_to_markdown(page_no=page_no)
+        if not page_md:
+            continue
+        parts.append(page_md)
+        page_anchors.append((cursor, cursor + len(page_md), page_no))
+        cursor += len(page_md) + len(_PAGE_SEP)
 
-    return full_text, page_boundaries
+    return _PAGE_SEP.join(parts), page_anchors
 
 
-async def extract_text(pdf_path: Path) -> tuple[str, list[tuple[int, int]]]:
-    """Extract text from PDF using Marker, returning Markdown with LaTeX math.
+async def extract_text(pdf_path: Path) -> tuple[str, list[tuple[int, int, int]]]:
+    """Extract Markdown + per-page anchors from a PDF using Docling.
 
-    Runs Marker in a thread pool since it is CPU-bound.
+    Runs the (CPU/GPU-bound) conversion in a thread pool.
 
     Returns
     -------
-    tuple[str, list[tuple[int, int]]]
-        ``(full_text, page_boundaries)`` where page_boundaries is a list of
-        ``(start_char, end_char)`` tuples for each page (1-indexed).
+    tuple[str, list[tuple[int, int, int]]]
+        ``(full_text, page_anchors)`` — see :func:`_extract_text_sync`.
     """
     loop = asyncio.get_running_loop()
-    full_text, page_boundaries = await loop.run_in_executor(None, _extract_text_sync, pdf_path)
-    return full_text, page_boundaries
+    return await loop.run_in_executor(None, _extract_text_sync, pdf_path)
 
 
 async def _validate_pdf_url(url: str) -> None:
@@ -282,7 +294,7 @@ class PDFProcessor:
         )
         return pdf_path
 
-    # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Marker
+    # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Docling
 
     def generate_snapshots(self, pdf_path: Path, paper_id: int) -> list[Path]:
         """Generate PNG snapshots of each page at 150 DPI.
@@ -355,8 +367,8 @@ class PDFProcessor:
         tuple[str, list[ChunkForEmbedding], list[str]]
             ``(full_text, chunks, qdrant_point_ids)``
         """
-        # 1. Extract text and page boundaries via Marker (CPU-bound, runs in thread pool)
-        full_text, page_boundaries = await extract_text(pdf_path)
+        # 1. Extract Markdown + per-page anchors via Docling (runs in thread pool)
+        full_text, page_anchors = await extract_text(pdf_path)
 
         # Strip null bytes — common in PDF text, causes PostgreSQL UTF-8 errors
         full_text = full_text.replace("\x00", "")
@@ -368,8 +380,8 @@ class PDFProcessor:
         # 2. Generate page snapshots (sync I/O — run in thread pool)
         await asyncio.to_thread(self.generate_snapshots, pdf_path, paper_id)
 
-        # 3. Chunk text
-        chunks = await asyncio.to_thread(self.embedder.chunk_text, full_text, page_boundaries)
+        # 3. Chunk text (page-bounded: each chunk lies on exactly one page)
+        chunks = await asyncio.to_thread(self.embedder.chunk_text, full_text, page_anchors)
 
         # 4. Embed and store in Qdrant
         point_ids = await self.embedder.embed_and_store(paper_id, chunks, user_id=user_id)

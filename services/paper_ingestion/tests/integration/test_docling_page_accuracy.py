@@ -5,18 +5,19 @@
 and snapshot selection (``services/summarization.py``).  A wrong page reads as
 "the RAG hallucinated".
 
-Approach (W19, operator-approved): **page-bounded chunking**.  Each page's
-``export_to_markdown(page_no=...)`` is chunked on its own and tagged with that
-page, so every chunk cites exactly one page.  Docling assigns a paragraph that
-spans a page break to the page where it *begins*, so the only deviation from a
-line-level oracle is such a paragraph being cited at its start page — the
-content is still present there.  The hard guarantee this test enforces is that
-a citation is **never more than one page off** (no random/hallucinated pages),
-with most citations exact.
+This opt-in integration test runs the REAL production path —
+:func:`paper_ingestion.pdf_processor._extract_text_sync` (Docling, page-bounded
+provenance anchors) + :meth:`Embedder.chunk_text` (page-bounded chunking) — and
+scores each chunk's ``page_number`` against the PyMuPDF (``fitz``) physical
+page.  fitz is the oracle because ``PDFProcessor.generate_snapshots`` numbers
+snapshots by the same physical page — exactly what the user sees when clicking a
+citation.
 
-Oracle = PyMuPDF (``fitz``) physical page, because
-``PDFProcessor.generate_snapshots`` numbers snapshots by the same physical page
-— it is exactly what the user sees when clicking a citation.
+Docling assigns a paragraph that spans a page break to the page where it
+*begins*, so the only deviation from a line-level oracle is such a paragraph
+cited at its start page — the content is still present there.  The hard
+guarantee enforced here is that a citation is **never more than one page off**
+(no random/hallucinated pages), with most citations exact.
 
 Run: ``uv run pytest services/paper_ingestion/tests/integration/\
 test_docling_page_accuracy.py -m integration -v -s``
@@ -29,12 +30,13 @@ import re
 import tempfile
 import urllib.request
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import fitz
 import pytest
-import tiktoken
 
-from paper_ingestion.ingestion.chunking import chunk_text
+from paper_ingestion.ingestion.embedder import Embedder
+from paper_ingestion.pdf_processor import _extract_text_sync
 
 pytestmark = pytest.mark.integration
 
@@ -44,7 +46,6 @@ _ARXIV_IDS = ("1706.03762", "1810.04805", "2010.11929")
 _EXACT_FLOOR = 0.80  # most citations land on the exact physical page
 _ADJACENT_FLOOR = 0.98  # trust guarantee: a citation is never >1 page off
 _MIN_PROBES = 10
-_ENC = tiktoken.get_encoding("cl100k_base")
 _CACHE = Path(tempfile.gettempdir()) / "jarvis_docling_accuracy_pdfs"
 
 
@@ -60,32 +61,6 @@ def _ensure_pdf(arxiv_id: str) -> Path:
     if not dest.exists() or dest.stat().st_size < 10_000:
         pytest.skip(f"download of {arxiv_id} produced no usable PDF")
     return dest
-
-
-def _build_converter():
-    from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
-    from docling.document_converter import DocumentConverter, PdfFormatOption
-
-    options = PdfPipelineOptions(do_ocr=True, ocr_options=RapidOcrOptions())
-    return DocumentConverter(
-        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
-    )
-
-
-def _chunk_per_page(doc) -> list:
-    """Page-bounded chunking: chunk each page's markdown, tag with its page.
-
-    Mirrors the production extraction path; a single anchor per page means
-    ``chunk_text`` stamps every resulting chunk with that page number.
-    """
-    chunks: list = []
-    for page_no in sorted(doc.pages):
-        page_md = doc.export_to_markdown(page_no=page_no)
-        if not page_md.strip():
-            continue
-        chunks.extend(chunk_text(page_md, [(0, len(page_md), page_no)], _ENC))
-    return chunks
 
 
 def _norm(text: str) -> str:
@@ -117,8 +92,10 @@ def test_docling_page_accuracy(arxiv_id: str) -> None:
     fitz_pages = _fitz_pages(pdf_path)
     norm_pages = [_norm(p) for p in fitz_pages]
 
-    doc = _build_converter().convert(str(pdf_path)).document
-    chunks = _chunk_per_page(doc)
+    # Real production path: Docling extraction + page-bounded chunking.
+    full_text, page_anchors = _extract_text_sync(pdf_path)
+    embedder = Embedder(http_client=MagicMock(), qdrant_client=MagicMock())
+    chunks = embedder.chunk_text(full_text, page_anchors)
     chunk_norms = [(c.page_number, _norm(c.content)) for c in chunks]
 
     located = exact = adjacent = 0

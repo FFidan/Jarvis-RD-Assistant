@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-# conftest.py stubs fitz + marker + tiktoken + qdrant_client at module level
-# so we can safely import paper_ingestion.pdf_processor here.
+# fitz/tiktoken/qdrant_client/docling are installed in the venv, so importing
+# paper_ingestion.pdf_processor here is safe; the Docling converter is built
+# lazily on first use, not at import time.
 import paper_ingestion.pdf_processor as pdf_processor
 import pytest
 from paper_ingestion.pdf_processor import (
@@ -453,30 +454,70 @@ async def test_download_pdf_rejects_truncated_pdf(
 
 
 # ---------------------------------------------------------------------------
-# ING-003: page-boundary off-by-one
+# Docling extraction → exact per-page anchors (mocked converter; no models)
 # ---------------------------------------------------------------------------
 
 
-def test_page_boundaries_last_page_captures_all_chars() -> None:
-    """10-page doc whose length is not divisible by 10 must include all trailing chars."""
-    # Replicate the formula from _extract_text_sync in pdf_processor.py
-    full_text = "x" * 103  # 103 chars, not divisible by 10
-    total_pages = 10
-    chars_per_page = len(full_text) // max(total_pages, 1)  # = 10
+def _fake_docling_doc(pages: dict[int, str]) -> MagicMock:
+    """Stand-in DoclingDocument: ``.pages`` keys + ``.export_to_markdown(page_no=)``."""
+    doc = MagicMock()
+    doc.pages = pages
+    doc.export_to_markdown = MagicMock(side_effect=lambda page_no: pages[page_no])
+    return doc
 
-    page_boundaries: list[tuple[int, int]] = []
-    for i in range(total_pages):
-        start = i * chars_per_page
-        end = len(full_text) if i == total_pages - 1 else (i + 1) * chars_per_page
-        page_boundaries.append((start, end))
 
-    # Last page must reach exactly len(full_text)
-    assert page_boundaries[-1][1] == len(full_text), (
-        f"Last page end={page_boundaries[-1][1]} != {len(full_text)}"
-    )
-    # All chars covered
-    reconstructed = "".join(full_text[s:e] for s, e in page_boundaries)
-    assert reconstructed == full_text
+def _patch_converter(monkeypatch: pytest.MonkeyPatch, doc: MagicMock) -> None:
+    converter = MagicMock()
+    converter.convert = MagicMock(return_value=MagicMock(document=doc))
+    monkeypatch.setattr(pdf_processor, "_get_docling_converter", lambda: converter)
+
+
+def test_extract_text_sync_builds_exact_page_anchors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Anchors are exact char ranges over full_text, one per page, carrying the real page_no."""
+    pages = {1: "## A\n\nalpha text", 2: "## B\n\nbeta text", 3: "## C\n\ngamma text"}
+    _patch_converter(monkeypatch, _fake_docling_doc(pages))
+
+    full_text, anchors = pdf_processor._extract_text_sync(Path("/x.pdf"))
+
+    assert [page_no for _, _, page_no in anchors] == [1, 2, 3]
+    assert anchors == sorted(anchors)  # ascending start_char
+    for start, end, page_no in anchors:
+        assert full_text[start:end] == pages[page_no]
+
+
+def test_extract_text_sync_skips_empty_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty-rendering page is dropped without shifting the other anchors."""
+    pages = {1: "## A\n\nalpha", 2: "", 3: "## C\n\ngamma"}
+    _patch_converter(monkeypatch, _fake_docling_doc(pages))
+
+    full_text, anchors = pdf_processor._extract_text_sync(Path("/x.pdf"))
+
+    assert [page_no for _, _, page_no in anchors] == [1, 3]
+    for start, end, page_no in anchors:
+        assert full_text[start:end] == pages[page_no]
+
+
+def test_extract_text_sync_empty_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A document with no pages yields ('', [])."""
+    _patch_converter(monkeypatch, _fake_docling_doc({}))
+    assert pdf_processor._extract_text_sync(Path("/x.pdf")) == ("", [])
+
+
+def test_chunk_text_page_bounded_reindex_and_pages() -> None:
+    """Per-page chunking: chunk_index is globally unique and each chunk's page is exact."""
+    from paper_ingestion.ingestion.embedder import Embedder
+
+    embedder = Embedder(http_client=MagicMock(), qdrant_client=MagicMock())
+    page1 = "## Introduction\n\n" + "alpha sentence. " * 60
+    page2 = "## Methods\n\n" + "beta sentence. " * 60
+    full_text = page1 + "\n\n" + page2
+    anchors = [(0, len(page1), 1), (len(page1) + 2, len(page1) + 2 + len(page2), 2)]
+
+    chunks = embedder.chunk_text(full_text, anchors)
+
+    assert [c.chunk_index for c in chunks] == list(range(len(chunks)))  # unique + monotonic
+    assert all(c.page_number in (1, 2) for c in chunks)
+    assert {c.page_number for c in chunks} == {1, 2}  # both pages produced chunks
 
 
 # ---------------------------------------------------------------------------

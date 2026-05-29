@@ -137,6 +137,16 @@ class PaperIngestionSettings(JarvisCommonSettings):
         ),
     )
 
+    # --- Docling extraction ---------------------------------------------
+    docling_artifacts_path: str | None = Field(
+        default=None,
+        description=(
+            "Local path to prefetched Docling model artifacts "
+            "(DOCLING_ARTIFACTS_PATH).  None = Docling downloads + caches models "
+            "on first use; set this in offline/air-gapped deployments."
+        ),
+    )
+
     # --- Zotero / BBT ---------------------------------------------------
     bbt_base_url: str = Field(
         default="http://host.docker.internal:23119",

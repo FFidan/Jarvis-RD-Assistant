@@ -95,30 +95,37 @@ class Embedder(EmbeddingStoreMixin, EmbeddingSearchMixin):
         text: str,
         page_anchors: list[tuple[int, int, int]] | None = None,
     ) -> list[ChunkForEmbedding]:
-        """Chunk Markdown text respecting structure and math blocks.
+        """Chunk Markdown into per-page, embedding-sized chunks.
 
-        Strategy:
-        1. Split on section headings (## )
-        2. Within sections, split on paragraph boundaries (double newline)
-        3. Never split inside $$...$$ display math blocks
-        4. If a unit exceeds CHUNK_TOKEN_LIMIT, sub-split at paragraph boundaries
-        5. Accumulate small units until reaching target size
+        Each page's markdown (``text[start:end]`` for its anchor) is chunked on
+        its own, so a chunk never spans a page break and every chunk's
+        ``page_number`` is exact.  ``chunk_index`` is then made unique across the
+        whole document — Qdrant point IDs derive from ``paper_id:chunk_index``,
+        so per-page restarts would collide and silently drop chunks.
 
         Parameters
         ----------
         text : str
-            Full extracted Markdown text from the PDF.
+            Full extracted Markdown (per-page segments joined by a blank line).
         page_anchors : list[tuple[int, int, int]] | None
-            ``(start_char, end_char, page_no)`` anchors per rendered page,
-            with ``page_no`` the 1-indexed physical PDF page from Docling
-            provenance.
+            ``(start_char, end_char, page_no)`` anchors per rendered page, with
+            ``page_no`` the 1-indexed physical PDF page from Docling provenance.
+            ``None`` chunks ``text`` as a single unpaged unit.
 
         Returns
         -------
         list[ChunkForEmbedding]
             Chunks ready for embedding, with character offsets and page numbers.
         """
-        return _chunk_text(text, page_anchors, self._encoding)
+        if not page_anchors:
+            return _chunk_text(text, None, self._encoding)
+        chunks: list[ChunkForEmbedding] = []
+        for start, end, page_no in page_anchors:
+            page_md = text[start:end]
+            chunks.extend(_chunk_text(page_md, [(0, len(page_md), page_no)], self._encoding))
+        for index, chunk in enumerate(chunks):
+            chunk.chunk_index = index
+        return chunks
 
 
 async def delete_paper_vectors(paper_id: int) -> None:
