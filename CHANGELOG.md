@@ -6,6 +6,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 > An internal `v0.5.0` git tag was cut locally on 2026-05-24 for version-metadata alignment with `pyproject.toml` / `frontend/package.json`. The repo remains private; this release line stays semantically **unreleased** until a public release event. When that happens, this `[unreleased]` heading will be retitled to `[v0.5.0] - <release date>` (matching the existing `[vX.Y.Z]` style).
 
+### Dependency security & PDF extraction (2026-05-29)
+
+The PDF text-extraction engine was migrated from marker-pdf to **Docling**. This closed the last dependency CVEs that marker-pdf's transitive version caps had been blocking — Pillow (6 advisories), the `diskcache` transitive (dropped via instructor 1.15), and a transformers code-execution advisory (fixed in 5.x) — and moved openai to the 2.x line. It also made citation **page numbers exact**: chunks are now bounded to a single page using Docling's per-page provenance, so a cited page always matches the page snapshot the reader sees.
+
 ### Post-public-readiness audit (2026-05-26)
 
 A six-week internal audit-and-remediation pass closed roughly 120 findings ahead of the first public release. The themes below capture user-visible and operator-visible changes; commit-level detail follows in the per-area sections.

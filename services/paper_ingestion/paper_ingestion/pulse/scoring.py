@@ -14,20 +14,12 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 import pydantic
+from instructor.core import InstructorRetryException
 from jarvis_common.llm_client import (
     ChatCompletionOptions,
     call_llm_structured,
     observe,
 )
-
-try:
-    from instructor.core import InstructorRetryException
-except ImportError:
-    try:
-        from instructor.exceptions import InstructorRetryException  # type: ignore[no-redef]
-    except ImportError:
-        InstructorRetryException = Exception  # type: ignore[misc,assignment]
-
 
 if TYPE_CHECKING:
     import openai

@@ -503,6 +503,22 @@ def test_extract_text_sync_empty_document(monkeypatch: pytest.MonkeyPatch) -> No
     assert pdf_processor._extract_text_sync(Path("/x.pdf")) == ("", [])
 
 
+def test_extract_text_sync_strips_null_bytes_keeping_anchors_aligned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Null bytes are stripped per page BEFORE anchoring, so full_text[start:end]
+    still reconstructs each page (PostgreSQL rejects \\x00; stale offsets here
+    would misattribute page numbers — the exact failure this wave prevents)."""
+    pages = {1: "## A\x00\n\nalpha\x00 text", 2: "## B\n\nbeta\x00"}
+    _patch_converter(monkeypatch, _fake_docling_doc(pages))
+
+    full_text, anchors = pdf_processor._extract_text_sync(Path("/x.pdf"))
+
+    assert "\x00" not in full_text
+    for start, end, page_no in anchors:
+        assert full_text[start:end] == pages[page_no].replace("\x00", "")
+
+
 def test_chunk_text_page_bounded_reindex_and_pages() -> None:
     """Per-page chunking: chunk_index is globally unique and each chunk's page is exact."""
     from paper_ingestion.ingestion.embedder import Embedder

@@ -33,14 +33,7 @@ if TYPE_CHECKING:
     import openai
 
 
-try:
-    from instructor.core import InstructorRetryException
-except ImportError:
-    try:
-        from instructor.exceptions import InstructorRetryException  # type: ignore[no-redef]
-    except ImportError:
-        InstructorRetryException = Exception  # type: ignore[misc,assignment]
-
+from instructor.core import InstructorRetryException
 
 logger = logging.getLogger(__name__)
 

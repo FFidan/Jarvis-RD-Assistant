@@ -334,8 +334,7 @@ services:
       - ${LOCAL_PDF_PATH:-./shared/local_pdfs}:/data/local_pdfs:ro
       - ./db/migrations:/app/db/migrations:ro
       - ./config:/app/config:ro  # llm-tier-candidates.yaml for /api/settings/ai
-      - marker_models:/tmp/appuser  # Persist Marker/Surya model cache across restarts
-      - hf_cache:/tmp/hf_cache  # Persist HuggingFace cache across container recreation
+      - hf_cache:/tmp/hf_cache  # Persist HuggingFace cache (Docling layout/table models) across recreation
       - ./litellm:/app/litellm_config:ro  # shared config for model updates (SEC-002: ro)
     mem_limit: 6g
     deploy:
@@ -759,7 +758,6 @@ volumes:
   ollama_data:
   qdrant_data:
   postgres_backups:
-  marker_models:
   hf_cache:
   caddy_data:
   caddy_config:

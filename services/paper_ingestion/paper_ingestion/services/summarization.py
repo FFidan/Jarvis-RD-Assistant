@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import asyncpg
 import httpx
 import pydantic
+from instructor.core import InstructorRetryException
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_LONG,
@@ -299,15 +300,7 @@ async def generate_paper_summary(
     except Exception as exc:  # noqa: BLE001 — openai.APIStatusError / InstructorRetryException
         import openai  # noqa: PLC0415
 
-        _is_instructor_retry = False
-        try:
-            from instructor.core.exceptions import InstructorRetryException  # noqa: PLC0415
-
-            _is_instructor_retry = isinstance(exc, InstructorRetryException)
-        except ImportError:
-            pass
-
-        if isinstance(exc, openai.APIStatusError) or _is_instructor_retry:
+        if isinstance(exc, openai.APIStatusError | InstructorRetryException):
             raise LLMError("LLM API error during summarization") from None
         raise
 

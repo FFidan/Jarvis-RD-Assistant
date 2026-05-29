@@ -102,6 +102,9 @@ def _extract_text_sync(pdf_path: Path) -> tuple[str, list[tuple[int, int, int]]]
     records an exact char-range anchor per page, so page numbers come straight
     from Docling provenance (the 1-indexed physical page, matching snapshots).
 
+    Null bytes (common in PDF text, and rejected by PostgreSQL) are stripped
+    per page *before* measuring, so anchors stay aligned with ``full_text``.
+
     Returns
     -------
     tuple[str, list[tuple[int, int, int]]]
@@ -115,7 +118,7 @@ def _extract_text_sync(pdf_path: Path) -> tuple[str, list[tuple[int, int, int]]]
     page_anchors: list[tuple[int, int, int]] = []
     cursor = 0
     for page_no in sorted(document.pages):
-        page_md = document.export_to_markdown(page_no=page_no)
+        page_md = document.export_to_markdown(page_no=page_no).replace("\x00", "")
         if not page_md:
             continue
         parts.append(page_md)
@@ -367,11 +370,9 @@ class PDFProcessor:
         tuple[str, list[ChunkForEmbedding], list[str]]
             ``(full_text, chunks, qdrant_point_ids)``
         """
-        # 1. Extract Markdown + per-page anchors via Docling (runs in thread pool)
+        # 1. Extract Markdown + per-page anchors via Docling (null bytes already
+        #    stripped per page inside _extract_text_sync so anchors stay aligned).
         full_text, page_anchors = await extract_text(pdf_path)
-
-        # Strip null bytes — common in PDF text, causes PostgreSQL UTF-8 errors
-        full_text = full_text.replace("\x00", "")
 
         if not full_text.strip():
             logger.warning("No text extracted from PDF for paper %d", paper_id)

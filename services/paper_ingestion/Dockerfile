@@ -14,8 +14,9 @@ RUN pip install --no-cache-dir --require-hashes -r constraints-builder.txt \
 # --- Stage 2: runtime
 FROM ${PYTHON_BASE_IMAGE}
 
-# Set to "true" to install sentence-transformers + PyTorch (adds ~2 GB).
-# Required only when RERANKER_ENABLED=true at runtime.
+# Set to "true" to install the reranker extras (sentence-transformers, etc.).
+# Required only when RERANKER_ENABLED=true at runtime. PyTorch is now a base
+# dependency (Docling), so it is installed regardless of this flag.
 ARG INSTALL_OPTIONAL=false
 
 # Set to "true" to install py-spy profiling tool.
@@ -46,13 +47,15 @@ RUN pip install --no-cache-dir --require-hashes -r constraints.txt \
 
 RUN adduser --disabled-password --no-create-home appuser
 
-# Writable caches for HuggingFace, Surya/Marker model downloads, and Marker fonts
+# Writable HuggingFace cache: Docling's layout/table models (docling-ibm-models)
+# and transformers weights download here on first use (volume-backed in compose).
 ENV HF_HOME=/tmp/hf_cache HOME=/tmp/appuser
 RUN mkdir -p /tmp/hf_cache /tmp/appuser && chown -R appuser:appuser /tmp/hf_cache /tmp/appuser
-# Marker downloads a font to its package static/ dir on first use
+# RapidOCR downloads its ONNX models into its own site-packages dir on first use;
+# make that dir writable so appuser can populate it at runtime.
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
-    mkdir -p "$SITE_PKGS/static" && \
-    chown -R appuser:appuser "$SITE_PKGS/static"
+    mkdir -p "$SITE_PKGS/rapidocr/models" && \
+    chown -R appuser:appuser "$SITE_PKGS/rapidocr/models"
 
 COPY services/paper_ingestion/paper_ingestion/ ./paper_ingestion/
 COPY services/paper_ingestion/entrypoint.sh /app/entrypoint.sh
