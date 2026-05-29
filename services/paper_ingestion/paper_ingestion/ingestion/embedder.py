@@ -93,7 +93,7 @@ class Embedder(EmbeddingStoreMixin, EmbeddingSearchMixin):
     def chunk_text(
         self,
         text: str,
-        page_boundaries: list[tuple[int, int]] | None = None,
+        page_anchors: list[tuple[int, int, int]] | None = None,
     ) -> list[ChunkForEmbedding]:
         """Chunk Markdown text respecting structure and math blocks.
 
@@ -108,16 +108,17 @@ class Embedder(EmbeddingStoreMixin, EmbeddingSearchMixin):
         ----------
         text : str
             Full extracted Markdown text from the PDF.
-        page_boundaries : list[tuple[int, int]] | None
-            List of ``(start_char, end_char)`` per page.  Index 0 corresponds
-            to page 1 (1-indexed for user display).
+        page_anchors : list[tuple[int, int, int]] | None
+            ``(start_char, end_char, page_no)`` anchors per rendered page,
+            with ``page_no`` the 1-indexed physical PDF page from Docling
+            provenance.
 
         Returns
         -------
         list[ChunkForEmbedding]
             Chunks ready for embedding, with character offsets and page numbers.
         """
-        return _chunk_text(text, page_boundaries, self._encoding)
+        return _chunk_text(text, page_anchors, self._encoding)
 
 
 async def delete_paper_vectors(paper_id: int) -> None:

@@ -1,13 +1,16 @@
 """Markdown-aware text chunking for embedding.
 
-Extracted verbatim from ``Embedder.chunk_text`` (C1 God-class decomposition).
-The logic is byte-for-byte identical to the original method body; the only
-change is that the tiktoken encoding is passed in explicitly instead of being
-read from ``self._encoding``.  ``Embedder.chunk_text`` now delegates here.
+Extracted from ``Embedder.chunk_text`` (C1 God-class decomposition); the
+tiktoken encoding is passed in explicitly rather than read from
+``self._encoding``, and ``Embedder.chunk_text`` delegates here.  Page numbers
+are resolved from Docling per-page provenance anchors
+(``(start_char, end_char, page_no)``) via nearest-preceding lookup — accurate
+to the physical PDF page, not an even-width estimate.
 """
 
 from __future__ import annotations
 
+import bisect
 import re
 
 from paper_ingestion.ingestion.embedding_config import (
@@ -19,7 +22,7 @@ from paper_ingestion.models import ChunkForEmbedding
 
 def chunk_text(
     text: str,
-    page_boundaries: list[tuple[int, int]] | None,
+    page_anchors: list[tuple[int, int, int]] | None,
     encoding,
 ) -> list[ChunkForEmbedding]:
     """Chunk Markdown text respecting structure and math blocks.
@@ -35,9 +38,11 @@ def chunk_text(
     ----------
     text : str
         Full extracted Markdown text from the PDF.
-    page_boundaries : list[tuple[int, int]] | None
-        List of ``(start_char, end_char)`` per page.  Index 0 corresponds
-        to page 1 (1-indexed for user display).
+    page_anchors : list[tuple[int, int, int]] | None
+        ``(start_char, end_char, page_no)`` anchors in ascending ``start_char``
+        order, one per rendered page.  ``page_no`` is the 1-indexed physical
+        PDF page (matches the page snapshots), taken from Docling per-item
+        provenance.
     encoding :
         tiktoken encoding used for token counting (formerly ``self._encoding``).
 
@@ -51,13 +56,17 @@ def chunk_text(
     def token_count(s: str) -> int:
         return len(enc.encode(s))
 
+    anchor_starts = [a[0] for a in page_anchors] if page_anchors else []
+
     def find_page(char_offset: int) -> int | None:
-        if not page_boundaries:
+        if not page_anchors:
             return None
-        for page_idx, (start, end) in enumerate(page_boundaries):
-            if start <= char_offset < end:
-                return page_idx + 1  # 1-indexed
-        return len(page_boundaries)  # last page
+        # Nearest-preceding anchor: the page whose text region starts at or
+        # before this offset.  Offsets in the separator gap between two pages
+        # resolve to the earlier page; offsets before the first anchor resolve
+        # to the first page.
+        idx = max(bisect.bisect_right(anchor_starts, char_offset) - 1, 0)
+        return page_anchors[idx][2]
 
     # Split into sections by headings, preserving the heading with each section
     sections = re.split(r"(?=\n##\s)", text)

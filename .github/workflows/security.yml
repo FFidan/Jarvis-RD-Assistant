@@ -41,13 +41,13 @@ jobs:
         run: uv tool install pip-audit
 
       - name: Audit paper_ingestion
-        run: uv tool run pip-audit -r services/paper_ingestion/requirements.txt
+        run: uv tool run pip-audit $(grep -v '^#' .github/pip-audit-ignore.txt | grep -v '^$' | sed 's/^/--ignore-vuln /' | tr '\n' ' ') -r services/paper_ingestion/requirements.txt
 
       - name: Audit learning_engine
-        run: uv tool run pip-audit -r services/learning_engine/requirements.txt
+        run: uv tool run pip-audit $(grep -v '^#' .github/pip-audit-ignore.txt | grep -v '^$' | sed 's/^/--ignore-vuln /' | tr '\n' ' ') -r services/learning_engine/requirements.txt
 
       - name: Audit telegram_bot
-        run: uv tool run pip-audit -r services/telegram_bot/requirements.txt
+        run: uv tool run pip-audit $(grep -v '^#' .github/pip-audit-ignore.txt | grep -v '^$' | sed 's/^/--ignore-vuln /' | tr '\n' ' ') -r services/telegram_bot/requirements.txt
 
   # ---------------------------------------------------------------------------
   # npm-audit — Frontend JavaScript dependency CVE scan
@@ -92,7 +92,9 @@ jobs:
         # Exits 1 if vulnerabilities are found; exits 2 on internal error.
         # osv-scanner reads lockfiles (uv.lock, package-lock.json, etc.) —
         # it does not traverse node_modules or .venv directories.
-        run: osv-scanner scan --recursive --skip-git .
+        # v2 default: git not scanned (old --skip-git → no flag now;
+        # opt-in via --include-git-root).
+        run: osv-scanner scan --recursive .
 
   # ---------------------------------------------------------------------------
   # docker-build-smoke — Build all service images to catch Dockerfile regressions

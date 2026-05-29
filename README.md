@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-![My Day — JARVIS RD Assistant](docs/screenshots/walkthrough-02-my-day.png)
+![My Day — JARVIS RD Assistant](docs/screenshots/02-my-day.png)
 
 ## Highlights
 
@@ -19,13 +19,15 @@
 - 📂 **Projects** — lightweight task + milestone tracking tied to source papers, with optional Zotero push.
 
 <details>
-<summary><b>More screenshots</b> — Research Feed · Pulse · Discover</summary>
+<summary><b>More screenshots</b> — Dashboard · Pulse · Library · Discover · Knowledge Graph</summary>
 
-| Research Feed | Pulse Digest |
+| Dashboard | Pulse Deck |
 |---|---|
-| ![Research Feed](docs/screenshots/walkthrough-01-home.png) | ![Pulse digest](docs/screenshots/walkthrough-03-pulse-generating.png) |
-| **Discover (multi-source)** | **Background jobs at a glance** |
-| ![Discover](docs/screenshots/walkthrough-05-discover-multi-source.png) | ![Jobs popover](docs/screenshots/walkthrough-04-jobs-indicator-popover.png) |
+| ![Dashboard](docs/screenshots/01-home.png) | ![Pulse deck](docs/screenshots/03-pulse.png) |
+| **Library (inbox)** | **Discover (multi-source)** |
+| ![Library inbox](docs/screenshots/04-library.png) | ![Discover](docs/screenshots/05-discover.png) |
+| **Knowledge Graph** | |
+| ![Knowledge graph](docs/screenshots/06-knowledge-graph.png) | |
 
 </details>
 

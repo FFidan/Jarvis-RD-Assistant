@@ -2,6 +2,5 @@
 # Update pyproject.toml dependency groups, then rerun the export script.
 networkx>=3.2
 onnxruntime>=1.19
-optimum[onnxruntime]>=1.21
-scikit-learn>=1.4
+scikit-learn>=1.6.0
 sentence-transformers>=3.2.0

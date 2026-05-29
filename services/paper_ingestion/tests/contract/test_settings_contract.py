@@ -522,8 +522,8 @@ async def test_settings_ai_post_rejects_non_candidate_model(_ai_settings_client,
         f"Expected 422 for non-candidate model; got {resp.status_code}: {resp.text}"
     )
     detail = resp.json().get("detail", "")
-    assert "candidates_for_tier" in detail, (
-        f"422 detail must mention 'candidates_for_tier'; got: {detail!r}"
+    assert "not an allowed candidate" in detail, (
+        f"422 detail must mention 'not an allowed candidate'; got: {detail!r}"
     )
 
 

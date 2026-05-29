@@ -83,7 +83,7 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::POST /extraction-templates": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::PUT /extraction-templates/{template_id}": "shared extraction-template catalog",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/extractions.py::DELETE /extraction-templates/{template_id}": "shared extraction-template catalog",  # noqa: E501
-    "services/paper_ingestion/paper_ingestion/routers/settings.py::GET /sources": "shared source-plugin registry",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/settings_sources.py::GET /sources": "shared source-plugin registry",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/snapshots.py::GET /{paper_id}/{page}": "static PDF page image, path-traversal guarded",  # noqa: E501
     # Shared global topics catalog (`topics` has no user_id column;
     # per-user subscriptions live on the *subscription* routes, which do

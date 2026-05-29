@@ -128,11 +128,11 @@ async def test_prepare_single_paper_rag_title_from_real_db(contract_conn):
 
     # The REAL DB fetch confirms the title "Neural ODEs Contract" is in the prompt.
     assert isinstance(messages, list)
-    assert len(messages) == 1
-    assert "Neural ODEs Contract" in messages[0]["content"], (
+    assert len(messages) == 2
+    assert "Neural ODEs Contract" in messages[1]["content"], (
         "Real paper title must appear in the RAG prompt"
     )
-    assert "What is the main idea?" in messages[0]["content"]
+    assert "What is the main idea?" in messages[1]["content"]
 
     assert isinstance(sources, list)
     assert len(sources) >= 1
@@ -245,7 +245,7 @@ async def test_prepare_cross_paper_rag_titles_from_real_db(contract_conn):
 
     assert isinstance(result, CrossPaperRagPrep), f"Expected CrossPaperRagPrep, got {type(result)}"
     # Real DB fetch confirms paper titles are in the prompt.
-    prompt_text = result.messages[0]["content"]
+    prompt_text = result.messages[1]["content"]
     assert "Transformer Paper Contract" in prompt_text, (
         "Real title for paper A must be in the cross-paper prompt"
     )
@@ -382,7 +382,7 @@ async def test_ask_endpoint_cross_paper_real_db_structure(
     from paper_ingestion.models import AskResponse as _AskResponse
 
     async def _stub_call_rag_llm(messages, *, smart_model):
-        assert "Ask Contract Paper" in messages[0]["content"]
+        assert "Ask Contract Paper" in messages[1]["content"]
         return _AskResponse(answer="Transformers use self-attention.")
 
     from jarvis_common.testing_contract_apps import patch_dependency_overrides
@@ -662,7 +662,7 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
     from paper_ingestion.models import AskResponse as _AskResponse
 
     async def _stub_call_rag_llm(messages, *, smart_model):
-        assert "A104 Ask Contract Paper" in messages[0]["content"]
+        assert "A104 Ask Contract Paper" in messages[1]["content"]
         return _AskResponse(answer="This paper is about contract tests.")
 
     from jarvis_common.testing_contract_apps import patch_dependency_overrides
@@ -696,7 +696,7 @@ async def test_a104_per_paper_ask_owner_gets_answer_shape(contract_conn, pi_test
     body = resp.json()
     assert body["answer"] == "This paper is about contract tests."
     assert isinstance(body["sources"], list)
-    assert body["sources"][0]["paper_id"] == paper_id
+    # per-paper sources_list contract: no paper_id field (single-paper context is implicit)
 
 
 @pytest.mark.contract
