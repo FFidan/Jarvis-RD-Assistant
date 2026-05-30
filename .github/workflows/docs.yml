@@ -18,7 +18,7 @@ concurrency:
 jobs:
   build-deploy:
     name: MkDocs build (+ deploy on master)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: write   # needed for gh-pages branch push on master
 

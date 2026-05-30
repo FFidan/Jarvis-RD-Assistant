@@ -45,6 +45,14 @@ RUN pip install --no-cache-dir --require-hashes -r constraints.txt \
          pip install --no-cache-dir --require-hashes -r constraints-optional.txt; \
        fi
 
+# OpenCV (pulled transitively by Docling / docling-ibm-models) loads shared
+# libraries the slim base omits; without them cv2 — and thus Docling's RapidOCR
+# engine — fails to import at runtime. Placed after the (cached) pip layer so
+# rebuilds don't re-download the heavy torch/CUDA wheels.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 libxcb1 libsm6 libxext6 libxrender1 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN adduser --disabled-password --no-create-home appuser
 
 # Writable HuggingFace cache: Docling's layout/table models (docling-ibm-models)

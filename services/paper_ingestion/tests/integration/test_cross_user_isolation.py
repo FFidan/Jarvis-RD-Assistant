@@ -262,7 +262,7 @@ def _ids() -> list[str]:
 
 
 @pytest.mark.parametrize(("service", "method", "template", "kind"), _REGISTRY, ids=_ids())
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 async def test_user_b_cannot_reach_user_a_resource(
     service: str,
     method: str,

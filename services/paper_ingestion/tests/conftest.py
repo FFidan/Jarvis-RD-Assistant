@@ -40,8 +40,15 @@ from jarvis_common.testing import (  # noqa: F401
 
 # live_pg_dsn fixture for this service uses the "jarvis-rd" container prefix.
 from jarvis_common.testing import make_live_pg_dsn as _make_live_pg_dsn
+from jarvis_common.testing import make_live_pg_session_dsn as _make_live_pg_session_dsn
 
 live_pg_dsn = _make_live_pg_dsn("jarvis-rd")
+
+# Cross-user isolation suite: ONE session-scoped container (suffix -xuser) reused
+# across all ~53 parametrized cases, with per-test TRUNCATE+reseed in two_users.
+# Replaces the per-test throwaway container (CI-CROSS-USER-FLAKY-1: docker-daemon
+# saturation under ~53 serial container spins on the loaded self-hosted runner).
+xuser_pg_dsn = _make_live_pg_session_dsn("jarvis-rd")
 
 # Contract-layer fixtures (Wave 4): session-scoped Postgres + per-test txn rollback
 from jarvis_common.testing import (  # noqa: E402, F401
@@ -224,26 +231,24 @@ async def test_db_pool(live_pg_dsn):
 # ---------------------------------------------------------------------------
 # 6. Two-user cross-isolation fixture (WS-NEGATIVE-TESTS)
 #
+# ONE session-scoped pool over the shared -xuser container; per-test reset via
+# TRUNCATE + reseed (committed, so the real SessionMiddleware — which acquires
+# its OWN pool connection — sees the session rows under READ COMMITTED).
+#
 # TwoUsers, A_* constants, _seed_user, _seed_resources are imported from
 # jarvis_common.testing (D5 — moved in Wave 4).
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
-async def two_users(live_pg_dsn):
-    """Two real users, each with a valid session cookie and owned rows.
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def _xuser_pool(xuser_pg_dsn):
+    """Session-scoped asyncpg pool for the cross-user isolation suite.
 
-    Builds its OWN asyncpg pool against the disposable ``live_pg_dsn``
-    container and provisions a complete schema.
-
-    Wave-1 squash (c6145af3): ``db/init.sql`` now embodies all 88 migrations
-    including the auth tables (``users``, ``sessions``, ``magic_link_tokens``).
-    Apply ``init.sql`` alone; ``run_migrations`` over the now-empty
-    ``db/migrations/`` is a clean no-op that just confirms no 0089+ tail
-    exists yet.
-
-    The container is torn down by ``live_pg_dsn`` after the test, so no
-    row-level cleanup is required — the DB is disposable per test.
+    Applies db/init.sql + run_migrations() ONCE per session against the single
+    ``xuser_pg_dsn`` container. ``init=init_pg_connection`` registers the
+    JSON/JSONB codec exactly like the app's lifespan-built pool (response models
+    require dict, not str). Per-test reset is done by ``two_users``; this pool is
+    created and closed exactly once.
     """
     import asyncio
     from pathlib import Path
@@ -256,14 +261,11 @@ async def two_users(live_pg_dsn):
     init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
     migrations_dir = db_dir / "migrations"
 
-    # init=init_pg_connection registers the JSON/JSONB codec exactly like the
-    # app's lifespan-built pool, so JSONB columns deserialize to dicts (the
-    # response models require dict, not str).
     pool = None
     for attempt in range(10):
         try:
             pool = await asyncpg.create_pool(
-                live_pg_dsn, min_size=1, max_size=5, init=init_pg_connection
+                xuser_pg_dsn, min_size=1, max_size=5, init=init_pg_connection
             )
             break
         except (OSError, asyncpg.PostgresError):
@@ -273,31 +275,51 @@ async def two_users(live_pg_dsn):
     assert pool is not None
     try:
         async with pool.acquire() as conn:
-            await conn.execute(init_sql)  # embodies all schema incl. users/sessions
+            await conn.execute(init_sql)
         await run_migrations(pool, migrations_dir=migrations_dir)
-
-        async with pool.acquire() as conn:
-            user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.com")
-            user_b_id, cookie_b = await _seed_user(conn, "iso-user-b@example.com")
-            res_a = await _seed_resources(conn, user_a_id, "a")
-            await _seed_resources(conn, user_b_id, "b")
-
-        yield TwoUsers(
-            user_a_id=user_a_id,
-            user_b_id=user_b_id,
-            cookie_a=cookie_a,
-            cookie_b=cookie_b,
-            paper_id_a=res_a["paper_id"],
-            note_id_a=res_a["note_id"],
-            card_id_a=res_a["card_id"],
-            deck_id_a=res_a["deck_id"],
-            project_id_a=res_a["project_id"],
-            task_id_a=res_a["task_id"],
-            journal_id_a=res_a["journal_id"],
-            topic_id_a=res_a["topic_id"],
-            pulse_deck_id_a=res_a["pulse_deck_id"],
-            pulse_card_id_a=res_a["pulse_card_id"],
-            pool=pool,
-        )
+        yield pool
     finally:
         await pool.close()
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def two_users(_xuser_pool):
+    """Two real users, each with a valid session cookie and owned rows.
+
+    Resets the shared session DB to a pristine state (TRUNCATE every public
+    table, RESTART IDENTITY CASCADE) then runs the canonical seed — all
+    COMMITTED so the real SessionMiddleware can resolve the jarvis_session cookie
+    under READ COMMITTED. Truncate-of-all wipes any app writes from the prior
+    case (e.g. paper_user_state, user_topic_subscriptions) and prevents the 4
+    `global` topic-mutation cases from contaminating later cases. No teardown:
+    the next test truncates first; the session pool is owned by ``_xuser_pool``
+    and must NOT be closed here.
+    """
+    async with _xuser_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        names = ", ".join(f'"{r["tablename"]}"' for r in rows)
+        if names:
+            await conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+
+        user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.com")
+        user_b_id, cookie_b = await _seed_user(conn, "iso-user-b@example.com")
+        res_a = await _seed_resources(conn, user_a_id, "a")
+        await _seed_resources(conn, user_b_id, "b")
+
+    yield TwoUsers(
+        user_a_id=user_a_id,
+        user_b_id=user_b_id,
+        cookie_a=cookie_a,
+        cookie_b=cookie_b,
+        paper_id_a=res_a["paper_id"],
+        note_id_a=res_a["note_id"],
+        card_id_a=res_a["card_id"],
+        deck_id_a=res_a["deck_id"],
+        project_id_a=res_a["project_id"],
+        task_id_a=res_a["task_id"],
+        journal_id_a=res_a["journal_id"],
+        topic_id_a=res_a["topic_id"],
+        pulse_deck_id_a=res_a["pulse_deck_id"],
+        pulse_card_id_a=res_a["pulse_card_id"],
+        pool=_xuser_pool,
+    )

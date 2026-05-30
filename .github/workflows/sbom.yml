@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   python-sbom:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
@@ -34,7 +34,7 @@ jobs:
           path: sbom-python.json
 
   node-sbom:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: frontend

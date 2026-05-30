@@ -35,6 +35,7 @@ __all__ = [
     "make_request",
     # cluster 2
     "make_live_pg_dsn",
+    "make_live_pg_session_dsn",
     # cluster 3
     "make_contract_pg_dsn",
     "_make_contract_pool_fixture",
@@ -177,6 +178,26 @@ def _docker_cli(
     )
 
 
+def _docker_rm_best_effort(container: str) -> None:
+    """Force-remove *container*, tolerating a momentarily slow/contended daemon.
+
+    Teardown must never fail the test: on a loaded box ``docker rm -f`` can
+    exceed its timeout (the CI-CROSS-USER-FLAKY-1 flake — ``subprocess``
+    raises ``TimeoutExpired``, which ``check=False`` does NOT suppress).  Retry
+    once with backoff, then give up silently — the ``--rm`` flag already makes
+    the container self-remove, so a leaked name is harmless and the next run's
+    pre-clean handles it.
+    """
+    for attempt in range(2):
+        try:
+            _docker_cli(["rm", "-f", container], check=False, timeout=15)
+            return
+        except subprocess.TimeoutExpired:
+            if attempt == 1:
+                return
+            time.sleep(1)
+
+
 def _spin_pg_container(
     container_prefix: str,
     *,
@@ -197,13 +218,19 @@ def _spin_pg_container(
     # killed between `docker run` and the `finally: docker rm -f` teardown).
     # Exit 125 = daemon refused to start because the name already exists.
     # `docker rm -f` is a no-op when the name is not found (exit 1, ignored).
-    _docker_cli(["rm", "-f", container], check=False, timeout=10)
+    _docker_rm_best_effort(container)
 
-    # Retry loop: handles transient daemon refusals (exit 125) after pre-clean.
-    # Two attempts with 1s backoff is sufficient for the CI name-collision flake
-    # without adding a general retry framework.
-    last_exc: subprocess.CalledProcessError | None = None
-    for attempt in range(2):
+    # Startup retry loop (CI-CROSS-USER-FLAKY-1). Two transient daemon faults
+    # under load are tolerated, both with cleanup + backoff between attempts:
+    #   * exit 125  — daemon refused: name still in use after pre-clean.
+    #   * TimeoutExpired — `docker run` itself exceeded its deadline because the
+    #     daemon was momentarily saturated (e.g. dozens of sequential live-PG
+    #     containers in one job). A 60s timeout (vs the 30s default) absorbs a
+    #     slow image-create; 3 attempts cover a brief contention spike.
+    run_attempts = 3
+    run_timeout = 60.0
+    last_exc: BaseException | None = None
+    for attempt in range(run_attempts):
         try:
             _docker_cli(
                 [
@@ -221,17 +248,23 @@ def _spin_pg_container(
                     "-p",
                     "127.0.0.1::5432",
                     image,
-                ]
+                ],
+                timeout=run_timeout,
             )
             last_exc = None
             break
-        except subprocess.CalledProcessError as exc:
-            if exc.returncode != 125 or attempt == 1:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            is_name_collision = (
+                isinstance(exc, subprocess.CalledProcessError) and exc.returncode == 125
+            )
+            if not (is_name_collision or isinstance(exc, subprocess.TimeoutExpired)):
+                raise
+            if attempt == run_attempts - 1:
                 raise
             last_exc = exc
-            # Force-remove the conflicting container then retry once.
-            _docker_cli(["rm", "-f", container], check=False, timeout=10)
-            time.sleep(1)
+            # Clean up any half-created container, then back off and retry.
+            _docker_rm_best_effort(container)
+            time.sleep(2)
     if last_exc is not None:
         raise last_exc
     try:
@@ -318,7 +351,7 @@ def _spin_pg_container(
 
         yield f"postgresql://jarvis:{password}@127.0.0.1:{host_port}/jarvis"
     finally:
-        _docker_cli(["rm", "-f", container], check=False, timeout=10)
+        _docker_rm_best_effort(container)
 
 
 def make_live_pg_dsn(container_prefix: str):  # -> pytest fixture
@@ -349,6 +382,37 @@ def make_live_pg_dsn(container_prefix: str):  # -> pytest fixture
         )
 
     return live_pg_dsn
+
+
+def make_live_pg_session_dsn(container_prefix: str):  # -> pytest fixture (session scope)
+    """Return a SESSION-scoped live-PG ``xuser_pg_dsn`` fixture for *container_prefix*.
+
+    Unlike ``make_live_pg_dsn`` (function scope — one container per test), this
+    spawns ONE postgres:16.8 container for the whole session (suffix ``-xuser``).
+    The cross-user isolation suite uses it so its ~53 parametrized cases share a
+    single container with per-test TRUNCATE+reseed instead of 53 throwaway
+    containers (CI-CROSS-USER-FLAKY-1: docker-daemon saturation on the loaded
+    self-hosted runner). The ``-xuser`` suffix keeps it independent of the
+    contract suite's ``-contract`` session container so lifecycles never contend.
+    """
+
+    @pytest.fixture(scope="session")
+    def xuser_pg_dsn() -> Iterator[str]:
+        if os.environ.get("JARVIS_RUN_LIVE_PG") != "1":
+            pytest.skip(
+                "set JARVIS_RUN_LIVE_PG=1 to run the cross-user isolation suite "
+                "(DB-backed; session-scoped postgres container)"
+            )
+        if shutil.which("docker") is None:
+            pytest.fail("Docker CLI is required for the cross-user isolation suite")
+
+        yield from _spin_pg_container(
+            container_prefix,
+            container_suffix="-xuser",
+            password_prefix="jarvis-xuser",
+        )
+
+    return xuser_pg_dsn
 
 
 # ---------------------------------------------------------------------------

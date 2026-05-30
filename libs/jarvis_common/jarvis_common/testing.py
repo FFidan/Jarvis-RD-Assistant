@@ -41,6 +41,7 @@ __all__ = [
     "_make_pool_and_conn",
     "make_request",
     "make_live_pg_dsn",
+    "make_live_pg_session_dsn",
     "make_contract_pg_dsn",
     "_make_contract_pool_fixture",
     "_make_contract_conn_fixture",
@@ -88,6 +89,7 @@ from jarvis_common.testing_db import (  # noqa: F401
     _make_pool_and_conn,
     make_contract_pg_dsn,
     make_live_pg_dsn,
+    make_live_pg_session_dsn,
     make_pool_and_conn,
     make_request,
 )

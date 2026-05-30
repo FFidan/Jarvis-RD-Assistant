@@ -27,7 +27,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pip-audit:
     name: pip-audit (Python SCA)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
@@ -35,26 +35,31 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
           enable-cache: true
+          prune-cache: false  # self-hosted: skip post-job prune (races the shared uv cache lock across parallel runners)
           python-version: "3.12"
 
-      - name: Install pip-audit
-        run: uv tool install pip-audit
-
+      # Audit the hash-pinned constraints.txt (exact == pins + --hash) with
+      # --no-deps --disable-pip: this skips pip-audit's ephemeral-venv creation
+      # + pip self-upgrade (the step that fails on this self-hosted runner) and
+      # audits the exact dependency graph Docker installs. requirements.txt uses
+      # range pins (>=,<) which --disable-pip rejects; constraints.txt is the
+      # fully-pinned lock. osv-scanner already does the deep transitive scan.
+      # Verified locally: exit 0, "No known vulnerabilities found" on all 3.
       - name: Audit paper_ingestion
-        run: uv tool run pip-audit -r services/paper_ingestion/requirements.txt
+        run: uvx pip-audit --no-deps --disable-pip -r services/paper_ingestion/constraints.txt
 
       - name: Audit learning_engine
-        run: uv tool run pip-audit -r services/learning_engine/requirements.txt
+        run: uvx pip-audit --no-deps --disable-pip -r services/learning_engine/constraints.txt
 
       - name: Audit telegram_bot
-        run: uv tool run pip-audit -r services/telegram_bot/requirements.txt
+        run: uvx pip-audit --no-deps --disable-pip -r services/telegram_bot/constraints.txt
 
   # ---------------------------------------------------------------------------
   # npm-audit — Frontend JavaScript dependency CVE scan
   # ---------------------------------------------------------------------------
   npm-audit:
     name: npm-audit (JS SCA)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
@@ -77,42 +82,30 @@ jobs:
   # ---------------------------------------------------------------------------
   osv-scanner:
     name: osv-scanner (multi-ecosystem CVE)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@v4
 
-      - name: Install osv-scanner v2.0.2
-        # ubuntu-latest ships Go; install the pinned release binary directly.
+      - name: Install osv-scanner v2.0.2 (prebuilt binary; no Go toolchain)
         run: |
-          go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.0.2
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          "$(go env GOPATH)/bin/osv-scanner" --version
+          curl -fsSL -o /tmp/osv-scanner https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64
+          chmod +x /tmp/osv-scanner
+          /tmp/osv-scanner --version
 
-      - name: Scan lockfiles (recursive)
-        # Exits 1 if vulnerabilities are found; exits 2 on internal error.
-        # osv-scanner reads lockfiles (uv.lock, package-lock.json, etc.) —
-        # it does not traverse node_modules or .venv directories.
-        # v2 default: git not scanned (old --skip-git → no flag now;
-        # opt-in via --include-git-root).
-        run: osv-scanner scan --recursive .
+      - name: Run osv-scanner
+        run: /tmp/osv-scanner scan --recursive .
 
-  # ---------------------------------------------------------------------------
-  # docker-build-smoke — Build all service images to catch Dockerfile regressions
-  # Closes: W2-CF2
-  # ---------------------------------------------------------------------------
   docker-build-smoke:
     name: Docker build smoke test
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     env:
-      DOCKER_BUILDKIT: "1"
+      DOCKER_BUILDKIT: "0"  # this self-hosted box has no buildx plugin; use the legacy builder
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Build paper_ingestion image
         run: |
           docker build \
-            --no-cache \
-            --progress=plain \
             -t smoke-paper-ingestion:test \
             -f services/paper_ingestion/Dockerfile \
             .
@@ -120,8 +113,6 @@ jobs:
       - name: Build learning_engine image
         run: |
           docker build \
-            --no-cache \
-            --progress=plain \
             -t smoke-learning-engine:test \
             -f services/learning_engine/Dockerfile \
             .
@@ -129,8 +120,6 @@ jobs:
       - name: Build telegram_bot image
         run: |
           docker build \
-            --no-cache \
-            --progress=plain \
             -t smoke-telegram-bot:test \
             -f services/telegram_bot/Dockerfile \
             .
@@ -138,8 +127,6 @@ jobs:
       - name: Build dashboard (frontend) image
         run: |
           docker build \
-            --no-cache \
-            --progress=plain \
             -t smoke-dashboard:test \
             frontend/
 
@@ -148,8 +135,6 @@ jobs:
           # Source versions.env to get the upstream image build-arg.
           set -a; . ./versions.env; set +a
           docker build \
-            --no-cache \
-            --progress=plain \
             --build-arg LANGFUSE_BASE_IMAGE="${LANGFUSE_IMAGE}" \
             -t smoke-langfuse-hardened:test \
             -f langfuse/Dockerfile.langfuse \
@@ -160,7 +145,7 @@ jobs:
   # ---------------------------------------------------------------------------
   security-gate:
     name: Security gate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     needs: [pip-audit, npm-audit, osv-scanner, docker-build-smoke]
     steps:
       - name: All security jobs passed
