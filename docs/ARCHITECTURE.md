@@ -23,8 +23,6 @@ Related docs:
 - `postgres` - primary state store.
 - `qdrant` - vector store for semantic search.
 - `litellm` and `ollama` - LLM gateway and local model runtime.
-- `n8n` - optional integration profile. Core scheduling uses APScheduler inside
-  Python services.
 
 Services communicate over the Docker `jarvis` network. The frontend proxies API
 requests through nginx to `paper_ingestion` and `learning_engine`.

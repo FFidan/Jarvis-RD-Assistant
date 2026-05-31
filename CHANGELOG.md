@@ -6,6 +6,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 > An internal `v0.5.0` git tag was cut locally on 2026-05-24 for version-metadata alignment with `pyproject.toml` / `frontend/package.json`. The repo remains private; this release line stays semantically **unreleased** until a public release event. When that happens, this `[unreleased]` heading will be retitled to `[v0.5.0] - <release date>` (matching the existing `[vX.Y.Z]` style).
 
+### Cleanup & footprint reduction (2026-06-01)
+
+Removed the optional n8n workflow-automation integration. APScheduler (built into the Telegram bot) remains the built-in scheduler and covers all daily-briefing and review-reminder scheduling, so n8n was redundant. Also pruned dead developer scripts, superseded benchmark fixtures, and an obsolete PDF-engine test, and refreshed the documentation for accuracy (version strings, the FastAPI pin, the conversational-agent roadmap gate) while trimming internal operational detail from the published site.
+
 ### Dependency security & PDF extraction (2026-05-29)
 
 The PDF text-extraction engine was migrated from marker-pdf to **Docling**. This closed the last dependency CVEs that marker-pdf's transitive version caps had been blocking — Pillow (6 advisories), the `diskcache` transitive (dropped via instructor 1.15), and a transformers code-execution advisory (fixed in 5.x) — and moved openai to the 2.x line. It also made citation **page numbers exact**: chunks are now bounded to a single page using Docling's per-page provenance, so a cited page always matches the page snapshot the reader sees.

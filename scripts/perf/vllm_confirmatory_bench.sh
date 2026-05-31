@@ -625,7 +625,7 @@ assert_ask_200() {
   # wiring) is variable. BOTH the chat (smart) AND the query-embed path route
   # through litellm, so a premature /api/ask raises httpx.ConnectError deep in
   # embed_texts → RuntimeError("Embedding service unavailable") → generic HTTP
-  # 500 (NOT 502/503). Evidence: REDACTED-HOST 20:49 abort. Therefore:
+  # 500 (NOT 502/503). Evidence: a 20:49 abort on the lab box. Therefore:
   #   (1) gate on litellm's OWN readiness first — after that a 500 is real;
   #   (2) then poll /api/ask; 500 retryable only within a bounded post-ready
   #       window, then a final die that still surfaces the code (RAG-DB-1

@@ -515,8 +515,6 @@ existing_env_value() {
 info "Generating secrets..."
 POSTGRES_PASSWORD="$(existing_env_value POSTGRES_PASSWORD || openssl rand -hex 24)"
 JARVIS_API_KEY="$(existing_env_value JARVIS_API_KEY || openssl rand -hex 32)"
-N8N_ENCRYPTION_KEY="$(existing_env_value N8N_ENCRYPTION_KEY || openssl rand -hex 32)"
-N8N_JWT_SECRET="$(existing_env_value N8N_JWT_SECRET || openssl rand -hex 32)"
 # Fernet requires a urlsafe-base64-encoded 32-byte key. openssl rand -base64 32
 # produces exactly that (44 chars with a trailing = pad — Fernet accepts it).
 JARVIS_CONFIG_KEY="$(existing_env_value JARVIS_CONFIG_KEY || openssl rand -base64 32)"
@@ -793,8 +791,6 @@ sub_value() {
     POSTGRES_PASSWORD)        printf '%s' "$POSTGRES_PASSWORD" ;;
     JARVIS_API_KEY)           printf '%s' "$JARVIS_API_KEY" ;;
     JARVIS_CONFIG_KEY)        printf '%s' "$JARVIS_CONFIG_KEY" ;;
-    N8N_ENCRYPTION_KEY)       printf '%s' "$N8N_ENCRYPTION_KEY" ;;
-    N8N_JWT_SECRET)           printf '%s' "$N8N_JWT_SECRET" ;;
     LITELLM_MASTER_KEY)        printf '%s' "$LITELLM_MASTER_KEY" ;;
     QDRANT_API_KEY)           printf '%s' "$QDRANT_API_KEY" ;;
     CLOUDFLARE_TUNNEL_TOKEN)  printf '%s' "$CLOUDFLARE_TUNNEL_TOKEN" ;;
@@ -959,7 +955,7 @@ fi
 # -----------------------------------------------------------------------------
 # 11. Wait for mandatory services to become healthy
 # -----------------------------------------------------------------------------
-# Optional services (n8n, telegram_bot) are profile-gated and intentionally
+# Optional services (telegram_bot) are profile-gated and intentionally
 # excluded from this list.
 MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboard)
 

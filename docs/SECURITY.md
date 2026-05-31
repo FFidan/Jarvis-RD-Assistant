@@ -116,7 +116,7 @@ explicitly set in the environment. An explicit env var always wins.
 | `JARVIS_CONFIG_KEY` | Fernet key for `user_config.encrypted_value` at-rest encryption. | Yes (startup refuses if absent) |
 | `JARVIS_CONFIG_KEY_OLD` | Previous Fernet key — enables zero-downtime rotation via MultiFernet. Set during key rotation; remove after. | No (rotation only) |
 | `JARVIS_MODEL_HMAC_KEY` | Dedicated HMAC-SHA256 key for Pulse classifier pickle signing (see below). Min 32 chars. | Yes (startup refuses if absent; derivation from `JARVIS_API_KEY` is refused in production) |
-| `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | SMTP relay credentials for magic-link delivery. Without these, links fall back to container stdout. | Strongly recommended |
+| `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | SMTP relay credentials for magic-link delivery. Without these (or when set to empty strings, which are silently ignored — see the SMTP entry in [known-residual-risks.md](known-residual-risks.md)), links fall back to container stdout. | Strongly recommended |
 | `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for `X-Owner-User-Id` header (Telegram bot per-user orchestration). Defaults to loopback + Docker bridge (`127.0.0.0/8,172.16.0.0/12`). | No (default is safe) |
 
 ### X-Owner-User-Id Mechanism
@@ -189,68 +189,14 @@ The audit log is readable by admins at `GET /api/admin/audit-log`
 
 ---
 
-## Leaked-secret remediation (one-time, before public)
+## Leaked-secret remediation (resolved)
 
-*(2026-05-17; corrected 2026-05-18)*
-
-**OBS-1 status: RESOLVED (verified 2026-05-25, during the 2026-05 pre-release hardening).**
-`git log origin/master --all --full-history --diff-filter=ACMRT -- secrets/langfuse_init_pk.txt secrets/langfuse_init_sk.txt` returns ZERO commits — the
-two secret-files are not present on any reachable ref of `origin/master`
-(commit `4587e9ab` at verification time). Prefix grep
-(`pk-lf-35d525` / `sk-lf-031360`) on `origin/master` returns 8 file hits,
-ALL in intentional CI-guard / documentation / audit references (this
-runbook, `scripts/check-burned-secrets.sh:15-16`,
-`scripts/gen-langfuse-keys.sh:29-30`, and 5 dated audit artifacts).
-No further `git filter-repo` or force-push is required for the
-public-launch transition.
-
-`secrets/langfuse_init_pk.txt` and `secrets/langfuse_init_sk.txt` were
-accidentally git-tracked in early development despite the `secrets/*.txt`
-`.gitignore` rule.
-
-**Done:** they have been untracked (`git rm --cached`) and the introducing
-commits purged from published GitHub history (operator-run history filter).
-The files are no longer tracked and no longer reachable from any remote ref.
-
-**Pending until next provision:** the leaked key *values* on disk are NOT yet
-rotated.  `scripts/gen-langfuse-keys.sh` is now **burned-aware**: it detects a
-file whose content still starts with a known-leaked prefix (`pk-lf-35d525` /
-`sk-lf-031360`) and treats it as absent, regenerating a fresh keypair and
-rewriting the matching `.env` lines in place.  Rotation therefore happens
-automatically the next time the keypair is provisioned via `make up`,
-`make observability-up`, or `./setup.sh` — no manual or destructive step is
-required.  Until then the leaked values remain live; provision once to retire
-them.  CI enforces this via `scripts/check-burned-secrets.sh`, which fails the
-build if a burned value is ever present in the working tree.
-
-The commits that introduced them still appear in git history.  Because the
-repository is currently **private** and the keys are **rotated dead**, the
-history rewrite below is **optional** — it is only required before making the
-repository public or sharing its history.
-
-**When to run:** only with explicit operator confirmation, only when the
-repository is still private, and only once (a force-push rewrites all
-published history).
-
-```bash
-# Rewrite history to remove the two files from every commit
-git filter-repo \
-  --invert-paths \
-  --path secrets/langfuse_init_pk.txt \
-  --path secrets/langfuse_init_sk.txt
-
-# Force-push the rewritten history to origin
-git push --force origin master
-```
-
-**Consequences of the force-push:**
-- Every existing clone and CI ref becomes stale and must `git clone` fresh.
-- GitHub Actions caches that reference old SHAs will miss and rebuild.
-- Any open pull requests targeting `master` must be rebased.
-
-This step is **NOT** performed automatically by any Makefile target or CI job.
-It requires deliberate operator action and is gate-deferred to the finishing
-step of this workstream.
+An early-development bug accidentally git-tracked a Langfuse keypair despite the
+`secrets/*.txt` `.gitignore` rule. It was untracked and purged from published
+history in May 2026; the key is rotated-dead, and `setup.sh` regenerates a fresh
+keypair on the next provision. CI enforces this via `scripts/check-burned-secrets.sh`,
+which fails the build if a known-burned value ever reappears in the working tree.
+No further action is required.
 
 ---
 

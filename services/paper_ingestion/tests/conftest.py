@@ -1,7 +1,7 @@
 """Shared test fixtures for paper_ingestion tests.
 
 Loaded automatically by pytest before any test file in this directory.
-All runtime dependencies (fitz, tiktoken, qdrant_client, rapidfuzz, marker,
+All runtime dependencies (fitz, tiktoken, qdrant_client, rapidfuzz, docling,
 sentence_transformers, apscheduler) are installed on the host venv — no
 module stubs are needed.
 

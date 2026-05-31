@@ -388,4 +388,4 @@ author re-Reads each cited file before final claim.
 | `configure_lifespan` (SDK init point) | libs/jarvis_common/jarvis_common/app_factory.py:151 | Equal-length init/teardown lifespan builder |
 | `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/services/settings_service.py:259-269 | Privacy: plaintext NEVER in span metadata |
 | `mask_secret` | libs/jarvis_common/jarvis_common/crypto.py | Helper for scrubbing values before span attachment |
-| Existing impl spec | docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md | Drives the integration work that produces this contract's steady state |
+| Existing impl spec | Instructor + Langfuse integration spec (archived; not in the public tree) | Drove the integration work that produces this contract's steady state |

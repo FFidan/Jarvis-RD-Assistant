@@ -26,6 +26,11 @@ Current release: **v0.5.0**.
 - **Shared canonical corpus + private workspace.** The bibliographic corpus is
   shared across users on an instance; all user activity and intellectual
   output is strictly private (see the SECURITY.md "Data Sharing Boundary").
+- **Documentation site + user guide.** A published companion site with
+  operator/developer docs and an end-user manual covering install through every
+  capability (ingestion, hybrid RAG, citation & knowledge graph, contradiction
+  detection, Pulse, FSRS flashcards, notes, projects, Telegram, the multi-tenant
+  model). The in-repo Markdown remains the offline source of truth.
 
 ## In progress
 
@@ -43,14 +48,6 @@ Current release: **v0.5.0**.
   questions and get cited, contradiction-aware answers. **Conditional GO,
   sequenced** — see the Deferred backlog below for the strict ordering
   (RB-3 → Perf Phase 1 → eval harness → Hermes) and rationale.
-- **Documentation site + complete user guide.** A published companion site
-  with operator/developer docs (the in-repo Markdown remains the offline
-  source of truth for self-hosters) and a complete end-user manual: from
-  install and setup through every capability of the project (ingestion,
-  hybrid RAG, citation & knowledge graph, contradiction detection, the
-  Pulse recommender, FSRS flashcards, notes, projects, Telegram, the
-  multi-tenant model) and a full UI/UX walkthrough. The user-guide portion
-  follows the in-progress UI redesign so it ships current rather than stale.
 
 ## Not planned
 
@@ -70,21 +67,18 @@ CI-Green + Verified-Real Gap Closure shipped to master `a7bfb18f` (GitHub CI GRE
 This is a **sequenced** backlog: each item carries its decision and the one-line *why*,
 because several were flat "open questions" that have since been decided.
 
-**Active — handed off this session (in flight):**
+**Shipped in the 2026-05 pre-launch hardening:**
 
-- **WS1 — audit HIGHs** from the 2026-05-17 audit (PI cache-transport api-key-in-key
-  / hop-by-hop headers, LE OB3-5, TG-N1, FE-D/E + SEC-1..4). Bounded security/hygiene;
-  highest gain-per-effort; two are regression debt in recently-shipped cache code.
-- **WS2 — operator/developer docs site** (NOT the end-user manual half — that is gated
-  on the UI redesign settling). Aggregates existing in-repo Markdown; 4 sub-choices
-  (hybrid-vs-thin, dir split, Pages-vs-RTD, domain) decided in the WS2 plan.
-- **WS3 — migration-test-harness drift.** *Upgraded from "test-infra debt" to
-  release-relevant:* the 2026-05-17 audit shows this drift is what lets a green suite
-  mask **RB-1** (the `POST /api/review/sync` `ON CONFLICT` partial-index bug). Goal: a
-  structural guard so a migration diverging from the init.sql snapshot is caught
-  automatically, not patched per-number.
+- **Security audit HIGHs** — cache-transport hardening, cross-service auth,
+  rate-limit and frontend fixes from the security review; closed.
+- **Operator/developer documentation site** — published (the in-repo Markdown
+  remains the offline source of truth; the end-user manual half tracks the UI
+  redesign so it ships current rather than stale).
+- **Migration-test-harness drift guard** — a structural invariant test now
+  catches a migration diverging from the `init.sql` snapshot automatically,
+  rather than patching per-number.
 
-**Decided this session (decision recorded; finish-task pending):**
+**Decided (decision recorded):**
 
 - **Installer (was "script-hardening vs desktop GUI") — RESOLVED.** Direction = **A+C**:
   a hardened `setup.sh` + the existing web first-run wizard *is* the GUI (the project's
@@ -147,5 +141,4 @@ micro-deferrals) verified ALREADY-SHIPPED at `5863ce5f` — do not re-flag. *Cav
 2026-05-17 audit re-opened offline-sync as **RB-1** (a distinct `ON CONFLICT` SQL bug,
 not the original "endpoint absent" finding) — that lives in WS1/WS3, not here.
 
-See vault `~/ObsidianVault/projects/JARVIS_RD_Assistant/{open-questions,decisions}.md`
-2026-05-17 entries.
+Open items and decision rationale are tracked via GitHub Issues and Discussions.

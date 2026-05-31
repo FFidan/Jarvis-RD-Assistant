@@ -106,8 +106,6 @@ if (Test-Path $envFile) {
 
     $secrets = @{
         'POSTGRES_PASSWORD'   = (New-RandomHex 32)
-        'N8N_ENCRYPTION_KEY'  = (New-RandomHex 32)
-        'N8N_JWT_SECRET'      = (New-RandomHex 32)
         'JARVIS_API_KEY'      = (New-RandomHex 32)
         'LITELLM_MASTER_KEY'  = (New-RandomHex 32)
         'JARVIS_CONFIG_KEY'   = (New-FernetKey)

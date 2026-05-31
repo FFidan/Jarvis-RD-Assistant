@@ -80,24 +80,24 @@ commits since the last Git tag.
 ## Docker Image Versioning
 
 Docker images for the four main services are built via `docker-compose.yml` and
-versioned using the `JARVIS_VERSION` environment variable (defaults to `0.1.0`):
+versioned using the `JARVIS_VERSION` environment variable (defaults to `0.5.0`):
 
 ```yaml
 services:
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.1.0}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.5.0}
     build: # ... build context
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.1.0}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-0.5.0}
     build: # ... build context
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.1.0}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.5.0}
     build: # ... build context
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.1.0}
+    image: jarvis/dashboard:${JARVIS_VERSION:-0.5.0}
     build: # ... build context
 ```
 
@@ -107,7 +107,7 @@ For production deployments, set `JARVIS_VERSION` in your `.env` or `versions.env
 
 ```bash
 # In .env or versions.env
-JARVIS_VERSION=0.1.0
+JARVIS_VERSION=0.5.0
 
 # Pull pre-built images (if using a remote registry)
 docker compose pull

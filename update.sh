@@ -55,8 +55,8 @@ docker compose version >/dev/null 2>&1 \
 # 3. Service → version-var mapping
 # -----------------------------------------------------------------------------
 # Parallel arrays keep ordering deterministic and avoid assoc-array iter gotchas.
-SERVICES=(postgres  ollama       qdrant       litellm       n8n       cloudflared)
-VAR_NAMES=(POSTGRES_IMAGE OLLAMA_IMAGE QDRANT_IMAGE LITELLM_IMAGE N8N_IMAGE CLOUDFLARED_IMAGE)
+SERVICES=(postgres  ollama       qdrant       litellm       cloudflared)
+VAR_NAMES=(POSTGRES_IMAGE OLLAMA_IMAGE QDRANT_IMAGE LITELLM_IMAGE CLOUDFLARED_IMAGE)
 
 # Columns for diff table.
 printf '\n%s%-14s %-40s %-40s %s%s\n' "$C_BOLD" "SERVICE" "RUNNING" "PINNED" "STATUS" "$C_RESET"

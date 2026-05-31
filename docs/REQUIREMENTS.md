@@ -56,8 +56,8 @@ The service groups are:
 | `learning-engine` | `services/learning_engine/requirements.txt`, `services/learning_engine/constraints.txt` |
 | `telegram-bot` | `services/telegram_bot/requirements.txt`, `services/telegram_bot/constraints.txt` |
 
-FastAPI is intentionally capped below `0.117.0` until the Docker runtime is
-upgraded in a dedicated compatibility pass.
+FastAPI is pinned to `>=0.136.1,<0.138.0` across services; the upper bound is
+bumped in dedicated dependency-compatibility passes after testing.
 
 ### frontend/package.json (React dashboard — PRIMARY)
 
@@ -90,7 +90,6 @@ respx>=0.21.0                # Mock httpx for async tests
 | Service | Image | Purpose |
 |---------|-------|---------|
 | PostgreSQL | `postgres:16.8` | Main database (all application state) |
-| n8n | `docker.n8n.io/n8nio/n8n:1.77.0` | Optional workflow automation (`--profile n8n`) |
 | Ollama | `ollama/ollama:0.23.1` | Local LLM inference (GPU recommended); pin lives in `versions.env` as `OLLAMA_IMAGE` |
 | Ollama Bootstrap | Custom init container | One-shot model pull for Ollama (runs before ollama service starts) |
 | Qdrant | `qdrant/qdrant:v1.13.2` | Vector store for paper chunk embeddings |
@@ -243,7 +242,7 @@ Existing installs get migrations applied automatically on startup by the auto-mi
 
 **Migration 018** (2026-04-11) for the Phase 1 Discovery & Pulse subsystem added:
 
-- Three new tables: `pulse_decks` (one row per daily deck), `pulse_cards` (papers in each deck with score metadata and LLM reasoning), and a Phase 1 feedback table (user feedback 👍/👎/💾/open/dismiss — collected silently for the Phase 2 classifier). **Phase A note (migration 049, 2026-04-29):** the Phase 1 feedback table is dropped and replaced by the broader `recommendation_feedback` table that consolidates Pulse + Inbox + Paper-Detail thumbs into a single signal store; see [docs/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) §3.3 + §7.
+- Three new tables: `pulse_decks` (one row per daily deck), `pulse_cards` (papers in each deck with score metadata and LLM reasoning), and a Phase 1 feedback table (user feedback 👍/👎/💾/open/dismiss — collected silently for the Phase 2 classifier). **Phase A note (migration 049, 2026-04-29):** the Phase 1 feedback table is dropped and replaced by the broader `recommendation_feedback` table that consolidates Pulse + Inbox + Paper-Detail thumbs into a single signal store (per the 2026-04-29 paper-lifecycle-redesign spec §3.3 + §7).
 - One helper table: `pdf_resolutions` (caches results of the PDF resolution chain to dedupe resolver calls).
 - One new optional column: `topics.description TEXT NULL` (free-text context for the Pulse LLM scoring prompt).
 - New rows in `paper_sources` registering `openalex` and `pubmed` source types. `pubmed` ships with `enabled=TRUE` to match the "works out of the box, no key required" principle; `openalex` ships `enabled=FALSE` until the user provides a key.
@@ -288,7 +287,7 @@ JARVIS uses Docker Secrets for sensitive runtime values. Each secret is stored i
 
 | Secret name | Mount path | Consuming service(s) | Env var resolved |
 |-------------|-----------|----------------------|-----------------|
-| `postgres_password` | `/run/secrets/postgres_password` | `postgres`, `n8n` | `POSTGRES_PASSWORD_FILE` |
+| `postgres_password` | `/run/secrets/postgres_password` | `postgres` | `POSTGRES_PASSWORD_FILE` |
 | `jarvis_api_key` | `/run/secrets/jarvis_api_key` | `paper_ingestion`, `learning_engine` | `JARVIS_API_KEY_FILE` |
 | `qdrant_api_key` | `/run/secrets/qdrant_api_key` | `qdrant`, `paper_ingestion`, `learning_engine` | `QDRANT_API_KEY_FILE` |
 | `telegram_bot_token` | `/run/secrets/telegram_bot_token` | `telegram_bot` | `TELEGRAM_BOT_TOKEN_FILE` |
@@ -320,8 +319,8 @@ Without these flags the service starts normally and falls back to RRF-only ranki
 
 **Migration 041** (2026-04-27): `jobs` NOTIFY/LISTEN support for lower-latency worker dispatch.
 
-**Migration 042** (2026-04-27): `user_ownership_columns` — adds `user_id` FK columns to core tables (papers, pulse_decks, cards, projects) for multi-tenant scaffolding; writes thread `user_id` end-to-end from Sprint 6. Enforcement remains gated on the real auth resolver (see `libs/jarvis_common/jarvis_common/auth.py`).
+**Migration 042** (2026-04-27): `user_ownership_columns` — adds `user_id` FK columns to core tables (papers, pulse_decks, cards, projects) for multi-tenant scaffolding; writes thread `user_id` end-to-end from Sprint 6. User ownership is enforced through the auth resolver in `libs/jarvis_common/jarvis_common/auth.py`, which reads the session `user_id` (`request.state.user_id`) for owned queries.
 
-**Migration 043** (2026-04-27): `multiuser_unique_constraints` — adds unique constraints scoped by `user_id` to prevent cross-user collisions once enforcement is activated. The Sprint 5 `papers.is_bookmarked` column + `PATCH /api/papers/{id}/bookmark` endpoint that this migration originally constrained were both removed in Phase A migration 047 (replaced by `state` ENUM + orthogonal `papers.starred` BOOLEAN); see [docs/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) §3.
+**Migration 043** (2026-04-27): `multiuser_unique_constraints` — adds unique constraints scoped by `user_id` to prevent cross-user collisions once enforcement is activated. The Sprint 5 `papers.is_bookmarked` column + `PATCH /api/papers/{id}/bookmark` endpoint that this migration originally constrained were both removed in Phase A migration 047 (replaced by `state` ENUM + orthogonal `papers.starred` BOOLEAN; per the 2026-04-29 paper-lifecycle-redesign spec §3).
 
 **Migrations 044-049** (2026-04-29 — Phase A lifecycle redesign): see the redesign spec and migration files. Headline changes: 047 collapses 5 lifecycle booleans + status enum into a single `state` ENUM + orthogonal `starred`; 048 adds `papers.discovery_origin`; 049 drops the Phase 1 feedback table in favor of `recommendation_feedback`.

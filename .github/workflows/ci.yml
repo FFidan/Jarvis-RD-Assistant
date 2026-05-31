@@ -20,6 +20,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
+env:
+  # Run the test environment in UTC so date-relative tests (which seed rows via
+  # Python `date.today()`) agree with the app's UTC date handling (Postgres
+  # `CURRENT_DATE` / `AT TIME ZONE 'UTC'` / `datetime.now(UTC)`). On a non-UTC
+  # self-hosted runner the two disagree for the ~22:00–00:00 UTC window each
+  # night, which deterministically fails the my-day/analytics contract tests.
+  TZ: UTC
+
 jobs:
   lint-test:
     name: Lint + fast test suite

@@ -34,6 +34,10 @@ docker-compose.override.yml
 PERSONAL-SETUP.md
 docs/personal/
 
+# Local PII-guard overrides (per-machine personal patterns / allowlist)
+scripts/pii-patterns-local.sh
+scripts/pii-allowlist-local.txt
+
 # Generated data (large, user-specific)
 shared/pdf_storage/
 shared/snapshots/
@@ -49,9 +53,6 @@ shared/perf/
 # OS
 .DS_Store
 Thumbs.db
-
-# n8n credentials (encrypted but still sensitive)
-n8n/credentials/
 
 # Logs
 *.log

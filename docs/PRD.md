@@ -4,8 +4,8 @@
 **Date:** 2026-05-23
 **Status:** Active
 
-> Implementation status note (updated 2026-05-23):
-> This PRD reflects features shipped through git tag v0.4.1. The Discovery &
+> Implementation status note (updated 2026-05-31):
+> This PRD reflects features shipped through git tag v0.5.0. The Discovery &
 > Pulse subsystem (Phase 1) shipped on 2026-05-01; Pulse is live in production.
 > The Paper Lifecycle Redesign (single-state ENUM + orthogonal Star) shipped
 > as Phase A of the Modernization Marathon (commit ee1de7f, 2026-05-01).
@@ -267,7 +267,7 @@ These features shipped in the Phase 1 Discovery & Pulse sprint and subsequent au
 
 These features shipped in the Sprint 5 hardening pass (commits up to `4b4805d`):
 
-- **Save/Star UI + REST** (migration 043, superseded by Phase A migration 047): historical Sprint-5 entry — introduced a `PATCH /api/papers/{id}/bookmark` endpoint backed by a `papers.is_bookmarked` column and per-user uniqueness constraints. **Both column and endpoint were removed in Phase A**; replaced by the canonical `state` ENUM (`inbox`/`to_read`/`reading`/`done`/`trash`) plus orthogonal `papers.starred` BOOLEAN, addressed via `PUT /api/papers/{id}/save` and `PUT /api/papers/{id}/star` (see [docs/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) §3 + §8).
+- **Save/Star UI + REST** (migration 043, superseded by Phase A migration 047): historical Sprint-5 entry — introduced a `PATCH /api/papers/{id}/bookmark` endpoint backed by a `papers.is_bookmarked` column and per-user uniqueness constraints. **Both column and endpoint were removed in Phase A**; replaced by the canonical `state` ENUM (`inbox`/`to_read`/`reading`/`done`/`trash`) plus orthogonal `papers.starred` BOOLEAN, addressed via `PUT /api/papers/{id}/save` and `PUT /api/papers/{id}/star` (per the 2026-04-29 paper-lifecycle-redesign spec §3 + §8).
 - **Pulse weight clamping**: scoring signal weights are now validated and clamped to [0.0, 1.0] on write; malformed weight vectors no longer silently corrupt the scoring pipeline.
 - **Sub-hourly cron guard**: `pulse.cron` values with intervals shorter than 1 hour are rejected at the settings layer with a clear validation error.
 - **Migration 043**: `multiuser_unique_constraints` — unique constraints scoped by `user_id` on `pulse_decks`, `papers`, `cards`, and related tables; groundwork for multi-tenant enforcement.
@@ -380,7 +380,7 @@ The My Day page is the researcher's daily triage hub, redesigned around a mornin
 This is the differentiating feature of JARVIS. Every design decision prioritizes
 verifiability over fluency.
 
-> **Current implementation status (2026-04-25):**
+> **Current implementation status (2026-05-31):**
 >
 > Per-layer status (see §5.3):
 >
@@ -481,7 +481,6 @@ Each paper summary must include:
 | arXiv/Semantic Scholar API rate limits or downtime | High | Medium | Caching, backoff, graceful degradation |
 | LLM quality variance across providers | Medium | High | Standardized prompts, output validation, tested model configs |
 | py-fsrs scheduling edge cases | Low | Medium | Unit tests, fallback to simple intervals |
-| n8n integration complexity | Low | Low | n8n is optional (`--profile n8n`); APScheduler handles core scheduling |
 | Docker resource consumption on small VPS | Medium | Medium | Document minimum specs (4GB RAM), optional components |
 | Users don't trust AI summaries | Medium | High | 4-layer anti-hallucination is core mitigation |
 | Briefing fatigue | Medium | Medium | Relevance filtering, configurable frequency |
@@ -521,7 +520,7 @@ subsystem (§8.5) directly closes this gap.
 - ~~Telegram bot activation (push-first UX is the core value proposition)~~ DONE
 
 **Tier 2 -- Polish (feature-competitive):**
-- ~~Bigger embedding model (nomic-embed-text or bge-m3 replacing qwen3-embedding:0.6b)~~ DONE
+- ~~Bigger embedding model (now qwen3-embedding:4b, 2560-dim)~~ DONE
 - ~~TLDR one-line summaries (Semantic Scholar-inspired)~~ DONE
 - ~~Seed-based paper discovery (ResearchRabbit-style "find more like these")~~ DONE
 - ~~Author alerts (track researchers you follow)~~ DONE
@@ -536,9 +535,9 @@ subsystem (§8.5) directly closes this gap.
 
 ### 8.3 RAG Quality Targets
 
-| Component | Current (v0.4.x) | Target (future) |
+| Component | Current (v0.5.0) | Target (future) |
 |-----------|----------------|-------------|
-| Embedding model | nomic-embed-text (768d) | _(achieved)_ |
+| Embedding model | qwen3-embedding:4b (2560d) | _(achieved)_ |
 | Retrieval | Hybrid RRF + cross-encoder rerank | _(achieved)_ |
 | Scope | Cross-paper search | _(achieved)_ |
 | Generation | Query decomposition | _(achieved)_ |
@@ -603,13 +602,13 @@ captures the roadmap phasing, acceptance criteria, and attribution.
 
 ### 8.7 Phase 4 — Conversational Agent Layer (Hermes integration or native build)
 
-**Status:** PLANNING ONLY. Not scheduled until Pulse Phase 2, Zotero Phase 3, and the anti-hallucination hardening (4-layer pipeline, §5.3) have shipped.
+**Status:** PLANNING ONLY (Conditional GO). Gated behind RB-3 cross-service auth (shipped), Performance Phase 1, and an evaluation harness as task 0 — see the [ROADMAP](../ROADMAP.md) for sequencing and rationale. The anti-hallucination hardening (4-layer pipeline, §5.3) applies at the agent boundary.
 
 **Goal.** A natural-language control plane over the JARVIS REST API. A user should be able to say *"find last week's AI safety Pulse cards I haven't rated"* and have the agent compose the right API calls, present results, and honor the anti-hallucination policy end-to-end.
 
 **Architectural pattern.** Agent-as-client over the existing REST surface. JARVIS services stay authoritative for data, verification, and persistence — the agent is never the system of record.
 
-**Decision point.** Adopt [`NousResearch/hermes-agent`](https://github.com/NousResearch) (MIT, 2026) as-is, or build natively on LiteLLM tool-calling plus our existing prompt harness. The WS-7 spike will resolve this.
+**Decision point.** Adopt an existing open agent framework, or build natively on LiteLLM tool-calling plus our existing prompt harness. The orchestration-substrate spike will resolve this.
 
 **Acceptance criteria.**
 
@@ -635,8 +634,8 @@ JARVIS's Discovery & Pulse design borrows ideas and patterns from several open-s
 - **[BERTopic](https://github.com/MaartenGr/BERTopic)** — neural topic modeling with dynamic temporal topics for trend detection (Phase 2).
 - **[OpenScholar](https://github.com/AkariAsai/OpenScholar)** (Allen Institute) — iterative self-feedback RAG over scientific literature (Phase 3 inspiration).
 - **[PaperQA2](https://github.com/Future-House/paper-qa)** (FutureHouse) — metadata-aware embeddings and agentic retrieval (Phase 3 inspiration).
-- **[NousResearch/hermes-agent](https://github.com/NousResearch)** (MIT, 2026) — agent-as-control-plane pattern over a REST surface (Phase 4 inspiration).
-- **OpenClaw** — messaging-first UX validation for conversational interfaces (Phase 4 inspiration).
+- **Agent-as-control-plane pattern** — an LLM agent orchestrating an existing REST surface while the services stay the system of record (Phase 4 inspiration).
+- **Messaging-first conversational UX** — chat as the primary interface to an agent layer (Phase 4 inspiration).
 
 All are MIT/Apache-licensed. Our use is at the idea/pattern level.
 digests, extraction) MUST pass through the anti-hallucination verification pipeline.

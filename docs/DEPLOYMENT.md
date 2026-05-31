@@ -197,7 +197,7 @@ cp .env.example .env   # setup.sh does this for you
 ./setup.sh             # pick option 1 at the access-mode prompt
 ```
 
-`setup.sh` generates `POSTGRES_PASSWORD`, `N8N_ENCRYPTION_KEY`, `N8N_JWT_SECRET`, and `JARVIS_API_KEY`, then brings the stack up. The direct dashboard URL is `http://localhost:3001` when `.env` uses the default `DASHBOARD_HOST_PORT=3001`; enable the `caddy-local` profile only when you explicitly want local HTTPS.
+`setup.sh` generates `POSTGRES_PASSWORD` and `JARVIS_API_KEY`, then brings the stack up. The direct dashboard URL is `http://localhost:3001` when `.env` uses the default `DASHBOARD_HOST_PORT=3001`; enable the `caddy-local` profile only when you explicitly want local HTTPS.
 
 ### Self-signed cert — browser acceptance
 
@@ -259,7 +259,6 @@ JARVIS_CONFIG_KEY=<Fernet key from: python -c "from cryptography.fernet import F
 
 - `DEV_MODE=true` does **not** bypass auth when a `JARVIS_API_KEY` is configured; the flag only helps unauthenticated local development.
 - `DEV_MODE=true` is a meta-flag: it promotes any granular dev flag (`DEV_AUTH_BYPASS`, `DEV_ERROR_DETAIL`, `DEV_CORS_OPEN`, `DEV_SMTP_LOG_ONLY`, `DEV_CRYPTO_RELAXED`) to `true` unless that flag is explicitly set in the environment. An explicit value always wins. In production, set each flag independently; none are permitted in `ENVIRONMENT=production` (startup will crash if any is `true`).
-- `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`.
 
 ### Rate-limit client-IP trust (automatic)
 
@@ -459,7 +458,7 @@ git pull
 What `update.sh` does (see the top of `update.sh` for the full flow):
 
 1. Loads pinned image versions from `versions.env`.
-2. Diffs running vs pinned images for `postgres`, `ollama`, `qdrant`, `litellm`, `n8n`, `cloudflared`. Prints a status table.
+2. Diffs running vs pinned images for `postgres`, `ollama`, `qdrant`, `litellm`, `cloudflared`. Prints a status table.
 3. Prompts to `docker compose pull && up -d` the stale services.
 4. Separately prompts to rebuild `paper_ingestion`, `learning_engine`, and `dashboard` from local source. It includes `telegram_bot` only when `.env` contains `TELEGRAM_BOT_TOKEN`.
 5. Waits up to 180 s per updated service for its HEALTHCHECK to report healthy.
@@ -576,7 +575,7 @@ Qdrant is **not** backed up by `scripts/backup.sh`. If you want durable vector b
 | Pinned Docker subnet `10.137.241.0/24` collides with my LAN | `setup.sh --check` warns on host-route collision | Set `JARVIS_NET_SUBNET=<free /24>` in `.env` **and** update `docker-compose.yml` `gateway:` and `frontend/nginx.conf` `set_real_ip_from` literals to the new range (see [Rate-limit client-IP trust](#rate-limit-client-ip-trust-automatic)), then run `docker compose down && docker compose up -d`. |
 | LAN device can ping host but `curl -k https://<LAN-IP>:3001` hangs | `DASHBOARD_BIND_HOST=127.0.0.1` (localhost mode) | Run `./setup.sh` mode 2, or edit `.env` to `DASHBOARD_BIND_HOST=0.0.0.0` and restart dashboard. |
 | `setup.sh` option 3 exits immediately with a ZT warning | `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` not set | Configure your Zero-Trust access policy first, then add `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` to `.env`. |
-| `update.sh` says "not running" for a service you're not using | The service is profile-gated (n8n / telegram / cloudflared / backup) | Expected; ignore the warning for profiles you haven't activated. |
+| `update.sh` says "not running" for a service you're not using | The service is profile-gated (telegram / cloudflared / backup) | Expected; ignore the warning for profiles you haven't activated. |
 | Pre-existing `docker-compose.override.yml` causes port conflicts after running `setup.sh` mode 2 | `setup.sh` now backs it up automatically, but old installs may still have one | `setup.sh` moves it to `docker-compose.override.yml.bak.<ts>`. Delete the backup once you're sure you don't need it. |
 | Settings → "Models & Preferences" shows "No config entries" | DB was initialized before migration 057 seeded default config rows | Restart paper_ingestion to trigger the migration runner: `docker compose restart paper_ingestion`. Verify: `docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"` — should return 3 rows. |
 | Selecting a model returns HTTP 400 "LiteLLM config is read-only" | Runtime LiteLLM config is mounted read-only or the selected model is not pulled/assignable | Pull the model first from Settings → Models, or restart LiteLLM with an updated config. The default smart model is `qwen3:14b`. |
@@ -794,4 +793,3 @@ bash scripts/production-readiness-check.sh; echo "exit=$?"
 - [docs/PRD.md](PRD.md) — product requirements; §4.1 security NFRs.
 - [docs/SECURITY.md](SECURITY.md) — threat model, auth boundaries, hardening checklist.
 - [docs/known-residual-risks.md](known-residual-risks.md) — acknowledged-but-deferred risks and their reopen criteria.
-- `PERSONAL-SETUP.md` (gitignored) — your own environment notes; not committed.

@@ -12,10 +12,6 @@ Instructor + Langfuse integration transition (Wave 1 canary → Wave 2 bulk →
 Wave 3 cleanup) has completed; only the end-state described here is in scope
 for new work.
 
-While the transition is in flight, this contract describes the **target
-state**. Pre-transition code that still uses `call_llm` / `call_llm_json_value`
-violates the contract; the violations are the work items in the impl spec.
-
 ---
 
 ## 0. What this contract covers (and what it does NOT)
@@ -377,8 +373,8 @@ The implementation MUST satisfy these. Testable.
 6. **Retry budget cap.** `max_retries` MUST NOT exceed 2 without a recorded
    latency-budget review tied to a specific stage cap.
 7. **Prompt provenance.** All prompt templates referenced by the call sites
-   MUST live in version-controlled source files (no n8n nodes, no DB
-   strings, no env-var prompts). Per [ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md).
+   MUST live in version-controlled source files (no external workflow nodes,
+   no DB strings, no env-var prompts). Per [ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md).
 
 ---
 
@@ -432,4 +428,4 @@ Every cited identifier was Read in the session producing this contract.
 | Card-generator `_verify_quote` fuzzy match | services/learning_engine/learning_engine/card_generator.py:72-79 | Custom verifier; preserved |
 | Pulse `verify_pulse_reasoning` | services/paper_ingestion/paper_ingestion/pulse/verification.py | QuoteVerifier-backed reasoning check |
 | Anti-hallucination spec | docs/ENGINEERING_STANDARDS.md:73-89 | Mandates evidence-backed claims |
-| Existing impl spec | docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md | Drives the transition to the steady state described above |
+| Existing impl spec | Instructor + Langfuse integration spec (archived; not in the public tree) | Drove the transition to the steady state described above |

@@ -84,8 +84,6 @@ else
 
   # Required secrets (mirrors setup.sh behaviour).
   POSTGRES_PASSWORD="$(openssl rand -hex 32)"
-  N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
-  N8N_JWT_SECRET="$(openssl rand -hex 32)"
   JARVIS_API_KEY="$(openssl rand -hex 32)"
   LITELLM_MASTER_KEY="$(openssl rand -hex 32)"
   # Fernet key — 32 bytes urlsafe-base64. cryptography.Fernet wants exactly
@@ -97,14 +95,10 @@ else
   # macOS-safe in-place sed: write through a tempfile.
   TMP="$(mktemp)"
   awk -v pgp="${POSTGRES_PASSWORD}" \
-      -v n8e="${N8N_ENCRYPTION_KEY}" \
-      -v n8j="${N8N_JWT_SECRET}" \
       -v jak="${JARVIS_API_KEY}" \
       -v lmk="${LITELLM_MASTER_KEY}" \
       -v jck="${JARVIS_CONFIG_KEY}" '
     /^POSTGRES_PASSWORD=$/ { print "POSTGRES_PASSWORD=" pgp; next }
-    /^N8N_ENCRYPTION_KEY=$/ { print "N8N_ENCRYPTION_KEY=" n8e; next }
-    /^N8N_JWT_SECRET=$/ { print "N8N_JWT_SECRET=" n8j; next }
     /^JARVIS_API_KEY=$/ { print "JARVIS_API_KEY=" jak; next }
     /^LITELLM_MASTER_KEY=$/ { print "LITELLM_MASTER_KEY=" lmk; next }
     /^JARVIS_CONFIG_KEY=$/ { print "JARVIS_CONFIG_KEY=" jck; next }

@@ -28,12 +28,10 @@ printf '%s\n' "smoke-qdrant-api-key" > "$TMP_DIR/qdrant_api_key.txt"
 printf '%s\n' "test-litellm-master-key" > "$TMP_DIR/litellm_master_key.txt"
 printf '%s\n' "$(openssl rand -base64 32)" > "$TMP_DIR/jarvis_config_key.txt"
 # Optional-profile secrets — must be declared so compose does not reject them
-# when observability / n8n / tunnel / backup profiles are activated in CI.
+# when observability / tunnel / backup profiles are activated in CI.
 printf '%s\n' "smoke-langfuse-pg-password" > "$TMP_DIR/langfuse_pg_password.txt"
 printf '%s\n' "smoke-langfuse-nextauth-secret" > "$TMP_DIR/langfuse_nextauth_secret.txt"
 printf '%s\n' "smoke-langfuse-salt" > "$TMP_DIR/langfuse_salt.txt"
-printf '%s\n' "smoke-n8n-encryption-key" > "$TMP_DIR/n8n_encryption_key.txt"
-printf '%s\n' "smoke-n8n-jwt-secret" > "$TMP_DIR/n8n_jwt_secret.txt"
 printf '%s\n' "smoke-cloudflare-tunnel-token" > "$TMP_DIR/cloudflare_tunnel_token.txt"
 printf '%s\n' "smoke-backup-encrypt-key" > "$TMP_DIR/backup_encrypt_key.txt"
 printf '%s\n' "$(openssl rand -hex 32)" > "$TMP_DIR/jarvis_model_hmac_key.txt"
@@ -60,10 +58,6 @@ secrets:
     file: $TMP_DIR/langfuse_nextauth_secret.txt
   langfuse_salt:
     file: $TMP_DIR/langfuse_salt.txt
-  n8n_encryption_key:
-    file: $TMP_DIR/n8n_encryption_key.txt
-  n8n_jwt_secret:
-    file: $TMP_DIR/n8n_jwt_secret.txt
   cloudflare_tunnel_token:
     file: $TMP_DIR/cloudflare_tunnel_token.txt
   backup_encrypt_key:

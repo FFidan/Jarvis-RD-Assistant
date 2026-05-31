@@ -1,0 +1,17 @@
+# scripts/pii-patterns-local.sh.example
+#
+# Copy to scripts/pii-patterns-local.sh (gitignored) and add the personal
+# identifiers from YOUR machine — home directory, hostname, backup mount, local
+# infra container names — so scripts/check-pii-allowlist.sh catches them before
+# they're accidentally committed.
+#
+#   cp scripts/pii-patterns-local.sh.example scripts/pii-patterns-local.sh
+#
+# This file is sourced by check-pii-allowlist.sh and appends to its `patterns`
+# array. Entries are extended-regex patterns passed to `git grep -nE`.
+patterns+=(
+    "/home/<your-username>"
+    "<YOUR-HOSTNAME>"
+    "/mnt/<your-backup-mount>"
+    "<your-local-infra-container>"
+)

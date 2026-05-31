@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Self-hosted runner post-job hook — keeps Docker disk bounded on /mnt/work_ext4.
+# Self-hosted runner post-job hook — keeps Docker disk bounded on the runner host.
 #
 # Canonical version. Wired on each runner via ACTIONS_RUNNER_HOOK_JOB_COMPLETED
-# in the runner's .env, so it runs after EVERY job. Apply with:
-#   cp docs/ci/prune-hook.sh /mnt/work_ext4/actions-runners/jarvis-rd/prune-hook.sh
-#   cp docs/ci/prune-hook.sh /mnt/work_ext4/actions-runners/jarvis-rd-2/prune-hook.sh
+# in the runner's .env, so it runs after EVERY job. Apply with (RUNNER_BASE_DIR
+# is wherever your self-hosted runners are installed):
+#   cp docs/ci/prune-hook.sh "${RUNNER_BASE_DIR:-/opt/actions-runners}/<runner-name>/prune-hook.sh"
+# Repeat for each runner instance registered on the host.
 #
 # Best-effort only: never fails a job.
 #

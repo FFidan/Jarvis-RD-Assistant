@@ -12,14 +12,18 @@ if [[ ! -f "$ALLOWLIST" ]]; then
     exit 2
 fi
 
-# Patterns to search for (separately to keep output readable):
+# Generic personal-data patterns scanned in every clone (e.g. personal email
+# domains). Machine-specific patterns — home directories, hostnames, backup
+# mounts, local-infra container names — are operator-specific and live in a
+# gitignored local file so each contributor scans for their own identifiers
+# without committing them. See scripts/pii-patterns-local.sh.example.
 declare -a patterns=(
-    "/home/ferhat"
     "@(googlemail|gmail|tuhh)\.de"
-    "FF-PC"
-    "/mnt/backup"
-    "claude-ollama"
 )
+if [[ -f "$ROOT/scripts/pii-patterns-local.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$ROOT/scripts/pii-patterns-local.sh"
+fi
 
 # Files to skip (gitignored dirs are not searched by git grep anyway; these
 # explicit excludes cover tracked-but-internal audit/handoff content):
@@ -32,10 +36,16 @@ declare -a exclude_paths=(
 
 declare -A allowed
 # Read allowlist: lines of "file<TAB>pattern" (or just "file" for blanket).
-while IFS=$'\t' read -r file pattern; do
-    [[ -z "$file" || "$file" == \#* ]] && continue
-    allowed["$file|${pattern:-.*}"]=1
-done < "$ALLOWLIST"
+# A gitignored scripts/pii-allowlist-local.txt overlay (same format) is also
+# read when present, for operator-specific allowlist entries.
+LOCAL_ALLOWLIST="$ROOT/scripts/pii-allowlist-local.txt"
+for allowlist_file in "$ALLOWLIST" "$LOCAL_ALLOWLIST"; do
+    [[ -f "$allowlist_file" ]] || continue
+    while IFS=$'\t' read -r file pattern; do
+        [[ -z "$file" || "$file" == \#* ]] && continue
+        allowed["$file|${pattern:-.*}"]=1
+    done < "$allowlist_file"
+done
 
 violation_count=0
 for pat in "${patterns[@]}"; do

@@ -3,8 +3,8 @@
 **Status:** SHIPPED — backend and Settings lifecycle v1 live-verified
 **Date:** 2026-05-03
 **Scope:** Model catalog, hardware-aware recommendations, pull-on-demand UI, cloud model integration, Settings UI GHOST surface fix
-**Depends on:** Phase C (embedding swap, spec at `docs/archive/2026-05/specs/2026-05-03-c-embedding-upgrade.md`)
-**Related:** `docs/contracts/03-llm.md`, `docs/archive/2026-05/specs/2026-05-03-c-embedding-upgrade.md`
+**Depends on:** Phase C (embedding swap; the Phase C spec is archived, not in the public tree)
+**Related:** `docs/contracts/03-llm.md`
 
 ---
 
@@ -478,7 +478,7 @@ The catalog is static in the package. If Ollama renames `qwen3:14b` → `qwen3:1
 
 | Step | Action |
 |---|---|
-| Phase C | Pulled `qwen3-embedding:0.6b`, rebuilt `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, updated `litellm/config.yaml` embed alias, and left `kg_entities` as a separately checkpointed/rebuildable optional collection. Full historical spec at `docs/archive/2026-05/specs/2026-05-03-c-embedding-upgrade.md`. |
+| Phase C | Pulled `qwen3-embedding:0.6b`, rebuilt `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, updated `litellm/config.yaml` embed alias, and left `kg_entities` as a separately checkpointed/rebuildable optional collection. The full historical spec is archived (not in the public tree). |
 | Shipped | Removed `nomic-embed-text` and `mistral-nemo:12b` from active `litellm/config.yaml` defaults. |
 | Shipped | Set smart/fast defaults: `smart=qwen3:14b`, `fast=qwen3:4b`. |
 | Shipped (14b→8b) | Downgraded smart default to qwen3:8b in litellm/config.yaml — qwen3:14b starved the GPU-resident embedder on 16 GB cards; admins restore 14b via Settings → llm.smart_model. |

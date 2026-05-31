@@ -18,7 +18,6 @@ below outrank archived notes.
 - [Deployment](DEPLOYMENT.md)
 - [Requirements](REQUIREMENTS.md)
 - [Performance Profiling HOWTO](perf/HOWTO.md)
-- [Library Wishlist Decisions](archive/2026-05/perf/2026-05-12-library-wishlist-decisions.md)
 
 ## Historical Material
 

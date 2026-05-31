@@ -76,10 +76,6 @@ sync_secret() {
           value=$(openssl rand -hex 16) ;;
         LANGFUSE_PG_PASSWORD)
           value=$(openssl rand -hex 24) ;;
-        N8N_ENCRYPTION_KEY)
-          value=$(openssl rand -base64 32 | tr -d '\n') ;;
-        N8N_JWT_SECRET)
-          value=$(openssl rand -hex 32) ;;
         BACKUP_ENCRYPT_KEY)
           value=$(openssl rand -base64 32 | tr -d '\n') ;;
         *)
@@ -153,12 +149,6 @@ sync_secret JARVIS_MODEL_HMAC_KEY jarvis_model_hmac_key.txt "openssl rand -hex 3
 sync_secret LANGFUSE_NEXTAUTH_SECRET langfuse_nextauth_secret.txt "openssl rand -hex 32"
 sync_secret LANGFUSE_SALT            langfuse_salt.txt            "openssl rand -hex 16"
 sync_secret LANGFUSE_PG_PASSWORD     langfuse_pg_password.txt     "openssl rand -hex 24"
-
-# ---------------------------------------------------------------------------
-# n8n workflow automation (--profile n8n)
-# ---------------------------------------------------------------------------
-sync_secret N8N_ENCRYPTION_KEY n8n_encryption_key.txt "openssl rand -base64 32 | tr -d '\\n'"
-sync_secret N8N_JWT_SECRET     n8n_jwt_secret.txt     "openssl rand -hex 32"
 
 # ---------------------------------------------------------------------------
 # Cloudflare Tunnel (--profile tunnel)

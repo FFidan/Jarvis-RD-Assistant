@@ -64,6 +64,7 @@ validation:
 # resolves them against docs_dir — producing hundreds of broken-link warnings.
 exclude_docs: |
   /README.md
+  USER_GUIDE.md
   AGENTIC_WORKFLOW.md
   agents-shim.md
   archive/
@@ -74,6 +75,7 @@ exclude_docs: |
   superpowers/
   screenshots/
   audit/
+  ci/
   handoff/
   manual/_meta.md
 
@@ -107,7 +109,6 @@ nav:
       - Typography: contracts/08-typography.md
       - LLM Prompt Shape: contracts/09-llm-prompt-shape.md
   - User Guide:
-      - Quick Reference: USER_GUIDE.md
       - Overview: manual/index.md
       - Getting Started: manual/getting-started.md
       - Navigation: manual/navigation.md

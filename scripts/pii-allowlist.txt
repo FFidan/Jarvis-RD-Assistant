@@ -15,13 +15,3 @@ services/paper_ingestion/paper_ingestion/sources/arxiv_source.py	ferhat\.fidan@t
 # CHANGELOG / LICENSE (legitimate author attribution)
 LICENSE	Ferhat Fidan
 CHANGELOG.md	Ferhat Fidan
-
-# Self-references — the pii-checker script + this allowlist literally enumerate patterns
-scripts/check-pii-allowlist.sh	/home/ferhat
-scripts/check-pii-allowlist.sh	FF-PC
-scripts/check-pii-allowlist.sh	/mnt/backup
-scripts/check-pii-allowlist.sh	claude-ollama
-scripts/pii-allowlist.txt	/home/ferhat
-scripts/pii-allowlist.txt	FF-PC
-scripts/pii-allowlist.txt	/mnt/backup
-scripts/pii-allowlist.txt	claude-ollama
