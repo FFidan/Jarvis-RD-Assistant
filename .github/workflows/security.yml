@@ -99,7 +99,13 @@ jobs:
     name: Docker build smoke test
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     env:
-      DOCKER_BUILDKIT: "0"  # this self-hosted box has no buildx plugin; use the legacy builder
+      # BuildKit (buildx is installed on the runner) — enables the
+      # `RUN --mount=type=cache` pip wheel cache in the 3 service Dockerfiles, so
+      # a constraints.txt change re-uses downloaded wheels instead of re-fetching
+      # the multi-GB torch/docling set (dep-bump rebuilds ~8min -> ~2min). Every
+      # other consumer (docker compose build in update.sh) already defaults to
+      # BuildKit, so the `# syntax`/`--mount` Dockerfiles build everywhere.
+      DOCKER_BUILDKIT: "1"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 

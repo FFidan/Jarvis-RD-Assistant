@@ -33,12 +33,19 @@ COPY services/paper_ingestion/requirements.txt services/paper_ingestion/constrai
 # --no-deps install). Final package set is identical to the prior ordering.
 # The cu124 torch pre-install was removed: constraints-optional.txt pins
 # torch==2.11.0 (PyPI) with its bundled nvidia-* libs.
-RUN pip install --no-cache-dir --require-hashes -r constraints.txt \
+# A BuildKit cache mount keeps pip's wheel cache across builds, so a
+# constraints.txt change re-uses already-downloaded wheels (the multi-GB
+# torch/docling set) instead of re-fetching them — dep-bump rebuilds drop from
+# ~8 min to ~2 min. --require-hashes still verifies every wheel, so the cache
+# cannot introduce an unpinned package. The mount is build-only, so the image
+# stays small without --no-cache-dir.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --require-hashes -r constraints.txt \
     && if [ "$INSTALL_PROFILING" = "true" ]; then \
-         pip install --no-cache-dir --require-hashes -r constraints-profiling.txt; \
+         pip install --require-hashes -r constraints-profiling.txt; \
        fi \
     && if [ "$INSTALL_OPTIONAL" = "true" ]; then \
-         pip install --no-cache-dir --require-hashes -r constraints-optional.txt; \
+         pip install --require-hashes -r constraints-optional.txt; \
        fi
 
 # jarvis_common wheel installed with --no-deps (its transitives are already

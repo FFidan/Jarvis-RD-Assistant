@@ -17,7 +17,11 @@ FROM ${PYTHON_BASE_IMAGE}
 WORKDIR /app
 
 COPY services/learning_engine/requirements.txt services/learning_engine/constraints.txt ./
-RUN pip install --no-cache-dir --require-hashes -r constraints.txt
+# BuildKit cache mount: re-use pip's wheel cache across builds so a
+# constraints.txt change doesn't re-download every wheel. --require-hashes
+# still verifies each wheel; the mount is build-only so the image stays small.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --require-hashes -r constraints.txt
 COPY --from=jarvis-common-builder /tmp/dist/*.whl /tmp/dist/
 RUN pip install --no-cache-dir --no-deps /tmp/dist/jarvis_common-*.whl \
     && rm -rf /tmp/dist
