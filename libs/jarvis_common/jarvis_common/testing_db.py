@@ -206,6 +206,10 @@ def _spin_pg_container(
 ) -> Iterator[str]:
     """Spin up a disposable postgres:16.8 container; yield its DSN; tear down on exit.
 
+    FALLBACK-ONLY: used when ``JARVIS_TEST_PG_ADMIN_DSN`` is unset (local dev with
+    no managed Postgres). CI and opt-in local runs take the managed-server path in
+    ``_managed_or_spin`` and issue zero docker commands.
+
     Docker invariant: ``--rm`` means the container self-removes when stopped,
     but we still call ``docker rm -f`` in the finally block to ensure cleanup
     even if the container was not stopped cleanly (e.g. on SIGKILL).
@@ -354,6 +358,143 @@ def _spin_pg_container(
         _docker_rm_best_effort(container)
 
 
+# ---------------------------------------------------------------------------
+# Managed-Postgres path (JARVIS_TEST_PG_ADMIN_DSN set)
+# ---------------------------------------------------------------------------
+# When a long-lived admin Postgres is available (the CI ``services:`` server, or
+# an opt-in local one), each fixture gets a fresh EMPTY database via
+# ``CREATE DATABASE … TEMPLATE template0`` instead of spinning a container. This
+# removes ``docker run`` from pytest entirely — the root of every DB-test flake
+# (CI-CROSS-USER-FLAKY-1) — so parallel runners stop contending on the Docker
+# daemon. The db is empty, so the consumer pool applies db/init.sql +
+# run_migrations exactly as it did against a throwaway container: transparent.
+# Unset the env var (local dev, no managed PG) → fall back to _spin_pg_container.
+
+
+def _admin_dsn() -> str | None:
+    """Admin DSN for the managed test Postgres, or None to fall back to
+    per-fixture throwaway containers (local dev)."""
+    return os.environ.get("JARVIS_TEST_PG_ADMIN_DSN")
+
+
+def _with_dbname(dsn: str, dbname: str) -> str:
+    """Return *dsn* with its database path component replaced by *dbname*."""
+    from urllib.parse import urlsplit, urlunsplit  # noqa: PLC0415
+
+    return urlunsplit(urlsplit(dsn)._replace(path=f"/{dbname}"))
+
+
+def _run_sync(coro: Any) -> Any:
+    """Drive *coro* to completion in a private event loop.
+
+    The DSN factories are sync pytest fixtures, but the admin CREATE/DROP
+    DATABASE calls are async (asyncpg). A throwaway loop keeps these brief admin
+    ops isolated from pytest-asyncio's session loop.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+async def _admin_connect(admin_dsn: str):  # -> asyncpg.Connection
+    """Connect to the admin server's maintenance db, retrying briefly while a
+    freshly-started Postgres finishes accepting connections.
+
+    The CI ``services:`` health-gate usually makes this a single attempt; the
+    opt-in local admin path has no gate, so 3 attempts absorb a cold start
+    (mirrors ``_spin_pg_container``'s 3-attempt run loop).
+    """
+    import asyncpg  # noqa: PLC0415
+
+    conn = None
+    for attempt in range(3):
+        try:
+            conn = await asyncpg.connect(admin_dsn)
+            break
+        except (OSError, asyncpg.PostgresError):
+            if attempt == 2:
+                raise
+            await asyncio.sleep(0.5)
+    assert conn is not None
+    return conn
+
+
+async def _create_fresh_db(admin_dsn: str, prefix: str) -> tuple[str, str]:
+    """``CREATE DATABASE "<prefix>_<uuid12>" TEMPLATE template0`` on the admin
+    server; return ``(dsn_to_new_db, dbname)``.
+
+    template0 is the pristine, always-copyable template (no active connections
+    to copy). CREATE DATABASE cannot run inside a transaction; asyncpg
+    connections are autocommit unless a transaction is opened, so a bare
+    ``execute`` is correct. The CREATE is retried on a transient PostgresError
+    (e.g. a momentary template lock if two jobs ever share one admin server).
+    The new db is EMPTY — the consumer pool applies the schema, exactly as for a
+    container. ``hex[:12]`` keeps the identifier well under Postgres' 63-byte
+    limit even with the longest service prefix.
+    """
+    import asyncpg  # noqa: PLC0415
+
+    dbname = f"{prefix.replace('-', '_')}_{uuid.uuid4().hex[:12]}"
+    assert len(dbname.encode()) <= 63, f"db identifier too long: {dbname!r}"
+    conn = await _admin_connect(admin_dsn)
+    try:
+        for attempt in range(3):
+            try:
+                await conn.execute(f'CREATE DATABASE "{dbname}" TEMPLATE template0')
+                break
+            except asyncpg.PostgresError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.5)
+    finally:
+        await conn.close()
+    return _with_dbname(admin_dsn, dbname), dbname
+
+
+async def _drop_db(admin_dsn: str, dbname: str) -> None:
+    """``DROP DATABASE IF EXISTS <dbname> WITH (FORCE)`` — drop the per-fixture
+    database at teardown, terminating any app-pool backends still attached.
+
+    Uses the same retrying connect as create so a transient blip at teardown
+    doesn't error an otherwise-green run.
+    """
+    conn = await _admin_connect(admin_dsn)
+    try:
+        await conn.execute(f'DROP DATABASE IF EXISTS "{dbname}" WITH (FORCE)')
+    finally:
+        await conn.close()
+
+
+def _managed_or_spin(
+    container_prefix: str,
+    *,
+    admin_suffix: str,
+    container_suffix: str,
+    password_prefix: str,
+) -> Iterator[str]:
+    """Yield a live-PG DSN: a fresh empty db on the managed server when
+    ``JARVIS_TEST_PG_ADMIN_DSN`` is set (zero docker commands), else a throwaway
+    container (today's local-dev path). Shared body of all 3 DSN factories.
+    """
+    admin = _admin_dsn()
+    if admin is not None:
+        dsn, dbname = _run_sync(_create_fresh_db(admin, f"{container_prefix}{admin_suffix}"))
+        try:
+            yield dsn
+        finally:
+            _run_sync(_drop_db(admin, dbname))
+    else:
+        if shutil.which("docker") is None:
+            pytest.fail("Docker CLI is required for JARVIS_RUN_LIVE_PG=1 live PostgreSQL tests")
+        yield from _spin_pg_container(
+            container_prefix,
+            container_suffix=container_suffix,
+            password_prefix=password_prefix,
+        )
+
+
 def make_live_pg_dsn(container_prefix: str):  # -> pytest fixture
     """Return a ``live_pg_dsn`` pytest fixture scoped to *container_prefix*.
 
@@ -372,11 +513,10 @@ def make_live_pg_dsn(container_prefix: str):  # -> pytest fixture
         """
         if os.environ.get("JARVIS_RUN_LIVE_PG") != "1":
             pytest.skip("set JARVIS_RUN_LIVE_PG=1 to run Docker-backed live PostgreSQL tests")
-        if shutil.which("docker") is None:
-            pytest.fail("Docker CLI is required for JARVIS_RUN_LIVE_PG=1 live PostgreSQL tests")
 
-        yield from _spin_pg_container(
+        yield from _managed_or_spin(
             container_prefix,
+            admin_suffix="_live",
             container_suffix="-live-pg",
             password_prefix="jarvis-test",
         )
@@ -403,11 +543,10 @@ def make_live_pg_session_dsn(container_prefix: str):  # -> pytest fixture (sessi
                 "set JARVIS_RUN_LIVE_PG=1 to run the cross-user isolation suite "
                 "(DB-backed; session-scoped postgres container)"
             )
-        if shutil.which("docker") is None:
-            pytest.fail("Docker CLI is required for the cross-user isolation suite")
 
-        yield from _spin_pg_container(
+        yield from _managed_or_spin(
             container_prefix,
+            admin_suffix="_xuser",
             container_suffix="-xuser",
             password_prefix="jarvis-xuser",
         )
@@ -436,11 +575,10 @@ def make_contract_pg_dsn(container_prefix: str):  # -> pytest fixture (session s
                 "set JARVIS_RUN_LIVE_PG=1 to run contract-layer tests "
                 "(DB-backed; session-scoped postgres container)"
             )
-        if shutil.which("docker") is None:
-            pytest.fail("Docker CLI is required for contract-layer tests")
 
-        yield from _spin_pg_container(
+        yield from _managed_or_spin(
             container_prefix,
+            admin_suffix="_contract",
             container_suffix="-contract",
             password_prefix="jarvis-contract",
         )

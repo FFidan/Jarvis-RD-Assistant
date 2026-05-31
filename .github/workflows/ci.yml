@@ -70,10 +70,15 @@ jobs:
   cross-user-isolation:
     name: Cross-user isolation (release gate)
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
-    # The live_pg fixture provisions its own throwaway PostgreSQL 16 (postgres:16.8)
-    # container via the Docker CLI (preinstalled on ubuntu-latest) and tears it
-    # down after each test.  No `services:` block is required — the fixture owns
-    # the container lifecycle.
+    # A runner-managed PostgreSQL 16 (postgres:16.8) is provided via the
+    # `services:` block below, on tmpfs.  The live-PG fixtures clone a fresh
+    # EMPTY database from it per session (CREATE DATABASE … TEMPLATE template0)
+    # instead of shelling `docker run`, so pytest issues ZERO docker commands and
+    # parallel runners never contend on the Docker daemon (root fix for
+    # CI-CROSS-USER-FLAKY-1).  The host port is RANDOM (`ports: - 5432`): on the
+    # self-hosted box host 5432 is already taken by the dev Postgres stack, and a
+    # random port also lets two concurrent jobs on one host coexist (Wave 2).
+    # The first step resolves JARVIS_TEST_PG_ADMIN_DSN from the assigned port.
     #
     # PYTHONPATH must include services/learning_engine (and the other service +
     # lib roots) so that `pytest.importorskip("learning_engine.main")` at the
@@ -83,12 +88,30 @@ jobs:
     # --override-ini="addopts=…" replaces the service-local pytest.ini addopts
     # which contains `-m "not live_pg and not integration"` — that marker
     # filter ANDs with the CLI -m flag and makes the test set empty.
+    services:
+      postgres:
+        image: postgres:16.8
+        env:
+          POSTGRES_PASSWORD: jarvis-ci
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432
     env:
       JARVIS_RUN_LIVE_PG: "1"
       PYTHONPATH: >-
         services/paper_ingestion:services/learning_engine:services/telegram_bot:libs/jarvis_common
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Resolve managed-Postgres admin DSN
+        run: >-
+          echo "JARVIS_TEST_PG_ADMIN_DSN=postgresql://postgres:jarvis-ci@localhost:${{ job.services.postgres.ports['5432'] }}/postgres"
+          >> "$GITHUB_ENV"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
@@ -109,9 +132,10 @@ jobs:
           -v
 
       - name: Guard - squashed baseline schema invariants
-        # Reuses this job's JARVIS_RUN_LIVE_PG=1 + Docker CLI (the live_pg
-        # fixture owns its throwaway postgres:16.8 container). The guard tests
-        # are marked `live_pg` only, so the marker filter is `live_pg`, not
+        # Reuses this job's JARVIS_RUN_LIVE_PG=1 + JARVIS_TEST_PG_ADMIN_DSN (the
+        # live-PG fixture clones a fresh empty db from the managed `services:`
+        # Postgres). The guard tests are marked `live_pg` only, so the marker
+        # filter is `live_pg`, not
         # the `integration and live_pg` used by the cross-user file above.
         # Wave-1 squash (c6145af3) collapsed 88 migrations into db/init.sql;
         # test_baseline_invariants.py is the post-squash I-class guard.
@@ -142,16 +166,37 @@ jobs:
   contract-tests:
     name: Contract layer (DB-backed)
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
-    # The contract_pg_dsn fixture provisions ONE postgres:16.8 container per
-    # pytest session and applies db/init.sql + run_migrations() once. Per-test
-    # isolation is via asyncpg transaction rollback (zero per-test container
-    # cost). The fixture owns the container lifecycle — no `services:` block.
+    # A runner-managed PostgreSQL 16 (postgres:16.8) is provided via `services:`
+    # below, on tmpfs.  The contract_pg_dsn fixture clones ONE fresh empty
+    # database from it per session (CREATE DATABASE … TEMPLATE template0) and
+    # applies db/init.sql + run_migrations() once; per-test isolation is via
+    # asyncpg transaction rollback (zero per-test cost).  No `docker run` from
+    # pytest.  Random host port (`ports: - 5432`) — host 5432 is taken by the dev
+    # stack and a random port lets concurrent jobs coexist (Wave 2).
+    services:
+      postgres:
+        image: postgres:16.8
+        env:
+          POSTGRES_PASSWORD: jarvis-ci
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432
     env:
       JARVIS_RUN_LIVE_PG: "1"
       PYTHONPATH: >-
         services/paper_ingestion:services/learning_engine:services/telegram_bot:libs/jarvis_common
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Resolve managed-Postgres admin DSN
+        run: >-
+          echo "JARVIS_TEST_PG_ADMIN_DSN=postgresql://postgres:jarvis-ci@localhost:${{ job.services.postgres.ports['5432'] }}/postgres"
+          >> "$GITHUB_ENV"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
