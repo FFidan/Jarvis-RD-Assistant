@@ -24,18 +24,6 @@ A six-week internal audit-and-remediation pass closed roughly 120 findings ahead
 
 **Public-launch preparation.** This release ships a rewritten README with above-the-fold product screenshots, a Highlights section, and the four-audience deployment path; weekly `dependabot` updates for pip, npm, Docker base images, and GitHub Actions; structured GitHub issue templates (bug report, feature request) with security reports routed to a private GitHub Security Advisory; and a root `SECURITY.md` pointing to the threat model.
 
-### Pristine pass (2026-05-25)
-
-Pre-public-launch pristine pass landed at `cadf8305`. 53 commits across 9 waves + 3 sub-waves.
-
-- **W1–W6**: closed audit-remediation carry-forwards (CI green unstick, 28 trivial CFs, 3 FE CFs, 14 backend CFs incl. HIGH/MED), shipped TELEGRAM-INTERNAL-API-1 + INFRA-INGEST-1, and split ARCH-ENTITIES-1 (entities.py 814→329 LOC + entities_qdrant.py + entities_sql.py).
-- **W6.5** (pre-pristine CF burn-down, YAGNI lens): 10 actionable CF fixes (`469bb978`..`55bfe9ef`) + wave6.5-fix (`e2466c02`) addressing Wave-Gate Axis 2/4/5 findings + 5 DEFERRED-INTENTIONAL downgrades; ARCH-AUTH-1 closed in `docs/known-residual-risks.md` (YAGNI, no coupling defect).
-- **W7** (OBS-1 RESOLVED, `e7d8687a`): `git log origin/master --all --full-history --diff-filter=ACMRT -- secrets/langfuse_init_pk.txt secrets/langfuse_init_sk.txt` returns ZERO commits; verified no `git filter-repo` / force-push required for public-launch.
-- **W8** (push + CI): pristine/main fast-forward-pushed to `origin/master` after all local pristine gates green (ruff / pyright / check-test-shape / check_agent_docs / check-burned-secrets / check-python-deps / pytest 2647/0/1-skip / FE lint+test+build / mkdocs --strict).
-- **W8.5** (baseline failure fixes): pulse `degraded_reason` clobber root-cause (`069e798c` + `46f299ce` refinement: pass `stats[degraded_reason]` to persist not the clobbered local var); reauth rate-limit-cache cross-file `_TEST_CHAT_ID` collision (`595ed887`: 99999 → 55555); 2 jsonb-double-encode guard violations in hw_probe + settings_ai (`36befbde`: drop `json.dumps()` wrappers before `$N::jsonb`).
-- **W8.6** (CI flake + speed-up): protocol-level `psql` round-trip probe in `_spin_pg_container` (`be2b4c1e`) supplements the W6-01 TCP probe to close the handshake-race window; zombie-container pre-clean + exit-125 retry in `_spin_pg_container` (`f1f12d80`) handles CI-retry zombie collisions; CI workflow upgraded to `astral-sh/setup-uv@v6.8.0` + `python-version: "3.12"` pin + `uv sync --frozen` (`466c6841`), cutting CI wall-clock from ~8-15min to ~4-5min.
-- **Post-push CI**: 3 consecutive green runs on master (`36befbde` post CI-E retry, `e52591f7` attempt 1 first-try, `cadf8305` first-try). Both flake fixes (psql probe + docker-125 retry) validated by live CI.
-
 ### Upgrade Notes
 
 - **Migration baseline squashed.** The 88-file migration chain prior to v0.5.0 was consolidated into `db/init.sql` as the single baseline; new migrations start at 0089. The migration runner detects squashed-init state and applies forward without interruption — operators upgrading from v0.4.1 or earlier need no manual intervention. See `tests/test_baseline_invariants.py` for the schema invariants pinned.
@@ -169,7 +157,7 @@ Pre-public-launch pristine pass landed at `cadf8305`. 53 commits across 9 waves 
 - Pristine-hardening program plan + QA/UX/perf deep audit
 - Fix 10 verified drift items (migration count, deprecated env, broken/stale refs, CHANGELOG regen) + archive superseded audits
 - Add end-user guide (surfaces + plain-English sign-in/recovery), index in docs/README
-- Canonical post-UI_v3 follow-ups execution plan (deep-plan output)
+- Canonical post-UI_v3 follow-ups execution plan
 - De-link removed PomodoroTimer.tsx in 2026-05-02 decisions doc (UI_v3 deleted it; fixes check_agent_docs)
 - Land 8 IA redesign specs + INDEX + parallelized execution plan
 - Add companion docs site + complete user guide (Planned; UI-guide gated on redesign)
@@ -214,7 +202,7 @@ Pre-public-launch pristine pass landed at `cadf8305`. 53 commits across 9 waves 
 
 
 ### Miscellaneous Tasks
-- Land CI-green + verified-gap-closure plan (deep-execute step 0)
+- Land CI-green + verified-gap-closure plan
 - Remove unused data-popover-testid from HealthDots trigger (Task C review nit)
 - Remove leftover /tmp/zotero-diag.log debug instrumentation from ResearchFeedPage test
 - Remove dead JournalSection component + stale tracked test (replaced by EOD redesign)
@@ -260,8 +248,8 @@ Pre-public-launch pristine pass landed at `cadf8305`. 53 commits across 9 waves 
 
 - **Deep-Audit cycles 1+2+3** (2026-05-23) — 82 findings closed across 3 fix-waves. 8 cross-user leak fixes (W1-D1/D2), 5 admin gating gaps closed (W2-S1), 3 XSS/CSP fixes (SEC-XSS-001/002 + SEC-CSP-001), 14 transformers CVEs, FastAPI/Starlette 0.126.0/0.50.0 (closes CVE-2025-62727), Pulse correctness bugs, `contradiction_jobs` user_id propagation.
 - **Bloat-Reduction program** (2026-05-24) — 5 god components decomposed. 260 inline `queryKey:` migrations. 12 telegram test migrations. 55 jarvis_common docstrings. Net +1963 LOC structural.
-- **Dead-Code Purge program** (2026-05-24) — 7 orphan frontend hook/util files removed (−213 LOC). 7 B-list rot-on-touch carry-forwards closed. 5-partition dead-code inventory generated.
-- **Polish Wave** (2026-05-24) — 2 final rot-on-touch carry-forwards (CF-W0G1, CF-W0G2). Vulture tooling removed (zero-yield, wrong fit for decorator-heavy Python; `knip` retained for frontend). 4 pre-existing failures fixed (SettingsAIPanel TS2532, chat-confidence vitest, 11 auto-fixable lint warnings, mkdocs install advisory). Version metadata + CHANGELOG + v0.5.0 git tag. **`libs/jarvis_common/jarvis_common/testing.py` decomposed** (945 LOC → 5 submodules + thin facade).
+- **Dead-Code Purge program** (2026-05-24) — 7 orphan frontend hook/util files removed (−213 LOC). 7 B-list rot-on-touch follow-ups closed. 5-partition dead-code inventory generated.
+- **Polish Wave** (2026-05-24) — 2 final rot-on-touch follow-ups. Vulture tooling removed (zero-yield, wrong fit for decorator-heavy Python; `knip` retained for frontend). 4 pre-existing failures fixed (SettingsAIPanel TS2532, chat-confidence vitest, 11 auto-fixable lint warnings, mkdocs install advisory). Version metadata + CHANGELOG + v0.5.0 git tag. **`libs/jarvis_common/jarvis_common/testing.py` decomposed** (945 LOC → 5 submodules + thin facade).
 ## [v0.4.1] - 2026-05-15
 
 

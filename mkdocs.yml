@@ -21,8 +21,7 @@
 # No file is moved. No canonical content is duplicated.
 # `mkdocs build --strict` validates this config at CI time.
 #
-# SCOPE: operator/developer half ONLY.
-# Out of scope: end-user manual (gated on UI redesign).
+# SCOPE: operator/developer docs + the end-user manual (see the User Guide nav).
 
 site_name: JARVIS RD Assistant — Operator & Developer Docs
 site_description: >-
@@ -55,12 +54,10 @@ validation:
 
 # Exclude directories that live under docs/ but are NOT part of this site:
 #  - archive/   historical plans, audit reports, old roadmaps (not operator docs)
-#  - plans/     in-flight implementation plans (agent working docs)
+#  - plans/     in-flight implementation plans (internal working docs)
 #  - specs/     dated transition specs (not evergreen)
 #  - perf/      profiling snapshots
-#  - agentic/   agent-internal runbooks
-#  - superpowers/ skill docs
-#  - screenshots/ UI screenshots
+#  - screenshots/ UI screenshots (referenced inline by README, not standalone pages)
 #
 # Without this exclusion, `mkdocs build --strict` would fail because those
 # files contain relative links to source-code paths (not doc files) and MkDocs

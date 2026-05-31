@@ -1,6 +1,6 @@
 """Pydantic models for the on-the-fly § Yesterday rollup (UI_v3 My-Day).
 
-Spec ``docs/superpowers/specs/2026-05-15-my-day-parity-pomodoro-design.md``
+Spec: internal design spec (archived)
 §3.2 / §4.2: § Yesterday is an **on-the-fly query**, NOT a materialized
 daily-rollup job (YAGNI; the stated rollup blocker is removed). Derived from
 ``tasks`` (completed / deferred) and ``daily_log`` (focus hours, cards

@@ -150,7 +150,7 @@ must fail review.
 3. **Redact API keys in error stacks.** When an exception is captured to
    a span, its stack trace MUST be filtered for known secret patterns
    (`Bearer`, `x-api-key`, `Authorization`). Use a centralized scrubber
-   (TBD utility — placeholder for impl plan).
+   (a dedicated scrubber utility — planned).
 4. **No paper full text** beyond the chunks already in the prompt — span
    metadata MUST NOT include `paper.abstract` or `paper_chunks.content`
    beyond what was sent to the LLM in the captured prompt itself.

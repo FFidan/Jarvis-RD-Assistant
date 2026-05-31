@@ -19,7 +19,7 @@ Required `.env` vars (init-secrets generates if blank):
 - `JARVIS_API_KEY`          — 32-byte hex; gates the REST API + dashboard login
 - `JARVIS_CONFIG_KEY`       — Fernet key; encrypts user_config secrets at rest
 - `LITELLM_MASTER_KEY`      — 32-byte hex; gates LiteLLM admin endpoints
-- `JARVIS_MODEL_HMAC_KEY`   — 64-hex; HMAC-signs Pulse classifier pickle blobs; **auto-generated** by `init-secrets.sh` — leave blank in `.env`, do not hand-edit (updated 2026-05-17, agent: claude-code)
+- `JARVIS_MODEL_HMAC_KEY`   — 64-hex; HMAC-signs Pulse classifier pickle blobs; **auto-generated** by `init-secrets.sh` — leave blank in `.env`, do not hand-edit (updated 2026-05-17)
 
 Optional:
 - `JARVIS_CONFIG_KEY_OLD`   — enables zero-downtime crypto rotation via MultiFernet
@@ -263,7 +263,7 @@ JARVIS_CONFIG_KEY=<Fernet key from: python -c "from cryptography.fernet import F
 
 ### Rate-limit client-IP trust (automatic)
 
-_Updated 2026-05-17, agent: claude-code._
+_Updated 2026-05-17._
 
 JARVIS pins the internal Docker network to a static subnet (`10.137.241.0/24` by default) and assigns Caddy a fixed IP within it (`10.137.241.2` for the public Caddy TLS terminator, `10.137.241.3` for `caddy_local`). nginx is configured to trust **only** those two /32 addresses plus `127.0.0.1` as `set_real_ip_from` sources — so client IP extraction is automatic and requires no operator step.
 
@@ -337,7 +337,7 @@ docker compose up -d paper_ingestion learning_engine   # triggers re-read on nex
 
 > **Note:** `secrets/` is the canonical secret store — every secret used by the stack lives here as `secrets/<name>.txt` (mode 600, gitignored). `setup.sh` writes all core secrets on first run, including `secrets/litellm_master_key.txt`. Never commit secret files. Use `chmod 600 secrets/*` to restrict read access on multi-user hosts.
 
-### Web UI configuration — zero manual `.env` editing required (updated 2026-05-17, agent: claude-code)
+### Web UI configuration — zero manual `.env` editing required (updated 2026-05-17)
 
 A normal install needs **no manual `.env` editing** beyond what `setup.sh` writes automatically. All ongoing configuration is handled through the web wizard and Settings:
 

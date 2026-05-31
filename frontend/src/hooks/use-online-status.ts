@@ -6,7 +6,7 @@
  *     on a stale/unrefreshable session — render cached content read-only instead.
  *   - P1d (connectivity banner + per-view offline indicators).
  *
- * Contract reference: docs/superpowers/specs/2026-05-15-shell-sidebar-admin-ia-redesign-design.md
+ * Contract reference: internal design spec (archived)
  *   "Offline / PWA contract — CANONICAL" §6 (global connectivity banner) and §4
  *   (last-known-good read mode).
  *

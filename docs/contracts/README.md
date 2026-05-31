@@ -41,7 +41,7 @@ Each contract follows the same skeleton:
 6. **Status table** — LIVE / GHOST / PARTIAL / DEPRECATED for every cited identifier
 7. **Cleanup decisions deferred** — lists ghosts; does NOT prescribe fixes (that's the impl plan's job)
 8. **Cross-contract references** — pointers to sibling contracts
-9. **Verified Identifiers** — every cited symbol with `file:line — one-line behavior`, per the grounding rule (CLAUDE.md, operator-only)
+9. **Verified Identifiers** — every cited symbol with `file:line — one-line behavior`, per the project's grounding convention
 
 ## Status meanings
 

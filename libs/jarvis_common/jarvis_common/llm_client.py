@@ -428,7 +428,9 @@ def _langfuse_lifespan_hook() -> None:
         logger.warning("OBSERVABILITY_ENABLED set but LANGFUSE_HOST/keys missing; traces no-op")
         return
     try:
-        from langfuse import Langfuse  # noqa: PLC0415
+        from langfuse import (
+            Langfuse,  # noqa: PLC0415  # pyright: ignore[reportAttributeAccessIssue]
+        )
 
         Langfuse(host=host, public_key=pk, secret_key=sk)
         logger.info("Langfuse configured, tracing to %s", host)

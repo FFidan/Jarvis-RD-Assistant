@@ -21,18 +21,12 @@ declare -a patterns=(
     "claude-ollama"
 )
 
-# Files to skip (gitignored is automatic; explicit dirs that hold legitimate audit content):
+# Files to skip (gitignored dirs are not searched by git grep anyway; these
+# explicit excludes cover tracked-but-internal audit/handoff content):
 declare -a exclude_paths=(
     ":!.git"
     ":!docs/audit"
     ":!docs/archive"
-    ":!.serena"
-    ":!.desloppify"
-    ":!.codeboarding"
-    ":!.ralph"
-    ":!.superpowers"
-    ":!.claude"
-    ":!.gemini"
     ":!handoff"
 )
 

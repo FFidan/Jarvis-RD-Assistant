@@ -2,7 +2,7 @@
 
 Verifies that LLM-generated quotes actually exist in the source paper text.
 Uses exact string matching first, then fuzzy matching with rapidfuzz at a
-97% threshold.  Implements the confidence rules from AGENTS.md:
+97% threshold.  Implements the confidence rules:
 
 - 100% pass  -> HIGH confidence
 - >50% pass  -> MEDIUM confidence
@@ -206,7 +206,7 @@ class QuoteVerifier:
         full_text: str,
         chunks: list[ChunkLike],
     ) -> VerificationReport:
-        """Verify all findings and compute confidence (HIGH/MEDIUM/LOW per AGENTS.md rules).
+        """Verify findings and compute confidence (HIGH/MEDIUM/LOW per anti-hallucination rules).
 
         Mutates *findings* in place (sets ``verified``, ``chunk_id``, ``page_number``).
         Each element of *findings* must have a ``.quote`` attribute and mutable
@@ -245,7 +245,7 @@ class QuoteVerifier:
         failed_count = total - verified_count
         pass_rate = verified_count / total
 
-        # Compute confidence per AGENTS.md rules
+        # Compute confidence per the anti-hallucination rules
         if pass_rate == 1.0:
             confidence = Confidence.HIGH
         elif pass_rate > 0.5:

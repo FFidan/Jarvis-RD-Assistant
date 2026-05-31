@@ -131,7 +131,7 @@ multi-user auth system. The current state:
 
 ### Cross-Service Auth Boundary (resolver DI)
 
-_Reconciled 2026-05-17 (agent: claude-code). Supersedes any earlier informal
+_Reconciled 2026-05-17. Supersedes any earlier informal
 "one canonical resolver, ~52 sites converted" wording — no such global
 convergence exists or is intended; the boundary below is the accurate one._
 

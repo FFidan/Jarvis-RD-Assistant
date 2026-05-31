@@ -3,7 +3,7 @@
 Generates cards from paper chunks via LiteLLM, then verifies every
 quote against source text. Unverified cards are discarded.
 
-Implements AGENTS.md anti-hallucination rules 5/6/7:
+Implements the anti-hallucination rules 5/6/7:
   5. If >50% fail verification → confidence = LOW
   6. If 100% fail → return fallback card with abstract
   7. Link verified cards to PDF page snapshots

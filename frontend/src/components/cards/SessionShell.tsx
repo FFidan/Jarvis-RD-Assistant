@@ -8,7 +8,7 @@
  * behind `onReviewSubmit` in ReviewCanvasProps. To add offline IndexedDB outbox +
  * sync, replace the implementation passed into <ReviewCanvas onReviewSubmit={...}>
  * without touching this shell or the canvas layout. The seam is intentional.
- * See docs/superpowers/specs/2026-05-15-learning-cards-ia-redesign-design.md §Offline.
+ * See internal design spec (archived), Offline section.
  */
 
 import { useCallback, useEffect, useState } from 'react';

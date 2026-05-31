@@ -6,12 +6,12 @@
  * else changes — ReviewMode is not rearchitected.
  *
  * Contract references:
- *   - docs/superpowers/specs/2026-05-15-learning-cards-ia-redesign-design.md
+ *   - internal design spec (archived)
  *     §Offline → "P2 (offline review + sync) — the flow this spec owns".
- *   - docs/superpowers/specs/2026-05-15-shell-sidebar-admin-ia-redesign-design.md
+ *   - internal design spec (archived)
  *     "Offline / PWA contract — CANONICAL": reconcile = a SINGLE toast
  *     "N synced, M skipped" (no merge UI).
- *   - docs/superpowers/specs/2026-05-16-offline-review-sync-endpoint-contract.md
+ *   - internal design spec (archived)
  *     (the wire contract handed to the functional/backend track).
  *
  * Behaviour

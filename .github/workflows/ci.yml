@@ -40,6 +40,19 @@ jobs:
       - name: Ruff
         run: uv run ruff check services/ libs/ scripts/
 
+      - name: Tach (module boundaries)
+        run: uv run tach check
+
+      - name: Set up Node (for pyright)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Pyright (type check)
+        # Resolves imports against the uv-synced .venv created above; pyrightconfig.json
+        # pins basic mode + the services/lib include set (tests/scripts/frontend excluded).
+        run: npx --yes pyright
+
       - name: Test-shape check
         run: uv run python3 scripts/check-test-shape.py
 

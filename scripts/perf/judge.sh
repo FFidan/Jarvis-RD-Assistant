@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare context for Claude-Code subagent judging of a bench bundle.
+# Prepare context for offline LLM-judging of a bench bundle.
 # Run AFTER the bench produces tier-rankings.json skeleton.
 #
 # Usage: scripts/perf/judge.sh <bundle_dir> <seed_dir>
@@ -54,5 +54,5 @@ PY
 
 echo
 echo "Judge tasks ready in: ${bundle_dir}/judge-tasks/"
-echo "Run each one via Claude Code (dispatch subagents in parallel)."
+echo "Run each judge task with your LLM-judging tool of choice (in parallel)."
 echo "After scores.md + verdict.txt files exist, run: scripts/perf/aggregate_judge.py ${bundle_dir}"

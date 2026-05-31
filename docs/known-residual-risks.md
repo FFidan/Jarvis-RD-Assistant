@@ -1,6 +1,6 @@
 # Known Residual Risks
 
-_Last updated: 2026-04-30_
+_Last updated: 2026-05-26_
 
 This document tracks acknowledged-but-deferred risks. Each entry links the originating audit ID and the rationale for deferring the full fix.
 
@@ -247,54 +247,54 @@ These records exist so future auditors don't re-raise the same falsified finding
 
 ## ARCH-AUTH-1: auth.py module split — closed (YAGNI; no coupling defect)
 
-The 2026-05-24 pristine-pass review found `libs/jarvis_common/jarvis_common/auth.py` (~687 LOC, 52+ importers) has no coupling defect, modification-pressure trigger, or measured maintainability cost justifying the previously-proposed 4-module split (session / api_key / owner_override / production_gate). Reopen only if a future change repeatedly trips over the file's size (e.g. >3 PRs need to coordinate edits within a quarter).
+The 2026-05-24 pre-release hardening review found `libs/jarvis_common/jarvis_common/auth.py` (~687 LOC, 52+ importers) has no coupling defect, modification-pressure trigger, or measured maintainability cost justifying the previously-proposed 4-module split (session / api_key / owner_override / production_gate). Reopen only if a future change repeatedly trips over the file's size (e.g. >3 PRs need to coordinate edits within a quarter).
 
 ---
 
-> **Resolved by 2026-05-25 pristine pass** (see CHANGELOG `[unreleased]` > Pristine pass):
-> - **TELEGRAM-INTERNAL-API-1** — `configure_middleware_and_errors` + `SessionMiddleware` wired into `internal_api.py` (W5-T1). Smoke test asserts both `SessionMiddleware` + `SlowAPIMiddleware` are present (W6.5-T6).
-> - **INFRA-INGEST-1** — IP allowlist guard added via `INFRA_INGEST_ALLOWED_CIDRS` `CoreSettings` field + default-deny 503 (W5-T2 + wave5-fix); XFF/proxy-trust risk documented in `docs/SECURITY.md` § Proxy-Trust and Source-IP Allowlisting (W6.5-T7).
-> - **ARCH-ENTITIES-1** — `extraction/entities.py` 814→329 LOC (orchestration only); `entities_qdrant.py` + `entities_sql.py` extracted; orchestrator owns `_store_entity_embedding` call (one-way orchestration→adapter); `_user_scope_paper_entities_exists` local helper consolidates 4 inlined SQL predicates (W6 + W6.5-T4).
+> **Resolved by the 2026-05-25 pre-release hardening** (see CHANGELOG `[unreleased]`):
+> - **TELEGRAM-INTERNAL-API-1** — `configure_middleware_and_errors` + `SessionMiddleware` wired into `internal_api.py`. Smoke test asserts both `SessionMiddleware` + `SlowAPIMiddleware` are present.
+> - **INFRA-INGEST-1** — IP allowlist guard added via `INFRA_INGEST_ALLOWED_CIDRS` `CoreSettings` field + default-deny 503; XFF/proxy-trust risk documented in `docs/SECURITY.md` § Proxy-Trust and Source-IP Allowlisting.
+> - **ARCH-ENTITIES-1** — `extraction/entities.py` 814→329 LOC (orchestration only); `entities_qdrant.py` + `entities_sql.py` extracted; orchestrator owns `_store_entity_embedding` call (one-way orchestration→adapter); `_user_scope_paper_entities_exists` local helper consolidates 4 inlined SQL predicates.
 
 ---
 
 ## CI-CROSS-USER-FLAKY-1: intermittent ConnectionResetError on live-PG container init
 
-**Severity:** MEDIUM — flakes CI gates; investigated and mitigated 2026-05-24 (W6-01).
+**Severity:** MEDIUM — flakes CI gates; investigated and mitigated 2026-05-24.
 
 **Symptom:** the `cross-user-isolation` and `contract-tests` CI jobs occasionally fail with `ConnectionResetError: [Errno 104] Connection reset by peer` inside `asyncpg.create_pool` → `_create_ssl_connection`. Last observed run: GitHub Actions run 26347134466 (2026-05-24), step "Guard - squashed baseline schema invariants" on container `cont-` prefix.
 
-**Root cause analysis (W6-01):** `pg_isready` returns success the moment the postmaster accepts UNIX-socket connections, but the TCP backend's SSL listener has a 100-500ms grace window before it accepts external connections cleanly. `asyncpg.create_pool` opens a TCP+SSL connection and times out if the SSL handler is not yet ready — surfacing as `ConnectionResetError`. The race is rare locally (loopback, low contention) but common on GitHub Actions runners under simultaneous CPU/IO pressure.
+**Root cause analysis:** `pg_isready` returns success the moment the postmaster accepts UNIX-socket connections, but the TCP backend's SSL listener has a 100-500ms grace window before it accepts external connections cleanly. `asyncpg.create_pool` opens a TCP+SSL connection and times out if the SSL handler is not yet ready — surfacing as `ConnectionResetError`. The race is rare locally (loopback, low contention) but common on GitHub Actions runners under simultaneous CPU/IO pressure.
 
-**Mitigation applied (W6-01 in `libs/jarvis_common/jarvis_common/testing_db.py`):**
+**Mitigation applied (in `libs/jarvis_common/jarvis_common/testing_db.py`):**
 - Bumped `_spin_pg_container` ready-deadline 45s → 90s.
 - Added a post-`pg_isready` TCP socket probe (`socket.create_connection` against the host port) with 30s deadline + 250ms retries to confirm the TCP listener is actually accepting before yielding the DSN.
 
 **Reopen criteria:** rerun this analysis if CI flake rate on `cross-user-isolation` job exceeds 1 failure per 10 runs over a 2-week window. Next escalation: pin `asyncpg<known-good>` OR switch the cross-user-isolation job to a `services:` Postgres container (managed by GitHub Actions, healthcheck-gated) instead of fixture-owned Docker.
 
-**Source:** 2026-05-24 audit round 6 (W6-01) investigation.
+**Source:** 2026-05-24 audit round 6 investigation.
 
 ---
 
-## Pristine-pass (2026-05-24) batch C doc-deferrals
+## Pre-release hardening (2026-05-24) batch C doc-deferrals
 
-- **W1-CF7** — `services/paper_ingestion/tests/test_account_router.py` uses handler-bypass shape (TS-01). Carve-out registered in `docs/contracts/07-testing.md` (pending a future contract-amendment pass). Reopen if the file undergoes substantive rewrite.
-- **W1-CF8** — Mixed facade vs direct `testing_db` imports across 3 contract test files. Reopen when test-infra policy is finalized.
-- **W1-CF9** — `test_testing_facade_all.py` mixes 2 concerns. Reopen during next test-infra cleanup.
-- **W3-CF3** — `_private` field-name expansion verified zero-production-impact at W3 ship; reopen only if dynamic field-name lists start including `_`-prefixed identifiers.
-- **W6-CF2** — `CI-CROSS-USER-FLAKY-1` hardening (asyncpg-pin / services-PG migration) deferred until reopen criteria fire.
+- **KRR-C1** — `services/paper_ingestion/tests/test_account_router.py` uses handler-bypass shape (TS-01). Carve-out registered in `docs/contracts/07-testing.md` (pending a future contract-amendment pass). Reopen if the file undergoes substantive rewrite.
+- **KRR-C2** — Mixed facade vs direct `testing_db` imports across 3 contract test files. Reopen when test-infra policy is finalized.
+- **KRR-C3** — `test_testing_facade_all.py` mixes 2 concerns. Reopen during next test-infra cleanup.
+- **KRR-C4** — `_private` field-name expansion verified zero-production-impact at ship time; reopen only if dynamic field-name lists start including `_`-prefixed identifiers.
+- **KRR-C5** — `CI-CROSS-USER-FLAKY-1` hardening (asyncpg-pin / services-PG migration) deferred until reopen criteria fire.
 
 ## SMTP-EMPTY-STRING-1 — empty-string SMTP env vars silently accepted
 
 **Symptom:** Setting any of `SMTP_HOST`, `SMTP_FROM`, `SMTP_USER`, or `SMTP_PASS` to an empty string is silently accepted by `SecretsSettings` (no Pydantic validator rejects `""`). `_EffectiveSmtp.deliverable` evaluates `bool("") == False`, so the magic-link sender falls through to the dev-mode logging path. **Operator sees nothing at startup; users do not receive magic-link emails; failure is silent.**
 
-**Detection:** `libs/jarvis_common/tests/test_secrets_settings.py` ships 4 `xfail(strict=False)` parametrized tests documenting the gap (W3-CF11). They will auto-green when validators are added.
+**Detection:** `libs/jarvis_common/tests/test_secrets_settings.py` ships 4 `xfail(strict=False)` parametrized tests documenting the gap. They will auto-green when validators are added.
 
 **Impact:** HIGH (operator-facing silent-failure, not data loss). Affects any deployment where SMTP env vars are mis-set to `""` rather than left unset (`""` and unset have different semantics; only unset is correctly handled).
 
 **Mitigation:** Add `@field_validator` to `SecretsSettings.smtp_host/from/user/pass` rejecting empty-string values OR add a startup-time health check that asserts the SMTP configuration is internally consistent.
 
-**Source:** W3-CF11 xfail-test surfacing during the 2026-05 audit round 2.
+**Source:** xfail-test surfacing during the 2026-05 audit round 2.
 
 ## BUILDER-STAGE-BUILD-UNHASHED-1 — Dockerfile jarvis-common-builder installs `build` without `--require-hashes`
 
@@ -351,4 +351,4 @@ These entries document intentional deviations from the W9 container hardening sw
 - **C-09 — ollama/ollama runs as root** (`docker-compose.yml` → `ollama` service). The upstream `ollama/ollama` image requires uid 0 for GPU device-node access: `/dev/nvidia*` device nodes on the host are owned by root and require either a privileged container or direct root access to open. Switching the image user to non-root breaks the NVIDIA device mount (`--gpus all` / `devices:` reservation). No non-root upstream variant exists (confirmed 2026-05-26). `security_opt: ["no-new-privileges:true"]` is already set as a partial mitigation. Reopen when the upstream image ships a non-root GPU-capable variant.
 - **C-05 (vllm) — user 1000:1000 write access to HF cache** (`docker-compose.vllm.yml`). The vllm service is configured with `user: "1000:1000"` and `HF_HOME: /tmp/hf-cache/huggingface` (a named Docker volume mounted at `/tmp/hf-cache/huggingface`). If the existing `vllm_model_cache` volume was previously populated as root, the first startup after this change may fail with a permissions error on the cache directory. Mitigation: remove the volume (`docker volume rm <project>_vllm_model_cache`) before the first non-root run to let Docker re-create it owned by uid 1000. This is a one-time operator action; document in setup runbook if vLLM is promoted to production.
 - **SC-09 — `services/paper_ingestion/requirements-optional.txt` floor-pins are informational only** (audit `02-security-review.md:151`). The audit complained that `optimum[onnxruntime]>=1.21` and `onnxruntime>=1.19` use floor pins. Verified 2026-05-26: the hashed security boundary lives in `services/paper_ingestion/constraints-optional.txt`, which pins `optimum==2.1.0` and `onnxruntime==1.25.1` with sha256 hashes verified at install time. Production installs always use `pip install --require-hashes -r constraints-optional.txt`; `requirements-optional.txt` itself is auto-generated from `pyproject.toml` by `scripts/export-service-requirements.sh` and may not be hand-edited (the `check-python-deps` pre-commit hook enforces parity). Closure pattern: documentation note here rather than file edit.
-- **C-06 (vector docker.sock structural alternative) — `cap_drop: [ALL]` is defense-in-depth only** (W9-T2; audit `02-security-review.md:144`). The vector log shipper mounts `/var/run/docker.sock:ro`; `cap_drop: [ALL]` removes Linux capabilities but socket access is governed by uid/gid, not capabilities, so vector can still `docker inspect` other containers. Proper fix is a structural alternative (swap docker.sock for syslog/fluent-bit forwarder OR run vector outside the docker network) — out of scope for W9 (would touch logging architecture). Reopen as W9-CF1 when log-routing redesign is in scope.
+- **C-06 (vector docker.sock structural alternative) — `cap_drop: [ALL]` is defense-in-depth only** (audit `02-security-review.md:144`). The vector log shipper mounts `/var/run/docker.sock:ro`; `cap_drop: [ALL]` removes Linux capabilities but socket access is governed by uid/gid, not capabilities, so vector can still `docker inspect` other containers. Proper fix is a structural alternative (swap docker.sock for syslog/fluent-bit forwarder OR run vector outside the docker network) — out of scope for now (would touch logging architecture). Reopen when a log-routing redesign is in scope.

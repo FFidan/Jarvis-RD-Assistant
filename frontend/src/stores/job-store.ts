@@ -284,10 +284,10 @@ export const useJobStore = create<JobStore>()(
         // createSSEReader handles buffering, line-splitting, [DONE] sentinel, and
         // reader.cancel() in its finally block — eliminating the inline reader loop.
         (async () => {
+          let terminalReceived = false;
+          // Track current backoff delay; reset to base on every successful frame
+          let currentReconnectDelay = reconnectDelay;
           try {
-            let terminalReceived = false;
-            // Track current backoff delay; reset to base on every successful frame
-            let currentReconnectDelay = reconnectDelay;
 
             for await (const raw of createSSEReader(`/api/jobs/${jobId}/stream`, {
               headers,
@@ -344,7 +344,7 @@ export const useJobStore = create<JobStore>()(
               }
             }
             // Other errors: reconcile if possible, otherwise reconnect with backoff.
-            await _reconcileOrRetry(reconnectDelay);
+            await _reconcileOrRetry(currentReconnectDelay);
           }
         })();
       },

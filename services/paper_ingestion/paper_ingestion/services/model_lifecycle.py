@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import platform
+import re
 import socket
 import subprocess
 from dataclasses import asdict, dataclass
@@ -236,14 +237,11 @@ def _probe_macos_vram() -> float | None:
     for line in proc.stdout.splitlines():
         if "VRAM" not in line:
             continue
-        digits = "".join(ch for ch in line if ch.isdigit() or ch == ".")
-        if not digits:
+        match = re.search(r"(\d+(?:\.\d+)?)\s*(MB|GB)", line, re.IGNORECASE)
+        if not match:
             continue
-        try:
-            mb = float(digits)
-        except ValueError:
-            continue
-        return mb / 1024.0
+        value = float(match.group(1))
+        return value / 1024.0 if match.group(2).upper() == "MB" else value
     return None
 
 

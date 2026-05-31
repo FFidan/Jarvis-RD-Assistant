@@ -2,7 +2,7 @@
  * query-persister — last-known-good offline cache for TanStack Query (Wave 3 P1b).
  *
  * Contract reference:
- *   docs/superpowers/specs/2026-05-15-shell-sidebar-admin-ia-redesign-design.md
+ *   internal design spec (archived)
  *   "Offline / PWA contract — CANONICAL" §3 (Client cache) + §4 (last-known-good)
  *   + "Explicit offline NON-GOALS" + the per-surface offline table.
  *

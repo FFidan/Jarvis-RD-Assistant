@@ -14,8 +14,8 @@
  * OFFLINE → appends to an IndexedDB outbox + resolves so the session advances;
  * on offline→online → drains the outbox idempotently and shows a single
  * reconcile toast. No other file needed changing — the seam is here.
- * See docs/superpowers/specs/2026-05-15-learning-cards-ia-redesign-design.md §Offline
- * and docs/superpowers/specs/2026-05-16-offline-review-sync-endpoint-contract.md.
+ * See internal design spec (archived), Offline section
+ * and internal design spec (archived).
  */
 
 import { useCallback, useEffect, useState } from 'react';

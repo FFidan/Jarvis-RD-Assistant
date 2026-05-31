@@ -809,6 +809,62 @@ describe('JobStore', () => {
     expect(keys).not.toContain('papers');
   });
 
+  // ----- catch-branch reconnect uses reset delay (3d) -----
+
+  it('subscribe: catch-branch reconnect uses reset base delay, not stale param (3d)', async () => {
+    // Scenario: subscribe is called with a NON-BASE delay (simulating a prior
+    // backoff step). The stream yields one successful non-terminal frame (which
+    // resets currentReconnectDelay back to RECONNECT_BASE_DELAY_MS = 1000ms),
+    // then throws. The catch branch must reconnect after 1000ms (reset base),
+    // NOT the stale 2000ms param value.
+    vi.useFakeTimers();
+    const { getJob } = await import('@/lib/api');
+    // getJob returns non-terminal so _reconcileOrRetry falls through to reconnect
+    vi.mocked(getJob).mockResolvedValue(null as unknown as ReturnType<typeof getJob> extends Promise<infer T> ? T : never);
+
+    const progressFrame = JSON.stringify({ status: 'running', progress: 10, progress_message: 'Going' });
+    const terminalFrame = JSON.stringify({ status: 'succeeded', progress: 100 });
+
+    // First subscription: yields one progress frame then throws
+    const readerSpy = vi.spyOn(sseReader, 'createSSEReader').mockImplementationOnce(
+      async function* () {
+        yield progressFrame;
+        throw new Error('Connection reset');
+      },
+    );
+
+    // Second subscription (triggered by reconnect): yields a TERMINAL frame so the
+    // stream ends with terminalReceived=true and fires NO further reconnect — this
+    // keeps the call count stable at exactly 2 (an empty stream would schedule a
+    // 3rd reconnect whose timing races CI).
+    readerSpy.mockImplementationOnce(async function* () {
+      yield terminalFrame;
+    });
+
+    const jobId = 'job-catch-delay';
+    useJobStore.setState({
+      jobs: { [jobId]: makeJob({ id: jobId, status: 'running' }) },
+      activeAborts: {},
+    });
+
+    // Subscribe with a non-base delay (2000ms) to distinguish stale vs reset
+    const STALE_DELAY_MS = 2000;
+    useJobStore.getState().subscribe(jobId, STALE_DELAY_MS);
+
+    // Drain microtasks so the async IIFE processes the frame + hits the catch
+    await vi.advanceTimersByTimeAsync(0);
+
+    // At this point the IIFE hit the catch block and is sleeping before reconnect.
+    // Advance by exactly the BASE delay (1000ms). If the bug is present the sleep
+    // uses stale 2000ms and the second subscribe has NOT yet been called.
+    // If fixed, sleep used 1000ms and the second subscribe fires now.
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(0); // drain follow-on microtasks
+
+    // The second createSSEReader call proves reconnect fired after 1000ms, not 2000ms
+    expect(readerSpy).toHaveBeenCalledTimes(2);
+  });
+
   // ----- createSSEReader integration (DRY-F1) -----
 
   it('subscribe: uses createSSEReader to stream job events (DRY-F1)', async () => {

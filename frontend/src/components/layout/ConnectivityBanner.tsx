@@ -3,7 +3,7 @@
  * offline connectivity (Wave 3 P1d).
  *
  * Contract reference:
- *   docs/superpowers/specs/2026-05-15-shell-sidebar-admin-ia-redesign-design.md
+ *   internal design spec (archived)
  *   "Offline / PWA contract — CANONICAL" §6 (global connectivity banner) + §7
  *   (install affordance).
  *

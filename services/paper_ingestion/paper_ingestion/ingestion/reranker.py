@@ -23,19 +23,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def select_onnx_provider(device: str, available_providers: list[str]) -> str:
-    """Return an ONNX provider compatible with the requested device."""
-    if device == "cuda":
-        if "CUDAExecutionProvider" in available_providers:
-            return "CUDAExecutionProvider"
-        raise RuntimeError(
-            "ONNX CUDA provider is unavailable; install onnxruntime-gpu or use CPU fallback"
-        )
-    if "CPUExecutionProvider" in available_providers:
-        return "CPUExecutionProvider"
-    raise RuntimeError(f"No supported ONNX execution provider: {available_providers}")
-
-
 class Reranker:
     """Cross-encoder reranker using sentence-transformers.
 
@@ -51,12 +38,10 @@ class Reranker:
         self._load_failed: bool = False
 
     def _load_model_if_needed(self) -> None:
-        """Lazy-load the cross-encoder model on first use.
+        """Lazy-load the cross-encoder model on first use (PyTorch backend).
 
-        Uses the ONNX backend (via ``optimum[onnxruntime]``) when available,
-        which gives ~30% faster CPU inference and removes the torch runtime
-        dependency after the one-time export+cache step.  Falls back to plain
-        PyTorch if ``optimum`` is not installed or if ONNX export fails.
+        Tries CUDA first and falls back to CPU. Latches ``_load_failed`` so a
+        failed load is not retried within the process.
         """
         if self._model is not None:
             return
@@ -67,54 +52,17 @@ class Reranker:
 
         cross_encoder_cls = CrossEncoder  # narrowed: not None past the guard above
 
-        onnx_providers: list[str] = []
-
-        def _load(device: str, use_onnx: bool) -> Any:
-            kwargs: dict[str, Any] = {"device": device}
-            if use_onnx:
-                kwargs.update(
-                    {
-                        "backend": "onnx",
-                        "model_kwargs": {"provider": select_onnx_provider(device, onnx_providers)},
-                    }
-                )
-            return cross_encoder_cls(self._model_name, **kwargs)
-
-        # Determine whether optimum+onnxruntime are present.
         try:
-            import onnxruntime
-            import optimum  # noqa: F401
-
-            onnx_providers = list(onnxruntime.get_available_providers())
-            _onnx_available = True
-        except ImportError:
-            _onnx_available = False
-
-        try:
-            self._model = _load("cuda", _onnx_available)
-            backend_tag = "ONNX/CUDA" if _onnx_available else "PyTorch/CUDA"
-            logger.info("Cross-encoder loaded on %s: %s", backend_tag, self._model_name)
+            self._model = cross_encoder_cls(self._model_name, device="cuda")
+            logger.info("Cross-encoder loaded on PyTorch/CUDA: %s", self._model_name)
         except Exception:
             logger.warning("CUDA unavailable for cross-encoder, falling back to CPU")
             try:
-                self._model = _load("cpu", _onnx_available)
-                backend_tag = "ONNX/CPU" if _onnx_available else "PyTorch/CPU"
-                logger.info("Cross-encoder loaded on %s: %s", backend_tag, self._model_name)
+                self._model = cross_encoder_cls(self._model_name, device="cpu")
+                logger.info("Cross-encoder loaded on PyTorch/CPU: %s", self._model_name)
             except (OSError, ImportError, RuntimeError, FileNotFoundError):
-                if _onnx_available:
-                    logger.warning(
-                        "ONNX backend failed; retrying with PyTorch CPU for cross-encoder",
-                        exc_info=True,
-                    )
-                    try:
-                        self._model = cross_encoder_cls(self._model_name, device="cpu")
-                        logger.info("Cross-encoder loaded on PyTorch/CPU: %s", self._model_name)
-                    except Exception:
-                        self._load_failed = True
-                        raise
-                else:
-                    self._load_failed = True
-                    raise
+                self._load_failed = True
+                raise
 
     def rerank(
         self,

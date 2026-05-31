@@ -1,6 +1,6 @@
 # Performance Profiling — HOWTO
 
-<!-- (agent: claude-code) Last updated 2026-05-18 for Task B1-4 (loadgen + gpu_probe wiring) -->
+<!-- Last updated 2026-05-18 for Task B1-4 (loadgen + gpu_probe wiring) -->
 
 `make profile` runs `scripts/profile.sh` end-to-end, dumping a snapshot under
 `artifacts/perf/<UTC-timestamp>/`. The harness is deliberately best-effort:

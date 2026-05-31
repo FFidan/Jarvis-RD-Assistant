@@ -1,6 +1,6 @@
 # JARVIS RD Assistant - Product Requirements Document (PRD)
 
-**Version:** 0.4.1 (Living document — see git tags for release versions.)
+**Version:** 0.5.0 (Living document — see git tags for release versions.)
 **Date:** 2026-05-23
 **Status:** Active
 

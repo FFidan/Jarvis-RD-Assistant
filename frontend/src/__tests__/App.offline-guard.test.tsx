@@ -2,7 +2,7 @@
  * P1c — offline last-known-good route-guard tests.
  * FE-1 — session-expiry side-effect out of render body.
  *
- * Canonical contract: docs/superpowers/specs/2026-05-15-shell-sidebar-admin-ia-redesign-design.md
+ * Canonical contract: internal design spec (archived)
  * "Offline / PWA contract — CANONICAL" §4 (last-known-good read mode).
  *
  * Security invariant being tested:

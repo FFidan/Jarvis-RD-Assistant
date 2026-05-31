@@ -202,6 +202,27 @@ describe('streamSSE', () => {
     expect((err as DOMException).name).toBe('AbortError');
   });
 
+  it('flushes trailing data: line when stream ends without trailing newline — streamSSE (3c)', async () => {
+    // Final chunk has no trailing \n\n — residual buffer must be flushed on done.
+    const stream = createMockReadableStream([
+      'data: {"type":"token","content":"partial"}\n\n',
+      'data: {"type":"token","content":"last"}',
+    ]);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(stream, { status: 200 }),
+    );
+
+    const events: StreamEvent[] = [];
+    for await (const event of streamSSE('/api/ask/stream', { question: 'test' })) {
+      events.push(event);
+    }
+
+    expect(events).toHaveLength(2);
+    expect(events[0]?.content).toBe('partial');
+    expect(events[1]?.content).toBe('last');
+  });
+
   it('warns and skips malformed frames while yielding subsequent valid frames (streamSSE)', async () => {
     const stream = createMockReadableStream([
       'data: {"type":"token","content":"before"}\n\n',
@@ -238,6 +259,37 @@ describe('streamSSE', () => {
 describe('createSSEReader', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('flushes trailing data: line when stream ends without trailing newline (3c)', async () => {
+    const encoder = new TextEncoder();
+    // Final chunk has no trailing \n\n — the `data:` line is residual in the buffer when done fires.
+    const chunks = [
+      'data: first\n\n',
+      'data: {"x":1}',
+    ];
+    let idx = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (idx < chunks.length) {
+          controller.enqueue(encoder.encode(chunks[idx]));
+          idx++;
+        } else {
+          controller.close();
+        }
+      },
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(stream, { status: 200 }),
+    );
+
+    const frames: string[] = [];
+    for await (const frame of createSSEReader('/api/test/stream')) {
+      frames.push(frame);
+    }
+
+    expect(frames).toEqual(['first', '{"x":1}']);
   });
 
   it('yields raw data-line payloads and stops on [DONE]', async () => {

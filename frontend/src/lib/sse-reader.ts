@@ -9,6 +9,8 @@
  * Scope: GET-only, no retry / backoff (those are the caller's responsibility).
  */
 
+import { readSSEFrames } from '@/lib/sse';
+
 export async function* createSSEReader(
   url: string,
   init?: { headers?: HeadersInit; signal?: AbortSignal },
@@ -24,26 +26,5 @@ export async function* createSSEReader(
     throw new Error(`SSE GET failed: ${res.status}`);
   }
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) return;
-      buffer += decoder.decode(value, { stream: true });
-      // SSE frames are separated by blank lines (\n\n).
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
-        if (data === '[DONE]') return;
-        yield data;
-      }
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
+  yield* readSSEFrames(res.body.getReader());
 }

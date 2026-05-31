@@ -191,9 +191,9 @@ The audit log is readable by admins at `GET /api/admin/audit-log`
 
 ## Leaked-secret remediation (one-time, before public)
 
-*(agent: claude-code, 2026-05-17; corrected 2026-05-18)*
+*(2026-05-17; corrected 2026-05-18)*
 
-**OBS-1 status: RESOLVED (verified 2026-05-25, Wave 7 of pristine pass).**
+**OBS-1 status: RESOLVED (verified 2026-05-25, during the 2026-05 pre-release hardening).**
 `git log origin/master --all --full-history --diff-filter=ACMRT -- secrets/langfuse_init_pk.txt secrets/langfuse_init_sk.txt` returns ZERO commits — the
 two secret-files are not present on any reachable ref of `origin/master`
 (commit `4587e9ab` at verification time). Prefix grep

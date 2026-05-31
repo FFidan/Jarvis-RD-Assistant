@@ -75,6 +75,8 @@ htmlcov/
 !handoff/screenshots/*.png
 # Exception: PWA app icons must be committed (required for Android-Chrome install / maskable)
 !frontend/public/icons/*.png
+# Exception: README / docs-site product screenshots must be committed (else they 404 on the public repo)
+!docs/screenshots/*.png
 
 # AI agent / tool scaffolding
 .claude/
@@ -104,6 +106,7 @@ Jarvis_RD.zip
 
 # Internal handoff bundles + agent-internal plans (operator-only)
 handoff/
+Jarvis_RD_UI_3/
 docs/superpowers/
 *.tar.gz
 codeboarding_*.log
@@ -116,6 +119,7 @@ docs/archive/
 AGENTS.md
 CLAUDE.md
 .codex
+.graphifyignore
 docs/agents-shim.md
 docs/AGENTIC_WORKFLOW.md
 scripts/verify-edits.sh

@@ -72,7 +72,7 @@ Respond in this exact JSON format:
 }
 """
 
-# Version-controlled prompt template (AGENTS.md rule 8)
+# Version-controlled prompt template (anti-hallucination rule 8)
 SUMMARIZE_PROMPT_TEMPLATE = """\
 {title}
 {authors}
@@ -325,10 +325,10 @@ async def generate_paper_summary(
     # --- VERIFICATION (Anti-Hallucination Layer 2) ---
     report = verifier.verify_findings(key_findings, full_text, chunks)
 
-    # Discard unverified findings (AGENTS.md rule 4)
+    # Discard unverified findings (anti-hallucination rule 4)
     verified_findings = [f for f in key_findings if f.verified]
 
-    # Link verified findings to page snapshots (AGENTS.md rule 7)
+    # Link verified findings to page snapshots (anti-hallucination rule 7)
     from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
     snapshot_base = get_paper_ingestion_settings().snapshot_storage_path
@@ -339,7 +339,7 @@ async def generate_paper_summary(
             if candidate.resolve().is_relative_to(snapshot_base_path):
                 f.snapshot_path = str(candidate.relative_to(snapshot_base_path))
 
-    # If verification failed or no findings, fall back to abstract (AGENTS.md rule 6)
+    # If verification failed or no findings, fall back to abstract (anti-hallucination rule 6)
     summary_brief = parsed.summary_brief
     summary_detailed = parsed.summary_detailed
     if report.total_findings == 0:
@@ -361,7 +361,7 @@ async def generate_paper_summary(
     # ON CONFLICT DO UPDATE handles the rare race where two concurrent requests
     # both passed the idempotency check in phase 1.
     async with db_pool.acquire() as conn:
-        # Cross-reference consistency check (AGENTS.md rule 9)
+        # Cross-reference consistency check (anti-hallucination rule 9)
         cross_references = await _find_cross_references(
             conn, paper_id, paper_row["title"], embedder=embedder
         )

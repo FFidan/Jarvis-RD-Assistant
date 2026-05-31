@@ -1,7 +1,7 @@
 """`thread` entity CRUD + auto-seed producers (UI_v3 My-Day § Open threads).
 
 A ``thread`` is a user's resumable mid-flight line of work (spec
-``docs/superpowers/specs/2026-05-15-my-day-parity-pomodoro-design.md`` §4.1).
+internal design spec (archived), §4.1).
 Open-question 2 (RESOLVED 2026-05-15) requires both a manual create path AND
 two auto-seed producers:
 

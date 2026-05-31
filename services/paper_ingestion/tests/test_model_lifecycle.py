@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import socket
+import subprocess
 from unittest.mock import patch
 
 from jarvis_common.model_catalog import ModelCatalogEntry
 from paper_ingestion.services.model_lifecycle import (
     HardwareInfo,
     _model_pull_job,
+    _probe_macos_vram,
     async_get_cached_hardware,
     build_model_statuses,
     catalog_entry_for_model,
@@ -361,3 +363,34 @@ async def test_async_get_cached_hardware_uses_to_thread_on_cache_miss() -> None:
 
     mock_to_thread.assert_called_once_with(detect_hardware)
     assert result is fake_hw
+
+
+# _probe_macos_vram unit-awareness (parser must honour MB vs GB)
+
+
+def _macos_proc(stdout: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout)
+
+
+def test_probe_macos_vram_parses_gb_unit() -> None:
+    """A 'VRAM (Total): 8 GB' line reports 8.0 GB, not 8/1024."""
+    with (
+        patch("paper_ingestion.services.model_lifecycle.platform.system", return_value="Darwin"),
+        patch(
+            "paper_ingestion.services.model_lifecycle.subprocess.run",
+            return_value=_macos_proc("        VRAM (Total): 8 GB\n"),
+        ),
+    ):
+        assert _probe_macos_vram() == 8.0
+
+
+def test_probe_macos_vram_converts_mb_to_gb() -> None:
+    """A 'VRAM (Dynamic, Max): 1536 MB' line converts MB to 1.5 GB."""
+    with (
+        patch("paper_ingestion.services.model_lifecycle.platform.system", return_value="Darwin"),
+        patch(
+            "paper_ingestion.services.model_lifecycle.subprocess.run",
+            return_value=_macos_proc("        VRAM (Dynamic, Max): 1536 MB\n"),
+        ),
+    ):
+        assert _probe_macos_vram() == 1.5

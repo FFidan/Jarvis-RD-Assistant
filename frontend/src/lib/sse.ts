@@ -72,31 +72,47 @@ export interface AnalyzeErrorEvent {
 
 export type AnalyzeEvent = AnalyzeStepEvent | AnalyzeCompleteEvent | AnalyzeErrorEvent;
 
-async function* parseSSEFrames(response: Response): AsyncGenerator<string> {
-  if (!response.body) {
-    throw new Error('Response body is null — streaming not supported');
-  }
-  const reader = response.body.getReader();
+/**
+ * Core SSE frame parser: reads from any Uint8Array reader, splits on newlines,
+ * yields each `data:` payload, and flushes any residual un-terminated line
+ * when the stream ends (flush invariant: a producer that omits the trailing
+ * blank line still delivers the final frame).
+ */
+export async function* readSSEFrames(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   let buffer = '';
 
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      if (!done) {
+        buffer += decoder.decode(value, { stream: true });
+      }
       const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      // When not done, the partial trailing line stays buffered for the next read.
+      // When done, lines is NOT popped, so a residual un-terminated `data:` line
+      // is flushed below rather than discarded.
+      buffer = done ? '' : (lines.pop() ?? '');
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
         if (data === '[DONE]') return;
         yield data;
       }
+      if (done) return;
     }
   } finally {
     await reader.cancel().catch(() => {});
   }
+}
+
+async function* parseSSEFrames(response: Response): AsyncGenerator<string> {
+  if (!response.body) {
+    throw new Error('Response body is null — streaming not supported');
+  }
+  yield* readSSEFrames(response.body.getReader());
 }
 
 export async function* streamSSE(

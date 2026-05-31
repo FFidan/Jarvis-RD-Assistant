@@ -8,8 +8,7 @@
 # with zero box access. This is the pre-registered confirmatory run that gates
 # vLLM adoption (the 0.5B lean bench PASSED but was deliberately not adopted).
 #
-# Plan of record: ~/.claude/plans/handoff-audit-high-cleanup-playful-bengio.md
-# Draft/context : docs/perf/2026-05-18-vllm-confirmatory-bench-plan.md
+# Plan / context: docs/perf/2026-05-18-vllm-confirmatory-bench-plan.md
 #
 # CONTRACT — differs from loadgen.sh/profile.sh (which degrade to exit 0):
 #   Any precondition failure HARD-ABORTS (non-zero) but the EXIT trap STILL

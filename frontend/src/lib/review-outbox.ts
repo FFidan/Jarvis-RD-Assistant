@@ -4,15 +4,15 @@
  * Wave 3 P2 (the ONLY offline-write surface — flashcard review).
  *
  * Contract references:
- *   - docs/superpowers/specs/2026-05-15-learning-cards-ia-redesign-design.md
+ *   - internal design spec (archived)
  *     §Offline / PWA contract → "P2 (offline review + sync) — the flow this spec owns".
- *   - docs/superpowers/specs/2026-05-15-shell-sidebar-admin-ia-redesign-design.md
+ *   - internal design spec (archived)
  *     "Offline / PWA contract — CANONICAL" → flashcard review = only offline-write;
  *     sync = idempotent batch replay → server recomputes FSRS; reconcile = a
  *     SINGLE toast "N synced, M skipped" (no merge UI).
  *   - The wire/idempotency contract this client implements is specified for the
  *     functional/backend track in
- *     docs/superpowers/specs/2026-05-16-offline-review-sync-endpoint-contract.md.
+ *     internal design spec (archived).
  *
  * What this does
  * --------------
@@ -313,8 +313,7 @@ export async function drainReviewOutbox(
 
 /**
  * The endpoint path the client targets. The backend track implements a
- * compatible handler — see
- * docs/superpowers/specs/2026-05-16-offline-review-sync-endpoint-contract.md.
+ * compatible handler — see internal design spec (archived).
  */
 export const REVIEW_SYNC_PATH = '/api/review/sync';
 

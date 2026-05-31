@@ -39,7 +39,7 @@ Untrusted text reaching the LLM unmarked is the root cause of the prompt-injecti
 
 This contract codifies layer 2 as a callsite shape. Layer 1 is governed by the source of `wrap_delimited`; layer 3 is enforced by review against the anti-patterns in §6.
 
-The audit finding **SEC-HIGH-06** (post-pristine remediation, Wave 10) inventoried the 9 production callsites that mix instruction + data in a single user-role `prompt=` argument. This contract is the steady-state guard that prevents reintroduction once those callsites are migrated.
+The audit finding **SEC-HIGH-06** (2026-05 audit round) inventoried the 9 production callsites that mix instruction + data in a single user-role `prompt=` argument. This contract is the steady-state guard that prevents reintroduction once those callsites are migrated.
 
 ---
 
@@ -282,7 +282,7 @@ The carve-out exists for callsites where Shape A is genuinely unsuitable, not as
 
 ## 9. Verified Identifiers
 
-Every cited symbol has been Read at HEAD `f6ef8870` on `post-pristine/remediation`.
+Every cited symbol has been verified at HEAD `f6ef8870`.
 
 | Citation | File:line | Behavior |
 |---|---|---|

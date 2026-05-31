@@ -3,7 +3,7 @@
  * service worker is allowed to runtime-cache for offline read mode.
  *
  * Wave 3 P1a. Contract reference:
- *   docs/superpowers/specs/2026-05-15-shell-sidebar-admin-ia-redesign-design.md
+ *   internal design spec (archived)
  *   "Offline / PWA contract — CANONICAL".
  *
  * IMPORTANT: `frontend/public/sw.js` is plain JS served verbatim from /public

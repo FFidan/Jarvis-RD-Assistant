@@ -760,7 +760,7 @@ async def test_get_my_export_excludes_other_users_papers(
 ):
     """A130 — cross-user isolation: user A's export ZIP must not contain user B's papers.
 
-    Closes the Wave-3 Axis-4 wave-gate finding (GDPR export correctness): the
+    Closes a GDPR export-correctness audit finding: the
     happy-path test only checks status / content-type / non-empty body. A
     regression that passed the wrong user_id to ``build_export_zip`` (e.g.
     ``None`` or a hardcoded constant) would not be caught. Here we leverage the
