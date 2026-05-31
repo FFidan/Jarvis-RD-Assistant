@@ -179,17 +179,21 @@ async def test_create_job_requires_session_identity(
 # ---------------------------------------------------------------------------
 
 
-async def _seed_pj(conn, *, user_id: int, job_id: str) -> None:
+async def _seed_pj(conn, *, user_id: int, job_id: str, status: str = "todo") -> None:
     """Insert a minimal ``procrastinate_jobs`` row owned by *user_id*.
 
     Verified: db/init.sql:178-192 — procrastinate_jobs columns used here.
+    Pass a TERMINAL status (succeeded/failed/cancelled) when the test opens the
+    SSE stream, so ``stream_job_events`` emits the terminal frame and exits
+    instead of polling to the ``MAX_STREAM_SECONDS`` (750s) ceiling.
     """
     await conn.execute(
         """
         INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
-        VALUES ('contract_test', 'card.generate', $1::jsonb, 'todo')
+        VALUES ('contract_test', 'card.generate', $1::jsonb, $2::procrastinate_job_status)
         """,
         {"job_id": job_id, "user_id": user_id},
+        status,
     )
 
 
@@ -387,15 +391,22 @@ async def test_owner_can_stream_own_job(contract_two_users, _jobs_app, _configur
 
     job_id = str(uuid.uuid4())
     shared = _jobs_app.state.db_pool
-    await _seed_pj(shared._conn, user_id=contract_two_users.user_a_id, job_id=job_id)
+    # Seed the job already TERMINAL so stream_job_events emits its frame and exits
+    # immediately — otherwise the in-process ASGITransport never delivers the
+    # client disconnect and the stream polls to the 750s MAX_STREAM_SECONDS ceiling.
+    await _seed_pj(
+        shared._conn, user_id=contract_two_users.user_a_id, job_id=job_id, status="succeeded"
+    )
 
     async with _authed_client(_jobs_app, contract_two_users.cookie_a) as c:
-        resp = await c.get(f"/api/jobs/{job_id}/stream")
-    assert resp.status_code == 200, (
-        f"Owner SSE: got {resp.status_code} (expected 200). Body: {resp.text[:300]}"
-    )
-    ct = resp.headers.get("content-type", "")
-    assert "text/event-stream" in ct, f"Expected text/event-stream, got {ct!r}"
+        # Stream the SSE endpoint and check status + headers WITHOUT draining the
+        # event-stream body. A plain ``await c.get(...)`` blocks until the server
+        # closes the stream (its idle timeout, ~12 min) — this test only needs to
+        # verify the stream OPENS for the owner. Mirrors test_jobs_sse_ownership.py.
+        async with c.stream("GET", f"/api/jobs/{job_id}/stream") as resp:
+            assert resp.status_code == 200, f"Owner SSE: got {resp.status_code} (expected 200)."
+            ct = resp.headers.get("content-type", "")
+            assert "text/event-stream" in ct, f"Expected text/event-stream, got {ct!r}"
 
 
 async def test_non_owner_stream_returns_404_not_403(
