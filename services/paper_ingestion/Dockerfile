@@ -28,22 +28,25 @@ WORKDIR /app
 COPY services/paper_ingestion/requirements.txt services/paper_ingestion/constraints.txt \
      services/paper_ingestion/requirements-optional.txt services/paper_ingestion/constraints-optional.txt \
      services/paper_ingestion/constraints-profiling.txt ./
-COPY --from=jarvis-common-builder /tmp/dist/*.whl /tmp/dist/
-# Hash-pinned install of every transitive dep, then install the local
-# jarvis_common wheel with --no-deps (its transitives are already covered by
-# constraints.txt; --no-deps prevents pip from pulling unverified packages).
+# Hash-pinned install of every transitive dep FIRST so this multi-GB layer is
+# immune to jarvis_common changes (the wheel COPY below busts only the cheap
+# --no-deps install). Final package set is identical to the prior ordering.
 # The cu124 torch pre-install was removed: constraints-optional.txt pins
-# torch==2.11.0 (PyPI) with its bundled nvidia-* libs, so the cu124 download
-# was redundantly overwritten on the next line.
+# torch==2.11.0 (PyPI) with its bundled nvidia-* libs.
 RUN pip install --no-cache-dir --require-hashes -r constraints.txt \
-    && pip install --no-cache-dir --no-deps /tmp/dist/jarvis_common-*.whl \
-    && rm -rf /tmp/dist \
     && if [ "$INSTALL_PROFILING" = "true" ]; then \
          pip install --no-cache-dir --require-hashes -r constraints-profiling.txt; \
        fi \
     && if [ "$INSTALL_OPTIONAL" = "true" ]; then \
          pip install --no-cache-dir --require-hashes -r constraints-optional.txt; \
        fi
+
+# jarvis_common wheel installed with --no-deps (its transitives are already
+# covered by the hash-pinned constraints.txt above). This cheap layer is the
+# only one a jarvis_common change rebuilds.
+COPY --from=jarvis-common-builder /tmp/dist/*.whl /tmp/dist/
+RUN pip install --no-cache-dir --no-deps /tmp/dist/jarvis_common-*.whl \
+    && rm -rf /tmp/dist
 
 # OpenCV (pulled transitively by Docling / docling-ibm-models) loads shared
 # libraries the slim base omits; without them cv2 — and thus Docling's RapidOCR

@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: security-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
-          enable-cache: true
+          enable-cache: ${{ vars.JARVIS_RUNNER == '' }}
           prune-cache: false  # self-hosted: skip post-job prune (races the shared uv cache lock across parallel runners)
           python-version: "3.12"
 

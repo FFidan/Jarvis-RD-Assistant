@@ -50,6 +50,10 @@ live_pg_dsn = _make_live_pg_dsn("jarvis-rd")
 # saturation under ~53 serial container spins on the loaded self-hosted runner).
 xuser_pg_dsn = _make_live_pg_session_dsn("jarvis-rd")
 
+# Baseline-invariants suite: ONE session container (suffix -baseline) + per-test
+# TRUNCATE, replacing the ~23 throwaway containers (one per test).
+baseline_pg_dsn = _make_live_pg_session_dsn("jarvis-rd-baseline")
+
 # Contract-layer fixtures (Wave 4): session-scoped Postgres + per-test txn rollback
 from jarvis_common.testing import (  # noqa: E402, F401
     _make_contract_conn_fixture,
@@ -323,3 +327,31 @@ async def two_users(_xuser_pool):
         pulse_card_id_a=res_a["pulse_card_id"],
         pool=_xuser_pool,
     )
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def _baseline_pool(baseline_pg_dsn):
+    """Session pool for test_baseline_invariants: db/init.sql applied ONCE."""
+    import asyncpg
+    from jarvis_common.db_helpers import init_pg_connection
+    from tests.migration_helpers import apply_fresh_init
+
+    pool = await asyncpg.create_pool(
+        baseline_pg_dsn, min_size=1, max_size=2, init=init_pg_connection
+    )
+    try:
+        await apply_fresh_init(pool)  # schema once; per-test reset is TRUNCATE
+        yield pool
+    finally:
+        await pool.close()
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def baseline_conn(_baseline_pool):
+    """Pristine connection per test: TRUNCATE all public tables, then yield."""
+    async with _baseline_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        names = ", ".join(f'"{r["tablename"]}"' for r in rows)
+        if names:
+            await conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+        yield conn

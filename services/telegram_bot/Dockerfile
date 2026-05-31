@@ -18,9 +18,9 @@ WORKDIR /app
 
 COPY services/telegram_bot/requirements.txt ./requirements.txt
 COPY services/telegram_bot/constraints.txt ./constraints.txt
+RUN pip install --no-cache-dir --require-hashes -r constraints.txt
 COPY --from=jarvis-common-builder /tmp/dist/*.whl /tmp/dist/
-RUN pip install --no-cache-dir --require-hashes -r constraints.txt \
-    && pip install --no-cache-dir --no-deps /tmp/dist/jarvis_common-*.whl \
+RUN pip install --no-cache-dir --no-deps /tmp/dist/jarvis_common-*.whl \
     && rm -rf /tmp/dist
 
 RUN adduser --disabled-password --no-create-home appuser
