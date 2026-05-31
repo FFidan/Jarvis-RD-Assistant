@@ -28,7 +28,7 @@ class TestRerankerLoadFailPropagatesFirstCall:
         # Patch CrossEncoder inside the reranker module and ensure _onnx_available=False path
         with (
             patch("paper_ingestion.ingestion.reranker.CrossEncoder", factory),
-            patch("builtins.__import__", side_effect=_import_blocker({"onnxruntime", "optimum"})),
+            patch("builtins.__import__", side_effect=_import_blocker({"onnxruntime"})),
         ):
             with pytest.raises(OSError, match="model weights not found"):
                 reranker._load_model_if_needed()
@@ -45,7 +45,7 @@ class TestRerankerLoadFailShortCircuitsSecondCall:
 
         with (
             patch("paper_ingestion.ingestion.reranker.CrossEncoder", factory),
-            patch("builtins.__import__", side_effect=_import_blocker({"onnxruntime", "optimum"})),
+            patch("builtins.__import__", side_effect=_import_blocker({"onnxruntime"})),
         ):
             # First call: expect the original error (factory may be called for CUDA + CPU paths)
             with pytest.raises(OSError):
@@ -70,7 +70,7 @@ class TestRerankerUnexpectedErrorPropagates:
 
         with (
             patch("paper_ingestion.ingestion.reranker.CrossEncoder", factory),
-            patch("builtins.__import__", side_effect=_import_blocker({"onnxruntime", "optimum"})),
+            patch("builtins.__import__", side_effect=_import_blocker({"onnxruntime"})),
         ):
             # ValueError is not in (OSError, ImportError, RuntimeError, FileNotFoundError)
             # so it must bubble up from the outer except Exception (CUDA fallback)

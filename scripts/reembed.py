@@ -20,12 +20,9 @@ Environment variables (reads from .env or system environment):
     REEMBED_RECREATE_COLLECTION
                          - Set true to delete/recreate a wrong-dimension Qdrant collection
     REEMBED_BATCH_SIZE  - Papers per batch for progress logging (default: 5)
-    REEMBED_BACKEND     - litellm, local, or onnx (default: litellm)
-    REEMBED_LOCAL_MODEL - Hugging Face model for local/onnx backends
+    REEMBED_BACKEND     - litellm or local (default: litellm)
+    REEMBED_LOCAL_MODEL - Hugging Face model for local backend
                            (default for qwen3: Qwen/Qwen3-Embedding-0.6B)
-    REEMBED_ONNX_REQUIRE_CUDA
-                         - Set true to fail if CUDA is available to torch but
-                           onnxruntime-gpu is not installed/exposing CUDA
     REEMBED_EMBED_BATCH_SIZE
                          - Chunks per embedding batch (default: 32)
     REEMBED_BENCHMARK   - Set true to run a read-only embedding benchmark
@@ -130,11 +127,6 @@ REEMBED_LOCAL_MODEL = os.environ.get("REEMBED_LOCAL_MODEL") or (
     if EMBEDDING_MODEL_NAME == "qwen3-embedding:0.6b"
     else EMBEDDING_MODEL_NAME
 )
-REEMBED_ONNX_REQUIRE_CUDA = os.environ.get("REEMBED_ONNX_REQUIRE_CUDA", "").lower() in {
-    "1",
-    "true",
-    "yes",
-}
 REEMBED_BENCHMARK = os.environ.get("REEMBED_BENCHMARK", "").lower() in {"1", "true", "yes"}
 REEMBED_BENCHMARK_SIZE = int(os.environ.get("REEMBED_BENCHMARK_SIZE", "128"))
 REEMBED_CONTINUE_ON_ERROR = os.environ.get("REEMBED_CONTINUE_ON_ERROR", "").lower() in {
@@ -190,9 +182,8 @@ class LiteLLMEmbeddingBackend:
 class SentenceTransformerEmbeddingBackend:
     """Local SentenceTransformers backend for bulk migration speed."""
 
-    def __init__(self, *, use_onnx: bool = False) -> None:
-        self.name = "onnx" if use_onnx else "local"
-        self._use_onnx = use_onnx
+    def __init__(self) -> None:
+        self.name = "local"
         self._model: Any | None = None
 
     def _load_model_if_needed(self) -> Any:
@@ -203,7 +194,7 @@ class SentenceTransformerEmbeddingBackend:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
             raise ScriptError(
-                "REEMBED_BACKEND=local/onnx requires sentence-transformers. "
+                "REEMBED_BACKEND=local requires sentence-transformers. "
                 "Install optional paper-ingestion dependencies first."
             ) from exc
 
@@ -217,25 +208,7 @@ class SentenceTransformerEmbeddingBackend:
             torch = None  # type: ignore[assignment]
 
         kwargs: dict[str, Any] = {"device": device}
-        if self._use_onnx:
-            try:
-                import onnxruntime
-                import optimum  # noqa: F401
-            except ImportError as exc:
-                raise ScriptError(
-                    "REEMBED_BACKEND=onnx requires optimum and onnxruntime. "
-                    "Use REEMBED_BACKEND=local or install optional dependencies."
-                ) from exc
-            provider = select_onnx_provider(
-                device=device,
-                available_providers=list(onnxruntime.get_available_providers()),
-                require_cuda=REEMBED_ONNX_REQUIRE_CUDA,
-            )
-            if provider == "CPUExecutionProvider":
-                device = "cpu"
-                kwargs["device"] = device
-            kwargs.update({"backend": "onnx", "model_kwargs": {"provider": provider}})
-        elif device == "cuda" and torch is not None:
+        if device == "cuda" and torch is not None:
             kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
 
         logger.info(
@@ -266,51 +239,6 @@ class SentenceTransformerEmbeddingBackend:
         return await asyncio.to_thread(_encode)
 
 
-def select_onnx_provider(
-    *,
-    device: str,
-    available_providers: list[str],
-    require_cuda: bool,
-) -> str:
-    """Select an ONNX Runtime execution provider that exists in this environment.
-
-    Parameters
-    ----------
-    device : str
-        Torch device string (``"cuda"`` or ``"cpu"``).
-    available_providers : list[str]
-        Providers returned by ``onnxruntime.get_available_providers()``.
-    require_cuda : bool
-        When ``True``, raises if CUDA is requested but not available in
-        onnxruntime (``REEMBED_ONNX_REQUIRE_CUDA=true``).
-
-    Returns
-    -------
-    str
-        Provider name, e.g. ``"CUDAExecutionProvider"`` or
-        ``"CPUExecutionProvider"``.
-
-    Raises
-    ------
-    ScriptError
-        If no supported provider is found, or CUDA is required but missing.
-    """
-    if device == "cuda" and "CUDAExecutionProvider" in available_providers:
-        return "CUDAExecutionProvider"
-    if device == "cuda" and require_cuda:
-        raise ScriptError(
-            "REEMBED_ONNX_REQUIRE_CUDA=true but onnxruntime does not expose "
-            "CUDAExecutionProvider. Install onnxruntime-gpu compatible with this CUDA stack "
-            "or unset REEMBED_ONNX_REQUIRE_CUDA to allow CPU ONNX fallback."
-        )
-    if "CPUExecutionProvider" in available_providers:
-        return "CPUExecutionProvider"
-    raise ScriptError(
-        "onnxruntime exposes no supported execution provider. Available providers: "
-        f"{available_providers}"
-    )
-
-
 def build_embedding_backend(name: str | None = None) -> EmbeddingBackend:
     """Return the configured embedding backend for this run.
 
@@ -319,7 +247,7 @@ def build_embedding_backend(name: str | None = None) -> EmbeddingBackend:
     name : str or None
         Backend name override. When ``None``, uses the ``REEMBED_BACKEND``
         module constant.  Recognised values: ``"litellm"`` (or ``"remote"``),
-        ``"local"`` (or ``"sentence-transformers"``/``"st"``), ``"onnx"``.
+        ``"local"`` (or ``"sentence-transformers"``/``"st"``).
 
     Returns
     -------
@@ -336,11 +264,9 @@ def build_embedding_backend(name: str | None = None) -> EmbeddingBackend:
     if normalized in {"litellm", "remote"}:
         return LiteLLMEmbeddingBackend()
     if normalized in {"local", "sentence-transformers", "sentence_transformers", "st"}:
-        return SentenceTransformerEmbeddingBackend(use_onnx=False)
-    if normalized == "onnx":
-        return SentenceTransformerEmbeddingBackend(use_onnx=True)
+        return SentenceTransformerEmbeddingBackend()
     raise ScriptError(
-        f"Unsupported REEMBED_BACKEND={backend_name!r}. Expected one of: litellm, local, onnx."
+        f"Unsupported REEMBED_BACKEND={backend_name!r}. Expected one of: litellm, local."
     )
 
 
@@ -787,7 +713,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--backend",
-        choices=["litellm", "local", "onnx"],
+        choices=["litellm", "local"],
         help="Embedding backend for this run. Defaults to REEMBED_BACKEND or litellm.",
     )
     parser.add_argument(

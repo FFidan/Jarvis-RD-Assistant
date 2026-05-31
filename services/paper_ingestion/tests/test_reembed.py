@@ -835,7 +835,6 @@ def test_build_embedding_backend_accepts_supported_names():
 
     assert reembed_mod.build_embedding_backend("litellm").name == "litellm"
     assert reembed_mod.build_embedding_backend("local").name == "local"
-    assert reembed_mod.build_embedding_backend("onnx").name == "onnx"
 
 
 def test_build_embedding_backend_rejects_unknown_name():
@@ -847,84 +846,6 @@ def test_build_embedding_backend_rejects_unknown_name():
 
     with pytest.raises(reembed_mod.ScriptError, match="Unsupported REEMBED_BACKEND"):
         reembed_mod.build_embedding_backend("bogus")
-
-
-def test_select_onnx_provider_prefers_cuda_when_available():
-    import importlib
-
-    import scripts.reembed as reembed_mod
-
-    importlib.reload(reembed_mod)
-
-    provider = reembed_mod.select_onnx_provider(
-        device="cuda",
-        available_providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        require_cuda=False,
-    )
-
-    assert provider == "CUDAExecutionProvider"
-
-
-def test_select_onnx_provider_falls_back_to_cpu_when_cuda_provider_missing():
-    import importlib
-
-    import scripts.reembed as reembed_mod
-
-    importlib.reload(reembed_mod)
-
-    provider = reembed_mod.select_onnx_provider(
-        device="cuda",
-        available_providers=["CPUExecutionProvider"],
-        require_cuda=False,
-    )
-
-    assert provider == "CPUExecutionProvider"
-
-
-def test_select_onnx_provider_can_require_cuda_provider():
-    import importlib
-
-    import scripts.reembed as reembed_mod
-
-    importlib.reload(reembed_mod)
-
-    with pytest.raises(reembed_mod.ScriptError, match="REEMBED_ONNX_REQUIRE_CUDA"):
-        reembed_mod.select_onnx_provider(
-            device="cuda",
-            available_providers=["CPUExecutionProvider"],
-            require_cuda=True,
-        )
-
-
-def test_onnx_backend_uses_cpu_device_when_cuda_provider_missing(monkeypatch):
-    import importlib
-
-    import scripts.reembed as reembed_mod
-
-    importlib.reload(reembed_mod)
-    fake_sentence_transformer = MagicMock(return_value=MagicMock())
-    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=MagicMock(return_value=True)))
-    fake_onnxruntime = SimpleNamespace(
-        get_available_providers=MagicMock(return_value=["CPUExecutionProvider"])
-    )
-
-    monkeypatch.setitem(
-        sys.modules,
-        "sentence_transformers",
-        SimpleNamespace(SentenceTransformer=fake_sentence_transformer),
-    )
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    monkeypatch.setitem(sys.modules, "onnxruntime", fake_onnxruntime)
-    monkeypatch.setitem(sys.modules, "optimum", SimpleNamespace())
-
-    backend = reembed_mod.SentenceTransformerEmbeddingBackend(use_onnx=True)
-    backend._load_model_if_needed()
-
-    fake_sentence_transformer.assert_called_once()
-    kwargs = fake_sentence_transformer.call_args.kwargs
-    assert kwargs["device"] == "cpu"
-    assert kwargs["backend"] == "onnx"
-    assert kwargs["model_kwargs"] == {"provider": "CPUExecutionProvider"}
 
 
 def test_parse_args_supports_safe_help_flags():
