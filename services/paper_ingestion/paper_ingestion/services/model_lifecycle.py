@@ -684,7 +684,11 @@ async def _model_pull_job(
 
     await _raise_if_cancelled(ctx)
     await ctx.update_progress(0.0, f"Starting pull for {tag}")
-    ollama_url = str(payload.get("ollama_url") or "http://ollama:11434").rstrip("/")
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+    ollama_url = str(
+        payload.get("ollama_url") or get_paper_ingestion_settings().ollama_base_url
+    ).rstrip("/")
     last_message = "Pulling model"
     try:
         async with http_client.stream(

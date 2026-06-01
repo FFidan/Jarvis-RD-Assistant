@@ -14,7 +14,7 @@ from typing import Any, cast
 import asyncpg
 import httpx
 from jarvis_common.db_helpers import assert_paper_ownership, assert_papers_ownership
-from jarvis_common.jobs import JobContext, JobError
+from jarvis_common.jobs import JobError, ProgressContext
 
 from paper_ingestion._state import get_services
 from paper_ingestion.pdf_processor import PDF_STORAGE_PATH
@@ -40,12 +40,12 @@ __all__ = [
 
 
 class _SubCtx:
-    """Wraps a JobContext and scales inner progress (0–1) to an outer range.
+    """Wraps a ProgressContext and scales inner progress (0–1) to an outer range.
 
     Example: ``_SubCtx(ctx, 0.2, 0.7)`` maps inner 0 → 0.2 and inner 1 → 0.7.
     """
 
-    def __init__(self, ctx: JobContext, start: float, end: float) -> None:
+    def __init__(self, ctx: ProgressContext, start: float, end: float) -> None:
         self._ctx = ctx
         self._start = start
         self._end = end
@@ -77,7 +77,7 @@ async def _paper_process_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Process a downloaded paper's PDF: extract, chunk, embed.
 
@@ -143,7 +143,7 @@ async def _paper_analyze_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Chain download → process → summarize for a single paper.
 
@@ -248,7 +248,7 @@ async def _paper_summarize_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Generate a quote-verified summary for a single paper."""
     from paper_ingestion.services.summarization import generate_paper_summary
@@ -281,7 +281,7 @@ async def _papers_batch_process_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Process many papers' PDFs in a single background job.
 
@@ -357,7 +357,7 @@ async def _papers_scan_local_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Scan the local PDF drop directory and import new PDFs."""
     from paper_ingestion.services.local_pdfs import scan_local_pdf_directory
@@ -377,7 +377,7 @@ async def _papers_batch_summarize_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Summarize many papers in a single background job.
 
@@ -427,7 +427,7 @@ async def _digest_weekly_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Generate the weekly digest in a visible durable job."""
     from paper_ingestion.weekly_summary import generate_weekly_summary

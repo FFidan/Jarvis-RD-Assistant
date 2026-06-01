@@ -5,6 +5,7 @@ import {
   ApiError,
   fetchContradictions,
   fetchSystemModels,
+  fetchStackHealth,
   promoteZoteroNote,
   scanContradictions,
   scanPaperContradictions,
@@ -340,5 +341,38 @@ describe('fetchSystemModels', () => {
       '/api/system/models',
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+});
+
+describe('fetchStackHealth — toStatus degraded branch', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("maps 'degraded' check status to ServiceHealthStatus 'degraded'", async () => {
+    // paper_ingestion and learning_engine are ok; one dep reports 'degraded'
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/health/paper_ingestion/internal')) {
+        return new Response(
+          JSON.stringify({ status: 'ok', checks: { postgres: 'ok', qdrant: 'degraded', ollama: 'ok', litellm: 'ok', vector: 'ok' } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      // Public health probes — both ok
+      return new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const summary = await fetchStackHealth();
+
+    const qdrantService = summary.services.find((s) => s.name === 'qdrant');
+    expect(qdrantService?.status).toBe('degraded');
+    expect(summary.degradedCount).toBe(1);
+    expect(summary.downCount).toBe(0);
+    // Overall rolls up to 'degraded' when any dep is degraded but none are down
+    expect(summary.overall).toBe('degraded');
   });
 });

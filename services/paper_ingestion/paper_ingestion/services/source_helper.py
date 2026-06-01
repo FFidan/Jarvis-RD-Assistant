@@ -133,7 +133,3 @@ async def get_sources_for_types(
             errors[source_type] = exc
 
     return plugins, errors
-
-
-# Backward-compatible alias while internal imports are migrated.
-_get_source = get_source_for_type

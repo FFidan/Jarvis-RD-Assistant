@@ -3,18 +3,13 @@
 Houses the four private helpers that interact with the kg_entities Qdrant
 collection.  Kept separate from entities.py so the Qdrant I/O surface is
 easy to locate and replace.
-
-NOTE: ``ConnLike`` is duplicated here to avoid a circular import with
-entities.py.  Both definitions must stay in sync until a shared types
-module for this package is introduced.
 """
 
 import logging
 import uuid
 from typing import Any
 
-import asyncpg
-
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.ingestion.embedder import (
     extract_qdrant_collection_dimension,
     raise_for_collection_dimension_mismatch,
@@ -24,8 +19,6 @@ logger = logging.getLogger(__name__)
 
 KG_COLLECTION = "kg_entities"
 SIMILARITY_THRESHOLD = 0.92
-
-ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
 
 
 async def _ensure_kg_collection(qdrant_client: Any) -> None:

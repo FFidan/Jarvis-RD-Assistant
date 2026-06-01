@@ -66,8 +66,6 @@ interface AuthState {
    * the next render cycle.
    */
   expireSession: () => void;
-  /** @deprecated Use isSessionValid() + expireSession() from a useEffect instead. */
-  checkSession: () => boolean;
   getApiKey: () => string | null;
   getUser: () => SessionUser | null;
 }
@@ -123,7 +121,7 @@ export const useAuthStore = create<AuthState>()(
         // Magic-link path: the session cookie is already set by the backend.
         // We persist nothing security-sensitive here — just the user record so
         // the UI can render. The cookie is HttpOnly so the browser/JS can't
-        // read or forge it; checkSession still gates on authTime so a stale
+        // read or forge it; isSessionValid() still gates on authTime so a stale
         // tab doesn't pretend to be logged in forever after the cookie
         // expires server-side.
         set({
@@ -229,18 +227,6 @@ export const useAuthStore = create<AuthState>()(
 
       expireSession(): void {
         set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
-      },
-
-      checkSession(): boolean {
-        const { authTime, isAuthenticated, apiKey, user } = get();
-        if (!isAuthenticated || authTime === null) return false;
-        // Either an API key OR a session user must be present
-        if (!apiKey && !user) return false;
-        if (Date.now() - authTime > SESSION_DURATION_MS) {
-          set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
-          return false;
-        }
-        return true;
       },
 
       getApiKey(): string | null {

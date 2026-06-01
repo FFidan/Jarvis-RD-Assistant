@@ -35,6 +35,20 @@ _MAX_RETRY_AFTER_S: int = 3600
 _STARTUP_AT: float = _time.monotonic()
 
 
+def parse_retry_after(exc: BaseException) -> int | None:
+    """Extract an integer Retry-After header from an exception's response."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    retry_after = response.headers.get("Retry-After")
+    if retry_after is None:
+        return None
+    try:
+        return int(float(retry_after))
+    except (TypeError, ValueError):
+        return None
+
+
 async def _enforce_startup_grace(grace_seconds: float) -> None:
     """Sleep until at least ``grace_seconds`` have elapsed since process startup.
 

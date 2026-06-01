@@ -254,20 +254,8 @@ def _resolve_request_user_id(request: Request) -> int | None:
 
 
 async def current_user_id(request: Request) -> int | None:
-    """Return the authenticated user's integer ID, or None.
-
-    Reads from ``request.state.user_id``, populated by
-    :class:`jarvis_common.session_middleware.SessionMiddleware` when a valid
-    ``jarvis_session`` cookie is present. Falls back to None for callers
-    without a browser session (Telegram bot using only ``X-API-Key``,
-    health checks, etc.).
-
-    An earlier refactor replaced the previous single-tenant stub and hardened
-    the resolver to ignore non-int values so ``SimpleNamespace`` /
-    ``MagicMock`` request stand-ins in legacy single-tenant unit tests still
-    see ``None``.
-    """
-    return _resolve_request_user_id(request)
+    """Alias for :func:`current_user_id_or_none` — prefer that name at new call-sites."""
+    return await current_user_id_or_none(request)
 
 
 async def current_user_id_or_none(request: Request) -> int | None:

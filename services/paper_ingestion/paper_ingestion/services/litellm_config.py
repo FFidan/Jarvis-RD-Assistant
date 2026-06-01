@@ -46,8 +46,6 @@ _CLOUD_PREFIX_TO_PROVIDER: dict[str, str] = {
     "gemini": "google",
 }
 
-_ALLOWED_PROVIDERS = frozenset({"anthropic", "openai", "google"})
-
 
 async def get_provider_api_key(provider: str, db_pool: Any) -> str | None:
     """Fetch and decrypt the LLM provider API key from user_config.
@@ -66,9 +64,11 @@ async def get_provider_api_key(provider: str, db_pool: Any) -> str | None:
     ValueError
         If *provider* is not in the allowed set.
     """
-    if provider not in _ALLOWED_PROVIDERS:
+    from paper_ingestion.services.config_metadata import CLOUD_PROVIDERS  # noqa: PLC0415
+
+    if provider not in CLOUD_PROVIDERS:
         raise ValueError(
-            f"Unsupported provider {provider!r}. Allowed values: {sorted(_ALLOWED_PROVIDERS)}"
+            f"Unsupported provider {provider!r}. Allowed values: {sorted(CLOUD_PROVIDERS)}"
         )
 
     config_key = f"llm.{provider}.api_key"
@@ -446,9 +446,11 @@ async def _post_ollama_alias_update(
     extra_body: dict[str, Any] | None = None,
 ) -> bool:
     """Push an Ollama alias update to LiteLLM /config/update in-memory (no api_key needed)."""
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
     litellm_params: dict[str, Any] = {
         "model": litellm_model_string,
-        "api_base": "http://ollama:11434",
+        "api_base": get_paper_ingestion_settings().ollama_base_url,
     }
     if extra_body is not None:
         litellm_params["extra_body"] = extra_body

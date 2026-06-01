@@ -38,7 +38,7 @@ async def list_project_questions(
     project_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
-) -> list[dict]:
+) -> list[ProjectQuestionResponse]:
     """List open research questions for a project (owner-scoped)."""
     async with db_pool.acquire() as conn:
         await _assert_project_owner(conn, project_id, user_id)
@@ -52,7 +52,7 @@ async def list_project_questions(
             project_id,
             user_id,
         )
-    return [dict(r) for r in rows]
+    return [ProjectQuestionResponse(**dict(r)) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +72,7 @@ async def create_project_question(
     body: ProjectQuestionCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
-) -> dict:
+) -> ProjectQuestionResponse:
     """Add an open question to a project (owner-scoped)."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -87,7 +87,7 @@ async def create_project_question(
                 user_id,
                 body.body,
             )
-    return dict(row)
+    return ProjectQuestionResponse(**dict(row))
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ async def list_project_activity(
     limit: int = Query(default=20, ge=1, le=100),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
-) -> list[dict]:
+) -> list[ProjectActivityItem]:
     """Recent-activity feed (§3.5): UNION over linked papers, completed
     tasks, and completed milestones — project-scoped via the owner guard,
     newest-first, each row carrying a ``kind`` label.
@@ -168,4 +168,4 @@ async def list_project_activity(
             user_id,
             limit,
         )
-    return [dict(r) for r in rows]
+    return [ProjectActivityItem(**dict(r)) for r in rows]

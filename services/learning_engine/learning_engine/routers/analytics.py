@@ -157,8 +157,14 @@ async def get_llm_cost(
 # ---------------------------------------------------------------------------
 
 
-def _compute_streak(rows: list, *, field: str) -> int:
-    """Count consecutive days (descending from today/yesterday) where *field* > 0.
+def _compute_streak(rows: list) -> int:
+    """Count consecutive days (descending from today/yesterday) with a qualifying daily_log row.
+
+    Deliberate perf mirror of the SQL gaps-and-islands streak in
+    ``executive._FOCUS_STREAK_SQL`` — the SQL version avoids transferring up
+    to 365 rows across the wire while this Python version drives the
+    /analytics/summary endpoint which has already fetched the rows.
+    Both must remain in sync; see ``test_executive.test_my_day_focus_streak_sql_live_pg``.
 
     Delegates to ``jarvis_common.streak.compute_streak`` which implements the
     same gaps-and-islands algorithm anchored to UTC.  The rows from daily_log
@@ -250,6 +256,6 @@ async def get_analytics_summary(
         papers_read_prev=prev_row["papers_read_prev"],
         focus_hours_prev=prev_row["focus_hours_prev"],
         cards_reviewed_prev=prev_row["cards_reviewed_prev"],
-        focus_streak_days=_compute_streak(focus_rows, field="focus_hours"),
-        cards_review_streak_days=_compute_streak(review_rows, field="cards_reviewed"),
+        focus_streak_days=_compute_streak(focus_rows),
+        cards_review_streak_days=_compute_streak(review_rows),
     )

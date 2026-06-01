@@ -6,7 +6,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext
+from jarvis_common.jobs import ProgressContext
 
 from paper_ingestion._state import get_services
 from paper_ingestion.services.contradictions import scan_contradictions
@@ -18,7 +18,7 @@ async def _contradictions_scan_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Scan verified paper findings for quote-verified contradictions."""
     services = get_services()

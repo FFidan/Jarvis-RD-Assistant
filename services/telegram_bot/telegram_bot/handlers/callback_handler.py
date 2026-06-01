@@ -23,7 +23,6 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 from telegram_bot.formatters import format_paper_detail, format_project_status
 from telegram_bot.handlers.helpers import _owner_headers, auth_check, get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
-from telegram_bot.handlers.review_handler import review_start
 from telegram_bot.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
@@ -280,47 +279,6 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     await query.message.reply_text(text, parse_mode="HTML")
 
 
-@rate_limit(max_calls=5, window_seconds=60)
-async def _test_only_start_review_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Intentionally NOT registered with the dispatcher.
-
-    The /review command flow is owned by review_handler.ConversationHandler
-    (TG-003). This function exists as test-covered scaffolding so the auth +
-    rate-limit + ack pattern can be regression-tested without depending on the
-    ConversationHandler. If a future contributor wires this into
-    register_callback_handlers, they must first remove the ConversationHandler
-    to avoid dual-dispatch.
-    """
-    query = update.callback_query
-    if query is None:
-        return
-
-    authorized, _ = await _callback_auth(update, context)
-    if not authorized:
-        await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
-        return
-
-    # Guard against InaccessibleMessage — can arrive when the message is older
-    # than 48 hours.  A bare assignment silently casts the wrong type; instead
-    # we answer with an alert so the user gets feedback.
-    if not isinstance(query.message, Message):
-        await query.answer("This message is no longer accessible", show_alert=True)
-        return
-
-    await query.answer()
-
-    # Delegate to review_start, passing the callback message explicitly so that
-    # update.message is never mutated (Update fields are conceptually immutable
-    # per call and the assignment was fragile / type-unsafe).
-    await review_start(update, context, message=query.message)
-
-
-# Keep the old name as an alias so tests importing start_review_callback continue to work.
-start_review_callback = _test_only_start_review_callback
-
-
 @rate_limit(max_calls=10, window_seconds=60)
 async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``task_done_{id}`` — mark a task as complete via ProjectManager."""
@@ -378,6 +336,6 @@ def register_callback_handlers(app: Application) -> None:
     )
     app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))
     app.add_handler(CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$"))
-    # _test_only_start_review_callback is intentionally NOT registered here (TG-003).
-    # review_handler.ConversationHandler owns the /review flow; wiring
-    # start_review_callback into this dispatcher would cause dual-dispatch.
+    # TG-003: start_review is intentionally NOT registered here.
+    # review_handler.ConversationHandler owns the /review flow; a duplicate
+    # registration would cause dual-dispatch.

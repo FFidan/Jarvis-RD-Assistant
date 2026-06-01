@@ -49,7 +49,6 @@ _EXPECTED_MODEL_PREFIXES: tuple[str, ...] = (
     "qwen3-embedding",
 )
 
-_OLLAMA_DEFAULT_BASE_URL = "http://ollama:11434"
 _OLLAMA_PROBE_TTL = 10  # seconds
 
 

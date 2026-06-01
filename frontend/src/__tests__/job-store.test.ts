@@ -413,7 +413,6 @@ describe('JobStore', () => {
         lastError: null,
         login: vi.fn(),
         loginWithSession: vi.fn(),
-        checkSession: vi.fn(() => true),
         isSessionValid: vi.fn(() => true),
         expireSession: vi.fn(),
       });

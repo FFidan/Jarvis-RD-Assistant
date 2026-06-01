@@ -125,7 +125,7 @@ async def _migrate_plaintext_secrets_hook(app: FastAPI) -> None:
     Runs after migrations so the schema is at the latest version. Best-effort:
     failures are logged inside the helper so this hook never blocks startup.
     """
-    from paper_ingestion.routers.settings import (  # noqa: PLC0415
+    from paper_ingestion.services.config_db import (  # noqa: PLC0415
         migrate_plaintext_secrets,
     )
 

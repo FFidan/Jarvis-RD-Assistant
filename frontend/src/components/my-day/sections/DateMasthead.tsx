@@ -50,8 +50,6 @@ export function DateMasthead() {
   const hash = Array.from(now.toDateString()).reduce((a, c) => a + c.charCodeAt(0), 0);
   // use hash (already computed) to pick a quote; fallback to first entry (array is a non-empty constant)
   const attributedQuote = ATTRIBUTED_QUOTES[hash % ATTRIBUTED_QUOTES.length] ?? ATTRIBUTED_QUOTES[0] ?? { text: '', author: '' };
-  // TODO: replace with real journal entry count from journal_entries table
-  const entryNum = Math.floor((now.getTime() - new Date('2026-01-01').getTime()) / 86400000);
   const dateStr =
     now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) + '.';
   const timeStr = now.toLocaleTimeString('en-US', {
@@ -91,7 +89,7 @@ export function DateMasthead() {
     <header className="border-b border-hair pb-6 grid grid-cols-[1fr_auto] gap-8 items-end">
       <div>
         <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-meta mb-2">
-          RESEARCH LOG · ENTRY {entryNum} · {timeStr}
+          RESEARCH LOG · {timeStr}
         </p>
         <h1 className="font-serif text-[36px] leading-tight text-strong">{dateStr}</h1>
         <p className="font-serif italic text-[15px] text-zinc-600 dark:text-zinc-400 mt-1">

@@ -176,3 +176,24 @@ async def test_no_active_users_results_in_zero_defers(task_registry_mocks):
         await scheduler.run_pulse_wrapper(app)
 
     assert task_registry_mocks["pulse.generate"].defer_async.await_count == 0
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, True),
+        (False, False),
+        (None, False),
+        ("true", True),
+        ("false", False),
+        ("yes", True),
+        ("no", False),
+        ("1", True),
+        ("0", False),
+        ("TRUE", True),
+        ("False", False),
+    ],
+)
+def test_coerce_bool_parity(value, expected):
+    """Characterize the shared bool coercion the zotero-poll gate relies on."""
+    assert scheduler._coerce_bool(value) is expected

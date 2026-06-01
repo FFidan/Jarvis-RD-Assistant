@@ -10,7 +10,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from paper_ingestion.routers.settings import _validate_cron
+from paper_ingestion.services.config_validators import _validate_cron
 
 
 @pytest.mark.parametrize(

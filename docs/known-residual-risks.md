@@ -200,3 +200,23 @@ Three small consolidation items accepted as low-priority code-quality debt:
 - One inline copy of the paper-visibility SQL predicate remains at `paper_ingestion/services/summarization.py`; the other copies were hoisted to a shared `paper_visible_sql()` helper. Hoist this last copy when that file is next edited.
 
 **Reopen criteria:** any of the above files are touched in a refactor — opportunistic cleanup at that point.
+
+---
+
+### JOBS-REGISTRY-GLOBALS-1 — Job task-registry uses module-level globals as test injection points
+
+**Finding:** `jarvis_common`'s job task registry exposes `_pool` and `_http_client` as module-level globals. Tests rely on these globals as injection points to substitute test doubles.
+
+**Why deferred:** converting to a proper dependency-injection seam would require updating every test that directly mutates the globals, with no change in production behavior.
+
+**Reopen criteria:** when the test suite for the job task registry is refactored, or when the globals cause a real isolation problem in CI.
+
+---
+
+### SETTINGS-BARREL-1 — `paper_ingestion` settings re-export barrel retained for call-site stability
+
+**Finding:** the `paper_ingestion.services.config` module acts as a re-export barrel for `get_paper_ingestion_settings`, rather than callers importing from the canonical `paper_ingestion.config` directly.
+
+**Why retained:** removing the barrel would require updating every call site that currently patches `paper_ingestion.services.config.get_paper_ingestion_settings` in tests, and the production consumer that imports from that path. The marginal leanness gain does not justify the regression surface. An export-snapshot test guards the barrel's interface.
+
+**Reopen criteria:** if a refactor already touches the majority of call sites, remove the barrel in the same pass.

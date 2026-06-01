@@ -49,10 +49,10 @@ def make_card_row(**overrides) -> FakeRecord:
 
 
 def make_job_ctx(job_id: str = "test-job-001") -> MagicMock:
-    """Return a minimal JobContext stub for generation router tests."""
-    from jarvis_common.jobs import JobContext
+    """Return a minimal ProgressContext stub for generation router tests."""
+    from jarvis_common.jobs import ProgressContext
 
-    ctx = MagicMock(spec=JobContext)
+    ctx = MagicMock(spec=ProgressContext)
     ctx.job_id = job_id
     ctx.update_progress = AsyncMock()
     ctx.is_cancelled = AsyncMock(return_value=False)

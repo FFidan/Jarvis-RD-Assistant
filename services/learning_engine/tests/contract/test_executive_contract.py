@@ -462,8 +462,11 @@ async def test_my_day_bundle_null_tolerant_with_no_seed(
         f"my-day-bundle should be null-tolerant; got {resp.status_code}: {resp.text[:300]}"
     )
     body = resp.json()
-    for key in ("tasks", "intent", "threads", "journal", "pulse_today"):
+    for key in ("tasks", "intent", "threads", "journal"):
         assert key in body, f"my-day-bundle missing key {key!r}: {body}"
+    assert "pulse_today" not in body, (
+        f"pulse_today was removed from the bundle (always-null field); still present: {body}"
+    )
     assert isinstance(body["tasks"], list), (
         f"tasks must be list; got {type(body['tasks']).__name__}"
     )

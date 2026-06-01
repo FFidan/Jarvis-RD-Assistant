@@ -12,7 +12,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext
+from jarvis_common.jobs import ProgressContext
 
 from paper_ingestion._state import get_services
 
@@ -28,7 +28,7 @@ async def _extraction_single_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Extract structured fields for one paper/template pair."""
     from jarvis_common.db_helpers import assert_paper_ownership  # noqa: PLC0415
@@ -61,7 +61,7 @@ async def _extraction_batch_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Extract structured fields for a batch of papers.
 

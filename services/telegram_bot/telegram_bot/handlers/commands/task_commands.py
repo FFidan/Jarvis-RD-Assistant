@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import escape, truncate
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import get_db
+from telegram_bot.handlers.helpers import get_db, get_jarvis_user_id
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.handlers.types import TaskRow
 from telegram_bot.project_manager import ProjectManager
@@ -24,9 +24,7 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.message is None:
         return
     db = get_db(context)
-    user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    user_id = get_jarvis_user_id(context)
     project_id = None
     if context.args:
         try:
@@ -89,9 +87,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     db = get_db(context)
-    user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    user_id = get_jarvis_user_id(context)
     pm = ProjectManager(db)
     result = await pm.complete_task(task_id, user_id=user_id)
 

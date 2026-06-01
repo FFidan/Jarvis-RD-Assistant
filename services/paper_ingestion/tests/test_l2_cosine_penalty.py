@@ -74,7 +74,7 @@ def _make_profile(
     return profile
 
 
-# Keep local: returns a plain AsyncMock (not Embedder) with embed_texts wired — canonical testing_embedder._make_embedder() has no args.
+# Keep local: returns a plain AsyncMock (not Embedder) with embed_texts wired — canonical tests._embedder_fakes._make_embedder() has no args.
 def _make_embedder(cand_vecs: list[list[float]]) -> AsyncMock:
     """Embedder mock that returns cand_vecs for candidates (no topics in these tests)."""
     mock = AsyncMock()

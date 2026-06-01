@@ -7,9 +7,9 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from telegram_bot.formatters import _BIDI_ZW_RE, escape, truncate
+from telegram_bot.formatters import escape, sanitize_user_input, truncate
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import get_db
+from telegram_bot.handlers.helpers import get_db, get_jarvis_user_id
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.handlers.types import ProjectRow
 from telegram_bot.project_manager import ProjectManager
@@ -35,9 +35,7 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if update.message is None:
         return
     db = get_db(context)
-    user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    user_id = get_jarvis_user_id(context)
     if user_id is not None:
         rows = await db.fetch(
             "SELECT id, name, status, description, deadline "
@@ -88,11 +86,9 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("Usage: /newproject &lt;name&gt;", parse_mode="HTML")
         return
 
-    name = _BIDI_ZW_RE.sub("", " ".join(context.args)[:200])
+    name = sanitize_user_input(" ".join(context.args), 200)
     db = get_db(context)
-    user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    user_id = get_jarvis_user_id(context)
     try:
         pm = ProjectManager(db)
         result = await pm.create_project(name, user_id=user_id)

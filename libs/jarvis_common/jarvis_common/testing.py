@@ -10,8 +10,7 @@ decomposed per the 2026-05-24 polish-wave decomposition:
   - cluster 9     -> testing_search.py        (NEW)
   - cluster 10    -> testing_contract_apps.py (EXTENDED — pre-existing 121 LOC file)
 
-``testing_embedder.py`` and ``testing_sidecars/`` are UNRELATED to this
-decomposition and remain untouched.
+``testing_sidecars/`` is UNRELATED to this decomposition and remains untouched.
 
 Public API
 ----------

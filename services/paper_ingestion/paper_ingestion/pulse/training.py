@@ -10,7 +10,7 @@ import pickle
 from datetime import UTC, datetime
 from typing import Any
 
-from jarvis_common.jobs import JobContext
+from jarvis_common.jobs import ProgressContext
 
 _HMAC_DIGEST_LEN = 32  # SHA-256 digest length in bytes
 
@@ -296,7 +296,7 @@ async def _pulse_train_classifier_job(
     pool: Any,
     http_client: Any,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Background job handler for Pulse classifier retraining."""
     user_id = payload.get("user_id")

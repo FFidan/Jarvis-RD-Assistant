@@ -44,7 +44,6 @@ def _card_generate_paper_extractor(payload: dict) -> int | None:
 
 
 router = build_jobs_router(
-    service_name="learning_engine",
     public_kinds=LE_PUBLIC_JOB_KINDS,
     get_db_pool=get_db_pool,
     limiter=limiter,

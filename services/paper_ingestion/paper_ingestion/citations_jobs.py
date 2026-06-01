@@ -12,7 +12,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext
+from jarvis_common.jobs import ProgressContext
 
 from paper_ingestion._state import get_services
 from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
@@ -28,7 +28,7 @@ async def _citations_batch_fetch_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Fetch citations from Semantic Scholar for papers that lack them.
 

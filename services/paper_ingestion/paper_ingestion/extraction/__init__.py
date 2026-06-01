@@ -9,6 +9,7 @@ from jarvis_common.verify import (
     QuoteVerifier,
 )
 
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.extraction.core import (
     batch_extract,
     build_extraction_prompt,
@@ -17,7 +18,6 @@ from paper_ingestion.extraction.core import (
 from paper_ingestion.extraction.entities import (
     KG_COLLECTION,
     SIMILARITY_THRESHOLD,
-    ConnLike,
     build_entity_prompt,
     extract_entities_for_paper,
     get_knowledge_graph,

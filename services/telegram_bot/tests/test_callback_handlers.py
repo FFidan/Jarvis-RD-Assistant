@@ -14,17 +14,60 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import telegram
+import telegram_bot.handlers.review_handler as _review_handler_mod
 from jarvis_common.testing import make_bot_config
+from telegram import Message, Update
+from telegram.ext import ContextTypes
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.callback_handler import (
+    _callback_auth,
     paper_action_callback,
     paper_detail_callback,
     paper_feedback_callback,
     project_detail_callback,
-    start_review_callback,
     task_done_callback,
 )
+from telegram_bot.handlers.rate_limit import rate_limit
+
+# ---------------------------------------------------------------------------
+# Test-only scaffolding: start_review_callback
+#
+# This function formerly lived in callback_handler.py as
+# _test_only_start_review_callback.  It is NOT registered with the dispatcher
+# (TG-003 — the ConversationHandler owns the /review flow); it exists here so
+# the auth + rate-limit + ack pattern can be regression-tested without
+# depending on the ConversationHandler.
+# ---------------------------------------------------------------------------
+
+
+@rate_limit(max_calls=5, window_seconds=60)
+async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Test-only scaffolding for start_review callback auth + ack pattern."""
+    query = update.callback_query
+    if query is None:
+        return
+
+    authorized, _ = await _callback_auth(update, context)
+    if not authorized:
+        await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
+        return
+
+    # Guard against InaccessibleMessage — can arrive when the message is older
+    # than 48 hours.  A bare assignment silently casts the wrong type; instead
+    # we answer with an alert so the user gets feedback.
+    if not isinstance(query.message, Message):
+        await query.answer("This message is no longer accessible", show_alert=True)
+        return
+
+    await query.answer()
+
+    # Delegate to review_start, passing the callback message explicitly so that
+    # update.message is never mutated (Update fields are conceptually immutable
+    # per call and the assignment was fragile / type-unsafe).
+    # Look up via module reference so patch("...review_handler.review_start") works.
+    await _review_handler_mod.review_start(update, context, message=query.message)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -668,7 +711,7 @@ async def test_start_review_callback_delegates_to_review_start():
     original_message = update.message
 
     with patch(
-        "telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock
+        "telegram_bot.handlers.review_handler.review_start", new_callable=AsyncMock
     ) as mock_review_start:
         await start_review_callback(update, context)
 
@@ -691,7 +734,7 @@ async def test_start_review_callback_does_not_mutate_update_message():
     sentinel = object()
     update.message = sentinel  # Set a known sentinel value.
 
-    with patch("telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock):
+    with patch("telegram_bot.handlers.review_handler.review_start", new_callable=AsyncMock):
         await start_review_callback(update, context)
 
     assert update.message is sentinel, (
@@ -792,7 +835,7 @@ async def test_start_review_unauthed_acks_before_returning():
     """start_review_callback acks the query even when auth fails."""
     update, context, _ = _make_unauthed_callback("start_review")
 
-    with patch("telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock):
+    with patch("telegram_bot.handlers.review_handler.review_start", new_callable=AsyncMock):
         await start_review_callback(update, context)
 
     assert update.callback_query.answer.call_count == 1
@@ -1030,7 +1073,7 @@ async def test_start_review_callback_handles_inaccessible_message_gracefully():
     }
 
     with patch(
-        "telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock
+        "telegram_bot.handlers.review_handler.review_start", new_callable=AsyncMock
     ) as mock_review_start:
         await start_review_callback(update, context)
 

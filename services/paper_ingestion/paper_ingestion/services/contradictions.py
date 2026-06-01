@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.converters import row_to_chunk_response
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.models import ChunkResponse
 from paper_ingestion.services.contradiction_models import ContradictionClassification
 from paper_ingestion.services.contradictions_extract import (
@@ -54,8 +55,6 @@ from paper_ingestion.services.contradictions_persist import (
 )
 
 logger = logging.getLogger(__name__)
-
-ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
 
 _SYSTEM_CONTRADICTIONS = """\
 You are checking whether two quote-backed research findings contradict each other.

@@ -14,7 +14,7 @@ from typing import Any
 import asyncpg
 from jarvis_common.prompt_safety import wrap_delimited
 
-ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
+from paper_ingestion.db_types import ConnLike
 
 _STOP_WORDS = {
     "about",

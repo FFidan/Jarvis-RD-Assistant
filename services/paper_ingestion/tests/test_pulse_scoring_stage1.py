@@ -72,7 +72,7 @@ def _make_profile(
     )
 
 
-# Local helper — canonical testing_embedder._make_embedder returns a real Embedder;
+# Local helper — canonical tests._embedder_fakes._make_embedder returns a real Embedder;
 # this variant takes return_vecs and returns a plain AsyncMock (stage-1 protocol only).
 def _make_embedder(return_vecs: list[list[float]]) -> AsyncMock:
     mock = AsyncMock()

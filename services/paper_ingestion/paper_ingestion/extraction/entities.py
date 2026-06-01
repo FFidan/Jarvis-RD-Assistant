@@ -16,10 +16,10 @@ from jarvis_common.prompt_safety import wrap_delimited
 from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.converters import row_to_chunk_response
+from paper_ingestion.db_types import ConnLike  # noqa: F401
 from paper_ingestion.extraction.entities_qdrant import (  # noqa: F401
     KG_COLLECTION,
     SIMILARITY_THRESHOLD,
-    ConnLike,
     _embed_entity_text,
     _ensure_kg_collection,
     _find_similar_entity,

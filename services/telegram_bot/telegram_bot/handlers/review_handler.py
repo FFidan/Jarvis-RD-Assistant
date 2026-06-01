@@ -20,7 +20,14 @@ from telegram.ext import (
 )
 
 from telegram_bot.formatters import format_card_back, format_card_front
-from telegram_bot.handlers.helpers import _owner_headers, auth_check, get_config, get_db, get_http
+from telegram_bot.handlers.helpers import (
+    _owner_headers,
+    auth_check,
+    get_config,
+    get_db,
+    get_http,
+    get_jarvis_user_id,
+)
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -45,9 +52,7 @@ async def _fetch_next_card(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
     """Fetch the next due card from the learning engine; returns None when none are due."""
     http = get_http(context)
     config = get_config(context)
-    jarvis_user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    jarvis_user_id = get_jarvis_user_id(context)
     try:
         resp = await http.get(
             f"{config.learning_engine_url}/api/review/next",

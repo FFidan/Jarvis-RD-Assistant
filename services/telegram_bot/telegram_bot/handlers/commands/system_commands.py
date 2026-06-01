@@ -12,7 +12,14 @@ from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import format_help
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import _owner_headers, auth_check, get_config, get_db, get_http
+from telegram_bot.handlers.helpers import (
+    _owner_headers,
+    auth_check,
+    get_config,
+    get_db,
+    get_http,
+    get_jarvis_user_id,
+)
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -199,9 +206,7 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     http = get_http(context)
     config = get_config(context)
-    jarvis_user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    jarvis_user_id = get_jarvis_user_id(context)
     try:
         resp = await http.post(
             f"{config.paper_ingestion_url}/api/pulse/generate",
@@ -252,9 +257,7 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     chat_id = update.effective_chat.id
-    jarvis_user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    jarvis_user_id = get_jarvis_user_id(context)
 
     async def focus_alarm(context: ContextTypes.DEFAULT_TYPE) -> None:
         job = context.job

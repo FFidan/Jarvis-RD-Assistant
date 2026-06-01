@@ -7,7 +7,6 @@ import {
   batchSavePapers,
   fetchSources,
   fetchFeedCounts,
-  fetchFeedCountsWithFacets,
 } from '@/lib/api';
 import { useOnlineStatus } from '@/hooks/use-online-status';
 import { getPersistedCacheTimestamp } from '@/lib/query-persister';
@@ -136,9 +135,9 @@ export function ResearchFeedPage() {
   }, [surface, feedScope]);
 
   // ── feed counts (numeric only — CountsBadge consumers) ───────────────────
-  const { data: counts } = useQuery({
+  const { data: counts } = useQuery<FeedCountsWithFacets>({
     queryKey: QUERY_KEYS.feed.counts(),
-    queryFn: fetchFeedCounts,
+    queryFn: () => fetchFeedCounts(),
     staleTime: 5_000,
   });
 
@@ -147,7 +146,7 @@ export function ResearchFeedPage() {
   // by_source / by_topic / untagged facet counts via fetch_feed_facet_counts.
   const { data: countsWithFacets } = useQuery<FeedCountsWithFacets>({
     queryKey: QUERY_KEYS.feed.counts(feedScope),
-    queryFn: () => fetchFeedCountsWithFacets(feedScope),
+    queryFn: () => fetchFeedCounts(feedScope),
     staleTime: 5_000,
   });
 

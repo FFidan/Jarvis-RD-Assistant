@@ -8,7 +8,7 @@ from jarvis_common.app_factory import (
 )
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import (
-    current_user_id,
+    current_user_id,  # noqa: F401 — kept for backward compat; prefer current_user_id_or_none
     current_user_id_or_none,
     current_user_id_strict,
     current_user_id_strict_with_owner_override,
@@ -99,7 +99,6 @@ __all__ = [
     "log_audit",
     "verify_api_key",
     "validate_production_config",
-    "current_user_id",
     "current_user_id_or_none",
     "current_user_id_strict",
     "current_user_id_strict_with_owner_override",

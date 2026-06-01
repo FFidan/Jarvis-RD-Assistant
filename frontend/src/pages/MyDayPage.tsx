@@ -46,8 +46,8 @@ export function MyDayPage() {
   //   ['my-day']               — bundle.tasks is MyDayTask[] only, not the full
   //                              MyDayResponse (missing cards_due, focus_hours,
   //                              project_pulse, recommendations). Self-fetch keeps.
-  //   ['pulse-today']          — bundle.pulse_today is always null (learning_engine
-  //                              cannot assemble the deck). Self-fetch keeps.
+  //   ['pulse-today']          — pulse assembly lives in paper_ingestion, not
+  //                              learning_engine. Self-fetch keeps.
   //   ['action-items-unprocessed'] — not in bundle. Self-fetch keeps.
   //   ['retention-stats']      — not in bundle. Self-fetch keeps.
   //   ['analytics', 'missing-foundational'] — not in bundle. Self-fetch keeps.

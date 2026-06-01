@@ -50,10 +50,6 @@ export interface FeedPaperRowProps {
   // Bulk selection
   isSelected?: boolean;
   onToggleSelect?: (paperId: number) => void;
-  /** @deprecated use isSelected/onToggleSelect */
-  bulkSelected?: boolean;
-  /** @deprecated use isSelected/onToggleSelect */
-  onBulkToggle?: (paperId: number) => void;
   // Cross-paper RAG seed selection
   seedChecked?: boolean;
   onSeedChange?: (paperId: number) => void;
@@ -80,8 +76,6 @@ function FeedPaperRowInner({
   surface: _surface,
   isSelected,
   onToggleSelect,
-  bulkSelected,
-  onBulkToggle,
   seedChecked,
   onSeedChange,
   onSave,
@@ -101,9 +95,8 @@ function FeedPaperRowInner({
   const state = paper.state ?? 'inbox';
   const isStarred = paper.starred ?? false;
 
-  // Normalise bulk selection props (support both old and new API)
-  const effectiveSelected = isSelected ?? bulkSelected ?? false;
-  const effectiveToggle = onToggleSelect ?? onBulkToggle;
+  const effectiveSelected = isSelected ?? false;
+  const effectiveToggle = onToggleSelect;
 
   return (
     <div className="rounded-lg border p-4">

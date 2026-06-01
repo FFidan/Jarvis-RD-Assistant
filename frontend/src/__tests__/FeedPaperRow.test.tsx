@@ -167,15 +167,15 @@ describe('FeedPaperRow', () => {
     expect(screen.queryByLabelText(/thumbs down/i)).not.toBeInTheDocument();
   });
 
-  it('bulk checkbox toggles when onBulkToggle is provided and calls it on click', async () => {
+  it('bulk checkbox toggles when onToggleSelect is provided and calls it on click', async () => {
     const user = userEvent.setup();
-    const onBulkToggle = vi.fn();
-    renderRow({ paper, onBulkToggle, bulkSelected: false });
+    const onToggleSelect = vi.fn();
+    renderRow({ paper, onToggleSelect, isSelected: false });
     const checkbox = screen.getByRole('checkbox', {
       name: `Select ${paper.title} for bulk action`,
     });
     await user.click(checkbox);
-    expect(onBulkToggle).toHaveBeenCalledWith(paper.id);
+    expect(onToggleSelect).toHaveBeenCalledWith(paper.id);
   });
 
   it('recommendation badge renders with star glyph', () => {

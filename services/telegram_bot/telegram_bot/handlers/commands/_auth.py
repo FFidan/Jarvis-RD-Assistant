@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from functools import wraps
@@ -17,34 +16,6 @@ from telegram_bot.handlers.helpers import auth_check, get_config, get_db
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Correlation-id + first-chat auth-event tracking
-# ---------------------------------------------------------------------------
-
-_SEEN_CHATS: set[int] = set()
-_SEEN_LOCK = asyncio.Lock()
-
-
-async def _maybe_emit_auth_event(chat_id: int, pool: Any) -> None:
-    """Emit a one-time ``auth`` event the first time a chat sends a command.
-
-    Uses an in-memory set guarded by an asyncio.Lock.  The set is not
-    persisted — a bot restart resets it.  That is intentional for this
-    single-user pre-launch deployment.
-    """
-    async with _SEEN_LOCK:
-        if chat_id in _SEEN_CHATS:
-            return
-        _SEEN_CHATS.add(chat_id)
-    await log_event(
-        pool=pool,
-        level="info",
-        category="auth",
-        source="telegram_bot",
-        message="chat_active",
-        context={"chat_id": chat_id},
-    )
-
 
 def auth_required(func: Any) -> Any:
     """Decorator that enforces authentication on a Telegram command handler.
@@ -52,7 +23,9 @@ def auth_required(func: Any) -> Any:
     Specifically:
 
     1. Sets a fresh ``correlation_id`` ContextVar for each invocation.
-    2. Emits a one-time ``auth`` event the first time a chat is seen.
+    2. Emits a one-time ``auth`` event the first time a chat is seen (tracked
+       via ``context.user_data["_auth_seen"]`` so the flag is per-chat session
+       and does not leak across chats via a shared module-level set).
     3. Rejects messages from unauthorised chats.
     4. Rejects authorized chats that have no paired JARVIS user account,
        prompting them to complete the pairing flow via the dashboard.
@@ -77,9 +50,18 @@ def auth_required(func: Any) -> Any:
             config = get_config(context)
             db_pool = get_db(context)
 
-            # --- first-chat auth event ---
-            if update.effective_chat is not None:
-                await _maybe_emit_auth_event(update.effective_chat.id, db_pool)
+            # --- first-chat auth event (per-session, not module-global) ---
+            if update.effective_chat is not None and context.user_data is not None:
+                if not context.user_data.get("_auth_seen"):
+                    context.user_data["_auth_seen"] = True
+                    await log_event(
+                        pool=db_pool,
+                        level="info",
+                        category="auth",
+                        source="telegram_bot",
+                        message="chat_active",
+                        context={"chat_id": update.effective_chat.id},
+                    )
 
             # --- auth gate ---
             authorized, jarvis_user_id = await auth_check(update, config, db_pool)

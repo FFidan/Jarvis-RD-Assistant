@@ -432,15 +432,6 @@ export interface Project {
   open_question_count?: number;
 }
 
-export interface ProjectDetail extends Project {
-  total_tasks: number;
-  done_tasks: number;
-  total_milestones: number;
-  completed_milestones: number;
-  // paper_count / open_question_count inherited from Project — parity with
-  // ProjectDetailResponse (models.py:347-348).
-}
-
 /**
  * A single open research question (Projects § OPEN QUESTIONS).
  * Grounded against ProjectQuestionResponse in
@@ -1319,6 +1310,4 @@ export interface MyDayBundle {
   threads: Array<Omit<Thread, 'last_at'> & { last_at: string | null }>;
   yesterday: YesterdaySummary;
   journal: JournalEntry | null;
-  /** Always null — Pulse assembly lives in paper_ingestion, not learning_engine. */
-  pulse_today: null;
 }

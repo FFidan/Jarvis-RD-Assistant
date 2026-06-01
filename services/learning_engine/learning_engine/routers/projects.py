@@ -93,20 +93,21 @@ async def create_project(
     user_id: int = Depends(current_user_id_strict),
 ) -> ProjectResponse:
     """Create a new project."""
-    row = await db_pool.fetchrow(
-        """
-        INSERT INTO projects (name, description, status, deadline, color, user_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING *
-        """,
-        body.name,
-        body.description,
-        body.status,
-        body.deadline,
-        body.color,
-        user_id,
-    )
-    return ProjectResponse(**dict(row))
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO projects (name, description, status, deadline, color, user_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+            """,
+            body.name,
+            body.description,
+            body.status,
+            body.deadline,
+            body.color,
+            user_id,
+        )
+    return ProjectResponse(**dict(row))  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

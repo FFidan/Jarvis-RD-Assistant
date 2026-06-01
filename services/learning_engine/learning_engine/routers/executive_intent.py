@@ -2,10 +2,10 @@
 
 from asyncpg import Pool
 from fastapi import APIRouter, Depends, Request
-from jarvis_common.auth import current_user_id_strict, verify_api_key
-from pydantic import BaseModel, Field
+from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.deps import get_db_pool, limiter
+from learning_engine.models import IntentBody
 from learning_engine.repos.intent_repo import (
     IntentRow,
 )
@@ -21,14 +21,11 @@ from learning_engine.repos.intent_repo import (
 
 router = APIRouter(prefix="/api/executive", tags=["executive"])
 
-
-class IntentBody(BaseModel):
-    """Request body for POST /api/executive/intent/today."""
-
-    intent: str = Field(..., max_length=280)
+# verify_api_key is applied globally on the FastAPI app (main.py:160) —
+# the per-route dependency here would be redundant.
 
 
-@router.get("/intent/today", dependencies=[Depends(verify_api_key)])
+@router.get("/intent/today")
 @limiter.limit("60/minute")
 async def get_intent_today(
     request: Request,
@@ -39,7 +36,7 @@ async def get_intent_today(
     return await _get_intent_today(db_pool, user_id)
 
 
-@router.post("/intent/today", dependencies=[Depends(verify_api_key)])
+@router.post("/intent/today")
 @limiter.limit("30/minute")
 async def save_intent_today(
     request: Request,

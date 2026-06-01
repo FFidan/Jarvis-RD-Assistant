@@ -29,6 +29,7 @@ from paper_ingestion.converters import (
     row_to_chunk_response,
     row_to_summary_response,
 )
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.exceptions import EmptyChunksError, LLMError, PaperNotFoundError
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import (
@@ -44,8 +45,6 @@ if TYPE_CHECKING:
     import openai
 
 logger = logging.getLogger(__name__)
-
-ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
 
 _SYSTEM_SUMMARIZE = """\
 You are a research assistant. Summarize the following paper excerpts.

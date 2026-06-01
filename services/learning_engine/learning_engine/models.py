@@ -6,7 +6,7 @@ request/response schemas for all API endpoints.
 
 from datetime import date, datetime
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -377,8 +377,12 @@ class TaskPaperLinkCreate(BaseModel):
 # --- Endpoint Response Models ---
 
 
-class BatchGenerateResponse(BaseModel):
-    """Response for POST /api/generate/batch."""
+class _BatchGenerateResult(BaseModel):
+    """Internal result shape for the batch-generate job handler.
+
+    Not exposed as a public API response model — the endpoints return
+    ``BatchAcceptedResponse`` (202 Accepted) instead.
+    """
 
     papers_processed: int
     cards_created: int
@@ -545,6 +549,51 @@ class MyDayResponse(BaseModel):
     today_focus_hours: float
     focus_streak_days: int
     project_pulse: list[MyDayProjectPulseItem]
+
+
+class MyDayBundleResponse(BaseModel):
+    """Response for GET /api/executive/my-day-bundle.
+
+    Each sub-field is typed ``dict[str, Any]`` or ``list[dict[str, Any]]``
+    because the tasks/threads entries are pre-serialized via ``.model_dump(mode="json")``,
+    and re-validating with concrete sub-models risks Pydantic v2 coercion errors.
+    """
+
+    # list of MyDayTaskItem dicts (pre-serialized)
+    tasks: list[dict[str, Any]]
+    # {intent: str|None, updated_at: str|None}
+    intent: dict[str, Any]
+    # list of thread dicts
+    threads: list[dict[str, Any]]
+    # {date, focused_hours, cards_reviewed, tasks_done, completed, deferred}
+    yesterday: dict[str, Any]
+    # {id, date, prompts, created_at, updated_at} or None
+    journal: dict[str, Any] | None
+
+
+# --- Request Models (executive endpoints) ---
+
+
+class FocusSessionRequest(BaseModel):
+    """Request body for POST /api/executive/focus/log."""
+
+    duration_hours: float = Field(..., gt=0, le=24)
+    task_id: int | None = None
+    paper_id: int | None = None
+
+
+class QuickAddTaskRequest(BaseModel):
+    """Request body for POST /api/executive/tasks (quick-add)."""
+
+    title: str = Field(..., min_length=1, max_length=500)
+    project_id: int | None = None
+    priority: int = Field(3, ge=1, le=4)
+
+
+class IntentBody(BaseModel):
+    """Request body for POST /api/executive/intent/today."""
+
+    intent: str = Field(..., max_length=280)
 
 
 # --- Analytics Summary Model ---

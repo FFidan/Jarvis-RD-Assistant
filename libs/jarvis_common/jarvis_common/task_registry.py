@@ -24,7 +24,7 @@ handler signature is::
         pool: asyncpg.Pool,
         http_client: httpx.AsyncClient,
         payload: dict[str, Any],
-        ctx: JobContext,
+        ctx: ProgressContext,
     ) -> dict[str, Any]
 
 so each task forwards exactly that.

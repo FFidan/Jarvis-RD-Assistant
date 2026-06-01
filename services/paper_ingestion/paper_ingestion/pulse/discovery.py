@@ -28,7 +28,7 @@ from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig
 from paper_ingestion.pulse.profile import UserProfile
-from paper_ingestion.sources.base import PaperSource
+from paper_ingestion.sources.base import PaperSource, parse_retry_after
 from paper_ingestion.sources.registry import get_source_class
 
 logger = logging.getLogger(__name__)
@@ -57,19 +57,6 @@ def _dedupe_key(paper: PaperCreate) -> tuple[str, str]:
     return ("title", _title_hash(paper.title))
 
 
-def _retry_after_seconds(exc: BaseException) -> int | None:
-    response = getattr(exc, "response", None)
-    if response is None:
-        return None
-    retry_after = response.headers.get("Retry-After")
-    if retry_after is None:
-        return None
-    try:
-        return int(float(retry_after))
-    except (TypeError, ValueError):
-        return None
-
-
 def _diagnostic_for_exception(source_name: str, exc: BaseException) -> dict[str, Any]:
     response = getattr(exc, "response", None)
     status_code = getattr(response, "status_code", None)
@@ -78,7 +65,7 @@ def _diagnostic_for_exception(source_name: str, exc: BaseException) -> dict[str,
             "status": "rate_limit",
             "message": f"{source_name} rate limit reached. Retry later.",
             "status_code": status_code,
-            "retry_after_s": _retry_after_seconds(exc),
+            "retry_after_s": parse_retry_after(exc),
             "settings_hint": None,
         }
     return {
@@ -87,7 +74,7 @@ def _diagnostic_for_exception(source_name: str, exc: BaseException) -> dict[str,
             f"{source_name} request failed. Check provider status and source configuration."
         ),
         "status_code": status_code,
-        "retry_after_s": _retry_after_seconds(exc),
+        "retry_after_s": parse_retry_after(exc),
         "settings_hint": None,
     }
 
@@ -132,7 +119,6 @@ async def discover_candidates(
     profile: UserProfile,
     since: datetime,
     source_cache: dict | None = None,
-    include_diagnostics: bool = True,
 ) -> tuple[list[PaperCreate], dict[str, int], SourceDiagnostics]:
     """Fan out to all enabled sources and return a deduplicated candidate list.
 
@@ -152,9 +138,6 @@ async def discover_candidates(
         instance (e.g. ``app.state.sources``).  When provided, cached instances
         are preferred so rate-limiter state persists across Pulse runs.  A new
         instance is created only for source types absent from the cache.
-    include_diagnostics:
-        Deprecated parameter; diagnostics are always returned.  Kept for
-        backward compatibility; ignored.
 
     Returns
     -------

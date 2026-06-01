@@ -99,7 +99,6 @@ const mockBundle: MyDayBundle = {
     deferred: [],
   },
   journal: null,
-  pulse_today: null,
 };
 
 function renderWithProviders() {

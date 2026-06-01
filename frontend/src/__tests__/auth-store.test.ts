@@ -101,27 +101,35 @@ describe('auth-store', () => {
     expect(useAuthStore.getState().getUser()).toBeNull();
   });
 
-  it('session expires after 8 hours', async () => {
+  it('session expires after 8 hours (isSessionValid pure check + expireSession mutation)', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => OWNER });
     await useAuthStore.getState().login('valid-key-32chars-xxxxxxxxxx');
-    expect(useAuthStore.getState().checkSession()).toBe(true);
+    expect(useAuthStore.getState().isSessionValid()).toBe(true);
 
     // Simulate 9 hours passing
     const nineHoursAgo = Date.now() - 9 * 60 * 60 * 1000;
     useAuthStore.setState({ authTime: nineHoursAgo });
 
-    expect(useAuthStore.getState().checkSession()).toBe(false);
+    // isSessionValid() is a pure check — returns false but does NOT mutate
+    expect(useAuthStore.getState().isSessionValid()).toBe(false);
+    // State still unchanged (pure)
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+
+    // expireSession() does the mutation
+    useAuthStore.getState().expireSession();
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
   });
 
-  it('checkSession returns false when neither apiKey nor user is present', () => {
+  it('isSessionValid returns false when neither apiKey nor user is present', () => {
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
       apiKey: null,
       user: null,
     });
-    expect(useAuthStore.getState().checkSession()).toBe(false);
+    expect(useAuthStore.getState().isSessionValid()).toBe(false);
+    // Pure: state unchanged
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
   });
 
   // -----------------------------------------------------------------------

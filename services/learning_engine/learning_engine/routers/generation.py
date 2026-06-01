@@ -15,7 +15,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from jarvis_common import get_smart_model
 from jarvis_common.auth import current_user_id_strict
 from jarvis_common.db_helpers import assert_paper_ownership
-from jarvis_common.jobs import JobContext, JobError
+from jarvis_common.jobs import JobError, ProgressContext
 from jarvis_common.task_registry import KIND_TO_TASK
 
 from learning_engine.card_generator import CardGenerator
@@ -26,9 +26,9 @@ from learning_engine.fsrs_manager import FSRSManager
 from learning_engine.models import (
     BatchAcceptedResponse,
     BatchGenerateRequest,
-    BatchGenerateResponse,
     CardResponse,
     GenerateCardsRequest,
+    _BatchGenerateResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ async def generate_cards_core(
     max_cards: int,
     fsrs_manager: FSRSManager | None = None,
     card_generator: CardGenerator | None = None,
-    ctx: JobContext | None = None,
+    ctx: ProgressContext | None = None,
     *,
     user_id: int | None = None,
 ) -> dict[str, Any]:
@@ -63,7 +63,7 @@ async def generate_cards_core(
     max_cards:      upper bound on generated cards
     fsrs_manager:   injected via FastAPI dep or created fresh inside job
     card_generator: injected via FastAPI dep or created fresh inside job
-    ctx:            optional JobContext for progress reporting
+    ctx:            optional ProgressContext for progress reporting
     user_id:        per-user identity written to cards.user_id (None = single-tenant)
 
     Returns
@@ -201,7 +201,7 @@ async def _card_generate_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Job handler for single-paper card generation."""
     return await generate_cards_core(
@@ -219,7 +219,7 @@ async def _card_generate_batch_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Job handler for batch card generation across all unprocessed papers in a deck."""
     deck_id: int = payload["deck_id"]
@@ -286,7 +286,7 @@ async def _card_generate_batch_job(
 
     await ctx.update_progress(1.0, "Batch complete")
 
-    return BatchGenerateResponse(
+    return _BatchGenerateResult(
         papers_processed=papers_processed,
         cards_created=cards_created,
         errors=errors,

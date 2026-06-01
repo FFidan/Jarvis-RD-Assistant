@@ -15,9 +15,11 @@ Anti-hallucination strategy:
 4. Verify quotes using QuoteVerifier
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING
 
 import asyncpg
 import httpx
@@ -34,6 +36,13 @@ from paper_ingestion.models import (
     ExtractedField,
     ExtractionResponse,
 )
+
+if TYPE_CHECKING:
+    import openai
+    from jarvis_common.jobs import ProgressContext
+    from jarvis_common.verify import QuoteVerifier
+
+    from paper_ingestion.ingestion.embedder import Embedder
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +113,9 @@ async def extract_fields_for_paper(
     db_pool: asyncpg.Pool,
     paper_id: int,
     template_id: int,
-    embedder: Any | None = None,
-    verifier: Any | None = None,
-    openai_client: Any | None = None,
+    embedder: Embedder | None = None,
+    verifier: QuoteVerifier | None = None,
+    openai_client: openai.AsyncOpenAI | None = None,
 ) -> ExtractionResponse:
     """Extract template fields for one paper and persist the extraction payload.
 
@@ -317,9 +326,9 @@ async def batch_extract(
     db_pool: asyncpg.Pool,
     paper_ids: list[int],
     template_id: int,
-    embedder: Any | None = None,
-    verifier: Any | None = None,
-    ctx: object | None = None,
+    embedder: Embedder | None = None,
+    verifier: QuoteVerifier | None = None,
+    ctx: ProgressContext | None = None,
 ) -> BatchExtractionResponse:
     """Extract fields for multiple papers, skipping those already extracted.
 
@@ -333,10 +342,10 @@ async def batch_extract(
     total = len(paper_ids)
 
     if ctx is not None:
-        await ctx.update_progress(0.0, f"Starting: {total} papers")  # type: ignore[attr-defined]
+        await ctx.update_progress(0.0, f"Starting: {total} papers")
 
     for i, paper_id in enumerate(paper_ids):
-        if ctx is not None and await ctx.is_cancelled():  # type: ignore[attr-defined]
+        if ctx is not None and await ctx.is_cancelled():
             break
         async with db_pool.acquire() as conn:
             try:
@@ -361,12 +370,10 @@ async def batch_extract(
 
         if ctx is not None:
             progress = (i + 1) / max(total, 1)
-            await ctx.update_progress(  # type: ignore[attr-defined]
-                progress, f"Processed {i + 1}/{total} papers"
-            )
+            await ctx.update_progress(progress, f"Processed {i + 1}/{total} papers")
 
     if ctx is not None:
-        await ctx.update_progress(  # type: ignore[attr-defined]
+        await ctx.update_progress(
             1.0, f"Done: {extracted} extracted, {skipped} skipped, {failed} failed"
         )
 

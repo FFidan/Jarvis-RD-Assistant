@@ -277,6 +277,7 @@ describe('ResearchFeedPage', () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
+      by_source: {}, by_topic: [], untagged: 0,
     });
     // Render on library surface directly
     const { container: _c } = render(
@@ -317,6 +318,7 @@ describe('ResearchFeedPage', () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
+      by_source: {}, by_topic: [], untagged: 0,
     });
     renderPage();
     await waitFor(() => {
@@ -1889,6 +1891,7 @@ describe('ResearchFeedPage', () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 2, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 2, kept: 2, all_non_trash: 2,
+      by_source: {}, by_topic: [], untagged: 0,
     });
     const user = userEvent.setup();
     renderPage();
@@ -1935,6 +1938,7 @@ describe('ResearchFeedPage', () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 2, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 7, kept: 7, all_non_trash: 7,
+      by_source: {}, by_topic: [], untagged: 0,
     });
     renderPage();
     await waitFor(() => {
@@ -1947,6 +1951,7 @@ describe('ResearchFeedPage', () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
+      by_source: {}, by_topic: [], untagged: 0,
     });
     renderPage();
     await waitFor(() => {
@@ -2121,8 +2126,11 @@ describe('ResearchFeedPage', () => {
     const { fetchFeedCountsWithFacets, fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15,
+      by_source: { arxiv: 8 },
+      by_topic: [],
+      untagged: 0,
     });
-    // Mock fetchFeedCountsWithFacets to return by_source data
+    // fetchFeedCountsWithFacets is now an alias for fetchFeedCounts — mock once covers both
     vi.mocked(fetchFeedCountsWithFacets).mockResolvedValue({
       inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15,
       by_source: { arxiv: 8 },

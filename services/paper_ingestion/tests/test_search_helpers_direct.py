@@ -13,8 +13,8 @@ from paper_ingestion.routers.search_helpers import (
     _build_preview_source_error,
     _load_local_library_matches,
     _preview_match_keys,
-    _retry_after_seconds,
 )
+from paper_ingestion.sources.base import parse_retry_after
 
 
 def _paper(**overrides) -> PaperCreate:
@@ -53,7 +53,7 @@ def test_retry_after_seconds_parses_integral_and_decimal_headers() -> None:
     response = httpx.Response(429, headers={"Retry-After": "2.0"}, request=request)
     exc = httpx.HTTPStatusError("rate limited", request=request, response=response)
 
-    assert _retry_after_seconds(exc) == 2
+    assert parse_retry_after(exc) == 2
 
 
 def test_retry_after_seconds_returns_none_for_missing_or_invalid_header() -> None:
@@ -62,8 +62,8 @@ def test_retry_after_seconds_returns_none_for_missing_or_invalid_header() -> Non
     response = httpx.Response(429, headers={"Retry-After": "later"}, request=request)
     exc = httpx.HTTPStatusError("rate limited", request=request, response=response)
 
-    assert _retry_after_seconds(exc) is None
-    assert _retry_after_seconds(RuntimeError("boom")) is None
+    assert parse_retry_after(exc) is None
+    assert parse_retry_after(RuntimeError("boom")) is None
 
 
 def test_build_preview_source_error_maps_semantic_scholar_rate_limit_without_key() -> None:

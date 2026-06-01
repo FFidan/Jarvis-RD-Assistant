@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from jarvis_common.testing_embedder import _dict_to_record, _make_embedder
+from tests._embedder_fakes import _dict_to_record, _make_embedder
 
 
 def _make_bm25_rows(n: int) -> list[dict]:

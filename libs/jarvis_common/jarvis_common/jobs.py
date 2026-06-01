@@ -1,7 +1,8 @@
 """Async job queue backbone shared by all JARVIS microservices.
 
 Provides:
-- ``JobContext`` for handler-side progress reporting and cancellation checks.
+- ``ProgressContext`` — Protocol for handler execution context.
+- ``ProcrastinateJobContextShim`` — concrete adapter (re-exported from ``_ctx_shim``).
 - ``JobError`` for structured errors with an optional action_link payload.
 - ``get``, ``list_jobs`` — DB helpers.
 - ``get_unified``, ``get_procrastinate_job_for_jarvis_id`` — procrastinate bridge.
@@ -14,12 +15,12 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 import asyncpg
 import asyncpg_listen
 
+from jarvis_common._ctx_shim import ProcrastinateJobContextShim  # noqa: F401 — re-exported
 from jarvis_common.sse import sse_event, sse_keepalive
 
 logger = logging.getLogger(__name__)
@@ -64,10 +65,19 @@ JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "tele
 
 @runtime_checkable
 class ProgressContext(Protocol):
-    """Minimum interface a job handler receives as its execution context."""
+    """Full interface a job handler receives as its execution context.
+
+    Concrete implementation: :class:`jarvis_common._ctx_shim.ProcrastinateJobContextShim`.
+    """
+
+    job_id: str
 
     async def update_progress(self, progress: float, message: str | None = None) -> None:
         """Persist the current progress fraction (0.0–1.0) and optional status message."""
+        ...
+
+    async def is_cancelled(self) -> bool:
+        """Return True when the job has been requested to abort."""
         ...
 
 
@@ -147,34 +157,13 @@ class _PoolListenConnection:
         self._conn = None
 
 
-async def notify_job_update(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy, job_id: str
-) -> None:
-    """Emit a best-effort PostgreSQL notification for job stream listeners."""
-    try:
-        await conn.execute("SELECT pg_notify($1, $2)", JOB_NOTIFY_CHANNEL, str(job_id))
-    except Exception:
-        logger.debug("jobs.notify failed for job %s", job_id, exc_info=True)
-
-
-def job_sse_payload(
-    row: dict[str, Any],
-    *,
-    source: Literal["legacy", "procrastinate"] = "legacy",
-) -> dict[str, Any]:
-    """Return the public SSE payload for a job row.
-
-    ``source`` is a debugging discriminator that tags whether the row came
-    from the legacy ``jobs`` table or from ``procrastinate_jobs`` (B.4 Step 2
-    bridge). The frontend currently ignores this field — it exists so
-    operators can correlate SSE events with the originating broker during
-    the dual-write period.
-    """
+def job_sse_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Return the public SSE payload for a procrastinate job row."""
     event_data: dict[str, Any] = {
         "progress": row.get("progress"),
         "progress_message": row.get("progress_message"),
         "status": row["status"],
-        "source": source,
+        "source": "procrastinate",
     }
     if row["status"] in TERMINAL_STATUSES:
         if row.get("result") is not None:
@@ -444,7 +433,7 @@ async def stream_job_events(
             )
             if procrastinate_key != last_procrastinate_key:
                 last_procrastinate_key = procrastinate_key
-                yield sse_event(job_sse_payload(procrastinate_row, source="procrastinate"))
+                yield sse_event(job_sse_payload(procrastinate_row))
 
         # If no procrastinate row exists, the job is unknown — terminate.
         if procrastinate_row is None:
@@ -483,38 +472,6 @@ class JobError(Exception):
         """Store the error message and an optional ``{"label": ..., "url": ...}`` action link."""
         super().__init__(message)
         self.action_link = action_link
-
-
-# ---------------------------------------------------------------------------
-# JobContext
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class JobContext:
-    """Legacy handler context — superseded by ProcrastinateJobContextShim.
-
-    All job handlers now run under procrastinate and receive a
-    ``ProcrastinateJobContextShim`` instead.  This class is kept for
-    type-annotation compatibility only; its methods are no-ops because
-    progress reporting and cancellation are handled entirely by
-    procrastinate (``job_progress`` table, migration 054) — there is no
-    legacy ``jobs`` table (dropped in migration 053).
-    """
-
-    job_id: str
-    _pool: asyncpg.Pool = field(repr=False)
-    _cancelled: bool = field(default=False, init=False, repr=False)
-
-    async def update_progress(self, progress: float, message: str | None = None) -> None:
-        """No-op stub — progress reporting is handled by ProcrastinateJobContextShim."""
-        logger.debug(
-            "job %s progress=%.2f msg=%s (legacy JobContext no-op)", self.job_id, progress, message
-        )
-
-    async def is_cancelled(self) -> bool:
-        """No-op stub — cancellation is handled by ProcrastinateJobContextShim."""
-        return self._cancelled
 
 
 # ---------------------------------------------------------------------------

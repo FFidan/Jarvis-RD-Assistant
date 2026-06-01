@@ -3,6 +3,8 @@
 import httpx
 from pydantic import BaseModel
 
+from paper_ingestion.services.config_metadata import CLOUD_PROVIDERS
+
 __all__ = [
     "ProviderTestResult",
     "_SUPPORTED_PROVIDERS",
@@ -15,7 +17,7 @@ class ProviderTestResult(BaseModel):
     error: str | None = None
 
 
-_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "google"})
+_SUPPORTED_PROVIDERS = CLOUD_PROVIDERS
 
 
 async def test_provider_connectivity(

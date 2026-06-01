@@ -680,13 +680,13 @@ async def test_contradiction_job_extracts_user_id_from_payload_str_or_absent(
     """_contradictions_scan_job correctly converts str→int and None→None for user_id."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from jarvis_common.jobs import JobContext
+    from jarvis_common.jobs import ProcrastinateJobContextShim
     from paper_ingestion.contradiction_jobs import _contradictions_scan_job
 
     scan_mock = AsyncMock(return_value={"found": 0, "inserted": 0})
     pool = MagicMock()
     http_client = MagicMock()
-    ctx = JobContext(job_id="test-job", _pool=pool)
+    ctx = ProcrastinateJobContextShim(job_id="test-job", pool=AsyncMock())
 
     payload: dict = {"paper_id": None, "limit": 10}
     if user_id_payload is not None:

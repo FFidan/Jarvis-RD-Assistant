@@ -289,7 +289,7 @@ describe('useFeedKeyboardShortcuts', () => {
       act(() => { rerender({ callbacks: { onNext: vi.fn<() => void>() } }); });
       act(() => { rerender({ callbacks: { onNext: vi.fn<() => void>() } }); });
 
-      const keydownCalls = addSpy.mock.calls.filter(([event]: [string, ...unknown[]]) => event === 'keydown');
+      const keydownCalls = addSpy.mock.calls.filter((args: unknown[]) => args[0] === 'keydown');
       expect(keydownCalls).toHaveLength(1);
     });
 

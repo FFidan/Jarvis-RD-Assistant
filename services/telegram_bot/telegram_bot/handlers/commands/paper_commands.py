@@ -9,14 +9,20 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import (
-    _BIDI_ZW_RE,
     format_morning_briefing,
     format_paper_card,
     format_pulse_card,
     format_review_stats,
+    sanitize_user_input,
 )
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import _owner_headers, get_config, get_db, get_http
+from telegram_bot.handlers.helpers import (
+    _owner_headers,
+    get_config,
+    get_db,
+    get_http,
+    get_jarvis_user_id,
+)
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -66,13 +72,11 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Handle ``/papers [query]`` — search paper_ingestion API or list Library papers."""
     if update.message is None:
         return
-    query = _BIDI_ZW_RE.sub("", (" ".join(context.args) if context.args else "")[:500])
+    query = sanitize_user_input(" ".join(context.args) if context.args else "", 500)
 
     http = get_http(context)
     config = get_config(context)
-    jarvis_user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    jarvis_user_id = get_jarvis_user_id(context)
     headers = _owner_headers(config, jarvis_user_id)
 
     if query:
@@ -143,9 +147,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     http = get_http(context)
     config = get_config(context)
-    jarvis_user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    jarvis_user_id = get_jarvis_user_id(context)
     try:
         resp = await http.get(
             f"{config.learning_engine_url}/api/stats",
@@ -171,9 +173,7 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     db = get_db(context)
     http = get_http(context)
     config = get_config(context)
-    user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    user_id = get_jarvis_user_id(context)
     # New papers in last 24 hours — scoped to the user's library when paired.
     since = datetime.now(UTC) - timedelta(hours=24)
     if user_id is not None:
@@ -254,9 +254,7 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     http = get_http(context)
     config = get_config(context)
-    jarvis_user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    jarvis_user_id = get_jarvis_user_id(context)
     try:
         resp = await http.get(
             f"{config.paper_ingestion_url}/api/pulse/today",
@@ -326,9 +324,7 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     http = get_http(context)
     config = get_config(context)
-    jarvis_user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
+    jarvis_user_id = get_jarvis_user_id(context)
     try:
         resp = await http.get(
             f"{config.paper_ingestion_url}/api/papers/feed",

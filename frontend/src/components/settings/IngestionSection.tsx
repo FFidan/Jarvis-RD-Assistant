@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchConfig, setConfig, fetchSystemModels } from '@/lib/api';
-import type { SystemModelsResponse } from '@/lib/api';
+import type { SystemModelsResponse, HardwareRecommendation } from '@/lib/api';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
@@ -37,25 +37,6 @@ interface ModelCatalogEntryApi {
   roles: string[];
   fit_detail?: ModelFitDetail;
   supports_thinking?: boolean;
-}
-
-/** Per-alias recommendation entry returned by GET /api/system/models hardware_recommendation. */
-interface HardwareRecommendationAlias {
-  alias: 'smart' | 'fast' | 'embed';
-  model: string;
-  confirm_on_target: boolean;
-  notes: string;
-}
-
-/**
- * Hardware-fit advisory returned by GET /api/system/models (B3-1 contract).
- * Optional — older backends omit this field; UI degrades gracefully.
- */
-interface HardwareRecommendation {
-  vram_mb: number | null;
-  bucket: 'CPU_ONLY' | 'ENTRY' | 'MID' | 'MID_HIGH' | 'HIGH';
-  summary: string;
-  aliases: HardwareRecommendationAlias[];
 }
 
 /**

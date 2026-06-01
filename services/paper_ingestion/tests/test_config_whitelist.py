@@ -1,12 +1,12 @@
 """Tests for config key whitelist and settings validation."""
 
 import pytest
-from paper_ingestion.routers.settings import (
+from paper_ingestion.services.config_metadata import (
     _ALLOWED_CONFIG_KEYS,
-    _CONFIG_VALIDATORS,
     SYSTEM_KEYS,
     _classify_config_key,
 )
+from paper_ingestion.services.config_validators import _CONFIG_VALIDATORS
 
 _LANGFUSE_KEY = "observability.langfuse_dashboard_url"
 

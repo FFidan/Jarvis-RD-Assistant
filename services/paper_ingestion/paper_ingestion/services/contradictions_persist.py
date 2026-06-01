@@ -6,11 +6,10 @@ from typing import Any
 
 import asyncpg
 
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.models import PaperContradictionResponse
 from paper_ingestion.services.contradiction_models import ContradictionClassification
 from paper_ingestion.services.contradictions_extract import ContradictionCandidate
-
-ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
 
 SCANNER_VERSION = "paper_contradictions_v1"
 

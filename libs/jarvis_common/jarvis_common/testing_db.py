@@ -62,10 +62,13 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+if TYPE_CHECKING:
+    import asyncpg
 
 # ---------------------------------------------------------------------------
 # Sentinel used to distinguish "not passed" from "explicitly None"
@@ -397,7 +400,7 @@ def _run_sync(coro: Any) -> Any:
         loop.close()
 
 
-async def _admin_connect(admin_dsn: str):  # -> asyncpg.Connection
+async def _admin_connect(admin_dsn: str) -> asyncpg.Connection:
     """Connect to the admin server's maintenance db, retrying briefly while a
     freshly-started Postgres finishes accepting connections.
 

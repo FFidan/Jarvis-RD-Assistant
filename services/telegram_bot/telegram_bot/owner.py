@@ -101,7 +101,7 @@ async def resolve_owner_chat_id(db_pool: asyncpg.Pool, config: BotConfig) -> int
         logger.exception("DB error resolving telegram.owner_chat_id")
         return None
 
-    if row is None or row == "null":
+    if row is None:
         return None
     try:
         return int(row)

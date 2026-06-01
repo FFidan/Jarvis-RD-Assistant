@@ -44,6 +44,16 @@ def get_http(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
     return context.application.bot_data["http_client"]
 
 
+def get_jarvis_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """Return the JARVIS user-id cached by ``auth_required`` in ``context.user_data``.
+
+    Returns ``None`` when ``context.user_data`` is unavailable or when the chat
+    is on the legacy single-tenant (env-var / ``user_config``) auth path where
+    no per-user id exists.
+    """
+    return context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+
+
 def _owner_headers(config: BotConfig, user_id: int | None) -> dict[str, str]:
     """Build the standard backend auth headers for a bot→backend HTTP call.
 

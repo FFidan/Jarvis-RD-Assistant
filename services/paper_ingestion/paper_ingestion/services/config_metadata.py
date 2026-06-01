@@ -21,6 +21,7 @@ __all__ = [
     "_NUM_CTX_PATTERN",
     "_THINKING_DISABLED_PATTERN",
     "_CLOUD_MODEL_PREFIXES",
+    "CLOUD_PROVIDERS",
     "_classify_litellm_runtime_key",
     "_is_cloud_model_assignment",
     "_is_allowed_config_key",
@@ -128,6 +129,9 @@ def _classify_litellm_runtime_key(key: str) -> dict[str, str] | None:
 
 
 _CLOUD_MODEL_PREFIXES = ("anthropic/", "openai/", "gemini/")
+
+# Canonical provider names accepted in ``llm.<provider>.api_key`` config keys.
+CLOUD_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "google"})
 
 
 def _is_cloud_model_assignment(model_id: str) -> bool:

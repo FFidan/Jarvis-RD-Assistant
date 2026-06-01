@@ -6,6 +6,7 @@ from typing import Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from jarvis_common.serialization import _coerce_bool
 
 from paper_ingestion.ingestion import refresh_recommendations
 from paper_ingestion.pipelines.auto_fetch import run_auto_pipeline
@@ -78,14 +79,6 @@ def _has_config_value(cfg: dict[str, Any], key: str) -> bool:
     return value is not None and str(value).strip() != ""
 
 
-def _coerce_config_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in ("true", "1", "yes")
-    return bool(value)
-
-
 async def _list_zotero_polling_users(db_pool: Any) -> list[int]:
     """List users whose personal Zotero config is ready for scheduled polling."""
     try:
@@ -122,7 +115,7 @@ async def _list_zotero_polling_users(db_pool: Any) -> list[int]:
 
     ready: list[int] = []
     for user_id, cfg in by_user.items():
-        if not _coerce_config_bool(cfg.get("zotero.poll_enabled")):
+        if not _coerce_bool(cfg.get("zotero.poll_enabled")):
             continue
         if not _has_config_value(cfg, "zotero.api_key"):
             continue

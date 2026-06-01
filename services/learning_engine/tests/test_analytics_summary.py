@@ -53,14 +53,14 @@ _TODAY = datetime.datetime.now(datetime.UTC).date()
 def test_compute_streak_empty():
     from learning_engine.routers.analytics import _compute_streak
 
-    assert _compute_streak([], field="focus_hours") == 0
+    assert _compute_streak([]) == 0
 
 
 def test_compute_streak_single_today():
     from learning_engine.routers.analytics import _compute_streak
 
     rows = [_make_streak_row(_TODAY)]
-    assert _compute_streak(rows, field="focus_hours") == 1
+    assert _compute_streak(rows) == 1
 
 
 def test_compute_streak_single_yesterday():
@@ -68,7 +68,7 @@ def test_compute_streak_single_yesterday():
 
     yesterday = _TODAY - datetime.timedelta(days=1)
     rows = [_make_streak_row(yesterday)]
-    assert _compute_streak(rows, field="focus_hours") == 1
+    assert _compute_streak(rows) == 1
 
 
 def test_compute_streak_gap_breaks():
@@ -77,14 +77,14 @@ def test_compute_streak_gap_breaks():
 
     two_days_ago = _TODAY - datetime.timedelta(days=2)
     rows = [_make_streak_row(two_days_ago)]
-    assert _compute_streak(rows, field="focus_hours") == 0
+    assert _compute_streak(rows) == 0
 
 
 def test_compute_streak_consecutive_three():
     from learning_engine.routers.analytics import _compute_streak
 
     rows = [_make_streak_row(_TODAY - datetime.timedelta(days=i)) for i in range(3)]
-    assert _compute_streak(rows, field="focus_hours") == 3
+    assert _compute_streak(rows) == 3
 
 
 def test_compute_streak_month_boundary(monkeypatch):
@@ -113,7 +113,7 @@ def test_compute_streak_month_boundary(monkeypatch):
 
         # 5 consecutive days ending on 2026-06-01 (crosses May→June boundary).
         rows = [_make_streak_row(_pinned - _dt.timedelta(days=i)) for i in range(5)]
-        result = _compute_streak(rows, field="focus_hours")
+        result = _compute_streak(rows)
 
     assert result == 5
 
@@ -130,7 +130,7 @@ def test_compute_streak_inner_gap():
         _make_streak_row(_TODAY - datetime.timedelta(days=3)),
         _make_streak_row(_TODAY - datetime.timedelta(days=4)),
     ]
-    assert _compute_streak(rows, field="focus_hours") == 2
+    assert _compute_streak(rows) == 2
 
 
 # test_summary_sql_param_contract deleted — B1-09 positional-arg binding assertions

@@ -8,7 +8,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext
+from jarvis_common.jobs import ProgressContext
 from jarvis_common.library import add_to_library
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 from jarvis_common.task_registry import KIND_TO_TASK
@@ -731,7 +731,7 @@ async def _zotero_push_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Job handler for zotero.push — push a single paper to Zotero.
 
@@ -758,7 +758,7 @@ async def _zotero_resync_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Job handler for zotero.resync — force re-push a paper to Zotero.
 
@@ -785,7 +785,7 @@ async def _zotero_sync_from_zotero_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Job handler for zotero.sync_from_zotero — incremental library poll.
 
@@ -805,7 +805,7 @@ async def _zotero_sync_annotations_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Job handler for importing Zotero annotations for a linked paper.
 

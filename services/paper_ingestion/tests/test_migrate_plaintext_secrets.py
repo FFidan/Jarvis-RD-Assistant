@@ -41,7 +41,7 @@ def _make_pool_with_rows(rows: list[dict]):
 
 @pytest.mark.asyncio
 async def test_migrate_rewrites_plaintext_rows(fernet_key):
-    from paper_ingestion.routers.settings import migrate_plaintext_secrets
+    from paper_ingestion.services.config_db import migrate_plaintext_secrets
 
     rows = [
         {"id": 1, "key": "zotero.api_key", "value": "legacy-plaintext"},
@@ -69,7 +69,7 @@ async def test_migrate_rewrites_plaintext_rows(fernet_key):
 
 @pytest.mark.asyncio
 async def test_migrate_skips_when_no_plaintext_rows(fernet_key):
-    from paper_ingestion.routers.settings import migrate_plaintext_secrets
+    from paper_ingestion.services.config_db import migrate_plaintext_secrets
 
     pool, conn = _make_pool_with_rows([])
     rewritten = await migrate_plaintext_secrets(pool)
@@ -80,7 +80,7 @@ async def test_migrate_skips_when_no_plaintext_rows(fernet_key):
 @pytest.mark.asyncio
 async def test_migrate_skips_null_or_empty_values(fernet_key):
     """Rows where value is empty must not be written."""
-    from paper_ingestion.routers.settings import migrate_plaintext_secrets
+    from paper_ingestion.services.config_db import migrate_plaintext_secrets
 
     rows = [
         {"key": "zotero.api_key", "value": ""},  # empty string -> skipped

@@ -26,7 +26,7 @@ async def compute_paper_priority(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> dict[str, int | float | str]:
+) -> PaperPriorityResponse:
     """Compute and store the priority score for a paper.
 
     Parameters
@@ -36,7 +36,7 @@ async def compute_paper_priority(
 
     Returns
     -------
-    dict
+    PaperPriorityResponse
         ``{paper_id, priority_score, priority_level}``
     """
     user_id = await current_user_id_strict(request)
@@ -65,7 +65,7 @@ async def compute_paper_priority(
         )
 
     level = priority_level(score)
-    return {"paper_id": paper_id, "priority_score": score, "priority_level": level}
+    return PaperPriorityResponse(paper_id=paper_id, priority_score=score, priority_level=level)
 
 
 @router.post(

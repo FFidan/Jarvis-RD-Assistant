@@ -6,7 +6,7 @@ from typing import Any
 import asyncpg
 from jarvis_common import escape_like
 
-from paper_ingestion.extraction.entities_qdrant import ConnLike
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.queries.predicates import paper_visible_sql
 
 logger = logging.getLogger(__name__)

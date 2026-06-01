@@ -18,6 +18,7 @@ import httpx
 import torch
 from qdrant_client.models import PointIdsList
 
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.ingestion.embedder import (
     COLLECTION_NAME,
     EMBEDDING_MODEL_NAME,
@@ -30,8 +31,6 @@ if TYPE_CHECKING:
     from paper_ingestion.pdf_processor import PDFProcessor
 
 logger = logging.getLogger(__name__)
-
-ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
 
 
 class ProcessPdfResult(TypedDict):

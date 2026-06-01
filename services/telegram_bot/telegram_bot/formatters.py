@@ -65,6 +65,40 @@ def escape(text: str | None) -> str:
     return html.escape(text)
 
 
+def strip_bidi(text: str) -> str:
+    """Remove BIDI control and zero-width characters from a string.
+
+    Parameters
+    ----------
+    text : str
+        Raw input string.
+
+    Returns
+    -------
+    str
+        String with all BIDI/zero-width characters removed.
+    """
+    return _BIDI_ZW_RE.sub("", text)
+
+
+def sanitize_user_input(text: str, max_len: int) -> str:
+    """Strip BIDI/zero-width chars and enforce a maximum length on user input.
+
+    Parameters
+    ----------
+    text : str
+        Raw user-supplied string.
+    max_len : int
+        Maximum number of characters to keep (applied after stripping).
+
+    Returns
+    -------
+    str
+        Cleaned, length-capped string safe for use in queries and display.
+    """
+    return _BIDI_ZW_RE.sub("", text[:max_len])
+
+
 def truncate(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:
     """Truncate text to fit Telegram's message limit.
 
@@ -332,8 +366,6 @@ def format_morning_briefing(
     due_cards: int,
     tasks: list[dict],
     milestones: list[dict],
-    *,
-    top_papers: list[dict] | None = None,
 ) -> str:
     """Format the combined morning briefing message.
 
@@ -347,8 +379,6 @@ def format_morning_briefing(
         In-progress tasks.
     milestones : list[dict]
         Upcoming milestones (next 7 days).
-    top_papers : list[dict] or None
-        Top papers to feature with TLDR summaries.
 
     Returns
     -------
@@ -360,14 +390,6 @@ def format_morning_briefing(
 
     lines.append(f"📄 <b>{new_papers_count}</b> new papers today")
     lines.append(f"📚 <b>{due_cards}</b> cards due for review")
-
-    if top_papers:
-        lines.append("\n📑 <b>Top Papers:</b>")
-        for p in top_papers[:5]:
-            p_title = escape(p.get("title", "Untitled"))
-            lines.append(f"  • <b>{p_title}</b>")
-            if p.get("tldr"):
-                lines.append(f"    💡 <i>{escape(p['tldr'])}</i>")
 
     if tasks:
         lines.append(f"\n📋 <b>In Progress ({len(tasks)}):</b>")

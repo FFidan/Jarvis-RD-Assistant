@@ -29,7 +29,7 @@ import asyncpg
 import httpx
 from jarvis_common.advisory_lock import AdvisoryLock, _kind_lock_key
 from jarvis_common.event_log import log_event
-from jarvis_common.jobs import JobContext
+from jarvis_common.jobs import ProgressContext
 from jarvis_common.llm_client import observe
 from jarvis_common.task_registry import KIND_TO_TASK
 
@@ -104,7 +104,7 @@ async def run_pulse(
     *,
     now: datetime | None = None,
     source_cache: dict | None = None,
-    ctx: JobContext | None = None,
+    ctx: ProgressContext | None = None,
     user_id: int | None = None,
 ) -> dict:
     """Run the full overnight Pulse pipeline.
@@ -120,7 +120,7 @@ async def run_pulse(
         ``app.state.sources``).  Passed to ``discover_candidates`` so that
         rate-limiter state is preserved across Pulse runs.
     ctx:
-        Optional :class:`~jarvis_common.jobs.JobContext` for progress reporting
+        Optional :class:`~jarvis_common.jobs.ProgressContext` for progress reporting
         and cancellation support when the pipeline runs as a background job.
         When ``None`` (scheduler / direct call) progress is not reported.
     """
@@ -181,7 +181,6 @@ async def run_pulse(
             profile,
             since=now - timedelta(days=profile.lookback_days),
             source_cache=source_cache,
-            include_diagnostics=True,
         )
         candidates, source_counts, source_diagnostics = discovery_result
     except Exception as exc:  # broad: fan-out over heterogeneous source plugins; degrade to []
@@ -556,7 +555,7 @@ async def _pulse_generate_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
-    ctx: JobContext,
+    ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Jobs backbone handler for on-demand Pulse deck generation.
 

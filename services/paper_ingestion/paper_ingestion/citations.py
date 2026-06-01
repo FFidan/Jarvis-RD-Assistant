@@ -11,6 +11,7 @@ from typing import Any
 
 import asyncpg
 
+from paper_ingestion.db_types import ConnLike
 from paper_ingestion.models import (
     CitationFetchResponse,
     CitationGraphResponse,
@@ -21,8 +22,6 @@ from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
 
 logger = logging.getLogger(__name__)
-
-ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
 
 _INSERT_CITATION_SQL = """INSERT INTO paper_citations (source_paper_id, cited_paper_id,
        citation_context, is_influential, intent)

@@ -104,7 +104,7 @@ def _owner_matches(row_user_id: Any, caller_user_id: int | None) -> bool:
 
 def build_jobs_router(
     *,
-    service_name: str,
+    service_name: str = "",
     public_kinds: frozenset[str],
     get_db_pool: Callable[..., asyncpg.Pool],
     limiter: Limiter,
@@ -117,8 +117,8 @@ def build_jobs_router(
     Parameters
     ----------
     service_name:
-        Service identifier (e.g. ``"paper_ingestion"``).  Used as a log-context
-        marker; not embedded in client-visible responses.
+        Optional service identifier (e.g. ``"paper_ingestion"``).  Currently
+        unused; accepted for backward compatibility.
     public_kinds:
         Base allowlist of job kinds clients may enqueue via ``POST /api/jobs``.
         ``noop.test`` is added at request-time when test jobs are enabled.

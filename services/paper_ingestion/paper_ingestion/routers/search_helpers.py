@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ValidationError
 
 from paper_ingestion.models import PaperCreate
+from paper_ingestion.sources.base import parse_retry_after
 
 # ---------------------------------------------------------------------------
 # Response models for multi-source search
@@ -281,20 +282,6 @@ def _store_preferred_library_match(
         indexes[key] = match
 
 
-def _retry_after_seconds(exc: Exception) -> int | None:
-    """Extract an integer Retry-After header when the upstream provided one."""
-    response = getattr(exc, "response", None)
-    if response is None:
-        return None
-    retry_after = response.headers.get("Retry-After")
-    if retry_after is None:
-        return None
-    try:
-        return int(float(retry_after))
-    except (TypeError, ValueError):
-        return None
-
-
 def _semantic_scholar_api_key_configured(plugin: Any) -> bool:
     """Return True when the Semantic Scholar source appears to have an API key."""
     config_obj = getattr(getattr(plugin, "config", None), "config", None)
@@ -331,7 +318,7 @@ def _build_preview_source_error(
     retry_after_s = None
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
-        retry_after_s = _retry_after_seconds(exc)
+        retry_after_s = parse_retry_after(exc)
 
         if status_code == 429:
             message = f"{_source_display_name(source_name)} rate limit reached. Retry later"

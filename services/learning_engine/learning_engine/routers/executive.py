@@ -9,15 +9,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_strict, current_user_id_strict_with_owner_override
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
-from pydantic import BaseModel, Field
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import (
+    FocusSessionRequest,
     FocusSessionResponse,
+    MyDayBundleResponse,
     MyDayProjectPulseItem,
     MyDayRecommendationItem,
     MyDayResponse,
     MyDayTaskItem,
+    QuickAddTaskRequest,
     TaskResponse,
 )
 
@@ -60,10 +62,12 @@ _FOCUS_HOURS_SQL = (
 )
 
 # Focus streak: consecutive days with focus_hours > 0, ending today or
-# yesterday (gaps-and-islands). Behaviour-equivalent to the prior 365-row
-# Python walk — CURRENT_DATE is UTC here (postgres container has no TZ set,
-# matching the old datetime.now(UTC).date() anchor), and the run is counted
-# only when its most recent qualifying day is CURRENT_DATE or CURRENT_DATE-1.
+# yesterday (gaps-and-islands). Deliberate perf mirror of analytics._compute_streak
+# (Python) — this SQL version avoids transferring up to 365 rows across the wire;
+# both must stay in sync (see test_executive.test_my_day_focus_streak_sql_live_pg).
+# CURRENT_DATE is UTC here (postgres container has no TZ set, matching the old
+# datetime.now(UTC).date() anchor), and the run is counted only when its most
+# recent qualifying day is CURRENT_DATE or CURRENT_DATE-1.
 _FOCUS_STREAK_SQL = """
     WITH qualifying AS (
         SELECT DISTINCT log_date
@@ -132,22 +136,6 @@ async def _fetchrow(pool: Pool, sql: str, *args: Any) -> Any:
     """Acquire a pool connection, run ``conn.fetchrow``, and release it."""
     async with pool.acquire() as conn:
         return await conn.fetchrow(sql, *args)
-
-
-class FocusSessionRequest(BaseModel):
-    """Request body for POST /api/executive/focus/log."""
-
-    duration_hours: float = Field(..., gt=0, le=24)
-    task_id: int | None = None
-    paper_id: int | None = None
-
-
-class QuickAddTaskRequest(BaseModel):
-    """Request body for POST /api/executive/tasks (quick-add)."""
-
-    title: str = Field(..., min_length=1, max_length=500)
-    project_id: int | None = None
-    priority: int = Field(3, ge=1, le=4)
 
 
 @router.get("/my-day", response_model=MyDayResponse)
@@ -282,7 +270,7 @@ def _journal_payload(row: Any) -> dict[str, Any] | None:
     }
 
 
-@router.get("/my-day-bundle")
+@router.get("/my-day-bundle", response_model=MyDayBundleResponse)
 @limiter.limit("60/minute")
 async def get_my_day_bundle(
     request: Request,
@@ -297,11 +285,10 @@ async def get_my_day_bundle(
 ) -> dict[str, Any]:
     """One-round-trip superset of the My-Day page's ~11 calls.
 
-    Returns ``{tasks, intent, threads, yesterday, journal, pulse_today}``.
-    ``pulse_today`` is always null here — the Pulse deck assembly lives in
-    paper_ingestion and is not re-implementable in learning_engine without
-    importing it; the frontend keeps its dedicated ``fetchPulseToday`` call as
-    the source for that one section. Every field is null/empty tolerant.
+    Returns ``{tasks, intent, threads, yesterday, journal}``.
+    The Pulse deck assembly lives in paper_ingestion; the frontend keeps its
+    dedicated ``fetchPulseToday`` call for that section.
+    Every field is null/empty tolerant.
     """
     # Yesterday window: local-midnight boundaries re-expressed as UTC instants
     # (mirrors routers.my_day.get_yesterday exactly).
@@ -363,7 +350,6 @@ async def get_my_day_bundle(
         "threads": [_thread_payload(r) for r in thread_rows],
         "yesterday": yesterday,
         "journal": _journal_payload(journal_row),
-        "pulse_today": None,
     }
 
 

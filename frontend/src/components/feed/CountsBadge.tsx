@@ -8,9 +8,9 @@ interface CountsBadgeProps {
 }
 
 export function CountsBadge({ surface }: CountsBadgeProps) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading } = useQuery<FeedCountsResponse>({
     queryKey: QUERY_KEYS.feed.counts(),
-    queryFn: fetchFeedCounts,
+    queryFn: () => fetchFeedCounts(),
     staleTime: 5_000,
   });
   if (isLoading || !data) return null;
