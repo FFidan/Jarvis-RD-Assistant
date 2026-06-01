@@ -1,4 +1,4 @@
-"""Audit log shared contract suite — Phase E1.JC.
+"""Audit log shared contract suite.
 
 Exercises ``jarvis_common.audit.log_audit`` against a real DB (contract_conn)
 so the DB write path is proven rather than mocked.

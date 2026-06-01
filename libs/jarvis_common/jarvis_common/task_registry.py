@@ -1,12 +1,11 @@
 """Procrastinate task registry — owns the App factory + registration API.
 
-B.4 cutover is complete as of 2026-05-03 (see ``docs/plans/2026-05-03-marathon-status.md``
-for the cutover record). The Procrastinate worker is wired into both
+The Procrastinate cutover is complete as of 2026-05-03. The Procrastinate worker is wired into both
 ``paper_ingestion`` and ``learning_engine`` service lifespans via
 ``app.run_worker_async()``. All enqueue paths use these tasks; the legacy
 ``worker_loop`` has been removed.
 
-W4-1 (Wave 2.2) — dependency inversion:
+Dependency inversion:
     jarvis_common owns the procrastinate ``App`` factory and exposes
     ``register_tasks(app, mapping, queue)`` to receive kind→handler dicts
     from each service. Each service registers its own tasks during lifespan

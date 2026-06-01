@@ -4,7 +4,7 @@
  * Owns the client-side session state: sessionTotal (seed from due_now at route entry)
  * and sessionReviewed (incremented on each successful submitReview).
  *
- * P2 OFFLINE SEAM (Wave 3 / functional-track): the submit-review call is isolated
+ * P2 OFFLINE SEAM: the submit-review call is isolated
  * behind `onReviewSubmit` in ReviewCanvasProps. To add offline IndexedDB outbox +
  * sync, replace the implementation passed into <ReviewCanvas onReviewSubmit={...}>
  * without touching this shell or the canvas layout. The seam is intentional.

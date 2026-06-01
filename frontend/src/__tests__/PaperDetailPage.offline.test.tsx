@@ -1,5 +1,5 @@
 /**
- * PaperDetailPage offline indicator tests — Wave 3 P1d
+ * PaperDetailPage offline indicator tests
  *
  * Coverage:
  *  - Header shows offline indicator (stale-cached / available-offline) when offline

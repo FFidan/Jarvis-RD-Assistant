@@ -1,4 +1,4 @@
-"""Middleware-wiring smoke test for telegram_bot internal_api (W5-CF5)."""
+"""Middleware-wiring smoke test for telegram_bot internal_api."""
 
 
 def test_internal_api_import_does_not_pull_paper_ingestion() -> None:

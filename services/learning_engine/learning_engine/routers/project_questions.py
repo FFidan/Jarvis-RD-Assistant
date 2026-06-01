@@ -2,9 +2,9 @@
 
 Projects IA redesign §3.4 (§ OPEN QUESTIONS) and §3.5 (§ RECENT ACTIVITY).
 Every endpoint is strictly project-owner-scoped: the project row is fetched
-with ``WHERE id = $1 AND user_id = $2`` (the WS-2D IDOR guard reused verbatim
-from ``project_papers.list_project_papers``) and a 404 is raised when absent,
-so a caller can never read/write another user's questions or activity.
+with ``WHERE id = $1 AND user_id = $2`` (IDOR guard reused verbatim from
+``project_papers.list_project_papers``) and a 404 is raised when absent, so a
+caller can never read/write another user's questions or activity.
 """
 
 import asyncpg
@@ -32,8 +32,8 @@ async def _assert_project_owner(
 ) -> None:
     """Raise 404 unless ``project_id`` exists and belongs to ``user_id``.
 
-    WS-2D owner-scoping guard, reused verbatim from project_papers — IDOR
-    otherwise (a 404, not 403, to avoid leaking project existence).
+    Owner-scoping guard reused verbatim from project_papers — IDOR otherwise
+    (a 404, not 403, to avoid leaking project existence).
     """
     owned = await conn.fetchval(
         "SELECT id FROM projects WHERE id = $1 AND user_id = $2",

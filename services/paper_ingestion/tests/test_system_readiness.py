@@ -1,4 +1,4 @@
-"""Tests for GET /api/system/readiness (Wave 5 pre-public-launch checklist)."""
+"""Tests for GET /api/system/readiness (pre-public-launch checklist)."""
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
-"""Characterization tests for pulse/job.py::run_pulse — pre-decomposition snapshot (W0.T4).
+"""Characterization tests for pulse/job.py::run_pulse — pre-decomposition snapshot.
 
 These tests pin the observable shape and degraded-path behaviour of run_pulse
-before Wave 1 extracts helper functions into _orchestrator_phases.py.  The same
+before helper functions are extracted into _orchestrator_phases.py.  The same
 tests MUST pass byte-identically after extraction; any divergence signals a
 regression.
 

@@ -40,7 +40,7 @@ async def _run_briefing_for_chat(
     """
     async with db_pool.acquire() as conn:
         # New papers in the last 24 hours — scoped to the user's library when
-        # user_id is set (Sprint B canonical-corpus model: membership lives in
+        # user_id is set (canonical-corpus model: membership lives in
         # user_library, not papers.user_id).  Falls back to a sitewide count
         # for legacy single-tenant mode (user_id=None).
         if user_id is not None:
@@ -139,8 +139,8 @@ async def run_daily_briefing(
 ) -> None:
     """Send a combined morning briefing with papers, cards, and tasks.
 
-    Sprint A: iterates ``telegram_user_pairings`` and delivers per-user
-    briefings.  Skips with a warning when no pairings exist.
+    Iterates ``telegram_user_pairings`` and delivers per-user briefings.
+    Skips with a warning when no pairings exist.
 
     Parameters
     ----------

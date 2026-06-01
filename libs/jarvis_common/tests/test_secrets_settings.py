@@ -80,7 +80,7 @@ def test_file_read_failure_raises_at_construction(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# W3-CF11: smtp.* empty-string rejection
+# smtp.* empty-string rejection
 #
 # NOTE: All five smtp fields (smtp_host, smtp_port, smtp_user, smtp_pass,
 # smtp_from) are typed as ``SecretStr | None`` with NO empty-string
@@ -110,7 +110,7 @@ def test_file_read_failure_raises_at_construction(monkeypatch):
     reason=(
         "SecretsSettings has no empty-string validator for smtp.* fields "
         "(all typed as SecretStr | None); empty string is currently accepted. "
-        "W3-CF11: add validators to make these pass."
+        "Add validators to make these pass."
     ),
 )
 def test_smtp_field_rejects_empty_string(monkeypatch, env_name: str, field_name: str) -> None:

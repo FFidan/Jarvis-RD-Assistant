@@ -8,7 +8,7 @@
 > This PRD reflects features shipped through git tag v0.5.0. The Discovery &
 > Pulse subsystem (Phase 1) shipped on 2026-05-01; Pulse is live in production.
 > The Paper Lifecycle Redesign (single-state ENUM + orthogonal Star) shipped
-> as Phase A of the Modernization Marathon (commit ee1de7f, 2026-05-01).
+> in an early modernization pass (commit ee1de7f, 2026-05-01).
 > Section 3.1 reflects the two distinct sub-features (Pulse = discovery,
 > Weekly Summary = reflection). Section 3.4 tracks features delivered beyond
 > the original MVP scope. Section 8 records the Phase 1/2/3 roadmap for the
@@ -162,7 +162,7 @@ The former weekly digest feature, renamed from `digest.py` to `weekly_summary.py
 - Runs weekly (default Monday 09:00) via the existing `/api/digest` endpoint (URL unchanged after rename).
 - Delivered via the Research Feed weekly summary section and optional Telegram weekly digest message.
 
-**Engagement filter (narrowed during Phase 1 rename):** the SQL query now explicitly excludes papers that appeared in a Pulse deck but received no engagement (no save, no upvote, no open). Weekly Summary reflects only papers with paper_user_state.starred = TRUE or state IN ('reading', 'done') or with a positive recommendation_feedback entry (signal='positive', source='pulse_thumbs') in the last 7 days. (Lifecycle schema collapsed in Phase A migrations 047-049.) This is Model C — complementary, zero-overlap with Pulse by construction rather than by convention.
+**Engagement filter (narrowed during the Pulse rename):** the SQL query now explicitly excludes papers that appeared in a Pulse deck but received no engagement (no save, no upvote, no open). Weekly Summary reflects only papers with paper_user_state.starred = TRUE or state IN ('reading', 'done') or with a positive recommendation_feedback entry (signal='positive', source='pulse_thumbs') in the last 7 days. (Lifecycle schema collapsed in migrations 047-049.) This is Model C — complementary, zero-overlap with Pulse by construction rather than by convention.
 
 **Complementarity guarantee (Model C):** Pulse and Weekly Summary answer different questions with different temporal stances and different corpora. Pulse is forward-looking ("what should I read today?"), external-corpus, daily, card-shaped. Weekly Summary is backward-looking ("what did my reading this week mean?"), internal-library-only, weekly, narrative-themes-shaped. They share infrastructure (embedder, LLM client, topics, authors) but never duplicate output. A dedicated drift-prevention test in `test_weekly_summary.py` asserts that Pulse-pending papers never leak into Weekly Summary output.
 
@@ -249,7 +249,7 @@ These features were promoted from v2 or added during development:
 
 These features shipped in the Phase 1 Discovery & Pulse sprint and subsequent audit remediation cycles:
 
-- **Unified Async Job System** (migrations 023+052+053): durable task broker is procrastinate (B.4 cutover, 2026-05-03). All 19 job kinds register as procrastinate tasks via `KIND_TO_TASK` in `libs/jarvis_common/jarvis_common/task_registry.py`; routing dispatches via `task.defer_async(job_id=<jarvis_uuid>, user_id=<int>, **payload)`. The REST API contract is preserved: `POST /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/stream` (SSE), `POST /api/jobs/{id}/cancel`. `get_unified()` in `jobs.py` is the single lookup helper. Frontend Zustand `job-store` + TopNav `JobsIndicator` + Sonner toasts are unchanged.
+- **Unified Async Job System** (migrations 023+052+053): durable task broker is procrastinate (Procrastinate cutover, 2026-05-03). All 19 job kinds register as procrastinate tasks via `KIND_TO_TASK` in `libs/jarvis_common/jarvis_common/task_registry.py`; routing dispatches via `task.defer_async(job_id=<jarvis_uuid>, user_id=<int>, **payload)`. The REST API contract is preserved: `POST /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/stream` (SSE), `POST /api/jobs/{id}/cancel`. `get_unified()` in `jobs.py` is the single lookup helper. Frontend Zustand `job-store` + TopNav `JobsIndicator` + Sonner toasts are unchanged.
 - **My Day redesigned as triage dashboard**: `DayHeader` with counters (focus time, tasks, cards due), Pulse preview card (3 top papers + link to full deck at Research Feed → Today's Pulse), Pomodoro + Tasks block, ActionItems (overdue + due-today tasks with Focus buttons), Learning summary, Project summary. Replaces the previous full PulseDeck widget on the My Day page.
 - **Global Pomodoro header widget**: compact timer display in the TopBar, visible on every page when a session is active, hidden when idle. Clicking it navigates back to My Day.
 - **Source drag-to-reorder**: `paper_sources.display_order` column + `PATCH /api/sources/reorder` endpoint + `@dnd-kit/sortable` grip handle UI in Settings → Sources.
@@ -263,28 +263,28 @@ These features shipped in the Phase 1 Discovery & Pulse sprint and subsequent au
 - **Generate Cards error link**: "no processed chunks" error in Generate Cards is now a clickable link to Process PDF.
 - **Sidebar label**: "Feed" renamed to "Research Feed" throughout navigation.
 
-### Shipped in Sprint 5 (2026-04-27)
+### Shipped 2026-04-27
 
-These features shipped in the Sprint 5 hardening pass (commits up to `4b4805d`):
+These features shipped in the 2026-04-27 hardening pass (commits up to `4b4805d`):
 
-- **Save/Star UI + REST** (migration 043, superseded by Phase A migration 047): historical Sprint-5 entry — introduced a `PATCH /api/papers/{id}/bookmark` endpoint backed by a `papers.is_bookmarked` column and per-user uniqueness constraints. **Both column and endpoint were removed in Phase A**; replaced by the canonical `state` ENUM (`inbox`/`to_read`/`reading`/`done`/`trash`) plus orthogonal `papers.starred` BOOLEAN, addressed via `PUT /api/papers/{id}/save` and `PUT /api/papers/{id}/star` (per the 2026-04-29 paper-lifecycle-redesign spec §3 + §8).
+- **Save/Star UI + REST** (migration 043, superseded by migration 047): historical entry — introduced a `PATCH /api/papers/{id}/bookmark` endpoint backed by a `papers.is_bookmarked` column and per-user uniqueness constraints. **Both column and endpoint were removed in the lifecycle redesign**; replaced by the canonical `state` ENUM (`inbox`/`to_read`/`reading`/`done`/`trash`) plus orthogonal `papers.starred` BOOLEAN, addressed via `PUT /api/papers/{id}/save` and `PUT /api/papers/{id}/star` (per the 2026-04-29 paper-lifecycle-redesign spec §3 + §8).
 - **Pulse weight clamping**: scoring signal weights are now validated and clamped to [0.0, 1.0] on write; malformed weight vectors no longer silently corrupt the scoring pipeline.
 - **Sub-hourly cron guard**: `pulse.cron` values with intervals shorter than 1 hour are rejected at the settings layer with a clear validation error.
 - **Migration 043**: `multiuser_unique_constraints` — unique constraints scoped by `user_id` on `pulse_decks`, `papers`, `cards`, and related tables; groundwork for multi-tenant enforcement.
-- **Docker Secrets**: four secrets wired end-to-end — `postgres_password`, `jarvis_api_key`, `qdrant_api_key`, `telegram_bot_token` — all consumed via `_FILE` env var convention. See `docs/REQUIREMENTS.md § Secrets & Files`. (LiteLLM previously had a fifth `litellm_master_key` secret; round-15 W1.1 dropped it — litellm runs loopback-only and fronts only Ollama.)
+- **Docker Secrets**: four secrets wired end-to-end — `postgres_password`, `jarvis_api_key`, `qdrant_api_key`, `telegram_bot_token` — all consumed via `_FILE` env var convention. See `docs/REQUIREMENTS.md § Secrets & Files`. (LiteLLM previously had a fifth `litellm_master_key` secret; it was later dropped — litellm runs loopback-only and fronts only Ollama.)
 
-### Shipped in Sprint 6 (2026-04-28)
+### Shipped 2026-04-28
 
-These features shipped in the Sprint 6 remediation pass (audit findings C1/C2/H1/H2/H3/H4/H5 + selected mediums/lows):
+These features shipped in the 2026-04-28 remediation pass (audit findings C1/C2/H1/H2/H3/H4/H5 + selected mediums/lows):
 
-- **Multi-tenant write threading (C1/C2)**: all write paths in `paper_ingestion` and `learning_engine` now thread `user_id` end-to-end — `INSERT`, `UPDATE`, and ownership-scoped `SELECT` queries carry `user_id` from the request context. Read-side IDOR is closed for Pulse endpoints. Enforcement of cross-user access at the read layer remains gated on the real auth resolver (see `CLAUDE.md § Multi-tenant status`).
+- **Multi-tenant write threading (C1/C2)**: all write paths in `paper_ingestion` and `learning_engine` now thread `user_id` end-to-end — `INSERT`, `UPDATE`, and ownership-scoped `SELECT` queries carry `user_id` from the request context. Read-side IDOR is closed for Pulse endpoints. Enforcement of cross-user access at the read layer remains gated on the real auth resolver (see `docs/SECURITY.md` and `docs/ARCHITECTURE.md` for the full multi-tenant model).
 - **Brace-escape verification fix**: the quote verifier no longer mismatches f-string brace literals (`{{`, `}}`) against source text, eliminating a class of false-negative verification failures on templated extractions.
 - **Embedder shim cleanup**: stale `_COMPAT_SHIM` path in `paper_ingestion/ingestion/embedder.py` removed; all callers use the canonical `embed_texts()` interface.
 - **Migration 043 robustness**: duplicate-key handling added to the migration runner for constraint-already-exists errors so that re-running migrations on partially-applied databases does not abort startup.
 
 ### Shipped in v0.2.0–v0.5.0 (2026-05-10 to 2026-05-24)
 
-These features shipped after the Sprint 6 audit cycle:
+These features shipped after the 2026-04-28 audit cycle:
 
 - **Multi-user auth** (migration 074): magic-link sign-in, session cookies, admin send-sign-in-link UI, and Telegram pairing. `magic_link_tokens` table live in `db/init.sql`. Auth resolvers (`current_user_id_strict` / `current_user_id_or_none`) read from `SessionMiddleware`-populated request state.
 - **PWA offline reader**: service worker + `manifest.json`; `ConnectivityBanner`, `query-persister`, and `logout-hygiene` tested in `frontend/src/__tests__/`. Offline reads of cached paper content work without a network connection.
@@ -560,7 +560,7 @@ A proactive overnight paper discovery subsystem that complements the existing li
 management features. The architectural design is embedded in §3.1.1; this section
 captures the roadmap phasing, acceptance criteria, and attribution.
 
-**Unified Async Job System (B.4 cutover SHIPPED 2026-05-03):** migration 023 established the REST/SSE contract. Migrations 052–053 introduced procrastinate as the durable broker and dropped the legacy `jobs` table. All 19 kinds run on procrastinate; `@job_handler` decorator, `worker_loop`, `_HANDLERS` registry, and per-service in-process workers are removed. See §3.4 for the current architecture.
+**Unified Async Job System (Procrastinate cutover SHIPPED 2026-05-03):** migration 023 established the REST/SSE contract. Migrations 052–053 introduced procrastinate as the durable broker and dropped the legacy `jobs` table. All 19 kinds run on procrastinate; `@job_handler` decorator, `worker_loop`, `_HANDLERS` registry, and per-service in-process workers are removed. See §3.4 for the current architecture.
 
 #### 8.5.1 Phase 1 (target)
 
@@ -602,7 +602,7 @@ captures the roadmap phasing, acceptance criteria, and attribution.
 
 ### 8.7 Phase 4 — Conversational Agent Layer (Hermes integration or native build)
 
-**Status:** PLANNING ONLY (Conditional GO). Gated behind RB-3 cross-service auth (shipped), Performance Phase 1, and an evaluation harness as task 0 — see the [ROADMAP](../ROADMAP.md) for sequencing and rationale. The anti-hallucination hardening (4-layer pipeline, §5.3) applies at the agent boundary.
+**Status:** PLANNING ONLY (Conditional GO). Gated behind cross-service auth hardening (shipped), a performance profiling pass, and an evaluation harness as task 0 — see the [ROADMAP](../ROADMAP.md) for sequencing and rationale. The anti-hallucination hardening (4-layer pipeline, §5.3) applies at the agent boundary.
 
 **Goal.** A natural-language control plane over the JARVIS REST API. A user should be able to say *"find last week's AI safety Pulse cards I haven't rated"* and have the agent compose the right API calls, present results, and honor the anti-hallucination policy end-to-end.
 
@@ -638,8 +638,6 @@ JARVIS's Discovery & Pulse design borrows ideas and patterns from several open-s
 - **Messaging-first conversational UX** — chat as the primary interface to an agent layer (Phase 4 inspiration).
 
 All are MIT/Apache-licensed. Our use is at the idea/pattern level.
-digests, extraction) MUST pass through the anti-hallucination verification pipeline.
-This is what differentiates JARVIS from every competitor.
 
 ---
 

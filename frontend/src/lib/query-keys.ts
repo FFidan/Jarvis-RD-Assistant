@@ -2,9 +2,9 @@
  * Centralised TanStack Query key registry.
  *
  * Every key is a typed factory returning an `as const` tuple so call-sites get
- * exact literal types for cache matching and invalidation.  Wave 2 migrates all
- * inline `queryKey: [...]` literals to these factories; do not add new inline
- * literals — use or extend this registry instead.
+ * exact literal types for cache matching and invalidation.  All inline
+ * `queryKey: [...]` literals are migrated to these factories; do not add new
+ * inline literals — use or extend this registry instead.
  */
 
 export const QUERY_KEYS = {

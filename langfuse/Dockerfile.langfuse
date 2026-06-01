@@ -1,5 +1,5 @@
 # langfuse/Dockerfile.langfuse — hardening wrapper for the upstream Langfuse v2
-# image (W9-T1 / SEC-HIGH-02).
+# image.
 #
 # Why this exists
 # ---------------

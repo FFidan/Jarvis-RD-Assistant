@@ -192,7 +192,7 @@ describe('MyDayPage', () => {
   it('renders Now section with Pulse #1 mode tab', async () => {
     renderWithProviders();
     expect(await screen.findByText(/§ Now/i)).toBeInTheDocument();
-    // ModePicker uses role="tab" buttons (W2-18 ARIA enhancement); Pulse #1 is always visible
+    // ModePicker uses role="tab" buttons (ARIA enhancement); Pulse #1 is always visible
     expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
     // Continue task only shows with an active Pomodoro (none in this test)
   });
@@ -405,7 +405,7 @@ describe('HeroPulse behaviour', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Hash-scroll behaviour (Phase 1e Task A1)
+// Hash-scroll behaviour
 // ---------------------------------------------------------------------------
 
 describe('MyDayPage hash-scroll', () => {

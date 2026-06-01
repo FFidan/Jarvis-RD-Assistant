@@ -5,9 +5,9 @@
  * eyebrow strip (§ CARD n · DECK NAME | last seen N days) → question text → reveal
  * separator → § ANSWER section → rating row.
  *
- * P2 OFFLINE SEAM (Wave 3 / functional-track):
+ * P2 OFFLINE SEAM:
  * The "submit review" side-effect is intentionally isolated behind the single
- * `submitReviewFn` prop. To add offline IndexedDB outbox + sync in Wave 3:
+ * `submitReviewFn` prop. To add offline IndexedDB outbox + sync:
  *   1. Create a `useOfflineReviewQueue` hook that writes to IndexedDB and returns
  *      a wrapped submit function.
  *   2. Pass it as `submitReviewFn` from `LearningCardsPage` — zero changes needed
@@ -41,7 +41,7 @@ export interface ReviewModeProps {
   /**
    * P2 OFFLINE SEAM — isolated submit boundary.
    * Default: online `submitReview` from @/lib/api.
-   * Wave 3: replace with an offline-aware function that writes to IndexedDB outbox
+   * Replace with an offline-aware function that writes to IndexedDB outbox
    * and advances local FSRS state optimistically. Signature is identical to the
    * online variant so swap is a one-liner at the call site.
    */

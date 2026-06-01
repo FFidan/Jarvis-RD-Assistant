@@ -97,7 +97,7 @@ async def test_notes_create_owner_gets_201(
 
 # ---------------------------------------------------------------------------
 # A62: PUT /api/notes/{note_id} — update persists and 404 for non-owner
-# (Phase B extension — row A62 PARTIAL-IDOR)
+# (row A62 PARTIAL-IDOR)
 # ---------------------------------------------------------------------------
 
 
@@ -109,7 +109,7 @@ async def test_a62_update_note_owner_gets_200(
     """Covers map row A62: PUT /api/notes/{id} owner updates note text.
 
     Verified: notes.py:127-165 update_note at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_notes.py mock-unit tests.
+    Survivor-of: test_notes.py mock-unit tests.
     """
     # First create a note to update
     paper_id = contract_two_users.paper_id_a
@@ -167,7 +167,7 @@ async def test_a62_update_note_user_b_gets_404(
 
 # ---------------------------------------------------------------------------
 # A64: DELETE /api/notes/{note_id} — deletes from DB and 404 for non-owner
-# (Phase B extension — row A64 PARTIAL-IDOR)
+# (row A64 PARTIAL-IDOR)
 # ---------------------------------------------------------------------------
 
 
@@ -180,7 +180,7 @@ async def test_a64_delete_note_owner_gets_204(
     """Covers map row A64: DELETE /api/notes/{id} removes row from DB for owner.
 
     Verified: notes.py:313-339 delete_note at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_notes.py mock-unit tests.
+    Survivor-of: test_notes.py mock-unit tests.
     """
     paper_id = contract_two_users.paper_id_a
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
@@ -246,7 +246,7 @@ async def test_e1_notes_user_b_sees_empty_list_for_user_a_paper(
     Behavioral assertion: even if user B's paper_id happens to match user A's
     paper, no notes cross the user_id boundary.
     Verified: notes.py:56 WHERE paper_id = $1 AND user_id = $2 scope.
-    Survivor-of (Phase E2): test_notes.py IDOR cross-user list mock tests.
+    Survivor-of: test_notes.py IDOR cross-user list mock tests.
     """
     paper_id = contract_two_users.paper_id_a
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
@@ -274,7 +274,7 @@ async def test_e1_notes_create_persists_to_db(
 
     Stronger than mock-unit: verifies the DB row exists after the POST.
     Verified: notes.py:105 INSERT INTO paper_notes ... RETURNING id, paper_id, user_note, source, created_at.
-    Survivor-of (Phase E2): test_notes.py create-note mock-unit DB-side assertions.
+    Survivor-of: test_notes.py create-note mock-unit DB-side assertions.
     """
     paper_id = contract_two_users.paper_id_a
     user_a_id = contract_two_users.user_a_id
@@ -309,7 +309,7 @@ async def test_e1_notes_highlight_source_idempotency(
     Highlights are NOT idempotent at the endpoint level — each POST creates a new
     row. This verifies the schema allows multiple highlight rows per (paper, user).
     Verified: notes.py:105 (no UNIQUE constraint on highlight rows — unlimited inserts).
-    Survivor-of (Phase E2): test_notes.py highlight source mock tests.
+    Survivor-of: test_notes.py highlight source mock tests.
     """
     paper_id = contract_two_users.paper_id_a
 

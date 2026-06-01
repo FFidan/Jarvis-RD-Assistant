@@ -1,4 +1,4 @@
-"""Optional citation-graph signals for Pulse Phase 2 scoring."""
+"""Optional citation-graph signals for Pulse scoring."""
 
 from __future__ import annotations
 

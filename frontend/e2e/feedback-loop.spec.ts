@@ -1,5 +1,5 @@
 /**
- * WS-PA-A6 — Feedback loop smoke test (negative feedback → Pulse L3 exclusion UI).
+ * Feedback loop smoke test (negative feedback → Pulse L3 exclusion UI).
  *
  * MODE: mocked — all /api/* calls are intercepted; no live stack required.
  *
@@ -251,7 +251,7 @@ async function skipIfUnreachable(page: Page) {
 // Test suite
 // ---------------------------------------------------------------------------
 
-test.describe('Feedback loop — negative feedback and Pulse L3 exclusion (WS-PA-A6)', () => {
+test.describe('Feedback loop — negative feedback and Pulse L3 exclusion', () => {
   test.setTimeout(60_000);
 
   test.beforeEach(async ({ page }) => {
@@ -354,8 +354,8 @@ test.describe('Feedback loop — negative feedback and Pulse L3 exclusion (WS-PA
 
   // ── Test 4: End-to-end flow — feedback then check Pulse deck ────────────
 
-  // Phase A WS-PA-W6: end-to-end mock chain (Inbox → POST /feedback → Pulse refresh) trips on
-  // the post-Phase-A counts/feed shape combination; impl covered by L3 unit tests
+  // End-to-end mock chain (Inbox → POST /feedback → Pulse refresh) trips on
+  // the current counts/feed shape combination; impl covered by L3 unit tests
   // (test_l1_negative_signals.py + L3 exclusion tests) and B.2 scenario 2 manual smoke.
   test.fixme('4. End-to-end: negative feedback in Inbox → Pulse deck excludes the paper', async ({ page }) => {
     // ── Phase 1: Inbox — give negative feedback ──────────────────────────
@@ -420,7 +420,7 @@ test.describe('Feedback loop — negative feedback and Pulse L3 exclusion (WS-PA
 
   // ── Test 5: Empty Pulse deck renders "Generate your first Pulse" ─────────
 
-  // Phase A WS-PA-W6: /my-day fetch chain depends on the new pulse + feed counts contract; the
+  // The /my-day fetch chain depends on the current pulse + feed counts contract; the
   // 204-empty-state copy was retitled. Manual smoke verifies; needs spec refresh.
   test.fixme('5. /my-day renders no-deck empty state when /api/pulse/today returns null', async ({ page }) => {
     // When the backend returns 204 or null, fetchPulseToday returns null.

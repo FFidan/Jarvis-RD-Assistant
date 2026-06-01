@@ -1,5 +1,5 @@
 /**
- * WS8-B3.8 — Feed lifecycle smoke test (Inbox → Save → Library → Star → Archive
+ * Feed lifecycle smoke test (Inbox → Save → Library → Star → Archive
  *             → Dismiss → Trash → Restore → HardDelete).
  *
  * MODE: mocked — all /api/papers/* calls are intercepted; no live stack required
@@ -13,7 +13,7 @@
  * Step 8 (GET /api/papers/{id} → 404) is conditional on LIVE_QDRANT=1 env var
  * matching the intent of the sprint spec.
  *
- * Lifecycle callbacks: wired in Wave 2.2 (FeedView.tsx:246-269 forwards onSave/onSkip/onTrash/etc to FeedPaperRow).
+ * Lifecycle callbacks: wired in FeedView.tsx:246-269 (forwards onSave/onSkip/onTrash/etc to FeedPaperRow).
  */
 
 import { test, expect, type Page, type Route } from '@playwright/test';
@@ -190,7 +190,7 @@ async function skipIfUnreachable(page: Page) {
 // Test suite
 // ---------------------------------------------------------------------------
 
-test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
+test.describe('Feed — full lifecycle smoke', () => {
   test.setTimeout(60_000);
 
   test.beforeEach(async ({ page }) => {
@@ -200,8 +200,8 @@ test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
 
   // ── Step 0 (sanity): Inbox surface loads with at least one paper ─────────
 
-  // Phase A WS-PA-W6: mock data uses pre-Phase-A user_state shape (status/saved/dismissed/archived
-  // booleans). The new schema is `state` ENUM + orthogonal `starred`. Surface chip count badge
+  // Mock data uses the legacy user_state shape (status/saved/dismissed/archived booleans).
+  // The current schema is `state` ENUM + orthogonal `starred`. Surface chip count badge
   // also routes through the new feed counts shape. Needs mock-data refresh + selector update.
   test.fixme('0. Inbox surface renders seeded paper', async ({ page }) => {
     const feedPhase: 'inbox' = 'inbox';
@@ -251,8 +251,8 @@ test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
 
   // ── Step 2: Library sub-filters (Starred, Archived) ──────────────────────
 
-  // Phase A WS-PA-W6: chip labels were updated (Starred/Reading/Reading List/Done — no Archived).
-  // Test asserts legacy `Archived` chip and `filter=archived` URL value that Phase A removed.
+  // Chip labels were updated (Starred/Reading/Reading List/Done — no Archived).
+  // Test asserts legacy `Archived` chip and `filter=archived` URL value that were removed.
   test.fixme('2. Library sub-filter chips update URL', async ({ page }) => {
     await routeFeedAndCounts(
       page,
@@ -367,8 +367,8 @@ test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
 
   // ── Step 6 (LIFECYCLE_WIRED): Star in Library ────────────────────────────
 
-  // Phase A WS-PA-W6: lifecycle endpoints renamed (`/bookmark` → `/star`, `/archive` → `/done`,
-  // `/dismiss` → `/trash`). Mock URL patterns + assertion strings need a Phase-A refresh; impl
+  // Lifecycle endpoints renamed (`/bookmark` → `/star`, `/archive` → `/done`,
+  // `/dismiss` → `/trash`). Mock URL patterns + assertion strings need a refresh; impl
   // covered by router pytest tests + manual smoke (B.2 scenario 1).
   test.fixme('6. [LIFECYCLE_WIRED] Star in Library fires /bookmark', async ({ page }) => {
     await stubLifecycleEndpoint(
@@ -398,7 +398,7 @@ test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
 
   // ── Step 7 (LIFECYCLE_WIRED): Archive in Library ─────────────────────────
 
-  // Phase A WS-PA-W6: see test 6 — endpoint rename `/archive` → `/done`.
+  // See test 6 — endpoint rename `/archive` → `/done`.
   test.fixme('7. [LIFECYCLE_WIRED] Archive in Library fires /archive', async ({ page }) => {
     // NOTE: onArchive IS passed from FeedView for non-archived surfaces.
     // This test exercises the Archive button on the library surface.
@@ -439,7 +439,7 @@ test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
 
   // ── Step 8 (LIFECYCLE_WIRED): Dismiss from Library ───────────────────────
 
-  // Phase A WS-PA-W6: see test 6 — endpoint rename `/dismiss` → `/trash` (+ optional `/feedback`
+  // See test 6 — endpoint rename `/dismiss` → `/trash` (+ optional `/feedback`
   // companion call). Negative feedback now lives in recommendation_feedback (decoupled).
   test.fixme('8. [LIFECYCLE_WIRED] Dismiss fires /dismiss and row vanishes', async ({ page }) => {
     let dismissedState = false;
@@ -478,8 +478,8 @@ test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
 
   // ── Step 9 (LIFECYCLE_WIRED): Restore from Trash ─────────────────────────
 
-  // Phase A WS-PA-W6: see test 6 — restore now writes state := state_before_trash; mock shape +
-  // selectors need to follow the new state ENUM rather than the legacy `archived` boolean.
+  // See test 6 — restore now writes state := state_before_trash; mock shape +
+  // selectors need to follow the state ENUM rather than the legacy `archived` boolean.
   test.fixme('9. [LIFECYCLE_WIRED] Restore from Trash fires /restore', async ({ page }) => {
     let restoredState = false;
 
@@ -513,8 +513,8 @@ test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
 
   // ── Step 10 (LIFECYCLE_WIRED): Hard delete from Trash ────────────────────
 
-  // Phase A WS-PA-W6: see test 6 — hard-delete still uses DELETE /api/papers/{id} but the modal
-  // copy + Trash mock seeding need the new state shape; impl covered by router pytests
+  // See test 6 — hard-delete still uses DELETE /api/papers/{id} but the modal
+  // copy + Trash mock seeding need the current state shape; impl covered by router pytests
   // (test_papers_router.py:908,931,960 NEW-H2 regression).
   test.fixme('10. [LIFECYCLE_WIRED] Hard-delete from Trash shows modal and fires DELETE', async ({ page }) => {
     let deletedState = false;
@@ -571,7 +571,7 @@ test.describe('Feed — full lifecycle smoke (WS8-B3.8)', () => {
 
     // This test is a live-backend integration assertion.
     // It expects a previously hard-deleted paper (PAPER_ID must exist in the DB)
-    // to return 404. In CI Wave 4, run with a seeded paper and LIVE_BACKEND=1.
+    // to return 404. Run with a seeded paper and LIVE_BACKEND=1 for full integration.
     const resp = await request.get(`/api/papers/${PAPER_ID}`);
     expect(resp.status()).toBe(404);
   });

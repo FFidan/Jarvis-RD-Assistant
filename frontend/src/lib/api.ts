@@ -89,7 +89,7 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetch(url, {
       ...init,
       signal: combinedSignal,
-      // WS-2A: send the jarvis_session HttpOnly cookie on every API call so
+      // Send the jarvis_session HttpOnly cookie on every API call so
       // the backend SessionMiddleware can populate request.state.user_id.
       // 'include' (not 'same-origin') so cross-origin dev setups (Vite on
       // :5173 hitting backend on :3001) still carry the cookie.
@@ -126,7 +126,7 @@ export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Resp
     const res = await fetch(url, {
       ...init,
       signal: combinedSignal,
-      // WS-2A: same rationale as apiFetch — carry the jarvis_session cookie.
+      // Same rationale as apiFetch — carry the jarvis_session cookie.
       credentials: init?.credentials ?? 'include',
       headers: {
         ...authHeaders(),
@@ -317,7 +317,7 @@ import type {
 
 export type { SourceHealth, SourceRunRecord };
 
-// --- Auth (Phase 2 WS-2A magic-link) ---
+// --- Auth (magic-link) ---
 import type { SessionUser } from '@/stores/auth-store';
 
 /** Request a one-shot magic-link email. Always resolves true regardless of
@@ -340,7 +340,7 @@ export const verifyMagicLink = (token: string) =>
 export const logoutSession = () =>
   apiFetch<void>('/api/auth/logout', { method: 'POST' });
 
-// --- Admin user management (Phase 2 WS-2B) ---
+// --- Admin user management ---
 
 export interface AdminUser {
   id: number;
@@ -377,7 +377,7 @@ export const sendSignInLink = (userId: number) =>
     method: 'POST',
   });
 
-// --- Admin audit log (WS-ADMIN-AUDIT) ---
+// --- Admin audit log ---
 
 export interface AuditLogEntry {
   id: number;
@@ -407,7 +407,7 @@ export const listAuditLog = (params?: {
   return apiFetch<AuditLogPage>(`/api/admin/audit-log${suffix}`);
 };
 
-// --- System readiness (WS-PRE-PUBLIC-CHECKLIST) ---
+// --- System readiness ---
 
 export interface ReadinessCheck {
   name: string;
@@ -518,7 +518,7 @@ export const setConfig = (key: string, value: unknown) =>
 export const getSetupStatus = () =>
   apiFetch<SetupStatus>('/api/system/setup-status');
 
-// --- WS-2F first-run wizard (pre-auth bootstrap) ---
+// --- First-run wizard (pre-auth bootstrap) ---
 // These call /api/setup/* which is unauthenticated until the first admin exists.
 // Distinct surface from /api/system/setup-status above (post-login bootstrap).
 export interface FirstRunStatus {
@@ -605,7 +605,7 @@ export const unpairTelegram = () =>
     body: JSON.stringify({ key: 'telegram.owner_chat_id', value: null }),
   });
 
-// --- Per-user multi-tenant Telegram pairing (Sprint A) ---
+// --- Per-user multi-tenant Telegram pairing ---
 
 export interface TelegramPairTokenResponse {
   token: string;
@@ -933,7 +933,7 @@ export const batchSavePapers = (papers: SearchPreviewResult[] | Partial<Paper>[]
     body: JSON.stringify(papers),
   });
 
-// --- Paper lifecycle mutations (Phase A) ---
+// --- Paper lifecycle mutations ---
 
 export async function savePaper(paperId: number): Promise<{ status: string; paper_id: number }> {
   return apiFetch(`/api/papers/${paperId}/save`, { method: 'PUT' });
@@ -971,7 +971,7 @@ export async function fetchFeedCountsWithFacets(scope: 'library' | 'corpus' = 'l
   return apiFetch(`/api/papers/feed/counts${qs}`);
 }
 
-// --- Phase A lifecycle mutations (Wave 2.1, additive) ---
+// --- Lifecycle mutations (additive) ---
 // Return type for simple state transitions: { status: string; paper_id: number }
 
 /** Skip a paper from the Inbox (state → done). */

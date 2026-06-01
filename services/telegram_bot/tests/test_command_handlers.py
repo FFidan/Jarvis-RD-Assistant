@@ -181,7 +181,7 @@ def test_inbox_keyboard_hides_feedback_for_user_initiated_papers():
 
 @pytest.mark.asyncio
 async def test_papers_no_args_lists_library_via_api():
-    """/papers with no query calls GET /api/papers/feed?view=library (Wave 3)."""
+    """/papers with no query calls GET /api/papers/feed?view=library."""
     update, context, _, mock_http = _make_update_and_context(args=[])
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
@@ -542,7 +542,7 @@ async def test_post_init_calls_set_my_commands():
 
 
 # ---------------------------------------------------------------------------
-# Tests: /focus — W4-4 clamp guard
+# Tests: /focus — clamp guard
 # ---------------------------------------------------------------------------
 
 
@@ -595,13 +595,13 @@ async def test_focus_positive_minutes_accepted():
 
 
 # ---------------------------------------------------------------------------
-# Tests: /papers bidi sanitisation — W4-4
+# Tests: /papers bidi sanitisation
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_papers_search_strips_bidi_chars():
-    """W4-4: inbound search text must have bidi/zero-width chars stripped before forwarding."""
+    """Inbound search text must have bidi/zero-width chars stripped before forwarding."""
     # U+202E (RTL OVERRIDE) embedded in the query string
     bidi_query = "neural‮nets"
     clean_query = "neuralnets"
@@ -623,7 +623,7 @@ async def test_papers_search_strips_bidi_chars():
 
 @pytest.mark.asyncio
 async def test_papers_search_strips_zero_width_space():
-    """W4-4: U+200B (ZERO WIDTH SPACE) must be stripped from inbound search text."""
+    """U+200B (ZERO WIDTH SPACE) must be stripped from inbound search text."""
     query_with_zwsp = "machine​learning"
     clean_query = "machinelearning"
 
@@ -643,7 +643,7 @@ async def test_papers_search_strips_zero_width_space():
 
 
 # ---------------------------------------------------------------------------
-# Wave-0 C1/C2: per-user scoping of interactive commands
+# Per-user scoping of interactive commands
 # ---------------------------------------------------------------------------
 
 
@@ -795,7 +795,7 @@ async def test_newproject_passes_user_id_to_create_project():
 
 
 # ---------------------------------------------------------------------------
-# WS-CROSS-USER: X-Owner-User-Id forwarded by paper commands for paired users
+# Cross-user: X-Owner-User-Id forwarded by paper commands for paired users
 # ---------------------------------------------------------------------------
 
 
@@ -808,7 +808,7 @@ from telegram_bot.handlers.commands.system_commands import pulse_now_command  # 
 
 @pytest.mark.asyncio
 async def test_papers_command_sends_owner_user_id_for_paired_user():
-    """WS-CROSS-USER: /papers sends X-Owner-User-Id when invoked by a paired user."""
+    """/papers sends X-Owner-User-Id when invoked by a paired user."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7, args=[])
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -827,7 +827,7 @@ async def test_papers_command_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_stats_command_sends_owner_user_id_for_paired_user():
-    """WS-CROSS-USER: /stats sends X-Owner-User-Id when invoked by a paired user."""
+    """/stats sends X-Owner-User-Id when invoked by a paired user."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -852,7 +852,7 @@ async def test_stats_command_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_next_command_sends_owner_user_id_for_paired_user():
-    """WS-CROSS-USER: /next sends X-Owner-User-Id when invoked by a paired user."""
+    """/next sends X-Owner-User-Id when invoked by a paired user."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -870,7 +870,7 @@ async def test_next_command_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_inbox_command_sends_owner_user_id_for_paired_user():
-    """WS-CROSS-USER: /inbox sends X-Owner-User-Id when invoked by a paired user."""
+    """/inbox sends X-Owner-User-Id when invoked by a paired user."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -888,7 +888,7 @@ async def test_inbox_command_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_pulse_now_command_sends_owner_user_id_for_paired_user():
-    """WS-CROSS-USER: /pulse_now sends X-Owner-User-Id when invoked by a paired user."""
+    """/pulse_now sends X-Owner-User-Id when invoked by a paired user."""
     update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_resp = MagicMock()
@@ -905,7 +905,7 @@ async def test_pulse_now_command_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
-    """WS-CROSS-USER: /briefing sends X-Owner-User-Id on the /api/stats HTTP call."""
+    """/briefing sends X-Owner-User-Id on the /api/stats HTTP call."""
     update, context, mock_db, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
     mock_db.fetchrow.return_value = {"cnt": 0}

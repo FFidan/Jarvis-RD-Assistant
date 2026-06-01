@@ -1,5 +1,5 @@
 /**
- * query-persister (Wave 3 P1b) — last-known-good IDB cache.
+ * query-persister — last-known-good IDB cache.
  *
  * Coverage:
  *   - shouldDehydrateQuery: includes read-surface keys, excludes NON-GOAL keys,

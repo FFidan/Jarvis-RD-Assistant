@@ -1,5 +1,5 @@
 /**
- * PulseSection tests — F2 (Wave 2)
+ * PulseSection tests
  *
  * vi.mock factories use vi.hoisted() for any values needed in the factory
  * closure so there are no TDZ issues with module-level consts.

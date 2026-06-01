@@ -1,4 +1,4 @@
-"""Tests for ScoredCandidate immutability (W5-18 / BE-08).
+"""Tests for ScoredCandidate immutability.
 
 Verifies that ScoredCandidate is frozen so no caller can accidentally mutate a
 candidate that has already passed through the pipeline.

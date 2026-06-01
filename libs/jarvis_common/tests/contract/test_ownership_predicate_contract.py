@@ -5,7 +5,7 @@ bypassing the HTTP layer. Covers the three access paths defined by the D4
 canonical-corpus ownership decision.
 
 Verified: libs/jarvis_common/jarvis_common/db_helpers.py:234-307 at HEAD.
-Survivor-of (Phase C): per-handler IDOR ownership-mock tests in test_audit_idor_sweep.py.
+Survivor-of an earlier consolidation: per-handler IDOR ownership-mock tests in test_audit_idor_sweep.py.
 """
 
 from __future__ import annotations

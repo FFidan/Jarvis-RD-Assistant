@@ -33,11 +33,11 @@ def _dampened_row(topic_id: int, neg_count: int) -> FakeRecord:
 # Helper: build a minimal 10-fetch side_effect list for load_profile
 #
 # Fetch call order in load_profile (from profile.py):
-#   Phase 1 connection:
+#   first connection:
 #     1. topics query
 #     2. tracked_authors query
 #     3. engaged papers query
-#   Phase 3 connection:
+#   second connection:
 #     4. user_config query
 #     5. positive ratings query
 #     6. negative ratings query

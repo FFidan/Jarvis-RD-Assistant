@@ -1,4 +1,4 @@
-"""My-Day domain contract tests — Phase B target rows A57-A59, A156-A162.
+"""My-Day domain contract tests — target rows A57-A59, A156-A162.
 
 Survivor-of: (all NONE — no prior contract coverage).
 
@@ -49,7 +49,7 @@ async def test_a57_get_journal_returns_own_entry(
     """Covers map row A57: GET /api/my-day/journal?date= returns caller's own journal entry.
 
     Verified: my_day.py:38-61 get_journal_entry — WHERE user_id=$1 AND date=$2.
-    Survivor-of (future Phase C): test_journal_endpoints.py mock-unit tests.
+    Survivor-of: test_journal_endpoints.py mock-unit tests.
     """
     today = date.today().isoformat()
 

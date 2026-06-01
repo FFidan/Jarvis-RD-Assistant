@@ -79,7 +79,7 @@ describe('ActionsSidebar', () => {
     expect(screen.getByRole('button', { name: /Analyze Paper/ })).toBeInTheDocument();
   });
 
-  it('renders manual action buttons conditionally based on stage props (W1.6-F)', async () => {
+  it('renders manual action buttons conditionally based on stage props', async () => {
     const user = userEvent.setup();
 
     // Default props (pdfDownloaded=false): only "Download PDF" visible behind "Show advanced"
@@ -170,14 +170,14 @@ describe('ActionsSidebar', () => {
     });
   });
 
-  it('structured process error shows error_type:error_detail and Retry button (W1.6-F + W1.6-I)', async () => {
+  it('structured process error shows error_type:error_detail and Retry button', async () => {
     const user = userEvent.setup();
 
     mockStreamEvents = [
       { type: 'step', step: 'downloading', status: 'started' },
       { type: 'step', step: 'downloading', status: 'completed' },
       { type: 'step', step: 'processing', status: 'started' },
-      // Backend W1.6-I emits BOTH old (step+message) AND new (stage+error_type+error_detail)
+      // Backend emits BOTH old (step+message) AND new (stage+error_type+error_detail)
       // shapes so the existing step-tracker keeps working AND the new structured banner +
       // per-stage Retry can render.
       {
@@ -287,7 +287,7 @@ describe('ActionsSidebar', () => {
     });
   });
 
-  it('visible manual button is disabled while analyze is running (W1.6-F)', async () => {
+  it('visible manual button is disabled while analyze is running', async () => {
     const user = userEvent.setup();
 
     // Use a gate to keep the stream open
@@ -360,7 +360,7 @@ describe('ActionsSidebar', () => {
     expect(generateBtn).toBeDisabled();
   });
 
-  it('renders tooltip info icons for visible action buttons (W1.6-F)', async () => {
+  it('renders tooltip info icons for visible action buttons', async () => {
     const user = userEvent.setup();
 
     // Render with all stages incomplete-but-progressed enough that manual

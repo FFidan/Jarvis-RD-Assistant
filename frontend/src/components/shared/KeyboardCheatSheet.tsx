@@ -21,7 +21,7 @@ const SHORTCUTS: { key: string; action: string; note?: string }[] = [
 ];
 
 /**
- * Global keyboard shortcuts dialog. Mounted once at the AppShell level (Wave 7 B.6).
+ * Global keyboard shortcuts dialog. Mounted once at the AppShell level.
  * Visibility controlled by `useKeyboardShortcuts` store; opened by the TopBar icon
  * button (visible on every authenticated page) or by the `?` keypress on the
  * Research Feed.

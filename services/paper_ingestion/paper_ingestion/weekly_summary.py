@@ -222,7 +222,7 @@ async def generate_weekly_summary(
         # Verify each theme title against concatenated paper title+summary_brief
         # for the topic.  Cheap fuzzy match (~ms per theme) — ephemeral, not persisted.
         # Each theme is annotated in-place with `verified` (bool|None) and
-        # `verification_reason` (str|None) per the multi-user-rollout WS-2 spec so
+        # `verification_reason` (str|None) annotated in-place so
         # the frontend's VerificationBadge can render inline next to each theme.
         # `verified_themes` / `unverified_themes` split lists are kept for backward
         # compatibility with any consumers that still rely on them.

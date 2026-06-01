@@ -1,4 +1,4 @@
-"""W3-05 (CFG-RAGSINGLE-1): ``ask_paper`` forwards ``user_id`` to ``prepare_single_paper_rag``.
+"""``ask_paper`` forwards ``user_id`` to ``prepare_single_paper_rag``.
 
 Boundary-adapter test: patches the prepared-RAG helper to capture kwargs, then
 hits the ``/api/papers/{id}/ask`` route via the in-process ASGI transport.  The
@@ -22,9 +22,7 @@ from tests.conftest import _make_pool_and_conn
 
 def test_prepare_single_paper_rag_accepts_user_id() -> None:
     sig = inspect.signature(prepare_single_paper_rag)
-    assert "user_id" in sig.parameters, (
-        "prepare_single_paper_rag must accept user_id kwarg (W3-05 / CFG-RAGSINGLE-1)"
-    )
+    assert "user_id" in sig.parameters, "prepare_single_paper_rag must accept user_id kwarg"
     param = sig.parameters["user_id"]
     assert param.default is None, "user_id default must be None"
     assert param.kind is inspect.Parameter.KEYWORD_ONLY, (
@@ -91,5 +89,5 @@ async def test_ask_paper_forwards_user_id_to_prepare_single_paper_rag() -> None:
     assert mock_prep.await_args is not None
     forwarded_user_id = mock_prep.await_args.kwargs.get("user_id")
     assert forwarded_user_id is not None, (
-        "ask_paper must forward user_id to prepare_single_paper_rag (W3-05 / CFG-RAGSINGLE-1)"
+        "ask_paper must forward user_id to prepare_single_paper_rag"
     )

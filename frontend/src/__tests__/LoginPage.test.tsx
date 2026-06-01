@@ -1,5 +1,5 @@
 /**
- * Tests for LoginPage — Phase 2 WS-2A magic-link login surface.
+ * Tests for LoginPage — magic-link login surface.
  *
  * Scope:
  * - Magic-link form is the default mode and submits to requestMagicLink.

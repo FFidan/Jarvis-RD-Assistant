@@ -343,7 +343,7 @@ async def test_run_process_pdf_stores_chunks_and_returns_processed():
 
 
 # ---------------------------------------------------------------------------
-# W1.7-G: torch OOM / CUDA error differentiation
+# torch OOM / CUDA error differentiation
 # ---------------------------------------------------------------------------
 
 
@@ -426,7 +426,7 @@ async def test_progress_callback_threaded_into_processor():
     from types import SimpleNamespace
 
     conn = AsyncMock()
-    conn.fetchval.return_value = 0  # no existing chunks → proceed to Phase 2
+    conn.fetchval.return_value = 0  # no existing chunks → proceed to embedding step
     conn.transaction = MagicMock(
         return_value=MagicMock(
             __aenter__=AsyncMock(return_value=None),

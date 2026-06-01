@@ -1,5 +1,5 @@
 /**
- * ResearchFeedPage — F4 Wave-2 UX improvements
+ * ResearchFeedPage — F4 UX improvements
  *
  * Coverage:
  *  - Per-filter subtitles differ on library surface (all / reading / to_read / done)

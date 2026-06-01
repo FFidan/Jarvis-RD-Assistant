@@ -170,7 +170,7 @@ async def test_get_pairing_status_returns_paired_false_when_literal_null_string(
 
 
 # ---------------------------------------------------------------------------
-# W1.6 — transaction + rate-limit + expire-only sweep tests
+# transaction + rate-limit + expire-only sweep tests
 # ---------------------------------------------------------------------------
 
 

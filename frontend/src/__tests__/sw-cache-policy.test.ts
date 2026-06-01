@@ -1,5 +1,5 @@
 /**
- * Unit tests for sw-cache-policy (Wave 3 P1a).
+ * Unit tests for sw-cache-policy.
  *
  * The SECURITY-CRITICAL assertions here are the NON-GOAL denials: chat/RAG,
  * discovery/process/embedding, streams, mutations, exports MUST NEVER be

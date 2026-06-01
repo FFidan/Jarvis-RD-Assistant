@@ -4,7 +4,7 @@
  * Exported so non-React code (e.g. the job store's SSE terminal handler)
  * can invalidate queries when background jobs finish.
  *
- * Wave 3 P1b: the read-surface slice of this cache is persisted to IndexedDB
+ * The read-surface slice of this cache is persisted to IndexedDB
  * for last-known-good offline read mode. `gcTime` is raised to match the
  * persist `maxAge` so dehydrated read-surface entries are not garbage-collected
  * before the offline snapshot expires (see query-persister.ts for the

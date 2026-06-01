@@ -1,4 +1,4 @@
-"""Tests for ``jarvis_common.testing_auth`` (W5-03 / F-3 hoist).
+"""Tests for ``jarvis_common.testing_auth``.
 
 Exercises ``_apply_default_authenticated_user`` context manager covering:
 - module-level symbol monkeypatch of ``current_user_id_strict*`` resolvers
@@ -126,7 +126,7 @@ def test_apply_default_authenticated_user_preserves_existing_override(
 
 
 # ---------------------------------------------------------------------------
-# W5-CF-COVERAGE-2: exception path — overrides restored on RuntimeError
+# exception path — overrides restored on RuntimeError
 # ---------------------------------------------------------------------------
 
 

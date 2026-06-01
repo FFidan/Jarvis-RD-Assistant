@@ -1,6 +1,6 @@
 """Unit tests for pulse/job.py helpers (no real DB required).
 
-Covers the W6-T3 fix: _emit_post_run_telemetry must call defer_async for
+Covers: _emit_post_run_telemetry must call defer_async for
 pulse.train_classifier regardless of whether ctx is present.
 
 Verified identifiers:
@@ -18,11 +18,11 @@ import pytest
 async def test_emit_post_run_telemetry_calls_defer_async_without_ctx():
     """_emit_post_run_telemetry enqueues pulse.train_classifier even when ctx=None.
 
-    Before the W6-T3 fix the defer_async call was inside `if ctx:`, so passing
-    ctx=None silently skipped classifier-training enqueue.  This test pins the
-    corrected behaviour: defer_async MUST be called regardless of ctx.
+    The defer_async call must be outside `if ctx:`, so passing ctx=None does not
+    silently skip classifier-training enqueue.  This test pins the corrected
+    behaviour: defer_async MUST be called regardless of ctx.
 
-    Verified: pulse/job.py:510-522 (defer_async outside ctx guard after W6-T3 fix).
+    Verified: pulse/job.py:510-522 (defer_async outside ctx guard).
     """
     from paper_ingestion.pulse.job import _emit_post_run_telemetry
 

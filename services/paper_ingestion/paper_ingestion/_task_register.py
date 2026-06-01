@@ -1,4 +1,4 @@
-"""Task registration for the paper_ingestion service (W4-1 dependency inversion).
+"""Task registration for the paper_ingestion service (dependency inversion).
 
 This module owns the kind→handler mapping for all JARVIS job kinds serviced
 by paper_ingestion. Call ``register_paper_ingestion_tasks(app)`` during

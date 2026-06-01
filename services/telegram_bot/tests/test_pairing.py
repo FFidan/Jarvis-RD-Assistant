@@ -1,4 +1,4 @@
-"""Tests for Sprint A /pair, /unpair, /whoami Telegram bot commands.
+"""Tests for /pair, /unpair, /whoami Telegram bot commands.
 
 Covers:
 - /pair <token>  happy path → upserts telegram_user_pairings, marks token consumed

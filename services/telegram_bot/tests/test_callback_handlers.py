@@ -4,7 +4,7 @@ Covers: paper_detail, paper_action (9 lifecycle actions), paper_feedback,
 project_detail, task_done, start_review.  Legacy bookmark/dismiss/save tests
 replaced by the new dispatcher pattern (T1).
 
-WS-AH2 H1 invariant: every test for the dispatcher callbacks asserts
+H1 invariant: every test for the dispatcher callbacks asserts
 ``query.answer.call_count == 1`` on every execution path.
 """
 
@@ -391,7 +391,7 @@ async def test_paper_action_auth_fail_answers_query():
     """H1 regression guard: an unauthorised callback still answers the query.
 
     Without this, the Telegram client spins indefinitely on auth-rejected
-    callbacks (Wave-3 review SB-2).
+    callbacks.
     """
     # Use a chat_id that does NOT match make_bot_config(BotConfig, ).telegram_chat_id so
     # auth_check returns False against both the env path and the DB path.
@@ -413,7 +413,7 @@ async def test_paper_action_auth_fail_answers_query():
 
 @pytest.mark.asyncio
 async def test_paper_feedback_auth_fail_answers_query():
-    """H1 regression guard for paper_feedback_callback (Wave-3 review SB-2)."""
+    """H1 regression guard for paper_feedback_callback."""
     update, context, mock_db, mock_http = _make_callback_update_and_context(
         "paper:feedback_pos:42:pulse_thumbs", chat_id=99999
     )
@@ -733,7 +733,7 @@ def test_start_review_not_registered_in_callback_handler():
 
 
 # ---------------------------------------------------------------------------
-# Tests: W4-4 — auth_check before query.answer in all 3 unauthenticated paths
+# Tests: auth_check before query.answer in all 3 unauthenticated paths
 # ---------------------------------------------------------------------------
 
 
@@ -750,9 +750,9 @@ def _make_unauthed_callback(callback_data: str) -> tuple:
 
 @pytest.mark.asyncio
 async def test_paper_detail_unauthed_acks_before_returning():
-    """W4-4: paper_detail_callback acks the query even when auth fails.
+    """paper_detail_callback acks the query even when auth fails.
 
-    auth_check is now evaluated BEFORE query.answer; on failure we still call
+    auth_check is evaluated BEFORE query.answer; on failure we still call
     query.answer once (H1) so Telegram stops the spinner.
     """
     update, context, _ = _make_unauthed_callback("paper_detail_42")
@@ -767,7 +767,7 @@ async def test_paper_detail_unauthed_acks_before_returning():
 
 @pytest.mark.asyncio
 async def test_project_detail_unauthed_acks_before_returning():
-    """W4-4: project_detail_callback acks the query even when auth fails."""
+    """project_detail_callback acks the query even when auth fails."""
     update, context, _ = _make_unauthed_callback("project_detail_3")
 
     await project_detail_callback(update, context)
@@ -778,7 +778,7 @@ async def test_project_detail_unauthed_acks_before_returning():
 
 @pytest.mark.asyncio
 async def test_task_done_unauthed_acks_before_returning():
-    """W4-4: task_done_callback acks the query even when auth fails."""
+    """task_done_callback acks the query even when auth fails."""
     update, context, _ = _make_unauthed_callback("task_done_10")
 
     await task_done_callback(update, context)
@@ -789,7 +789,7 @@ async def test_task_done_unauthed_acks_before_returning():
 
 @pytest.mark.asyncio
 async def test_start_review_unauthed_acks_before_returning():
-    """W4-4: start_review_callback acks the query even when auth fails."""
+    """start_review_callback acks the query even when auth fails."""
     update, context, _ = _make_unauthed_callback("start_review")
 
     with patch("telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock):
@@ -799,7 +799,7 @@ async def test_start_review_unauthed_acks_before_returning():
 
 
 # ---------------------------------------------------------------------------
-# WS-CROSS-USER: X-Owner-User-Id forwarded from paired callbacks
+# Cross-user: X-Owner-User-Id forwarded from paired callbacks
 # ---------------------------------------------------------------------------
 
 _PAIRED_CHAT_ID = 55555
@@ -826,7 +826,7 @@ def _make_paired_callback(callback_data: str) -> tuple:
 
 @pytest.mark.asyncio
 async def test_paper_detail_callback_sends_owner_user_id_for_paired_user():
-    """WS-CROSS-USER: paper_detail_callback includes X-Owner-User-Id for a paired user."""
+    """paper_detail_callback includes X-Owner-User-Id for a paired user."""
     update, context, _, mock_http = _make_paired_callback("paper_detail_42")
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
@@ -846,7 +846,7 @@ async def test_paper_detail_callback_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_paper_action_callback_sends_owner_user_id_for_paired_user():
-    """WS-CROSS-USER: paper_action_callback includes X-Owner-User-Id for a paired user."""
+    """paper_action_callback includes X-Owner-User-Id for a paired user."""
     update, context, _, _ = _make_paired_callback("paper:save:7")
     mock_http = _make_action_mock_http()
     context.application.bot_data["http_client"] = mock_http
@@ -861,7 +861,7 @@ async def test_paper_action_callback_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
-    """WS-CROSS-USER: paper_feedback_callback includes X-Owner-User-Id for a paired user."""
+    """paper_feedback_callback includes X-Owner-User-Id for a paired user."""
     update, context, _, _ = _make_paired_callback("paper:feedback_pos:7:pulse_thumbs")
     mock_http = AsyncMock()
     mock_resp = MagicMock()

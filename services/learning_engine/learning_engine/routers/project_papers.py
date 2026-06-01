@@ -27,7 +27,7 @@ async def list_project_papers(
 ) -> list[dict]:
     """List papers linked to a project."""
     async with db_pool.acquire() as conn:
-        # WS-2D: scope project lookup by owner — IDOR otherwise.
+        # Scope project lookup by owner — IDOR otherwise.
         project = await conn.fetchval(
             "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
             project_id,
@@ -67,7 +67,7 @@ async def link_paper(
     should_push_zotero = False
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            # WS-2D: scope by owner. Cannot link a paper into another user's project.
+            # Scope by owner. Cannot link a paper into another user's project.
             project = await conn.fetchrow(
                 "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
                 project_id,
@@ -151,7 +151,7 @@ async def unlink_paper(
 ) -> None:
     """Unlink a paper from a project."""
     async with db_pool.acquire() as conn:
-        # WS-2D: prevent IDOR — only delete links whose project belongs to caller.
+        # Prevent IDOR — only delete links whose project belongs to caller.
         result = await conn.execute(
             "DELETE FROM project_papers pp USING projects p "
             "WHERE pp.project_id = $1 AND pp.paper_id = $2 "

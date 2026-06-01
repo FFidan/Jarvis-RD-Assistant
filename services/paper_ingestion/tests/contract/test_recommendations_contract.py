@@ -1,4 +1,4 @@
-"""Recommendations eligibility-filter contract tests (Phase B, B.PI-pulse-rag).
+"""Recommendations eligibility-filter contract tests.
 
 Replaces the B1-09 SQL-substring cluster in test_recommender.py lines 186-223
 (TestFilterUnread) with real asyncpg assertions against the live schema.
@@ -424,7 +424,7 @@ async def test_filter_unread_starred_paper_remains_eligible(contract_conn):
     The exclusion predicate is: COALESCE(pus.state, 'inbox') IN ('trash', 'done').
     The starred boolean is NOT an exclusion predicate — starred papers remain recommendable.
     Verified: recommender.py:220-245 (_filter_unread exclusion set).
-    Survivor-of (Phase E2): test_recommender.py::TestFilterUnread::test_starred_papers_remain_eligible_for_recommendation.
+    Survivor-of: test_recommender.py::TestFilterUnread::test_starred_papers_remain_eligible_for_recommendation.
     """
     from paper_ingestion.ingestion.recommender import _filter_unread
 
@@ -459,7 +459,7 @@ async def test_list_recommendations_owner_scope_excludes_other_user_rows(
 
     Seeds a fresh recommendation row for user B and verifies user A cannot see it.
     Verified: recommendations.py:22-39 (list_recommendations WHERE pr.user_id = $1).
-    Survivor-of (Phase E2): test_recommender.py owner-scope isolation tests.
+    Survivor-of: test_recommender.py owner-scope isolation tests.
     """
     user_b_id = contract_two_users.user_b_id
 

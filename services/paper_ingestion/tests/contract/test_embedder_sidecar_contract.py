@@ -194,7 +194,7 @@ async def test_reembed_swap_atomicity_qdrant_failure_rolls_back_db(contract_conn
 
 
 # ---------------------------------------------------------------------------
-# §W2.2-REEMBED-01 — happy-path: FauxOllama + FauxQdrant end-to-end
+# happy-path: FauxOllama + FauxQdrant end-to-end
 #
 # Verified: scripts/reembed.py:594-668 (reembed_paper: embed → upsert → delete → DB)
 # Survivor-of: test_old_qdrant_points_deleted, test_db_embedding_model_updated,
@@ -264,7 +264,7 @@ async def test_reembed_w2_happy_path_with_faux_ollama_and_faux_qdrant(contract_c
 
 
 # ---------------------------------------------------------------------------
-# §W2.2-REEMBED-02 — upsert failure rolls back DB
+# upsert failure rolls back DB
 #
 # Verified: scripts/reembed.py:614-619 (upsert loop raises before delete/DB step)
 # Survivor-of: test_reembed_partial_failure_preserves_old_points,
@@ -342,7 +342,7 @@ async def test_reembed_w2_rollback_semantics_on_qdrant_upsert_failure(contract_c
 
 
 # ---------------------------------------------------------------------------
-# §W2.2-REEMBED-03 — post-success Qdrant count == DB chunks count
+# post-success Qdrant count == DB chunks count
 #
 # Verified: scripts/reembed.py:671-720 (verify_postconditions: DB count == Qdrant count)
 # Survivor-of: test_verify_postconditions_requires_db_target_count_and_qdrant_count_parity,
@@ -426,7 +426,7 @@ async def test_reembed_w2_qdrant_post_state_matches_db_invariant(contract_conn, 
 
 
 # ---------------------------------------------------------------------------
-# §W2.2-REEMBED-04 — chunk shape preserved through pipeline
+# chunk shape preserved through pipeline
 #
 # Verified: scripts/reembed.py:594-612 (PointStruct payload keys + vector dim)
 # Survivor-of: test_old_qdrant_points_deleted (payload key assertions),

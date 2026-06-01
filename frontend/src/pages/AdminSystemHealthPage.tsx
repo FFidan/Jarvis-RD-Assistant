@@ -1,5 +1,5 @@
 /**
- * Admin system-readiness viewer (WS-PRE-PUBLIC-CHECKLIST).
+ * Admin system-readiness viewer.
  *
  * Accessible at /admin/system-health. Requires admin role; non-admins are
  * redirected by the AdminOnlyRoute guard in App.tsx.

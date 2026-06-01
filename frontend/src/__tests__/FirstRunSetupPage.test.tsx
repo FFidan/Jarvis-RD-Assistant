@@ -1,5 +1,5 @@
 /**
- * Phase 2 WS-2F: pre-auth first-run wizard tests.
+ * Pre-auth first-run wizard tests.
  *
  * Mocks the /api/setup/* surface and asserts:
  *   * step 1 (system check) renders per-service status from the probe response.

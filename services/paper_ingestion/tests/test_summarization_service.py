@@ -228,7 +228,7 @@ async def test_generate_paper_summary_maps_read_timeout_to_llm_error():
 async def test_generate_paper_summary_confidence_none_roundtrips_without_validation_error():
     """Confidence.NONE (zero findings) must survive the DB round-trip without ValidationError.
 
-    Regression for W1-3: jarvis_common.verify.Confidence.NONE was not in the local
+    Regression guard: jarvis_common.verify.Confidence.NONE was not in the local
     Confidence enum, so row_to_summary_response raised a Pydantic ValidationError on
     read-back whenever verify_findings returned NONE (empty findings list).
     """
@@ -295,13 +295,13 @@ async def test_generate_paper_summary_confidence_none_roundtrips_without_validat
 
 
 # ---------------------------------------------------------------------------
-# W1-D2-005 — keyword-fallback visibility predicate
+# keyword-fallback visibility predicate
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_cross_references_filter_unseen_papers():
-    """Keyword-fallback SQL must include a visibility predicate (W1-D2-005).
+    """Keyword-fallback SQL must include a visibility predicate.
 
     The generated query should contain ``discovered_by IS NULL OR discovered_by = $``
     so that papers owned by other users are not exposed via title-keyword match.
@@ -362,13 +362,13 @@ async def test_cross_references_keyword_fallback_passes_owner_id():
 
 
 # ---------------------------------------------------------------------------
-# W1-D2-009 — INSERT includes user_id
+# INSERT includes user_id
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_generate_paper_summary_persists_user_id():
-    """INSERT into paper_summaries must include user_id column (W1-D2-009).
+    """INSERT into paper_summaries must include user_id column.
 
     Two users summarizing the same paper previously both upserted the NULL-user
     row, causing mutual overwrite.  The fix adds user_id to the column list and
@@ -438,7 +438,7 @@ async def test_generate_paper_summary_persists_user_id():
 
 
 # ---------------------------------------------------------------------------
-# W1-CF5: BUG-SUMMARIZER-1 — ValidationError → LLMError (not HTTPException)
+# ValidationError → LLMError (not HTTPException)
 # ---------------------------------------------------------------------------
 
 
@@ -486,7 +486,7 @@ async def test_generate_paper_summary_raises_llm_error_on_pydantic_validation_er
 
 
 # ---------------------------------------------------------------------------
-# W6-T2 — RuntimeError guard when openai_client is None
+# RuntimeError guard when openai_client is None
 # ---------------------------------------------------------------------------
 
 
@@ -494,9 +494,9 @@ async def test_generate_paper_summary_raises_llm_error_on_pydantic_validation_er
 async def test_generate_paper_summary_raises_runtime_error_when_client_none(monkeypatch):
     """RuntimeError is raised when both openai_client arg and svc.openai_client are None.
 
-    Guard added in W6-T2 (HIGH-PI-07): if the lifespan never ran (or client
-    was not wired), the function must fail fast with a clear message rather
-    than passing None into call_llm_structured.
+    Guard: if the lifespan never ran (or client was not wired), the function
+    must fail fast with a clear message rather than passing None into
+    call_llm_structured.
     """
     # Override the autouse fixture: set svc.openai_client to None explicitly.
     monkeypatch.setattr(summarization.svc, "openai_client", None)

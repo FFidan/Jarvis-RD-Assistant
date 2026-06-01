@@ -6,7 +6,7 @@ Verifies that:
 - API-key-only callers (user_role absent from request.state) are allowed
   through — legacy single-tenant compatibility.
 
-These tests exercise the ``require_admin`` dependency added in WS-2E by
+These tests exercise the ``require_admin`` dependency by
 injecting a fake ``request.state.user_role`` value via a lightweight ASGI
 middleware shim, rather than spinning up the full session cookie machinery.
 """

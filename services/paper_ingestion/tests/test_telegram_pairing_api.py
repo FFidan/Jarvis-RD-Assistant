@@ -1,4 +1,4 @@
-"""Tests for Sprint A per-user pairing endpoints.
+"""Tests for per-user Telegram pairing endpoints.
 
 Covers:
 - POST /api/telegram/pair-token  — auth required, issues 15-min token

@@ -115,9 +115,8 @@ async def generate_pulse(
 
     logger.info("pulse.generate: enqueueing job")
     jarvis_job_id = str(uuid.uuid4())
-    # Phase 2 WS-2D: pass caller user_id so the resulting deck is owned by the
-    # user that clicked "generate Pulse". Pre-WS-2A this was a system-wide
-    # deck (incorrect once auth resolver returns real IDs).
+    # Pass caller user_id so the resulting deck is owned by the user that
+    # clicked "generate Pulse".
     await KIND_TO_TASK["pulse.generate"].defer_async(job_id=jarvis_job_id, user_id=current_uid)
     await log_audit(
         db_pool,
@@ -390,7 +389,7 @@ async def debug_pulse(
     * Topic-embedding sanity check (non-null, correct dimension).
     * Top-10 card signal breakdown (paper_id, title, signals, final_score).
 
-    SEC (Wave-3/W1-5): The diagnostics body exposes classifier feature names,
+    SEC: The diagnostics body exposes classifier feature names,
     AUC, per-card signal weights, and topic-embedding internals — a model-
     inversion vector. The endpoint is gated behind ``DEV_MODE=true``; in
     production it returns 404 to avoid disclosing existence.
@@ -437,7 +436,7 @@ async def debug_pulse(
 
         # Topic-embedding sanity check
         # NOTE: user_config pulse.* / topic.* keys are intentionally global
-        # single-tenant (one operator per JARVIS instance). Wave-4 multi-tenant:
+        # single-tenant (one operator per JARVIS instance). Multi-tenant future:
         # re-key as `pulse.<user_id>.weights`, `topic.<user_id>.<n>.embedding`,
         # etc. and add a `WHERE user_id = $1` filter here.
         embed_rows = await conn.fetch(
@@ -449,7 +448,7 @@ async def debug_pulse(
         )
         # NOTE: pulse_models classifier is global per deployment (one classifier
         # per JARVIS instance, trained on aggregated feedback). No user_id
-        # scoping required today. Wave-4 multi-tenant: add a `user_id` column
+        # scoping required today. Multi-tenant future: add a `user_id` column
         # to pulse_models + filter here if per-user classifiers ship.
         model_row = await conn.fetchrow(
             """

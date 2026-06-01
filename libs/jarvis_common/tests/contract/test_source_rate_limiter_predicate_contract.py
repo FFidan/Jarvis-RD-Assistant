@@ -6,7 +6,7 @@ unique source_type to avoid row collisions; the outer transaction is rolled
 back after each test so no state leaks.
 
 Verified: libs/jarvis_common/jarvis_common/source_rate_limiter.py:74-492 at HEAD.
-Survivor-of (Phase C): per-source mock unit tests replaced by this predicate-direct suite.
+Survivor-of an earlier consolidation: per-source mock unit tests replaced by this predicate-direct suite.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
-"""Characterization tests for settings_service — pre-decomposition behavioral snapshot (W0.T4).
+"""Characterization tests for settings_service — pre-decomposition behavioral snapshot.
 
-These tests pin the observable behaviour of settings_service.py before Wave 1
-extracts it into sub-modules.  The same tests MUST pass byte-identically after
+These tests pin the observable behaviour of settings_service.py before
+sub-module extraction.  The same tests MUST pass byte-identically after
 extraction; any divergence signals a regression.
 
 Scope: smoke-level (3–5 assertions each).  Exhaustive coverage lives in the

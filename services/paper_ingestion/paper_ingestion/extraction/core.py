@@ -247,7 +247,7 @@ async def extract_fields_for_paper(
                 value = None
                 quote = None
 
-        # PI-CORE-007 + W1-24: confidence is binary — 1.0 when the quote was
+        # confidence is binary — 1.0 when the quote was
         # verified end-to-end, 0.0 otherwise. There is no "partially trusted"
         # middle ground: an unverified quote (no verifier configured, verifier
         # crashed, verification failed, or the quote was whitespace-only and

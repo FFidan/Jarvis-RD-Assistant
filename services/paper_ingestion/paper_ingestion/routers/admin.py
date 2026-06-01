@@ -1,4 +1,4 @@
-"""Admin user-management endpoints (Phase 2 WS-2B).
+"""Admin user-management endpoints.
 
 All endpoints require both:
 1. A valid session cookie (set by SessionMiddleware on the request) OR

@@ -1,4 +1,4 @@
-"""Tests for the three pydantic-settings Settings classes (Wave 4B).
+"""Tests for the three pydantic-settings Settings classes.
 
 Coverage goals:
 * Default values resolve correctly without any env vars set.

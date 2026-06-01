@@ -308,7 +308,7 @@ async def test_p07_process_pdf_enqueues_job_returns_queued_shape(
 
 
 # ---------------------------------------------------------------------------
-# W2.5 — PDF workflow sidecar-backed contracts
+# PDF workflow sidecar-backed contracts
 # ---------------------------------------------------------------------------
 
 

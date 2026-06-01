@@ -37,7 +37,7 @@ const makePaper = (id: number, title: string, pdf_downloaded = true) => ({
   priority_score: null, metadata: {},
   discovered_at: null, created_at: '', summary_brief: null, tldr: null,
   confidence: null, rating: null,
-  // Phase A required fields
+  // Required fields
   state: 'inbox' as const,
   state_before_trash: null,
   starred: false,

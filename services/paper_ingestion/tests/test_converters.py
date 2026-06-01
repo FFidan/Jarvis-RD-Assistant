@@ -1,4 +1,4 @@
-"""Tests for row_to_feed_paper converter — W1.7-A regression coverage.
+"""Tests for row_to_feed_paper converter — regression coverage.
 
 Ensures that state and state_before_trash are forwarded from the SQL row
 rather than silently falling back to Pydantic defaults.

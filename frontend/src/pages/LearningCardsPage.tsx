@@ -7,7 +7,7 @@
  *
  * Route default: shows Review if due_now > 0; Library otherwise.
  *
- * P2 OFFLINE SEAM (Wave 3) — WIRED:
+ * P2 OFFLINE SEAM — WIRED:
  * The `submitReviewFn` threaded into <ReviewMode> is the single boundary for
  * the submit-review call. `useOfflineReviewQueue()` returns an outbox-backed
  * submit fn that: ONLINE → delegates to the real `submitReview` UNCHANGED;

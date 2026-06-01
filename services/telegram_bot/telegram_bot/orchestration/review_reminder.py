@@ -83,9 +83,9 @@ async def run_review_reminder(
 ) -> None:
     """Send a review reminder if cards are due.
 
-    Sprint A: iterates ``telegram_user_pairings`` and delivers per-user
-    reminders by sending ``X-Owner-User-Id`` + ``X-API-Key`` headers.
-    Skips with a warning when no pairings exist.
+    Iterates ``telegram_user_pairings`` and delivers per-user reminders by
+    sending ``X-Owner-User-Id`` + ``X-API-Key`` headers.  Skips with a warning
+    when no pairings exist.
 
     Parameters
     ----------

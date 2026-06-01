@@ -1,4 +1,4 @@
-"""Account domain contract tests — Phase B target rows A1, A2.
+"""Account domain contract tests — target rows A1, A2.
 
 Survivor-of: test_account.py mock-unit assertions for get_account, update_account.
 Carve-out: app.state.http_client is MagicMock (outbound HTTP);
@@ -34,7 +34,7 @@ async def test_a1_get_account_returns_own_profile(
     """Covers map row A1: GET /api/account returns caller's own AccountResponse.
 
     Verified: account.py:89-102 get_account at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_account.py mock-unit tests for get_account.
+    Survivor-of: test_account.py mock-unit tests for get_account.
     """
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/account")
@@ -85,7 +85,7 @@ async def test_a2_patch_account_display_name_persists(
     """Covers map row A2: PATCH /api/account updates display_name in DB.
 
     Verified: account.py:107-134 update_account display_name path at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_account.py mock-unit tests for update_account.
+    Survivor-of: test_account.py mock-unit tests for update_account.
     """
     new_name = "Contract Test Name"
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
@@ -154,7 +154,7 @@ async def test_e1_magic_link_token_consumed_twice_second_fails(
     The first verify marks used_at = NOW(); the second call hits the
     `token_row["used_at"] is not None` guard and must return 400.
     Verified: auth.py:219-220 (used_at guard → HTTPException 400).
-    Survivor-of (Phase E2): test_auth_magic_link.py token-consumed-twice mock tests.
+    Survivor-of: test_auth_magic_link.py token-consumed-twice mock tests.
     """
     import hashlib
     import secrets
@@ -205,7 +205,7 @@ async def test_e1_magic_link_expired_token_returns_400(
     """POST /api/auth/verify: expired token (expires_at in the past) returns 400.
 
     Verified: auth.py:221-222 (expires_at <= now guard → HTTPException 400).
-    Survivor-of (Phase E2): test_auth_magic_link.py expired-token mock tests.
+    Survivor-of: test_auth_magic_link.py expired-token mock tests.
     """
     import hashlib
     import secrets
@@ -243,7 +243,7 @@ async def test_e1_magic_link_invalid_token_returns_400(
     """POST /api/auth/verify: completely unknown token returns 400 (no row found).
 
     Verified: auth.py:217-218 (token_row is None guard → HTTPException 400).
-    Survivor-of (Phase E2): test_auth_magic_link.py invalid-token mock tests.
+    Survivor-of: test_auth_magic_link.py invalid-token mock tests.
     """
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_pi_app_with_pool),

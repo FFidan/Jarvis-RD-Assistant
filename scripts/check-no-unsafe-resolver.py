@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WS-AUTH guard: enforce a safe user-id resolver on every router endpoint.
+"""Auth guard: enforce a safe user-id resolver on every router endpoint.
 
 Two failure classes are caught:
 

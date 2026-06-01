@@ -102,7 +102,7 @@ def test_xml_escaping():
     assert "&lt;b&gt;" in safe_question
 
 
-# W4.PI-rag COLLAPSE: test_ask_cross_paper_endpoint_structure deleted.
+# test_ask_cross_paper_endpoint_structure deleted.
 # Used _make_pool_and_conn() — a mock DB pool, not a real Postgres connection.
 # Superseded by contract/test_rag_contract.py::test_ask_endpoint_cross_paper_real_db_structure,
 # which wires the ASGI client to the contract_conn transaction (real schema),

@@ -1,10 +1,10 @@
-"""Admin-gate tests for system.py routes (W2-S1-002, W2-S1-003, W2-S1-006, SEC-D4-002).
+"""Admin-gate tests for system.py routes.
 
 Verifies that:
-- DELETE /api/system/models/{tag}  requires admin or API-key (W2-S1-002)
-- POST /api/system/models/{tag}/pull requires admin or API-key (W2-S1-003)
-- GET /api/system/hardware          requires admin or API-key (SEC-D4-002)
-- GET /api/system/models/recommendations requires admin or API-key (SEC-D4-002)
+- DELETE /api/system/models/{tag}  requires admin or API-key
+- POST /api/system/models/{tag}/pull requires admin or API-key
+- GET /api/system/hardware          requires admin or API-key
+- GET /api/system/models/recommendations requires admin or API-key
 
 Pattern mirrors test_logs_admin_gate.py: RoleMiddleware injects
 request.state.user_role; verify_api_key is bypassed via dependency_overrides
@@ -73,7 +73,7 @@ def _make_fake_http_client(*, delete_status: int = 200) -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# 1. DELETE /api/system/models/{tag} — W2-S1-002
+# 1. DELETE /api/system/models/{tag}
 # ---------------------------------------------------------------------------
 
 
@@ -172,7 +172,7 @@ async def test_delete_model_admin_accepted(_base_app):
 
 
 # ---------------------------------------------------------------------------
-# 2. POST /api/system/models/{tag}/pull — W2-S1-003
+# 2. POST /api/system/models/{tag}/pull
 # ---------------------------------------------------------------------------
 
 
@@ -277,7 +277,7 @@ async def test_model_recommendations_admin_only(_base_app):
 
 
 # ---------------------------------------------------------------------------
-# 5. Helper-bypass fix — W2-S1-006
+# 5. Helper-bypass: /recommendations must enforce auth at route level
 # ---------------------------------------------------------------------------
 
 

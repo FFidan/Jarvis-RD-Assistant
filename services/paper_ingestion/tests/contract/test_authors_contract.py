@@ -1,4 +1,4 @@
-"""Authors domain contract tests — Phase B target rows A19-A24.
+"""Authors domain contract tests — target rows A19-A24.
 
 Survivor-of: (all NONE — no prior contract coverage).
 Carve-out: app.state.http_client is MagicMock (outbound HTTP).
@@ -41,7 +41,7 @@ async def test_a19_list_authors_returns_only_own_rows(
     """Covers map row A19: GET /api/authors scoped to current user.
 
     Verified: authors.py:38-50 list_tracked_authors — WHERE user_id IS NOT DISTINCT FROM $1.
-    Survivor-of (future Phase C): no prior mock-unit tests for this endpoint.
+    Survivor-of: no prior mock-unit tests for this endpoint.
     """
     # Seed one author for user A
     author_a_id = await contract_conn.fetchval(

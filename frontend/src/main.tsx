@@ -15,6 +15,6 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 );
 
-// PWA foundation (Wave 3 P1a): register the offline service worker + capture
+// PWA foundation: register the offline service worker + capture
 // the install affordance. No-ops in dev / unsupported / insecure contexts.
 registerServiceWorker();

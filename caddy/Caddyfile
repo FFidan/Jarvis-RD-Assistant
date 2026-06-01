@@ -11,9 +11,8 @@
 
 # Inner Caddy → nginx hop is HTTP-only by design: Caddy already terminates
 # public TLS via Let's Encrypt; an inner mTLS layer would add complexity
-# without buying anything for a single-machine compose stack. If a future
-# multi-host deployment needs inner mTLS, see W1-4 in
-# docs/plans/2026-05-07-post-audit-fix-sweep.md.
+# without buying anything for a single-machine compose stack. A future
+# multi-host deployment could add inner mTLS if needed.
 {$LETSENCRYPT_DOMAIN:localhost} {
 	request_body {
 		max_size 50MB
@@ -27,7 +26,7 @@
 	reverse_proxy http://dashboard:3000 {
 		header_up Host localhost
 		# Stamp the real client IP so nginx can bucket rate-limits per client
-		# instead of collapsing all requests into the Caddy→bridge IP (RB-4).
+		# instead of collapsing all requests into the Caddy→bridge IP.
 		# {http.request.remote.host} is the Caddy v2 placeholder for the
 		# connecting peer IP (i.e. the TLS-terminated client address).
 		header_up X-Real-IP {http.request.remote.host}

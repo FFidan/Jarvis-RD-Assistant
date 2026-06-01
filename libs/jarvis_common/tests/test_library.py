@@ -1,4 +1,4 @@
-"""Tests for ``jarvis_common.library`` — Sprint B canonical-corpus helpers.
+"""Tests for ``jarvis_common.library`` — canonical-corpus helpers.
 
 These tests use mocked asyncpg connections since the real schema requires
 a running PostgreSQL instance (see services/paper_ingestion/tests/conftest.py

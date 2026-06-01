@@ -1,5 +1,5 @@
 /**
- * Unit tests for use-online-status (Wave 3 P1a gating primitive).
+ * Unit tests for use-online-status (connectivity gating primitive).
  * Verifies initial read + online→offline→online transitions + SSR safety.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';

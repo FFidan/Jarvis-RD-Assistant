@@ -1,4 +1,4 @@
-"""Setup wizard contract tests — Phase B target rows A131-A139.
+"""Setup wizard contract tests — target rows A131-A139.
 
 Covers:
   A131: GET  /api/setup/status              — DB-driven configured flag
@@ -104,7 +104,7 @@ async def test_a131_status_unconfigured_when_no_admin(setup_client):
 
     Fresh contract DB has no users rows → configured=False.
     Verified: setup.py:246-261 get_status at HEAD.
-    Survivor-of (future Phase C): test_setup_first_run.py status mock assertions.
+    Survivor-of: test_setup_first_run.py status mock assertions.
     """
     resp = await setup_client.get("/api/setup/status")
 
@@ -145,7 +145,7 @@ async def test_a133_smtp_config_reflects_persisted_rows(setup_client, contract_c
     Inserts plaintext SMTP rows directly into user_config, then asserts the
     endpoint returns them with the password masked.
     Verified: setup.py:447-461 get_smtp_config at HEAD.
-    Survivor-of (future Phase C): test_setup_first_run.py smtp-get mock assertions.
+    Survivor-of: test_setup_first_run.py smtp-get mock assertions.
     """
     # Insert SMTP config rows directly (bypass POST for isolation).
     for key, value in (("smtp.host", "mail.example.test"), ("smtp.port", 587)):
@@ -179,7 +179,7 @@ async def test_a134_smtp_post_persists_to_db(setup_client, contract_conn):
     """Covers map row A134: POST /api/setup/smtp persists smtp.host/port/from to user_config.
 
     Verified: setup.py:464-491 configure_smtp at HEAD.
-    Survivor-of (future Phase C): test_setup_first_run.py smtp-post mock assertions.
+    Survivor-of: test_setup_first_run.py smtp-post mock assertions.
     """
     resp = await setup_client.post(
         "/api/setup/smtp",
@@ -223,7 +223,7 @@ async def test_a135_create_first_admin_inserts_user_and_session(setup_client, co
 
     Fresh DB has no admins → endpoint is in bootstrap mode (no auth required).
     Verified: setup.py:494-578 create_first_admin at HEAD.
-    Survivor-of (future Phase C): test_setup_first_run.py create-admin mock assertions.
+    Survivor-of: test_setup_first_run.py create-admin mock assertions.
     """
     resp = await setup_client.post(
         "/api/setup/admin",
@@ -291,7 +291,7 @@ async def test_a136_cloud_llm_keys_stored_encrypted(
     Verifies that: (a) saved_providers reflects submitted keys,
     (b) an encrypted_value column is non-NULL in user_config.
     Verified: setup.py:581-667 configure_cloud_llm_keys at HEAD.
-    Survivor-of (future Phase C): test_setup_first_run.py cloud-llm mock assertions.
+    Survivor-of: test_setup_first_run.py cloud-llm mock assertions.
     """
     resp = await setup_client.post(
         "/api/setup/cloud-llm-keys",
@@ -323,7 +323,7 @@ async def test_a137_telegram_token_stored_encrypted(
     """Covers map row A137: POST /api/setup/telegram-bot-token persists encrypted token.
 
     Verified: setup.py:670-688 configure_telegram_bot_token at HEAD.
-    Survivor-of (future Phase C): test_setup_first_run.py telegram-token mock assertions.
+    Survivor-of: test_setup_first_run.py telegram-token mock assertions.
     """
     resp = await setup_client.post(
         "/api/setup/telegram-bot-token",
@@ -354,7 +354,7 @@ async def test_a138_telegram_token_status_reflects_db(setup_client, contract_con
     """Covers map row A138: GET /api/setup/telegram-bot-token returns has_token=true when row exists.
 
     Verified: setup.py:691-709 get_telegram_bot_token_status at HEAD.
-    Survivor-of (future Phase C): test_setup_first_run.py telegram-status mock assertions.
+    Survivor-of: test_setup_first_run.py telegram-status mock assertions.
     """
     # Initially no token.
     resp_before = await setup_client.get("/api/setup/telegram-bot-token")
@@ -382,7 +382,7 @@ async def test_a139_setup_mode_persisted_to_db(setup_client, contract_conn):
     """Covers map row A139: POST /api/setup/mode writes setup.mode to user_config.
 
     Verified: setup.py:712-729 configure_setup_mode at HEAD.
-    Survivor-of (future Phase C): test_setup_first_run.py setup-mode mock assertions.
+    Survivor-of: test_setup_first_run.py setup-mode mock assertions.
     """
     resp = await setup_client.post(
         "/api/setup/mode",
@@ -419,7 +419,7 @@ async def test_e1_setup_state_advances_after_admin_creation(setup_client, contra
     Tests the multi-step operator-bootstrap flow: status reports false before an
     admin exists, and true immediately after the admin is created (same transaction scope).
     Verified: setup.py:246-261 (get_status) + setup.py:494-578 (create_first_admin).
-    Survivor-of (Phase E2): test_setup_first_run.py multi-step state mock assertions.
+    Survivor-of: test_setup_first_run.py multi-step state mock assertions.
     """
     # Pre-condition: no admin → configured=False
     resp_before = await setup_client.get("/api/setup/status")
@@ -446,7 +446,7 @@ async def test_e1_setup_smtp_idempotent_update(setup_client, contract_conn):
 
     The second POST must overwrite smtp.host without creating a duplicate row.
     Verified: setup.py:464-491 (configure_smtp — ON CONFLICT DO UPDATE UPSERT path).
-    Survivor-of (Phase E2): test_setup_first_run.py smtp idempotency tests.
+    Survivor-of: test_setup_first_run.py smtp idempotency tests.
     """
     await setup_client.post(
         "/api/setup/smtp",
@@ -485,7 +485,7 @@ async def test_e1_setup_status_contains_setup_mode(setup_client, contract_conn):
     """GET /api/setup/status includes setup_mode field (required by frontend wizard).
 
     Verified: setup.py:246-261 (get_status response shape includes setup_mode).
-    Survivor-of (Phase E2): test_setup_first_run.py status response-shape assertions.
+    Survivor-of: test_setup_first_run.py status response-shape assertions.
     """
     resp = await setup_client.get("/api/setup/status")
     assert resp.status_code == 200
@@ -501,7 +501,7 @@ async def test_e1_setup_admin_creates_session_and_user(setup_client, contract_co
     Duplicate of the positive path in test_a135_*, but independently verifies
     that both rows are committed atomically (no partial state on success).
     Verified: setup.py:540-570 (create_first_admin — INSERT sessions after INSERT users).
-    Survivor-of (Phase E2): test_setup_first_run.py session-creation assertion.
+    Survivor-of: test_setup_first_run.py session-creation assertion.
     """
     resp = await setup_client.post(
         "/api/setup/admin",

@@ -576,13 +576,13 @@ def test_persist_contradiction_dedup_uses_direct_equality():
 
 
 # ---------------------------------------------------------------------------
-# W1-D2-001 / W1-D2-002 — user_id scoping (cross-user isolation)
+# user_id scoping (cross-user isolation)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_load_verified_findings_excludes_other_user():
-    """_load_verified_findings passes user_id predicate in SQL (W1-D2-001).
+    """_load_verified_findings passes user_id predicate in SQL.
 
     Pure SQL-capture unit: verifies that when user_id is passed, the generated
     query contains the user-scoping predicate.  No live DB required.
@@ -599,12 +599,12 @@ async def test_load_verified_findings_excludes_other_user():
     # Behaviour-shape assertion: user_id reaches the DB layer as a parameter,
     # not interpolated into the SQL text. Statement-text shape is exercised by
     # the live-PG contract test (test_contradictions_contract.py).
-    assert 42 in args, f"W1-D2-001: expected user_id=42 in bound params, got {args}"
+    assert 42 in args, f"expected user_id=42 in bound params, got {args}"
 
 
 @pytest.mark.asyncio
 async def test_persist_contradiction_writes_user_id():
-    """_persist_contradiction includes user_id in INSERT column list and params (W1-D2-002).
+    """_persist_contradiction includes user_id in INSERT column list and params.
 
     Pure SQL-capture unit: verifies the INSERT statement contains user_id and
     that the value is passed as a bind parameter.
@@ -661,7 +661,7 @@ async def test_persist_contradiction_writes_user_id():
 
     # Behaviour-shape assertion: user_id reaches the INSERT as a bind parameter.
     # SQL column-list shape is exercised by the live-PG contract test.
-    assert 99 in params, f"W1-D2-002: expected user_id=99 in INSERT params, got {params}"
+    assert 99 in params, f"expected user_id=99 in INSERT params, got {params}"
 
 
 # ---------------------------------------------------------------------------
@@ -893,7 +893,7 @@ async def test_quotes_verify_rejects_whitespace_only_quotes():
 
 
 # ---------------------------------------------------------------------------
-# W10-CF2 — _quotes_verify logs info when rejecting empty quotes
+# _quotes_verify logs info when rejecting empty quotes
 # ---------------------------------------------------------------------------
 
 

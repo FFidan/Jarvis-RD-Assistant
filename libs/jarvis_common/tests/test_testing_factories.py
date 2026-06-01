@@ -1,4 +1,4 @@
-"""Char-tests for jarvis_common.testing factory helpers (Wave 1)."""
+"""Char-tests for jarvis_common.testing factory helpers."""
 
 import inspect
 
@@ -42,7 +42,7 @@ async def test_testing_embedder_make_embedder_returns_embed_capable_mock() -> No
 
 
 # ---------------------------------------------------------------------------
-# ScriptedReranker char-tests (W0.3)
+# ScriptedReranker char-tests
 # ---------------------------------------------------------------------------
 
 

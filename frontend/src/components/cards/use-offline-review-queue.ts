@@ -1,7 +1,7 @@
 /**
  * useOfflineReviewQueue — the P2 offline-review seam implementation.
  *
- * Wave 3 P2. Consumed ONLY by LearningCardsPage via the F8 single-boundary
+ * Consumed ONLY by LearningCardsPage via the F8 single-boundary
  * `submitReviewFn` prop of <ReviewMode> (commented "P2 OFFLINE SEAM"). Nothing
  * else changes — ReviewMode is not rearchitected.
  *

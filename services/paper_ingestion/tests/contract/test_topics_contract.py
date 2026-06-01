@@ -1,4 +1,4 @@
-"""Topics domain contract tests — Phase B target rows A163-A169.
+"""Topics domain contract tests — target rows A163-A169.
 
 Survivor-of: (all NONE — no prior contract coverage).
 

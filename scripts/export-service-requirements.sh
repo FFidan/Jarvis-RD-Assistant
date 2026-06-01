@@ -40,7 +40,7 @@ HEADER = (
 
 
 def expand_group(name: str, *, seen: set[str] | None = None) -> list[str]:
-    """Inline `{include-group = "..."}` references recursively (Sprint 7 B19).
+    """Inline `{include-group = "..."}` references recursively.
 
     Without expansion, ``pip install -r services/<svc>/requirements.txt`` would
     silently miss `jarvis_common`'s `cryptography` and `pydantic-settings` deps

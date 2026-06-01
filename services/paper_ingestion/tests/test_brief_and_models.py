@@ -695,5 +695,5 @@ async def test_system_models_hardware_recommendation_48gb_confirm_on_target(_app
 
     aliases_by_name = {a["alias"]: a for a in hw_rec["aliases"]}
     assert aliases_by_name["smart"]["model"] == "qwen3:32b"
-    # RTX 5880 Ada bench not yet run — must be flagged
+    # ≈48 GB tier (RTX 5880 Ada) bench not yet run — must be flagged
     assert aliases_by_name["smart"]["confirm_on_target"] is True

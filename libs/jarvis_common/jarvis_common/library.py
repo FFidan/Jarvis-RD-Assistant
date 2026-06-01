@@ -1,4 +1,4 @@
-"""Per-user library helpers (Sprint B canonical-corpus refactor).
+"""Per-user library helpers (canonical-corpus refactor).
 
 A user's "library" is the set of papers they have explicitly accepted into
 their working set. Membership is recorded in the ``user_library`` table

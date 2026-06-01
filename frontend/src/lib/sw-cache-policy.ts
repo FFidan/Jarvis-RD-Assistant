@@ -2,7 +2,7 @@
  * sw-cache-policy — single source of truth for which GET API requests the
  * service worker is allowed to runtime-cache for offline read mode.
  *
- * Wave 3 P1a. Contract reference:
+ * Contract reference:
  *   internal design spec (archived)
  *   "Offline / PWA contract — CANONICAL".
  *

@@ -94,9 +94,8 @@ _TS08_TABLE_ROW = re.compile(r"^\| (?![-:]+\|)", re.MULTILINE)
 _TS08_CONTRACT_PATH = "docs/contracts/07-testing.md"
 
 # TS-02 carve-out — files registered in 07-testing.md §5.5 SQL-shape regression
-# guards are exempt from TS-02 enforcement (W3-CF12 reconciliation: script-vs-
-# reviewer divergence resolved by single source of truth; the registry itself
-# is SACROSANCT per TS-08 so this list cannot be weakened silently).
+# guards are exempt from TS-02 enforcement (single source of truth; the registry
+# itself is SACROSANCT per TS-08 so this list cannot be weakened silently).
 _TS02_CARVEOUT_PATHS: frozenset[str] = frozenset(
     {
         "services/paper_ingestion/tests/test_data_export.py",

@@ -4,7 +4,7 @@ Applies unapplied SQL migrations from a migrations directory on startup using
 an advisory transaction lock so concurrent instances don't race.
 
 Originally lived in ``paper_ingestion.migrations_runner``; moved here as part
-of the W3-DRY-6 consolidation so non-paper-ingestion services (learning_engine,
+of the consolidation so non-paper-ingestion services (learning_engine,
 future broker workers) can run the same migration logic without depending on
 ``paper_ingestion``. The old import path is preserved by a thin re-export
 shim.

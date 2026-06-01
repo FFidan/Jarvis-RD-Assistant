@@ -46,15 +46,15 @@ live_pg_dsn = _make_live_pg_dsn("jarvis-rd")
 
 # Cross-user isolation suite: ONE session-scoped container (suffix -xuser) reused
 # across all ~53 parametrized cases, with per-test TRUNCATE+reseed in two_users.
-# Replaces the per-test throwaway container (CI-CROSS-USER-FLAKY-1: docker-daemon
-# saturation under ~53 serial container spins on the loaded self-hosted runner).
+# Replaces the per-test throwaway container (docker-daemon saturation under ~53
+# serial container spins on a loaded CI runner).
 xuser_pg_dsn = _make_live_pg_session_dsn("jarvis-rd")
 
 # Baseline-invariants suite: ONE session container (suffix -baseline) + per-test
 # TRUNCATE, replacing the ~23 throwaway containers (one per test).
 baseline_pg_dsn = _make_live_pg_session_dsn("jarvis-rd-baseline")
 
-# Contract-layer fixtures (Wave 4): session-scoped Postgres + per-test txn rollback
+# Contract-layer fixtures: session-scoped Postgres + per-test txn rollback
 from jarvis_common.testing import (  # noqa: E402, F401
     _make_contract_conn_fixture,
     _make_contract_pool_fixture,
@@ -144,7 +144,7 @@ def _clear_settings_caches():
 
 @pytest.fixture(autouse=True)
 def _default_authenticated_user(request):
-    """WS-CROSS-USER: default every router's strict user-id resolver to user 1.
+    """Cross-user isolation: default every router's strict user-id resolver to user 1.
 
     Delegates to ``jarvis_common.testing_auth._apply_default_authenticated_user``.
     Tests marked ``@pytest.mark.real_auth`` opt out entirely.
@@ -196,7 +196,7 @@ from tests.pulse_helpers import (  # noqa: F401
 async def test_db_pool(live_pg_dsn):
     """Provide a real asyncpg pool against the live PostgreSQL fixture.
 
-    Applies db/init.sql (the full single-baseline schema post-Wave-1)
+    Applies db/init.sql (the full single-baseline schema)
     + run_migrations() (no-op against the empty db/migrations/ today;
     future-proofs for 0089+).
     """
@@ -233,14 +233,14 @@ async def test_db_pool(live_pg_dsn):
 
 
 # ---------------------------------------------------------------------------
-# 6. Two-user cross-isolation fixture (WS-NEGATIVE-TESTS)
+# 6. Two-user cross-isolation fixture
 #
 # ONE session-scoped pool over the shared -xuser container; per-test reset via
 # TRUNCATE + reseed (committed, so the real SessionMiddleware — which acquires
 # its OWN pool connection — sees the session rows under READ COMMITTED).
 #
 # TwoUsers, A_* constants, _seed_user, _seed_resources are imported from
-# jarvis_common.testing (D5 — moved in Wave 4).
+# jarvis_common.testing.
 # ---------------------------------------------------------------------------
 
 

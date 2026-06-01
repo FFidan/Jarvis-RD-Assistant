@@ -1,4 +1,4 @@
-"""WS-USER-DELETION D4: /api/me/export returns the caller's data only."""
+"""/api/me/export returns the caller's data only."""
 
 from __future__ import annotations
 

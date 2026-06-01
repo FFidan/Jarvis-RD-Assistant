@@ -1,4 +1,4 @@
-"""Tests for W1-D2-006: entities.paper_count double-increment guard.
+"""Tests for entities.paper_count double-increment guard.
 
 Audit finding: ``_find_or_create_entity`` was incrementing ``paper_count``
 unconditionally on every call, so:

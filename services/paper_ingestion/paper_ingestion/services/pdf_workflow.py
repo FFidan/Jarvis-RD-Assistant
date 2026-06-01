@@ -178,12 +178,11 @@ async def upsert_paper(
 ) -> asyncpg.Record:
     """Insert or update a canonical paper, returning the row.
 
-    Sprint B (canonical corpus): ``papers`` is the canonical, shared corpus
-    — there is no per-user ownership column on this table any more. Library
-    membership is recorded in ``user_library`` (see
-    :func:`jarvis_common.library.add_to_library`). Callers that want a user
-    to "have" the paper MUST follow this upsert with an ``add_to_library``
-    call.
+    ``papers`` is the canonical, shared corpus — there is no per-user
+    ownership column on this table. Library membership is recorded in
+    ``user_library`` (see :func:`jarvis_common.library.add_to_library`).
+    Callers that want a user to "have" the paper MUST follow this upsert
+    with an ``add_to_library`` call.
 
     The legacy ``papers.user_id`` column has been renamed to
     ``papers.discovered_by`` and is now audit-only ("which user (or NULL for
@@ -240,9 +239,9 @@ async def run_process_pdf(
     Splits work into three phases so the advisory lock is never held during
     the long-running embedding I/O (C-6):
 
-    Phase 1 (under lock): DB idempotency check + optional force cleanup.
-    Phase 2 (no lock):    Extract text, chunk, and embed (60 s+ I/O).
-    Phase 3 (new conn):   Write chunks to DB with ON CONFLICT DO NOTHING.
+    Under lock:    DB idempotency check + optional force cleanup.
+    No lock:       Extract text, chunk, and embed (60 s+ I/O).
+    New conn:      Write chunks to DB with ON CONFLICT DO NOTHING.
 
     Used by both the ``process_pdf`` endpoint and the batch-process background
     task.  Raises ``RuntimeError`` (not ``HTTPException``) so callers without
@@ -262,7 +261,7 @@ async def run_process_pdf(
         if ctx is not None:
             await ctx.update_progress(p, msg)
 
-    # --- Phase 1: idempotency check + DB cleanup under advisory lock ---
+    # --- Idempotency check + DB cleanup under advisory lock ---
     # Qdrant delete intentionally moved outside the lock (see below) to avoid
     # holding the advisory lock during network I/O.
     point_ids_to_delete: list[str] = []
@@ -293,7 +292,7 @@ async def run_process_pdf(
 
     await _maybe_progress(0.1, "Downloaded")
 
-    # --- Phase 2: Extract text, chunk, embed (no lock, no connection held) ---
+    # --- Extract text, chunk, embed (no lock, no connection held) ---
 
     async def _extraction_progress(chunk_index: int, total_chunks: int) -> None:
         """Map per-chunk extraction progress into the 0.1–0.4 phase window."""
@@ -359,7 +358,7 @@ async def run_process_pdf(
     await _maybe_progress(0.4, "Extracted")
     await _maybe_progress(0.7, "Chunked")
 
-    # --- Phase 3: Store chunks in DB (new connection, no advisory lock needed) ---
+    # --- Store chunks in DB (new connection, no advisory lock needed) ---
     # ON CONFLICT DO NOTHING handles the rare race where two requests both
     # passed phase 1.
     batch_size = 32

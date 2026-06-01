@@ -65,22 +65,16 @@ validation:
 exclude_docs: |
   /README.md
   USER_GUIDE.md
-  AGENTIC_WORKFLOW.md
-  agents-shim.md
   archive/
   plans/
   specs/
   perf/
-  agentic/
-  superpowers/
   screenshots/
   audit/
-  ci/
-  handoff/
   manual/_meta.md
 
 # Curated allowlist — operator/developer docs + user manual scaffold.
-# archive/, plans/, specs/, perf/, agentic/, superpowers/, screenshots/,
+# archive/, plans/, specs/, perf/, screenshots/,
 # audit/ remain excluded (see exclude_docs above).
 nav:
   - Home: index.md

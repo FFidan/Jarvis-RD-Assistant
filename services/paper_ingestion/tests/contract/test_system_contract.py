@@ -1,6 +1,6 @@
-"""Contract tests for system.py bypass routes (Sub-wave 4.4 D5).
+"""Contract tests for system.py bypass routes.
 
-BYPASS ROUTE CONCERN (Opus W4.1.3 review):
+BYPASS ROUTE CONCERN (code review):
   Three routes in routers/system.py read ``request.app.state.db_pool.acquire()``
   DIRECTLY, bypassing ``Depends(get_db_pool)``:
     - Line 241: GET /api/system/models  (current model assignment fetch)
@@ -260,7 +260,7 @@ async def test_setup_status_via_contract_conn(pi_test_client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Phase B additions — setup-status topics_count reflects real DB rows
+# Setup-status topics_count reflects real DB rows
 # ---------------------------------------------------------------------------
 
 

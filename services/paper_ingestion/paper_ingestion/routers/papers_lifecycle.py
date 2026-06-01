@@ -57,7 +57,7 @@ async def save_paper(
 
 
 # ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/unsave  — revert to_read → inbox (W1.5 UX-E.2)
+# PUT /api/papers/{paper_id}/unsave  — revert to_read → inbox
 # ---------------------------------------------------------------------------
 
 
@@ -303,7 +303,7 @@ async def annotate_paper(
 
 
 # ---------------------------------------------------------------------------
-# DELETE /api/papers/{paper_id}  — hard delete (preserves WS-AH2 NEW-H2)
+# DELETE /api/papers/{paper_id}  — hard delete (preserves NEW-H2 ordering)
 # ---------------------------------------------------------------------------
 
 

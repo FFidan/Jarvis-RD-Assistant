@@ -1,7 +1,7 @@
 """Typed pydantic-settings configuration for the Learning Engine service.
 
-Bucket H — Wave 4: migrates learning-engine-specific ``os.getenv`` call sites
-to a typed ``LearningEngineSettings`` class. Inherits shared infra keys from
+Bucket H — migrates learning-engine-specific ``os.getenv`` call sites to a
+typed ``LearningEngineSettings`` class. Inherits shared infra keys from
 ``JarvisCommonSettings``.
 
 1:1 env-var table (learning-engine layer)

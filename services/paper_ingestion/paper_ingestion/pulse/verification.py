@@ -1,4 +1,4 @@
-"""Pulse reasoning verification (WS-2.3).
+"""Pulse reasoning verification.
 
 Thin wrapper around the existing :class:`QuoteVerifier` that scores a Pulse
 card's LLM-generated ``reasoning`` sentence against the candidate paper's

@@ -1,4 +1,4 @@
-"""Admin user-management contract tests — Phase B target rows A4-A8, A14.
+"""Admin user-management contract tests — target rows A4-A8, A14.
 
 Covers:
   A4:  GET  /api/admin/users              — list non-deleted users (admin-gated)
@@ -195,7 +195,7 @@ async def test_a4_list_users_returns_non_deleted_users(admin_client, contract_co
     """Covers map row A4: admin lists all non-deleted users; response shape matches UserRecord.
 
     Verified: admin.py:133-145 list_users at HEAD.
-    Survivor-of (future Phase C): test_admin_users.py list-users mock assertions.
+    Survivor-of: test_admin_users.py list-users mock assertions.
     """
     resp = await admin_client.get("/api/admin/users")
 
@@ -233,7 +233,7 @@ async def test_a5_invite_user_creates_db_row(admin_client, contract_conn):
     """Covers map row A5: admin invite creates users row + magic_link_tokens row.
 
     Verified: admin.py:154-216 invite_user at HEAD.
-    Survivor-of (future Phase C): test_admin_users.py invite mock assertions.
+    Survivor-of: test_admin_users.py invite mock assertions.
     """
     new_email = "invited-contract-user@example.com"
 
@@ -297,7 +297,7 @@ async def test_a6_update_role_persists_to_db(admin_client, contract_conn):
     """Covers map row A6: role update writes to users.role in DB.
 
     Verified: admin.py:224-272 update_user_role at HEAD.
-    Survivor-of (future Phase C): test_admin_users.py role-change mock assertions.
+    Survivor-of: test_admin_users.py role-change mock assertions.
     """
     # Seed a target user.
     target_id = await contract_conn.fetchval(
@@ -348,7 +348,7 @@ async def test_a7_soft_delete_sets_deleted_at(admin_client, contract_conn):
     """Covers map row A7: soft-delete sets users.deleted_at in DB.
 
     Verified: admin.py:281-321 soft_delete_user at HEAD.
-    Survivor-of (future Phase C): test_admin_users.py delete mock assertions.
+    Survivor-of: test_admin_users.py delete mock assertions.
     """
     target_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
@@ -391,7 +391,7 @@ async def test_a8_restore_user_clears_deleted_at(admin_client, contract_conn):
     """Covers map row A8: restore clears users.deleted_at within 30-day grace.
 
     Verified: admin.py:329-364 restore_user at HEAD.
-    Survivor-of (future Phase C): test_admin_user_deletion.py restore tests.
+    Survivor-of: test_admin_user_deletion.py restore tests.
     """
     target_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
@@ -450,7 +450,7 @@ async def test_a14_audit_log_returns_entries_from_db(audit_admin_client, contrac
     """Covers map row A14: GET /api/admin/audit-log returns DB audit rows.
 
     Verified: audit_admin.py:37-84 list_audit_log at HEAD.
-    Survivor-of (future Phase C): logs/audit mock-unit assertions.
+    Survivor-of: logs/audit mock-unit assertions.
     """
     # Insert a known audit_log row in the same transaction.
     await contract_conn.execute(

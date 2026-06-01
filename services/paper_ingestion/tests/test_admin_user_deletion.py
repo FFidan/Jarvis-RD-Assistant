@@ -1,4 +1,4 @@
-"""WS-USER-DELETION: restore endpoint + admin audit-log coverage.
+"""User-deletion: restore endpoint + admin audit-log coverage.
 
 Reuses the mocked-pool style from test_admin_users.py (no Docker needed).
 """

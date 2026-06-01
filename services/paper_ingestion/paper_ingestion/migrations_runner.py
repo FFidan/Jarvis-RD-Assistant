@@ -1,7 +1,7 @@
 """Deprecated re-export shim — use ``jarvis_common.migrations`` directly.
 
-The migration runner moved to ``jarvis_common.migrations`` as part of W3-DRY-6
-so non-paper-ingestion services (learning_engine, future workers) can share it.
+The migration runner moved to ``jarvis_common.migrations`` so non-paper-ingestion
+services (learning_engine, future workers) can share it.
 This shim is preserved so the 9+ paper_ingestion test files importing
 ``from paper_ingestion.migrations_runner import run_migrations`` keep working.
 Eventually remove once those tests migrate to the new import path.

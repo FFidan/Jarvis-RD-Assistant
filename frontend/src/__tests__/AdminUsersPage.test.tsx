@@ -1,5 +1,5 @@
 /**
- * Tests for AdminUsersPage — Phase 2 WS-2B admin user management.
+ * Tests for AdminUsersPage — admin user management.
  *
  * Scope:
  * - Table renders users returned by listUsers.

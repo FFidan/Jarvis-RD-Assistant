@@ -116,7 +116,7 @@ codeboarding_*.log
 docs/audit/
 docs/archive/
 
-# Agent / operator tooling (per user constraint: zero agentic-tooling visible in public repo)
+# Local-only tooling & operator notes (not shipped publicly)
 AGENTS.md
 CLAUDE.md
 .codex

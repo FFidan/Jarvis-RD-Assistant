@@ -34,7 +34,7 @@ docs/
 *.png
 Jarvis_RD.zip
 
-# Agentic tooling (defense-in-depth — these are also gitignored)
+# Local-only tooling & caches (not part of the image build context)
 .serena/
 .desloppify/
 .codeboarding/

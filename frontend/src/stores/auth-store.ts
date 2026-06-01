@@ -19,7 +19,7 @@ export function registerQueryClient(qc: QueryClient): void {
 /**
  * Two coexisting authentication paths:
  *
- * 1. Magic-link sessions (Phase 2 WS-2A): the backend issues a session cookie
+ * 1. Magic-link sessions: the backend issues a session cookie
  *    after /api/auth/verify; the cookie is HttpOnly so the browser can't read
  *    it. This store carries only the user record (id/email/role) returned by
  *    /api/auth/verify so the UI can render greetings + role-gated chrome. The
@@ -29,7 +29,7 @@ export function registerQueryClient(qc: QueryClient): void {
  * 2. API-key sessions (legacy): users sitting in front of the wizard or
  *    self-hosters who haven't set up SMTP can still paste their JARVIS_API_KEY
  *    into the login form. The key is stored in sessionStorage and threaded
- *    through every fetch as X-API-Key. WS-2A keeps this path working so
+ *    through every fetch as X-API-Key. This path is kept working so
  *    Telegram bot + non-browser callers don't break and so dev-mode iteration
  *    on a fresh install still works without an SMTP relay.
  *
@@ -82,7 +82,7 @@ export const useAuthStore = create<AuthState>()(
       lastError: null,
 
       async login(apiKey: string): Promise<boolean> {
-        // WS-AUTH-KEY-SESSION: a valid JARVIS_API_KEY mints a real
+        // A valid JARVIS_API_KEY mints a real
         // owner-scoped jarvis_session cookie. We must use credentials:'include'
         // so the Set-Cookie sticks, then store the returned owner user via the
         // SAME path magic-link uses (loginWithSession) so user-data routes

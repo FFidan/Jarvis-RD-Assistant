@@ -9,7 +9,7 @@
 - The autouse `_default_authenticated_user` stub in [services/paper_ingestion/tests/conftest.py](../../services/paper_ingestion/tests/conftest.py)
 - The pre-commit test-shape checker in [scripts/check-test-shape.py](../../scripts/check-test-shape.py)
 
-This contract describes **what a test in this repo must look like** — for every Python test added from 2026-05-22 onward. It is the steady-state counterpart to the 2026-05-22 recomposition closeout (archived, not in public tree), which documented why the *existing* test suite drifted away from this shape.
+This contract describes **what a test in this repo must look like** — for every Python test added from 2026-05-22 onward. It is the steady-state counterpart to the 2026-05-22 recomposition closeout, which documented why the *existing* test suite drifted away from this shape.
 
 The contract is **machine-enforceable** where practical (pre-commit hook), **policy-enforceable** otherwise (PR review against the rules in §4).
 
@@ -320,7 +320,7 @@ Rules TS-01..TS-07 are machine-checked by [scripts/check-test-shape.py](../../sc
 | TS-02 | New test files MUST NOT contain SQL-substring assertions (regex: `assert .* in .*sql`, `assert .*"(SELECT\|INSERT\|UPDATE\|WHERE\|JOIN)`) | ERROR | SQL-substring anti-pattern (§2.3) |
 | TS-03 | New contract test files (under `tests/contract/`) MUST declare `pytest.mark.contract` in their `pytestmark` | ERROR | Required by [pyproject.toml addopts](../../pyproject.toml) marker registration |
 | TS-04 | New contract test files under `services/paper_ingestion/tests/contract/` MUST declare `pytest.mark.real_auth` in their `pytestmark` | ERROR | The autouse `_default_authenticated_user` fixture would otherwise resolve `cookie_b` as user 1 (silent IDOR-test failure) |
-| TS-05 | New contract test files MUST set `loop_scope="session"` on `pytest.mark.asyncio` and on any `@pytest_asyncio.fixture` | ERROR | Fixture loop-mismatch causes "Task attached to a different loop" failures (Phase B tech debt the recomposition program cleaned up) |
+| TS-05 | New contract test files MUST set `loop_scope="session"` on `pytest.mark.asyncio` and on any `@pytest_asyncio.fixture` | ERROR | Fixture loop-mismatch causes "Task attached to a different loop" failures (pre-existing tech debt that the test recomposition program cleaned up) |
 | TS-06 | New contract test files MUST contain at least one `# Verified: <file>:<line>` comment per `def test_*` | WARN | Grounding convention — every cited production symbol must be Read at HEAD |
 | TS-07 | Test files MUST NOT redefine inline `_make_pool` / `_mock_pool` / `_make_embedder` / `_build_request` / `FakeRecord` / `_make_telegram_update` / `make_config` when the canonical version exists in [libs/jarvis_common/jarvis_common/testing.py](../../libs/jarvis_common/jarvis_common/testing.py) (canonical replacement for `make_config`: `jarvis_common.testing.make_bot_config` at [libs/jarvis_common/jarvis_common/testing.py:773](../../libs/jarvis_common/jarvis_common/testing.py)) | WARN | Factory dedup — keep [jarvis_common.testing](../../libs/jarvis_common/jarvis_common/testing.py) the single source of truth |
 | TS-08 | The carve-out registry (§5) MUST NOT be deleted or weakened without a paired contract update | ERROR (enforced by review) | Carve-outs protect CI cost + reliability — deleting one without a replacement plan is a real regression |
@@ -345,11 +345,11 @@ Test populations updated 2026-05-22 after the W3 polish-wave deletions. Counts r
 
 | Boundary | Mock mechanism | Test population guarded |
 |---|---|---|
-| Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP; **superseded by `FauxOllamaServer` for new success-path** (W0.2) | **~30 residual** legacy tests (was ~150 pre-W3); failure-branch + Langfuse-specific only |
-| Cross-encoder reranker (`rerank_chunks`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) | **DI-seam'd via `ScriptedReranker`** (`jarvis_common.testing`, W0.3); legacy `AsyncMock` on `EmbeddingSearchMixin.rerank_chunks` migrated on rot-on-touch | **1 residual** (`services/paper_ingestion/tests/test_cross_rag.py:46`); 4 `ScriptedReranker` char-tests in `test_testing_factories.py` |
-| Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant`; **superseded by `FauxQdrantClient` for new success-path** (W2.1, W2.2, W2.5) | **~25 residual** legacy tests (was ~120); failure-branch + dimension-mismatch only |
+| Ollama HTTP (`embed_texts`, qwen3 think-block, `nomic-embed-text`) | `AsyncMock` on adapter methods; `respx.mock` for raw HTTP; **superseded by `FauxOllamaServer` for new success-path** | **~30 residual** legacy tests; failure-branch + Langfuse-specific only |
+| Cross-encoder reranker (`rerank_chunks`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) | **DI-seam'd via `ScriptedReranker`** (`jarvis_common.testing`); legacy `AsyncMock` on `EmbeddingSearchMixin.rerank_chunks` migrated on rot-on-touch | **1 residual** (`services/paper_ingestion/tests/test_cross_rag.py:46`); 4 `ScriptedReranker` char-tests in `test_testing_factories.py` |
+| Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant`; **superseded by `FauxQdrantClient` for new success-path** | **~25 residual** legacy tests; failure-branch + dimension-mismatch only |
 | `respx.mock` / `httpx_mock` for source HTTP | respx routes | ~200 tests (Zotero, S2, OpenAlex, arXiv, PubMed) — unchanged |
-| `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client`; **superseded by `FauxLiteLLMServer` sidecar for new non-streaming and Instructor-patched tests** (W0.2, W2.3, W2.4); legacy `MagicMock` path retained for error-path and Langfuse-specific tests | **~15 residual** legacy tests (was ~80); error-path + observability boundary only |
+| `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client`; **superseded by `FauxLiteLLMServer` sidecar for new non-streaming and Instructor-patched tests**; legacy `MagicMock` path retained for error-path and Langfuse-specific tests | **~15 residual** legacy tests; error-path + observability boundary only |
 | Telegram Bot API (`bot.send_message`, `reply_text`, `Update`) | `make_telegram_update` + `AsyncMock` | ~120 tests — unchanged (PTB carve-out remains, W1B.1 adds HTTP-side contracts on top without removing PTB-side) |
 
 ### 5.2 Library boundaries
@@ -365,7 +365,7 @@ Test populations updated 2026-05-22 after the W3 polish-wave deletions. Counts r
 
 | Boundary | Mock mechanism | Notes |
 |---|---|---|
-| `services/paper_ingestion/tests/test_baseline_invariants.py` (post-W1-squash invariants) | none — runs against live Postgres | All 16 tests are LIVE; **NEVER delete** |
+| `services/paper_ingestion/tests/test_baseline_invariants.py` (post-squash invariants) | none — runs against live Postgres | All 16 tests are LIVE; **NEVER delete** |
 
 ### 5.5 SQL-shape regression guards (TS-02 carve-out)
 
@@ -399,7 +399,7 @@ The codebase has ~2,000 pre-existing tests that violate §2 (mostly handler-bypa
 
 **Policy:** rot-on-touch.
 
-- DO NOT run "big-bang cleanup" passes against them. Past attempts (Phase B, W4, Phase C, recomposition E2) hit a structural ceiling at ~128 deletions per pass — the survivor-citation discipline is correct but expensive.
+- DO NOT run "big-bang cleanup" passes against them. Past big-bang cleanup attempts hit a structural ceiling at ~128 deletions per pass — the survivor-citation discipline is correct but expensive.
 - DO delete or recompose legacy mock-unit tests when their touched behavior slice is already covered by a contract, boundary-adapter, sidecar, or pure-unit survivor. Cite the survivor in the commit message or local ledger; if no survivor exists, write one in the same PR.
 - DO NOT require a whole-file rewrite merely because one behavior slice changed. Review should name concrete anti-pattern tests in the edited slice, not use this policy as a license for broad churn.
 
@@ -409,7 +409,7 @@ The codebase has ~2,000 pre-existing tests that violate §2 (mostly handler-bypa
 
 The recomposition closeout (§"What WOULD actually move the needle") identified that replacing mocked Ollama / Qdrant with deterministic sidecars would unlock cleaner coverage for those boundaries. That replacement path is now LIVE for the shared `testing_sidecars` infrastructure: new success-path Ollama/LiteLLM and Qdrant integration coverage MUST use the faux sidecars when the behavior under test is our HTTP/vector integration. Keep the §5.1 carve-outs for legacy tests and for boundary failures the sidecars do not model yet.
 
-**Available sidecars (as of W0.2, 2026-05-22):**
+**Available sidecars:**
 
 | Sidecar | Module | Endpoints | Primary use |
 |---|---|---|---|
@@ -466,8 +466,8 @@ Every cited symbol has been Read at HEAD `master` after the recomposition merge 
 | `pytest.mark.real_auth` registration | [pyproject.toml](../../pyproject.toml) | `"real_auth: opt out of the autouse user-id stub; exercise the real session resolver"` |
 | `pytest.mark.live_pg` registration | [pyproject.toml](../../pyproject.toml) | `"live_pg: requires Docker-backed PostgreSQL and JARVIS_RUN_LIVE_PG=1"` |
 | Default `addopts` excludes | [pyproject.toml](../../pyproject.toml) | `addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"` — `contract` tests are collected-but-skipped without `JARVIS_RUN_LIVE_PG=1`. |
-| `test_baseline_invariants.py` (DO NOT DELETE) | [services/paper_ingestion/tests/test_baseline_invariants.py](../../services/paper_ingestion/tests/test_baseline_invariants.py) | 16 post-W1-squash invariants gating the consolidated schema. Marked `live_pg`. |
-| Recomposition closeout (root-cause evidence) | 2026-05-22-recomposition-closeout.md (archived, not in public tree) | Plan-vs-actual + structural ceiling analysis. |
+| `test_baseline_invariants.py` (DO NOT DELETE) | [services/paper_ingestion/tests/test_baseline_invariants.py](../../services/paper_ingestion/tests/test_baseline_invariants.py) | 16 post-squash invariants gating the consolidated schema. Marked `live_pg`. |
+| Recomposition closeout (root-cause evidence) | 2026-05-22-recomposition-closeout.md | Plan-vs-actual + structural ceiling analysis. |
 | `scripts/check-test-shape.py` (enforcement) | [scripts/check-test-shape.py](../../scripts/check-test-shape.py) | Pre-commit hook implementing TS-01..TS-07 invariants (TS-08 is review-only). |
 
 ---

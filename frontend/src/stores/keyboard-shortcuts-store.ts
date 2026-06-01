@@ -3,7 +3,7 @@ import { create } from 'zustand';
 /**
  * Tiny global store for the KeyboardCheatSheet dialog visibility.
  *
- * Wired in Wave 7 (B.6) to make the cheat sheet reachable from any page
+ * Wired to make the cheat sheet reachable from any page
  * — both via the persistent TopBar icon button and via the `?` keypress
  * on the Research Feed (the only surface where shortcuts are currently
  * functional). The dialog itself is mounted once at the AppShell level.

@@ -7,10 +7,9 @@ Spec §5.3 callback name convention:
     paper:<action>:<id>                              — lifecycle / curation
     paper:feedback_(pos|neg):<id>:<source>           — per-paper feedback signal
 
-WS-AH2 H1 invariant: each execution path performs exactly ONE
-``query.answer()``.  Bare early answers on rejection paths are H1-compliant
-(single answer per path).  Never call ``query.answer()`` twice on a single
-execution path.
+H1 invariant: each execution path performs exactly ONE ``query.answer()``.
+Bare early answers on rejection paths are H1-compliant (single answer per
+path).  Never call ``query.answer()`` twice on a single execution path.
 """
 
 from __future__ import annotations
@@ -121,7 +120,7 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
     """Handle ``paper:<action>:<id>`` — lifecycle / curation via backend API.
 
     Spec §5.3 callback convention.  Dispatches via :data:`_PAPER_ACTION_ENDPOINTS`.
-    Preserves WS-AH2 H1 invariant (single ``query.answer()`` per success path).
+    Preserves the H1 invariant (single ``query.answer()`` per success path).
     """
     query = update.callback_query
     if query is None:
@@ -166,8 +165,8 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
 async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``paper:feedback_(pos|neg):<id>:<source>`` — record per-paper feedback.
 
-    POSTs to ``/api/papers/{id}/feedback`` (Wave 1cd endpoint).  Preserves
-    WS-AH2 H1 invariant (single ``query.answer()`` per success path).
+    POSTs to ``/api/papers/{id}/feedback``.  Preserves the H1 invariant
+    (single ``query.answer()`` per success path).
     """
     query = update.callback_query
     if query is None:

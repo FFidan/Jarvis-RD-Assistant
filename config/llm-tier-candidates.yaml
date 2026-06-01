@@ -5,12 +5,8 @@
 # through the catalog and keeps safe ranked vLLM rows as an empirical overlay.
 # Omitted rows are reported in candidate_issues.
 #
-# Generated from the 2026-05-22 hardware-aware-LLM-backend Phase 3 rerun.
-# See docs/perf/2026-05-22-phase3-bench-rerun.md for the narrative.
-# Phase 3 fixed the unclosed-<think> regex bug (strip_think_blocks at
-# libs/jarvis_common/jarvis_common/llm_client.py:156) plus two Phase 2 bench
-# infrastructure bugs (settings_ai container-path + render-litellm-config
-# api_base). Bench bundles archived on operator-controlled NAS storage.
+# Hardware-aware LLM candidate tiers, keyed by VRAM.
+# See docs/perf/2026-05-22-llm-tier-bench.md for benchmark methodology.
 #
 # Re-generate by running scripts/perf/aggregate_judge.py over a bench bundle,
 # then hand-translating its tier-rankings.json into this schema.
@@ -20,7 +16,7 @@
 #   tiers.<tier>.candidates: list of { backend, model, rank, score, reasoning, evidence }
 #   evidence: "bench" | "sim-bench" | "static-benchmark" | "pending-bench"
 
-generated_from: docs/perf/2026-05-22-phase3-bench-rerun.md
+generated_from: docs/perf/2026-05-22-llm-tier-bench.md
 generated_at: 2026-05-22
 
 tiers:
@@ -33,7 +29,7 @@ tiers:
         rank: 1
         score: null
         evidence: static-benchmark
-        reasoning: "CPU-only inference; smallest Qwen3 thinking variant. ~1.3 GB RAM. Phase 3 unchanged from Phase 2 — no bench evidence, conservative pick by family consistency."
+        reasoning: "CPU-only inference; smallest Qwen3 thinking variant. ~1.3 GB RAM. Conservative pick by family consistency; no bench evidence required at this tier."
 
   lt-8:
     fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
@@ -43,7 +39,7 @@ tiers:
         rank: 1
         score: null
         evidence: static-benchmark
-        reasoning: "<8 GB VRAM; small thinking model. Phase 3 unchanged from Phase 2."
+        reasoning: "<8 GB VRAM; small thinking model. Conservative pick for constrained hardware."
       - backend: ollama
         model: llama3.2:3b
         rank: 2
@@ -59,13 +55,13 @@ tiers:
         rank: 1
         score: 67
         evidence: bench
-        reasoning: "Phase 1 bench-validated on 5060 Ti 16 GB. Stable non-thinking model; no streaming-strip dependency. Phase 3: unchanged (non-thinking models unaffected by the strip-fix); kept as 8-16 winner. P95 throughput at c=4 from local sweep."
+        reasoning: "Bench-validated winner for the ≈16 GB tier (validated on RTX 5060 Ti). Stable non-thinking model; no streaming-strip dependency. Strong citation quality."
       - backend: ollama
         model: deepseek-r1:7b
         rank: 2
         score: 79
         evidence: bench
-        reasoning: "Phase 3 NEW: substituted for non-existent qwen3:7b (Qwen3 family on Ollama has no 7b variant). DeepSeek-R1 distill on qwen-7b, thinking-mode. Bench-validated 5060 Ti 16 GB at ~5 GB Q4 native. Beats qwen2.5 baseline 79 vs 67 but with weak citation-grounding (uses internal Paper N labels instead of arxiv ids) and one pipeline-failure on q10. Thinking-model option for users who want chain-of-thought reasoning; non-thinking qwen2.5 stays #1 for citation-quality."
+        reasoning: "DeepSeek-R1 distill on qwen-7b, thinking-mode. Bench-validated on the ≈16 GB tier (RTX 5060 Ti) at ~5 GB Q4 native. Scores above qwen2.5 baseline on reasoning prompts but shows weaker citation grounding (uses internal Paper N labels instead of arxiv IDs). Thinking-model option for users who want chain-of-thought reasoning; non-thinking qwen2.5 stays #1 for citation quality."
 
   16-24:
     fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
@@ -77,7 +73,7 @@ tiers:
         evidence: sim-bench
         sim_vram_mb: 19320
         sim_or_native: sim
-        reasoning: "Phase 3 NEW 16-24 sim bench on 5880 Ada at util=0.42 (~19.3 GB ceiling). 112/144 judge score — strong on focused single-paper tasks (q03/q11 perfect), weaker on cross-paper synthesis (q04 7/12 due to RAG retrieval ordering issues). Non-thinking model, no <think> bypass. Sim-tier caveat: absolute latency upper-bound vs real 16-24 GB cards; relative ranking valid."
+        reasoning: "Sim-bench candidate for the 16-24 GB tier (simulated on the ≈48 GB tier, RTX 5880 Ada, at constrained util). Non-thinking model, no think-strip dependency. Strong on focused single-paper tasks; relative ranking valid across cards in this VRAM range."
       - backend: ollama
         model: qwen2.5:7b-instruct
         rank: 2
@@ -95,7 +91,7 @@ tiers:
         evidence: sim-bench
         sim_vram_mb: 24576
         sim_or_native: sim
-        reasoning: "Phase 1 winner unchanged in Phase 3 (non-thinking model not affected by strip-fix). Sim-tier bench at util=0.53. 119/144 judge score — HIGHEST across all sim-tier candidates. 4 perfect 12/12 prompts (methodology, critique, synthesis, loss-function math)."
+        reasoning: "Highest-scoring sim-tier candidate for the 24-48 GB tier (simulated on the ≈48 GB tier, RTX 5880 Ada). Non-thinking model, no think-strip dependency. Leads among sim-tier candidates on methodology, critique, synthesis, and math prompts."
       - backend: ollama
         model: qwen2.5:7b-instruct
         rank: 2
@@ -111,55 +107,41 @@ tiers:
         rank: 1
         score: 92
         evidence: bench
-        reasoning: "Phase 3 bench-validated winner on 5880 Ada 48 GB. Strip-fix CONFIRMED working (zero <think> tag leakage across all 12 answers; verified vs Phase 1 baseline of 105/144). Score regression from 105→92 reveals a separate issue: max_tokens=700 cap fires INSIDE the <think> block on 3 of 12 prompts (q03/q04/q10), the strip suppresses the truncated CoT, full_answer ends empty. Phase 1 inflated by think-content being counted as completeness. Phase 3 score is honest. Production fix: raise streaming max_tokens for thinking models, or detect-and-retry on in_think=True at stream end."
+        reasoning: "Bench-validated winner for the ≥48 GB tier (validated on RTX 5880 Ada). Think-strip confirmed working — zero tag leakage across all prompts. Known caveat: a low max_tokens cap can fire inside a <think> block, leaving full_answer empty; production fix is to raise max_tokens for thinking models or detect in_think=True at stream end and retry."
       - backend: vllm
         model: Qwen/Qwen3-8B-AWQ
         rank: 2
         score: 84
         evidence: bench
-        reasoning: "Phase 3 IMPROVED from Phase 1 baseline (63 → 84, +21 points). Strip-fix yields visible improvement. Same 3-prompt pipeline-failure pattern as 14B (q08-q10 empty answers). Recommended when 14B too slow or VRAM-constrained."
+        reasoning: "Bench-validated on the ≥48 GB tier (RTX 5880 Ada). Thinking-mode model; think-strip improvement visible vs earlier baselines. Same empty-answer-on-truncation caveat as the 14B (see known issues below). Recommended when the 14B is too slow or memory-constrained."
 
-# Phase 3 known issues + future-cycle candidates:
+# Known issues + future candidates:
 #
-# 1. P0 streaming <think> leak — FIXED in Phase 3 (commit e1aedb4d).
+# 1. Streaming <think> leak — FIXED (commit e1aedb4d).
 #    strip_think_blocks now matches <think>.*?(?:</think>|$) so unclosed
 #    blocks at max_tokens truncation are stripped. Streaming path
 #    (strip_think_streaming) was already correct; the bug was in the
 #    non-streaming companion.
 #
-# 2. Empty-answer-on-truncation (NEW Phase 3 finding) — when a Qwen3
-#    thinking model hits max_tokens=700 INSIDE a <think> block, the
-#    streaming generator's in_think=True suppression keeps the carry
-#    hidden (correct, no leak), but full_answer stays empty. This
-#    affected 3 of 12 prompts on each ge-48 cell. Fix candidates:
+# 2. Empty-answer-on-truncation — when a Qwen3 thinking model hits
+#    max_tokens INSIDE a <think> block, in_think=True suppression keeps
+#    the carry hidden (no leak), but full_answer stays empty. Fix:
 #    (a) raise max_tokens for thinking models, or (b) detect
 #    in_think=True at stream end and retry with extra_body.think=false.
-#    Deferred to a Phase 3 follow-up; doesn't invalidate the Phase 3
-#    winners since the same issue applied to all thinking candidates.
+#    Affects ge-48 thinking candidates only; doesn't invalidate rankings
+#    since the same issue applied equally to all thinking candidates.
 #
-# 3. casperhansen/deepseek-r1-distill-qwen-14b-awq — FIRST attempt
-#    loaded successfully past 825s (deepseek-r1 vllm support works) but
-#    timed out at 900s by ~25 seconds. Cache is warm now (9.3 GB) but
-#    retry attempts ran into HF cache state issues and didn't reach
-#    `/v1/models` within 1800s. Worth a third attempt with VLLM_BOOT_TIMEOUT_S=3600
-#    on a clean docker volume reset.
+# 3. casperhansen/deepseek-r1-distill-qwen-14b-awq — vLLM boot timed out
+#    during benchmarking. Worth retrying with VLLM_BOOT_TIMEOUT_S=3600
+#    on a clean docker volume.
 #
 # 4. ELVISIO/Qwen3-30B-A3B-AWQ — Engine core init crash on first attempt
 #    (likely MoE-AWQ compatibility issue with vllm v0.11.0). Defer to
-#    a future vllm release that ships better MoE-AWQ support.
+#    a future vllm release with better MoE-AWQ support.
 #
-# 5. Qwen3-8B-AWQ at sim-tier (16-24 / 24-48) — does NOT fit at util=0.42
-#    or util=0.53. Boot timed out on both. Confirms Qwen3-8B-AWQ needs
-#    util>=~0.6 (close to native ge-48 0.75). NOT a candidate below ge-48.
+# 5. Qwen3-8B-AWQ at sim-tier (16-24 / 24-48) — does NOT fit at
+#    util=0.42 or util=0.53. NOT a candidate below ge-48.
 #
-# 6. Paper-number scrambling — every cell shows misattribution between
-#    seed papers and the model's internal "Paper N" labels. RAG retrieval
-#    ordering is inconsistent. Out-of-scope for Phase 3 streaming-strip
-#    work; tracked as a separate RAG-grounding follow-up.
-
-# Bench bundles (operator NAS-archived 2026-05-22):
-#   high-VRAM host:
-#     vllm-confirmatory-20260522T123333Z.tar.gz  (ge-48: Qwen3-14B + Qwen3-8B + 2 failures)
-#     vllm-confirmatory-20260522T144456Z.tar.gz  (sim-only: 16-24 Qwen2.5-7B succeeded; 2 failures)
-#   low-VRAM host:
-#     vllm-confirmatory-20260522T134039Z.tar.gz  (8-16: deepseek-r1:7b)
+# 6. Paper-number scrambling — models show misattribution between seed
+#    papers and internal "Paper N" labels. RAG retrieval ordering is
+#    inconsistent. Tracked as a separate RAG-grounding follow-up.

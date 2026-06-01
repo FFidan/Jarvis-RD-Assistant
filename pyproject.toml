@@ -8,11 +8,11 @@ license = "MIT"
 
 [dependency-groups]
 jarvis-common = [
-    "aiosmtplib>=3.0,<4.0",  # WS-2A: SMTP delivery for magic-link auth
+    "aiosmtplib>=3.0,<4.0",  # SMTP delivery for magic-link auth
     "asyncpg-listen>=0.0.9",
     "asyncpg>=0.30.0,<0.32.0",
     "cryptography>=46.0.7",
-    "email-validator>=2.0",  # WS-2A: backs pydantic EmailStr
+    "email-validator>=2.0",  # backs pydantic EmailStr
     "fastapi>=0.136.1,<0.138.0",
     "gitpython>=3.1.50",
     "httpx>=0.27.0",
@@ -24,7 +24,7 @@ jarvis-common = [
     "procrastinate[aiopg]>=0.49",
     "psycopg[binary]>=3.1",  # procrastinate 3.x imports psycopg unconditionally; bundled libpq
     "pydantic-settings>=2.0",
-    "rapidfuzz>=3.0.0",  # libs/jarvis_common runtime dep (was previously absent from root group; W2-T3)
+    "rapidfuzz>=3.0.0",  # libs/jarvis_common runtime dep (was previously absent from root group)
     "slowapi>=0.1.9",
     "structlog>=24.0",
     "urllib3>=2.7.0",
@@ -124,7 +124,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 "services/paper_ingestion/paper_ingestion/pdf_processor.py" = ["E501", "N806"]
 "services/paper_ingestion/paper_ingestion/verification.py" = ["E501", "N806"]
 "services/paper_ingestion/paper_ingestion/models/papers.py" = ["UP042"]
-# W2-26: jarvis_common.paper_state aliases (as _xxx) trigger ruff isort split; suppress I001.
+# jarvis_common.paper_state aliases (as _xxx) trigger ruff isort split; suppress I001.
 "services/paper_ingestion/paper_ingestion/routers/papers.py" = ["I001"]
 # tests.conftest (relative test helper) is classified as a different section from
 # paper_ingestion (src), causing a false-positive I001 split that ruff-format re-introduces.

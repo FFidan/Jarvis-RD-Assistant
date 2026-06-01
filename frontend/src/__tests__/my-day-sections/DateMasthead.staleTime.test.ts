@@ -1,4 +1,4 @@
-// W4-CF7 NOTE: This test is intentionally structural (source-text regex) rather
+// NOTE: This test is intentionally structural (source-text regex) rather
 // than behavioural. A full behavioural test would require either msw or
 // vitest-fetch-mock to intercept React Query's network calls, verify a first
 // fetch fires on mount, advance time < 60 s, and assert no second fetch.

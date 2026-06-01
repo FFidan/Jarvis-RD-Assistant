@@ -36,11 +36,10 @@ async def get_dashboard_metrics(
     """
     user_id = await current_user_id_strict(request)
     async with pool.acquire() as conn:
-        # Sprint B canonical-corpus: paper-count metrics scope through
-        # ``user_library`` (the caller's library) instead of the legacy
-        # ``papers.user_id`` predicate. In single-user mode (user_id=None)
-        # the user_library JOIN matches nothing — so we keep the legacy
-        # SELECT shape (no library JOIN) for that path.
+        # Paper-count metrics scope through ``user_library`` (the caller's
+        # library) instead of the legacy ``papers.user_id`` predicate.
+        # In single-user mode (user_id=None) the user_library JOIN matches
+        # nothing — so we keep the legacy SELECT shape (no library JOIN).
         if user_id is not None:
             row = await conn.fetchrow(
                 f"""

@@ -1,4 +1,4 @@
-"""W3-CF3 — sync_reviews concurrent ON CONFLICT race (contract test).
+"""sync_reviews concurrent ON CONFLICT race (contract test).
 
 Race surface analysis
 ---------------------
@@ -75,7 +75,7 @@ _N_CONCURRENT = 6  # number of simultaneous sync requests racing on the same eve
 
 
 # ---------------------------------------------------------------------------
-# §W3-CF3 — concurrent upsert does not corrupt
+# concurrent upsert does not corrupt
 # ---------------------------------------------------------------------------
 
 

@@ -349,9 +349,9 @@ class PaperSource(ABC):
     ) -> list[PaperCreate]:
         """Fetch papers newer than ``since`` relevant to any of the given topics.
 
-        ``user_id`` (Phase 2 WS-2D) is threaded through to per-user rate-limit
-        slots and ``source_run_history`` rows so multi-tenant pulse runs don't
-        collide on shared limiter buckets.
+        ``user_id`` is threaded through to per-user rate-limit slots and
+        ``source_run_history`` rows so multi-tenant pulse runs don't collide
+        on shared limiter buckets.
 
         Default: returns empty list. Sources that can poll by date override this.
         """

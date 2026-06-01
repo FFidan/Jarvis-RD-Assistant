@@ -1,4 +1,4 @@
-"""First-run setup wizard endpoints (Phase 2 WS-2F).
+"""First-run setup wizard endpoints.
 
 These endpoints are the bootstrap path for a fresh install. They allow an
 unauthenticated caller to:
@@ -22,7 +22,7 @@ A new ``require_unconfigured_or_admin`` dependency gates every endpoint:
 The router is exported with the ``auth_exempt`` marker and registered with
 ``dependencies=[]`` in ``main.py`` so it bypasses the global
 ``verify_api_key`` — same exemption shape as ``routers/auth.py`` /
-``routers/admin.py`` (WS-2A / WS-2B).
+``routers/admin.py``.
 
 Naming note
 -----------
@@ -61,7 +61,7 @@ SMTP_TEST_TIMEOUT_SECONDS = 10.0
 # Encrypted user_config keys this router writes. Must be a subset of the
 # allow-list maintained in routers/settings.py — these keys are intentionally
 # duplicated here rather than imported because settings.py is not on the
-# WS-2F write scope (and an import would create a circular surface).
+# setup write scope (and an import would create a circular surface).
 _SMTP_PLAINTEXT_KEYS = ("smtp.host", "smtp.port", "smtp.user", "smtp.from")
 _SMTP_ENCRYPTED_KEYS = ("smtp.pass",)
 _CLOUD_LLM_KEY_MAP = {

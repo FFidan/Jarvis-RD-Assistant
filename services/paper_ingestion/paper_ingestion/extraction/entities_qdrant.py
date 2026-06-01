@@ -5,8 +5,8 @@ collection.  Kept separate from entities.py so the Qdrant I/O surface is
 easy to locate and replace.
 
 NOTE: ``ConnLike`` is duplicated here to avoid a circular import with
-entities.py.  Both definitions must stay in sync until Wave 6c lands a
-shared types module for this package.
+entities.py.  Both definitions must stay in sync until a shared types
+module for this package is introduced.
 """
 
 import logging

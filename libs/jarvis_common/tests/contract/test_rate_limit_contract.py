@@ -25,8 +25,8 @@ Design notes
   tests need NO live DB — they run regardless.  The ``JARVIS_RUN_LIVE_PG``
   check is by-passed by not using the contract_pg_dsn fixture here.
 
-The existing per-service rate-limit tests collapse in Sub-wave 4.4 to
-"is the limiter wired" smokes citing this suite as survivor.
+The existing per-service rate-limit tests collapse to
+"is the limiter wired" smokes citing this suite as the authoritative contract.
 """
 
 import pytest

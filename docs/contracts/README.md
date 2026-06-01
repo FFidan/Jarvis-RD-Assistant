@@ -41,7 +41,7 @@ Each contract follows the same skeleton:
 6. **Status table** — LIVE / GHOST / PARTIAL / DEPRECATED for every cited identifier
 7. **Cleanup decisions deferred** — lists ghosts; does NOT prescribe fixes (that's the impl plan's job)
 8. **Cross-contract references** — pointers to sibling contracts
-9. **Verified Identifiers** — every cited symbol with `file:line — one-line behavior`, per the project's grounding convention
+9. **Verified Identifiers** — every cited symbol with `file:line — one-line behavior`
 
 ## Status meanings
 
@@ -56,6 +56,3 @@ Each contract follows the same skeleton:
 
 - [docs/ARCHITECTURE.md](../ARCHITECTURE.md) — service and runtime boundaries (high-level)
 - [docs/ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md) — durable engineering rules
-- paper-lifecycle-redesign (archived, not in public tree) — archived atomic-cutover spec; the lifecycle schema referenced by 01-settings.md
-- instructor-langfuse-integration (archived, not in public tree) — archived B.1+B.2 implementation spec; transitional counterpart to 03-llm.md and 04-observability.md
-- marathon-meta (archived, not in public tree) — archived multi-phase modernization roadmap

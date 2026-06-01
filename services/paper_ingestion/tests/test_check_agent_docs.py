@@ -1,4 +1,4 @@
-"""Tests for the lightweight agent-doc guard script."""
+"""Tests for the contract-docs link guard script."""
 
 from __future__ import annotations
 
@@ -54,49 +54,21 @@ def test_link_exists_resolves_relative_to_source_file(tmp_path: Path) -> None:
     assert not check_agent_docs._link_exists(source, "missing.md")
 
 
-def test_line_count_counts_split_lines(tmp_path: Path) -> None:
-    """Line counting should match the script's AGENTS size guard behavior."""
-    doc = tmp_path / "doc.md"
-    doc.write_text("a\nb\nc\n", encoding="utf-8")
-
-    assert check_agent_docs._line_count(doc) == 3
-
-
 def test_main_returns_zero_on_real_tree() -> None:
     """main() must pass cleanly against the actual repository tree."""
     assert check_agent_docs.main() == 0
 
 
-def test_main_returns_one_when_stale_token_injected(tmp_path: Path, monkeypatch) -> None:
-    """main() must return 1 and surface the offending token when a stale path is present."""
-    stale_token = check_agent_docs.STALE_PATTERNS[0]
-
-    # Stub out every file the checker iterates over (W13 split PUBLIC vs OPERATOR_ONLY).
-    for rel_path in (
-        *check_agent_docs.PUBLIC_DOC_PATHS,
-        *check_agent_docs.OPERATOR_ONLY_DOC_PATHS,
-    ):
+def test_main_returns_one_when_link_broken(tmp_path: Path, monkeypatch) -> None:
+    """main() must return 1 when a required contract doc has a broken local link."""
+    for rel_path in check_agent_docs.PUBLIC_DOC_PATHS:
         stub = tmp_path / rel_path
         stub.parent.mkdir(parents=True, exist_ok=True)
         stub.write_text("clean content\n", encoding="utf-8")
 
-    # AGENTS.md must be within the line limit so that size error is not triggered.
-    agents_stub = tmp_path / "AGENTS.md"
-    agents_stub.write_text(
-        "\n".join(f"line {i}" for i in range(check_agent_docs.AGENTS_LINE_LIMIT - 5)),
-        encoding="utf-8",
-    )
-
-    # Inject the stale token into a doc that is NOT AGENTS.md.
-    # Use any OPERATOR_ONLY_DOC_PATHS entry so the AGENTS.md overwrite above
-    # doesn't clobber it.
-    all_doc_paths = (
-        *check_agent_docs.PUBLIC_DOC_PATHS,
-        *check_agent_docs.OPERATOR_ONLY_DOC_PATHS,
-    )
-    non_agents_doc = next(rel for rel in all_doc_paths if str(rel) != "AGENTS.md")
-    (tmp_path / non_agents_doc).write_text(
-        f"content containing {stale_token} here\n", encoding="utf-8"
+    # Inject a broken local link into one of the required docs.
+    (tmp_path / check_agent_docs.PUBLIC_DOC_PATHS[0]).write_text(
+        "[gone](./does-not-exist.md)\n", encoding="utf-8"
     )
 
     monkeypatch.setattr(check_agent_docs, "ROOT", tmp_path)

@@ -8,7 +8,7 @@ test.describe('Settings - Topics', () => {
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   });
 
-  test('does not render redundant § TOPICS marker (W4-2 regression guard)', async ({ page }) => {
+  test('does not render redundant § TOPICS marker (regression guard)', async ({ page }) => {
     // Wait for tab content to settle
     await expect(page.getByText('Loading topics...')).not.toBeVisible({ timeout: 10000 });
     // No § TOPICS, § SOURCES, § AUTHORS, § INGESTION, § AUTOMATION, § PULSE,

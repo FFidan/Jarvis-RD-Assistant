@@ -107,7 +107,7 @@ async def create_note(
         if not paper:
             raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
 
-        # Phase 2 WS-2D: write user_id so notes are scoped to their author.
+        # Write user_id so notes are scoped to their author.
         # NULL user_id continues to mean "system-shared" (single-tenant legacy).
         row = await conn.fetchrow(
             """INSERT INTO paper_notes
@@ -227,7 +227,7 @@ async def promote_zotero_note(
                 status_code=400,
                 detail="Only Zotero annotation notes can be promoted",
             )
-        # WS-6B-α: ownership check (short-circuits when user_id=None).
+        # Ownership check (short-circuits when user_id=None).
         await assert_paper_ownership(conn, note["paper_id"], user_id)
 
         # Idempotency guard: if already verified and promoted, short-circuit —
@@ -242,7 +242,7 @@ async def promote_zotero_note(
                 detail="Zotero note has no highlight text to verify",
             )
 
-        # WS-4: page-window optimisation — when the annotation carries a page
+        # Page-window optimisation — when the annotation carries a page
         # number, first try a narrow ±2-page window to avoid loading the entire
         # paper into memory just for one verification call.  If the window
         # misses (no match found), fall back to the full chunk set.

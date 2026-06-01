@@ -64,9 +64,9 @@ export interface AnalyzeErrorEvent {
   error_code?: string | null;
   /** Sanitized user-facing message. Prefer this over raw backend internals when present. */
   display_message?: string | null;
-  /** Structured error class name from the backend (e.g. "PdfTooLargeError"). Optional — absent until W1.6-I backend ships. */
+  /** Structured error class name from the backend (e.g. "PdfTooLargeError"). Optional — absent until the structured-error backend ships. */
   error_type?: string | null;
-  /** Human-readable detail string from the backend. Optional — absent until W1.6-I backend ships. */
+  /** Human-readable detail string from the backend. Optional — absent until the structured-error backend ships. */
   error_detail?: string | null;
 }
 
@@ -123,7 +123,7 @@ export async function* streamSSE(
   const apiKey = useAuthStore.getState().getApiKey();
   const res = await fetch(url, {
     method: 'POST',
-    // WS-2A: include the jarvis_session cookie alongside any X-API-Key.
+    // Include the jarvis_session cookie alongside any X-API-Key.
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
@@ -165,7 +165,7 @@ export async function* streamAnalyze(
   const apiKey = useAuthStore.getState().getApiKey();
   const res = await fetch(`/api/papers/${paperId}/analyze`, {
     method: 'POST',
-    // WS-2A: include the jarvis_session cookie alongside any X-API-Key.
+    // Include the jarvis_session cookie alongside any X-API-Key.
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',

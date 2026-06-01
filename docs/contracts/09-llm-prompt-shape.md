@@ -282,7 +282,7 @@ The carve-out exists for callsites where Shape A is genuinely unsuitable, not as
 
 ## 9. Verified Identifiers
 
-Every cited symbol has been verified at HEAD `f6ef8870`.
+Every cited symbol was verified at the time this contract was written.
 
 | Citation | File:line | Behavior |
 |---|---|---|

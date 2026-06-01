@@ -126,7 +126,7 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     # /api/auth/* IS the auth bootstrap surface — magic-link request, magic-link
     # verify, and logout. They cannot themselves require API-key auth without
     # locking out brand-new users who haven't been issued a key yet.
-    # WS-2A: these endpoints have their own validation (token TTL + single-use).
+    # These endpoints have their own validation (token TTL + single-use).
     if request.url.path.startswith("/api/auth/"):
         return
     # /api/setup/* IS the first-run bootstrap surface — the FirstRunGate polls
@@ -138,7 +138,7 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     # the whole UI hangs on the loading spinner.
     if request.url.path.startswith("/api/setup/"):
         return
-    # WS-AUTH-KEY-SESSION: a valid browser session is sufficient to pass this
+    # A valid browser session is sufficient to pass this
     # global front-door gate. SessionMiddleware (ASGI middleware, runs BEFORE
     # router dependencies) sets request.state.user_id (int) only for a
     # non-revoked, non-expired session whose user is not deleted; an
@@ -197,7 +197,7 @@ async def require_admin(request: Request) -> None:
     :class:`jarvis_common.session_middleware.SessionMiddleware` when a valid
     session cookie is present.
 
-    WS-AUTH: API-key-only callers (no session ⇒ ``user_role`` absent) are NOT
+    API-key-only callers (no session ⇒ ``user_role`` absent) are NOT
     admins. The JARVIS_API_KEY is an ops credential, not an admin bearer. Only
     a browser session with ``role == 'admin'`` passes; everything else — no
     session, or a non-admin session — gets 403. For ops endpoints the bot/cron
@@ -262,10 +262,10 @@ async def current_user_id(request: Request) -> int | None:
     without a browser session (Telegram bot using only ``X-API-Key``,
     health checks, etc.).
 
-    Phase 2 WS-2A replaced the previous single-tenant stub. Phase 2 final
-    integration hardened the resolver to ignore non-int values so
-    ``SimpleNamespace`` / ``MagicMock`` request stand-ins in legacy
-    single-tenant unit tests still see ``None``.
+    An earlier refactor replaced the previous single-tenant stub and hardened
+    the resolver to ignore non-int values so ``SimpleNamespace`` /
+    ``MagicMock`` request stand-ins in legacy single-tenant unit tests still
+    see ``None``.
     """
     return _resolve_request_user_id(request)
 
@@ -310,7 +310,7 @@ async def current_user_id_strict(request: Request) -> int:
 
 
 # ---------------------------------------------------------------------------
-# X-Owner-User-Id override — Sprint A (Telegram per-user orchestration)
+# X-Owner-User-Id override — Telegram per-user orchestration
 # ---------------------------------------------------------------------------
 
 _OWNER_OVERRIDE_HEADER = "X-Owner-User-Id"

@@ -1,5 +1,5 @@
 /**
- * Tests for W2.4: API key uses sessionStorage (not localStorage),
+ * Tests for auth store persistence: API key uses sessionStorage (not localStorage),
  * and logout clears the jarvis-ui localStorage entry.
  *
  * The Zustand persist middleware writes to the storage engine on every
@@ -15,7 +15,7 @@ vi.stubGlobal('fetch', mockFetch);
 // Dynamic import ensures the stub is in place when the module initialises.
 const { useAuthStore } = await import('@/stores/auth-store');
 
-describe('auth-store — sessionStorage persistence (W2.4)', () => {
+describe('auth-store — sessionStorage persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset in-memory storage between tests.

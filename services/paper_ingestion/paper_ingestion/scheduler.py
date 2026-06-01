@@ -55,8 +55,8 @@ async def _is_pulse_enabled(db_pool: Any) -> bool:
 async def _list_active_users(db_pool: Any) -> list[int]:
     """List active (non-deleted) user IDs for per-user cron fan-out.
 
-    WS-2D: schedulers iterate users-with-feature-enabled. ``user_config`` is
-    still global (Wave-3 deferred per-user keying), so this helper currently
+    Schedulers iterate users-with-feature-enabled. ``user_config`` is
+    still global (per-user keying deferred), so this helper currently
     returns all active users; once ``user_config`` becomes per-user the
     callers should narrow on ``key=feature.enabled AND value=true``.
 
@@ -211,11 +211,10 @@ async def _defer_per_user(
 ) -> int:
     """Iterate active users and defer one ``task_kind`` job per user.
 
-    Sprint B: returns 0 (no-op) when no active users exist. The pre-Sprint-B
-    "fall back to a single system-shared defer with ``user_id=None``" path
-    has been removed — a multi-user system with zero users has nothing to
-    do, and ``user_id=None`` defers leak unattributable work into the job
-    table.
+    Returns 0 (no-op) when no active users exist. The legacy fallback to a
+    single system-shared defer with ``user_id=None`` has been removed — a
+    multi-user system with zero users has nothing to do, and ``user_id=None``
+    defers leak unattributable work into the job table.
     """
     import uuid  # noqa: PLC0415
 
@@ -269,7 +268,7 @@ async def run_pulse_wrapper(app: Any) -> None:
         logger.info("pulse: disabled via user_config, skipping nightly run")
         return
     try:
-        # WS-2D: one Pulse deck per user (audit BLOCKING #15).
+        # One Pulse deck per user.
         await _defer_per_user(task_kind="pulse.generate", db_pool=db_pool, log_label="pulse")
     except Exception:
         logger.exception("pulse: failed to defer pulse.generate job")
@@ -282,7 +281,7 @@ async def run_pulse_classifier_training_wrapper(app: Any) -> None:
         logger.info("pulse: disabled via user_config, skipping classifier retraining")
         return
     try:
-        # WS-2D: train per-user classifier (audit BLOCKING #16).
+        # Train per-user classifier.
         await _defer_per_user(
             task_kind="pulse.train_classifier", db_pool=db_pool, log_label="pulse"
         )
@@ -301,8 +300,8 @@ async def run_weekly_digest_wrapper(app: Any) -> None:
     upfront and passed as the ``job_id`` kwarg so the SSE bridge can locate
     the procrastinate row via ``args->>'job_id'``.
 
-    WS-2D: fans out one digest job per active user instead of producing a
-    single global digest (audit BLOCKING #17).
+    Fans out one digest job per active user instead of producing a single
+    global digest.
     """
     db_pool = app.state.db_pool  # touch to surface AttributeError early in tests
     try:
@@ -489,7 +488,7 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     except Exception:
         logger.exception("Failed to register purge_system_events job")
 
-    # WS-USER-DELETION: daily hard-purge of soft-deleted users past grace.
+    # Daily hard-purge of soft-deleted users past grace period.
     from paper_ingestion.jobs.data_purge import register_data_purge  # noqa: PLC0415
 
     register_data_purge(scheduler, app)

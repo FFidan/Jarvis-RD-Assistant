@@ -45,9 +45,9 @@ _BOOTSTRAP_SEED_HI = 92  # next runner-owned migration; init.sql owns 1..(HI-1)
 def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     """init.sql bootstrap must use an explicit version list, not generate_series.
 
-    Post-squash (Wave-1 2026-05-19) + post-pristine fold-ins (2026-05-26:
-    89=pdf_resolutions drop; 90=audit_log append-only; 91=author_alert_log
-    per-user dedupe; all folded into init.sql per db/migrations/README.md):
+    Post-squash (2026-05-19) + fold-ins (89=pdf_resolutions drop;
+    90=audit_log append-only; 91=author_alert_log per-user dedupe; all
+    folded into init.sql per db/migrations/README.md):
     the seeded set must be exactly set(range(_BOOTSTRAP_SEED_LO,
     _BOOTSTRAP_SEED_HI)) — contiguous, no gaps. The runner owns
     _BOOTSTRAP_SEED_HI+.
@@ -75,7 +75,7 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     """The schema_migrations seed in init.sql must own the squashed + folded-in
     versions; any on-disk migration file must use a higher number.
 
-    Post-squash (Wave-1 2026-05-19) + post-pristine fold-ins (2026-05-26):
+    Post-squash (2026-05-19) + fold-ins:
     - init.sql owns _BOOTSTRAP_SEED_LO.._BOOTSTRAP_SEED_HI-1.
     - Any on-disk migration file in db/migrations/ must have version
       >= _BOOTSTRAP_SEED_HI (runner-applied, never pre-seeded).
@@ -114,11 +114,11 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     )
 
 
-# test_schema_probes_cover_recent_migrations — DELETED (Wave-1 squash 2026-05-19):
+# test_schema_probes_cover_recent_migrations — DELETED (db/migrations squash 2026-05-19):
 # chain-coupled: asserted {56,60,61} <= versions on _MIGRATION_SCHEMA_PROBES which is
 # now an empty tuple. Probe data retired with the 88-file chain.
 
-# test_migration_060_probe_checks_integer_with_schema_filter — DELETED (Wave-1 squash 2026-05-19):
+# test_migration_060_probe_checks_integer_with_schema_filter — DELETED (db/migrations squash 2026-05-19):
 # chain-coupled: probes[60] on an empty tuple is a KeyError. Probe data retired.
 
 
@@ -208,7 +208,7 @@ async def test_repair_false_applied_migrations_treats_missing_dependencies_as_fa
 
 
 # test_migration_049_probe_requires_recommendation_feedback_and_no_pulse_ratings — DELETED
-# (Wave-1 squash 2026-05-19): chain-coupled probe test; probes[49] KeyErrors on empty tuple.
+# (db/migrations squash 2026-05-19): chain-coupled probe test; probes[49] KeyErrors on empty tuple.
 
 # test_migration_058_probe_requires_job_terminal_columns — DELETED
-# (Wave-1 squash 2026-05-19): chain-coupled probe test; probes[58] KeyErrors on empty tuple.
+# (db/migrations squash 2026-05-19): chain-coupled probe test; probes[58] KeyErrors on empty tuple.

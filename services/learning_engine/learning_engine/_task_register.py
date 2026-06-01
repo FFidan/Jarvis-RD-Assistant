@@ -1,4 +1,4 @@
-"""Task registration for the learning_engine service (W4-1 dependency inversion).
+"""Task registration for the learning_engine service (dependency inversion).
 
 This module owns the kind→handler mapping for all JARVIS job kinds serviced
 by learning_engine. Call ``register_learning_engine_tasks(app)`` during

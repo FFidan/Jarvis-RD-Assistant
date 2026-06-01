@@ -1,6 +1,6 @@
 """Tests verifying that the LiteLLM transparent-proxy configuration is in place.
 
-Wave 1, Round-15 audit: litellm/entrypoint.sh was deleted and master_key removed
+litellm/entrypoint.sh was deleted and master_key removed
 from litellm/config.yaml because litellm is loopback-only and needs no auth.
 """
 
@@ -14,8 +14,8 @@ def test_litellm_entrypoint_deleted() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     entrypoint = repo_root / "litellm" / "entrypoint.sh"
     assert not entrypoint.exists(), (
-        "litellm/entrypoint.sh still exists but was removed in Wave 1 of the "
-        "Round-15 audit.  Delete it and remove the entrypoint: reference from "
+        "litellm/entrypoint.sh still exists but was removed during the "
+        "transparent-proxy migration.  Delete it and remove the entrypoint: reference from "
         "docker-compose.yml to complete the transparent-proxy migration."
     )
 

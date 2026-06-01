@@ -1,9 +1,9 @@
 """User-scope tests for citation graph and citation list endpoints.
 
-W1-D1-002: build_citation_graph BFS node fetch leaked non-stub papers from
-           other users at BFS depth ≥1.
-W1-D2-003: GET /api/citations/{paper_id} counter-party paper IDs leaked
-           unscoped.
+build_citation_graph BFS node fetch must not leak non-stub papers from
+other users at BFS depth ≥1.
+GET /api/citations/{paper_id} counter-party paper IDs must not be leaked
+unscoped.
 
 Test shapes: pure-unit tests against mock asyncpg (make_pool_and_conn) —
 these functions are pure DB-query orchestrators with no other I/O.
@@ -55,7 +55,7 @@ def _citation_row(*, source_paper_id: int, cited_paper_id: int) -> FakeRecord:
 
 
 # ---------------------------------------------------------------------------
-# W1-D1-002: build_citation_graph must not include papers invisible to caller
+# build_citation_graph must not include papers invisible to caller
 # ---------------------------------------------------------------------------
 
 
@@ -103,7 +103,7 @@ async def test_build_citation_graph_filters_other_user_papers() -> None:
     assert p1_id in node_ids, "seed paper P1 must be in the graph"
     assert p2_id not in node_ids, (
         "P2 belongs to user_b and must NOT appear as a node for user_a "
-        "(W1-D1-002: cross-user paper enumeration via BFS)"
+        "(cross-user paper enumeration via BFS must be prevented)"
     )
 
 
@@ -148,7 +148,7 @@ async def test_build_citation_graph_without_user_id_keeps_all_nodes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# W1-D2-003: GET /api/citations/{paper_id} must strip invisible counter-parties
+# GET /api/citations/{paper_id} must strip invisible counter-parties
 # ---------------------------------------------------------------------------
 
 

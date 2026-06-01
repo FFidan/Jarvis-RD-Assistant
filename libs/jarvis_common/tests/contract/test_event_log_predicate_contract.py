@@ -5,7 +5,7 @@ so the inserted row is visible within the same transaction and rolled back
 after each test — no persistent side effects.
 
 Verified: libs/jarvis_common/jarvis_common/event_log.py:13-64 at HEAD.
-Survivor-of (Phase C): scattered log_event call-site mock tests replaced by
+Survivor-of an earlier consolidation: scattered log_event call-site mock tests replaced by
 this single predicate-direct suite.
 """
 

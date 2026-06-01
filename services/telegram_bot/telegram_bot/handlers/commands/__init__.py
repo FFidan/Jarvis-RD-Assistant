@@ -52,7 +52,7 @@ __all__ = [
     "help_command",
     "focus_command",
     "pulse_now_command",
-    # pairing domain (Sprint A)
+    # pairing domain
     "pair_command",
     "unpair_command",
     "whoami_command",

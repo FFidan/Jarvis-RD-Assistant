@@ -166,7 +166,7 @@ async def test_model_pull_job_stops_when_cancelled_mid_stream() -> None:
 
 
 # ---------------------------------------------------------------------------
-# compute_vram_fit tests (W3-SMOKE-03 regression + edge cases)
+# compute_vram_fit tests (regression guard + edge cases)
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +192,7 @@ def _hw_zero() -> HardwareInfo:
 
 
 def test_compute_vram_fit_qwen3_14b_unfit_at_32768_on_16gb() -> None:
-    """W3-SMOKE-03 regression: qwen3:14b at 32768 ctx should be unfit on 16 GB."""
+    """Regression guard: qwen3:14b at 32768 ctx should be unfit on 16 GB."""
     entry = catalog_entry_for_model("qwen3:14b")
     assert entry is not None, "qwen3:14b must be in the catalog"
 
@@ -212,7 +212,7 @@ def test_compute_vram_fit_qwen3_14b_unfit_at_32768_on_16gb() -> None:
 
 
 def test_compute_vram_fit_qwen3_14b_fits_at_8192_on_16gb() -> None:
-    """W3-SMOKE-03 mitigation: qwen3:14b at 8192 ctx should fit on 16 GB."""
+    """qwen3:14b at 8192 ctx should fit on 16 GB."""
     entry = catalog_entry_for_model("qwen3:14b")
     assert entry is not None
 

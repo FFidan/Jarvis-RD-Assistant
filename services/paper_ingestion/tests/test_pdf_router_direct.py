@@ -251,7 +251,7 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
 
 
 # ---------------------------------------------------------------------------
-# dev-mode inline refactor smoke tests (W2.T3 — structural, behaviour unchanged)
+# dev-mode inline refactor smoke tests (structural, behaviour unchanged)
 # ---------------------------------------------------------------------------
 
 

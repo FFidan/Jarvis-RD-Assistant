@@ -30,7 +30,7 @@ because the tested paths need no DB: we only exercise the error-handler
 layer, not the route logic.
 
 Per-service error-shape assertions scattered across test files collapse
-in Sub-wave 4.4 with this suite as the survivor citation.
+into this shared suite as the authoritative citation.
 """
 
 from __future__ import annotations

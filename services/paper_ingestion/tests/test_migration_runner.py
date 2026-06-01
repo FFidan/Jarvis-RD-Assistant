@@ -50,11 +50,11 @@ async def test_skips_already_applied_migrations(tmp_path):
     assert conn.transaction.call_count == 1
 
 
-# test_applies_unapplied_migration — DELETED (Wave-1 squash 2026-05-19):
+# test_applies_unapplied_migration — DELETED (db/migrations squash 2026-05-19):
 # chain-coupled: used _real_migration_versions() which globs db/migrations/*.sql
 # → returns [] post-squash, causing IndexError at versions[0]. No post-squash contract.
 
-# test_applies_multiple_unapplied_in_order — DELETED (Wave-1 squash 2026-05-19):
+# test_applies_multiple_unapplied_in_order — DELETED (db/migrations squash 2026-05-19):
 # chain-coupled: used _count_real_migrations() → 0 post-squash → expected_new = -10 FAIL.
 
 
@@ -184,7 +184,7 @@ def test_migration_runner_strips_begin_commit():
     assert "SELECT 1" in result3
 
 
-# test_migration_runner_strips_begin_commit_in_real_migrations — DELETED (Wave-1 squash 2026-05-19):
+# test_migration_runner_strips_begin_commit_in_real_migrations — DELETED (db/migrations squash 2026-05-19):
 # chain-coupled: globs db/migrations/*.sql → empty post-squash → cleaned_count == 0
 # → assert cleaned_count > 0 FAIL. The pure-unit test above (test_migration_runner_strips_begin_commit)
 # fully covers _strip_outer_transaction_control behavior for 0089+ migrations.

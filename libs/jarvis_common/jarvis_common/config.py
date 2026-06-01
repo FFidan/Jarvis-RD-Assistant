@@ -1,6 +1,6 @@
 """Typed pydantic-settings configuration for JARVIS infrastructure env vars.
 
-Bucket H — Wave 4: consolidates the ~52 ``os.getenv`` call sites into typed
+Bucket H — consolidates the ~52 ``os.getenv`` call sites into typed
 Settings classes per service. Each class is a **1:1 mapping** of existing env
 vars — no renames, no drops.  Awkward names are preserved and documented with
 a follow-up comment.

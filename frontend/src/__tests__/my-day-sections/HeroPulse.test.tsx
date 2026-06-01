@@ -85,7 +85,7 @@ function renderHeroPulse(queryClient?: QueryClient) {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('HeroPulse currentIndex clamp and reset (Phase 1e)', () => {
+describe('HeroPulse currentIndex clamp and reset', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(ratePulseCard).mockResolvedValue(undefined as any);

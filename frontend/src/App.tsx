@@ -126,7 +126,7 @@ function NavigateBridgeRegistrar() {
 }
 
 /**
- * WS-2F: gates ALL routes (auth + post-auth) behind a /api/setup/status check.
+ * FirstRunGate: gates ALL routes (auth + post-auth) behind a /api/setup/status check.
  * When the install reports configured=false (no admin user exists yet), every
  * route redirects to /first-run so the operator can run the bootstrap wizard.
  *
@@ -203,7 +203,7 @@ export function App() {
     return (
       <FirstRunGate>
         <Routes>
-          {/* WS-2F: pre-auth wizard — reachable even with no session, by design. */}
+          {/* pre-auth wizard — reachable even with no session, by design. */}
           <Route path="/first-run" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><FirstRunSetupPage /></Suspense></RouteErrorBoundary>} />
           {/* Magic-link landing must be reachable without an existing session — */}
           {/* it's the page that CREATES the session. */}
@@ -222,7 +222,7 @@ export function App() {
         <PomodoroAutoLogger />
         <Routes>
           <Route path="/setup" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><SetupWizard /></Suspense></RouteErrorBoundary>} />
-          {/* WS-2F: when an authed-but-stale session lingers on an unconfigured */}
+          {/* when an authed-but-stale session lingers on an unconfigured */}
           {/* install, FirstRunGate redirects to /first-run; this route renders */}
           {/* the wizard outside of AppShell so the user can complete setup. */}
           <Route path="/first-run" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><FirstRunSetupPage /></Suspense></RouteErrorBoundary>} />

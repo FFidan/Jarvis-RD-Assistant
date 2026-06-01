@@ -2001,7 +2001,7 @@ describe('ResearchFeedPage', () => {
     }
   });
 
-  // ── W2-T3: ?surface=garbage URL fallback ───────────────────────────────────
+  // ── ?surface=garbage URL fallback ─────────────────────────────────────────
 
   it('?surface=garbage falls back to Inbox surface (VALID_SURFACES guard)', async () => {
     render(
@@ -2090,9 +2090,9 @@ describe('ResearchFeedPage', () => {
     expect(useBulkSelection.getState().selectedIds.size).toBe(0);
   });
 
-  // ── W1.8-D: Inbox source-type filter chips ─────────────────────────────────
+  // ── Inbox source-type filter chips ──────────────────────────────────────────
 
-  it('W1.8-D / F1 IA: §Source facet in FacetRail replaces old source-type sub-chips', async () => {
+  it('§Source facet in FacetRail replaces old source-type sub-chips', async () => {
     // F1 3-pane IA: source-type filtering is via §Source facets in FacetRail
     // Old horizontal sub-chip row is removed; §Source rail is always visible
     renderPage();
@@ -2102,7 +2102,7 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByRole('tablist', { name: 'Filter by source' })).not.toBeInTheDocument();
   });
 
-  it('W1.8-D / F1 IA: source filtering via §Source FacetRail is surface-agnostic (no old sub-chip rows)', async () => {
+  it('source filtering via §Source FacetRail is surface-agnostic (no old sub-chip rows)', async () => {
     const user = userEvent.setup();
     renderPage();
 

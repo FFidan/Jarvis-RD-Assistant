@@ -1,5 +1,5 @@
-"""Tests for W3.2 fixes: download_pdf releases DB conn before HTTP download;
-scan_local_pdfs uses per-file connections [H12, H13].
+"""Tests for download_pdf releasing DB conn before HTTP download;
+scan_local_pdfs using per-file connections.
 """
 
 from __future__ import annotations
@@ -79,23 +79,23 @@ async def test_download_pdf_releases_conn_before_http():
     """DB conn must be released (acquire() closes) before the HTTP download begins.
 
     Verifies that db_pool.acquire() is called exactly twice:
-    - once during Phase 1 (load row)
-    - once during Phase 3 (write back)
+    - once to load the row
+    - once to write back
     The download happens between those two calls, with no connection held.
     """
-    phase1_row = _paper_row(pdf_downloaded=False)
+    load_row = _paper_row(pdf_downloaded=False)
     updated_row = _paper_row(pdf_downloaded=True, pdf_local_path="/data/pdfs/1.pdf")
 
-    phase1_conn = _make_conn(fetchrow_return=phase1_row)
-    phase3_conn = _make_conn(fetchrow_return=updated_row)
-    pool = _make_pool_multi_conn(phase1_conn, phase3_conn)
+    load_conn = _make_conn(fetchrow_return=load_row)
+    writeback_conn = _make_conn(fetchrow_return=updated_row)
+    pool = _make_pool_multi_conn(load_conn, writeback_conn)
 
     # Track when download happens relative to acquire() calls
     acquire_call_count_at_download: list[int] = []
 
     async def mock_download(url, paper_id):
-        # At this point Phase 1 conn should already be released,
-        # so acquire has been called once and Phase 3 has not started yet.
+        # At this point the load conn should already be released,
+        # so acquire has been called once and the write-back has not started yet.
         acquire_call_count_at_download.append(pool.acquire.call_count)
         return Path("/data/pdfs/1.pdf")
 
@@ -111,10 +111,10 @@ async def test_download_pdf_releases_conn_before_http():
 
     # acquire() must have been called exactly twice
     assert pool.acquire.call_count == 2, (
-        f"Expected 2 acquire() calls (Phase 1 + Phase 3), got {pool.acquire.call_count}"
+        f"Expected 2 acquire() calls (load + write-back), got {pool.acquire.call_count}"
     )
 
-    # During the download, exactly 1 acquire() call had been made (Phase 1 done, Phase 3 not yet)
+    # During the download, exactly 1 acquire() call had been made (load done, write-back not yet)
     assert acquire_call_count_at_download == [1], (
         "DB connection was still held (or not yet released) when HTTP download ran"
     )
@@ -142,5 +142,5 @@ async def test_download_pdf_catches_http_error():
 
     assert exc_info.value.status_code == 502
     assert "PDF download failed" in exc_info.value.detail
-    # Only Phase 1 acquire() should have happened (Phase 3 never reached)
+    # Only the load acquire() should have happened (write-back never reached)
     assert pool.acquire.call_count == 1

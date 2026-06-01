@@ -19,9 +19,9 @@ It returns {"status": "ok"} unconditionally with no auth.  It is included in
 the no-auth / status-present assertions only; the degraded and /health/internal
 cases apply only to services using register_health_routes.
 
-Per-service test_health_*.py files in Sub-wave 4.4 collapse to a thin
+Per-service test_health_*.py files collapse to a thin
 "is the route wired" smoke (one test per service), citing this suite as
-their survivor.
+the shared authoritative contract.
 """
 
 from __future__ import annotations

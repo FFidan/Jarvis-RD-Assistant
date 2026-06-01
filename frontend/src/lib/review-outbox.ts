@@ -1,7 +1,7 @@
 /**
  * review-outbox — append-only IndexedDB outbox for offline flashcard reviews.
  *
- * Wave 3 P2 (the ONLY offline-write surface — flashcard review).
+ * The ONLY offline-write surface — flashcard review.
  *
  * Contract references:
  *   - internal design spec (archived)

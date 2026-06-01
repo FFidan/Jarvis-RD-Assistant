@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { requestMagicLink } from '@/lib/api';
 
 /**
- * Phase 2 WS-2A login surface.
+ * Magic-link login surface.
  *
  * Primary: magic-link. User enters email, backend sends a one-shot link.
  * Fallback: API key. Hidden behind a "Use API key instead" toggle so existing

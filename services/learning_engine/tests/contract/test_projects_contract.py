@@ -257,7 +257,7 @@ async def test_project_papers_attach_idempotent_envelope(
     Pins the W14 MED-XC-02 envelope-consistency contract: the already-linked
     early-return path returns the same two-key shape as the freshly-linked
     path and no longer carries a ``message`` field. Exercises the link_paper
-    success path, which queries ``papers.zotero_item_key`` (W14.5 schema
+    success path, which queries ``papers.zotero_item_key`` (schema
     recovery added the missing column to the bedrock).
     """
     project_id = contract_two_users.project_id_a

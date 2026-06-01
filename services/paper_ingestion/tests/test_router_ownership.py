@@ -1,4 +1,4 @@
-"""WS-6B-β: ownership wiring smoke tests for paper-touching routers.
+"""Ownership wiring smoke tests for paper-touching routers.
 
 Verifies (a) single-user mode (caller user_id=None) is unchanged — endpoints
 return their normal status; (b) the WHERE filter for cross-paper SQL is
@@ -58,7 +58,7 @@ def _app():
 async def test_rag_summarize_paper_passes_for_owned_paper(_app, monkeypatch):
     """POST /api/summarize/{paper_id} returns 202 for a paper the caller owns.
 
-    WS-CROSS-USER: there is no permissive single-user mode anymore — the
+    Cross-user isolation: there is no permissive single-user mode anymore — the
     resolver yields a real user and ownership is always enforced. A canonical
     (NULL ``discovered_by``) paper fast-grants, so the endpoint still queues.
     """
@@ -97,7 +97,7 @@ async def test_rag_summarize_paper_passes_for_owned_paper(_app, monkeypatch):
 async def test_extractions_extract_paper_passes_for_owned_paper(_app, monkeypatch):
     """POST /api/papers/{paper_id}/extract returns 202 for an owned paper.
 
-    WS-CROSS-USER: ownership is always enforced; a canonical paper
+    Cross-user isolation: ownership is always enforced; a canonical paper
     (NULL ``discovered_by``) fast-grants so the job still queues.
     """
     from unittest.mock import AsyncMock, MagicMock
@@ -135,7 +135,7 @@ async def test_extractions_extract_paper_passes_for_owned_paper(_app, monkeypatc
 async def test_search_relevance_score_passes_for_owned_paper(_app):
     """POST /api/relevance-score returns 200 for an owned paper + healthy embedder.
 
-    WS-CROSS-USER: ownership is always enforced; the first fetchrow is the
+    Cross-user isolation: ownership is always enforced; the first fetchrow is the
     ownership probe (canonical paper → fast-grant), then paper + topic.
     """
     app, conn = _app
@@ -196,7 +196,7 @@ async def test_feed_list_papers_includes_user_filter_in_query(_app):
         resp = await client.get("/api/papers/feed")
 
     assert resp.status_code == 200, resp.text
-    # Sprint B: in single-user mode (current_user_id_or_none → None), the
+    # In single-user mode (current_user_id_or_none → None), the
     # feed query takes the canonical-corpus fallback FROM clause — no
     # user_library JOIN, no legacy `p.user_id IS NULL` predicate. The
     # rendered SQL must root on `FROM papers p` and contain neither legacy
@@ -273,8 +273,8 @@ async def test_discovery_similar_enrichment_query_includes_user_filter(_app):
         resp = await client.get("/api/similar/42")
 
     assert resp.status_code == 200, resp.text
-    # Sprint B canonical-corpus: discovery enrichment SELECT no longer
-    # scopes by the (renamed) audit column. The query rooted on `FROM
+    # Canonical-corpus: discovery enrichment SELECT no longer
+    # scopes by the audit column. The query rooted on `FROM
     # papers` should not reference user_id / discovered_by predicates.
     enrich_queries = [q for q in captured_queries if "FROM papers" in q]
     assert enrich_queries, f"enrichment never queried: {captured_queries}"
@@ -313,7 +313,7 @@ async def test_rag_batch_summarize_query_includes_user_filter(_app, monkeypatch)
         resp = await client.post("/api/papers/batch-summarize")
 
     assert resp.status_code == 200, resp.text
-    # Sprint B canonical-corpus: in single-user mode the batch-summarize SQL
+    # Canonical-corpus: in single-user mode the batch-summarize SQL
     # selects unsummarized papers from the canonical corpus directly (no
     # legacy `p.user_id IS NULL OR p.user_id = $N` predicate; no rename
     # leak either). The query is rooted on `FROM papers p`.

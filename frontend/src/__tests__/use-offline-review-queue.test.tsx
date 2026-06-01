@@ -1,5 +1,5 @@
 /**
- * useOfflineReviewQueue (Wave 3 P2) — the offline-review seam hook.
+ * useOfflineReviewQueue — the offline-review seam hook.
  *
  * Coverage:
  *   - ONLINE: returned submitReviewFn calls the REAL submitReview (api), NOT

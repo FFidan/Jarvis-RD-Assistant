@@ -10,7 +10,7 @@ __all__ = ["ScriptedReranker"]
 from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
-# ScriptedReranker — in-process DI seam replacing CrossEncoder (W0.3)
+# ScriptedReranker — in-process DI seam replacing CrossEncoder
 # ---------------------------------------------------------------------------
 
 

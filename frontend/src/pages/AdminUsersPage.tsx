@@ -1,5 +1,5 @@
 /**
- * Admin user management page (Phase 2 WS-2B).
+ * Admin user management page.
  *
  * Accessible at /admin/users. Requires admin role; non-admins are redirected
  * to / by the route guard in App.tsx.

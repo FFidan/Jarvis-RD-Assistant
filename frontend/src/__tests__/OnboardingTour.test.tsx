@@ -1,5 +1,5 @@
 /**
- * OnboardingTour tests — WS-2G Phase 2
+ * OnboardingTour tests
  *
  * Covers:
  *  1. Tour renders for new users (zero topics + zero papers, not dismissed).

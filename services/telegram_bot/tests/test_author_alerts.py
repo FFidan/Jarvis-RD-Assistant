@@ -1,9 +1,8 @@
 """Unit tests for author_alert_log dedupe scoping (SEC-AUTHALERT-1).
 
-W4-T8 (HIGH-XC-02) consolidated both insert sites into
+Both insert sites were consolidated into
 ``libs/jarvis_common.db_helpers.record_author_alert``; the SQL string now
-lives in one place. The 3-col unique index lives in db/init.sql (the
-former 0091 migration was folded into init.sql by W1-T1).
+lives in one place. The 3-col unique index lives in db/init.sql.
 """
 
 from __future__ import annotations

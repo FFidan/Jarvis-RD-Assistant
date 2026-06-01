@@ -47,7 +47,7 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("next", next_command))
     app.add_handler(CommandHandler("inbox", inbox_command))
     app.add_handler(CommandHandler("pulse_now", pulse_now_command))
-    # Sprint A: per-user Telegram pairing commands
+    # Per-user Telegram pairing commands
     app.add_handler(CommandHandler("pair", pair_command))
     app.add_handler(CommandHandler("unpair", unpair_command))
     app.add_handler(CommandHandler("whoami", whoami_command))

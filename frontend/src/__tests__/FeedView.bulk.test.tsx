@@ -110,7 +110,7 @@ describe('FeedView — bulk selection wiring (NEW-H4)', () => {
     await waitFor(() => {
       expect(screen.getByText('1 selected')).toBeInTheDocument();
     });
-    // Library surface (Phase A) offers Mark Reading + Mark Done + Trash + Star/Unstar
+    // Library surface offers Mark Reading + Mark Done + Trash + Star/Unstar
     expect(screen.getByRole('button', { name: 'Mark Reading' })).toBeInTheDocument();
   });
 });

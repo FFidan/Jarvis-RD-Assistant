@@ -57,7 +57,7 @@ async def test_rate_limit_gc_always_prunes_stale_timestamps():
     async def _noop_handler(update, context):  # type: ignore[no-untyped-def]
         return "ok"
 
-    # Key format uses __module__.__qualname__ since W4-8; @wraps copies both to the wrapper.
+    # Key format uses __module__.__qualname__; @wraps copies both to the wrapper.
     key = f"{chat_id}:{_noop_handler.__module__}.{_noop_handler.__qualname__}"
     _timestamps[key] = [far_past] * stale_count
 
@@ -160,7 +160,7 @@ async def test_rate_limit_notifies_via_callback_answer_when_message_is_none():
 
 @pytest.mark.asyncio
 async def test_rate_limit_anonymous_update_bypasses_bucket():
-    """W4-4: effective_chat is None — anonymous update bypasses the rate limiter.
+    """effective_chat is None — anonymous update bypasses the rate limiter.
 
     Without this guard, all anonymous traffic would share a single global
     bucket keyed by 'unknown:<func_name>', making it trivial to accidentally
@@ -203,10 +203,10 @@ async def test_rate_limit_anonymous_update_bypasses_bucket():
 
 @pytest.mark.asyncio
 async def test_rate_limit_cooldown_branch_uses_callback_answer_when_message_is_none():
-    # Sprint 7 B11: covers the cooldown elif branch (the sliding-window
-    # fallback was already covered above). When a callback handler is
-    # decorated with cooldown_seconds and update.message is None, the
-    # cooldown rejection must surface via callback_query.answer.
+    # Covers the cooldown elif branch (the sliding-window fallback was already
+    # covered above). When a callback handler is decorated with
+    # cooldown_seconds and update.message is None, the cooldown rejection must
+    # surface via callback_query.answer.
     _timestamps.clear()
 
     @rate_limit(max_calls=10, window_seconds=60, cooldown_seconds=300)

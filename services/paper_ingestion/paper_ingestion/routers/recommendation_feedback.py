@@ -1,6 +1,6 @@
 """Recommendation feedback CRUD endpoints (spec §7.3 + §8).
 
-Wave 1cd Task B6 ships the read + bulk-delete API surface for the
+This module ships the read + bulk-delete API surface for the
 ``recommendation_feedback`` table. The router lives in its own module
 because the prefix (``/api/recommendation_feedback``) does not fit under
 ``routers/papers.py``'s ``/api/papers`` prefix.

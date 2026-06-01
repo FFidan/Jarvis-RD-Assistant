@@ -1,6 +1,6 @@
 """Search and relevance-scoring endpoints.
 
-After WS-5B GOD-001 split, this module owns:
+This module owns:
 
 * ``POST /api/search``               — multi-source search + DB upsert
 * ``POST /api/search-preview``       — multi-source search without DB writes
@@ -233,8 +233,8 @@ async def search_papers(
         deduped = _dedup_papers(interleaved)
 
     # Upsert into DB (per original /api/search behavior).
-    # Sprint B canonical-corpus: insert canonical, then add to the caller's
-    # user_library so the manually-searched paper appears in *their* feed.
+    # Insert canonical, then add to the caller's user_library so the
+    # manually-searched paper appears in *their* feed.
     saved_results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
         for paper in deduped:

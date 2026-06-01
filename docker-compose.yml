@@ -1,7 +1,7 @@
 # =============================================================================
 # JARVIS RD Assistant - Docker Compose
 # =============================================================================
-# Based on a self-hosted AI starter kit, extended with JARVIS services.
+# Self-hosted research-assistant stack.
 # Usage:
 #   cp .env.example .env   # edit with your values
 #   docker compose up -d
@@ -192,7 +192,7 @@ services:
     # litellm/config.yaml uses ``master_key: os.environ/LITELLM_MASTER_KEY`` and
     # the upstream image does not honour the ``_FILE`` convention.  This shim
     # reads the secret file into LITELLM_MASTER_KEY at container start and
-    # refuses to start when the file is empty (W1-2 + W1-5).  Both
+    # refuses to start when the file is empty.  Both
     # ``entrypoint`` and ``command`` are overridden — the upstream image sets
     # entrypoint=["litellm"], so without overriding it our ``sh`` would be
     # passed as a positional arg to litellm.
@@ -513,7 +513,7 @@ services:
       - jarvis
 
   langfuse:
-    # W9-T1 / SEC-HIGH-02: a thin wrapper image runs as root, reads
+    # Security hardening: a thin wrapper image runs as root, reads
     # DATABASE_URL / NEXTAUTH_SECRET / SALT from /run/secrets/* (langfuse v2
     # has no _FILE convention), exports them, then drops to the upstream
     # `nextjs` user via `su-exec` and execs the upstream entrypoint

@@ -23,7 +23,7 @@ interface NotesTabProps {
   paperId: number;
   /**
    * When true, disables the note creation form and delete/promote actions.
-   * Offline note editing is an explicit NON-GOAL (Wave 3 offline contract).
+   * Offline note editing is an explicit NON-GOAL (offline contract).
    * Existing cached notes remain readable. Defaults to false.
    */
   readOnly?: boolean;

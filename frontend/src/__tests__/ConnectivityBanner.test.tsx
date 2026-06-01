@@ -1,5 +1,5 @@
 /**
- * ConnectivityBanner tests — Wave 3 P1d
+ * ConnectivityBanner tests
  *
  * Coverage:
  *  - OfflineBanner: hidden when online, shown when offline

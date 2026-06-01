@@ -19,7 +19,7 @@ _FRONTEND_KEYS = {
     "llm.embed_model",
 }
 
-# Vestigial notification keys removed in Wave-1 β1 (APScheduler owns scheduled_nudges)
+# Vestigial notification keys removed (APScheduler owns scheduled_nudges)
 _REMOVED_NOTIFICATION_KEYS = {
     "notifications.timezone",
     "notifications.morning_briefing",

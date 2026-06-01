@@ -1,4 +1,4 @@
-"""Pairing command handlers: /pair, /unpair, /whoami (Sprint A multi-tenant)."""
+"""Pairing command handlers: /pair, /unpair, /whoami (multi-tenant)."""
 
 from __future__ import annotations
 

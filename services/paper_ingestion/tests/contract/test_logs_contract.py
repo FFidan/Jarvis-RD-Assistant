@@ -1,4 +1,4 @@
-"""Logs domain contract tests — Phase B target rows A51-A56.
+"""Logs domain contract tests — target rows A51-A56.
 
 Survivor-of: (all NONE — no prior contract coverage).
 Carve-out: SSE stream (A56) is IDIOMATIC-MOCK-ONLY — the generator polls

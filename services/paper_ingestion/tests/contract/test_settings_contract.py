@@ -1,4 +1,4 @@
-"""Contract tests for settings/config endpoints (Sub-wave 4.4 D5).
+"""Contract tests for settings/config endpoints.
 
 Exercises real DB-backed config round-trips via the ASGI transport + SharedConnPool.
 
@@ -175,7 +175,7 @@ async def test_put_fsrs_desired_retention_round_trip(
 
     Verified: settings_service.py:436 (_validate_fsrs_retention),
               settings_service.py:520-547 (_write_config_row UPSERT path).
-    Survivor-of (Phase E2): test_settings.py fsrs key round-trip mock-unit tests.
+    Survivor-of: test_settings.py fsrs key round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
         "/api/config/fsrs.desired_retention",
@@ -201,7 +201,7 @@ async def test_put_fsrs_desired_retention_invalid_value_returns_400(pi_settings_
     """PUT fsrs.desired_retention with value ≥ 1.0 returns 400 (validator guard).
 
     Verified: settings_service.py:416-421 (_validate_fsrs_retention out-of-range).
-    Survivor-of (Phase E2): test_settings.py invalid-value parametrize cases.
+    Survivor-of: test_settings.py invalid-value parametrize cases.
     """
     resp = await pi_settings_client.put(
         "/api/config/fsrs.desired_retention",
@@ -222,7 +222,7 @@ async def test_put_pulse_l2_lambda_round_trip(contract_conn, pi_settings_client)
 
     Verified: settings_service.py:329-337 (_validate_l2_lambda),
               settings_service.py:520-547 (_write_config_row NULL-scoped UPSERT).
-    Survivor-of (Phase E2): test_settings.py l2_lambda round-trip mock-unit tests.
+    Survivor-of: test_settings.py l2_lambda round-trip mock-unit tests.
     """
     resp = await pi_settings_client.put(
         "/api/config/pulse.l2_lambda",
@@ -260,7 +260,7 @@ async def test_put_setup_completed_persists_true(contract_conn, pi_settings_clie
 
     Verified: settings_service.py:447 (_validate_bool guard),
               settings_service.py:520-547 (_write_config_row UPSERT).
-    Survivor-of (Phase E2): test_settings.py setup.completed round-trip tests.
+    Survivor-of: test_settings.py setup.completed round-trip tests.
     """
     resp = await pi_settings_client.put(
         "/api/config/setup.completed",
@@ -286,7 +286,7 @@ async def test_put_telegram_owner_chat_id_round_trip(contract_conn, pi_settings_
 
     Verified: settings_service.py:448 (telegram.owner_chat_id → _validate_optional_int),
               settings_service.py:512-517 (_fetch_effective_config_row system path).
-    Survivor-of (Phase E2): test_settings.py telegram.owner_chat_id round-trip tests.
+    Survivor-of: test_settings.py telegram.owner_chat_id round-trip tests.
     """
     resp = await pi_settings_client.put(
         "/api/config/telegram.owner_chat_id",
@@ -530,7 +530,7 @@ async def test_settings_ai_post_rejects_non_candidate_model(_ai_settings_client,
 # ---------------------------------------------------------------------------
 # test_settings_ai_apply_failure_returns_generic_502
 # Verified: routers/settings_ai.py:94-102 (apply_ai_settings 502 branch — MED-PI-04)
-# CF-W3-CF2: regression guard — exc message must NOT appear in response body
+# regression guard — exc message must NOT appear in response body
 # ---------------------------------------------------------------------------
 
 

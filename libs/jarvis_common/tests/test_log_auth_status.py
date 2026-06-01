@@ -1,4 +1,4 @@
-"""Unit test for app_factory._log_auth_status WARNING on CIDR refresh failure (W4-CF13)."""
+"""Unit test for app_factory._log_auth_status WARNING on CIDR refresh failure."""
 
 import logging
 from types import SimpleNamespace

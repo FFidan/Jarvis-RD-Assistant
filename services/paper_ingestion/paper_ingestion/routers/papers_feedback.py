@@ -83,7 +83,7 @@ async def submit_feedback(
 
 
 # ---------------------------------------------------------------------------
-# DELETE /api/papers/{paper_id}/feedback  — clear a feedback signal (W1.5 UX-E.1)
+# DELETE /api/papers/{paper_id}/feedback  — clear a feedback signal
 # ---------------------------------------------------------------------------
 
 
@@ -98,13 +98,13 @@ async def delete_paper_feedback(
 ) -> None:
     """Delete a recommendation_feedback row for this paper+user+source triple.
 
-    W1-D1-010: assert_paper_ownership is called before DELETE to prevent
-    cross-user feedback deletion (IDOR fix).
+    assert_paper_ownership is called before DELETE to prevent cross-user
+    feedback deletion (IDOR protection).
     Idempotent — returns 204 regardless of whether a row was deleted.
     ``source`` must be supplied as a query parameter (e.g. ``?source=pulse_thumbs``).
     """
     async with db_pool.acquire() as conn:
-        # W1-D1-010: ownership check before DELETE
+        # Ownership check before DELETE — prevents cross-user feedback deletion.
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await conn.execute(
             "DELETE FROM recommendation_feedback"

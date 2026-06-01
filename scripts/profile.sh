@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/profile.sh — Bucket G perf profiling harness.
+# scripts/profile.sh — perf profiling harness.
 #
 # Captures a baseline snapshot of frontend bundle sizes, backend endpoint
 # wall-clock timings, and (optionally) py-spy flamegraph + pg_stat_statements

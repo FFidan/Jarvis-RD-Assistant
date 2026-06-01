@@ -1,4 +1,4 @@
-"""Sprint 3 job endpoint contract tests."""
+"""Job endpoint contract tests."""
 
 from unittest.mock import AsyncMock, patch
 

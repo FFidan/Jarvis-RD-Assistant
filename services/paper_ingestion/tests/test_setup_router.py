@@ -30,7 +30,7 @@ def _build_request(pool: MagicMock) -> SimpleNamespace:
 
 @pytest.mark.asyncio
 async def test_system_check_requires_admin_when_configured() -> None:
-    """system_check must raise 403 when an admin exists and caller is not admin (W2-S1-001)."""
+    """system_check must raise 403 when an admin exists and caller is not admin."""
     from fastapi import HTTPException
 
     # admin_count > 0 → setup is complete; caller has no role (unauthenticated)

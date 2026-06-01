@@ -1,5 +1,5 @@
 /**
- * pwa — service worker registration + install affordance (Wave 3 P1a).
+ * pwa — service worker registration + install affordance.
  *
  * Contract reference:
  *   internal design spec (archived)

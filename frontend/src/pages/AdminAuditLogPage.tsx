@@ -1,5 +1,5 @@
 /**
- * Admin audit-log viewer (WS-ADMIN-AUDIT).
+ * Admin audit-log viewer.
  *
  * Accessible at /admin/audit-log. Requires admin role; non-admins are
  * redirected by the AdminOnlyRoute guard in App.tsx.

@@ -1,4 +1,4 @@
-"""Thread entity contract tests — Phase E1.PI (NEW file).
+"""Thread entity contract tests.
 
 Covers endpoints in paper_ingestion/routers/threads.py:
   GET  /api/my-day/threads              — list open threads (user-scoped)
@@ -8,7 +8,7 @@ Covers endpoints in paper_ingestion/routers/threads.py:
   POST /api/my-day/threads/seed/pomodoro — de-duplicated seed from Pomodoro
   POST /api/my-day/threads/{id}/resume  — bump last_at
 
-Survivor-of (Phase E2):
+Survivor-of:
   test_threads_endpoints.py — all mock-unit tests in this file exercise the same
   handlers with a stubbed DB; these contract tests exercise the real schema.
 
@@ -95,7 +95,7 @@ async def test_t01_create_thread_appears_in_list(
     """POST /api/my-day/threads creates a thread; GET returns it in user A's list.
 
     Verified: threads.py:118-137 create_thread + threads.py:64-84 list_threads.
-    Survivor-of (Phase E2): test_threads_endpoints.py::test_create_thread_binds_caller_user_id
+    Survivor-of: test_threads_endpoints.py::test_create_thread_binds_caller_user_id
       + test_list_threads_scoped_to_caller.
     """
     async with _make_client(_pi_threads_app, contract_two_users.cookie_a) as c:
@@ -136,7 +136,7 @@ async def test_t02_get_thread_idor_user_b_gets_404(
     """GET /api/my-day/threads/{id}: user B cannot access user A's thread — 404.
 
     Verified: threads.py:92-110 WHERE id=$1 AND user_id=$2 (no leak, no 403).
-    Survivor-of (Phase E2): test_threads_endpoints.py::test_get_thread_cross_user_is_404.
+    Survivor-of: test_threads_endpoints.py::test_get_thread_cross_user_is_404.
     """
     # Seed a thread directly for user A
     thread_id = await contract_conn.fetchval(
@@ -169,7 +169,7 @@ async def test_t03_patch_thread_owner_updates_title(
     """PATCH /api/my-day/threads/{id}: owner can update title; DB row reflects change.
 
     Verified: threads.py:145-183 (update_thread SET "title"=$1 WHERE id AND user_id).
-    Survivor-of (Phase E2): test_threads_endpoints.py::test_update_thread_sets_fields_and_bumps_last_at.
+    Survivor-of: test_threads_endpoints.py::test_update_thread_sets_fields_and_bumps_last_at.
     """
     thread_id = await contract_conn.fetchval(
         """INSERT INTO thread (user_id, title, progress, status)
@@ -203,7 +203,7 @@ async def test_t03_patch_thread_non_owner_gets_404(
     """PATCH /api/my-day/threads/{id}: non-owner gets 404 (no state written).
 
     Verified: threads.py:181-183 (row is None → HTTPException 404).
-    Survivor-of (Phase E2): test_threads_endpoints.py::test_update_thread_cross_user_is_404.
+    Survivor-of: test_threads_endpoints.py::test_update_thread_cross_user_is_404.
     """
     thread_id = await contract_conn.fetchval(
         """INSERT INTO thread (user_id, title, progress, status)
@@ -242,7 +242,7 @@ async def test_t04_seed_pomodoro_deduplicates_on_title(
     """POST /api/my-day/threads/seed/pomodoro: second seed with same title touches, not duplicates.
 
     Verified: threads.py:221-263 (seed_thread_from_pomodoro FOR UPDATE + GREATEST(progress)).
-    Survivor-of (Phase E2): test_threads_endpoints.py::test_seed_pomodoro_dedupes_existing_open_thread.
+    Survivor-of: test_threads_endpoints.py::test_seed_pomodoro_dedupes_existing_open_thread.
     """
     payload = {"title": "T04 Pomodoro Dedup", "progress": 0.25}
 

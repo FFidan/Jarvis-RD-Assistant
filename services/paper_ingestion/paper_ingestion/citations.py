@@ -169,7 +169,7 @@ async def sync_citations_for_paper(
     """
     is_pool = isinstance(conn_or_pool, asyncpg.Pool)
 
-    # --- Phase 1: look up the paper's S2 ID (short DB read) ---
+    # --- Look up the paper's S2 ID (short DB read) ---
     async def _lookup_paper() -> asyncpg.Record | None:
         if is_pool:
             async with conn_or_pool.acquire() as c:  # type: ignore[union-attr]
@@ -191,7 +191,7 @@ async def sync_citations_for_paper(
     if metadata.get("s2_id"):
         s2_id = metadata["s2_id"]
 
-    # --- Phase 2: S2 API calls (no DB connection held) ---
+    # --- S2 API calls (no DB connection held) ---
     try:
         citations_data = await s2_source.fetch_citations(s2_id)
     except Exception:
@@ -204,7 +204,7 @@ async def sync_citations_for_paper(
         logger.exception("Failed to fetch references for paper %d (s2:%s)", paper_id, s2_id)
         references_data = []
 
-    # --- Phase 3: DB writes with fetched data (connection held, no HTTP) ---
+    # --- DB writes with fetched data (connection held, no HTTP) ---
     citations_added = 0
     references_added = 0
     stubs_created = 0
@@ -306,8 +306,8 @@ async def build_citation_graph(
       without raising.
     * An empty *paper_ids* list short-circuits to an empty graph.
     * When *user_id* is provided, BFS-discovered nodes are filtered to only
-      include papers visible to that user (W1-D1-002: prevents cross-user
-      paper enumeration at BFS depth ≥1).
+      include papers visible to that user (prevents cross-user paper
+      enumeration at BFS depth ≥1).
     """
     if not paper_ids:
         return CitationGraphResponse(nodes=[], edges=[])
@@ -342,7 +342,7 @@ async def build_citation_graph(
     # Cap at 200 nodes
     all_ids = list(collected_ids)[:200]
 
-    # W1-D1-002: restrict node fetch to papers visible to the caller.
+    # Restrict node fetch to papers visible to the caller — prevents cross-user enumeration.
     if user_id is not None:
         all_ids = await _filter_visible_paper_ids(conn, all_ids, user_id)
 

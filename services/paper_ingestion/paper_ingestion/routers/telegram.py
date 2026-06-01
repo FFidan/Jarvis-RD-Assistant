@@ -6,7 +6,7 @@ Two pairing flows co-exist:
    issues a short-lived code that the bot's ``/start PAIR_<code>`` handler
    consumes to set ``user_config.telegram.owner_chat_id``.
 
-2. **Per-user multi-tenant flow (Sprint A)** — ``POST /api/telegram/pair-token``
+2. **Per-user multi-tenant flow** — ``POST /api/telegram/pair-token``
    issues a 15-minute token tied to the authenticated user.  The bot's
    ``/pair <token>`` command consumes it and inserts a row into
    ``telegram_user_pairings``.  ``GET /api/telegram/pairing`` and
@@ -61,7 +61,7 @@ class PairingStatus(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Per-user multi-tenant pairing models (Sprint A)
+# Per-user multi-tenant pairing models
 # ---------------------------------------------------------------------------
 
 _PAIR_TOKEN_TTL = timedelta(minutes=15)
@@ -207,7 +207,7 @@ async def get_pairing_status(
 
 
 # ---------------------------------------------------------------------------
-# Per-user multi-tenant pairing endpoints (Sprint A)
+# Per-user multi-tenant pairing endpoints
 # ---------------------------------------------------------------------------
 
 

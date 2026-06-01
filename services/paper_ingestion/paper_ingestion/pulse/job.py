@@ -1,7 +1,7 @@
 """Pulse overnight job — full 7-step orchestration.
 
 Each stage is wrapped in defensive error handling: any single stage failure
-degrades gracefully (Phase 1 principle — Pulse must never crash the service
+degrades gracefully (Pulse must never crash the service
 and must produce a deck even if sources fail or the LLM times out).
 
 Stats dict keys
@@ -335,7 +335,7 @@ async def _run_stage2(
         # Count actual LLM calls: candidates where llm_relevance was set
         llm_calls = sum(1 for sc in stage2_out if sc.llm_relevance is not None)
     except Stage2ClientUnavailableError:
-        # W3-DRY-3: explicit sentinel — openai_client was None at stage2 entry
+        # explicit sentinel — openai_client was None at stage2 entry
         degraded_reason = "stage2 skipped: openai_client unavailable"
         logger.warning(
             "pulse.stage2 skipped — openai_client is None; deck degraded to stage1 results"
@@ -428,8 +428,8 @@ async def _run_optional_signals(
                 for idx, sc in enumerate(enriched)
             },
         )
-    except Exception as exc:  # broad: optional Phase 2 scoring must degrade cleanly
-        degraded_reason = f"optional Pulse Phase 2 signals unavailable: {exc}"
+    except Exception as exc:  # broad: optional citation scoring must degrade cleanly
+        degraded_reason = f"optional Pulse citation signals unavailable: {exc}"
         logger.warning(
             "citation_signals failed; pulse degraded",
             exc_info=exc,
@@ -461,9 +461,9 @@ async def _persist_pipeline(
                         # so a single-card failure cannot poison the outer transaction.
                         async with conn.transaction():
                             card.paper.discovery_origin = "pulse"
-                            # Sprint B: pulse inserts canonical-only; library
-                            # membership for the deck owner is recorded when
-                            # the user accepts the card (rate=save) via the
+                            # Pulse inserts canonical-only; library membership
+                            # for the deck owner is recorded when the user
+                            # accepts the card (rate=save) via the
                             # /api/pulse/rate endpoint.
                             await upsert_paper(conn, card.paper)
                         successes += 1
@@ -509,8 +509,8 @@ async def _emit_post_run_telemetry(
     """Stage 9 — enqueue classifier training + emit verification telemetry (best-effort)."""
     try:
         classifier_job_id = str(uuid.uuid4())
-        # Sprint B / Wave-2: thread the deck owner's user_id so the
-        # follow-up classifier-training job is attributable.
+        # Thread the deck owner's user_id so the follow-up
+        # classifier-training job is attributable.
         await KIND_TO_TASK["pulse.train_classifier"].defer_async(
             job_id=classifier_job_id,
             user_id=user_id,

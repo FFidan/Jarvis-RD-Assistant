@@ -146,8 +146,8 @@ async def test_api_failure_sends_diagnostic(caplog):
 async def test_card_message_has_three_inline_buttons(monkeypatch):
     """Per-card buttons use the spec §5.3 callback name convention.
 
-    Wave 3 retired ``pulse_(up|down|save)_<id>`` in favour of
-    ``paper:feedback_pos:<id>:pulse_thumbs`` / ``paper:feedback_neg:...`` /
+    The legacy ``pulse_(up|down|save)_<id>`` callbacks were retired in favour
+    of ``paper:feedback_pos:<id>:pulse_thumbs`` / ``paper:feedback_neg:...`` /
     ``paper:save:<id>``.
     """
     captured_keyboards: list = []

@@ -1,6 +1,6 @@
 """Typed pydantic-settings configuration for the Paper Ingestion service.
 
-Bucket H — Wave 4: migrates paper-ingestion-specific ``os.getenv`` call sites
+Bucket H — migrates paper-ingestion-specific ``os.getenv`` call sites
 to a typed ``PaperIngestionSettings`` class. Inherits shared infra keys from
 ``JarvisCommonSettings``.
 

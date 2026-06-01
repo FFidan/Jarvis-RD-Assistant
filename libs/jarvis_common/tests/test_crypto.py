@@ -205,7 +205,7 @@ async def test_validate_encrypted_config_rows_warns_in_dev_on_bad_key(monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# resolve_secret_row helper (Sprint 7 B12)
+# resolve_secret_row helper
 # ---------------------------------------------------------------------------
 
 
@@ -246,7 +246,7 @@ def test_resolve_secret_row_handles_memoryview_ciphertext(valid_key) -> None:
 
 
 # ---------------------------------------------------------------------------
-# resolve_secret_row — tightened typing (W4-T4)
+# resolve_secret_row — tightened typing
 # ---------------------------------------------------------------------------
 
 
@@ -329,7 +329,7 @@ def test_resolve_secret_row_custom_mapping(valid_key) -> None:
 
 
 # ---------------------------------------------------------------------------
-# W10-CF1 — reload_fernet_on_sighup logging
+# reload_fernet_on_sighup logging
 # ---------------------------------------------------------------------------
 
 

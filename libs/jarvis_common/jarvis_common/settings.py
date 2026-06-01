@@ -107,12 +107,12 @@ class CoreSettings(BaseSettings):
     # returns 503. Operator must explicitly opt in by setting the env var,
     # e.g. INFRA_INGEST_ALLOWED_CIDRS="127.0.0.1/8,::1/128".
     infra_ingest_allowed_cidrs: str = ""
-    # WS-AUTH-KEY-SESSION: explicit owner user for the API-key→session mint.
+    # Explicit owner user for the API-key→session mint.
     # When set, that user id is bound to the minted session. When unset, the
     # endpoint resolves the lowest-id non-deleted admin user. Never synthesises
     # or auto-creates a user.
     owner_user_id: int | None = None
-    # WS-AUTH-KEY-SESSION single-tenant gate opt-in. The endpoint mints only
+    # Single-tenant gate opt-in. The endpoint mints only
     # when exactly one non-deleted user exists OR this flag is explicitly true
     # (operator opt-in for a small multi-user-but-single-owner deployment).
     api_key_login_enabled: bool = False

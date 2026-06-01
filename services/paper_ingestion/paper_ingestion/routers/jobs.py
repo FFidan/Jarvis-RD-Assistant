@@ -96,7 +96,7 @@ PI_PUBLIC_JOB_KINDS: frozenset[str] = frozenset(
 def _extract_paper_ids(payload: dict) -> int | list[int] | None:
     """Return paper IDs from single-paper and batch paper-scoped payloads.
 
-    WS-6B-α: scopes the factory's ownership check to single-paper kinds
+    Scopes the factory's ownership check to single-paper kinds
     (``paper.process``, ``paper.analyze``) and batch kinds
     (``papers.batch_process``, ``papers.batch_summarize``, ``extraction.batch``).
     Workers still revalidate, but public enqueue is denied up front.

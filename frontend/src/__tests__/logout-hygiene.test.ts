@@ -1,5 +1,5 @@
 /**
- * Tests for WS-FRONTEND-HYGIENE: after logout(), the React-Query cache is
+ * Logout hygiene tests: after logout(), the React-Query cache is
  * cleared and all user-scoped zustand stores are reset to their initial state.
  *
  * This prevents cross-user data leakage when two users share a browser

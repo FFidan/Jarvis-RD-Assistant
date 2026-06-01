@@ -1,4 +1,4 @@
-"""Admin-only reader for the ``audit_log`` table (WS-ADMIN-AUDIT).
+"""Admin-only reader for the ``audit_log`` table.
 
 Single endpoint: ``GET /api/admin/audit-log`` — cursor-paginated by ``id``
 DESC with an optional ``action`` prefix filter. Admin session required

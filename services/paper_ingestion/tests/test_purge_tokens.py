@@ -1,4 +1,4 @@
-"""Tests for ``paper_ingestion.jobs.purge_tokens`` (W5-19 / BE-09)."""
+"""Tests for ``paper_ingestion.jobs.purge_tokens``."""
 
 from __future__ import annotations
 

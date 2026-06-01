@@ -164,7 +164,7 @@ async def extract_entities_for_paper(
 
     entity_map: dict[str, int] = {}
 
-    # --- Phase 1: validate and pre-embed entities (no DB connection held) ---
+    # --- Validate and pre-embed entities (no DB connection held) ---
     valid_entities: list[dict] = []
     for ent in entities_data:
         name = ent.name.strip()
@@ -197,7 +197,7 @@ async def extract_entities_for_paper(
     # Instantiate verifier once for this extraction run
     quote_verifier = QuoteVerifier()
 
-    # --- Phase 2: DB reads + writes (connection held, no external HTTP) ---
+    # --- DB reads + writes (connection held, no external HTTP) ---
     # Track entity ids already processed in this run so that paper_count is
     # incremented at most once per entity per extraction call.  This prevents
     # double-counting when the LLM emits the same entity name more than once,

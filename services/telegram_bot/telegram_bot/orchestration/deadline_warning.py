@@ -111,9 +111,9 @@ async def run_deadline_warning(
 ) -> None:
     """Send warnings for milestones due in the next 3 days.
 
-    Sprint A: iterates ``telegram_user_pairings`` and delivers per-user
-    warnings scoped to each user's own milestones.  Skips with a warning
-    when no pairings exist.
+    Iterates ``telegram_user_pairings`` and delivers per-user warnings scoped
+    to each user's own milestones.  Skips with a warning when no pairings
+    exist.
 
     Parameters
     ----------

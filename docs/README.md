@@ -1,25 +1,16 @@
-# JARVIS RD Assistant Docs
+# JARVIS RD Assistant — Docs
 
-This index points at the current, maintained documentation surface. Historical
-plans and older audits are kept for archaeology, but current code and the files
-below outrank archived notes.
+This folder contains the source Markdown for the operator, developer, and
+user documentation.
 
-## Current Product And Architecture
+For the full rendered site, visit the [documentation site](../README.md).
 
-- [PRD](PRD.md) — durable product requirements.
-- [Architecture](ARCHITECTURE.md) — service boundaries, data stores, jobs, auth, and runtime layout.
-- [Engineering Standards](ENGINEERING_STANDARDS.md) — coding, testing, API, and database standards.
-- [Contracts](contracts/README.md) — evergreen subsystem contracts.
-- [Known Residual Risks](known-residual-risks.md) — accepted risks and reopen criteria.
+## Quick Links
 
-## Operations
+- [Deployment Guide](DEPLOYMENT.md) — install, configure, and operate
+- [Architecture](ARCHITECTURE.md) — service topology and data flows
+- [Security](SECURITY.md) — threat model and secrets management
+- [User Guide](manual/index.md) — end-user manual (sign-in, features, Telegram)
 
-- [User Guide](USER_GUIDE.md) — end-user reference: sign-in, surfaces, account recovery.
-- [Deployment](DEPLOYMENT.md)
-- [Requirements](REQUIREMENTS.md)
-- [Performance Profiling HOWTO](perf/HOWTO.md)
-
-## Historical Material
-
-Older plans and audits remain useful context but are not source of truth unless
-the current roadmap links to them explicitly.
+> The canonical edit targets are the Markdown files in this directory.
+> The rendered site is generated from these sources — always edit here.

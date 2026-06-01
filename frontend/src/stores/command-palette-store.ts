@@ -4,7 +4,7 @@ import type { SearchPreviewResult } from '@/types';
 /**
  * Global store for the ⌘K command-palette overlay.
  *
- * Wired in Wave 2 (F1) so the palette is reachable from any authed page via
+ * Wired so the palette is reachable from any authed page via
  * the persistent TopBar search trigger and the ⌘K / Ctrl+K shortcut. The
  * palette UI is mounted once inside CommandPaletteSearch (always present in
  * the TopBar); this store is the single source of open/query/results state.

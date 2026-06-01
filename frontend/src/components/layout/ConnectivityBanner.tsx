@@ -1,6 +1,6 @@
 /**
  * ConnectivityBanner — slim app-shell banner shown when the browser reports
- * offline connectivity (Wave 3 P1d).
+ * offline connectivity.
  *
  * Contract reference:
  *   internal design spec (archived)

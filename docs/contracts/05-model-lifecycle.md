@@ -3,7 +3,7 @@
 **Status:** SHIPPED — backend and Settings lifecycle v1 live-verified
 **Date:** 2026-05-03
 **Scope:** Model catalog, hardware-aware recommendations, pull-on-demand UI, cloud model integration, Settings UI GHOST surface fix
-**Depends on:** Phase C (embedding swap; the Phase C spec is archived, not in the public tree)
+**Depends on:** the embedding-model swap (Qdrant rebuilt to 1024d)
 **Related:** `docs/contracts/03-llm.md`
 
 ---
@@ -35,7 +35,7 @@ Live proof on 2026-05-06:
   active catalog entries.
 - LiteLLM aliases were updated to `ollama/qwen3:14b`,
   `ollama/qwen3:4b`, and `ollama/qwen3-embedding:0.6b`.
-- Phase C completed against the same stack: Qdrant `paper_chunks` is 1024d with
+- The embedding swap completed against the same stack: Qdrant `paper_chunks` is 1024d with
   4,888 points, and PostgreSQL has 4,888/4,888 chunks marked with
   `qwen3-embedding:0.6b`.
 
@@ -58,7 +58,7 @@ Runtime default update on 2026-05-11:
 5. **Pull-on-demand lifecycle** — explicit user action with confirm dialog showing disk/VRAM cost; procrastinate `model.pull` task; progress via existing SSE jobs stream.
 6. **Delete lifecycle** — explicit user action; fails loudly if model is currently assigned.
 7. **Cloud model integration** — catalog entries for Anthropic/OpenAI cloud aliases; Settings UI fix for GHOST surface (API keys exist but no model-select UI).
-8. **Hard migration** — `nomic-embed-text` and `mistral-nemo:12b` are removed from active `litellm/config.yaml` defaults. Phase C rebuilds Qdrant on Qwen3 embeddings. No legacy user protection needed (single-user, pre-launch).
+8. **Hard migration** — `nomic-embed-text` and `mistral-nemo:12b` are removed from active `litellm/config.yaml` defaults. The embedding swap rebuilds Qdrant on Qwen3 embeddings. No legacy user protection needed (single-user, pre-launch).
 
 ### Non-goals (hard)
 
@@ -150,7 +150,7 @@ Cloud entries omit `ollama_tag`, set `vram_gb=0`, `disk_gb=0`, `tier=0`.
   existing 1024d collection.
 - `mxbai-embed-large` — kept as a future embed fallback but not assignable by default because its embedding dimension differs from Qwen3 and requires matching runtime/Qdrant config.
 - `llama4:scout` — included for 10M-token context window (long paper chains). Llama 4 Community license allows commercial with attribution.
-- Cloud embed (`openai/text-embedding-3-small`) — listed as a future option only. It is not assignable in Phase C because cloud embeddings require an explicit dimension and rebuild policy.
+- Cloud embed (`openai/text-embedding-3-small`) — listed as a future option only. It is not assignable during the embedding swap because cloud embeddings require an explicit dimension and rebuild policy.
 
 ### 1.4 Catalog Staleness
 
@@ -432,9 +432,9 @@ No new SSE infrastructure. Existing job store handles it.
 
 ## 8. Risks — Pre-Mitigated
 
-### 8.1 `qwen3-embedding:0.6b` not in Ollama at Phase C execution time
+### 8.1 `qwen3-embedding:0.6b` not in Ollama at embedding-swap time
 
-**Mitigation:** `mxbai-embed-large` is in the catalog as embed fallback. Phase C spec §6 already calls this out. If `qwen3-embedding:0.6b` is unavailable, executor falls back to `mxbai-embed-large` (1024d, Apache 2.0). Cloud embed (`openai/text-embedding-3-small`) is a third option for users with OpenAI keys.
+**Mitigation:** `mxbai-embed-large` is in the catalog as embed fallback. The embedding-swap plan already calls this out. If `qwen3-embedding:0.6b` is unavailable, executor falls back to `mxbai-embed-large` (1024d, Apache 2.0). Cloud embed (`openai/text-embedding-3-small`) is a third option for users with OpenAI keys.
 
 ### 8.2 Catalog entry VRAM values are wrong (model update, quantization variant)
 
@@ -478,7 +478,7 @@ The catalog is static in the package. If Ollama renames `qwen3:14b` → `qwen3:1
 
 | Step | Action |
 |---|---|
-| Phase C | Pulled `qwen3-embedding:0.6b`, rebuilt `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, updated `litellm/config.yaml` embed alias, and left `kg_entities` as a separately checkpointed/rebuildable optional collection. The full historical spec is archived (not in the public tree). |
+| Embedding swap | Pulled `qwen3-embedding:0.6b`, rebuilt `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, updated `litellm/config.yaml` embed alias, and left `kg_entities` as a separately checkpointed/rebuildable optional collection. |
 | Shipped | Removed `nomic-embed-text` and `mistral-nemo:12b` from active `litellm/config.yaml` defaults. |
 | Shipped | Set smart/fast defaults: `smart=qwen3:14b`, `fast=qwen3:4b`. |
 | Shipped (14b→8b) | Downgraded smart default to qwen3:8b in litellm/config.yaml — qwen3:14b starved the GPU-resident embedder on 16 GB cards; admins restore 14b via Settings → llm.smart_model. |
@@ -517,9 +517,9 @@ This contract does NOT prescribe task grouping — that is for the writing-plans
 5. `DELETE /api/system/models/{tag}` with guard
 6. Frontend: Models tab layout + status badges + confirm dialog + pull progress
 7. Frontend: GHOST surface fix (cloud model-select dropdown in role pickers)
-8. Phase C execution (separate sprint, spec already exists)
+8. Embedding-swap execution (separate task)
 
-Phase C (step 8) can execute before or after the UI work (steps 1–7) — the UI does not depend on the embedding swap. The embedding swap depends only on step 4 (pull machinery).
+The embedding swap (step 8) can execute before or after the UI work (steps 1–7) — the UI does not depend on the embedding swap. The embedding swap depends only on step 4 (pull machinery).
 
 ---
 

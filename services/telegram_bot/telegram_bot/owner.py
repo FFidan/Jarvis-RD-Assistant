@@ -1,6 +1,6 @@
 """Resolve Telegram chat IDs for outbound (scheduled/push) messages.
 
-Two pairing modes co-exist after Sprint A:
+Two pairing modes co-exist:
 
 1. **Legacy single-tenant** — ``TELEGRAM_CHAT_ID`` env var OR
    ``user_config.telegram.owner_chat_id`` row. Used by
@@ -10,9 +10,9 @@ Two pairing modes co-exist after Sprint A:
    migration 071). :func:`list_user_pairings` returns all (user_id, chat_id)
    rows so orchestrators can iterate and deliver per-user content.
 
-Sprint A orchestrators that have access to a DB pool use
-:func:`list_user_pairings`. They fall back to :func:`resolve_owner_chat_id`
-for the legacy single-tenant path only when no rows exist in the new table.
+Orchestrators that have access to a DB pool use :func:`list_user_pairings`.
+They fall back to :func:`resolve_owner_chat_id` for the legacy single-tenant
+path only when no rows exist in the new table.
 """
 
 from __future__ import annotations

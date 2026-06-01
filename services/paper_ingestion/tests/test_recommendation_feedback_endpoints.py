@@ -1,6 +1,6 @@
 """Tests for GET and DELETE /api/recommendation_feedback endpoints.
 
-Wave 1cd Task C8 — covers pagination, user-scoping, paper_id filter,
+Covers pagination, user-scoping, paper_id filter,
 topic-name join, and bulk-delete behaviour.
 """
 

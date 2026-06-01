@@ -1,4 +1,4 @@
-"""RB-3: Auth enforcement + cross-tenant scoping for GET /api/contradictions.
+"""Auth enforcement + cross-tenant scoping for GET /api/contradictions.
 
 (a) No session → 401.
 (b) User B does not receive user A's contradictions.

@@ -1,4 +1,4 @@
-"""Tests for paper_ingestion.pulse.verification.verify_pulse_reasoning (WS-2.3).
+"""Tests for paper_ingestion.pulse.verification.verify_pulse_reasoning.
 
 Exercises the four branches that gate persistence of
 ``pulse_cards.reasoning_verified`` + ``pulse_cards.reasoning_confidence``:

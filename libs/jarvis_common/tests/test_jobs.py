@@ -1,6 +1,6 @@
 """Unit tests for stream_job_events adaptive poll throttle in jobs.py.
 
-Covers: W5-12 / BE-02 — ramp-up timing must be invariant to poll_interval growth.
+Covers: ramp-up timing must be invariant to poll_interval growth.
 
 The old proxy `idle_ticks * poll_interval > 30` has a cascade defect:
 once the threshold is first crossed at tick ~16 (idle_ticks=16, poll_interval=2,
@@ -57,7 +57,7 @@ async def _drain(ait: AsyncIterator[str], max_items: int = 300) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# W5-12 / BE-02: ramp-up must not cascade on the same idle period
+# ramp-up must not cascade on the same idle period
 # ---------------------------------------------------------------------------
 
 
@@ -311,7 +311,7 @@ async def test_adaptive_throttle_resets_idle_start_on_state_change():
 
 
 # ---------------------------------------------------------------------------
-# W5-15 / BE-05 — list_jobs user_id filter SQL behaviour
+# list_jobs user_id filter SQL behaviour
 # ---------------------------------------------------------------------------
 
 

@@ -518,7 +518,7 @@ async def test_delete_paper_feedback_removes_row_scoped_to_user(
 
 
 # ---------------------------------------------------------------------------
-# Owner-path tests for uncovered rows (Phase B Fixer 1)
+# Owner-path tests for uncovered rows
 # ---------------------------------------------------------------------------
 
 
@@ -532,7 +532,7 @@ async def test_a43_get_papers_feed_owner_sees_own_library(
 ):
     """Covers map row A43: GET /api/papers/feed returns user A's library papers.
     Verified: services/paper_ingestion/paper_ingestion/routers/feed.py:34 at HEAD ba1f8146.
-    Survivor-of (Phase C): mock-unit feed-scoping tests in test_papers_router.py.
+    Survivor-of: mock-unit feed-scoping tests in test_papers_router.py.
     """
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/papers/feed")
@@ -564,7 +564,7 @@ async def test_a67_get_paper_detail_owner_gets_200(
     a query binding $1 as an integer first. On cache collision asyncpg raises
     DataError → 500. This test accepts 200 (success) or skips with documented reason
     on 500 to avoid masking real failures while acknowledging the infrastructure
-    limitation documented in Wave 4.4 prereqs.
+    limitation documented in the SharedConnPool prereqs.
     """
     paper_id = contract_two_users.paper_id_a
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
@@ -573,7 +573,7 @@ async def test_a67_get_paper_detail_owner_gets_200(
     if resp.status_code == 500:
         pytest.skip(
             "SharedConnPool $1::text prepared-statement-cache collision on "
-            "procrastinate_jobs subquery — known Wave 4.4 limitation; skip rather than fail"
+            "procrastinate_jobs subquery — known SharedConnPool limitation; skip rather than fail"
         )
     assert resp.status_code == 200, f"Owner expected 200, got {resp.status_code}: {resp.text[:300]}"
     body = resp.json()
@@ -594,7 +594,7 @@ async def test_a68_batch_save_inserts_into_user_library(
 ):
     """Covers map row A68: POST /api/papers/batch-save inserts papers into user_library with correct user_id.
     Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:356 at HEAD ba1f8146.
-    Survivor-of (Phase C): test_papers_router.py mock-unit batch-save tests.
+    Survivor-of: test_papers_router.py mock-unit batch-save tests.
     """
     payload = [
         {
@@ -689,7 +689,7 @@ async def test_a71_get_feed_counts_reflects_user_library(
 ):
     """Covers map row A71: GET /api/papers/feed/counts returns inbox/reading_list counts for user.
     Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:484 at HEAD ba1f8146.
-    Survivor-of (Phase C): test_feed_facet_counts.py mock-unit count tests.
+    Survivor-of: test_feed_facet_counts.py mock-unit count tests.
     """
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/papers/feed/counts")
@@ -715,7 +715,7 @@ async def test_a74_skip_paper_transitions_state_to_done(
 ):
     """Covers map row A74: PUT /api/papers/{paper_id}/skip sets paper_user_state to 'done'.
     Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:563 at HEAD ba1f8146.
-    Survivor-of (Phase C): test_papers_router.py skip mock-unit tests.
+    Survivor-of: test_papers_router.py skip mock-unit tests.
 
     skip_paper requires state='inbox'; seed a fresh paper in inbox state.
     """
@@ -759,7 +759,7 @@ async def test_a81_trash_and_reject_trashes_and_inserts_feedback(
     """Covers map row A81: PUT /api/papers/{paper_id}/trash_and_reject trashes paper and inserts
     negative feedback row atomically (source='dismiss_combined').
     Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:762 at HEAD ba1f8146.
-    Survivor-of (Phase C): test_papers_lifecycle.py mock-unit trash_and_reject test.
+    Survivor-of: test_papers_lifecycle.py mock-unit trash_and_reject test.
     """
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
@@ -818,7 +818,7 @@ async def test_a83_hard_delete_removes_paper_row(
 ):
     """Covers map row A83: DELETE /api/papers/{paper_id} removes the paper row from DB.
     Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:831 at HEAD ba1f8146.
-    Survivor-of (Phase C): test_papers_lifecycle.py mock-unit hard_delete tests.
+    Survivor-of: test_papers_lifecycle.py mock-unit hard_delete tests.
 
     hard_delete requires state='trash'. Seeds a fresh paper in trash state.
     Qdrant cleanup is best-effort and not asserted (Qdrant is an exempt boundary).
@@ -866,7 +866,7 @@ async def test_a84_bulk_action_transitions_state_for_owner(
 ):
     """Covers map row A84: POST /api/papers/bulk applies bulk state change to owner's papers.
     Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:891 at HEAD ba1f8146.
-    Survivor-of (Phase C): test_papers_lifecycle.py mock-unit bulk_action tests.
+    Survivor-of: test_papers_lifecycle.py mock-unit bulk_action tests.
 
     Seeds a fresh inbox paper; bulk action 'save' should transition it to 'to_read'.
     """
@@ -920,7 +920,7 @@ async def test_a90_batch_process_returns_job_id(
 ):
     """Covers map row A90: POST /api/papers/batch-process returns {queued, job_id} dict.
     Verified: services/paper_ingestion/paper_ingestion/routers/pdf.py:384 at HEAD ba1f8146.
-    Survivor-of (Phase C): test_pdf_router_direct.py mock-unit batch_process tests.
+    Survivor-of: test_pdf_router_direct.py mock-unit batch_process tests.
 
     This endpoint queries for papers with pdf_downloaded=True in the user's library;
     in the contract test environment there are no such papers, so queued=0 and
@@ -948,7 +948,7 @@ async def test_a92_recompute_all_priorities_returns_updated_count(
 ):
     """Covers map row A92: POST /api/papers/recompute-priorities returns {updated: N}.
     Verified: services/paper_ingestion/paper_ingestion/routers/priority.py:77 at HEAD ba1f8146.
-    Survivor-of (Phase C): test_priority.py mock-unit recompute tests.
+    Survivor-of: test_priority.py mock-unit recompute tests.
 
     The endpoint recomputes priorities across ALL papers (not scoped by user) and
     returns the count of updated rows. With at least the seeded paper in the DB,
@@ -1081,7 +1081,7 @@ async def test_e1_bulk_action_partial_failure_isolation(
     This is the per-paper SAVEPOINT isolation guarantee: a 403/404 on one paper
     must not roll back the outer transaction, and must not affect an unrelated paper.
     Verified: papers.py:889-946 bulk_action_papers (SAVEPOINT per iteration).
-    Survivor-of (Phase E2): test_papers_lifecycle.py bulk IDOR mock-unit tests.
+    Survivor-of: test_papers_lifecycle.py bulk IDOR mock-unit tests.
     """
     user_a_id = contract_two_users.user_a_id
     user_b_id = contract_two_users.user_b_id
@@ -1163,7 +1163,7 @@ async def test_e1_annotations_idempotent_double_put(
     """PUT /api/papers/{id}/annotations twice yields the last write's state (idempotent UPSERT).
 
     Verified: papers.py:807 (annotate_paper — ON CONFLICT DO UPDATE path via assert_paper_ownership).
-    Survivor-of (Phase E2): test_papers_lifecycle.py annotations idempotency tests.
+    Survivor-of: test_papers_lifecycle.py annotations idempotency tests.
     """
     paper_id = contract_two_users.paper_id_a
     user_a_id = contract_two_users.user_a_id
@@ -1509,7 +1509,7 @@ async def test_batch_save_stamps_citation_batch_origin(
 #   libs/jarvis_common/jarvis_common/db_helpers.py:234 — assert_paper_ownership → 403 non-owner
 #
 # CONTRACT-GAP (test_pwst_08): save_paper does NOT emit to system_events.
-# Verified by Serena find_symbol + grep 'system_events' in routers/papers.py → 0 matches.
+# Verified by grep 'system_events' in routers/papers.py → 0 matches.
 # test_pwst_08 instead asserts the trigger-maintained updated_at column records
 # the state-transition timestamp (observable audit trail via set_updated_at_paper_user_state).
 # ---------------------------------------------------------------------------
@@ -1723,7 +1723,7 @@ async def test_pwst_08_state_transition_audit_emits_event(
     """PUT /api/papers/{id}/save: paper_user_state.updated_at advances on state transition.
 
     CONTRACT-GAP NOTE: save_paper does NOT emit to system_events (verified by
-    Serena find_symbol + grep 'system_events' in routers/papers.py → 0 matches).
+    grep 'system_events' in routers/papers.py → 0 matches).
     The observable audit trail is the trigger-maintained updated_at column on
     paper_user_state (set_updated_at_paper_user_state trigger, db/init.sql:1776).
 
@@ -1785,11 +1785,11 @@ async def test_pwst_08_state_transition_audit_emits_event(
 
 
 # ---------------------------------------------------------------------------
-# W1.T2 audit-bug regression tests
+# Audit-bug regression tests
 #
-# W1-D1-004: batch_save_papers must reject non-allowlisted pdf_url at persistence time.
-# W1-D1-008: list_papers BM25 fallback uses websearch_to_tsquery consistently.
-# W1-D1-010: delete_paper_feedback must call assert_paper_ownership before DELETE.
+# batch_save_papers must reject non-allowlisted pdf_url at persistence time.
+# list_papers BM25 fallback uses websearch_to_tsquery consistently.
+# delete_paper_feedback must call assert_paper_ownership before DELETE.
 #
 # Verified identifiers:
 #   routers/papers_detail.py:batch_save_papers — pdf_url allowlist check before upsert
@@ -1804,7 +1804,7 @@ async def test_batch_save_papers_rejects_non_allowlisted_pdf_url(
     _configure_api_key,
     contract_conn,
 ):
-    """W1-D1-004: POST /api/papers/batch-save clears pdf_url if domain not in ALLOWED_PDF_DOMAINS.
+    """POST /api/papers/batch-save clears pdf_url if domain not in ALLOWED_PDF_DOMAINS.
 
     Sends a paper with pdf_url pointing to evil.example.com (not in the allowlist).
     Asserts that the stored row has pdf_url=None (cleared at persistence time), confirming
@@ -1817,7 +1817,7 @@ async def test_batch_save_papers_rejects_non_allowlisted_pdf_url(
         {
             "external_id": "w1d1004-contract-pdf-block-ext",
             "source_type": "arxiv",
-            "title": "W1-D1-004 PDF Allowlist Contract Test",
+            "title": "PDF Allowlist Contract Test",
             "authors": ["Test Author"],
             "url": "https://w1d1004.contract.test/paper",
             "pdf_url": "https://evil.example.com/malicious.pdf",
@@ -1838,7 +1838,7 @@ async def test_batch_save_papers_rejects_non_allowlisted_pdf_url(
     )
     assert row is not None, f"Paper {saved_paper_id} not found in DB after batch-save"
     assert row["pdf_url"] is None, (
-        f"W1-D1-004 FAIL: pdf_url from evil.example.com must be cleared at persistence time; "
+        f"pdf_url from evil.example.com must be cleared at persistence time; "
         f"got pdf_url={row['pdf_url']!r}"
     )
 
@@ -1849,7 +1849,7 @@ async def test_list_papers_bm25_uses_websearch_to_tsquery(
     _configure_api_key,
     contract_conn,
 ):
-    """W1-D1-008: GET /api/papers?q=... BM25 fallback uses websearch_to_tsquery.
+    """GET /api/papers?q=... BM25 fallback uses websearch_to_tsquery.
 
     Verifies behavioral consistency: a multi-term query that websearch_to_tsquery
     handles (e.g. quoted phrase OR operator) returns results without error, and
@@ -1859,7 +1859,7 @@ async def test_list_papers_bm25_uses_websearch_to_tsquery(
     the BM25 path executes the correct SQL parser without an error response.
 
     # Verified: routers/papers_feed.py:list_papers — websearch_to_tsquery('english', $N)
-    # replaces the former plainto_tsquery in the BM25 fallback path (W1-D1-008 fix).
+    # replaces the former plainto_tsquery in the BM25 fallback path.
     """
     sentinel = "xq7bm25websearchfix2026"
 
@@ -1886,12 +1886,11 @@ async def test_list_papers_bm25_uses_websearch_to_tsquery(
         resp = await c.get("/api/papers", params={"q": sentinel})
 
     assert resp.status_code == 200, (
-        f"W1-D1-008: BM25 websearch_to_tsquery path returned {resp.status_code}: {resp.text[:300]}"
+        f"BM25 websearch_to_tsquery path returned {resp.status_code}: {resp.text[:300]}"
     )
     ids = [p["id"] for p in resp.json()]
     assert bm25_paper_id in ids, (
-        f"W1-D1-008: sentinel paper {bm25_paper_id} not returned by BM25 search for {sentinel!r}; "
-        f"ids={ids}"
+        f"sentinel paper {bm25_paper_id} not returned by BM25 search for {sentinel!r}; ids={ids}"
     )
 
 
@@ -1901,15 +1900,15 @@ async def test_delete_paper_feedback_rejects_cross_owner(
     _configure_api_key,
     contract_conn,
 ):
-    """W1-D1-010: DELETE /api/papers/{paper_id}/feedback by non-owner returns 403/404.
+    """DELETE /api/papers/{paper_id}/feedback by non-owner returns 403/404.
 
     User A owns paper A and has a feedback row. User B attempts to DELETE that
-    feedback row. With the W1-D1-010 fix, assert_paper_ownership fires before
-    the DELETE, so user B gets 403/404 and user A's row is untouched.
+    feedback row. assert_paper_ownership fires before the DELETE, so user B
+    gets 403/404 and user A's row is untouched.
 
     # Verified: routers/papers_feedback.py:delete_paper_feedback —
     # assert_paper_ownership(conn, paper_id, user_id) called before DELETE FROM
-    # recommendation_feedback (W1-D1-010 fix).
+    # recommendation_feedback.
     """
     paper_id = contract_two_users.paper_id_a
     user_a_id = contract_two_users.user_a_id
@@ -1928,7 +1927,7 @@ async def test_delete_paper_feedback_rejects_cross_owner(
         resp = await c.delete(f"/api/papers/{paper_id}/feedback", params={"source": "feed_thumbs"})
 
     assert resp.status_code in (403, 404), (
-        f"W1-D1-010 FAIL: cross-owner DELETE /feedback returned {resp.status_code} "
+        f"cross-owner DELETE /feedback returned {resp.status_code} "
         f"(expected 403 or 404); body: {resp.text[:300]}"
     )
 
@@ -1938,6 +1937,4 @@ async def test_delete_paper_feedback_rejects_cross_owner(
         paper_id,
         user_a_id,
     )
-    assert row is not None, (
-        "W1-D1-010 FAIL: user A's feedback row was deleted by user B's cross-owner DELETE"
-    )
+    assert row is not None, "user A's feedback row was deleted by user B's cross-owner DELETE"

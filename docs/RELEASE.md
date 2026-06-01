@@ -14,7 +14,7 @@ Releases follow [Semantic Versioning](https://semver.org/): `vMAJOR.MINOR.PATCH`
 To cut a release:
 
 ```bash
-# 1. Ensure all waves have merged and tests pass.
+# 1. Ensure all planned changes have merged and tests pass.
 uv run pytest -x
 npm --prefix frontend run test -- --run
 uv run ruff check services/ libs/ scripts/
@@ -127,7 +127,7 @@ been pushed to a registry.
 
 Before tagging a release:
 
-- [ ] All waves for the milestone have merged to `master`.
+- [ ] All planned changes for the milestone have merged to `master`.
 - [ ] `uv run pytest -x` passes.
 - [ ] `npm --prefix frontend run test -- --run` passes.
 - [ ] `uv run ruff check services/ libs/ scripts/` is clean.

@@ -20,7 +20,7 @@ service test suites):
 * ``LE-002`` — unknown kinds in permissive mode return ``400`` (not ``422``).
 * ``SYM-002`` — ``CreateJobRequest.payload`` uses
   ``Field(default_factory=dict)``; the default is never a shared mutable.
-* ``LE-002 (Sprint 4)`` — ownership comparisons coerce both sides to ``str``
+* ``LE-002`` — ownership comparisons coerce both sides to ``str``
   so that asyncpg-returned ``user_id='42'`` matches caller ``user_id=42``.
 * ``noop.test`` — appended to the allowlist when
   ``get_jobs_settings().test_jobs_enabled`` is true (re-evaluated on every

@@ -123,7 +123,7 @@ async def update_card(
     """Update a card's content (does not affect FSRS state)."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            # WS-2D: scope by user_id to prevent IDOR — user A must not edit user B's card.
+            # Scope by user_id to prevent IDOR — user A must not edit user B's card.
             existing = await conn.fetchrow(
                 "SELECT * FROM cards WHERE id = $1 AND user_id = $2 FOR UPDATE",
                 card_id,
@@ -169,7 +169,7 @@ async def delete_card(
 ) -> None:
     """Delete a card."""
     async with db_pool.acquire() as conn:
-        # WS-2D: scope by user_id to prevent IDOR delete.
+        # Scope by user_id to prevent IDOR delete.
         result = await conn.execute(
             "DELETE FROM cards WHERE id = $1 AND user_id = $2",
             card_id,

@@ -83,7 +83,7 @@ async def _start_procrastinate_worker(app: FastAPI) -> None:
     """B.4 Step 4 — start the procrastinate worker (legacy worker removed).
 
     Wires the procrastinate ``App`` connector to ``DATABASE_URL``, registers
-    learning_engine task handlers (W4-1: dependency inversion — service owns
+    learning_engine task handlers (dependency inversion — service owns
     its kind→handler mapping), and starts the worker polling the
     ``learning_engine`` + ``builtin`` queues.
     """
@@ -99,7 +99,7 @@ async def _start_procrastinate_worker(app: FastAPI) -> None:
         register_learning_engine_tasks,
     )
 
-    # Register kind→handler mappings BEFORE the worker starts (W4-1).
+    # Register kind→handler mappings BEFORE the worker starts.
     register_learning_engine_tasks(procrastinate_app)
 
     # Bind the connector to the same DSN the app_factory pool uses (reads from
@@ -165,10 +165,10 @@ configure_middleware_and_errors(
     app, limiter=limiter, trusted_proxy_hosts=get_core_settings().trusted_proxy_hosts_list
 )
 
-# WS-2A: SessionMiddleware populates request.state.user_id from the
-# jarvis_session cookie issued by paper_ingestion's /api/auth/verify.
-# Sessions are shared across both services because both back onto the
-# same Postgres `sessions` table.
+# SessionMiddleware populates request.state.user_id from the jarvis_session
+# cookie issued by paper_ingestion's /api/auth/verify.  Sessions are shared
+# across both services because both back onto the same Postgres `sessions`
+# table.
 from jarvis_common.session_middleware import SessionMiddleware  # noqa: E402
 
 app.add_middleware(SessionMiddleware)

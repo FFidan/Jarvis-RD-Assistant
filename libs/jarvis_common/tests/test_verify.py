@@ -1,4 +1,4 @@
-"""Smoke tests for jarvis_common.verify (W3-DRY-4).
+"""Smoke tests for jarvis_common.verify.
 
 Verifies:
 1. QuoteVerifier is importable from the canonical path jarvis_common.verify.
@@ -6,7 +6,7 @@ Verifies:
    non-matching quote rejected.
 3. DictChunk adapts plain dicts to the ChunkLike Protocol.
 
-Note: paper_ingestion.extraction.verify shim removed in audit A1-04 (W2.A1a).
+Note: paper_ingestion.extraction.verify shim removed in an earlier audit pass.
 """
 
 from __future__ import annotations

@@ -378,7 +378,7 @@ async def quick_add_task(
     """Quick-add a task, optionally linked to a project."""
     async with db_pool.acquire() as conn:
         if payload.project_id is not None:
-            # WS-2D: scope project lookup by owner — IDOR otherwise.
+            # Scope project lookup by owner — IDOR otherwise.
             project_exists = await conn.fetchval(
                 "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
                 payload.project_id,
@@ -387,7 +387,7 @@ async def quick_add_task(
             if not project_exists:
                 raise HTTPException(status_code=404, detail="Project not found")
 
-        # WS-2D: write user_id (Wave-3B added the column but this insert never set it).
+        # Write user_id into the new task row.
         row = await conn.fetchrow(
             "INSERT INTO tasks (title, project_id, priority, status, user_id) "
             "VALUES ($1, $2, $3, 'todo', $4) RETURNING *",
@@ -416,7 +416,7 @@ async def log_focus_session(
         async with conn.transaction():
             # Validate and lock referenced rows inside the transaction (LE-009: FOR UPDATE
             # prevents concurrent deletes from racing between the check and the DML).
-            # WS-2D: scope by user_id to prevent IDOR — user A cannot log focus
+            # Scope by user_id to prevent IDOR — user A cannot log focus
             # against user B's task.
             if payload.task_id is not None:
                 task_row = await conn.fetchrow(

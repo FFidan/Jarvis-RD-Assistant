@@ -1,5 +1,5 @@
 /**
- * TelegramPairingSection — per-user multi-tenant Telegram pairing UI (Sprint A).
+ * TelegramPairingSection — per-user multi-tenant Telegram pairing UI.
  *
  * Shows:
  *  - Current pairing status (paired / unpaired)

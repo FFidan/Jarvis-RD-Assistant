@@ -51,10 +51,9 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
     )
 
 
-# Sprint B canonical-corpus refactor: papers are canonical (no owner
-# column); per-user library membership is in `user_library`. The feed
-# joins `user_library` so users see *their* library; system-wide single-
-# user mode (user_id=None) bypasses the join via a UNION fallback.
+# Papers are canonical (no owner column); per-user library membership
+# is in `user_library`. The feed joins `user_library` so users see
+# *their* library; single-user mode (user_id=None) bypasses the join.
 _BASE_FROM_USER = (
     " FROM papers p"
     " JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1"
@@ -126,12 +125,11 @@ def build_feed_queries(
 ) -> FeedQueryParts:
     """Build the feed data and count queries for the requested filters.
 
-    Sprint B canonical-corpus refactor: papers are a canonical shared
-    corpus; per-user library membership is in ``user_library``. The data
-    query JOINs ``user_library`` so each user only sees what's actually in
-    *their* library. When ``user_id`` is ``None`` (single-user / pre-multi-
-    user fallback) the JOIN is skipped and the query returns the entire
-    canonical corpus.
+    Papers are a canonical shared corpus; per-user library membership is
+    in ``user_library``. The data query JOINs ``user_library`` so each
+    user only sees what's actually in *their* library. When ``user_id``
+    is ``None`` (single-user fallback) the JOIN is skipped and the query
+    returns the entire canonical corpus.
 
     The ``view`` parameter maps to a set of fixed SQL predicates defined in
     :data:`VIEW_PREDICATES`.  Valid values:
@@ -140,8 +138,8 @@ def build_feed_queries(
     When ``view`` is supplied it takes precedence over the legacy ``statuses``
     filter.  Raises :exc:`ValueError` if ``view`` is not a recognised key.
 
-    .. deprecated:: Phase A
-        `statuses` is ignored. Use `view` instead. Removed entirely in a future sprint.
+    .. deprecated::
+        `statuses` is ignored. Use `view` instead. Will be removed in a future release.
     """
     if view is not None and view not in VIEW_PREDICATES:
         raise ValueError(f"Unknown view {view!r}. Valid values: {sorted(VIEW_PREDICATES)}")
@@ -152,11 +150,10 @@ def build_feed_queries(
     params: list[object] = []
     param_idx = 1
 
-    # Sprint B: user_library JOIN replaces the muddled
-    # `p.user_id IS NULL OR p.user_id = $N` predicate. The first parameter is
-    # always reserved for user_id so downstream parameter numbering matches
-    # historical expectations (and the LEFT JOIN onto paper_user_state still
-    # binds against $1).
+    # user_library JOIN replaces the legacy `p.user_id IS NULL OR p.user_id = $N`
+    # predicate. The first parameter is always reserved for user_id so
+    # downstream parameter numbering matches historical expectations (and the
+    # LEFT JOIN onto paper_user_state still binds against $1).
     if user_id is None or scope == "corpus":
         # _BASE_FROM_CORPUS_USER binds user_id to $1 via IS NOT DISTINCT FROM $1
         # which evaluates to IS NULL when user_id is NULL — semantically identical

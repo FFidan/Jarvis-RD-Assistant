@@ -321,7 +321,7 @@ async def teststream_rag_events_sse_termination():
 
 
 async def teststream_rag_events_think_blocks_filtered():
-    """Think-block tokens are stripped from token events and full_answer (W0-2 defense-in-depth)."""
+    """Think-block tokens are stripped from token events and full_answer (defense-in-depth)."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
     # Simulate a provider that emits <think>...</think> CoT wrappers across SSE chunks.

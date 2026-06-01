@@ -193,9 +193,9 @@ async def batch_summarize_papers(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    # Sprint B: select only papers in the caller's user_library. WS-CROSS-USER:
-    # the resolver hard-401s sessionless callers, so the previous unscoped
-    # corpus fallback (which leaked every user's papers) is removed.
+    # Select only papers in the caller's user_library. The resolver
+    # hard-401s sessionless callers, so the previous unscoped corpus
+    # fallback (which leaked every user's papers) is removed.
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT p.id FROM papers p
@@ -587,10 +587,10 @@ async def get_weekly_digest(
     against the topic corpus and returned in ``verified_themes`` /
     ``unverified_themes`` (ephemeral — not persisted to DB).
 
-    Phase 2 WS-2D: ``user_id`` is resolved from the session via
-    ``get_current_user_id`` rather than accepted as a query parameter
-    (which was an IDOR vector pre-WS-2A — any authenticated user could pass
-    any user_id and read another user's digest).
+    ``user_id`` is resolved from the session via ``get_current_user_id``
+    rather than accepted as a query parameter (which was an IDOR vector —
+    any authenticated user could pass any user_id and read another user's
+    digest).
 
     Parameters
     ----------

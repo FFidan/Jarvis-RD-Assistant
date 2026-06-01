@@ -1,5 +1,5 @@
 /**
- * review-outbox (Wave 3 P2) — append-only offline review outbox.
+ * review-outbox — append-only offline review outbox.
  *
  * Coverage:
  *   - enqueueReview: persists a record with idempotency_key + user_id + ts.

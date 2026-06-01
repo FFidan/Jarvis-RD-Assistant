@@ -1,5 +1,5 @@
 /**
- * Phase 2 WS-2F first-run wizard (pre-auth).
+ * First-run wizard (pre-auth).
  *
  * This wizard runs BEFORE any user is authenticated. It bootstraps an
  * unconfigured install through:

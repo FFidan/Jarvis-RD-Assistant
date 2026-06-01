@@ -1,4 +1,4 @@
-"""RB-3 guard: cross-service auth-DI boundary for learning_engine.
+"""Guard: cross-service auth-DI boundary for learning_engine.
 
 The Telegram bot calls a small, fixed set of LE endpoints *per user* with
 ``X-API-Key`` + ``X-Owner-User-Id`` (no session cookie). Those endpoints MUST

@@ -61,7 +61,7 @@ async def download_pdf(
 
     user_id = await current_user_id_strict(request)
 
-    # Phase 1: load and validate (short transaction — no lock held during I/O)
+    # Load and validate (short transaction — no lock held during I/O)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
         if not row:
@@ -72,7 +72,7 @@ async def download_pdf(
     if row["pdf_downloaded"]:
         return row_to_paper_response(row)
 
-    # Phase 2: download (no DB connection held across slow HTTP)
+    # Download (no DB connection held across slow HTTP)
     try:
         pdf_path = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
     except ValueError as e:
@@ -85,7 +85,7 @@ async def download_pdf(
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="PDF download failed")
 
-    # Phase 3: write back (new short transaction — pdf_downloaded=TRUE is idempotent guard)
+    # Write back (new short transaction — pdf_downloaded=TRUE is idempotent guard)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             updated = await conn.fetchrow(
@@ -362,9 +362,9 @@ async def scan_local_pdfs(
 
     user_id = await current_user_id_strict(request)
     jarvis_job_id = str(uuid.uuid4())
-    # Phase 2 WS-2D: thread caller user_id for audit-trail attribution. The
-    # scan itself is filesystem-wide; per-user PDF dirs are deferred until
-    # multi-user PDF storage spec lands.
+    # Thread caller user_id for audit-trail attribution. The scan itself is
+    # filesystem-wide; per-user PDF dirs are deferred until the multi-user
+    # PDF storage spec lands.
     await KIND_TO_TASK["papers.scan_local"].defer_async(job_id=jarvis_job_id, user_id=user_id)
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 

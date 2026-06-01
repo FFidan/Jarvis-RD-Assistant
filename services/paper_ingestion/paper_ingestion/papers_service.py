@@ -14,7 +14,7 @@ that the router used to own is dispatched from this module instead.
 
 Behaviour is preserved verbatim from the pre-extraction router — same SQL, same
 ordering, same error handling, same return shapes. In particular the
-load-bearing DELETE→Qdrant ordering (WS-AH2 NEW-H2) is unchanged: the DB DELETE
+load-bearing DELETE→Qdrant ordering (NEW-H2) is unchanged: the DB DELETE
 commits inside the transaction, then ``delete_paper_vectors`` runs OUTSIDE the
 transaction.
 """
@@ -138,7 +138,7 @@ async def get_feed_counts(
             f"THEN 1 ELSE 0 END), 0)::int AS {alias}"
         )
 
-    # Sprint B: scope feed counts via the caller's user_library; single-user
+    # Scope feed counts via the caller's user_library; single-user
     # mode (user_id=None) falls back to the canonical corpus.
     if user_id is not None:
         sql = f"""
@@ -215,7 +215,7 @@ async def hard_delete_paper(
 
     Cascades through FK; Qdrant cleanup is best-effort.
 
-    Order rationale (WS-AH2 NEW-H2 — load-bearing): if SQL ``DELETE`` fails,
+    Order rationale (NEW-H2 — load-bearing): if SQL ``DELETE`` fails,
     the txn rolls back and Qdrant is untouched (user retries cleanly). If
     SQL succeeds and Qdrant fails, vectors are orphaned (recoverable). The
     reverse order is data-loss-prone — do not collapse the inside-txn

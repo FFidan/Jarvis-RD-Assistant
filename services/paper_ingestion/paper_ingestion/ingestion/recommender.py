@@ -1,5 +1,5 @@
 """
-Recommendation engine — Phase 1: liked centroid + project context.
+Recommendation engine — liked centroid + project context.
 Called by scheduler (nightly) or via POST /api/recommendations/refresh.
 """
 

@@ -34,7 +34,7 @@ from jarvis_common.testing import make_live_pg_dsn as _make_live_pg_dsn
 
 live_pg_dsn = _make_live_pg_dsn("jarvis-le")
 
-# Contract-layer fixtures (Wave 4): session-scoped Postgres + per-test txn rollback
+# Contract-layer fixtures: session-scoped Postgres + per-test txn rollback
 from jarvis_common.testing import (  # noqa: E402, F401
     _make_contract_conn_fixture,
     _make_contract_pool_fixture,

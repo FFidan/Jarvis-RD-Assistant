@@ -1,5 +1,5 @@
 /*
- * JARVIS RD Assistant — Service Worker (Wave 3 P1a, offline / PWA foundation)
+ * JARVIS RD Assistant — Service Worker (offline / PWA foundation)
  *
  * Plain JS, served verbatim from /public (no bundler — cannot import the TS
  * classifier). The cacheability policy below is a HAND-MIRROR of

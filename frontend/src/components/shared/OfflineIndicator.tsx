@@ -1,6 +1,6 @@
 /**
  * OfflineIndicator — small per-surface badge for the offline / PWA track
- * (Wave 3 P1d).
+ * (offline / PWA track).
  *
  * Contract reference:
  *   internal design spec (archived)

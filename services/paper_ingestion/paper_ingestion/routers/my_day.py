@@ -1,4 +1,4 @@
-"""My Day journal endpoints (Phase 2).
+"""My Day journal endpoints.
 
 Provides GET and POST (upsert) for end-of-day journal entries stored in the
 ``journal_entries`` table (migration 051).

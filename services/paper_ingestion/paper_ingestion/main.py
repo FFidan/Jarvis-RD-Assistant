@@ -60,7 +60,7 @@ from paper_ingestion.pdf_processor import PDFProcessor
 from paper_ingestion.services.telegram_bootstrap import refresh_telegram_bot_username
 from paper_ingestion.sources.registry import get_source_class
 
-# WS-6: install uvloop early so the event-loop policy is set before
+# Install uvloop early so the event-loop policy is set before
 # any asyncio.get_event_loop() calls.  Guarded against pytest runs because
 # uvloop.install() mutates the global policy and breaks pytest-asyncio
 # per-test loop isolation (tests pass when isolated but fail as a suite).
@@ -317,7 +317,7 @@ async def _start_procrastinate_worker(app: FastAPI) -> None:
 
     Wires the procrastinate ``App`` connector with ``DATABASE_URL`` (the same
     DSN backing ``app.state.db_pool``), registers paper_ingestion task handlers
-    (W4-1: dependency inversion — service owns its kind→handler mapping), opens
+    (dependency inversion — service owns its kind→handler mapping), opens
     the connector, threads ``(pool, http_client)`` into ``task_registry`` so
     task wrappers can access the shared singletons, then starts the worker as
     a background asyncio task. Stored on ``app.state`` for the symmetric
@@ -335,7 +335,7 @@ async def _start_procrastinate_worker(app: FastAPI) -> None:
         register_paper_ingestion_tasks,
     )
 
-    # Register kind→handler mappings BEFORE the worker starts (W4-1).
+    # Register kind→handler mappings BEFORE the worker starts.
     register_paper_ingestion_tasks(procrastinate_app)
 
     # The connector built at task_registry import time has no DSN — replace it
@@ -432,7 +432,7 @@ configure_middleware_and_errors(
     trusted_proxy_hosts=get_core_settings().trusted_proxy_hosts_list,
 )
 
-# WS-2A: SessionMiddleware reads the jarvis_session cookie and populates
+# SessionMiddleware reads the jarvis_session cookie and populates
 # request.state.user_id. Added AFTER configure_middleware_and_errors so it
 # sits OUTSIDE (i.e. runs BEFORE) RequestIDMiddleware/SlowAPI/CORS/ProxyHeaders
 # in the request flow — Starlette add_middleware prepends, so the last-added
@@ -488,12 +488,12 @@ from paper_ingestion.routers import source_config as source_config_router  # noq
 from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
 app.include_router(auth_router.router)
-# WS-2B: admin router uses session-only auth (no X-API-Key required for browser
+# Admin router uses session-only auth (no X-API-Key required for browser
 # sessions). Exempt from the global verify_api_key dep via dependencies=[].
 app.include_router(admin_router.router, dependencies=[])
-# Wave 3-C: AI backend configuration — session-only admin auth, no X-API-Key required.
+# AI backend configuration — session-only admin auth, no X-API-Key required.
 app.include_router(settings_ai_router.router, dependencies=[])
-# WS-2F: setup router is the first-run bootstrap. Endpoints are wide open until
+# Setup router is the first-run bootstrap. Endpoints are wide open until
 # the first admin exists; afterwards each handler enforces admin-role itself
 # via require_unconfigured_or_admin. Exempt from global verify_api_key.
 app.include_router(setup_router.router, dependencies=[])

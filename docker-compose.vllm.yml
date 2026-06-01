@@ -30,7 +30,7 @@
 #     Zero call-site changes required.  db_helpers.validated_model() and
 #     get_smart_model() always return the alias "smart"; LiteLLM routes it.
 #
-# VRAM budget reasoning (16 GB RTX 5060 Ti, 16 311 MiB total):
+# VRAM budget reasoning (≈16 GB GPU, e.g. RTX 5060 Ti):
 #   - qwen3-embedding:4b (resident, keep_alive=-1): ~2.4 GB
 #   - Qwen2.5-7B-Instruct-AWQ (vLLM, 4-bit AWQ): ~4.5–5.5 GB
 #   - Total peak: ~7–8 GB  <  16 GB physical  → within budget with ~8 GB headroom.

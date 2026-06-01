@@ -214,7 +214,7 @@ print(recommend_models(${_vram_mb}).summary)
   fi
   # When the operator overrides JARVIS_NET_SUBNET to a non-default value, the
   # hard-coded literals in frontend/nginx.conf must also be updated manually —
-  # otherwise the RB-4 rate-limit self-DoS protection silently regresses (Caddy
+  # otherwise the rate-limit self-DoS protection silently regresses (Caddy
   # IP no longer matches set_real_ip_from → all clients collapse to one bucket).
   # Note: docker-compose.yml no longer contains a hardcoded gateway; Docker
   # auto-assigns the first host in JARVIS_NET_SUBNET, so compose won't hard-fail.

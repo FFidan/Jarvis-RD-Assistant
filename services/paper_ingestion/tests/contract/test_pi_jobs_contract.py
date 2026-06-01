@@ -1,4 +1,4 @@
-"""Jobs domain contract tests — Phase B target rows A176-A180.
+"""Jobs domain contract tests — target rows A176-A180.
 
 Survivor-of: (all NONE — no prior contract coverage).
 Carve-out: task_registry._TASK_MAP is a declared external-boundary carve-out

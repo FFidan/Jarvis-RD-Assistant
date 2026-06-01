@@ -1,4 +1,4 @@
-"""Magic-link authentication endpoints (Phase 2 WS-2A).
+"""Magic-link authentication endpoints.
 
 Three endpoints:
 
@@ -341,7 +341,7 @@ async def api_key_session(
 ) -> UserResponse:
     """Exchange a valid ``JARVIS_API_KEY`` for a real owner-scoped session.
 
-    WS-AUTH-KEY-SESSION (decision A2). Three non-negotiable guardrails:
+    API-key-to-session exchange (decision A2). Three non-negotiable guardrails:
 
     1. Bind to ONE explicit owner — ``OWNER_USER_ID`` setting if present,
        else the lowest-id non-deleted ``role='admin'`` user. Never a

@@ -1,4 +1,4 @@
-"""Sprint B — ``upsert_paper`` no longer accepts ``user_id``; canonical-only.
+"""``upsert_paper`` no longer accepts ``user_id``; canonical-only.
 
 The legacy ``user_id`` keyword has been replaced with ``discovered_by`` (audit
 only). Library membership lives in ``user_library`` and is added by callers
@@ -36,12 +36,12 @@ def _make_paper() -> PaperCreate:
 
 @pytest.mark.asyncio
 async def test_upsert_paper_signature_no_user_id_kwarg():
-    """``upsert_paper(conn, paper, user_id=...)`` is gone. Sprint B keeps a
-    different keyword (``discovered_by``) for audit-trail attribution."""
+    """``upsert_paper(conn, paper, user_id=...)`` is gone. The canonical-only
+    refactor keeps a different keyword (``discovered_by``) for audit-trail attribution."""
     import inspect
 
     sig = inspect.signature(upsert_paper)
-    assert "user_id" not in sig.parameters, "Sprint B drops user_id from upsert_paper"
+    assert "user_id" not in sig.parameters, "canonical refactor drops user_id from upsert_paper"
     assert "discovered_by" in sig.parameters
 
 

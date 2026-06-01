@@ -1,4 +1,4 @@
-"""WS-NEGATIVE-TESTS — cross-user data-isolation negative suite.
+"""Cross-user data-isolation negative suite.
 
 THE merge gate for the v0.4.0 public launch. Drives BOTH service apps
 (paper_ingestion + learning_engine) with the *real* ``SessionMiddleware``

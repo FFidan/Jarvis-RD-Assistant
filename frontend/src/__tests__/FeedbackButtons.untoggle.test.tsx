@@ -1,5 +1,5 @@
 /**
- * Regression test: W1.6-B — FeedbackButtons untoggle-lock fix.
+ * Regression test: FeedbackButtons untoggle-lock fix.
  *
  * Before the fix, clearMutation.isSuccess was sticky (stays true after the
  * first successful clear). Subsequent 👍→👍→👍 sequences would leave the
@@ -31,7 +31,7 @@ const wrap = (ui: React.ReactNode) => {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 };
 
-describe('FeedbackButtons — untoggle-lock regression (W1.6-B)', () => {
+describe('FeedbackButtons — untoggle-lock regression', () => {
   beforeEach(() => vi.clearAllMocks());
 
   /**

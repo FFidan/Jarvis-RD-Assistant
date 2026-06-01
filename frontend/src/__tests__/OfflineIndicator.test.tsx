@@ -1,5 +1,5 @@
 /**
- * OfflineIndicator tests — Wave 3 P1d
+ * OfflineIndicator tests
  *
  * Coverage:
  *  - available-offline variant renders correct badge + accessible text

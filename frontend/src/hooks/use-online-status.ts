@@ -1,10 +1,10 @@
 /**
  * use-online-status — shared connectivity primitive for the offline / PWA track.
  *
- * Wave 3 P1a (gating sub-task). Consumed by:
- *   - P1c (route-guard): MUST NOT hard-bounce to /login when `online === false`
+ * Consumed by:
+ *   - The route-guard: MUST NOT hard-bounce to /login when `online === false`
  *     on a stale/unrefreshable session — render cached content read-only instead.
- *   - P1d (connectivity banner + per-view offline indicators).
+ *   - The connectivity banner + per-view offline indicators.
  *
  * Contract reference: internal design spec (archived)
  *   "Offline / PWA contract — CANONICAL" §6 (global connectivity banner) and §4

@@ -5,7 +5,7 @@ C2: submit_feedback INSERT must include user_id; conflict key must include user_
 Note: C1 (mark_paper_read) tests were removed in Phase-A lifecycle redesign because
 the mark_paper_read endpoint was deleted (replaced by annotate_paper / state machine).
 
-After Phase-A Wave 1cd, ``submit_feedback`` delegates the write to
+After the canonical-corpus refactor, ``submit_feedback`` delegates the write to
 ``_upsert_recommendation_feedback`` which:
   * issues ``conn.fetchval(...)`` to look up the paper's primary topic_id
     (when not supplied) — 1 fetchval call always
@@ -32,7 +32,7 @@ async def test_submit_feedback_threads_user_id_to_insert():
     """C2: submit_feedback INSERT must include user_id as $2 (signal/source/reason after it).
 
     Writes to recommendation_feedback with binds ($1=paper_id, $2=user_id,
-    $3=signal, $4=source, $5=reason, $6=topic_id). WS-CROSS-USER: the
+    $3=signal, $4=source, $5=reason, $6=topic_id). Cross-user isolation: the
     resolver yields a real user, so ``assert_paper_ownership`` runs (1
     fetchrow, canonical fast-grant) in addition to the Group B
     discovery_origin fetchrow.
@@ -58,7 +58,7 @@ async def test_submit_feedback_threads_user_id_to_insert():
     assert result.paper_id == 7
     assert result.signal == "positive"
 
-    # WS-CROSS-USER: assert_paper_ownership now runs (1 fetchrow, canonical
+    # Cross-user isolation: assert_paper_ownership now runs (1 fetchrow, canonical
     # fast-grant) plus the Group B discovery_origin fetchrow.
     assert conn.fetchrow.await_count == 2
     # INSERT goes through conn.execute (no RETURNING) after a topic_id fetchval.
@@ -90,7 +90,7 @@ async def test_submit_feedback_threads_user_id_to_select():
     """C2: submit_feedback INSERT uses ON CONFLICT keyed on (paper_id, user_id, source).
 
     Verifies that user_id appears in the conflict target SQL so repeat submissions
-    by different users never overwrite each other.  WS-CROSS-USER: a real
+    by different users never overwrite each other.  Cross-user isolation: a real
     user_id is bound at $2 (no NULL-shared rows).
     Group B: source='pulse_thumbs' is pulse-only, so fetchrow validates discovery_origin.
     """

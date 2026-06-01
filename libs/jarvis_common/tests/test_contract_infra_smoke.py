@@ -73,6 +73,6 @@ async def test_char4_contract_two_users_seeds_contained_check(contract_conn):
 
 
 # Char-test 5 (pi_test_client) deferred: per-service test_client fixtures are
-# authored in their own conftests in Sub-wave 4.3 / 4.4 batches. The shared
+# authored in their own conftests. The shared
 # SharedConnPool + SharedAcquireCM are already exercised structurally by the
 # above tests (every contract_* test path uses the session pool + per-test conn).

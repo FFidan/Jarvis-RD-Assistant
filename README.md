@@ -79,7 +79,7 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 ### Design choices
 
 - **Anti-hallucination pipeline.** Verified summaries, flashcard evidence, KG edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. Weekly Summary separates verified from unverified themes. A conservative contradiction scanner persists only quote-backed conflicts.
-- **Local-first.** Runs on Ollama with no cloud dependency. LiteLLM provides a unified gateway so you can swap between local and cloud models without code changes. See the [Phase 3 bench rerun](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/perf/2026-05-22-phase3-bench-rerun.md) for tier-by-tier model recommendations.
+- **Local-first.** Runs on Ollama with no cloud dependency. LiteLLM provides a unified gateway so you can swap between local and cloud models without code changes. See the [LLM tier benchmark](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/perf/2026-05-22-llm-tier-bench.md) for tier-by-tier model recommendations.
 - **Hybrid search.** BM25 full-text search fused with Qdrant vector search via reciprocal rank fusion, then reranked with a cross-encoder for high-precision retrieval.
 
 ## Architecture
@@ -209,7 +209,7 @@ You can mix admin and user roles. Admins see system-scope settings (SMTP, Pulse 
 
 #### 5. Docker compose tuning
 
-Heavy CPU/GPU? See `OLLAMA_MAX_LOADED_MODELS` in `.env.example` and the GPU notes below. Multiple users on one box? Watch the LiteLLM dashboard for backpressure on the `smart` model. The [Phase 3 bench rerun](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/perf/2026-05-22-phase3-bench-rerun.md) documents tier-by-tier candidates.
+Heavy CPU/GPU? See `OLLAMA_MAX_LOADED_MODELS` in `.env.example` and the GPU notes below. Multiple users on one box? Watch the LiteLLM dashboard for backpressure on the `smart` model. The [LLM tier benchmark](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/perf/2026-05-22-llm-tier-bench.md) documents tier-by-tier candidates.
 
 ### GPU acceleration (optional, all paths)
 

@@ -93,7 +93,7 @@ async def _find_cross_references(
     Falls back to keyword-based title overlap if semantic search fails or is unavailable.
     """
     # Always fetch discovered_by so the keyword fallback can apply the visibility
-    # predicate even when no embedder is provided (W1-D2-005 fix).
+    # predicate even when no embedder is provided.
     abstract_row = await conn.fetchrow(
         "SELECT abstract, discovered_by FROM papers WHERE id = $1", paper_id
     )
@@ -153,7 +153,7 @@ async def _find_cross_references(
     # Visibility predicate mirrors the semantic path: restrict to papers whose
     # owner matches (discovered_by IS NULL = canonical/public, or same user,
     # or the user has it in their library).  This prevents title-keyword leaks
-    # across user boundaries (W1-D2-005).
+    # across user boundaries.
     rows = await conn.fetch(
         """
         SELECT id, title FROM papers
@@ -212,7 +212,7 @@ async def generate_paper_summary(
         ``svc.openai_client`` (set by the service lifespan).  Tests may
         inject a mock here directly.
     """
-    # --- Phase 1: fetch all needed data under advisory lock ---
+    # --- Fetch all needed data under advisory lock ---
     # Capture everything as plain Python objects before releasing the connection.
     async with db_pool.acquire() as conn:
         async with advisory_lock(conn, 2, paper_id):
@@ -263,7 +263,7 @@ async def generate_paper_summary(
         text=paper_text_block,
     )
 
-    # --- Phase 2: call LiteLLM via Instructor (no connection held) ---
+    # --- Call LiteLLM via Instructor (no connection held) ---
     client = openai_client if openai_client is not None else svc.openai_client
     if client is None:
         raise RuntimeError("openai_client not initialized — check lifespan ran")
@@ -357,9 +357,9 @@ async def generate_paper_summary(
         summary_detailed = paper_row["abstract"] or "No abstract available."
         verified_findings = []
 
-    # --- Phase 3: store in DB (new connection, no advisory lock) ---
+    # --- Store in DB (new connection, no advisory lock) ---
     # ON CONFLICT DO UPDATE handles the rare race where two concurrent requests
-    # both passed the idempotency check in phase 1.
+    # both passed the idempotency check above.
     async with db_pool.acquire() as conn:
         # Cross-reference consistency check (anti-hallucination rule 9)
         cross_references = await _find_cross_references(

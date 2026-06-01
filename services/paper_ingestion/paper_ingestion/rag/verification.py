@@ -1,4 +1,4 @@
-"""RAG answer verification — sentence-level confidence scoring (WS-2.1).
+"""RAG answer verification — sentence-level confidence scoring.
 
 Splits the LLM answer into sentences, verifies each against the source
 chunk content using the existing QuoteVerifier (exact + fuzzy matching),

@@ -1,7 +1,7 @@
 """Pure-unit tests for Reranker._load_model_if_needed fail-fast latch.
 
-Covers audit finding W1-D1-006: narrow inner except + _load_failed latch
-to prevent infinite reload attempts when model loading fails.
+Covers: narrow inner except + _load_failed latch to prevent infinite
+reload attempts when model loading fails.
 """
 
 from unittest.mock import MagicMock, patch

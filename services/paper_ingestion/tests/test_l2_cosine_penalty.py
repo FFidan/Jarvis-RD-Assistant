@@ -1,12 +1,12 @@
 """Unit tests for the L2 cosine-penalty branch in stage1_embedding_filter.
 
-Wave 1cd §7.2 — B2 added a negative-centroid penalty:
+The negative-centroid penalty:
     embedding_sim -= l2_lambda * cosine(cand_vec, negative_centroid)
 
 These tests verify the math in isolation, independent of DB / HTTP / recency.
 
 Time-decay note: the 30-day half-weight lives in the SQL CASE inside
-``pulse/profile.py::load_profile`` Phase 2b, NOT in scoring.py.
+``pulse/profile.py::load_profile`` (negative-centroid path), NOT in scoring.py.
 C1 (test_pulse_profile.py) is the appropriate home for time-decay tests.
 """
 

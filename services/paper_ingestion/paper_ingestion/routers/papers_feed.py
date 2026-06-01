@@ -120,7 +120,7 @@ async def list_papers(
 
     # ------------------------------------------------------------------
     # Standard / fallback BM25 query path
-    # W1-D1-008: use websearch_to_tsquery consistently (same as hybrid path)
+    # Use websearch_to_tsquery consistently (same as hybrid path)
     # ------------------------------------------------------------------
     query = "SELECT p.* FROM papers p"
     joins: list[str] = []
@@ -149,7 +149,7 @@ async def list_papers(
         conditions.append(f"p.source_type = ${len(params)}")
 
     if q:
-        # W1-D1-008: websearch_to_tsquery (consistent with hybrid BM25 leg)
+        # websearch_to_tsquery (consistent with hybrid BM25 leg)
         params.append(q)
         conditions.append(f"p.search_vector @@ websearch_to_tsquery('english', ${len(params)})")
 

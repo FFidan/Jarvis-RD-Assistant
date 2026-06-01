@@ -1,4 +1,4 @@
-"""Unit tests for jarvis_common.task_registry (B.4 Step 2 part 1 / W4-1).
+"""Unit tests for jarvis_common.task_registry.
 
 These tests assert structural properties only:
   - ``register_tasks`` registers kind→handler entries on ``app.tasks``.
@@ -9,7 +9,7 @@ These tests assert structural properties only:
   - Importing ``task_registry`` without first calling ``set_dependencies``
     is fine; the runtime check fires only when a task body executes.
 
-W4-1 note: tasks are no longer registered at module import time. They are
+Note: tasks are no longer registered at module import time. They are
 registered by each service during lifespan startup via ``register_tasks``.
 The structural tests below use a fresh ``procrastinate.App`` instance to avoid
 polluting the module-level singleton.
@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# register_tasks API — tasks registered on demand (W4-1)
+# register_tasks API — tasks registered on demand
 # ---------------------------------------------------------------------------
 
 
@@ -123,12 +123,12 @@ def test_register_tasks_handler_closure() -> None:
 
 
 # ---------------------------------------------------------------------------
-# At import time app.tasks has only noop.test + builtin tasks (W4-1)
+# At import time app.tasks has only noop.test + builtin tasks
 # ---------------------------------------------------------------------------
 
 
 def test_no_service_tasks_at_import_time() -> None:
-    """After W4-1: jarvis_common no longer registers service tasks at import.
+    """jarvis_common no longer registers service tasks at import.
 
     The module-level app should contain only the ``noop.test`` task and
     procrastinate's builtin tasks immediately after import — no paper_ingestion
@@ -141,7 +141,7 @@ def test_no_service_tasks_at_import_time() -> None:
     # noop.test is registered unconditionally; service kinds are NOT registered.
     for kind in JOB_HANDLER_OWNER:
         assert kind not in user_task_names, (
-            f"kind {kind!r} should NOT be in app.tasks at import time after W4-1 "
+            f"kind {kind!r} should NOT be in app.tasks at import time "
             f"(tasks are registered lazily by each service)"
         )
 
@@ -237,9 +237,9 @@ def test_set_dependencies_then_called_pre_worker() -> None:
     assert hasattr(task_registry, "app")
     assert hasattr(task_registry, "set_dependencies")
     assert hasattr(task_registry, "register_tasks"), (
-        "register_tasks must be exported for service startup hooks (W4-1)"
+        "register_tasks must be exported for service startup hooks"
     )
-    # W4-1: tasks are registered lazily by each service — NOT at import time.
+    # Tasks are registered lazily by each service — NOT at import time.
     # Only builtin tasks + noop.test exist immediately after import.
     assert "noop.test" in task_registry.app.tasks or all(
         t.queue == "builtin" for t in task_registry.app.tasks.values()

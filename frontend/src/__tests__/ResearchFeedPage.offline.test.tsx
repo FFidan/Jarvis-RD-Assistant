@@ -1,5 +1,5 @@
 /**
- * ResearchFeedPage offline indicator tests — Wave 3 P1d
+ * ResearchFeedPage offline indicator tests
  *
  * Coverage:
  *  - Library surface: shows offline indicator when offline

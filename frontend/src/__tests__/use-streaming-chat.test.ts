@@ -127,10 +127,10 @@ describe('use-streaming-chat — FE-SSE-1 streamError', () => {
 });
 
 // ---------------------------------------------------------------------------
-// W4-CF1 — catch-block sets streamError on non-abort transport errors
+// catch-block sets streamError on non-abort transport errors
 // ---------------------------------------------------------------------------
 
-describe('use-streaming-chat — W4-CF1 catch-block setStreamError', () => {
+describe('use-streaming-chat — catch-block setStreamError', () => {
   beforeEach(() => {
     resetStore();
     vi.clearAllMocks();
@@ -158,10 +158,10 @@ describe('use-streaming-chat — W4-CF1 catch-block setStreamError', () => {
 });
 
 // ---------------------------------------------------------------------------
-// W4-CF2 — clearChat resets streamError
+// clearChat resets streamError
 // ---------------------------------------------------------------------------
 
-describe('use-streaming-chat — W4-CF2 clearChat resets streamError', () => {
+describe('use-streaming-chat — clearChat resets streamError', () => {
   beforeEach(() => {
     resetStore();
     vi.clearAllMocks();
@@ -342,7 +342,7 @@ describe('use-streaming-chat — D.3 unmount does not abort stream', () => {
     expect(capturedSignal!.aborted).toBe(true);
   });
 
-  it('isStreaming stays true on a fresh hook mount while the stream is still in flight (W1.6 review fix)', async () => {
+  it('isStreaming stays true on a fresh hook mount while the stream is still in flight (review fix)', async () => {
     let capturedSignal: AbortSignal | null = null;
     mockStreamSSE.mockImplementation((_url, _body, signal: AbortSignal) => {
       capturedSignal = signal;

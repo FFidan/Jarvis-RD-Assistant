@@ -9,7 +9,7 @@
  *   - DateMasthead renders (RESEARCH LOG header)
  *   - § section markers visible in documented order
  *   - Hero card mode picker has 3 tabs
- *   - "Resume reading" tab is disabled (Phase 2 placeholder)
+ *   - "Resume reading" tab is disabled (placeholder)
  *   - "Continue task" tab click persists choice to localStorage and
  *     survives a page reload (data-state="active")
  *   - Page wrapper uses .bg-paper class

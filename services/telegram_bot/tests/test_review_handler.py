@@ -348,7 +348,7 @@ _W2_CF4_CHAT_ID = 77777
 
 @pytest.mark.asyncio
 async def test_rate_card_malformed_data_answers_with_text() -> None:
-    """Malformed query.data must answer with user-facing text (W2-CF4 / SEC-RATING-1).
+    """Malformed query.data must answer with user-facing text (SEC-RATING-1).
 
     Bare query.answer() leaves Telegram UI showing live (now non-functional) buttons.
     The fix passes text= so Telegram dismisses the spinner with a visible message.
@@ -401,7 +401,7 @@ async def test_rate_card_valid_rating_parses_correctly() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tests: SEC-RATING-1 behavioral coverage for ratings 1 and 2 (W2-CF9)
+# Tests: SEC-RATING-1 behavioral coverage for ratings 1 and 2
 # ---------------------------------------------------------------------------
 
 # Separate chat_id bucket so the 5-call rate-limiter quota from _TEST_CHAT_ID
@@ -422,7 +422,7 @@ async def test_rate_card_ratings_1_and_2_send_correct_payload(
 ) -> None:
     """Ratings 1 ('Again') and 2 ('Hard') POST the correct integer to the API.
 
-    W2-CF9: behavioral coverage for ratings 1 and 2, mirroring the rating-3
+    Behavioral coverage for ratings 1 and 2, mirroring the rating-3
     test in test_rate_card_valid_rating_parses_correctly.
     """
     card = _sample_card()

@@ -1,4 +1,4 @@
-"""Discovery endpoint contract tests (Phase B, B.PI-pulse-rag).
+"""Discovery endpoint contract tests.
 
 Covers the DB-layer behaviors in POST /api/discover and GET /api/similar/{paper_id}:
   - Ownership enforcement (assert_paper_ownership) for seed papers

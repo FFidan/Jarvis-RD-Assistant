@@ -1,4 +1,4 @@
-"""RB-5: Stale-identity cross-tenant regression tests for review handlers.
+"""Stale-identity cross-tenant regression tests for review handlers.
 
 Asserts that after auth_check resolves a NEW jarvis_user_id, each handler
 writes the fresh id back to context.user_data and uses it — not the stale

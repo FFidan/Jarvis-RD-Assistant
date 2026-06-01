@@ -157,7 +157,7 @@ describe('BulkToolbar', () => {
     });
   });
 
-  // --- W1.7-E+F new tests ---
+  // --- Additional toolbar tests ---
 
   it('surface=trash renders Delete forever button when papers selected', () => {
     useBulkSelection.setState({ selectedIds: new Set([1, 2]) });

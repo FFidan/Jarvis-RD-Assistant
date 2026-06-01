@@ -438,8 +438,8 @@ async def _load_local_library_matches(
               )
         """
 
-    # Sprint B: scope library-preview to the caller's user_library when
-    # authenticated; single-user fallback returns canonical-corpus matches.
+    # Scope library-preview to the caller's user_library when authenticated;
+    # single-user fallback returns canonical-corpus matches.
     async with db_pool.acquire() as conn:
         if args[0] is not None:  # user_id present
             rows = await conn.fetch(

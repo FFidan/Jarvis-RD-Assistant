@@ -183,7 +183,7 @@ async def stage1_embedding_filter(
 
     centroid = profile.library_centroid
 
-    # L2 negative-centroid penalty (Wave 1cd §7.2)
+    # L2 negative-centroid penalty (§7.2)
     negative_centroid = profile.negative_centroid  # list[float] | None
     l2_lambda = float(profile.l2_lambda)
 

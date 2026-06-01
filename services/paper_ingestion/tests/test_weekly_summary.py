@@ -1,4 +1,4 @@
-"""Unit tests for W3-13 CFG-LLMOUT-1: ThemeOutput attribute access.
+"""Unit tests for ThemeOutput attribute access.
 
 Verifies that:
 - ThemeOutput.theme is accessed as an attribute (not via .get("theme")).

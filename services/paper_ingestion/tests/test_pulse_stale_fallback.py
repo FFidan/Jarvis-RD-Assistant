@@ -222,7 +222,7 @@ def test_get_today_includes_source_diagnostics_in_stale_response(client):
     assert diag["pubmed"]["consecutive_failures"] == 0
 
 
-# test_get_today_404_when_no_deck_at_all: DELETED (Phase C collapse).
+# test_get_today_404_when_no_deck_at_all: DELETED (collapsed into contract test).
 # Duplicate of test_pulse_router.py::test_today_404_when_no_deck — identical
 # setup (patch load_today → None) and assertion (resp.status_code == 404).
 

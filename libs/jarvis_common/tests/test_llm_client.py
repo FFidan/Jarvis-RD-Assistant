@@ -48,7 +48,7 @@ def test_build_litellm_headers_returns_bearer_when_key_set(monkeypatch):
 
 
 def test_build_litellm_headers_reads_key_from_file_var(monkeypatch, tmp_path):
-    """W1-2: LITELLM_MASTER_KEY_FILE must be honoured ahead of the plain env var.
+    """LITELLM_MASTER_KEY_FILE must be honoured ahead of the plain env var.
 
     When ``LITELLM_MASTER_KEY_FILE`` points to a non-empty file, the resolved
     key (whitespace-stripped) is used in the Bearer header even if the legacy
@@ -407,7 +407,7 @@ def test_boundary_functions_are_observed():
 
 
 # ---------------------------------------------------------------------------
-# strip_think_streaming — streaming CoT filter (W0-2)
+# strip_think_streaming — streaming CoT filter
 # ---------------------------------------------------------------------------
 
 
@@ -492,7 +492,7 @@ def test_strip_think_streaming_every_byte_boundary(src):
 
     For each input, feed it as two chunks split at every possible byte offset; the
     accumulated visible text (out1 + out2 + non-think carry) must equal the canonical
-    regex-stripped result. A1 of Phase 3 confirmed streaming is sound; this test
+    regex-stripped result. Streaming was confirmed sound at the time this test
     locks that in against future refactors.
     """
     expected = re.sub(r"<think>.*?</think>", "", src, flags=re.DOTALL)

@@ -1,4 +1,4 @@
-"""Pydantic models for journal entry CRUD endpoints (Phase 2 My Day)."""
+"""Pydantic models for journal entry CRUD endpoints (My Day)."""
 
 from __future__ import annotations
 

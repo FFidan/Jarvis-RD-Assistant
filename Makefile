@@ -82,7 +82,7 @@ check: no-tracked-secrets secure-secrets deps-check lint typecheck test
 ## Keys are loaded from .env (written by gen-langfuse-keys.sh) so they never
 ## appear in the process environment or docker inspect output. DATABASE_URL /
 ## NEXTAUTH_SECRET / SALT are read from /run/secrets/* by the wrapper image at
-## ./langfuse/ (W9-T1 / SEC-HIGH-02 — they are no longer exposed via
+## ./langfuse/ (they are no longer exposed via
 ## `docker inspect`). First boot builds the wrapper image (~30s); subsequent
 ## boots use the cached layer.
 observability-up: gen-langfuse-keys

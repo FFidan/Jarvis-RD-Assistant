@@ -33,7 +33,7 @@ export interface Paper {
   metadata: Record<string, unknown>;
   discovered_at: string | null;
   created_at: string;
-  // Phase A — migration 048 added discovery_origin; migration 049 + recommendation_feedback
+  // Migration 048 added discovery_origin; migration 049 + recommendation_feedback
   // joined surface produces recent_feedback. Optional because legacy callers may not have them.
   discovery_origin?: 'user_initiated' | 'pulse' | 'recommender' | 'citation_batch';
   recent_feedback?: RecentFeedback | null;
@@ -677,7 +677,7 @@ export interface SearchPreviewResponse {
   source_errors: Record<string, SearchPreviewSourceError>;
 }
 // =============================================================================
-// Hardware-Aware Settings types (Wave 5 / Contract 06)
+// Hardware-Aware Settings types (Contract 06)
 // =============================================================================
 
 /**
@@ -694,12 +694,12 @@ export interface ModelFitDetail {
 }
 
 // =============================================================================
-// Phase A Lifecycle Redesign types (Wave 2.2 — legacy types removed)
+// Lifecycle Redesign types (legacy types removed)
 // =============================================================================
 
-// --- Phase A core enums ---
+// --- Core enums ---
 
-/** Phase A lifecycle state per spec §2 (post-2026-04-29 redesign).
+/** Lifecycle state per spec §2 (post-2026-04-29 redesign).
  *
  * H.11 cross-ref: this union MUST stay in sync with the ``state`` Literal
  * in services/paper_ingestion/paper_ingestion/models/papers.py
@@ -717,9 +717,9 @@ export type LifecycleState = 'inbox' | 'to_read' | 'reading' | 'done' | 'trash';
  */
 export type StateBeforeTrash = 'inbox' | 'to_read' | 'reading' | 'done' | null;
 
-// --- Phase A User State ---
+// --- User State ---
 
-/** User state per spec §9.1 (Phase A redesign). */
+/** User state per spec §9.1. */
 export interface UserState {
   state: LifecycleState;
   state_before_trash: StateBeforeTrash;
@@ -741,7 +741,7 @@ export interface UserStateResponse {
   updated_at: string | null;
 }
 
-// --- Phase A Feedback ---
+// --- Feedback ---
 
 export interface RecentFeedback {
   signal: 'positive' | 'negative';
@@ -749,9 +749,9 @@ export interface RecentFeedback {
   created_at: string;
 }
 
-// --- Phase A Paper Response ---
+// --- Paper Response ---
 
-/** Canonical paper response per Phase A redesign (grounded against PaperResponse + PaperBase in models/papers.py). */
+/** Canonical paper response (grounded against PaperResponse + PaperBase in models/papers.py). */
 export interface LifecyclePaperResponse {
   id: number;
   external_id: string;
@@ -774,15 +774,15 @@ export interface LifecyclePaperResponse {
   recent_feedback: RecentFeedback | null;
 }
 
-// --- Phase A Feed Paper ---
+// --- Feed Paper ---
 
 /**
- * Feed-level paper per Phase A redesign.
+ * Feed-level paper.
  * Grounded against FeedPaper (models/papers.py:290-307) which extends PaperResponse.
  * Fields: summary_brief, tldr, confidence, state, state_before_trash, starred, rating,
  *         priority_level, has_chunks, has_summary, recommendation_score,
  *         recommendation_reason, recommendation_modes, note_match_count, note_snippet.
- * Note: priority_score comes from PaperResponse (via PaperBase); user_status removed in Phase A.
+ * Note: priority_score comes from PaperResponse (via PaperBase); user_status field removed.
  */
 export interface FeedPaper extends LifecyclePaperResponse {
   state: LifecycleState;
@@ -802,10 +802,10 @@ export interface FeedPaper extends LifecyclePaperResponse {
   note_snippet?: string | null;
 }
 
-// --- Phase A Bulk Actions ---
+// --- Bulk Actions ---
 
 /**
- * Bulk action enum per BulkActionRequest in models/papers.py:582-597 (Phase A).
+ * Bulk action enum per BulkActionRequest in models/papers.py:582-597.
  */
 export type BulkAction =
   | 'save' | 'skip' | 'trash'
@@ -814,7 +814,7 @@ export type BulkAction =
   | 'feedback_positive' | 'feedback_negative'
   | 'hard_delete';
 
-// --- Phase A Surface / Filter Views ---
+// --- Surface / Filter Views ---
 
 /** Library sub-chip filter per spec §5.4. */
 export type LibraryFilter = 'starred' | 'reading' | 'to_read' | 'done';
@@ -828,7 +828,7 @@ export type InboxSourceFilter = 'arxiv' | 'semantic_scholar' | 'openalex' | 'pub
 /** Top-level feed surface per spec §5.4 (5 surfaces). */
 export type SurfaceView = 'inbox' | 'library' | 'search' | 'ask' | 'trash';
 
-// --- Phase A Feed Counts ---
+// --- Feed Counts ---
 
 /**
  * Per-topic count for the feed facet rail (§ Topic section).
@@ -890,7 +890,7 @@ export interface FeedFacets {
 /** The full `GET /api/papers/feed/counts` JSON: named views + facet rail. */
 export type FeedCountsWithFacets = FeedCountsResponse & FeedFacets;
 
-// --- Phase A Feedback CRUD ---
+// --- Feedback CRUD ---
 
 export interface FeedbackListItem {
   paper_id: number;
@@ -1209,7 +1209,7 @@ export interface PartialGenJob {
 
 // --- Weekly Digest ---
 //
-// Shape returned by GET /api/digest/weekly.  Backend WS-2 (Phase 1) adds
+// Shape returned by GET /api/digest/weekly.  The backend adds
 // `verified` and `verification_reason` to each theme object so the frontend
 // can show VerificationBadge inline next to each theme.
 

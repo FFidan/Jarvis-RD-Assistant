@@ -172,7 +172,7 @@ def test_refresh_allowed_networks_cache_exists() -> None:
 
 
 # ---------------------------------------------------------------------------
-# W2-CF10: non-integer X-Owner-User-Id must return 403
+# non-integer X-Owner-User-Id must return 403
 # ---------------------------------------------------------------------------
 
 

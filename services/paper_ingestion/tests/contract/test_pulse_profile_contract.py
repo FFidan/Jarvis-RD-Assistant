@@ -1,4 +1,4 @@
-"""W2.5 — Pulse profile sidecar contracts.
+"""Pulse profile sidecar contracts.
 
 Survivors for centroid/connection-release/negative-feedback mock-units in
 services/paper_ingestion/tests/test_pulse_profile.py.
@@ -16,7 +16,7 @@ pytestmark = [
 
 
 # Verified: services/paper_ingestion/paper_ingestion/pulse/profile.py:166
-# (load_profile Phase 2a: centroid = mean of embedder.embed_texts(abstracts))
+# (load_profile centroid path: centroid = mean of embedder.embed_texts(abstracts))
 async def test_pulse_profile_w2_centroid_computation_via_faux_ollama_embeddings(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
@@ -157,7 +157,7 @@ async def test_pulse_profile_w2_connection_release_ordering_under_load(
 
 
 # Verified: services/paper_ingestion/paper_ingestion/pulse/profile.py:384
-# (load_profile Phase 2b: negative_centroid = weighted mean of neg_abstract embeddings)
+# (load_profile negative-centroid path: negative_centroid = weighted mean of neg_abstract embeddings)
 async def test_pulse_profile_w2_negative_centroid_embed_handled(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
@@ -208,7 +208,7 @@ async def test_pulse_profile_w2_negative_centroid_embed_handled(
 
     assert profile.negative_centroid is not None, (
         "negative_centroid must not be None when a negative feedback paper with abstract exists; "
-        "check Phase 2b weighted-centroid path in profile.py:384"
+        "check negative-centroid weighted-mean path in profile.py:384"
     )
     assert len(profile.negative_centroid) == EMBEDDING_DIMENSION, (
         f"negative_centroid dimension mismatch: got {len(profile.negative_centroid)}, "

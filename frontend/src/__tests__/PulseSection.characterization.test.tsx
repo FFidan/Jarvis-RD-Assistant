@@ -1,8 +1,8 @@
 /**
- * PulseSection — pre-decomposition behavioral snapshot (W0.T4).
+ * PulseSection — pre-decomposition behavioral snapshot.
  *
  * These tests pin the observable rendering structure of PulseSection.tsx
- * before Wave 1 extracts it into sub-components.  The same tests MUST pass
+ * before it is extracted into sub-components.  The same tests MUST pass
  * byte-identically after extraction (data-testid attributes are preserved on
  * the extracted card wrappers).
  *

@@ -27,8 +27,8 @@ def _pulse_keyboard(paper_id: int) -> InlineKeyboardMarkup:
     """Pulse-delivery keyboard.
 
     Spec §5.3 callback name convention. The legacy ``pulse_(up|down|save)_<id>``
-    handler was deleted in Wave 3; thumbs map to the per-paper feedback flow
-    and Save uses the lifecycle endpoint.
+    handler was deleted; thumbs map to the per-paper feedback flow and Save
+    uses the lifecycle endpoint.
     """
     return InlineKeyboardMarkup(
         [
@@ -145,9 +145,9 @@ async def run_research_pulse(
 ) -> None:
     """Fetch today's Pulse deck and deliver the top cards to Telegram.
 
-    Sprint A: iterates ``telegram_user_pairings`` and delivers per-user Pulse
-    by sending ``X-Owner-User-Id`` + ``X-API-Key`` headers to the backend.
-    Skips with a warning when no pairings exist.
+    Iterates ``telegram_user_pairings`` and delivers per-user Pulse by sending
+    ``X-Owner-User-Id`` + ``X-API-Key`` headers to the backend.  Skips with a
+    warning when no pairings exist.
 
     Parameters
     ----------

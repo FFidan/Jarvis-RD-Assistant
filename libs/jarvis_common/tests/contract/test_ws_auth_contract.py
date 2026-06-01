@@ -1,4 +1,4 @@
-"""WebSocket/session auth shared contract suite — Phase E1.JC.
+"""WebSocket/session auth shared contract suite.
 
 Exercises ``SessionMiddleware`` identity resolution against a real DB
 (contract_conn) for the offline-grace, expiry, and revocation edge cases

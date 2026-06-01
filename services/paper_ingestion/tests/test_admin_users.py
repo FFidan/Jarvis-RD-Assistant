@@ -1,4 +1,4 @@
-"""Phase 2 WS-2B: admin user-management router unit tests.
+"""Admin user-management router unit tests.
 
 Mocks the DB pool so the suite runs without Docker.
 
@@ -53,11 +53,11 @@ def _user_row(
 # ---------------------------------------------------------------------------
 
 
-# Collapsed (Phase C): test_require_admin_allows_admin_role
+# Collapsed: test_require_admin_allows_admin_role
 # Survivor: test_admin_contract.py::test_a4_list_users_returns_non_deleted_users
 # Allow path covered by admin_client fixture successfully accessing any A4 endpoint.
 
-# Collapsed (Phase C): test_require_admin_rejects_user_role
+# Collapsed: test_require_admin_rejects_user_role
 # Survivor: test_admin_contract.py::test_a4_list_users_non_admin_gets_403
 # Plain-user 403 behavioral outcome covered by contract test_a4 with real DB.
 
@@ -76,7 +76,7 @@ async def test_require_admin_rejects_missing_state() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Collapsed (Phase C): test_list_users_returns_non_deleted_users
+# Collapsed: test_list_users_returns_non_deleted_users
 # Survivor: test_admin_contract.py::test_a4_list_users_returns_non_deleted_users
 
 
@@ -85,12 +85,12 @@ async def test_require_admin_rejects_missing_state() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Collapsed (Phase C): test_invite_user_happy_path
+# Collapsed: test_invite_user_happy_path
 # Survivor: test_admin_contract.py::test_a5_invite_user_creates_db_row
 # SQL-text assertion ("INSERT INTO magic_link_tokens" in sql) — B1-09 class.
 # Contract A5 verifies users row + magic_link_tokens row in real DB; both mock send_magic_link.
 
-# Collapsed (Phase C): test_invite_user_conflict_raises_409
+# Collapsed: test_invite_user_conflict_raises_409
 # Survivor: test_admin_contract.py::test_a5_invite_user_409_on_duplicate_email
 
 
@@ -99,7 +99,7 @@ async def test_require_admin_rejects_missing_state() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Collapsed (Phase C): test_update_role_happy_path
+# Collapsed: test_update_role_happy_path
 # Survivor: test_admin_contract.py::test_a6_update_role_persists_to_db
 
 
@@ -117,7 +117,7 @@ async def test_update_role_demote_self_last_admin_blocked() -> None:
     assert "last admin" in exc.value.detail
 
 
-# Collapsed (Phase C): test_update_role_user_not_found_raises_404
+# Collapsed: test_update_role_user_not_found_raises_404
 # Survivor: test_admin_contract.py::test_a6_update_role_404_on_nonexistent_user
 
 
@@ -126,11 +126,11 @@ async def test_update_role_demote_self_last_admin_blocked() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Collapsed (Phase C): test_soft_delete_self_blocked
+# Collapsed: test_soft_delete_self_blocked
 # Survivor: test_admin_contract.py::test_a7_self_delete_returns_400
 
 
-# Collapsed (Phase C): test_soft_delete_happy_path
+# Collapsed: test_soft_delete_happy_path
 # Survivor: test_admin_contract.py::test_a7_soft_delete_sets_deleted_at
 # SQL assertion ("deleted_at = NOW()" in sql) — B1-09 class. Contract A7 verifies deleted_at
 # is non-NULL in DB + 204 response after soft-delete.
@@ -153,7 +153,7 @@ async def test_soft_delete_not_found_raises_404() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Collapsed (Phase C): test_non_admin_cannot_list_users
+# Collapsed: test_non_admin_cannot_list_users
 # Survivor: test_admin_contract.py::test_a4_list_users_non_admin_gets_403
 
 

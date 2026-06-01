@@ -1,4 +1,4 @@
-"""Feed endpoint contract tests (Phase B, B.PI-pulse-rag).
+"""Feed endpoint contract tests.
 
 Covers GET /api/papers/feed DB-layer behaviors:
   - State-filter view predicates (inbox, reading, done, trash) against real DB rows

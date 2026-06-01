@@ -124,7 +124,7 @@ function renderFeedView(surface: Parameters<typeof FeedView>[0]['surface']) {
   );
 }
 
-describe('FeedView — state-switch button rendering (Phase A)', () => {
+describe('FeedView — state-switch button rendering', () => {
   it('surface="inbox" renders a Save button for inbox-state paper', async () => {
     renderFeedView('inbox');
     await waitFor(() =>
@@ -180,7 +180,7 @@ describe('FeedView — mutation onError toasts (NI-3)', () => {
   });
 });
 
-describe('FeedView — shortcut callback freshness (W3-C5-02)', () => {
+describe('FeedView — shortcut callback freshness', () => {
   // Renders FeedView inside a MemoryRouter with a sentinel /paper/:id route so
   // we can assert on navigate() calls triggered by keyboard shortcuts.
   function NavigationCapture({ onNavigate }: { onNavigate: (path: string) => void }) {

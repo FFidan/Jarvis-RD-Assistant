@@ -1,4 +1,4 @@
-"""Unit tests for _ip_in_allowlist cold-start cache write-back (W3-CF8)."""
+"""Unit tests for _ip_in_allowlist cold-start cache write-back."""
 
 import ipaddress
 

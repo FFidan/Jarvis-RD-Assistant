@@ -1,8 +1,8 @@
 # Contract 06 — Hardware-Aware Settings
 
-**Status:** RATIFIED 2026-05-07 (Wave-4 user review gate cleared; Wave-5 dispatchable)
+**Status:** RATIFIED 2026-05-07
 **Date:** 2026-05-07
-**Scope:** Per-machine VRAM transparency in Settings — fit indicators, `num_ctx` slider per role, thinking-mode toggle for thinking-capable models, support for the user's two machines (RTX 5060 Ti 16 GB and a separate 48 GB box).
+**Scope:** Per-machine VRAM transparency in Settings — fit indicators, `num_ctx` slider per role, thinking-mode toggle for thinking-capable models; validated on the ≈16 GB tier (RTX 5060 Ti) and the ≈48 GB tier (RTX 5880 Ada).
 **Depends on:** Contract 05 (Model Lifecycle) — additive only; does not contradict it.
 **Related:** [`docs/contracts/01-settings.md`](01-settings.md), [`docs/contracts/03-llm.md`](03-llm.md), [`docs/contracts/05-model-lifecycle.md`](05-model-lifecycle.md).
 
@@ -17,7 +17,7 @@ overturned are documented in §10 with the user's chosen resolution.
 The current Settings UI ([`IngestionSection.tsx`](../../frontend/src/components/settings/IngestionSection.tsx) +
 [`ModelSelector.tsx:192-199`](../../frontend/src/components/shared/ModelSelector.tsx#L192-L199))
 shows VRAM totals and a tier label, but offers **no `num_ctx` slider** and
-**no per-model fit indicator**. W3-SMOKE-03 demonstrated the consequence:
+**no per-model fit indicator**. An early hardware-fit smoke test demonstrated the consequence:
 `qwen3:14b` at 32 768 tokens demanded ~20 GB on a 16 GB GPU, forcing 76% CPU
 offload silently. Mitigation today is a hand-edited `litellm/config.yaml`
 ([`litellm/config.yaml:30-34`](../../litellm/config.yaml#L30-L34)) — not a
@@ -48,7 +48,7 @@ user-facing surface. This contract designs the user-facing surface.
    Settings exposes a per-model "Disable thinking mode" checkbox; backend
    propagates to LiteLLM via `extra_body.think: false`. Default: thinking
    disabled for known-capable models (matches today's hand-tuned default
-   in `litellm/config.yaml:35-37` shipped under W3-SMOKE-04).
+   in `litellm/config.yaml:35-37`).
 
 ### 1.2 Non-scope (hard)
 
@@ -106,13 +106,13 @@ llm.{machine_id}.embed_num_ctx
 
 | Option | Pros | Cons |
 |---|---|---|
-| (a) `llm.{machine_id}.{role}_num_ctx` | The user's two machines have 3× different VRAM; a single shared key would either underuse the 48 GB box or over-stretch the 16 GB box. Each backend reads its own machine's key. | Two writes from Settings if the user explicitly wants the same value on both. |
-| (b) `llm.{role}_num_ctx` | One key. Simpler. | Forces one of the two machines to be wrong. The 32 768 → 8 192 mitigation from W3-SMOKE-03 only applies to the 16 GB box. |
+| (a) `llm.{machine_id}.{role}_num_ctx` | Machines differ significantly in VRAM; a single shared key would either underuse the ≈48 GB tier or over-stretch the ≈16 GB tier. Each backend reads its own machine's key. | Two writes from Settings if the operator explicitly wants the same value on both machines. |
+| (b) `llm.{role}_num_ctx` | One key. Simpler. | Forces one tier to be wrong. The 32 768 → 8 192 mitigation only applies to the ≈16 GB tier. |
 
-**Recommendation: (a).** The single-user-but-two-machines premise of the user
-makes (a) strictly better than (b). The orchestrator wave-5 plan will need to
-write three keys (`smart_num_ctx`, `fast_num_ctx`, `embed_num_ctx`) per
-machine, each gated on the live machine_id at request time.
+**Recommendation: (a).** When machines differ by 3× in VRAM, per-machine keys
+are strictly better. A future settings revision will need to write three keys
+(`smart_num_ctx`, `fast_num_ctx`, `embed_num_ctx`) per machine, each gated on
+the live machine_id at request time.
 
 ---
 
@@ -160,8 +160,8 @@ Three thresholds, with rationale:
 
 | Status | Predicate | Rationale |
 |---|---|---|
-| `fits` | `required_vram_gb <= hw.vram_gb * 0.85` | 15% headroom for the OS, X server, browser, dashboard nginx, and Ollama runtime overhead. Empirically aligned with W3-SMOKE-03's "qwen3:14b at 8k = ~12 GB on 16 GB card → no CPU offload". |
-| `partial` | `required_vram_gb <= hw.vram_gb * 1.20` | Ollama supports CPU offload; up to ~20% over actual VRAM is "slow but works". W3-SMOKE-03 lived in this band before the mitigation (≈ 20 / 16 = 125%). |
+| `fits` | `required_vram_gb <= hw.vram_gb * 0.85` | 15% headroom for the OS, X server, browser, dashboard nginx, and Ollama runtime overhead. Empirically derived: qwen3:14b at 8k = ~12 GB on 16 GB card → no CPU offload. |
+| `partial` | `required_vram_gb <= hw.vram_gb * 1.20` | Ollama supports CPU offload; up to ~20% over actual VRAM is "slow but works". The 32 768-ctx case lived in this band before the mitigation (≈ 20 / 16 = 125%). |
 | `unfit` | otherwise | Hard-blocked in UI: option disabled in picker, slider clamps to highest fitting value. |
 
 Special cases:
@@ -177,7 +177,7 @@ Special cases:
   normal; the badge tooltip surfaces "approximate" so the user can disregard
   borderline calls.
 
-W3-SMOKE-03 sanity-check (derived; user can verify offline):
+Hardware-fit sanity-check (derived; user can verify offline):
 
 | Case | required_vram | hw.vram | 85% threshold | Status |
 |---|---|---|---|---|
@@ -385,10 +385,10 @@ preserving other hardware parameters such as `num_ctx`.
 
 In `services/paper_ingestion/tests/test_model_lifecycle.py` (extend existing):
 
-- `test_compute_vram_fit_qwen3_14b_partial_at_32768_on_16gb` — W3-SMOKE-03
-  regression. Asserts `unfit` (the actual measured state) at 32 768 on 16 GB.
-- `test_compute_vram_fit_qwen3_14b_fits_at_8192_on_16gb` — W3-SMOKE-03
-  mitigation. Asserts `fits`.
+- `test_compute_vram_fit_qwen3_14b_partial_at_32768_on_16gb` — regression.
+  Asserts `unfit` (the actual measured state) at 32 768 on 16 GB.
+- `test_compute_vram_fit_qwen3_14b_fits_at_8192_on_16gb` — mitigation.
+  Asserts `fits`.
 - `test_compute_vram_fit_falls_back_to_tier_when_field_absent` — entries
   without `min_vram_gb_at_default_ctx` use existing tier ordinal.
 - `test_compute_vram_fit_skips_cloud_models` — cloud entries return
@@ -431,16 +431,16 @@ Three independently reversible phases:
 | T3-B | Backend `compute_vram_fit` + `SystemModelsResponse.catalog[i].fit_detail` + `GET /api/system/hardware` adds `machine_id`. | Response-additive; old frontend ignores new field. |
 | T3-C | Frontend slider, fit badge, machine strip. Tolerates missing `fit_detail` via TS optional. | Backend can roll back without breaking the new UI (it just renders without fit indicators). |
 
-Each phase is independently mergeable. Wave-5 in the source plan may
-parallelize T3-A and T3-B (independent files); T3-C must dispatch after
-T3-B since the frontend reads the new response field.
+Each phase is independently mergeable. T3-A and T3-B may be parallelized
+(independent files); T3-C must dispatch after T3-B since the frontend reads
+the new response field.
 
 ---
 
 ## 10. Resolutions (user-ratified 2026-05-07)
 
 The six open questions from the design pass were resolved by the user.
-Recorded here for executor reference (Wave-5 reads these as binding).
+Recorded here for executor reference.
 
 ### 10.1 Per-machine identity → hostname (internal-only, not displayed)
 `socket.gethostname()` is the `machine_id`. It namespaces `user_config`
@@ -458,9 +458,8 @@ Originally recommended as soft warning. **User overruled: hard block.**
 Unfit options render disabled in the model picker (grayed out, not
 clickable) with tooltip "Won't fit at current num_ctx — try {N}". Slider
 clamps at the highest fitting snap-step. The user should not be able to
-silently pick a config that forces 76% CPU offload (W3-SMOKE-03 root
-cause); make the failure mode visible at config-time, not at request-
-latency-time.
+silently pick a config that forces 76% CPU offload; make the failure mode
+visible at config-time, not at request-latency-time.
 
 ### 10.4 Thinking-mode toggle → IN scope (originally declared out of scope)
 Originally declared out of scope on the rationale that

@@ -1,4 +1,4 @@
-"""Auth domain contract tests — Phase B target rows A16, A17, A18.
+"""Auth domain contract tests — target rows A16, A17, A18.
 
 Survivor-of: test_auth_magic_link.py mock-unit assertions for verify,
     api_key_session, logout.
@@ -38,7 +38,7 @@ async def test_a16_verify_valid_token_returns_session_cookie(
     """Covers map row A16: valid magic-link token → session cookie set + token consumed.
 
     Verified: auth.py:190-313 verify at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_auth_magic_link.py verify tests.
+    Survivor-of: test_auth_magic_link.py verify tests.
     """
     import hashlib
     import secrets
@@ -159,7 +159,7 @@ async def test_a18_logout_revokes_session_row_in_db(
     """Covers map row A18: POST /api/auth/logout sets sessions.revoked_at and clears cookie.
 
     Verified: auth.py:467-514 logout at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_auth_magic_link.py logout tests.
+    Survivor-of: test_auth_magic_link.py logout tests.
     """
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.post("/api/auth/logout")

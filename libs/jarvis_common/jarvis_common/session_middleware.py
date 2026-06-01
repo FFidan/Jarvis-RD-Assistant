@@ -1,6 +1,6 @@
 """Session-cookie reading middleware for JARVIS browser sessions.
 
-Phase 2 WS-2A: parses the ``jarvis_session`` cookie, validates the row in
+Parses the ``jarvis_session`` cookie, validates the row in
 ``sessions``, and populates ``request.state.user_id`` (INTEGER), ``user_email``,
 ``user_role`` for downstream code (``current_user_id_or_none``, route handlers).
 

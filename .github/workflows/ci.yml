@@ -23,14 +23,16 @@ concurrency:
 env:
   # Run the test environment in UTC so date-relative tests (which seed rows via
   # Python `date.today()`) agree with the app's UTC date handling (Postgres
-  # `CURRENT_DATE` / `AT TIME ZONE 'UTC'` / `datetime.now(UTC)`). On a non-UTC
-  # self-hosted runner the two disagree for the ~22:00–00:00 UTC window each
-  # night, which deterministically fails the my-day/analytics contract tests.
+  # `CURRENT_DATE` / `AT TIME ZONE 'UTC'` / `datetime.now(UTC)`). When running
+  # on a self-hosted runner whose system clock is not UTC, the runner clock and
+  # the DB clock can disagree near midnight UTC, which deterministically fails
+  # the my-day/analytics contract tests.
   TZ: UTC
 
 jobs:
   lint-test:
     name: Lint + fast test suite
+    # optional self-hosted-runner repo variable; unset → GitHub-hosted ubuntu-latest
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -59,7 +61,7 @@ jobs:
       - name: Pyright (type check)
         # Resolves imports against the uv-synced .venv created above; pyrightconfig.json
         # pins basic mode + the services/lib include set (tests/scripts/frontend excluded).
-        run: npx --yes pyright
+        run: npx --yes pyright@1.1.408
 
       - name: Test-shape check
         run: uv run python3 scripts/check-test-shape.py
@@ -79,7 +81,7 @@ jobs:
       - name: Guard - no JSONB double-encode
         run: python3 scripts/check-no-jsonb-double-encode.py
 
-      - name: Guard - agent docs in sync
+      - name: Guard - docs links in sync
         run: python3 scripts/check_agent_docs.py
 
       - name: Guard - migrations no explicit transaction
@@ -96,9 +98,9 @@ jobs:
     # EMPTY database from it per session (CREATE DATABASE … TEMPLATE template0)
     # instead of shelling `docker run`, so pytest issues ZERO docker commands and
     # parallel runners never contend on the Docker daemon (root fix for
-    # CI-CROSS-USER-FLAKY-1).  The host port is RANDOM (`ports: - 5432`): on the
-    # self-hosted box host 5432 is already taken by the dev Postgres stack, and a
-    # random port also lets two concurrent jobs on one host coexist (Wave 2).
+    # CI-CROSS-USER-FLAKY-1).  The host port is RANDOM (`ports: - 5432`): this
+    # avoids colliding with a pre-existing local Postgres on port 5432, and also
+    # lets two concurrent jobs on one host coexist.
     # The first step resolves JARVIS_TEST_PG_ADMIN_DSN from the assigned port.
     #
     # PYTHONPATH must include services/learning_engine (and the other service +
@@ -158,8 +160,8 @@ jobs:
         # Postgres). The guard tests are marked `live_pg` only, so the marker
         # filter is `live_pg`, not
         # the `integration and live_pg` used by the cross-user file above.
-        # Wave-1 squash (c6145af3) collapsed 88 migrations into db/init.sql;
-        # test_baseline_invariants.py is the post-squash I-class guard.
+        # The squashed baseline (db/init.sql) collapses all migrations into one
+        # init script; test_baseline_invariants.py is the guard that keeps it honest.
         run: >-
           uv run pytest
           --override-ini="addopts=--import-mode=importlib"
@@ -192,8 +194,8 @@ jobs:
     # database from it per session (CREATE DATABASE … TEMPLATE template0) and
     # applies db/init.sql + run_migrations() once; per-test isolation is via
     # asyncpg transaction rollback (zero per-test cost).  No `docker run` from
-    # pytest.  Random host port (`ports: - 5432`) — host 5432 is taken by the dev
-    # stack and a random port lets concurrent jobs coexist (Wave 2).
+    # pytest.  Random host port (`ports: - 5432`) — use a random host port so a
+    # pre-existing local Postgres doesn't collide, and concurrent jobs can coexist.
     services:
       postgres:
         image: postgres:16.8

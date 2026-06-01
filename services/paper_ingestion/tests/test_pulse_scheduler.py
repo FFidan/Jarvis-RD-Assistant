@@ -83,8 +83,8 @@ async def test_run_pulse_wrapper_skips_when_disabled(scheduler_module):
 
 @pytest.mark.asyncio
 async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module):
-    """Sprint B / Wave-2: ``run_pulse_wrapper`` fans out one defer per
-    active user (no legacy ``user_id=None`` system fallback).
+    """``run_pulse_wrapper`` fans out one defer per active user
+    (no legacy ``user_id=None`` system fallback).
     """
     import jarvis_common.task_registry as task_registry
 
@@ -152,7 +152,7 @@ async def test_run_pulse_classifier_training_wrapper_skips_when_disabled(schedul
 
 @pytest.mark.asyncio
 async def test_run_pulse_classifier_training_wrapper_defers_when_enabled(scheduler_module):
-    """Sprint B / Wave-2: pulse.train_classifier defers per active user."""
+    """pulse.train_classifier defers per active user."""
     import jarvis_common.task_registry as task_registry
 
     pool, conn = _make_pool_and_conn()
@@ -177,7 +177,7 @@ async def test_run_pulse_classifier_training_wrapper_defers_when_enabled(schedul
 
 @pytest.mark.asyncio
 async def test_run_weekly_digest_wrapper_enqueues_digest_weekly(scheduler_module):
-    """Sprint B / Wave-2: digest.weekly defers per active user with days=7."""
+    """digest.weekly defers per active user with days=7."""
     import jarvis_common.task_registry as task_registry
 
     pool, conn = _make_pool_and_conn()

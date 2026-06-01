@@ -1,4 +1,4 @@
-"""Tests for Wave 6A ownership helper: assert_paper_ownership.
+"""Tests for the assert_paper_ownership helper.
 
 Covers the 4-quadrant matrix:
   - single-user mode (user_id=None) always allows
@@ -19,9 +19,9 @@ from fastapi import HTTPException
 def _make_conn(fetchrow_return, *, in_library: bool = False) -> AsyncMock:
     """Return an asyncpg Connection mock with fetchrow + fetchval pre-wired.
 
-    Sprint B: ``assert_paper_ownership`` reads ``papers.discovered_by`` first
-    via fetchrow, then optionally checks ``user_library`` membership via
-    fetchval. ``in_library`` controls the second probe.
+    ``assert_paper_ownership`` reads ``papers.discovered_by`` first via
+    fetchrow, then optionally checks ``user_library`` membership via fetchval.
+    ``in_library`` controls the second probe.
     """
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=fetchrow_return)
@@ -30,7 +30,7 @@ def _make_conn(fetchrow_return, *, in_library: bool = False) -> AsyncMock:
 
 
 def _make_row(discovered_by: int | None) -> MagicMock:
-    """Return a mock asyncpg Record for a paper row (Sprint B columns)."""
+    """Return a mock asyncpg Record for a paper row."""
     row = MagicMock()
     row.__getitem__ = MagicMock(
         side_effect=lambda key: discovered_by if key == "discovered_by" else None
@@ -122,7 +122,7 @@ async def test_assert_paper_ownership_403_for_other_user() -> None:
     from jarvis_common.db_helpers import assert_paper_ownership
 
     row = _make_row(42)  # paper discovered by user 42
-    # Sprint B: 403 fires only when paper is NOT in the caller's library either.
+    # 403 fires only when paper is NOT in the caller's library either.
     conn = _make_conn(row, in_library=False)
 
     # Caller is user 99 — different from the discoverer, paper not in library.

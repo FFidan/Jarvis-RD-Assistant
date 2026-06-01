@@ -64,7 +64,7 @@ async def _analyze_stream(
     # ---- Step 1: Download PDF ----
     yield sse_event({"type": "step", "step": "downloading", "status": "started"})
     try:
-        # Phase 1a: Check paper state (short query, no lock)
+        # Check paper state (short query, no lock)
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT id, source_type, pdf_url, pdf_downloaded, pdf_local_path "
@@ -99,9 +99,9 @@ async def _analyze_stream(
             # Already downloaded: nothing to do
             yield sse_event({"type": "step", "step": "downloading", "status": "completed"})
         else:
-            # Phase 1b: Download outside any transaction
+            # Download outside any transaction
             pdf_path = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
-            # Phase 1c: Update DB (short query)
+            # Update DB (short query)
             async with db_pool.acquire() as conn:
                 row = await conn.fetchrow(
                     "UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE "

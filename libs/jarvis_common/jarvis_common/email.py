@@ -1,6 +1,6 @@
 """SMTP delivery for transactional emails (magic-link, future invites).
 
-Phase 2 WS-2A: ships only ``send_magic_link``. Plain-text only by design (better
+Ships only ``send_magic_link``. Plain-text only by design (better
 deliverability, simpler debugging, no template engine dependency).
 
 Dev-mode fallback: when any required SMTP env var is unset OR ``DEV_MODE=true``,

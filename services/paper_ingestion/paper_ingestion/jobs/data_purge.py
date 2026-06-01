@@ -1,6 +1,6 @@
 """Daily hard-delete of soft-deleted users past the 30-day grace.
 
-WS-USER-DELETION D2: ``DELETE /api/admin/users/{id}`` only sets
+User deletion D2: ``DELETE /api/admin/users/{id}`` only sets
 ``users.deleted_at``. This job hard-deletes any user whose grace window has
 elapsed; migration 080's ON DELETE CASCADE FKs then collapse every owned row
 (papers.discovered_by stays ON DELETE SET NULL so discovered papers fall back

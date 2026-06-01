@@ -71,12 +71,11 @@ if printf '%s\n' "$INIT_SQL_NO_COMMENTS" | grep -q "generate_series"; then
   exit 1
 fi
 
-# WAVE 1 squash (2026-05-19): the RUNTIME_REPLAY_VERSIONS absence loop was
-# replaced by a positive contiguity check. Post-squash init.sql pre-marks ALL
-# 88 versions (1..88 contiguous, no gaps) so the runtime runner is a no-op on
-# fresh install. The generate_series ban above is still load-bearing — the
-# explicit contiguous list is the audit trail that init.sql truly embodies each
-# version.
+# The RUNTIME_REPLAY_VERSIONS absence loop was replaced by a positive
+# contiguity check. init.sql pre-marks all baseline versions (contiguous,
+# no gaps) so the runtime runner is a no-op on fresh install. The
+# generate_series ban above is still load-bearing — the explicit contiguous
+# list is the audit trail that init.sql truly embodies each version.
 BOOTSTRAP_SQL=$(printf '%s\n' "$INIT_SQL_NO_COMMENTS" | sed -n '/CREATE TABLE IF NOT EXISTS schema_migrations/,$p')
 
 # Extract the seeded version numbers from the INSERT VALUES block.

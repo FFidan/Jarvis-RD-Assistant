@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/jarvis-setup.sh — Phase 2 WS-2F bootstrap (Linux / macOS).
+# scripts/jarvis-setup.sh — non-interactive bootstrap (Linux / macOS).
 #
 # Goal: a clean install path for self-hosters. Get the Docker stack up
 # and running with sane defaults, then point the user at the web wizard
@@ -16,10 +16,9 @@
 # wizard — this script only handles the layers Docker+TLS+secrets setup
 # the wizard cannot reach.
 #
-# Compare with the legacy ./setup.sh: the legacy script is interactive and
-# asks 2 questions (access mode, Telegram token). This script is non-
-# interactive and defers all those choices to the wizard. Use whichever
-# matches your taste.
+# Compare with ./setup.sh: setup.sh is interactive and asks questions
+# (access mode, Telegram token). This script is non-interactive and defers
+# all those choices to the wizard. Use whichever matches your taste.
 
 set -euo pipefail
 
@@ -44,7 +43,7 @@ err()  { printf '%s[ERROR]%s %s\n'  "$C_RED"    "$C_RESET" "$*" >&2; }
 
 printf '%s================================================================%s\n' \
   "$C_BOLD" "$C_RESET"
-printf '%s   JARVIS RD Assistant — bootstrap (WS-2F)                       %s\n' \
+printf '%s   JARVIS RD Assistant — non-interactive bootstrap                  %s\n' \
   "$C_BOLD" "$C_RESET"
 printf '%s================================================================%s\n\n' \
   "$C_BOLD" "$C_RESET"

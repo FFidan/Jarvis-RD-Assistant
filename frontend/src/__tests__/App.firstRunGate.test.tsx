@@ -1,5 +1,5 @@
 /**
- * Phase 2 WS-2F: App.tsx FirstRunGate redirect behaviour.
+ * App.tsx FirstRunGate redirect behaviour.
  *
  * Asserts that when /api/setup/status reports configured=false, ALL routes
  * (auth and post-auth) are redirected to /first-run, and the wizard renders.

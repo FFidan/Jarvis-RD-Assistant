@@ -368,8 +368,8 @@ async def get_extraction_table(
                     status_code=400,
                     detail="paper_ids must be comma-separated integers",
                 )
-            # Sprint B canonical-corpus: papers are global; extractions are
-            # the per-template artifact whose ownership lives elsewhere.
+            # Papers are global; extractions are the per-template artifact
+            # whose ownership lives elsewhere.
             try:
                 await assert_papers_ownership(conn, ids, user_id)
                 rows = await conn.fetch(

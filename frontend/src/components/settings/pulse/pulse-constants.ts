@@ -1,6 +1,6 @@
 /**
  * Shared constants for the Pulse settings panel.
- * Extracted from PulseSection.tsx (Wave 1 bloat-reduction).
+ * Extracted from PulseSection.tsx (bloat-reduction).
  */
 
 export type PulseWeightKey =

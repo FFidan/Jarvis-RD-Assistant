@@ -437,7 +437,7 @@ def test_validate_bbt_base_url_accepts_https_public_host():
 
 
 # ---------------------------------------------------------------------------
-# W1-CF4: BUG-ZOTERO-1 — str BYTEA variant in _get_zotero_config
+# str BYTEA variant in _get_zotero_config
 # ---------------------------------------------------------------------------
 
 

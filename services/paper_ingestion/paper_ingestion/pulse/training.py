@@ -1,4 +1,4 @@
-"""Pulse Phase 2 classifier training and scoring."""
+"""Pulse classifier training and scoring."""
 
 from __future__ import annotations
 

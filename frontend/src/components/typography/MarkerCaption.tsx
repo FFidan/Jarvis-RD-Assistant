@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 export interface MarkerCaptionProps {
-  id?: string;        // anchor for j/k nav (Phase 2)
+  id?: string;        // anchor for j/k nav
   marker: string;     // "Yesterday", "Now", "Today's intent", etc.
   meta?: ReactNode;   // optional middle: count, "edit", etc.
   right?: ReactNode;  // optional far-right action

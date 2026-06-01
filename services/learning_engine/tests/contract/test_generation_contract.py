@@ -244,7 +244,7 @@ async def test_generate_endpoint_missing_paper_id_returns_422(
 
 
 # ---------------------------------------------------------------------------
-# W2.4 — LLM-sidecar contracts: card generation + anki export
+# LLM-sidecar contracts: card generation + anki export
 #
 # These contracts replace mock-unit patches of call_llm_structured in:
 #   test_card_generator.py (291 LOC)

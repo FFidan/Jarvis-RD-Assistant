@@ -160,8 +160,8 @@ async def batch_save_papers(
 ) -> list[PaperResponse]:
     """Upsert a list of papers to the database (by external_id).
 
-    W1-D1-004: pdf_url is validated against ALLOWED_PDF_DOMAINS at persistence
-    time; non-allowlisted URLs are cleared before upsert.
+    pdf_url is validated against ALLOWED_PDF_DOMAINS at persistence time;
+    non-allowlisted URLs are cleared before upsert.
     """
     max_batch = 100
     if len(papers) > max_batch:
@@ -172,7 +172,7 @@ async def batch_save_papers(
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             for paper in papers:
-                # W1-D1-004: validate pdf_url against ALLOWED_PDF_DOMAINS
+                # Validate pdf_url against ALLOWED_PDF_DOMAINS; clear non-allowlisted URLs.
                 if paper.pdf_url is not None:
                     try:
                         parsed = urlparse(str(paper.pdf_url))
@@ -184,7 +184,7 @@ async def batch_save_papers(
                             paper.pdf_url = None  # type: ignore[assignment]
                     except Exception:
                         paper.pdf_url = None  # type: ignore[assignment]
-                # Wave 1cd Task B6: stamp citation_batch origin
+                # Stamp citation_batch origin
                 paper.discovery_origin = "citation_batch"
                 row = await upsert_paper(conn, paper, discovered_by=user_id)
                 if user_id is not None:

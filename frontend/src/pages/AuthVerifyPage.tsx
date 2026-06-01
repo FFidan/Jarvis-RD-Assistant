@@ -5,7 +5,7 @@ import { verifyMagicLink } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 /**
- * Phase 2 WS-2A: handles the magic-link landing URL.
+ * Handles the magic-link landing URL.
  *
  * URL shape: /auth/verify?token=<urlsafe-32>
  *

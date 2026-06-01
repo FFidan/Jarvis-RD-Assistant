@@ -1,5 +1,5 @@
 /**
- * IngestionSection — hardware-aware settings tests (Contract 06 / Wave-5 T3-C).
+ * IngestionSection — hardware-aware settings tests (Contract 06).
  *
  * Covers:
  * - Hardware strip shows VRAM + tier; does NOT show hostname

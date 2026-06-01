@@ -105,7 +105,7 @@ def _app():
 # ---------------------------------------------------------------------------
 
 
-# Collapsed (Phase C): test_dashboard_metrics_shape
+# Collapsed: test_dashboard_metrics_shape
 # Survivor: test_dashboard_contract.py::test_a32_dashboard_metrics_returns_all_fields
 # Contract A32 verifies all 7 field names present + non-negative ints with real DB data.
 

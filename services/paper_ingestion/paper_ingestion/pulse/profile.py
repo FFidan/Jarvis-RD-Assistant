@@ -44,7 +44,7 @@ class UserProfile(BaseModel):
     recent_positive_titles: list[str]
     recent_negative_titles: list[str]
     liked_paper_ids: list[int] = Field(default_factory=list)
-    # Phase A — lifecycle redesign fields (Wave 1cd)
+    # Lifecycle redesign fields
     user_id: int | None = None
     negative_topics: list[str] = Field(default_factory=list)
     negative_authors: list[str] = Field(default_factory=list)
@@ -88,7 +88,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
     (BE-001 / PI-006).
     """
     # ------------------------------------------------------------------
-    # Phase 1 — fetch centroid-feed data (topics, authors, engaged papers)
+    # Fetch centroid-feed data (topics, authors, engaged papers).
     # Release the connection before the HTTP call to the embedder.
     # ------------------------------------------------------------------
     async with db_pool.acquire() as conn:
@@ -141,7 +141,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
                 tracked_author_names.add(str(name).lower())
 
         # 3. Collect abstracts of "engaged" papers for library centroid computation.
-        # Phase A fix: state column replaces the old status/saved columns; starred is orthogonal.
+        # state column replaces the old status/saved columns; starred is orthogonal.
         engaged_rows = await conn.fetch(
             """
             SELECT p.id, p.abstract
@@ -158,10 +158,10 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             user_id,
         )
         abstracts = [r["abstract"] for r in engaged_rows]
-    # Connection released — Phase 1 complete.
+    # Connection released — centroid-feed fetch complete.
 
     # ------------------------------------------------------------------
-    # Phase 2a — HTTP call for library centroid (no DB connection held, PI-006)
+    # HTTP call for library centroid (no DB connection held, PI-006)
     # ------------------------------------------------------------------
     library_centroid: list[float] | None = None
     if abstracts:
@@ -188,7 +188,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             library_centroid = None
 
     # ------------------------------------------------------------------
-    # Phase 3 — fetch config + rating history + L1/L2/L3 signals
+    # Fetch config + rating history + L1/L2/L3 signals
     # ------------------------------------------------------------------
     async with db_pool.acquire() as conn:
         # 4. Config: weights, deck_size, stage2_top_k, l2_lambda
@@ -376,10 +376,10 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             """,
             user_id,
         )
-    # Connection released — Phase 3 complete.
+    # Connection released — config and signal fetch complete.
 
     # ------------------------------------------------------------------
-    # Phase 2b — Compute L2 negative centroid (no DB connection held)
+    # Compute L2 negative centroid (no DB connection held)
     # ------------------------------------------------------------------
     negative_centroid: list[float] | None = None
     if neg_abstract_rows:

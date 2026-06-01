@@ -304,7 +304,7 @@ describe('ReviewMode offline seam', () => {
      * This test asserts the offline-seam contract:
      * - The submit-review call is ONLY routed through `submitReviewFn`.
      * - Mocking this one prop in one place is sufficient to intercept all reviews.
-     * Wave 3 offline implementation replaces this prop; nothing else changes.
+     * The offline implementation replaces this prop; nothing else changes.
      */
     const offlineOutbox: Array<{ cardId: number; rating: number }> = [];
     const offlineSubmit = vi.fn().mockImplementation(

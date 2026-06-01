@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  JARVIS RD Assistant bootstrap (Phase 2 WS-2F) — Windows / PowerShell.
+  JARVIS RD Assistant non-interactive bootstrap — Windows / PowerShell.
 
 .DESCRIPTION
   Idempotent installer that mirrors scripts/jarvis-setup.sh:
@@ -42,7 +42,7 @@ function Write-Err   { param($Msg) Write-Host "[ERROR] $Msg" -ForegroundColor Re
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor White
-Write-Host "   JARVIS RD Assistant - bootstrap (WS-2F)                      " -ForegroundColor White
+Write-Host "   JARVIS RD Assistant - non-interactive bootstrap                " -ForegroundColor White
 Write-Host "================================================================" -ForegroundColor White
 Write-Host ""
 

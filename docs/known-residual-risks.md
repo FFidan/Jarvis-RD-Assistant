@@ -35,7 +35,7 @@ Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host pu
 
 **Context:** the roadmap targets a conversational agent layer (Hermes).
 
-**Current state:** not started. The build-vs-adopt decision — adopt an existing open agent framework vs. build natively on LiteLLM tool-calling plus the existing prompt harness — requires explicit sign-off before the spike is worth running. It is sequenced behind RB-3 cross-service auth, Performance Phase 1, and an evaluation harness; see the [ROADMAP](../ROADMAP.md).
+**Current state:** not started. The build-vs-adopt decision — adopt an existing open agent framework vs. build natively on LiteLLM tool-calling plus the existing prompt harness — requires explicit sign-off before the spike is worth running. It is sequenced behind the cross-service auth work, the first performance phase, and an evaluation harness; see the [ROADMAP](../ROADMAP.md).
 
 **Reopen criteria:** when the roadmap prerequisites land and the build-vs-adopt path is selected.
 
@@ -65,11 +65,11 @@ Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host pu
 
 ---
 
-## Sprint 6 deferrals
+## Auth hardening deferrals
 
 ### H5 — Migration 043 live-fixture test deferred
 
-Migration 043 uses a defensive PL/pgSQL constraint-name lookup. The live-fixture migration test is deferred to a future sprint with proper test infra.
+Migration 043 uses a defensive PL/pgSQL constraint-name lookup. The live-fixture migration test is deferred to a future hardening pass with proper test infra.
 
 **Reopen criteria:** when a migration test harness with a real ephemeral Postgres instance is available.
 
@@ -81,13 +81,13 @@ The `extra_sets` allowlist is not yet enforced — the current guard is `isinsta
 
 ### L4 — S3 backup encryption relies on bucket SSE only
 
-Backups are encrypted at rest by S3 server-side encryption but are not client-side encrypted before upload. A client-side openssl pipeline is deferred to a future infra sprint.
+Backups are encrypted at rest by S3 server-side encryption but are not client-side encrypted before upload. A client-side openssl pipeline is deferred to a future infra pass.
 
 **Reopen criteria:** when compliance requirements mandate end-to-end encryption of backup files.
 
 ---
 
-## Sprint 4 deferrals
+## Telegram / security hardening deferrals
 
 ### TG-004 — In-memory bot rate limits
 

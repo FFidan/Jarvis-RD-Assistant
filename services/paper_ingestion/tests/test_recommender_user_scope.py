@@ -1,4 +1,4 @@
-"""Pure-unit test for audit finding W1-D1-001.
+"""Pure-unit test: user_id forwarding prevents cross-user vector leaks.
 
 Verifies that _refresh_recommendations_for_user forwards user_id to
 embedder.discover_from_seeds, preventing cross-user vector leaks.

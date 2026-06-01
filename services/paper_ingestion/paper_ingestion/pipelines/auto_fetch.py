@@ -44,8 +44,8 @@ async def run_auto_pipeline(app) -> None:
             )
             topics_rows = await conn.fetch("SELECT id, name FROM topics")
 
-        # Sprint B: keep topic id alongside name so a search-result paper can
-        # be fanned out to users subscribed to that topic via user_library.
+        # Keep topic id alongside name so a search-result paper can be fanned
+        # out to users subscribed to that topic via user_library.
         # Defensive: tolerate fixtures / partial-schema rows that omit ``id``.
         def _row_get(row: object, key: str) -> object | None:
             try:
@@ -93,9 +93,9 @@ async def run_auto_pipeline(app) -> None:
                                         row = await upsert_paper(conn, paper)
                                         if row and row["is_insert"]:
                                             papers_added += 1
-                                        # Sprint B: fan out to every user
-                                        # subscribed to this topic. Idempotent
-                                        # via ON CONFLICT DO NOTHING.
+                                        # Fan out to every user subscribed to
+                                        # this topic. Idempotent via
+                                        # ON CONFLICT DO NOTHING.
                                         if row and topic_id is not None:
                                             try:
                                                 await fan_out_to_topic_users(

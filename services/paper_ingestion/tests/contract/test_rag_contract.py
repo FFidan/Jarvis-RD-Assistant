@@ -12,9 +12,9 @@ Collapses the following mock-unit DB stubs:
   - test_cross_rag.py::test_ask_cross_paper_endpoint_structure
     (_make_pool_and_conn() for DB layer)
 
-Wave 4.PI-rag additions:
+Additional additions:
   - test_cross_rag.py::test_ask_cross_paper_endpoint_structure collapsed here
-    (W4.PI-rag; see test_ask_endpoint_cross_paper_real_db_structure)
+    (see test_ask_endpoint_cross_paper_real_db_structure)
   - test_filter_unread_starred_paper_remains_eligible (new): real schema exercise
     of Phase-A starred-boolean non-exclusion; strengthens the SQL-substring mock-unit
     in test_recommender.py::TestFilterUnread::test_starred_papers_remain_eligible_for_recommendation.
@@ -1030,7 +1030,7 @@ async def test_a105_ask_stream_non_owner_gets_403(contract_conn, pi_test_client)
 
 
 # ---------------------------------------------------------------------------
-# W2.4 — LLM-sidecar contracts: summarization + weekly digest
+# LLM-sidecar contracts: summarization + weekly digest
 #
 # These contracts replace mock-unit patches of call_llm_structured in:
 #   test_summarization_service.py (494 LOC)
@@ -1290,7 +1290,7 @@ async def test_rag_w2_weekly_summary_aggregates_across_papers(
 
 
 # ---------------------------------------------------------------------------
-# W3-CF10. Null openai_client → 503 (not 502)
+# Null openai_client → 503 (not 502)
 #
 # Differentiates startup misconfiguration (_RagServiceNotReady → 503) from
 # runtime LLM failures (RuntimeError → 502).  Both /api/ask (cross-paper) and
@@ -1422,7 +1422,7 @@ async def test_ask_paper_endpoint_returns_503_when_openai_client_not_initialized
 
 
 # ---------------------------------------------------------------------------
-# W4-CF1. POST /api/papers/{paper_id}/ask/stream — exception-to-HTTP mapping
+# POST /api/papers/{paper_id}/ask/stream — exception-to-HTTP mapping
 #
 # Regression guard: if the explicit PaperNotFoundError/NoRelevantChunksError
 # handlers (rag.py:350-353) are removed, the stream endpoint falls through to

@@ -1,5 +1,5 @@
 /**
- * query-persister — last-known-good offline cache for TanStack Query (Wave 3 P1b).
+ * query-persister — last-known-good offline cache for TanStack Query.
  *
  * Contract reference:
  *   internal design spec (archived)
@@ -20,7 +20,7 @@
  * Excluded: RAG/chat/ask, discovery/fetch/process/embedding/summarize,
  * contradictions, any mutation cache, and operational/admin/auth surfaces.
  *
- * Dependency-owner notes (P1b is the sole Wave-3 dep owner)
+ * Dependency-owner notes (P1b is the sole idb-keyval dep owner)
  * --------------------------------------------------------
  *   - `idb-keyval` (~0.6kB) backs a minimal async store. Chosen over a
  *     hand-rolled IDB AsyncStorage: it correctly handles DB open/upgrade,

@@ -1,4 +1,4 @@
-"""Unit tests for digest filtering based on paper_user_state Phase A schema.
+"""Unit tests for digest filtering based on the paper_user_state schema.
 
 Tests verify that the _simple_digest query correctly filters papers by:
   - state ENUM: 'trash' and 'done' are excluded from the digest (NOT EXISTS guard).
@@ -12,12 +12,12 @@ Deleted tests and rationale:
   - test_digest_includes_read_active: state='done' (previously status='read') is now in
     BOTH the NOT EXISTS exclude guard AND the include branch.  The exclude guard always
     wins, so done papers are permanently excluded from the digest.  This is intentional
-    per the Phase-A redesign (state='done' means the user has already triaged the paper).
+    (state='done' means the user has already triaged the paper).
   - test_digest_excludes_starred_status_legacy: the legacy status column (with its
     CHECK constraint) was dropped in migration 047.  The CHECK-violation guard it tested
-    no longer applies to the Phase-A schema.
-  - test_digest_excludes_pulse_rated_then_dismissed: dismiss → trash in Phase A.  This
-    case is now fully covered by test_digest_excludes_state_trash.
+    no longer applies to the current schema.
+  - test_digest_excludes_pulse_rated_then_dismissed: dismiss → trash.  This case is now
+    fully covered by test_digest_excludes_state_trash.
 """
 
 from __future__ import annotations

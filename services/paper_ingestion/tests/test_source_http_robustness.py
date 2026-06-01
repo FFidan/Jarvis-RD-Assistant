@@ -1,4 +1,4 @@
-"""Sprint 5 Batch 1F — Source plugin robustness tests.
+"""Source plugin robustness tests.
 
 Covers:
 - H13: SemanticScholarSource._fetch_json returns {} on 429/5xx (no exception)

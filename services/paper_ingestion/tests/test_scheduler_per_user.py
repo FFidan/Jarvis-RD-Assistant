@@ -1,4 +1,4 @@
-"""Sprint B / Wave-2 — scheduler wrappers fan out per user.
+"""Scheduler wrappers fan out per user.
 
 The four cron wrappers (``run_zotero_sync_wrapper``, ``run_pulse_wrapper``,
 ``run_pulse_classifier_training_wrapper``, ``run_weekly_digest_wrapper``)
@@ -167,7 +167,7 @@ async def test_weekly_digest_wrapper_defers_one_job_per_user(task_registry_mocks
 
 @pytest.mark.asyncio
 async def test_no_active_users_results_in_zero_defers(task_registry_mocks):
-    """Sprint B: empty users table → no defers (instead of legacy
+    """Empty users table → no defers (instead of legacy
     ``user_id=None`` system fallback)."""
     pool, _conn = _pool_with_users([])
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))

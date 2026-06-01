@@ -1,4 +1,4 @@
-"""Priority domain contract tests — Phase B target rows A91, A92.
+"""Priority domain contract tests — target rows A91, A92.
 
 Survivor-of: test_priority.py mock-unit assertions for compute_paper_priority,
     recompute_all_priorities.
@@ -70,7 +70,7 @@ async def test_a91_compute_priority_writes_score_to_db(
     """Covers map row A91: POST /api/papers/{id}/priority writes priority_score to papers row.
 
     Verified: priority.py:25-68 compute_paper_priority at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_priority.py mock-unit tests.
+    Survivor-of: test_priority.py mock-unit tests.
     """
     paper_id = contract_two_users.paper_id_a
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
@@ -126,7 +126,7 @@ async def test_a92_recompute_all_priorities_returns_updated_count(
     """Covers map row A92: POST /api/papers/recompute-priorities returns updated count.
 
     Verified: priority.py:71-112 recompute_all_priorities at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_priority.py mock-unit tests.
+    Survivor-of: test_priority.py mock-unit tests.
     """
     # Seed a second paper to ensure there are rows to update
     await contract_conn.execute(

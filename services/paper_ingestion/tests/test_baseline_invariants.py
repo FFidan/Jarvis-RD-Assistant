@@ -2,7 +2,7 @@
 
 These tests encode the cross-user-isolation + data-shape invariants that the 88
 ``db/migrations/*.sql`` per-migration tests used to assert via the *replay* path.
-Wave 1 of the full-restructure program squashes the chain into a single
+The full-restructure program squashes the chain into a single
 regenerated ``db/init.sql`` baseline; this file re-homes those invariants as
 **direct assertions against that regenerated baseline** so the invariants keep
 their coverage after the chain (and its per-migration tests) is deleted.

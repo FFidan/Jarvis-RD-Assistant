@@ -52,7 +52,7 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
-    # WS-CROSS-USER: settings routes now hard-401 sessionless callers.
+    # Settings routes now hard-401 sessionless callers.
     # Inject a concrete authenticated user for the duration of the test.
     _orig_resolver = settings_router.current_user_id_strict
     settings_router.current_user_id_strict = AsyncMock(return_value=1)

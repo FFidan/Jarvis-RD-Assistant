@@ -1,4 +1,4 @@
-"""Sprint B — auto_fetch fans out a canonical paper into N user_library rows.
+"""auto_fetch fans out a canonical paper into N user_library rows.
 
 Approach: patch ``upsert_paper`` and ``fan_out_to_topic_users`` and assert
 the wiring (one canonical insert per result, one fan-out call per topic

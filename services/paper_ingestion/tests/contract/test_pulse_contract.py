@@ -432,7 +432,7 @@ async def test_load_profile_user_id_isolates_ratings(contract_conn, contract_two
 
 
 # ---------------------------------------------------------------------------
-# Phase B additions — pulse stats, history, today, source-health
+# Pulse stats, history, today, source-health
 # ---------------------------------------------------------------------------
 
 
@@ -684,7 +684,7 @@ async def test_e1_persist_deck_degraded_reason_stored(contract_conn, contract_tw
     Exercises the degraded_reason column write (spec §7.3).  An empty card list
     simulates the stage2-timeout-degraded path where no candidates pass scoring.
     Verified: pulse/deck.py:70-92 (_persist_deck_inner INSERT degraded_reason=$3).
-    Survivor-of (Phase E2): test_pulse_deck.py::test_degraded_reason_persisted mock tests.
+    Survivor-of: test_pulse_deck.py::test_degraded_reason_persisted mock tests.
     """
     from datetime import date
 
@@ -722,7 +722,7 @@ async def test_e1_persist_deck_second_call_updates_degraded_reason(
 
     This proves the ON CONFLICT DO UPDATE path sets degraded_reason from EXCLUDED.
     Verified: pulse/deck.py:73-89 ON CONFLICT (deck_date, user_id) DO UPDATE SET degraded_reason.
-    Survivor-of (Phase E2): test_pulse_deck.py savepoint-isolation mock tests.
+    Survivor-of: test_pulse_deck.py savepoint-isolation mock tests.
     """
     from datetime import date
 
@@ -768,7 +768,7 @@ async def test_e1_rate_card_down_writes_negative_feedback(
     """POST /api/pulse/rate with rating='down' inserts recommendation_feedback signal='negative'.
 
     Verified: routers/pulse.py:271-277 (rate_card 'down' path → _upsert_recommendation_feedback).
-    Survivor-of (Phase E2): test_pulse_router.py rate_card down-signal mock tests.
+    Survivor-of: test_pulse_router.py rate_card down-signal mock tests.
     """
     paper_id = contract_two_users.paper_id_a
     user_id = contract_two_users.user_a_id
@@ -1274,7 +1274,7 @@ async def test_pulse_generate_user_id_threading_deck_is_user_scoped(
 
 
 # ---------------------------------------------------------------------------
-# §W2.3 — Stage 2/3 LLM sidecar contracts
+# Stage 2/3 LLM sidecar contracts
 # ---------------------------------------------------------------------------
 # These six tests target stage2_llm_rerank and stage3_combine directly,
 # using a real FauxLiteLLMServer sidecar instead of patching call_llm_structured.
@@ -1285,7 +1285,7 @@ async def test_pulse_generate_user_id_threading_deck_is_user_scoped(
 #   test_pulse_scoring_stage3.py —  7 tests superseded (noted inline)
 
 
-# §W2.3-01 — Stage 2 routes requests to the configured model alias
+# Stage 2 routes requests to the configured model alias
 # Verified: pulse/scoring.py:56 (_llm_model() lazy getter)
 # Verified: pulse/scoring.py:305-306 (ChatCompletionOptions(model=_llm_model()))
 # Survivor-of: test_pulse_scoring_stage2.py::test_stage2_uses_fast_model_and_single_retry_by_default
@@ -1370,7 +1370,7 @@ async def test_pulse_scoring_w2_stage2_model_config_respected(monkeypatch):
     )
 
 
-# §W2.3-02 — Verifier gate: unverifiable reasoning marked reasoning_verified=False
+# Verifier gate: unverifiable reasoning marked reasoning_verified=False
 # Verified: pulse/scoring.py:329-347 (verify_pulse_reasoning called; reasoning_verified set on result)
 # Verified: pulse/verification.py:53-101 (verify_pulse_reasoning returns (bool, RagConfidence))
 # Survivor-of: test_pulse_scoring_stage2.py::test_stage2_fills_llm_scores
@@ -1454,7 +1454,7 @@ async def test_pulse_scoring_w2_stage2_verifier_gated_filter_drops_unverifiable(
     )
 
 
-# §W2.3-03 — Empty stage1 output short-circuits without calling the LLM
+# Empty stage1 output short-circuits without calling the LLM
 # Verified: pulse/scoring.py:284-285 (if not stage1_out: return [])
 # Survivor-of: test_pulse_scoring_stage2.py::test_stage2_empty_input_returns_empty
 
@@ -1507,7 +1507,7 @@ async def test_pulse_scoring_w2_stage2_empty_candidates_short_circuits():
     )
 
 
-# §W2.3-04 — Stage 3 reasoning text persists to pulse_cards.reasoning column
+# Stage 3 reasoning text persists to pulse_cards.reasoning column
 # Verified: pulse/deck.py:140-172 (INSERT INTO pulse_cards ... reasoning=$7)
 # Verified: db/init.sql:1072 (pulse_cards.reasoning text)
 # Verified: pulse/scoring.py:319-321 (reasoning from PulseScoringOutput stored on ScoredCandidate)
@@ -1596,7 +1596,7 @@ async def test_pulse_scoring_w2_stage3_reasoning_verification_persists(
     )
 
 
-# §W2.3-05 — LLM 502 causes graceful per-candidate fallback; stage3 still executes
+# LLM 502 causes graceful per-candidate fallback; stage3 still executes
 # Verified: pulse/scoring.py:359-378 (broad except → llm_relevance=None, reasoning="LLM scoring failed")
 # Verified: pulse/scoring.py:389-427 (stage3_combine operates on fallback output)
 # Survivor-of: test_pulse_scoring_stage2.py::test_stage2_graceful_fallback_on_llm_error
@@ -1684,7 +1684,7 @@ async def test_pulse_scoring_w2_stage3_llm_502_falls_back_to_stage2_output():
     )
 
 
-# §W2.3-06 — Retry-then-success: first 502 + second success produces scored candidate
+# Retry-then-success: first 502 + second success produces scored candidate
 # Verified: pulse/scoring.py:316 (max_retries=_stage2_max_retries() passed to call_llm_structured)
 # Verified: pulse/scoring.py:62 (_stage2_max_retries() returns _get_cfg().pulse_stage2_max_retries)
 # Survivor-of: test_pulse_scoring_stage2.py::test_stage2_model_and_retry_budget_are_env_configurable

@@ -1,7 +1,7 @@
 """Shared DB test infrastructure.
 
 Asyncpg mocks, live-PG fixtures, contract pool/conn fixtures, shared-conn
-pool, and TwoUsers seed helpers — clusters 1-5 of the 2026-05-24 polish-wave
+pool, and TwoUsers seed helpers — clusters 1-5 of the original
 decomposition of ``jarvis_common.testing``:
 
 1. FakeRecord + ``make_pool_and_conn`` + ``make_request`` (mock asyncpg pool/conn factories)
@@ -22,7 +22,7 @@ AsyncMock / @patch and must NOT be collapsed into contract_conn:
   - task_registry._TASK_MAP (module-level mutable dict)
 These boundaries own their own I/O contract; only asyncpg pool mocks
 collapse into contract_conn. This carve-out registry is the load-bearing
-rule for Sub-wave 4.4 test migrations.
+rule for the Postgres naming convention used in session-scoped test DBs.
 """
 
 from __future__ import annotations
@@ -182,11 +182,10 @@ def _docker_rm_best_effort(container: str) -> None:
     """Force-remove *container*, tolerating a momentarily slow/contended daemon.
 
     Teardown must never fail the test: on a loaded box ``docker rm -f`` can
-    exceed its timeout (the CI-CROSS-USER-FLAKY-1 flake — ``subprocess``
-    raises ``TimeoutExpired``, which ``check=False`` does NOT suppress).  Retry
-    once with backoff, then give up silently — the ``--rm`` flag already makes
-    the container self-remove, so a leaked name is harmless and the next run's
-    pre-clean handles it.
+    exceed its timeout (``subprocess`` raises ``TimeoutExpired``, which
+    ``check=False`` does NOT suppress).  Retry once with backoff, then give up
+    silently — the ``--rm`` flag already makes the container self-remove, so a
+    leaked name is harmless and the next run's pre-clean handles it.
     """
     for attempt in range(2):
         try:
@@ -224,8 +223,8 @@ def _spin_pg_container(
     # `docker rm -f` is a no-op when the name is not found (exit 1, ignored).
     _docker_rm_best_effort(container)
 
-    # Startup retry loop (CI-CROSS-USER-FLAKY-1). Two transient daemon faults
-    # under load are tolerated, both with cleanup + backoff between attempts:
+    # Startup retry loop — two transient daemon faults under load are
+    # tolerated, both with cleanup + backoff between attempts:
     #   * exit 125  — daemon refused: name still in use after pre-clean.
     #   * TimeoutExpired — `docker run` itself exceeded its deadline because the
     #     daemon was momentarily saturated (e.g. dozens of sequential live-PG
@@ -272,7 +271,7 @@ def _spin_pg_container(
     if last_exc is not None:
         raise last_exc
     try:
-        # W6-01: bumped 45 → 90s deadline. pg_isready returns when the postmaster
+        # Bumped 45 → 90s deadline. pg_isready returns when the postmaster
         # accepts UNIX-socket connections; the TCP/SSL backend has a brief
         # follow-on window where asyncpg.create_pool can hit
         # ``ConnectionResetError [Errno 104] Connection reset by peer``. The
@@ -294,7 +293,7 @@ def _spin_pg_container(
         port_result = _docker_cli(["port", container, "5432/tcp"])
         host_port = port_result.stdout.strip().rsplit(":", maxsplit=1)[-1]
 
-        # W6-01: socket probe — verify the TCP listener actually accepts a fresh
+        # Socket probe — verify the TCP listener actually accepts a fresh
         # connection. pg_isready only confirms the postmaster is alive; the
         # network-facing TCP socket can lag by 100-500ms after that signal under
         # CI load.
@@ -364,8 +363,8 @@ def _spin_pg_container(
 # When a long-lived admin Postgres is available (the CI ``services:`` server, or
 # an opt-in local one), each fixture gets a fresh EMPTY database via
 # ``CREATE DATABASE … TEMPLATE template0`` instead of spinning a container. This
-# removes ``docker run`` from pytest entirely — the root of every DB-test flake
-# (CI-CROSS-USER-FLAKY-1) — so parallel runners stop contending on the Docker
+# removes ``docker run`` from pytest entirely (eliminating docker-daemon contention
+# as a source of DB-test flakes) — so parallel runners stop contending on the Docker
 # daemon. The db is empty, so the consumer pool applies db/init.sql +
 # run_migrations exactly as it did against a throwaway container: transparent.
 # Unset the env var (local dev, no managed PG) → fall back to _spin_pg_container.
@@ -531,8 +530,8 @@ def make_live_pg_session_dsn(container_prefix: str):  # -> pytest fixture (sessi
     spawns ONE postgres:16.8 container for the whole session (suffix ``-xuser``).
     The cross-user isolation suite uses it so its ~53 parametrized cases share a
     single container with per-test TRUNCATE+reseed instead of 53 throwaway
-    containers (CI-CROSS-USER-FLAKY-1: docker-daemon saturation on the loaded
-    self-hosted runner). The ``-xuser`` suffix keeps it independent of the
+    containers (avoids docker-daemon saturation on loaded CI runners). The
+    ``-xuser`` suffix keeps it independent of the
     contract suite's ``-contract`` session container so lifecycles never contend.
     """
 
@@ -555,7 +554,7 @@ def make_live_pg_session_dsn(container_prefix: str):  # -> pytest fixture (sessi
 
 
 # ---------------------------------------------------------------------------
-# Contract-layer fixture factories (Wave 4)
+# Contract-layer fixture factories
 # ---------------------------------------------------------------------------
 
 

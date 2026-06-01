@@ -22,7 +22,7 @@ VIEW_PREDICATES: dict[str, str] = {
 
 # Recommender exclusion (spec §7.3.1): papers in trash or done are never
 # recommended again. The 60-day negative-feedback exclusion lives in
-# recommender.py (Wave 1c) to avoid coupling this constant to the
+# recommender.py to avoid coupling this constant to the
 # recommendation_feedback table.
 RECOMMENDER_EXCLUDE_SQL = "COALESCE(pus.state, 'inbox') IN ('trash','done')"
 

@@ -1,5 +1,5 @@
 /**
- * Tests for AuthVerifyPage — Phase 2 WS-2A magic-link verification handler.
+ * Tests for AuthVerifyPage — magic-link verification handler.
  *
  * Scope:
  * - Success: posts the token, calls loginWithSession, navigates to "/".

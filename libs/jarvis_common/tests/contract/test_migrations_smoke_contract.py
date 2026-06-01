@@ -6,7 +6,7 @@ exercise idempotence — a second call to run_migrations() must complete without
 error and must not insert additional schema_migrations rows.
 
 Verified: libs/jarvis_common/jarvis_common/migrations.py:125-235 at HEAD.
-Survivor-of (Phase C): migration unit tests that mocked pool.acquire() replaced
+Survivor-of an earlier consolidation: migration unit tests that mocked pool.acquire() replaced
 by this predicate-direct idempotence smoke.
 """
 

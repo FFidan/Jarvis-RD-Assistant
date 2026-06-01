@@ -1,6 +1,6 @@
 """Contract tests for telegram_bot pairing handlers.
 
-Uses a real Postgres connection (contract_conn) via the Wave-4 txn-rollback
+Uses a real Postgres connection (contract_conn) via the txn-rollback
 fixture.  The Telegram Bot API boundary (reply_text, bot.send_message) stays
 mocked — that is an external PTB boundary, per the D8 carve-out.
 

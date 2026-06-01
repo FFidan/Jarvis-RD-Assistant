@@ -13,8 +13,8 @@ POST   /api/settings/sources/{source_type}/clear-cooldown
     Admin session required.
 
 Note: clear-cooldown uses direct SQL (``UPDATE source_health``) rather than
-``PersistentSourceRateLimiter.reset()`` even though that method now exists (added
-in Wave-1 B2).  The two are NOT interchangeable: ``reset()`` is scoped to a
+``PersistentSourceRateLimiter.reset()`` even though that method now exists.
+The two are NOT interchangeable: ``reset()`` is scoped to a
 single ``(user_id, source_type)`` pair, whereas this endpoint clears **all**
 ``source_health`` rows for the source type — both the global row
 (``user_id IS NULL``) and every per-user row — via ``WHERE source_type=$1``.
@@ -150,7 +150,7 @@ async def clear_source_cooldown(
     source type (both global rows with ``user_id IS NULL`` and per-user rows).
 
     NOTE: This endpoint uses a direct ``UPDATE source_health`` rather than
-    ``PersistentSourceRateLimiter.reset()`` (which now exists as of Wave-1 B2).
+    ``PersistentSourceRateLimiter.reset()``.
     The two are intentionally NOT interchangeable: ``reset()`` targets a single
     ``(user_id, source_type)`` pair, but this endpoint clears **all** rows for
     the source type — global (``user_id IS NULL``) and every per-user row —

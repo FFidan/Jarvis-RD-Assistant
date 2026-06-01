@@ -72,7 +72,7 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
-    # WS-AUTH: admin-gate the settings endpoints (see test_settings._app).
+    # Admin-gate the settings endpoints (see test_settings._app).
     app.dependency_overrides[require_admin] = lambda: None
     _orig_require_admin = _settings_mod.require_admin
     _settings_mod.require_admin = AsyncMock(return_value=None)

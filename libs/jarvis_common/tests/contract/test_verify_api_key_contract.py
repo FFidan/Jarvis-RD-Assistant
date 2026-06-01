@@ -3,8 +3,8 @@
 THE authoritative home. Each test exercises the real ``verify_api_key``
 implementation against a real DB-backed session/user, NOT a mock.
 Replaces the ~177 per-router re-tests scattered across 50 paper_ingestion
-test files (those collapse in Sub-wave 4.4 D1/D5; this suite is their
-survivor citation).
+test files (those collapse into this shared suite as the authoritative
+contract citation).
 
 Branch points under test (derived from auth.py:108-189, session_middleware.py:74-104):
   A. Exempt path → early return (no DB interaction)

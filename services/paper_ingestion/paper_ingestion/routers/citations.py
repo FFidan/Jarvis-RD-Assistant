@@ -64,9 +64,9 @@ async def batch_fetch_citations(
     """
     user_id = await current_user_id_strict(request)
     jarvis_job_id = str(uuid.uuid4())
-    # Phase 2 WS-2D: pass caller user_id for audit-trail attribution. The job
-    # body is still system-wide discovery (batched across all papers), but the
-    # user that triggered the batch should be recorded.
+    # Pass caller user_id for audit-trail attribution. The job body is still
+    # system-wide discovery (batched across all papers), but the user that
+    # triggered the batch should be recorded.
     await KIND_TO_TASK["citations.batch_fetch"].defer_async(job_id=jarvis_job_id, user_id=user_id)
     return BatchCitationFetchResponse(queued=1, message=f"Job {jarvis_job_id} queued")
 
@@ -111,8 +111,8 @@ async def get_paper_citations(
         except asyncpg.exceptions.UndefinedTableError:
             return []
 
-        # W1-D2-003: drop rows whose counter-party paper is not visible to
-        # the caller.  A single follow-up SELECT checks visibility in bulk.
+        # Drop rows whose counter-party paper is not visible to the caller —
+        # a single follow-up SELECT checks visibility in bulk.
         if rows:
             counter_party_ids = [
                 r["cited_paper_id"] if r["source_paper_id"] == paper_id else r["source_paper_id"]

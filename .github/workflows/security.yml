@@ -1,13 +1,11 @@
 name: Security
 
-# Supply-chain and secret-scanning CI.
-# Closes: SEC-HIGH-05 (pip-audit + npm-audit + osv-scanner), W2-CF2 (docker-build-smoke).
-#
-# NOTE (out-of-scope): SEC-HIGH-05(c) "move SBOM to push" is owned by .github/workflows/sbom.yml
-# (W9-T4 scope). The osv-scanner job here satisfies the CVE-scan requirement.
-#
-# NOTE (gate wiring): Add "security-gate" to ci.yml gate.needs once this workflow has
-# a green baseline run — fold into W11 follow-up per task partition.
+# Supply-chain security CI.
+# Runs pip-audit + npm-audit (Python and JS dependency CVE scans), osv-scanner
+# (multi-ecosystem OSV database scan), and a docker-build smoke test to confirm
+# all service images build cleanly.  SBOM generation on release is handled by
+# .github/workflows/sbom.yml.  The terminal `security-gate` job can be added
+# to ci.yml gate.needs once the workflow has a green baseline.
 on:
   push:
     branches: [master]
@@ -40,11 +38,10 @@ jobs:
 
       # Audit the hash-pinned constraints.txt (exact == pins + --hash) with
       # --no-deps --disable-pip: this skips pip-audit's ephemeral-venv creation
-      # + pip self-upgrade (the step that fails on this self-hosted runner) and
+      # + pip self-upgrade (which can fail when pip is externally managed) and
       # audits the exact dependency graph Docker installs. requirements.txt uses
       # range pins (>=,<) which --disable-pip rejects; constraints.txt is the
       # fully-pinned lock. osv-scanner already does the deep transitive scan.
-      # Verified locally: exit 0, "No known vulnerabilities found" on all 3.
       - name: Audit paper_ingestion
         run: uvx pip-audit --no-deps --disable-pip -r services/paper_ingestion/constraints.txt
 
@@ -147,7 +144,8 @@ jobs:
             langfuse/
 
   # ---------------------------------------------------------------------------
-  # security-gate — Terminal job; add to ci.yml gate.needs in W11 follow-up
+  # security-gate — Terminal job; can be added to ci.yml gate.needs once a
+  # green baseline is established.
   # ---------------------------------------------------------------------------
   security-gate:
     name: Security gate

@@ -8,9 +8,8 @@
 - The retry / fallback policy
 
 This contract describes the steady-state LLM call surface. The historical
-Instructor + Langfuse integration transition (Wave 1 canary → Wave 2 bulk →
-Wave 3 cleanup) has completed; only the end-state described here is in scope
-for new work.
+Instructor + Langfuse integration transition (canary → bulk → cleanup) has completed;
+only the end-state described here is in scope for new work.
 
 ---
 
@@ -34,7 +33,7 @@ for new work.
 
 ## 1. The choke point
 
-After B.1 ships (instructor-langfuse-integration spec §2, archived, not in public tree), `jarvis_common.llm_client` exports exactly four
+After B.1 ships (instructor-langfuse-integration spec §2), `jarvis_common.llm_client` exports exactly four
 functions. No code outside this module may construct a chat-completions
 HTTP request directly.
 
@@ -46,7 +45,7 @@ HTTP request directly.
 | `get_litellm_config` | Resolve LiteLLM base URL | `LiteLLMConfig` |
 
 `call_llm` and `call_llm_json_value` (pre-B.1 functions) are **DELETED** in
-the cutover commit (Wave 3). No backwards-compat alias.
+the cutover commit. No backwards-compat alias.
 
 ### 1.1 `call_llm_structured` signature (target)
 
@@ -129,7 +128,7 @@ message included; up to 2 retry round-trips are performed before
 **Retries cost up to 3× round-trip time.** Caller stage budgets must
 account for this. Pulse's 600 s Stage-2 cap is the tightest constraint —
 if Stage-2 retry rate measured during canary exceeds the budget, the
-implementation plan reduces `max_retries` to 1 (per instructor-langfuse-integration spec §6.3, archived, not in public tree).
+implementation plan reduces `max_retries` to 1 (per instructor-langfuse-integration spec §6.3).
 
 ### 3.3 Fallback per site
 
@@ -320,7 +319,7 @@ boundaries; that's the only B.2 work it gets.
 
 ### 6.3 Query decomposition (`decompose_query`)
 
-[rag/decomposition.py:75-85](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L75-L85) uses `call_llm_structured` with `RootModel[list[str]]` (Wave 3 complete):
+[rag/decomposition.py:75-85](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L75-L85) uses `call_llm_structured` with `RootModel[list[str]]`:
 
 ```python
 class QueryDecomposition(RootModel[list[str]]):
@@ -361,7 +360,7 @@ The implementation MUST satisfy these. Testable.
 1. **Choke-point closure.** `grep -rn "POST.*v1/chat/completions\|client.stream.*chat/completions" services/ libs/ scripts/` returns matches ONLY in:
    - `libs/jarvis_common/jarvis_common/llm_client.py` (inside the choke-point)
    - `services/paper_ingestion/paper_ingestion/rag/streaming.py` (the streaming exception, §6.1)
-2. **No `dict[str, Any]` LLM returns post-B.1.** `grep -rn "call_llm\b\|call_llm_json_value\b" services/ libs/ scripts/` returns no hits in production code after Wave 3 (only in test fixtures and historical docs).
+2. **No `dict[str, Any]` LLM returns post-B.1.** `grep -rn "call_llm\b\|call_llm_json_value\b" services/ libs/ scripts/` returns no hits in production code (only in test fixtures and historical docs).
 3. **Every call site has a `try/except`.** Every invocation of
    `call_llm_structured` MUST be inside a `try/except` that catches at minimum
    `pydantic.ValidationError`, `ValueError`, `RuntimeError`, `httpx.HTTPError`.
@@ -419,7 +418,7 @@ Every cited identifier was Read in the session producing this contract.
 | Site 4 `call_llm` invocation (cards) | services/learning_engine/learning_engine/card_generator.py:119 | Inside `_call_llm_for_cards` |
 | Site 5 `call_llm` invocation (contradictions) | services/paper_ingestion/paper_ingestion/services/contradictions.py:516 | Inside `_classify_candidate` |
 | Site 6 `call_llm` invocation (weekly) | services/paper_ingestion/paper_ingestion/weekly_summary.py:178 | Inside per-topic loop in `generate_weekly_summary` |
-| `decompose_query` `call_llm_structured` use | services/paper_ingestion/paper_ingestion/rag/decomposition.py:75-85 | Scalar list[str] via RootModel; Wave 3 complete |
+| `decompose_query` `call_llm_structured` use | services/paper_ingestion/paper_ingestion/rag/decomposition.py:75-85 | Scalar list[str] via RootModel |
 | RAG streaming raw `client.stream` | services/paper_ingestion/paper_ingestion/rag/streaming.py:319-325 | The streaming exception (§6.1) |
 | `ExtractedField` storage model | services/paper_ingestion/paper_ingestion/models/extractions.py:81-89 | Existing storage shape; unchanged by B.1 |
 | `ExtractionField` template-field def | services/paper_ingestion/paper_ingestion/models/extractions.py:40-46 | Needs name regex validator added |

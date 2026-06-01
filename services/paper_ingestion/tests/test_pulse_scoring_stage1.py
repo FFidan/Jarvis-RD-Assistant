@@ -304,7 +304,7 @@ async def test_stage1_scored_candidate_has_expected_signals():
 
 
 # ---------------------------------------------------------------------------
-# L2 negative-centroid penalty (Wave 1cd §7.2)
+# L2 negative-centroid penalty
 # ---------------------------------------------------------------------------
 
 

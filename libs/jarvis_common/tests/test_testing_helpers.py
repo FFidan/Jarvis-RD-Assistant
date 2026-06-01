@@ -1,4 +1,4 @@
-"""Smoke tests for jarvis_common.testing — Phase 0 keystone verification.
+"""Smoke tests for jarvis_common.testing — keystone verification.
 
 These tests verify that the shared fixtures behave identically to the
 canonical bodies they were extracted from.  They do NOT cover telegram_bot

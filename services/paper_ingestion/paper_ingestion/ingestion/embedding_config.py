@@ -68,7 +68,7 @@ def validate_embedding_configuration(
             raise RuntimeError(
                 f"Embedding configuration mismatch: {model_name} outputs "
                 f"{expected_dimension} dimensions, but EMBEDDING_DIMENSION={dimension}. "
-                "Update EMBEDDING_DIMENSION or finish the Phase C Qdrant re-embed checkpoint."
+                "Update EMBEDDING_DIMENSION or finish the Qdrant re-embed checkpoint."
             )
 
 
@@ -102,7 +102,7 @@ def raise_for_collection_dimension_mismatch(
     raise RuntimeError(
         f"Qdrant collection {collection_name!r} has dimension {current_dimension}; "
         f"expected {expected_dimension} for {model_name}. "
-        "Run the documented Phase C Qdrant checkpoint/re-embed flow before restarting."
+        "Run the documented Qdrant checkpoint/re-embed flow before restarting."
     )
 
 

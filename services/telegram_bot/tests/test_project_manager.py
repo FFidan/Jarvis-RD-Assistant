@@ -200,7 +200,7 @@ async def test_get_project_papers_returns_plain_dicts():
         ("list_projects", True),
         ("get_today_tasks", True),
         ("get_upcoming_milestones", True),
-        # W2-CF8 / W3-T4: user_id is keyword-only with default=None (backward-compat)
+        # user_id is keyword-only with default=None (backward-compat)
         ("list_tasks", False),
         ("create_task", False),
         ("complete_milestone", False),
@@ -209,7 +209,7 @@ async def test_get_project_papers_returns_plain_dicts():
     ],
 )
 def test_methods_accept_user_id(method_name: str, mandatory: bool) -> None:
-    """All 7 ProjectManager methods must expose a user_id parameter (SEC-PRJMGR-1 + W2-CF8)."""
+    """All 7 ProjectManager methods must expose a user_id parameter (SEC-PRJMGR-1)."""
     from telegram_bot.project_manager import ProjectManager
 
     sig = inspect.signature(getattr(ProjectManager, method_name))
@@ -246,7 +246,7 @@ async def test_list_tasks_filters_by_user_id() -> None:
 
 @pytest.mark.asyncio
 async def test_create_task_persists_user_id() -> None:
-    """create_task writes user_id into the tasks row (W2-CF8)."""
+    """create_task writes user_id into the tasks row."""
     db_pool = AsyncMock()
     db_pool.fetchrow.return_value = _row(id=10, title="Do it", user_id=3)
     manager = ProjectManager(db_pool)
@@ -262,7 +262,7 @@ async def test_create_task_persists_user_id() -> None:
 
 @pytest.mark.asyncio
 async def test_create_task_defaults_user_id_to_null() -> None:
-    """create_task without user_id writes NULL — legacy owner semantics (W2-CF8)."""
+    """create_task without user_id writes NULL — legacy owner semantics."""
     db_pool = AsyncMock()
     db_pool.fetchrow.return_value = _row(id=11, title="Legacy", user_id=None)
     manager = ProjectManager(db_pool)
@@ -275,7 +275,7 @@ async def test_create_task_defaults_user_id_to_null() -> None:
 
 @pytest.mark.asyncio
 async def test_complete_milestone_scopes_by_user_id() -> None:
-    """complete_milestone with user_id uses IS NOT DISTINCT FROM (W2-CF8)."""
+    """complete_milestone with user_id uses IS NOT DISTINCT FROM."""
     db_pool = AsyncMock()
     db_pool.fetchrow.return_value = None  # not owned by this user
     manager = ProjectManager(db_pool)
@@ -291,7 +291,7 @@ async def test_complete_milestone_scopes_by_user_id() -> None:
 
 @pytest.mark.asyncio
 async def test_complete_milestone_legacy_no_user_id() -> None:
-    """complete_milestone without user_id passes NULL — single-SQL NULL-safe predicate (W6.5-T3)."""
+    """complete_milestone without user_id passes NULL — single-SQL NULL-safe predicate."""
     db_pool = AsyncMock()
     db_pool.fetchrow.return_value = _row(id=99, completed=True)
     manager = ProjectManager(db_pool)
@@ -307,7 +307,7 @@ async def test_complete_milestone_legacy_no_user_id() -> None:
 
 @pytest.mark.asyncio
 async def test_link_paper_to_task_guards_ownership() -> None:
-    """link_paper_to_task with user_id uses a subquery ownership guard (W2-CF8)."""
+    """link_paper_to_task with user_id uses a subquery ownership guard."""
     db_pool = AsyncMock()
     db_pool.fetchval.return_value = 1
     manager = ProjectManager(db_pool)
@@ -322,7 +322,7 @@ async def test_link_paper_to_task_guards_ownership() -> None:
 
 @pytest.mark.asyncio
 async def test_link_paper_to_task_legacy_no_user_id() -> None:
-    """link_paper_to_task without user_id passes NULL — single-SQL NULL-safe predicate (W6.5-T3)."""
+    """link_paper_to_task without user_id passes NULL — single-SQL NULL-safe predicate."""
     db_pool = AsyncMock()
     db_pool.fetchval.return_value = 1
     manager = ProjectManager(db_pool)
@@ -335,7 +335,7 @@ async def test_link_paper_to_task_legacy_no_user_id() -> None:
     assert params == (5, 10, None, None)
 
 
-# W6.5-T3: collapsed SQL tests
+# Collapsed SQL tests
 
 
 @pytest.mark.asyncio
@@ -398,12 +398,12 @@ async def test_link_paper_to_task_scopes_by_user_id_collapsed(caplog) -> None:
     assert any("owner mismatch" in r.message for r in caplog.records)
 
 
-# W3-T4: update_project_status ownership guard
+# update_project_status ownership guard
 
 
 @pytest.mark.asyncio
 async def test_update_project_status_scopes_by_user_id() -> None:
-    """update_project_status with user_id uses IS NOT DISTINCT FROM guard (W3-T4)."""
+    """update_project_status with user_id uses IS NOT DISTINCT FROM guard."""
     db_pool = AsyncMock()
     db_pool.fetchrow.return_value = _row(id=7, status="completed", user_id=3)
     manager = ProjectManager(db_pool)
@@ -419,7 +419,7 @@ async def test_update_project_status_scopes_by_user_id() -> None:
 
 @pytest.mark.asyncio
 async def test_update_project_status_rejects_other_user_project() -> None:
-    """update_project_status returns empty dict when ownership guard rejects the row (W3-T4)."""
+    """update_project_status returns empty dict when ownership guard rejects the row."""
     db_pool = AsyncMock()
     db_pool.fetchrow.return_value = None  # WHERE clause matched zero rows
     manager = ProjectManager(db_pool)
@@ -435,7 +435,7 @@ async def test_update_project_status_rejects_other_user_project() -> None:
 
 @pytest.mark.asyncio
 async def test_update_project_status_backward_compatible_no_user_id() -> None:
-    """update_project_status without user_id passes NULL — legacy/system path (W3-T4)."""
+    """update_project_status without user_id passes NULL — legacy/system path."""
     db_pool = AsyncMock()
     db_pool.fetchrow.return_value = _row(id=5, status="archived")
     manager = ProjectManager(db_pool)

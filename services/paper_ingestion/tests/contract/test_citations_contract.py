@@ -1,4 +1,4 @@
-"""Citations domain contract tests — Phase B target rows A25, A28.
+"""Citations domain contract tests — target rows A25, A28.
 
 Survivor-of: test_citations.py mock-unit assertions for get_citation_graph
     and get_paper_citations.
@@ -34,7 +34,7 @@ async def test_a25_citation_graph_owner_gets_200_with_graph_shape(
     """Covers map row A25: GET /api/citations/graph returns CitationGraphResponse shape.
 
     Verified: citations.py:34-47 at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_citations.py::test_get_citation_graph_*.
+    Survivor-of: test_citations.py::test_get_citation_graph_*.
     """
     paper_id = contract_two_users.paper_id_a
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
@@ -78,7 +78,7 @@ async def test_a28_get_paper_citations_owner_gets_list(
     """Covers map row A28: GET /api/citations/{paper_id} returns list for owner.
 
     Verified: citations.py:88-118 get_paper_citations at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_citations.py::test_get_paper_citations_*.
+    Survivor-of: test_citations.py::test_get_paper_citations_*.
     """
     paper_id = contract_two_users.paper_id_a
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:

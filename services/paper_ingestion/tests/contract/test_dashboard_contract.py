@@ -1,4 +1,4 @@
-"""Dashboard domain contract tests — Phase B target row A32.
+"""Dashboard domain contract tests — target row A32.
 
 Survivor-of: test_dashboard_api.py mock-unit assertions for get_dashboard_metrics.
 Carve-out: app.state.http_client is MagicMock (outbound HTTP).
@@ -32,7 +32,7 @@ async def test_a32_dashboard_metrics_returns_all_fields(
     """Covers map row A32: GET /api/dashboard/metrics returns all 7 aggregate fields.
 
     Verified: dashboard_api.py:29-130 get_dashboard_metrics at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_dashboard_api.py mock-unit tests.
+    Survivor-of: test_dashboard_api.py mock-unit tests.
     """
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/dashboard/metrics")

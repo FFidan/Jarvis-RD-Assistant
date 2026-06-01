@@ -394,7 +394,7 @@ async def sync_annotations_for_paper(
     if not paper:
         return {"paper_id": paper_id, "imported": 0, "status": "not_found"}
     zotero_item_key = paper["zotero_item_key"]
-    # Sprint B: attribute imported annotations to the paper's discoverer
+    # Attribute imported annotations to the paper's discoverer
     # (audit-trail column). Tolerate fixtures missing the column (NULL = system).
     try:
         paper_owner_user_id = paper["discovered_by"]
@@ -577,8 +577,7 @@ async def poll_zotero_library(
                         try:
                             await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
                                 job_id=str(uuid.uuid4()),
-                                # Sprint B: attribute to paper's discoverer
-                                # (audit-trail column).
+                                # Attribute to paper's discoverer (audit-trail column).
                                 user_id=row["discovered_by"],
                                 paper_id=row["id"],
                             )
@@ -626,10 +625,9 @@ async def poll_zotero_library(
 
         try:
             async with db_pool.acquire() as conn:
-                # Sprint B canonical-corpus: insert canonical, then mirror
-                # into the polling user's library so the imported item
-                # appears in *their* feed. ``discovered_by`` keeps the audit
-                # trail.
+                # Insert canonical, then mirror into the polling user's library
+                # so the imported item appears in *their* feed.
+                # ``discovered_by`` keeps the audit trail.
                 row = await upsert_paper(conn, paper_create, discovered_by=polling_user_id)
                 paper_id = row["id"]
                 if polling_user_id is not None:
@@ -795,7 +793,7 @@ async def _zotero_sync_from_zotero_job(
     enqueues paper.process jobs for any new items not originating in JARVIS.
     """
     await ctx.update_progress(0.1, "Starting Zotero library poll")
-    # WS-2D: thread caller user_id through so imported papers/state/annotations
+    # Thread caller user_id through so imported papers/state/annotations
     # are attributed correctly. NULL when scheduler-cron-invoked (system poll).
     polling_user_id = payload.get("user_id")
     result = await poll_zotero_library(pool, http_client, polling_user_id=polling_user_id)

@@ -1,4 +1,4 @@
-"""Extraction templates contract tests — Phase B target rows A35, A36, A37, A38, A40.
+"""Extraction templates contract tests — target rows A35, A36, A37, A38, A40.
 
 Survivor-of: test_extraction_endpoints.py, test_extractions.py mock-unit assertions
     for list_templates, create_template, update_template, delete_template,
@@ -71,7 +71,7 @@ async def test_a35_list_templates_returns_global_list(
     """Covers map row A35: GET /api/extraction-templates returns global list.
 
     Verified: extractions.py:56-81 list_templates at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_extraction_endpoints.py, test_extractions.py.
+    Survivor-of: test_extraction_endpoints.py, test_extractions.py.
     """
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/extraction-templates")
@@ -95,7 +95,7 @@ async def test_a36_create_template_admin_persists_to_db(
     """Covers map row A36: admin POST creates template row in DB.
 
     Verified: extractions.py:84-122 create_template at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_extraction_endpoints.py, test_extractions.py.
+    Survivor-of: test_extraction_endpoints.py, test_extractions.py.
     """
     template_name = "contract-test-template-phase-b"
     async with _make_client(_pi_app_admin, contract_two_users.cookie_a) as c:
@@ -103,7 +103,7 @@ async def test_a36_create_template_admin_persists_to_db(
             "/api/extraction-templates",
             json={
                 "name": template_name,
-                "description": "Phase B contract test template",
+                "description": "contract test template",
                 "fields": [
                     {
                         "name": "field1",
@@ -184,7 +184,7 @@ async def test_a37_update_template_persists_changes(
     """Covers map row A37: admin PUT updates template description in DB.
 
     Verified: extractions.py:125-196 update_template at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_extraction_endpoints.py, test_extractions.py.
+    Survivor-of: test_extraction_endpoints.py, test_extractions.py.
     """
     template_id = await contract_conn.fetchval(
         "INSERT INTO extraction_templates (name, description, fields, is_default) VALUES ($1, $2, $3::jsonb, FALSE) RETURNING id",
@@ -223,7 +223,7 @@ async def test_a38_delete_template_removes_row_from_db(
     """Covers map row A38: admin DELETE removes template row from DB.
 
     Verified: extractions.py:199-221 delete_template at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_extraction_endpoints.py, test_extractions.py.
+    Survivor-of: test_extraction_endpoints.py, test_extractions.py.
     """
     template_id = await contract_conn.fetchval(
         "INSERT INTO extraction_templates (name, description, fields, is_default) VALUES ($1, $2, $3::jsonb, FALSE) RETURNING id",
@@ -272,7 +272,7 @@ async def test_a40_get_paper_extractions_owner_gets_list(
     """Covers map row A40: GET /api/papers/{id}/extractions returns list for owner.
 
     Verified: extractions.py:257 get_paper_extractions at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_extraction_endpoints.py.
+    Survivor-of: test_extraction_endpoints.py.
     """
     paper_id = contract_two_users.paper_id_a
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
@@ -302,7 +302,7 @@ async def test_a40_get_paper_extractions_user_b_gets_403_404(
 
 
 # ---------------------------------------------------------------------------
-# W2.4 — LLM-sidecar contracts: decomposition + extraction + verifier-mandatory
+# LLM-sidecar contracts: decomposition + extraction + verifier-mandatory
 #
 # These contracts replace mock-unit patches of call_llm_structured in:
 #   test_decomposition.py (~260 LOC)

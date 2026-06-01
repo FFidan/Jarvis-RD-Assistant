@@ -1,4 +1,4 @@
-"""Knowledge graph domain contract tests — Phase B target rows A47, A48, A49.
+"""Knowledge graph domain contract tests — target rows A47, A48, A49.
 
 Survivor-of: test_knowledge_graph.py mock-unit assertions for get_graph,
     list_entities, get_entity_detail.
@@ -34,7 +34,7 @@ async def test_a47_get_graph_owner_gets_200_with_structure(
     """Covers map row A47: GET /api/knowledge-graph returns KnowledgeGraphResponse shape.
 
     Verified: knowledge_graph.py:133-185 get_graph at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_knowledge_graph.py mock-unit tests for get_graph.
+    Survivor-of: test_knowledge_graph.py mock-unit tests for get_graph.
     """
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/knowledge-graph")
@@ -100,7 +100,7 @@ async def test_a48_list_entities_owner_gets_200_list(
     """Covers map row A48: GET /api/knowledge-graph/entities returns list for owner.
 
     Verified: knowledge_graph.py:188-265 list_entities at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_knowledge_graph.py mock-unit tests for list_entities.
+    Survivor-of: test_knowledge_graph.py mock-unit tests for list_entities.
     """
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/knowledge-graph/entities")
@@ -167,7 +167,7 @@ async def test_a49_get_entity_detail_user_b_gets_403_404(
     """Covers map row A49: GET /api/knowledge-graph/entity/{id} 403/404 for non-owner.
 
     Verified: knowledge_graph.py:268 get_entity_detail at HEAD d21aaea8.
-    Survivor-of (future Phase C): test_kg_relationship_scoping.py mock-unit tests.
+    Survivor-of: test_kg_relationship_scoping.py mock-unit tests.
     """
     # Seed an entity linked to user A only
     entity_id = await contract_conn.fetchval(
@@ -248,7 +248,7 @@ async def test_e1_kg_relationship_visible_in_graph(
     Seeds two entities with a relationship row; verifies the graph endpoint
     returns them in the relationships list.
     Verified: knowledge_graph.py:133-185 (get_graph aggregates entity_relationships).
-    Survivor-of (Phase E2): test_knowledge_graph.py relationship-traversal mock tests.
+    Survivor-of: test_knowledge_graph.py relationship-traversal mock tests.
     """
     # Seed two entities owned by user A
     eid1 = await contract_conn.fetchval(
@@ -306,7 +306,7 @@ async def test_e1_kg_duplicate_entity_merge_does_not_double_count(
     Verifies the unique constraint on entities (canonical_name, entity_type) and that
     the endpoint does not return duplicate entity names.
     Verified: knowledge_graph.py:188-265 (list_entities — SELECT DISTINCT or GROUP BY).
-    Survivor-of (Phase E2): test_knowledge_graph.py duplicate-entity mock tests.
+    Survivor-of: test_knowledge_graph.py duplicate-entity mock tests.
     """
     # Insert an entity once (first insert)
     eid = await contract_conn.fetchval(
@@ -353,7 +353,7 @@ async def test_e1_kg_nonexistent_entity_detail_returns_404(
     """GET /api/knowledge-graph/entity/{id} with a non-existent id returns 404.
 
     Verified: knowledge_graph.py:268 (get_entity_detail — None row → 404).
-    Survivor-of (Phase E2): test_knowledge_graph.py 404 path mock tests.
+    Survivor-of: test_knowledge_graph.py 404 path mock tests.
     """
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get("/api/knowledge-graph/entity/999999999")
@@ -570,7 +570,7 @@ async def test_kg_query_search_returns_user_scoped_entities(
 
 
 # ---------------------------------------------------------------------------
-# W2.1 sidecar-backed KG boundary contracts
+# Sidecar-backed KG boundary contracts
 #
 # Contract 1: _ensure_kg_collection creates kg_entities collection with correct
 #             dimension via FauxQdrant; paper_entities table populates correctly.
