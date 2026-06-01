@@ -1306,7 +1306,7 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByRole('menuitem', { name: 'Send to Zotero' })).not.toBeInTheDocument();
   });
 
-  it('updates a row from Send to Zotero to View in Zotero after the Zotero job succeeds', async () => {
+  it('updates a row from Send to Zotero to View in Zotero after the Zotero job succeeds', { timeout: 15000 }, async () => {
     const user = userEvent.setup();
     const { searchPreview, zoteroPushPaper, zoteroGetLinkage } = await import('@/lib/api');
     vi.mocked(searchPreview).mockResolvedValueOnce({
@@ -1412,11 +1412,7 @@ describe('ResearchFeedPage', () => {
     // Exactly 2+ calls: first poll (null linkage) + re-poll after invalidation (ITEM-12345).
     expect(vi.mocked(zoteroGetLinkage).mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole('menuitem', { name: 'Re-sync Zotero' })).toBeInTheDocument();
-  },
-  // Extended timeout (15 s): drives a full SSE → invalidateQueries → TanStack
-  // Query refetch → React re-render cycle.  Under CPU load in the full suite
-  // the default 5 s Vitest test timeout is not enough.
-  15000);
+  });
 
   it('keeps Search active and preserves preview results after save', async () => {
     const user = userEvent.setup();

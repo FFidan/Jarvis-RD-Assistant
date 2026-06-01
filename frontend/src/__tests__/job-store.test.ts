@@ -85,6 +85,11 @@ describe('JobStore', () => {
   beforeEach(() => {
     // Reset store to empty state
     useJobStore.setState({ jobs: {}, activeAborts: {} });
+    // resetAllMocks clears call history AND queued return values (mockResolvedValueOnce
+    // etc.) on all vi.fn() instances — prevents bleed-over between tests.
+    // In vitest 4, vi.clearAllMocks() no longer clears the mockResolvedValueOnce queue,
+    // so vi.resetAllMocks() is required here to prevent cross-test mock queue bleed.
+    vi.resetAllMocks();
     vi.restoreAllMocks();
     // Re-stub sonner after restoreAllMocks
     vi.mock('sonner', () => ({

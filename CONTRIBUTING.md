@@ -96,29 +96,11 @@ addopts = "--import-mode=importlib -m 'not live_pg and not integration and not s
 ```
 
 For the **contract layer** (DB-backed) and **cross-user isolation** gate you
-need a live Postgres. Locally:
-
-```bash
-# Start the stack first (postgres must be up):
-docker compose up -d postgres
-
-# Contract suite (mirrors CI contract-tests job):
-JARVIS_RUN_LIVE_PG=1 \
-JARVIS_TEST_PG_ADMIN_DSN=postgresql://postgres:<password>@localhost:5432/postgres \
-uv run pytest --override-ini="addopts=--import-mode=importlib" -m contract -v
-
-# Cross-user isolation (mirrors CI cross-user-isolation / release gate):
-JARVIS_RUN_LIVE_PG=1 \
-JARVIS_TEST_PG_ADMIN_DSN=postgresql://postgres:<password>@localhost:5432/postgres \
-uv run pytest \
-  --override-ini="addopts=--import-mode=importlib" \
-  -m "integration and live_pg" \
-  services/paper_ingestion/tests/integration/test_cross_user_isolation.py -v
-```
-
-These live-DB jobs are **not** included in `make check` because they require
-Docker services to be running. CI runs them in dedicated jobs with a managed
-Postgres container.
+need a live Postgres. Set `JARVIS_RUN_LIVE_PG=1` and
+`JARVIS_TEST_PG_ADMIN_DSN=postgresql://postgres:<password>@localhost:5432/postgres`,
+then run pytest with the `contract` or `integration and live_pg` markers (e.g.
+`-m contract` / `-m "integration and live_pg"`). CI runs these in dedicated jobs
+with a managed Postgres container.
 
 ### Frontend (standalone)
 
@@ -146,40 +128,24 @@ mkdocs serve   # live preview at http://localhost:8000
 
 ## Adding a Database Migration
 
-### Where migrations live
+The baseline schema is **`db/init.sql`**. New migrations go in
+**`db/migrations/`** as numbered SQL files; see `db/migrations/README.md` for
+the fold-in convention, current next migration number, and idempotency examples.
 
-The baseline schema is **`db/init.sql`** — it is the authoritative starting
-point and contains the entire schema as of the public launch (migrations 0001–
-0091 were folded in on 2026-05-26 as part of the pre-launch consolidation).
+**Numbering:** name files `NNN_short_description.sql` where `NNN` is the next
+sequential three-digit number. Never reuse a number.
 
-New migrations go in **`db/migrations/`** as numbered SQL files. See
-`db/migrations/README.md` for the fold-in convention and the current next
-migration number.
+**Two hard rules for the SQL:**
 
-### Numbering convention
+1. **No outer transaction control.** Do not include bare `BEGIN` / `COMMIT` /
+   `ROLLBACK` at the top level — the migration runner wraps each file in its own
+   transaction automatically. PL/pgSQL `DO $$ BEGIN ... END $$` blocks are fine.
+2. **Idempotent.** Use `IF NOT EXISTS`, `OR REPLACE`, or equivalent guards so
+   the migration is safe to replay.
 
-Name files `NNN_short_description.sql` where `NNN` is the next sequential
-three-digit number per `db/migrations/README.md`. Never reuse a number.
-
-### Writing the SQL
-
-- **Idempotent**: use `IF NOT EXISTS`, `OR REPLACE`, or
-  `DO $$ BEGIN IF NOT EXISTS ... END IF; END $$;` guards so the migration
-  is safe to replay.
-- **No outer transaction control**: do not include bare `BEGIN` / `COMMIT` /
-  `ROLLBACK` at the top level. The migration runner wraps each file in its own
-  transaction and strips standalone transaction-control statements automatically
-  (see `_strip_outer_transaction_control` in `jarvis_common/migrations.py`).
-  PL/pgSQL `DO $$ BEGIN ... END $$` blocks are fine.
-- **Seed data**: if the migration seeds `user_config` or `paper_sources` rows,
-  add a test in `services/paper_ingestion/tests/test_migration_NNN.py` verifying
-  the expected rows exist after the migration runs.
-
-### Testing a migration locally
-
-```bash
-docker compose exec paper_ingestion pytest tests/test_migration_NNN.py
-```
+If the migration seeds `user_config` or `paper_sources` rows, add a test in
+`services/paper_ingestion/tests/test_migration_NNN.py` verifying the expected
+rows exist after it runs.
 
 ---
 

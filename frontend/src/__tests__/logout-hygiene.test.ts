@@ -8,9 +8,17 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-/** Flush all pending microtasks (Promise.resolve chain resolves dynamic imports). */
+/** Flush all pending microtasks and async tasks (dynamic imports, promises). */
 async function flushPromises(): Promise<void> {
-  // A few ticks are enough; dynamic imports resolve in a single microtask.
+  // Use a setImmediate-wrapped promise to yield to the event loop, which
+  // allows dynamic import() calls (which are macro/microtask combinations
+  // in vitest 4's new pool architecture) to fully resolve.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  // Additional microtask flushes for chained .then() callbacks.
+  for (let i = 0; i < 20; i++) {
+    await Promise.resolve();
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
   for (let i = 0; i < 10; i++) {
     await Promise.resolve();
   }

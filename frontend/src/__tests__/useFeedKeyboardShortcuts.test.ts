@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { fireEvent } from '@testing-library/react';
 import { useFeedKeyboardShortcuts } from '@/hooks/useFeedKeyboardShortcuts';
@@ -26,32 +26,32 @@ function renderShortcuts(
 }
 
 describe('useFeedKeyboardShortcuts', () => {
-  let onNext: ReturnType<typeof vi.fn>;
-  let onPrev: ReturnType<typeof vi.fn>;
-  let onSave: ReturnType<typeof vi.fn>;
-  let onStar: ReturnType<typeof vi.fn>;
-  let onSaveAndStar: ReturnType<typeof vi.fn>;
-  let onSetAside: ReturnType<typeof vi.fn>;
-  let onTrash: ReturnType<typeof vi.fn>;
-  let onRestore: ReturnType<typeof vi.fn>;
-  let onMarkDone: ReturnType<typeof vi.fn>;
-  let onOpenDetail: ReturnType<typeof vi.fn>;
-  let onShowCheatSheet: ReturnType<typeof vi.fn>;
-  let onClearSelection: ReturnType<typeof vi.fn>;
+  let onNext: Mock<() => void>;
+  let onPrev: Mock<() => void>;
+  let onSave: Mock<(id: number) => void>;
+  let onStar: Mock<(id: number) => void>;
+  let onSaveAndStar: Mock<(id: number) => void>;
+  let onSetAside: Mock<(id: number) => void>;
+  let onTrash: Mock<(id: number) => void>;
+  let onRestore: Mock<(id: number) => void>;
+  let onMarkDone: Mock<(id: number) => void>;
+  let onOpenDetail: Mock<(id: number) => void>;
+  let onShowCheatSheet: Mock<() => void>;
+  let onClearSelection: Mock<() => void>;
 
   beforeEach(() => {
-    onNext = vi.fn();
-    onPrev = vi.fn();
-    onSave = vi.fn();
-    onStar = vi.fn();
-    onSaveAndStar = vi.fn();
-    onSetAside = vi.fn();
-    onTrash = vi.fn();
-    onRestore = vi.fn();
-    onMarkDone = vi.fn();
-    onOpenDetail = vi.fn();
-    onShowCheatSheet = vi.fn();
-    onClearSelection = vi.fn();
+    onNext = vi.fn<() => void>();
+    onPrev = vi.fn<() => void>();
+    onSave = vi.fn<(id: number) => void>();
+    onStar = vi.fn<(id: number) => void>();
+    onSaveAndStar = vi.fn<(id: number) => void>();
+    onSetAside = vi.fn<(id: number) => void>();
+    onTrash = vi.fn<(id: number) => void>();
+    onRestore = vi.fn<(id: number) => void>();
+    onMarkDone = vi.fn<(id: number) => void>();
+    onOpenDetail = vi.fn<(id: number) => void>();
+    onShowCheatSheet = vi.fn<() => void>();
+    onClearSelection = vi.fn<() => void>();
   });
 
   // ── Navigation ────────────────────────────────────────────────────────────
@@ -283,19 +283,19 @@ describe('useFeedKeyboardShortcuts', () => {
       const { rerender } = renderHook(
         ({ callbacks }: { callbacks: FeedKeyboardCallbacks }) =>
           useFeedKeyboardShortcuts('inbox', papers, 0, callbacks),
-        { initialProps: { callbacks: { onNext: vi.fn() } } },
+        { initialProps: { callbacks: { onNext: vi.fn<() => void>() } } },
       );
 
-      act(() => { rerender({ callbacks: { onNext: vi.fn() } }); });
-      act(() => { rerender({ callbacks: { onNext: vi.fn() } }); });
+      act(() => { rerender({ callbacks: { onNext: vi.fn<() => void>() } }); });
+      act(() => { rerender({ callbacks: { onNext: vi.fn<() => void>() } }); });
 
-      const keydownCalls = addSpy.mock.calls.filter(([event]) => event === 'keydown');
+      const keydownCalls = addSpy.mock.calls.filter(([event]: [string, ...unknown[]]) => event === 'keydown');
       expect(keydownCalls).toHaveLength(1);
     });
 
     it('latest callbacks are respected after re-renders', () => {
-      const firstOnNext = vi.fn();
-      const latestOnNext = vi.fn();
+      const firstOnNext = vi.fn<() => void>();
+      const latestOnNext = vi.fn<() => void>();
       const papers = makePapers('inbox');
 
       const { rerender } = renderHook(
