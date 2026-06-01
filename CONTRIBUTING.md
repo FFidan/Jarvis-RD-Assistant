@@ -25,95 +25,161 @@ isolation expectation that every contributor must follow.
 3. Include a brief description of what changed, why, and any migration steps.
 4. Ensure all quality gates pass (see below) before requesting review.
 5. Update `CHANGELOG.md` if the change is user-visible.
+6. Use [Conventional Commits](https://www.conventionalcommits.org/) style for
+   commit messages (`feat:`, `fix:`, `chore:`, `docs:`, etc.) — makes the
+   changelog easier to generate and review.
+
+---
+
+## Setting Up a Development Environment
+
+**Full single-instance install** (Docker, Python, Node, secrets, etc.):
+
+```bash
+./setup.sh            # interactive — asks for API keys and config
+# or
+./scripts/jarvis-setup.sh   # non-interactive — reads env vars / defaults
+```
+
+**Python deps only** (after the full install, or for CI-style local work):
+
+```bash
+make dev-env          # runs: uv sync --group dev
+```
+
+> `make setup` is a backward-compatible alias for `make dev-env`.
+> Neither replaces `./setup.sh` for a first-time install.
+
+**Pre-commit hooks** (run once after cloning):
+
+```bash
+pre-commit install
+```
+
+This wires the same ruff / secret-check guards that CI runs on every push.
 
 ---
 
 ## Quality Gates
 
-Run these before opening a PR. All must pass.
-
-### Python (backend + shared libs)
+### One-command local gate
 
 ```bash
-uv run ruff check services/ libs/ scripts/
-uv run pytest
+make check
 ```
 
-Ruff covers linting and import ordering. Pytest runs the full unit + integration
-suite. Tests that require a live database connection use `pytest-postgresql` or
-are marked `live_pg` — the full suite runs inside the Docker containers.
+This mirrors the CI `lint-test` + `frontend` jobs end-to-end:
 
-### Frontend
+| Step | What it runs |
+|---|---|
+| Guard: no tracked secrets | `bash scripts/check-no-tracked-secrets.sh` |
+| Dependency parity | `bash scripts/check-python-deps.sh` |
+| Lint | ruff + migrations-no-tx + no-jsonb-double-encode + no-unsafe-resolver |
+| Tach | module boundary check (`uv run tach check`) |
+| Pyright | type check (`npx --yes pyright@1.1.408`) |
+| Test-shape | `uv run python3 scripts/check-test-shape.py` |
+| Guard: burned secrets | `bash scripts/check-burned-secrets.sh` |
+| Fast pytest suite | `uv run pytest` (see below) |
+| Frontend | lint + typecheck + unit tests + build |
+
+You can also run each sub-check individually (targets: `lint`, `typecheck`,
+`frontend-check`, `test`).
+
+### Fast vs. live-DB test suites
+
+`uv run pytest` (or `make test`) runs the **fast suite only**. The
+`pyproject.toml` `addopts` permanently deselects tests marked `live_pg`,
+`integration`, or `slow`:
+
+```
+addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"
+```
+
+For the **contract layer** (DB-backed) and **cross-user isolation** gate you
+need a live Postgres. Locally:
 
 ```bash
+# Start the stack first (postgres must be up):
+docker compose up -d postgres
+
+# Contract suite (mirrors CI contract-tests job):
+JARVIS_RUN_LIVE_PG=1 \
+JARVIS_TEST_PG_ADMIN_DSN=postgresql://postgres:<password>@localhost:5432/postgres \
+uv run pytest --override-ini="addopts=--import-mode=importlib" -m contract -v
+
+# Cross-user isolation (mirrors CI cross-user-isolation / release gate):
+JARVIS_RUN_LIVE_PG=1 \
+JARVIS_TEST_PG_ADMIN_DSN=postgresql://postgres:<password>@localhost:5432/postgres \
+uv run pytest \
+  --override-ini="addopts=--import-mode=importlib" \
+  -m "integration and live_pg" \
+  services/paper_ingestion/tests/integration/test_cross_user_isolation.py -v
+```
+
+These live-DB jobs are **not** included in `make check` because they require
+Docker services to be running. CI runs them in dedicated jobs with a managed
+Postgres container.
+
+### Frontend (standalone)
+
+```bash
+make frontend-check
+# or individually:
 npm --prefix frontend run lint
+npm --prefix frontend run typecheck
 npm --prefix frontend run test -- --run
 npm --prefix frontend run build
 ```
 
-`lint` runs ESLint. `test --run` runs Vitest in non-watch mode. `build` confirms
-the TypeScript compile and bundle succeed.
+### Docs site preview (optional, for docs changes)
 
-### Security resolver check
-
-```bash
-python3 scripts/check-no-unsafe-resolver.py
-```
-
-Ensures that no user-data endpoint uses an unsafe auth resolver. Must exit 0.
-
-### Dependency parity (optional, for backend changes)
-
-```bash
-bash scripts/export-service-requirements.sh
-bash scripts/check-python-deps.sh
-```
-
-### Doc alignment check
-
-```bash
-python3 scripts/check_agent_docs.py
-```
-
-### Docs site preview (optional but recommended before pushing docs changes)
-
-CI runs `mkdocs build --strict` on every push (`.github/workflows/docs.yml`). To catch broken links / unresolved refs / nav-config errors before pushing:
+CI runs `mkdocs build --strict` on every push. To catch broken links before
+pushing:
 
 ```bash
 pip install -r requirements-docs.txt
 mkdocs build --strict
-mkdocs serve  # live preview at http://localhost:8000
+mkdocs serve   # live preview at http://localhost:8000
 ```
-
-The local dev container does NOT include mkdocs by default; install on demand.
 
 ---
 
 ## Adding a Database Migration
 
-Migrations live in `db/migrations/` and are applied automatically by the
-migration runner at service startup.
+### Where migrations live
+
+The baseline schema is **`db/init.sql`** — it is the authoritative starting
+point and contains the entire schema as of the public launch (migrations 0001–
+0091 were folded in on 2026-05-26 as part of the pre-launch consolidation).
+
+New migrations go in **`db/migrations/`** as numbered SQL files. See
+`db/migrations/README.md` for the fold-in convention and the current next
+migration number.
 
 ### Numbering convention
 
 Name files `NNN_short_description.sql` where `NNN` is the next sequential
-three-digit number. Check `db/migrations/` for the highest existing number and
-increment by one. Never reuse a number.
+three-digit number per `db/migrations/README.md`. Never reuse a number.
 
 ### Writing the SQL
 
-- **Idempotent**: use `IF NOT EXISTS`, `OR REPLACE`, `DO $$ BEGIN IF NOT EXISTS ...
-  END IF; END $$;` guards so the migration is safe to replay.
+- **Idempotent**: use `IF NOT EXISTS`, `OR REPLACE`, or
+  `DO $$ BEGIN IF NOT EXISTS ... END IF; END $$;` guards so the migration
+  is safe to replay.
 - **No outer transaction control**: do not include bare `BEGIN` / `COMMIT` /
   `ROLLBACK` at the top level. The migration runner wraps each file in its own
   transaction and strips standalone transaction-control statements automatically
   (see `_strip_outer_transaction_control` in `jarvis_common/migrations.py`).
-  PL/pgSQL `DO $$ BEGIN ... END $$` blocks are fine — those are not stripped.
+  PL/pgSQL `DO $$ BEGIN ... END $$` blocks are fine.
 - **Seed data**: if the migration seeds `user_config` or `paper_sources` rows,
   add a test in `services/paper_ingestion/tests/test_migration_NNN.py` verifying
   the expected rows exist after the migration runs.
-- Test your migration with `docker compose exec paper_ingestion pytest
-  tests/test_migration_NNN.py`.
+
+### Testing a migration locally
+
+```bash
+docker compose exec paper_ingestion pytest tests/test_migration_NNN.py
+```
 
 ---
 
@@ -152,8 +218,9 @@ async def get_my_resource(
 - Python: follow `ruff` rules configured in `pyproject.toml`. Type annotations
   are expected on all new public functions.
 - TypeScript: follow the ESLint config in `frontend/`. Avoid `any`.
-- Commit messages: imperative mood, present tense (e.g. "add X", "fix Y",
-  "remove Z"). Reference issue numbers when applicable.
+- Commit messages: use Conventional Commits style — imperative mood, present
+  tense, with a type prefix (`feat:`, `fix:`, `chore:`, `docs:`, `test:`,
+  `refactor:`). Reference issue numbers when applicable.
 
 ---
 

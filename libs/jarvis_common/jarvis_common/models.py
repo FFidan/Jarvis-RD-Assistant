@@ -33,10 +33,14 @@ class JobCreateResponse(BaseModel):
 
 
 class JobStatusResponse(BaseModel):
-    """Serialised representation of a row from the ``jobs`` table.
+    """Serialised representation of a procrastinate-backed job.
 
+    Rows are sourced from ``procrastinate_jobs`` (via
+    :func:`jarvis_common.jobs.list_jobs` or
+    :func:`jarvis_common.jobs.get_unified`) and normalised to this shape
+    by :func:`jarvis_common.jobs.procrastinate_row_to_jarvis_row`.
     ``result`` / ``payload`` / ``error`` are opaque JSON blobs; timestamps
-    are ISO-8601 strings (converted by :func:`_serialise_row`).
+    are ISO-8601 strings.
     """
 
     id: str
@@ -54,14 +58,3 @@ class JobStatusResponse(BaseModel):
     finished_at: str | None = None
 
     model_config = {"extra": "allow"}
-
-
-class JobListResponse(BaseModel):
-    """Wrapper around a paginated list of jobs.
-
-    The legacy endpoint returns a bare ``list[JobStatusResponse]``; this
-    response model is provided for callers that want a documented envelope.
-    """
-
-    jobs: list[JobStatusResponse]
-    total: int

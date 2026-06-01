@@ -9,13 +9,14 @@ import logging
 import time as _time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
     import asyncpg
 
 import httpx
+from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, TopicRef
 
@@ -99,6 +100,7 @@ class PaperSource(ABC):
     """
 
     source_type: str  # must be set by subclass as class variable
+    _rate_limiter: SourceRateLimiter  # in-memory fallback; set by subclass __init__
 
     def __init__(
         self,
@@ -339,6 +341,37 @@ class PaperSource(ABC):
         """
         grace = getattr(getattr(self.config, "pulse", None), "startup_grace_seconds", 0.0)
         await _enforce_startup_grace(grace)
+
+    def make_persistent_rate_limiter(
+        self,
+        *,
+        user_id: int | None,
+        min_interval_seconds: float,
+    ) -> "PersistentSourceRateLimiter | None":
+        """Build the per-(source, user) persistent rate limiter for a poll run.
+
+        Returns ``None`` when ``db_pool`` is absent (the limiter degrades to the
+        in-process ``self._rate_limiter`` fallback at the call site).  Shared by
+        every ``fetch_new_since`` implementation; only ``min_interval_seconds``
+        differs per source.
+        """
+        if self.db_pool is None:
+            return None
+        return PersistentSourceRateLimiter(
+            source_type=self.source_type,
+            user_id=user_id,
+            min_interval_seconds=min_interval_seconds,
+            db_pool=self.db_pool,
+            fallback=self._rate_limiter,
+        )
+
+    @staticmethod
+    def _normalize_since_utc(since: datetime) -> datetime:
+        """Return ``since`` as a UTC-aware datetime.
+
+        Naive inputs are assumed to already be UTC; aware inputs are converted.
+        """
+        return since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
 
     async def fetch_new_since(
         self,

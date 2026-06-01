@@ -7,6 +7,7 @@ import asyncpg
 from jarvis_common import escape_like
 
 from paper_ingestion.extraction.entities_qdrant import ConnLike
+from paper_ingestion.queries.predicates import paper_visible_sql
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ async def get_knowledge_graph(
         # ``paper_id`` (paper deleted → ON DELETE SET NULL) is unattributable
         # and stays visible.
         relationships = await conn.fetch(
-            """SELECT id, source_entity_id, target_entity_id, relationship_type,
+            f"""SELECT id, source_entity_id, target_entity_id, relationship_type,
                       paper_id, evidence_quote, confidence, metadata, created_at
                FROM entity_relationships er
                WHERE source_entity_id = ANY($1) AND target_entity_id = ANY($1)
@@ -178,7 +179,7 @@ async def get_knowledge_graph(
                      OR EXISTS (
                          SELECT 1 FROM papers p
                          WHERE p.id = er.paper_id
-                           AND (p.discovered_by IS NULL OR p.discovered_by = $2)
+                           AND {paper_visible_sql(2)}
                      )
                      OR EXISTS (
                          SELECT 1 FROM user_library ul
@@ -273,8 +274,7 @@ async def query_knowledge_graph(
                              OR EXISTS (
                                  SELECT 1 FROM papers p
                                  WHERE p.id = er.paper_id
-                                   AND (p.discovered_by IS NULL
-                                        OR p.discovered_by = $2)
+                                   AND {paper_visible_sql(2)}
                              )
                              OR EXISTS (
                                  SELECT 1 FROM user_library ul
@@ -316,8 +316,7 @@ async def query_knowledge_graph(
                              OR EXISTS (
                                  SELECT 1 FROM papers p
                                  WHERE p.id = er.paper_id
-                                   AND (p.discovered_by IS NULL
-                                        OR p.discovered_by = $1)
+                                   AND {paper_visible_sql(1)}
                              )
                              OR EXISTS (
                                  SELECT 1 FROM user_library ul

@@ -8,7 +8,7 @@ from typing import Any
 
 import asyncpg
 
-from paper_ingestion.queries.predicates import RECOMMENDER_EXCLUDE_SQL
+from paper_ingestion.queries.predicates import EXCLUDED_STATE_SQL
 
 _logger = logging.getLogger(__name__)
 
@@ -233,7 +233,7 @@ async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int], user_id
                    SELECT 1 FROM paper_user_state pus
                     WHERE pus.paper_id = p.id
                       AND pus.user_id = $2
-                      AND {RECOMMENDER_EXCLUDE_SQL}
+                      AND {EXCLUDED_STATE_SQL}
                  )
                  AND NOT EXISTS (
                    SELECT 1 FROM recommendation_feedback rf

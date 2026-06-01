@@ -164,7 +164,7 @@ class Qwen3Reranker:
                     truncation=True,
                 ).to(self._device)
 
-                output = self._model.generate(
+                output = self._model.generate(  # pyright: ignore[reportAttributeAccessIssue]
                     **inputs,
                     max_new_tokens=1,
                     return_dict_in_generate=True,

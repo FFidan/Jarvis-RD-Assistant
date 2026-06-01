@@ -68,6 +68,25 @@ _PAPER_FEEDBACK_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
+# Shared auth preamble
+# ---------------------------------------------------------------------------
+
+
+async def _callback_auth(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> tuple[bool, int | None]:
+    """Run the shared callback auth check and return ``(authorized, jarvis_user_id)``.
+
+    Callers MUST call ``query.answer()`` (H1) themselves when this returns
+    ``(False, None)``; this helper deliberately does NOT call ``query.answer()``
+    so that callers can provide a custom message if needed.
+    """
+    config = get_config(context)
+    db_pool = get_db(context)
+    return await auth_check(update, config, db_pool)
+
+
+# ---------------------------------------------------------------------------
 # Callback handlers
 # ---------------------------------------------------------------------------
 
@@ -82,9 +101,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer()
         return
 
-    config = get_config(context)
-    db_pool = get_db(context)
-    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await _callback_auth(update, context)
     if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
@@ -95,6 +112,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     paper_id = int(match.group(1))
 
+    config = get_config(context)
     http = get_http(context)
     try:
         resp = await http.get(
@@ -129,9 +147,7 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer()
         return
 
-    config = get_config(context)
-    db_pool = get_db(context)
-    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await _callback_auth(update, context)
     if not authorized:
         await query.answer()  # H1: every path answers exactly once
         return
@@ -145,6 +161,7 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
     method, suffix = _PAPER_ACTION_ENDPOINTS[action]
     label = _PAPER_ACTION_LABELS[action]
 
+    config = get_config(context)
     http = get_http(context)
     try:
         resp = await http.request(
@@ -175,9 +192,7 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.answer()
         return
 
-    config = get_config(context)
-    db_pool = get_db(context)
-    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await _callback_auth(update, context)
     if not authorized:
         await query.answer()  # H1: every path answers exactly once
         return
@@ -191,6 +206,7 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
     signal = "positive" if sign == "pos" else "negative"
     label = "👍 Recorded" if sign == "pos" else "👎 Recorded"
 
+    config = get_config(context)
     http = get_http(context)
     try:
         resp = await http.post(
@@ -216,9 +232,7 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.answer()
         return
 
-    config = get_config(context)
-    db_pool = get_db(context)
-    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await _callback_auth(update, context)
     if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
@@ -267,7 +281,9 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
 
 
 @rate_limit(max_calls=5, window_seconds=60)
-async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _test_only_start_review_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Intentionally NOT registered with the dispatcher.
 
     The /review command flow is owned by review_handler.ConversationHandler
@@ -281,9 +297,7 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if query is None:
         return
 
-    config = get_config(context)
-    db_pool = get_db(context)
-    authorized, _ = await auth_check(update, config, db_pool)
+    authorized, _ = await _callback_auth(update, context)
     if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
@@ -303,6 +317,10 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await review_start(update, context, message=query.message)
 
 
+# Keep the old name as an alias so tests importing start_review_callback continue to work.
+start_review_callback = _test_only_start_review_callback
+
+
 @rate_limit(max_calls=10, window_seconds=60)
 async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``task_done_{id}`` — mark a task as complete via ProjectManager."""
@@ -313,9 +331,7 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.answer()
         return
 
-    config = get_config(context)
-    db_pool = get_db(context)
-    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await _callback_auth(update, context)
     if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
@@ -362,6 +378,6 @@ def register_callback_handlers(app: Application) -> None:
     )
     app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))
     app.add_handler(CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$"))
-    # start_review_callback is intentionally NOT registered here (TG-003).
+    # _test_only_start_review_callback is intentionally NOT registered here (TG-003).
     # review_handler.ConversationHandler owns the /review flow; wiring
     # start_review_callback into this dispatcher would cause dual-dispatch.

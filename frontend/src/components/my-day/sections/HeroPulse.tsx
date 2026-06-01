@@ -9,6 +9,7 @@ import { ScoreStack } from './ScoreStack';
 import { WhyChips } from '@/components/my-day/primitives/WhyChips';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { fetchPulseToday, ratePulseCard } from '@/lib/api';
+import { errorMessage } from '@/lib/errors';
 import type { PulseDeck, PulseCardItem, PulseRating } from '@/types';
 
 import { toScoreParts } from '@/lib/score-utils';
@@ -84,7 +85,7 @@ export function HeroPulse() {
     return (
       <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
         Failed to load Pulse:{' '}
-        {error instanceof Error ? error.message : 'unknown error'}
+        {errorMessage(error, 'unknown error')}
       </div>
     );
   }

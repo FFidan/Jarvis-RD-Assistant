@@ -146,3 +146,69 @@ These document intentional deviations from the container-hardening sweep, each w
 - **C-05 — vLLM user `1000:1000` write access to the HF cache** (`docker-compose.vllm.yml`). The vLLM service runs as `user: "1000:1000"` with `HF_HOME` on a named volume. If that volume was previously populated as root, the first non-root startup may fail with a permissions error; remove the volume before the first non-root run so Docker re-creates it owned by uid 1000. One-time operator action; document in the setup runbook if vLLM is promoted to production.
 - **SC-09 — `requirements-optional.txt` floor-pins are informational only.** The hashed security boundary lives in `constraints-optional.txt`, pinned with sha256 hashes verified at install (`pip install --require-hashes`). `requirements-optional.txt` is auto-generated from `pyproject.toml` and may not be hand-edited (the `check-python-deps` pre-commit hook enforces parity).
 - **C-06 — vector `docker.sock` access; `cap_drop: [ALL]` is defense-in-depth only.** The vector log shipper mounts `/var/run/docker.sock:ro`; `cap_drop: [ALL]` removes Linux capabilities but socket access is governed by uid/gid, so vector can still `docker inspect` other containers. The proper fix is structural (swap `docker.sock` for a syslog/fluent-bit forwarder, or run vector outside the docker network) — deferred as it would touch the logging architecture. Reopen when a log-routing redesign is in scope.
+
+---
+
+## Deferred items from the 2026-06-01 audit round
+
+### C5-3 — Cross-user isolation gate excludes RAG/search paths
+
+**Finding:** the 52-scenario cross-user isolation release gate covers the core task/project/paper/user data paths but excludes the RAG and search endpoints (`/api/ask*`, `/api/search*`, `/api/similar`, and the generation pipeline) because those require a live Ollama and Qdrant instance.
+
+**Current coverage:** `test_rag_contract.py` exercises these paths at unit/contract granularity with mocked backends. Ownership isolation at the HTTP boundary (auth headers, user-scoped Qdrant collections) is enforced by the same middleware that the gate exercises on the covered paths, giving reasonable indirect assurance.
+
+**Why deferred:** a full live two-user RAG-path isolation test needs both inference and vector services healthy in CI, which adds significant environment complexity.
+
+**Reopen criteria:** when a multi-user deployment scenario is targeted, or when the Qdrant collection-isolation logic changes.
+
+---
+
+### B5-5 — Telegram bot queries shared schema directly instead of service API
+
+**Finding:** `telegram_bot` queries Postgres directly for tasks, projects, and milestones even though `learning_engine` exposes REST APIs for those resources, coupling the bot to the shared schema.
+
+**Why deferred:** single-deployment, single-user product. The direct queries are correct and the schema is stable.
+
+**Reopen criteria:** if the shared schema churns (column renames, table splits, migration changes that affect the queried tables), or if `telegram_bot` is deployed independently of `learning_engine`.
+
+---
+
+### B3-006 — `/api/papers/process_batch` uses an underscore in the path
+
+**Finding:** `/api/papers/process_batch` uses an underscore separator while peer routes use hyphens.
+
+**Why deferred:** renaming would be a breaking change for existing clients. The frontend API client (`api.ts`) is deliberately frozen, so no functional benefit justifies the churn.
+
+**Reopen criteria:** if the frontend client is regenerated or a breaking-change API version is introduced.
+
+---
+
+### B3-009 — Loosely-typed `dict[str, Any]` fields in two response models
+
+**Finding:** `SystemModelsResponse` and `WeeklyDigestResponse.topics` use `dict[str, Any]` fields, which reduces OpenAPI schema fidelity and weakens static analysis on callers.
+
+**Why deferred:** the shapes are stable and internally consistent; tightening requires adding new typed models with no user-visible change.
+
+**Reopen criteria:** when the response shapes are consumed by a typed client or documentation that benefits from a precise schema.
+
+---
+
+### EVAL-HARNESS-1 — Retrieval/quality eval harness removed; reproducible replacement owed
+
+**Finding:** the retrieval and pulse eval scripts and their fixtures were removed for the public release. They were not called by CI, were not user-facing, and referenced database-local paper IDs that an external contributor could not reproduce.
+
+**Why deferred:** the scripts would have been non-runnable by anyone other than the original developer.
+
+**Reopen criteria:** introduce a reproducible eval harness keyed on stable arXiv IDs with an accompanying seed-fetch script so a contributor can run the eval against a fresh database. Scope this as a standalone developer-tooling task.
+
+---
+
+### LOW-DRY-001 — Minor un-hoisted duplications (low priority)
+
+Three small consolidation items accepted as low-priority code-quality debt:
+
+- `build_jobs_router(service_name=…)` accepts a `service_name` parameter that no code path currently uses. Retained to avoid touching every call-site; remove when the router is next refactored.
+- The `_paper_helpers.py` 2-hop shim in `paper_ingestion` (3 callers) was left intact. Consolidate opportunistically.
+- One inline copy of the paper-visibility SQL predicate remains at `paper_ingestion/services/summarization.py`; the other copies were hoisted to a shared `paper_visible_sql()` helper. Hoist this last copy when that file is next edited.
+
+**Reopen criteria:** any of the above files are touched in a refactor — opportunistic cleanup at that point.

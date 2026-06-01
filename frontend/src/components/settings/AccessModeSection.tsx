@@ -20,6 +20,7 @@ import { getFirstRunStatus, saveSetupMode } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { errorMessage } from '@/lib/errors';
 
 const MODE_LABELS: Record<'single' | 'multi', string> = {
   single: 'Single-user — only the admin account can log in',
@@ -105,7 +106,7 @@ export function AccessModeSection() {
         {saveMut.isError && (
           <p className="text-sm text-destructive">
             Could not save:{' '}
-            {saveMut.error instanceof Error ? saveMut.error.message : 'unknown error'}
+            {errorMessage(saveMut.error, 'unknown error')}
           </p>
         )}
 

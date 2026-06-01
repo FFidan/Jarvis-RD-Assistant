@@ -7,7 +7,7 @@ Rate limit: 1 request/second on the free tier.
 
 import logging
 import time as _time
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -17,7 +17,7 @@ from urllib.parse import urlparse as _urlparse
 
 import httpx
 from jarvis_common.event_log import log_event
-from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
+from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.text_utils import author_matches
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
@@ -327,17 +327,11 @@ class SemanticScholarSource(PaperSource):
         await self.apply_startup_grace()
 
         # Persistent rate limiter (no-op when db_pool is None).
-        p_limiter: PersistentSourceRateLimiter | None = None
-        if self.db_pool is not None:
-            p_limiter = PersistentSourceRateLimiter(
-                source_type="semantic_scholar",
-                user_id=user_id,
-                min_interval_seconds=RATE_LIMIT_DELAY,
-                db_pool=self.db_pool,
-                fallback=self._rate_limiter,
-            )
+        p_limiter = self.make_persistent_rate_limiter(
+            user_id=user_id, min_interval_seconds=RATE_LIMIT_DELAY
+        )
 
-        since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
+        since_utc = self._normalize_since_utc(since)
         since_date = since_utc.date()
 
         # Use consolidate_topics (default: one query per topic).

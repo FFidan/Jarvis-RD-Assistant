@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -170,6 +170,16 @@ async def submit_review(
                 user_id,
             )
 
+            await conn.execute(
+                """
+                INSERT INTO daily_log (user_id, log_date, cards_reviewed)
+                VALUES ($1, CURRENT_DATE, 1)
+                ON CONFLICT (user_id, log_date)
+                DO UPDATE SET cards_reviewed = daily_log.cards_reviewed + 1
+                """,
+                user_id,
+            )
+
     return ReviewResponse(
         card_id=card_id,
         rating=body.rating.value,
@@ -191,6 +201,7 @@ async def sync_reviews(
     synced = 0
     skipped = 0
     already_synced = 0
+    new_today = 0  # newly-inserted reviews whose reviewed_at is today (UTC)
     if not body.reviews:
         return ReviewSyncResponse(synced=0, skipped=0, already_synced=0)
 
@@ -261,8 +272,28 @@ async def sync_reviews(
                         event.card_id,
                         user_id,
                     )
+                    reviewed_at_utc = (
+                        event.reviewed_at.astimezone(UTC)
+                        if event.reviewed_at.tzinfo is not None
+                        else event.reviewed_at
+                    )
+                    if reviewed_at_utc.date() == datetime.now(UTC).date():
+                        new_today += 1
                 applied.add(event.idempotency_key)
                 synced += 1
+
+    if new_today > 0:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO daily_log (user_id, log_date, cards_reviewed)
+                VALUES ($1, CURRENT_DATE, $2)
+                ON CONFLICT (user_id, log_date)
+                DO UPDATE SET cards_reviewed = daily_log.cards_reviewed + $2
+                """,
+                user_id,
+                new_today,
+            )
 
     return ReviewSyncResponse(synced=synced, skipped=skipped, already_synced=already_synced)
 

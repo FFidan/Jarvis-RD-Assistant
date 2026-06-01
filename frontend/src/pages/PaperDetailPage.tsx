@@ -40,6 +40,7 @@ import { PaperTOC, type TOCSection } from '@/components/paper/PaperTOC';
 import { PaperResearchLog } from '@/components/paper/PaperResearchLog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { usePaperScrollSpy } from '@/hooks/paper-scroll-spy';
+import { errorMessage } from '@/lib/errors';
 
 // Section IDs in document order (must match ResearchSection ids in PaperResearchLog)
 const SECTION_IDS = [
@@ -155,7 +156,7 @@ export function PaperDetailPage() {
           <FileText className="h-8 w-8" /> Paper Detail
         </h1>
         <p className="text-destructive">
-          {error instanceof Error ? error.message : 'Failed to load paper.'}
+          {errorMessage(error, 'Failed to load paper.')}
         </p>
         <Link to="/feed" className="text-sm underline">Go back to feed</Link>
       </div>

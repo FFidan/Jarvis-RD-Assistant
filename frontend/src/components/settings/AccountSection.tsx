@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { Pencil, Check, X, User, Mail, ShieldCheck } from 'lucide-react';
+import { errorMessage } from '@/lib/errors';
 import type { AccountResponse } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -64,8 +65,7 @@ function useConfirmEmailToken(): ConfirmState {
         setSearchParams(next, { replace: true });
       })
       .catch((err: unknown) => {
-        const message =
-          err instanceof Error ? err.message : 'Email confirmation failed. The link may have expired.';
+        const message = errorMessage(err, 'Email confirmation failed. The link may have expired.');
         setState({ status: 'err', message });
         const next = new URLSearchParams(searchParams);
         next.delete('confirm_email_token');
@@ -120,7 +120,7 @@ function DisplayNameRow({ account }: { account: AccountResponse }) {
       setError(null);
     },
     onError: (e: unknown) => {
-      setError(e instanceof Error ? e.message : 'Failed to save display name');
+      setError(errorMessage(e, 'Failed to save display name'));
     },
   });
 
@@ -225,7 +225,7 @@ function EmailRow({ account }: { account: AccountResponse }) {
       }
     },
     onError: (e: unknown) => {
-      setError(e instanceof Error ? e.message : 'Failed to request email change');
+      setError(errorMessage(e, 'Failed to request email change'));
     },
   });
 

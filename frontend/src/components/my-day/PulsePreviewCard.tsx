@@ -16,12 +16,9 @@ import {
 import { PulseCard } from '@/components/pulse/PulseCard';
 import { useJobStore } from '@/stores/job-store';
 import { ApiError, fetchPulseToday, ratePulseCard } from '@/lib/api';
+import { formatTime } from '@/lib/relative-time';
+import { errorMessage } from '@/lib/errors';
 import type { PulseDeck, PulseRating } from '@/types';
-
-/** Format a date as "HH:MM" (24h). */
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
 
 /** Returns the age in hours since `iso`. */
 function hoursAgo(iso: string): number {
@@ -200,7 +197,7 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
         </CardHeader>
         <CardContent className="flex items-center justify-between gap-4">
           <p className="text-muted-foreground text-sm">
-            {error instanceof Error ? error.message : 'Unknown error'}
+            {errorMessage(error)}
           </p>
           <Button variant="outline" size="sm" onClick={() => refetch()}>
             Retry

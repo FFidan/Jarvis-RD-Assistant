@@ -12,6 +12,7 @@ from paper_ingestion import papers_service
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
     BulkActionRequest,
+    BulkActionResponse,
     ProcessBatchRequest,
 )
 
@@ -59,14 +60,14 @@ def _classify_bulk_error(exc: Exception) -> str:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/bulk")
+@router.post("/bulk", response_model=BulkActionResponse)
 @limiter.limit("10/minute")
 async def bulk_action_papers(
     request: Request,
     body: BulkActionRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, object]:
     """Apply a lifecycle action to multiple papers atomically.
 
     Returns ``{"succeeded": [...], "failed": [{"paper_id": int, "error": str}]}``.
@@ -124,7 +125,7 @@ async def process_batch(
     body: ProcessBatchRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, str]:
     """Enqueue a ``papers.batch_process`` job for the given paper IDs.
 
     Accepts 1–50 explicit paper IDs and immediately queues the job without

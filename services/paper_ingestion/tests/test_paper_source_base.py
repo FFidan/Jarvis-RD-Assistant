@@ -9,10 +9,12 @@ BE-06: _retry_after_seconds cap + attempt-1 guard (N/A — no persistent writer)
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import httpx
+from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.arxiv_source import ArxivSource
 from paper_ingestion.sources.base import PaperSource, SourceQuery, _MAX_RETRY_AFTER_S
@@ -316,3 +318,72 @@ def test_retry_after_seconds_preserves_reasonable_value(stub_source):
 def test_retry_after_seconds_cap_equals_one_hour():
     """_MAX_RETRY_AFTER_S module constant equals 3600 (one hour)."""
     assert _MAX_RETRY_AFTER_S == 3600
+
+
+# ---------------------------------------------------------------------------
+# B2-DRY-01: make_persistent_rate_limiter hoisted to PaperSource base
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "source_cls,source_type_enum,expected_source_type",
+    [
+        (ArxivSource, SourceType.ARXIV, "arxiv"),
+        (OpenAlexSource, SourceType.OPENALEX, "openalex"),
+        (SemanticScholarSource, SourceType.SEMANTIC_SCHOLAR, "semantic_scholar"),
+        (PubMedSource, SourceType.PUBMED, "pubmed"),
+    ],
+)
+def test_make_persistent_rate_limiter_wires_source_specifics(
+    source_cls, source_type_enum, expected_source_type
+):
+    """The base helper builds a limiter keyed to the subclass source_type.
+
+    Identical to the previous inline construction: source_type comes from the
+    subclass, the in-memory limiter is passed as fallback, and the supplied
+    min_interval_seconds is preserved verbatim.
+    """
+    mock_pool = MagicMock()
+    config = _make_config(source_type_enum)
+    source = source_cls(config=config, http_client=MagicMock(), db_pool=mock_pool)
+
+    limiter = source.make_persistent_rate_limiter(user_id=7, min_interval_seconds=2.5)
+
+    assert isinstance(limiter, PersistentSourceRateLimiter)
+    assert limiter._source_type == expected_source_type
+    assert limiter._user_id == 7
+    assert limiter._min_interval == 2.5
+    assert limiter._pool is mock_pool
+    assert limiter._fallback is source._rate_limiter
+
+
+def test_make_persistent_rate_limiter_returns_none_without_pool(stub_source):
+    """No db_pool -> None (call sites fall back to the in-memory limiter)."""
+    assert stub_source.db_pool is None
+    assert stub_source.make_persistent_rate_limiter(user_id=1, min_interval_seconds=1.0) is None
+
+
+# ---------------------------------------------------------------------------
+# B2-DRY-01: _normalize_since_utc hoisted to PaperSource base
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_since_utc_treats_naive_as_utc(stub_source):
+    """A naive datetime is stamped with UTC without shifting its wall-clock value."""
+    naive = datetime(2024, 3, 1, 12, 30)
+    result = stub_source._normalize_since_utc(naive)
+    assert result.tzinfo is UTC
+    assert result == datetime(2024, 3, 1, 12, 30, tzinfo=UTC)
+
+
+def test_normalize_since_utc_converts_aware_offset(stub_source):
+    """An aware datetime in another offset is converted to the equivalent UTC instant."""
+    plus_two = datetime(2024, 3, 1, 12, 30, tzinfo=timezone(timedelta(hours=2)))
+    result = stub_source._normalize_since_utc(plus_two)
+    assert result == datetime(2024, 3, 1, 10, 30, tzinfo=UTC)
+
+
+def test_normalize_since_utc_is_idempotent_on_utc(stub_source):
+    """An already-UTC datetime is returned unchanged."""
+    aware = datetime(2024, 3, 1, 12, 30, tzinfo=UTC)
+    assert stub_source._normalize_since_utc(aware) == aware

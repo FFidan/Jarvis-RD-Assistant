@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from paper_ingestion.models import TopicRef
+from paper_ingestion.queries.predicates import VIEW_PREDICATES
 
 logger = logging.getLogger(__name__)
 
@@ -143,14 +144,14 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         # 3. Collect abstracts of "engaged" papers for library centroid computation.
         # state column replaces the old status/saved columns; starred is orthogonal.
         engaged_rows = await conn.fetch(
-            """
+            f"""
             SELECT p.id, p.abstract
             FROM papers p
             JOIN paper_user_state pus ON pus.paper_id = p.id
             WHERE ($1::int IS NULL OR pus.user_id IS NOT DISTINCT FROM $1)
               AND (
                 COALESCE(pus.starred, FALSE)
-                OR COALESCE(pus.state, 'inbox') IN ('to_read', 'reading', 'done')
+                OR {VIEW_PREDICATES["library"]}
             )
               AND p.abstract IS NOT NULL
               AND p.abstract != ''

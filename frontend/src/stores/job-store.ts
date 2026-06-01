@@ -16,6 +16,7 @@ import { createSSEReader } from '@/lib/sse-reader';
 import { queryClient } from '@/lib/query-client';
 import { getNavigate } from '@/lib/navigate-bridge';
 import { QUERY_KEYS } from '@/lib/query-keys';
+import { errorMessage } from '@/lib/errors';
 
 /**
  * Per-kind query invalidation: when a job of the given kind reaches
@@ -353,7 +354,7 @@ export const useJobStore = create<JobStore>()(
         try {
           await apiCancelJob(jobId);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Failed to cancel job';
+          const msg = errorMessage(err, 'Failed to cancel job');
           toast.error(msg);
           get().subscribe(jobId);
           return;

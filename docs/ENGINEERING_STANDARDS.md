@@ -102,7 +102,11 @@ LLM-generated scientific content must remain evidence-backed:
   assigned to the correct service queue (paper_ingestion, learning_engine, or telegram_bot).
 - Procrastinate task handlers are registered via `@app.task(queue=...)` decorators
   in each service. Tests can mock or defer tasks as needed.
-- Job handlers should parse payloads into typed models before use.
+- At the public enqueue boundary (`jobs_router`'s discriminated-union `JobRequest`
+  model), payloads are already validated into typed models before dispatch.
+  Internal handlers that receive a pre-validated payload dict may work with it
+  directly; typed model parsing is encouraged but not mandatory for purely
+  internal handlers that never cross a service or HTTP boundary.
 
 ## Testing
 

@@ -23,6 +23,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAISettings, postAISettings, redetectHW, getFirstRunStatus, dismissBanner } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
+import { errorMessage } from '@/lib/errors';
 
 const QUERY_KEY = ['ai-settings'] as const;
 
@@ -325,7 +326,7 @@ export function SettingsAIPanel() {
           className="rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
           Failed to apply settings:{' '}
-          {applyMut.error instanceof Error ? applyMut.error.message : 'unknown error'}
+          {errorMessage(applyMut.error, 'unknown error')}
         </div>
       )}
     </div>

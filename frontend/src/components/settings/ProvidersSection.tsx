@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Loader2, CheckCircle, CircleDashed, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
+import { errorMessage } from '@/lib/errors';
 import type { ConfigEntry } from '@/types';
 
 const PROVIDER_LABELS: Record<CloudProvider, string> = {
@@ -113,7 +114,7 @@ export function ProvidersSection() {
         toast.error(result.error ?? `${PROVIDER_LABELS[provider]} test failed`);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Connection failed';
+      const msg = errorMessage(err, 'Connection failed');
       setTestResults((prev) => ({ ...prev, [provider]: { ok: false, error: msg } }));
       toast.error(msg);
     } finally {

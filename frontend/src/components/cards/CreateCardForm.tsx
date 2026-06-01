@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { errorMessage } from '@/lib/errors';
 
 const CARD_TYPES = ['concept', 'quote', 'method', 'comparison'] as const;
 
@@ -207,7 +208,7 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
       startPolling(data.job_id);
     },
     onError: (err) => {
-      const msg = err instanceof Error ? err.message : 'Generation failed';
+      const msg = errorMessage(err, 'Generation failed');
       setJob({ status: 'failed', error: { message: msg } } satisfies PartialGenJob);
     },
   });

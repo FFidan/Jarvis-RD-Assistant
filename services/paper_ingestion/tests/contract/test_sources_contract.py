@@ -250,7 +250,7 @@ async def test_arxiv_run_history_inserted_on_success(contract_conn, _sources_poo
     with (
         respx.mock,
         patch(
-            "paper_ingestion.sources.arxiv_source.PersistentSourceRateLimiter",
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
     ):
@@ -306,7 +306,7 @@ async def test_arxiv_run_history_inserted_on_rate_limit(contract_conn, _sources_
         respx.mock,
         patch("paper_ingestion.sources.arxiv_source.asyncio.sleep", _noop_sleep),
         patch(
-            "paper_ingestion.sources.arxiv_source.PersistentSourceRateLimiter",
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
     ):

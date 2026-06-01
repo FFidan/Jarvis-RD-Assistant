@@ -7,6 +7,7 @@ import { submitFeedback, clearFeedback } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { errorMessage } from '@/lib/errors';
 
 // Must align with FeedbackBody['source'] in api.ts (excludes dismiss_combined)
 type FeedbackSource = 'feed_thumbs' | 'paper_detail_thumbs' | 'pulse_thumbs';
@@ -54,7 +55,7 @@ export function FeedbackButtons({
     onSuccess: () => onSuccess?.(),
     onError: (err) =>
       toast.error('Failed to record feedback', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: errorMessage(err),
       }),
   });
 
@@ -67,7 +68,7 @@ export function FeedbackButtons({
     },
     onError: (err) =>
       toast.error('Failed to clear feedback', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: errorMessage(err),
       }),
   });
 

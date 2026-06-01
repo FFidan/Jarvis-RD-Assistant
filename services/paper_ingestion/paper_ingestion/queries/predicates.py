@@ -20,12 +20,22 @@ VIEW_PREDICATES: dict[str, str] = {
     "all_non_trash": "COALESCE(pus.state, 'inbox') != 'trash'",
 }
 
-# Recommender exclusion (spec §7.3.1): papers in trash or done are never
-# recommended again. The 60-day negative-feedback exclusion lives in
-# recommender.py to avoid coupling this constant to the
+# Recommender + Pulse exclusion (spec §6 + §7.3.1): papers in trash or done
+# are never recommended again. The 60-day negative-feedback exclusion lives
+# in recommender.py to avoid coupling this constant to the
 # recommendation_feedback table.
-RECOMMENDER_EXCLUDE_SQL = "COALESCE(pus.state, 'inbox') IN ('trash','done')"
+EXCLUDED_STATE_SQL = "COALESCE(pus.state, 'inbox') IN ('trash','done')"
 
-# Pulse candidate filter (spec §6 + §7.3.1): same as RECOMMENDER_EXCLUDE_SQL
-# today, kept as a separate name in case Pulse and Recommender diverge.
-PULSE_CANDIDATE_EXCLUDE_SQL = "COALESCE(pus.state, 'inbox') IN ('trash','done')"
+
+def paper_visible_sql(param_index: int, alias: str = "p") -> str:
+    """SQL fragment: a paper row is visible to the bound user_id.
+
+    Emits ``(<alias>.discovered_by IS NULL OR <alias>.discovered_by = $N)`` —
+    i.e. unattributed stubs plus papers the caller discovered. The user_library
+    membership branch is composed at each call site (it varies by surrounding
+    query shape).
+
+    Both ``param_index`` (a literal int) and ``alias`` (a SQL identifier) are
+    caller-controlled, never user input — f-string interpolation is safe.
+    """
+    return f"({alias}.discovered_by IS NULL OR {alias}.discovered_by = ${param_index})"

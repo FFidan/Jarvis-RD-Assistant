@@ -166,7 +166,9 @@ async def test_source_emits_event_on_success(source_name, make_source, module, s
         log_calls.append(kwargs)
 
     with (
-        patch(f"{module}.PersistentSourceRateLimiter", return_value=mock_limiter),
+        patch(
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter", return_value=mock_limiter
+        ),
         patch(f"{module}.log_event", side_effect=_capture),
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
@@ -221,7 +223,7 @@ async def test_arxiv_emits_source_event_on_rate_limit(monkeypatch):
 
     with (
         patch(
-            "paper_ingestion.sources.arxiv_source.PersistentSourceRateLimiter",
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
         patch("paper_ingestion.sources.arxiv_source.log_event", side_effect=_capture),
@@ -287,7 +289,9 @@ async def test_source_emits_event_on_rate_limit(
         log_calls.append(kwargs)
 
     with (
-        patch(f"{module}.PersistentSourceRateLimiter", return_value=mock_limiter),
+        patch(
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter", return_value=mock_limiter
+        ),
         patch(f"{module}.log_event", side_effect=_capture),
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
@@ -333,7 +337,7 @@ async def test_arxiv_emits_source_event_on_http_error():
 
     with (
         patch(
-            "paper_ingestion.sources.arxiv_source.PersistentSourceRateLimiter",
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
         patch("paper_ingestion.sources.arxiv_source.log_event", side_effect=_capture),
@@ -391,7 +395,9 @@ async def test_source_emits_event_on_http_error(source_name, make_source, module
         log_calls.append(kwargs)
 
     with (
-        patch(f"{module}.PersistentSourceRateLimiter", return_value=mock_limiter),
+        patch(
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter", return_value=mock_limiter
+        ),
         patch(f"{module}.log_event", side_effect=_capture),
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)

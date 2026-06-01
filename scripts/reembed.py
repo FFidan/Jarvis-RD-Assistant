@@ -480,7 +480,7 @@ async def reembed_paper(
     qdrant : AsyncQdrantClient
         Qdrant async client.
     http_client : httpx.AsyncClient
-        HTTP client for the LiteLLM backend (ignored by local/ONNX backends).
+        HTTP client for the LiteLLM backend (ignored by local backends).
     backend : EmbeddingBackend or None
         Backend to use. Defaults to :class:`LiteLLMEmbeddingBackend` when
         ``None``.

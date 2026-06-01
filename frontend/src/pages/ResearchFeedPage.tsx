@@ -3,7 +3,6 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import {
-  ApiError,
   searchPreview,
   batchSavePapers,
   fetchSources,
@@ -26,6 +25,7 @@ import type {
 } from '@/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { errorMessage } from '@/lib/errors';
 import { SearchBar } from '@/components/feed/SearchBar';
 import { PreviewResults } from '@/components/feed/PreviewResults';
 import { SearchSourceErrors } from '@/components/feed/SearchSourceErrors';
@@ -258,13 +258,7 @@ export function ResearchFeedPage() {
       toast.success(`Saved ${data.length} paper(s) to your library.`);
     },
     onError: (error) => {
-      const message =
-        error instanceof ApiError
-          ? error.detail
-          : error instanceof Error
-            ? error.message
-            : 'Save failed. Check service logs.';
-      toast.error(message);
+      toast.error(errorMessage(error, 'Save failed. Check service logs.'));
     },
   });
 
@@ -286,11 +280,7 @@ export function ResearchFeedPage() {
 
   const searchErrorMessage =
     searchMutation.isError && searchMutation.error
-      ? searchMutation.error instanceof ApiError
-        ? searchMutation.error.detail
-        : searchMutation.error instanceof Error
-          ? searchMutation.error.message
-          : 'Search failed. Please try again.'
+      ? errorMessage(searchMutation.error, 'Search failed. Please try again.')
       : null;
 
   // ── FacetRail selection ──────────────────────────────────────────────────

@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import httpx
 from jarvis_common.event_log import log_event
-from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
+from jarvis_common.source_rate_limiter import SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
@@ -517,18 +517,12 @@ class ArxivSource(PaperSource):
         await self.apply_startup_grace()
 
         # Persistent rate limiter (no-op when db_pool is None).
-        p_limiter: PersistentSourceRateLimiter | None = None
-        if self.db_pool is not None:
-            p_limiter = PersistentSourceRateLimiter(
-                source_type="arxiv",
-                user_id=user_id,
-                min_interval_seconds=RATE_LIMIT_DELAY,
-                db_pool=self.db_pool,
-                fallback=self._rate_limiter,
-            )
+        p_limiter = self.make_persistent_rate_limiter(
+            user_id=user_id, min_interval_seconds=RATE_LIMIT_DELAY
+        )
 
         # Normalise *since* to UTC, then format as arXiv date string YYYYMMDDHHMM
-        since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
+        since_utc = self._normalize_since_utc(since)
         since_str = since_utc.strftime("%Y%m%d%H%M")
         # arXiv submittedDate ranges require minute precision on both bounds.
         # Use a far-future minute sentinel instead of the invalid legacy 99999999

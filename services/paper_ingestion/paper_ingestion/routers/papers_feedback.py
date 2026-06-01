@@ -38,7 +38,7 @@ async def submit_feedback(
     body: FeedbackRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> FeedbackResponse:
     """Record per-paper recommendation feedback.
 
     Writes to the ``recommendation_feedback`` table (one row per

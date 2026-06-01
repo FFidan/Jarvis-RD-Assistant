@@ -34,6 +34,7 @@ import {
   type FirstRunSystemCheck,
 } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { errorMessage } from '@/lib/errors';
 
 const TOTAL_STEPS = 5;
 
@@ -100,7 +101,7 @@ function SystemCheckStep({ onNext }: { onNext: () => void }) {
       const res = await runFirstRunSystemCheck();
       setData(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Probe failed');
+      setError(errorMessage(e, 'Probe failed'));
     } finally {
       setLoading(false);
     }
@@ -286,7 +287,7 @@ function SmtpStep({ onBack, onNext, singleUser }: { onBack: () => void; onNext: 
       </div>
       {saveMut.isError && (
         <div className="text-sm text-destructive">
-          Save failed: {saveMut.error instanceof Error ? saveMut.error.message : 'unknown error'}
+          Save failed: {errorMessage(saveMut.error, 'unknown error')}
         </div>
       )}
     </SetupStep>
@@ -359,7 +360,7 @@ function AdminStep({
       </div>
       {createMut.isError && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          {createMut.error instanceof Error ? createMut.error.message : 'Could not create admin.'}
+          {errorMessage(createMut.error, 'Could not create admin.')}
         </div>
       )}
     </SetupStep>

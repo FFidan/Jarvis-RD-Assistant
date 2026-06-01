@@ -31,7 +31,7 @@ import type { LucideIcon } from 'lucide-react';
 
 // NI-3: shared toastError helper — every mutation must call this on error
 const toastError = (verb: string) => (err: unknown) =>
-  toast.error(`Failed to ${verb}`, { description: err instanceof Error ? err.message : 'Unknown error' });
+  toast.error(`Failed to ${verb}`, { description: errorMessage(err) });
 
 interface FeedViewProps {
   surface: SurfaceView;

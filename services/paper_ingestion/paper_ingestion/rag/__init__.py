@@ -14,6 +14,7 @@ from paper_ingestion.rag.verification import (
     RagVerificationReport,
     VerifiedSentence,
     verify_answer_sentences,
+    verify_answer_summary,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "sse_error_stream",
     "stream_rag_events",
     "verify_answer_sentences",
+    "verify_answer_summary",
 ]

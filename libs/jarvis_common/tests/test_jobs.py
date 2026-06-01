@@ -445,3 +445,54 @@ class _DictRecord:
 
     def items(self):
         return self._data.items()
+
+
+# ---------------------------------------------------------------------------
+# _STATUS_CASE_SQL DRY invariant
+# ---------------------------------------------------------------------------
+
+
+class TestStatusCaseSql:
+    """B1-1: _STATUS_CASE_SQL must be consistent with PROCRASTINATE_STATUS_MAP.
+
+    The SQL fragment is derived from PROCRASTINATE_STATUS_MAP at module load;
+    these tests verify the derivation is correct and complete so that adding
+    a new procrastinate status to the map automatically propagates to the SQL.
+    """
+
+    def test_every_map_key_appears_as_when_clause(self) -> None:
+        """Each key in PROCRASTINATE_STATUS_MAP has a corresponding WHEN clause."""
+        from jarvis_common.jobs import _STATUS_CASE_SQL, PROCRASTINATE_STATUS_MAP
+
+        for proc_status in PROCRASTINATE_STATUS_MAP:
+            assert f"WHEN '{proc_status}'" in _STATUS_CASE_SQL, (
+                f"_STATUS_CASE_SQL is missing a WHEN clause for '{proc_status}'. "
+                "Add the key to PROCRASTINATE_STATUS_MAP and regenerate."
+            )
+
+    def test_every_map_value_appears_as_then_clause(self) -> None:
+        """Each target value in PROCRASTINATE_STATUS_MAP has a THEN clause."""
+        from jarvis_common.jobs import _STATUS_CASE_SQL, PROCRASTINATE_STATUS_MAP
+
+        for jarvis_status in set(PROCRASTINATE_STATUS_MAP.values()):
+            assert f"THEN '{jarvis_status}'" in _STATUS_CASE_SQL, (
+                f"_STATUS_CASE_SQL is missing a THEN clause for '{jarvis_status}'."
+            )
+
+    def test_fallback_else_clause_present(self) -> None:
+        """The ELSE 'running' fallback clause must always be present."""
+        from jarvis_common.jobs import _STATUS_CASE_SQL
+
+        assert "ELSE 'running' END" in _STATUS_CASE_SQL, (
+            "_STATUS_CASE_SQL must end with ELSE 'running' END for unknown statuses."
+        )
+
+    def test_when_then_count_matches_map_length(self) -> None:
+        """Number of WHEN clauses equals the number of entries in the map."""
+        from jarvis_common.jobs import _STATUS_CASE_SQL, PROCRASTINATE_STATUS_MAP
+
+        when_count = _STATUS_CASE_SQL.count("WHEN '")
+        assert when_count == len(PROCRASTINATE_STATUS_MAP), (
+            f"_STATUS_CASE_SQL has {when_count} WHEN clauses but "
+            f"PROCRASTINATE_STATUS_MAP has {len(PROCRASTINATE_STATUS_MAP)} entries."
+        )

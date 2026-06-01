@@ -12,7 +12,7 @@ from jarvis_common import current_user_id_strict
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import DashboardMetrics
-from paper_ingestion.queries.predicates import RECOMMENDER_EXCLUDE_SQL
+from paper_ingestion.queries.predicates import EXCLUDED_STATE_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ async def get_dashboard_metrics(
                            SELECT 1 FROM paper_user_state pus
                             WHERE pus.paper_id = ul.paper_id
                               AND pus.user_id = $1
-                              AND {RECOMMENDER_EXCLUDE_SQL}
+                              AND {EXCLUDED_STATE_SQL}
                          )) AS unread_papers,
                     (SELECT COUNT(*) FROM user_library ul
                      LEFT JOIN paper_summaries ps ON ul.paper_id = ps.paper_id
@@ -79,7 +79,7 @@ async def get_dashboard_metrics(
                            SELECT 1 FROM paper_user_state pus
                             WHERE pus.paper_id = p.id
                               AND pus.user_id IS NULL
-                              AND {RECOMMENDER_EXCLUDE_SQL}
+                              AND {EXCLUDED_STATE_SQL}
                          )) AS unread_papers,
                     (SELECT COUNT(*) FROM papers p
                      LEFT JOIN paper_summaries ps ON p.id = ps.paper_id

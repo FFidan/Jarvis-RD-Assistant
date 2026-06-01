@@ -179,7 +179,7 @@ async def get_feed_counts(
     scope: str = Query(default="library", max_length=16),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> FeedCountsResponse:
     """Return per-bucket paper counts (C3: delegates to papers_service)."""
     _ = request  # required by @limiter.limit; not used in body
     return await papers_service.get_feed_counts(scope, db_pool, user_id)

@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { errorMessage } from '@/lib/errors';
 import type { SmtpConfig } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -180,7 +181,7 @@ export function SmtpSection() {
 
             {saveMut.isError && (
               <p className="text-sm text-destructive">
-                Could not save: {saveMut.error instanceof Error ? saveMut.error.message : 'unknown error'}
+                Could not save: {errorMessage(saveMut.error, 'unknown error')}
               </p>
             )}
           </div>

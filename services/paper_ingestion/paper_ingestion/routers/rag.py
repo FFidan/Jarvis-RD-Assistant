@@ -38,6 +38,7 @@ from paper_ingestion.deps import (
 from paper_ingestion.models import (
     AskRequest,
     AskResponse,
+    BatchSummarizeResponse,
     CrossPaperAskRequest,
     WeeklyDigestResponse,
 )
@@ -174,7 +175,7 @@ async def summarize_paper(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/papers/batch-summarize")
+@router.post("/papers/batch-summarize", response_model=BatchSummarizeResponse)
 @limiter.limit("2/minute")
 async def batch_summarize_papers(
     request: Request,
@@ -291,25 +292,22 @@ async def ask_paper(
     # Enrich sources with paper_id for verification
     sources = [{**s, "paper_id": paper_id} for s in raw_sources]
 
-    confidence: str | None = None
-    verified_fraction: float | None = None
-    per_sentence: list[dict[str, object]] = []
+    verification: dict[str, object] = {
+        "confidence": None,
+        "verified_fraction": None,
+        "per_sentence": [],
+    }
     try:
-        from paper_ingestion.rag.verification import verify_answer_sentences
+        from paper_ingestion.rag.verification import verify_answer_summary
 
-        report = await verify_answer_sentences(answer, sources, verifier, db_pool)
-        confidence = report.confidence.value
-        verified_fraction = report.pass_rate
-        per_sentence = [{"text": s.text, "verified": s.verified} for s in report.per_sentence]
+        verification = await verify_answer_summary(answer, sources, verifier, db_pool)
     except Exception as exc:  # noqa: BLE001
         logger.warning("RAG verification failed for paper %d: %s", paper_id, exc, exc_info=True)
 
     return {
         "answer": answer,
         "sources": sources,
-        "confidence": confidence,
-        "verified_fraction": verified_fraction,
-        "per_sentence": per_sentence,
+        **verification,
     }
 
 
@@ -457,25 +455,22 @@ async def ask_cross_paper(
 
     answer = _strip_think_blocks(ask_result.answer)
 
-    confidence: str | None = None
-    verified_fraction: float | None = None
-    per_sentence: list[dict[str, object]] = []
+    verification: dict[str, object] = {
+        "confidence": None,
+        "verified_fraction": None,
+        "per_sentence": [],
+    }
     try:
-        from paper_ingestion.rag.verification import verify_answer_sentences
+        from paper_ingestion.rag.verification import verify_answer_summary
 
-        report = await verify_answer_sentences(answer, sources_list, verifier, db_pool)
-        confidence = report.confidence.value
-        verified_fraction = report.pass_rate
-        per_sentence = [{"text": s.text, "verified": s.verified} for s in report.per_sentence]
+        verification = await verify_answer_summary(answer, sources_list, verifier, db_pool)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Cross-paper RAG verification failed: %s", exc, exc_info=True)
 
     return {
         "answer": answer,
         "sources": sources_list,
-        "confidence": confidence,
-        "verified_fraction": verified_fraction,
-        "per_sentence": per_sentence,
+        **verification,
     }
 
 

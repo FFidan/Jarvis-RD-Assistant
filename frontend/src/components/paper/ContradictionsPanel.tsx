@@ -6,6 +6,7 @@ import { useJobStore, type Job } from '@/stores/job-store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { errorMessage } from '@/lib/errors';
 
 interface ContradictionsPanelProps {
   paperId: number;
@@ -109,9 +110,7 @@ export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
 
       {scanMutation.isError && (
         <p className="text-xs text-destructive">
-          {scanMutation.error instanceof Error
-            ? scanMutation.error.message
-            : 'Failed to queue contradiction scan.'}
+          {errorMessage(scanMutation.error, 'Failed to queue contradiction scan.')}
         </p>
       )}
 

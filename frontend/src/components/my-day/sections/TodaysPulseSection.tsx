@@ -9,17 +9,8 @@ import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCa
 import { PulseRow } from './PulseRow';
 import { ApiError, fetchPulseToday } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
+import { formatTime } from '@/lib/relative-time';
 import type { PulseDeck } from '@/types';
-
-/** Format an ISO datetime string as a short HH:MM time. */
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return iso;
-  }
-}
 
 export function TodaysPulseSection() {
   const [expanded, setExpanded] = useState(false);

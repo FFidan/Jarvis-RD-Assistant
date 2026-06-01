@@ -25,11 +25,7 @@ class TestRerankerLoadFailPropagatesFirstCall:
         factory = MagicMock(side_effect=OSError("model weights not found"))
         reranker = _make_reranker()
 
-        # Patch CrossEncoder inside the reranker module and ensure _onnx_available=False path
-        with (
-            patch("paper_ingestion.ingestion.reranker.CrossEncoder", factory),
-            patch("builtins.__import__", side_effect=_import_blocker({"onnxruntime"})),
-        ):
+        with patch("paper_ingestion.ingestion.reranker.CrossEncoder", factory):
             with pytest.raises(OSError, match="model weights not found"):
                 reranker._load_model_if_needed()
 
@@ -43,10 +39,7 @@ class TestRerankerLoadFailShortCircuitsSecondCall:
         factory = MagicMock(side_effect=OSError("model weights not found"))
         reranker = _make_reranker()
 
-        with (
-            patch("paper_ingestion.ingestion.reranker.CrossEncoder", factory),
-            patch("builtins.__import__", side_effect=_import_blocker({"onnxruntime"})),
-        ):
+        with patch("paper_ingestion.ingestion.reranker.CrossEncoder", factory):
             # First call: expect the original error (factory may be called for CUDA + CPU paths)
             with pytest.raises(OSError):
                 reranker._load_model_if_needed()
@@ -68,32 +61,8 @@ class TestRerankerUnexpectedErrorPropagates:
         factory = MagicMock(side_effect=ValueError("unexpected internal error"))
         reranker = _make_reranker()
 
-        with (
-            patch("paper_ingestion.ingestion.reranker.CrossEncoder", factory),
-            patch("builtins.__import__", side_effect=_import_blocker({"onnxruntime"})),
-        ):
+        with patch("paper_ingestion.ingestion.reranker.CrossEncoder", factory):
             # ValueError is not in (OSError, ImportError, RuntimeError, FileNotFoundError)
             # so it must bubble up from the outer except Exception (CUDA fallback)
             with pytest.raises(ValueError, match="unexpected internal error"):
                 reranker._load_model_if_needed()
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__  # type: ignore[union-attr]
-
-
-def _import_blocker(blocked: set[str]):
-    """Return a side_effect function that raises ImportError for blocked module names."""
-    import builtins
-
-    real = builtins.__import__
-
-    def _side_effect(name: str, *args, **kwargs):
-        if name in blocked:
-            raise ImportError(f"Blocked in test: {name}")
-        return real(name, *args, **kwargs)
-
-    return _side_effect

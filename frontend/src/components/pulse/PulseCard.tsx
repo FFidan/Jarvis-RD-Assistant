@@ -11,6 +11,7 @@ import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
 import { VerificationBadge } from '@/components/shared/VerificationBadge';
 import { cn } from '@/lib/utils';
 import { trashAndRejectPaper, unsavePaper } from '@/lib/api';
+import { errorMessage } from '@/lib/errors';
 import type { PulseCardItem, PulseRating } from '@/types';
 import { ScoreStack } from '@/components/my-day/sections/ScoreStack';
 
@@ -86,7 +87,7 @@ export function PulseCard({
         queryClient.setQueryData(QUERY_KEYS.pulse.today(), context.prev);
       }
       toast.error('Failed to trash & reject', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: errorMessage(err),
       });
     },
     onSettled: () => {
@@ -116,7 +117,7 @@ export function PulseCard({
         queryClient.setQueryData(QUERY_KEYS.pulse.today(), context.prev);
       }
       toast.error('Failed to unsave paper', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: errorMessage(err),
       });
     },
     onSuccess: () => {

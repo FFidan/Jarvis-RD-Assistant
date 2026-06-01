@@ -18,30 +18,12 @@ from learning_engine.models import (
     ProjectQuestionCreate,
     ProjectQuestionResponse,
 )
+from learning_engine.routers._guards import assert_project_owner as _assert_project_owner
 
 router = APIRouter(prefix="/api/projects", tags=["project-questions"])
 # Spec §4a: DELETE is addressed by question id, not nested under a project,
 # so it lives on its own /api/questions prefix.
 questions_router = APIRouter(prefix="/api/questions", tags=["project-questions"])
-
-
-async def _assert_project_owner(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
-    project_id: int,
-    user_id: int,
-) -> None:
-    """Raise 404 unless ``project_id`` exists and belongs to ``user_id``.
-
-    Owner-scoping guard reused verbatim from project_papers — IDOR otherwise
-    (a 404, not 403, to avoid leaking project existence).
-    """
-    owned = await conn.fetchval(
-        "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
-        project_id,
-        user_id,
-    )
-    if not owned:
-        raise HTTPException(status_code=404, detail="Project not found")
 
 
 # ---------------------------------------------------------------------------

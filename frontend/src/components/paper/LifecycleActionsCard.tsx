@@ -48,6 +48,7 @@ import {
   hardDeletePaper,
 } from '@/lib/api';
 import { toast } from 'sonner';
+import { errorMessage } from '@/lib/errors';
 
 interface LifecycleActionsCardProps {
   paperId: number;
@@ -70,7 +71,7 @@ export function LifecycleActionsCard({
   // NI-3 error helper (identical to PaperHeader)
   const toastError = (verb: string) => (err: unknown) =>
     toast.error(`Failed to ${verb}`, {
-      description: err instanceof Error ? err.message : 'Unknown error',
+      description: errorMessage(err),
     });
 
   const invalidate = () => {

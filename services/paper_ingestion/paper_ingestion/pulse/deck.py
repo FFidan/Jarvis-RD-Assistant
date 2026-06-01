@@ -10,7 +10,7 @@ from typing import Any
 
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
 from paper_ingestion.pulse.scoring import ScoredCandidate
-from paper_ingestion.queries.predicates import PULSE_CANDIDATE_EXCLUDE_SQL, VIEW_PREDICATES
+from paper_ingestion.queries.predicates import EXCLUDED_STATE_SQL, VIEW_PREDICATES
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ async def _persist_deck_inner(
                    ON pus.paper_id = p.id
                   AND pus.user_id IS NOT DISTINCT FROM $11
             WHERE p.external_id = $2
-              AND NOT ({PULSE_CANDIDATE_EXCLUDE_SQL})
+              AND NOT ({EXCLUDED_STATE_SQL})
               -- spec §7.3.1: exclude papers with 60d negative feedback for this user
               AND NOT EXISTS (
                   SELECT 1 FROM recommendation_feedback rf
@@ -183,7 +183,7 @@ async def _persist_deck_inner(
                    ON pus.paper_id = p.id
                   AND pus.user_id IS NOT DISTINCT FROM $11
             WHERE p.external_id = $2
-              AND NOT ({PULSE_CANDIDATE_EXCLUDE_SQL})
+              AND NOT ({EXCLUDED_STATE_SQL})
             ON CONFLICT (deck_id, paper_id) DO NOTHING
             RETURNING id
             """,

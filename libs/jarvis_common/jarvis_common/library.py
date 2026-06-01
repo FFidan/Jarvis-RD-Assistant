@@ -42,8 +42,6 @@ ALLOWED_ADDED_VIA: Final[frozenset[str]] = frozenset(
 
 async def _execute(db: DbLike, sql: str, *args: object) -> str:
     """Run ``conn.execute`` against either a Pool or a Connection."""
-    if isinstance(db, asyncpg.Pool):
-        return await db.execute(sql, *args)
     return await db.execute(sql, *args)
 
 

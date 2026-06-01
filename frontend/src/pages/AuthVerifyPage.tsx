@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '@/stores/auth-store';
 import { verifyMagicLink } from '@/lib/api';
+import { errorMessage } from '@/lib/errors';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 /**
@@ -47,10 +48,7 @@ export function AuthVerifyPage() {
         navigate('/', { replace: true });
       } catch (err) {
         if (cancelled) return;
-        const message =
-          err instanceof Error && err.message
-            ? err.message
-            : 'Invalid or expired link';
+        const message = errorMessage(err, 'Invalid or expired link');
         setErrorMsg(message);
         setStatus('error');
         // Brief display window then redirect; this gives the user a chance

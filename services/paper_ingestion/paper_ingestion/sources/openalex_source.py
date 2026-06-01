@@ -27,7 +27,7 @@ shared across all calls on the same instance.
 
 import logging
 import time as _time
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ from urllib.parse import urlparse
 
 import httpx
 from jarvis_common.event_log import log_event
-from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
+from jarvis_common.source_rate_limiter import SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
@@ -438,8 +438,8 @@ class OpenAlexSource(PaperSource):
 
         Consolidates all topics into a single API query via
         :meth:`consolidate_topics` (concept-ID filter when available, falling
-        back to free-text search).  Wires :class:`PersistentSourceRateLimiter`
-        when ``db_pool`` is set and records each attempt in ``source_run_history``.
+        back to free-text search).  Wires the persistent rate limiter when
+        ``db_pool`` is set and records each attempt in ``source_run_history``.
 
         Parameters
         ----------
@@ -466,17 +466,9 @@ class OpenAlexSource(PaperSource):
         await self.apply_startup_grace()
 
         # Persistent rate limiter (no-op when db_pool is None).
-        p_limiter: PersistentSourceRateLimiter | None = None
-        if self.db_pool is not None:
-            p_limiter = PersistentSourceRateLimiter(
-                source_type="openalex",
-                user_id=user_id,
-                min_interval_seconds=0.11,
-                db_pool=self.db_pool,
-                fallback=self._rate_limiter,
-            )
+        p_limiter = self.make_persistent_rate_limiter(user_id=user_id, min_interval_seconds=0.11)
 
-        since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
+        since_utc = self._normalize_since_utc(since)
         date_str = since_utc.strftime("%Y-%m-%d")
         date_filter = f"from_publication_date:{date_str}"
 

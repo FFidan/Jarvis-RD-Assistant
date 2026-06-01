@@ -532,6 +532,16 @@ class BatchProcessResponse(BaseModel):
     job_id: str | None = None
 
 
+class BatchSummarizeResponse(BaseModel):
+    """Response for POST /api/papers/batch-summarize.
+
+    ``job_id`` is ``None`` when no unsummarised papers were found.
+    """
+
+    total_unsummarized: int
+    job_id: str | None = None
+
+
 class WeeklyDigestResponse(BaseModel):
     """Response for GET /api/digest/weekly."""
 
@@ -626,6 +636,24 @@ class BulkActionRequest(BaseModel):
         "feedback_negative",
         "hard_delete",  # bulk permanent delete (only valid on state='trash')
     ]
+
+
+class BulkActionFailure(BaseModel):
+    """A single failed paper in a POST /api/papers/bulk response."""
+
+    paper_id: int
+    error: str
+
+
+class BulkActionResponse(BaseModel):
+    """Response for POST /api/papers/bulk.
+
+    Partial failures are reported per-paper; ``failed`` carries a safe,
+    operator-diagnostic ``error`` code (never raw exception text).
+    """
+
+    succeeded: list[int] = Field(default_factory=list)
+    failed: list[BulkActionFailure] = Field(default_factory=list)
 
 
 class TopicFacetCount(BaseModel):

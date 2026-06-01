@@ -11,7 +11,7 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 
 
 from jarvis_common.testing_contract_apps import (
@@ -39,7 +39,7 @@ async def test_activity_user_b_cannot_see_user_a_rows(
     User B's response must not contain that value. Collapses the SQL-text
     ``WHERE user_id = $1`` assertion in test_analytics.py to a real scoping proof.
     """
-    today = date.today()
+    today = datetime.now(UTC).date()
     await contract_conn.execute(
         """INSERT INTO daily_log (user_id, log_date, focus_hours, cards_reviewed,
                papers_read, tasks_completed)
@@ -71,7 +71,7 @@ async def test_activity_owner_sees_own_rows(
     today row (focus_hours=8.88) which must NOT appear — /activity excludes today
     to mirror /summary's stable-KPI window.
     """
-    today = date.today()
+    today = datetime.now(UTC).date()
     yesterday = today - timedelta(days=1)
     # Past-date seed — must appear in response
     await contract_conn.execute(
@@ -250,7 +250,7 @@ async def test_analytics_summary_cross_period_isolation(
     Seeds a daily_log row in the prior period only (31 days ago) and confirms
     it appears in *_prev but NOT in *_total (current 30-day window).
     """
-    prior_date = date.today() - timedelta(days=31)
+    prior_date = datetime.now(UTC).date() - timedelta(days=31)
     await contract_conn.execute(
         """INSERT INTO daily_log (user_id, log_date, papers_read, focus_hours,
                cards_reviewed, tasks_completed)
@@ -289,7 +289,7 @@ async def test_streak_three_consecutive_days(
     The cards_review_streak_days field in /analytics/summary must be >= 3.
     # Verified: services/learning_engine/learning_engine/routers/analytics.py:155-179
     """
-    today = date.today()
+    today = datetime.now(UTC).date()
     for days_back in range(3):
         log_date = today - timedelta(days=days_back)
         await contract_conn.execute(
@@ -394,7 +394,7 @@ async def test_analytics_summary_user_b_excludes_user_a_data(
     papers_read_total must not reach 99.
     # Verified: services/learning_engine/learning_engine/routers/analytics.py:187-260
     """
-    today = date.today()
+    today = datetime.now(UTC).date()
     await contract_conn.execute(
         """INSERT INTO daily_log (user_id, log_date, papers_read, focus_hours,
                cards_reviewed, tasks_completed)
@@ -413,4 +413,66 @@ async def test_analytics_summary_user_b_excludes_user_a_data(
     b_papers = resp.json()["papers_read_total"]
     assert b_papers < 99, (
         f"IDOR: user B's papers_read_total={b_papers} includes user A's sentinel 99"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §A190 — B4-01 fix: HTTP review increments daily_log.cards_reviewed
+# ---------------------------------------------------------------------------
+
+
+async def test_http_review_increments_cards_reviewed_total(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/review/{card_id} increments daily_log so analytics/summary reflects it.
+
+    Before B4-01 fix, submit_review never wrote daily_log, so cards_reviewed_total
+    and cards_review_streak_days were always 0 for HTTP/PWA reviewers.
+
+    cards_reviewed_total is windowed to [today-days, today) — it excludes today
+    by design (a completed-days metric, like papers_read / focus_hours). So this
+    seeds a prior-day daily_log row to exercise the total, and submits one
+    same-day review to exercise the streak. Asserts:
+    - cards_reviewed_total >= 2 (prior-day row, inside the window)
+    - cards_review_streak_days >= 2 (prior day + today, consecutive)
+    # Verified: services/learning_engine/learning_engine/routers/review.py (submit_review)
+    # Verified: services/learning_engine/learning_engine/routers/analytics.py (get_analytics_summary)
+    """
+    card_id_a = contract_two_users.card_id_a
+    user_id_a = await contract_conn.fetchval("SELECT user_id FROM cards WHERE id = $1", card_id_a)
+    # Seed a prior-day review so cards_reviewed_total (windowed to exclude today)
+    # has a row to count; the same-day review below exercises the streak.
+    await contract_conn.execute(
+        "INSERT INTO daily_log (user_id, log_date, cards_reviewed) "
+        "VALUES ($1, CURRENT_DATE - 1, 2) "
+        "ON CONFLICT (user_id, log_date) "
+        "DO UPDATE SET cards_reviewed = daily_log.cards_reviewed + 2",
+        user_id_a,
+    )
+    await contract_conn.execute(
+        "UPDATE cards SET due_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
+        card_id_a,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        review_resp = await c.post(
+            f"/api/review/{card_id_a}", json={"rating": 3, "review_duration_ms": 1500}
+        )
+    assert review_resp.status_code == 200, (
+        f"POST /api/review/{card_id_a} failed: {review_resp.status_code}: {review_resp.text[:300]}"
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        summary_resp = await c.get("/api/analytics/summary", params={"days": 30})
+    assert summary_resp.status_code == 200, (
+        f"GET /api/analytics/summary failed: {summary_resp.status_code}: {summary_resp.text[:300]}"
+    )
+    body = summary_resp.json()
+    assert body["cards_reviewed_total"] >= 2, (
+        f"Expected cards_reviewed_total >= 2 (prior-day daily_log row inside the "
+        f"window); got {body['cards_reviewed_total']} (B4-01 fix not applied?)"
+    )
+    assert body["cards_review_streak_days"] >= 2, (
+        f"Expected cards_review_streak_days >= 2 (prior day + today); "
+        f"got {body['cards_review_streak_days']} (B4-01 fix not applied?)"
     )

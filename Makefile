@@ -4,7 +4,7 @@ COMPOSE_ENV_FILES = $(if $(wildcard .env),--env-file .env,) --env-file versions.
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose $(COMPOSE_ENV_FILES)
 COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 
-.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys no-tracked-secrets
+.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys no-tracked-secrets
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -14,13 +14,18 @@ certs:
 up-https:
 	$(COMPOSE) --profile caddy-local up -d
 
-## Create/update the root uv environment from uv.lock
-setup:
-	uv sync
+## Install Python dev dependencies from uv.lock (does NOT run setup.sh / docker setup)
+## For a full single-instance install run: ./setup.sh (interactive) or
+## ./scripts/jarvis-setup.sh (non-interactive).
+dev-env:
+	uv sync --group dev
+
+## Alias kept for backward compatibility — delegates to dev-env
+setup: dev-env
 
 ## Deprecated: host development now uses the root uv environment
 setup-service:
-	@echo "Use 'make setup'. Service requirements are generated from uv.lock."
+	@echo "Use 'make dev-env'. Service requirements are generated from uv.lock."
 
 ## Export Docker/pip requirements from uv.lock
 deps-export:
@@ -59,9 +64,9 @@ clean:
 clean-venvs:
 	find . -type d -name .venv -exec rm -rf {} + 2>/dev/null || true
 
-## Run pyright type checking
+## Run pyright type checking (pinned to same version as CI)
 typecheck:
-	npx pyright
+	npx --yes pyright@1.1.408
 
 ## Enforce 0600 permissions on all secret files (run on first checkout and in CI)
 secure-secrets:
@@ -75,8 +80,38 @@ ci-smoke:
 no-tracked-secrets:
 	bash scripts/check-no-tracked-secrets.sh
 
-## Run all quality checks: dependency parity + lint + typecheck + test
-check: no-tracked-secrets secure-secrets deps-check lint typecheck test
+## Frontend lint + typecheck + unit tests + build (mirrors CI `frontend` job)
+frontend-check:
+	npm --prefix frontend ci
+	npm --prefix frontend run lint
+	npm --prefix frontend run typecheck
+	npm --prefix frontend run test -- --run
+	npm --prefix frontend run build
+
+## Run all local quality gates (mirrors CI lint-test job + frontend job).
+##
+## Ordered fast → slow:
+##   1. Guard: no tracked secrets
+##   2. Guard: dependency parity (uv.lock ↔ requirements*.txt)
+##   3. Lint (ruff + migrations-no-tx + jsonb-double-encode + unsafe-resolver)
+##   4. Tach (module boundary check)
+##   5. Pyright (type check)
+##   6. Test-shape check
+##   7. Guard: burned secrets
+##   8. Fast pytest suite (excludes live_pg / integration / slow)
+##   9. Frontend lint + typecheck + tests + build
+##
+## NOT included (require a live Postgres — run in CI or opt-in locally):
+##   JARVIS_RUN_LIVE_PG=1 uv run pytest -m contract -v
+##   JARVIS_RUN_LIVE_PG=1 uv run pytest -m "integration and live_pg" \
+##     services/paper_ingestion/tests/integration/test_cross_user_isolation.py -v
+check: no-tracked-secrets secure-secrets deps-check lint
+	uv run tach check
+	$(MAKE) typecheck
+	uv run python3 scripts/check-test-shape.py
+	bash scripts/check-burned-secrets.sh
+	uv run pytest
+	$(MAKE) frontend-check
 
 ## Bring up Langfuse + JARVIS services with observability tracing enabled.
 ## Keys are loaded from .env (written by gen-langfuse-keys.sh) so they never

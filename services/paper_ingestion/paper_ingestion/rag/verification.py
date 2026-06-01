@@ -33,6 +33,7 @@ __all__ = [
     "VerifiedSentence",
     "RagVerificationReport",
     "verify_answer_sentences",
+    "verify_answer_summary",
 ]
 
 # ---------------------------------------------------------------------------
@@ -257,3 +258,22 @@ async def verify_answer_sentences(
         confidence=_build_confidence(pass_rate, total),
         per_sentence=per_sentence,
     )
+
+
+async def verify_answer_summary(
+    answer: str,
+    sources: list[dict],
+    verifier: QuoteVerifier,
+    db_pool: asyncpg.Pool,
+) -> dict[str, object]:
+    """Run :func:`verify_answer_sentences` and serialise it for API payloads.
+
+    Returns the ``confidence`` / ``verified_fraction`` / ``per_sentence`` shape
+    shared by the single-paper, cross-paper, and streaming RAG endpoints.
+    """
+    report = await verify_answer_sentences(answer, sources, verifier, db_pool)
+    return {
+        "confidence": report.confidence.value,
+        "verified_fraction": report.pass_rate,
+        "per_sentence": [{"text": s.text, "verified": s.verified} for s in report.per_sentence],
+    }

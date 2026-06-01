@@ -2,13 +2,15 @@
 
 from typing import TypedDict
 
+import asyncpg
+
 
 class IntentRow(TypedDict):
     intent: str | None
     updated_at: str | None
 
 
-async def get_today(pool, user_id: int | None) -> IntentRow:
+async def get_today(pool: asyncpg.Pool, user_id: int | None) -> IntentRow:
     """Return today's intent for *user_id*, or ``{intent: None, updated_at: None}`` if absent.
 
     Parameters
@@ -40,7 +42,7 @@ async def get_today(pool, user_id: int | None) -> IntentRow:
     }
 
 
-async def upsert_today(pool, user_id: int | None, intent: str) -> IntentRow:
+async def upsert_today(pool: asyncpg.Pool, user_id: int | None, intent: str) -> IntentRow:
     """Insert or update today's intent text for *user_id*.
 
     Parameters
@@ -77,7 +79,7 @@ async def upsert_today(pool, user_id: int | None, intent: str) -> IntentRow:
     }
 
 
-async def delete_today(pool, user_id: int | None) -> None:
+async def delete_today(pool: asyncpg.Pool, user_id: int | None) -> None:
     """Delete today's intent row for *user_id*, if it exists.
 
     Parameters

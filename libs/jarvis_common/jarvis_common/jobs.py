@@ -96,9 +96,15 @@ PROCRASTINATE_STATUS_MAP: dict[str, str] = {
     "aborted": "cancelled",
 }
 
-# Backward-compatible aliases (deprecated — import the public names instead)
-_KEEPALIVE_INTERVAL = KEEPALIVE_INTERVAL
-_MAX_STREAM_SECONDS = MAX_STREAM_SECONDS
+# Pre-built SQL CASE fragment derived from PROCRASTINATE_STATUS_MAP.
+# Used in _list_jobs queries to avoid hand-duplicating the mapping.
+# PROCRASTINATE_STATUS_MAP is a trusted module-level constant (no user input),
+# so string interpolation here is safe.
+_STATUS_CASE_SQL = (
+    "CASE pj.status "
+    + " ".join(f"WHEN '{k}' THEN '{v}'" for k, v in PROCRASTINATE_STATUS_MAP.items())
+    + " ELSE 'running' END"
+)
 
 
 class _PoolListenConnection:
@@ -490,8 +496,10 @@ class JobContext:
 
     All job handlers now run under procrastinate and receive a
     ``ProcrastinateJobContextShim`` instead.  This class is kept for
-    type-annotation compatibility only; its DB methods are no-ops because
-    the ``jobs`` table was dropped in migration 053.
+    type-annotation compatibility only; its methods are no-ops because
+    progress reporting and cancellation are handled entirely by
+    procrastinate (``job_progress`` table, migration 054) — there is no
+    legacy ``jobs`` table (dropped in migration 053).
     """
 
     job_id: str
@@ -544,19 +552,11 @@ async def list_jobs(
         limit,  # $4 — LIMIT
     ]
 
-    query_with_progress = """
+    query_with_progress = f"""
         SELECT pj.args->>'job_id' AS id,
                pj.task_name AS kind,
                pj.args->>'user_id' AS user_id,
-               CASE pj.status
-                 WHEN 'todo'       THEN 'queued'
-                 WHEN 'doing'      THEN 'running'
-                 WHEN 'succeeded'  THEN 'succeeded'
-                 WHEN 'failed'     THEN 'failed'
-                 WHEN 'cancelled'  THEN 'cancelled'
-                 WHEN 'aborting'   THEN 'cancelled'
-                 WHEN 'aborted'    THEN 'cancelled'
-                 ELSE 'running' END AS status,
+               {_STATUS_CASE_SQL} AS status,
                pj.args - 'job_id' - 'user_id' AS payload,
                jp.result AS result,
                jp.error AS error,
@@ -569,16 +569,7 @@ async def list_jobs(
         FROM procrastinate_jobs pj
         LEFT JOIN job_progress jp ON jp.jarvis_job_id = pj.args->>'job_id'
         WHERE pj.args ? 'job_id'
-          AND ($1::text IS NULL OR
-               CASE pj.status
-                 WHEN 'todo'       THEN 'queued'
-                 WHEN 'doing'      THEN 'running'
-                 WHEN 'succeeded'  THEN 'succeeded'
-                 WHEN 'failed'     THEN 'failed'
-                 WHEN 'cancelled'  THEN 'cancelled'
-                 WHEN 'aborting'   THEN 'cancelled'
-                 WHEN 'aborted'    THEN 'cancelled'
-                 ELSE 'running' END = $1)
+          AND ($1::text IS NULL OR {_STATUS_CASE_SQL} = $1)
           AND ($2::text IS NULL OR pj.task_name = $2)
           AND (
             ($3::text IS NULL AND pj.args->>'user_id' IS NULL)
@@ -587,19 +578,11 @@ async def list_jobs(
         ORDER BY (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) DESC NULLS LAST
         LIMIT $4
     """
-    query_without_progress = """
+    query_without_progress = f"""
         SELECT pj.args->>'job_id' AS id,
                pj.task_name AS kind,
                pj.args->>'user_id' AS user_id,
-               CASE pj.status
-                 WHEN 'todo'       THEN 'queued'
-                 WHEN 'doing'      THEN 'running'
-                 WHEN 'succeeded'  THEN 'succeeded'
-                 WHEN 'failed'     THEN 'failed'
-                 WHEN 'cancelled'  THEN 'cancelled'
-                 WHEN 'aborting'   THEN 'cancelled'
-                 WHEN 'aborted'    THEN 'cancelled'
-                 ELSE 'running' END AS status,
+               {_STATUS_CASE_SQL} AS status,
                pj.args - 'job_id' - 'user_id' AS payload,
                NULL::jsonb AS result,
                NULL::jsonb AS error,
@@ -611,16 +594,7 @@ async def list_jobs(
                'procrastinate' AS source
         FROM procrastinate_jobs pj
         WHERE pj.args ? 'job_id'
-          AND ($1::text IS NULL OR
-               CASE pj.status
-                 WHEN 'todo'       THEN 'queued'
-                 WHEN 'doing'      THEN 'running'
-                 WHEN 'succeeded'  THEN 'succeeded'
-                 WHEN 'failed'     THEN 'failed'
-                 WHEN 'cancelled'  THEN 'cancelled'
-                 WHEN 'aborting'   THEN 'cancelled'
-                 WHEN 'aborted'    THEN 'cancelled'
-                 ELSE 'running' END = $1)
+          AND ($1::text IS NULL OR {_STATUS_CASE_SQL} = $1)
           AND ($2::text IS NULL OR pj.task_name = $2)
           AND (
             ($3::text IS NULL AND pj.args->>'user_id' IS NULL)

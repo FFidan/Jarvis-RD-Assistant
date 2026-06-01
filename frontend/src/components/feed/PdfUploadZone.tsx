@@ -5,6 +5,7 @@ import { Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { uploadPdf, processPdf } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
+import { errorMessage } from '@/lib/errors';
 
 type FileStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
 
@@ -49,7 +50,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
         setFiles(s =>
           s.map((f, si) =>
             si === index
-              ? { ...f, status: 'error' as FileStatus, error: err instanceof Error ? err.message : 'Upload failed' }
+              ? { ...f, status: 'error' as FileStatus, error: errorMessage(err, 'Upload failed') }
               : f,
           ),
         );
@@ -83,7 +84,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
             setFiles(s =>
               s.map((f, si) =>
                 si === idx
-                  ? { ...f, status: 'error' as FileStatus, error: err instanceof Error ? err.message : 'Upload failed' }
+                  ? { ...f, status: 'error' as FileStatus, error: errorMessage(err, 'Upload failed') }
                   : f,
               ),
             );

@@ -74,7 +74,6 @@ from jarvis_common.models import (
     ErrorResponse,
     HealthCheckResponse,
     JobCreateResponse,
-    JobListResponse,
     JobStatusResponse,
 )
 from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
@@ -136,7 +135,6 @@ __all__ = [
     "HealthCheckResponse",
     "ErrorResponse",
     "JobCreateResponse",
-    "JobListResponse",
     "JobStatusResponse",
     "RequestIDMiddleware",
     "author_matches",

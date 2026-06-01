@@ -6,6 +6,7 @@ import { fetchRecommendationFeedback, deleteRecommendationFeedback } from '@/lib
 import type { FeedbackListItem } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { errorMessage } from '@/lib/errors';
 
 interface TopicGroup {
   topic_id: number;
@@ -50,7 +51,7 @@ export function RejectedTopicsPanel() {
     },
     onError: (err) =>
       toast.error('Failed to reset topic feedback', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: errorMessage(err),
       }),
   });
 

@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { fetchConfig, setConfig } from '@/lib/api';
 import type { ConfigEntry } from '@/types';
 import { useAuthStore } from '@/stores/auth-store';
+import { errorMessage } from '@/lib/errors';
 
 const CONFIG_KEY = 'observability.langfuse_dashboard_url';
 
@@ -49,7 +50,7 @@ export function LangfuseLinkCard() {
       setDraft(null);
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
     },
-    onError: (e) => setError(e instanceof Error ? e.message : 'Failed to save'),
+    onError: (e) => setError(errorMessage(e, 'Failed to save')),
   });
 
   const onSave = () => {

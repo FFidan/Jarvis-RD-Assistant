@@ -37,6 +37,7 @@ import {
 import { useSyncedState } from './use-synced-state';
 import { useDebouncedConfig } from './use-debounced-config';
 import { getConfigValue } from './pulse-utils';
+import { errorMessage } from '@/lib/errors';
 import type { ConfigEntry } from '@/types';
 
 function coerceWeights(raw: unknown): Record<PulseWeightKey, number> {
@@ -404,7 +405,7 @@ export function PulseAdvancedTuningCard({
                     {
                       onError: (err) =>
                         toast.error('Failed to update L2 lambda', {
-                          description: err instanceof Error ? err.message : 'Unknown error',
+                          description: errorMessage(err),
                         }),
                     },
                   )

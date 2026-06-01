@@ -4,6 +4,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { formatTimestamp } from '@/lib/relative-time';
 import type { SourceRunRecord } from '@/types';
 
 interface Props {
@@ -22,18 +23,6 @@ function statusColor(status: string): string {
   return STATUS_COLORS[status] ?? 'bg-gray-300';
 }
 
-function formatTimestamp(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
-}
 
 export function SourceTimeline({ sourceType, runs }: Props) {
   if (runs.length === 0) {

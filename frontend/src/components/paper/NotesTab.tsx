@@ -18,6 +18,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
 import { CheckCircle, RefreshCw, ShieldCheck, StickyNote, Trash2, XCircle } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
+import { errorMessage } from '@/lib/errors';
 
 interface NotesTabProps {
   paperId: number;
@@ -164,7 +165,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
           </Button>
           {createMut.isError && (
             <p className="text-sm text-destructive">
-              {createMut.error instanceof Error ? createMut.error.message : 'Failed to save note'}
+              {errorMessage(createMut.error, 'Failed to save note')}
             </p>
           )}
         </section>
@@ -214,9 +215,7 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
                   </div>
                   {deleteMut.isError && deleteMut.variables === note.id && (
                     <p className="mt-1 text-xs text-destructive" role="alert">
-                      {deleteMut.error instanceof Error
-                        ? deleteMut.error.message
-                        : 'Failed to delete note'}
+                      {errorMessage(deleteMut.error, 'Failed to delete note')}
                     </p>
                   )}
                 </CardContent>
@@ -242,16 +241,12 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
         </div>
         {syncZoteroMut.isError && (
           <p className="text-sm text-destructive">
-            {syncZoteroMut.error instanceof Error
-              ? syncZoteroMut.error.message
-              : 'Failed to sync Zotero highlights'}
+            {errorMessage(syncZoteroMut.error, 'Failed to sync Zotero highlights')}
           </p>
         )}
         {promoteZoteroMut.isError && (
           <p className="text-sm text-destructive">
-            {promoteZoteroMut.error instanceof Error
-              ? promoteZoteroMut.error.message
-              : 'Failed to promote Zotero highlight'}
+            {errorMessage(promoteZoteroMut.error, 'Failed to promote Zotero highlight')}
           </p>
         )}
         {zoteroLoading ? (

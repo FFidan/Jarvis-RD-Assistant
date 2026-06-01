@@ -570,7 +570,7 @@ async def test_fetch_new_since_uses_persistent_rate_limiter_when_pool_set():
     mock_limiter.update_last_request = AsyncMock()
 
     with patch(
-        "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+        "paper_ingestion.sources.base.PersistentSourceRateLimiter",
         return_value=mock_limiter,
     ):
         await source.fetch_new_since(
@@ -598,7 +598,7 @@ async def test_fetch_new_since_inserts_run_history_on_success():
     mock_limiter.update_last_request = AsyncMock()
 
     with patch(
-        "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+        "paper_ingestion.sources.base.PersistentSourceRateLimiter",
         return_value=mock_limiter,
     ):
         await source.fetch_new_since(
@@ -633,7 +633,7 @@ async def test_fetch_new_since_calls_log_event_on_success():
     log_event_mock = AsyncMock()
     with (
         patch(
-            "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
         patch("paper_ingestion.sources.pubmed_source.log_event", log_event_mock),
@@ -667,7 +667,7 @@ async def test_fetch_new_since_records_run_history_status_error_on_exception():
     log_event_mock = AsyncMock()
     with (
         patch(
-            "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
         patch("paper_ingestion.sources.pubmed_source.log_event", log_event_mock),
@@ -768,7 +768,7 @@ async def test_fetch_new_since_rate_limiter_acquired_per_term():
     mock_limiter.update_last_request = AsyncMock()
 
     with patch(
-        "paper_ingestion.sources.pubmed_source.PersistentSourceRateLimiter",
+        "paper_ingestion.sources.base.PersistentSourceRateLimiter",
         return_value=mock_limiter,
     ):
         await source.fetch_new_since(

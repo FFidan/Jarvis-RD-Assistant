@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { errorMessage } from '@/lib/errors';
 
 interface UserStateFormProps {
   paperId: number;
@@ -121,7 +122,7 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
 
       {mutation.isError && (
         <p className="text-sm text-destructive">
-          {mutation.error instanceof Error ? mutation.error.message : 'Failed to save'}
+          {errorMessage(mutation.error, 'Failed to save')}
         </p>
       )}
     </div>

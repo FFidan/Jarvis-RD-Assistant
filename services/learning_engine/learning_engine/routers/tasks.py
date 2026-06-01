@@ -15,6 +15,7 @@ from learning_engine.models import (
     TaskResponse,
     TaskUpdate,
 )
+from learning_engine.routers._guards import assert_project_owner as _assert_project_owner
 
 router = APIRouter(prefix="/api", tags=["tasks"])
 
@@ -54,13 +55,7 @@ async def list_tasks(
         )
     async with db_pool.acquire() as conn:
         # Verify project exists and belongs to the caller (same conn as data query — avoid TOCTOU)
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
-            project_id,
-            user_id,
-        )
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+        await _assert_project_owner(conn, project_id, user_id)
 
         if status:
             rows = await conn.fetch(
@@ -101,13 +96,7 @@ async def create_task(
     """Create a task in a project."""
     async with db_pool.acquire() as conn:
         # Verify project exists and belongs to the caller (same conn as insert — avoid TOCTOU)
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
-            project_id,
-            user_id,
-        )
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+        await _assert_project_owner(conn, project_id, user_id)
 
         try:
             row = await conn.fetchrow(

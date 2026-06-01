@@ -33,6 +33,7 @@ from paper_ingestion.models import (
     KnowledgeGraphResponse,
     RelationshipResponse,
 )
+from paper_ingestion.queries.predicates import paper_visible_sql
 
 logger = logging.getLogger(__name__)
 
@@ -299,14 +300,14 @@ async def get_entity_detail(
         # unattributable and stays visible.
         if user_id is not None:
             rels = await conn.fetch(
-                """SELECT * FROM entity_relationships er
+                f"""SELECT * FROM entity_relationships er
                    WHERE (source_entity_id = $1 OR target_entity_id = $1)
                      AND (
                          er.paper_id IS NULL
                          OR EXISTS (
                              SELECT 1 FROM papers p
                              WHERE p.id = er.paper_id
-                               AND (p.discovered_by IS NULL OR p.discovered_by = $2)
+                               AND {paper_visible_sql(2)}
                          )
                          OR EXISTS (
                              SELECT 1 FROM user_library ul

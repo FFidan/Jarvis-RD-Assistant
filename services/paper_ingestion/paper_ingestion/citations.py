@@ -17,6 +17,7 @@ from paper_ingestion.models import (
     GraphEdge,
     GraphNode,
 )
+from paper_ingestion.queries.predicates import paper_visible_sql
 from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
 
 logger = logging.getLogger(__name__)
@@ -265,14 +266,14 @@ async def _filter_visible_paper_ids(
 
     A paper is visible when it is a stub (``discovered_by IS NULL``),
     directly discovered by the caller, or held in their user_library.
-    Mirrors the visibility predicate used in knowledge_graph.py:309-315.
+    The stub/discovered-by clauses use the shared
+    :func:`paper_visible_sql` helper, as in the KG relationship queries.
     """
     rows = await conn.fetch(
-        """SELECT id FROM papers
+        f"""SELECT id FROM papers
            WHERE id = ANY($1)
              AND (
-                 discovered_by IS NULL
-                 OR discovered_by = $2
+                 {paper_visible_sql(2, alias="papers")}
                  OR EXISTS (
                      SELECT 1 FROM user_library ul
                      WHERE ul.user_id = $2 AND ul.paper_id = papers.id

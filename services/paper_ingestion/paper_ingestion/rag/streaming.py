@@ -439,18 +439,10 @@ async def stream_rag_events(
         )
     if verifier is not None and db_pool is not None:
         try:
-            from paper_ingestion.rag.verification import verify_answer_sentences
+            from paper_ingestion.rag.verification import verify_answer_summary
 
-            report = await verify_answer_sentences(full_answer, sources_list, verifier, db_pool)
-            payload = {
-                "type": "confidence",
-                "confidence": report.confidence.value,
-                "verified_fraction": report.pass_rate,
-                "per_sentence": [
-                    {"text": s.text, "verified": s.verified} for s in report.per_sentence
-                ],
-            }
-            yield sse_event(payload)
+            summary = await verify_answer_summary(full_answer, sources_list, verifier, db_pool)
+            yield sse_event({"type": "confidence", **summary})
         except Exception as exc:  # noqa: BLE001 — don't break the stream if verification errors
             logger.warning("RAG verification failed: %s", exc, exc_info=True)
     yield SSE_DONE

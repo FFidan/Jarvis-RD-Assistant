@@ -5,7 +5,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { ExternalLink, Loader2, MoreHorizontal, RefreshCw, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SearchPreviewResult } from '@/types';
-import { ApiError, zoteroGetLinkage, zoteroPushPaper, zoteroResync } from '@/lib/api';
+import { zoteroGetLinkage, zoteroPushPaper, zoteroResync } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { formatAuthors, formatDate } from '@/lib/utils';
 import { SOURCE_LABELS } from '@/components/feed/source-labels';
+import { errorMessage } from '@/lib/errors';
 
 interface SearchPreviewRowProps {
   paper: SearchPreviewResult;
@@ -97,13 +98,7 @@ export function SearchPreviewRow({
         status: response.status as 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled',
       });
     } catch (error) {
-      const message =
-        error instanceof ApiError
-          ? error.detail
-          : error instanceof Error
-            ? error.message
-            : 'Zotero action failed.';
-      toast.error(message);
+      toast.error(errorMessage(error, 'Zotero action failed.'));
     } finally {
       setPendingAction(null);
     }

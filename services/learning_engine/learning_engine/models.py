@@ -442,7 +442,6 @@ class ActivityItem(BaseModel):
     cards_reviewed: int
     papers_read: int
     focus_hours: float
-    notes: str | None = None
 
 
 class ReviewDistributionItem(BaseModel):

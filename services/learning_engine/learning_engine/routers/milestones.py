@@ -7,6 +7,7 @@ from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import MilestoneCreate, MilestoneResponse, MilestoneUpdate
+from learning_engine.routers._guards import assert_project_owner as _assert_project_owner
 
 router = APIRouter(prefix="/api", tags=["milestones"])
 
@@ -28,13 +29,7 @@ async def list_milestones(
 ) -> list[MilestoneResponse]:
     """List milestones for a project."""
     async with db_pool.acquire() as conn:
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
-            project_id,
-            user_id,
-        )
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+        await _assert_project_owner(conn, project_id, user_id)
 
         rows = await conn.fetch(
             """SELECT * FROM milestones
@@ -67,13 +62,7 @@ async def create_milestone(
 ) -> MilestoneResponse:
     """Create a milestone in a project."""
     async with db_pool.acquire() as conn:
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
-            project_id,
-            user_id,
-        )
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+        await _assert_project_owner(conn, project_id, user_id)
 
         row = await conn.fetchrow(
             """

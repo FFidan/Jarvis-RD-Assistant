@@ -11,6 +11,7 @@ from jarvis_common.library import add_to_library
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import ProjectPaperItem, ProjectPaperLinkResponse
+from learning_engine.routers._guards import assert_project_owner as _assert_project_owner
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +29,7 @@ async def list_project_papers(
     """List papers linked to a project."""
     async with db_pool.acquire() as conn:
         # Scope project lookup by owner — IDOR otherwise.
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
-            project_id,
-            user_id,
-        )
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+        await _assert_project_owner(conn, project_id, user_id)
 
         rows = await conn.fetch(
             """
@@ -68,13 +63,7 @@ async def link_paper(
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             # Scope by owner. Cannot link a paper into another user's project.
-            project = await conn.fetchrow(
-                "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
-                project_id,
-                user_id,
-            )
-            if not project:
-                raise HTTPException(status_code=404, detail="Project not found")
+            await _assert_project_owner(conn, project_id, user_id)
             await assert_paper_ownership(conn, paper_id, user_id)
             await add_to_library(
                 conn,

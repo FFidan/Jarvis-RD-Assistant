@@ -45,7 +45,7 @@ async def save_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, object]:
     """Save a paper to the Reading List (``state := 'to_read'``)."""
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
@@ -89,7 +89,7 @@ async def skip_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, object]:
     """Skip a paper from the Inbox (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
@@ -110,7 +110,7 @@ async def reading_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, object]:
     """Mark a paper as currently being read (``state := 'reading'``)."""
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
@@ -133,7 +133,7 @@ async def done_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, object]:
     """Mark a paper as done (``state := 'done'``)."""
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
@@ -153,7 +153,7 @@ async def star_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, object]:
     """Set ``starred = TRUE``. Does not change reading state.
 
     Side effect: enqueues a ``zotero.push`` job iff all three conditions hold:
@@ -215,7 +215,7 @@ async def unstar_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, object]:
     """Set ``starred = FALSE``. Does not change reading state."""
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
@@ -235,7 +235,7 @@ async def trash_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, object]:
     """Move paper to Trash. Atomic: ``state_before_trash := state; state := 'trash'``."""
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
@@ -255,7 +255,7 @@ async def restore_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, object]:
     """Restore a paper from Trash to its prior state."""
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
@@ -277,7 +277,7 @@ async def annotate_paper(
     body: AnnotationsRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> UserStateResponse:
     """Update subjective per-paper annotations (rating 1-5, user_notes, flagged).
 
     Partial updates: any field left as ``None`` is preserved on conflict.
@@ -314,7 +314,7 @@ async def hard_delete_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-):
+) -> dict[str, int]:
     """Permanently delete a trashed paper.
 
     Cascades through FK; Qdrant cleanup is best-effort.

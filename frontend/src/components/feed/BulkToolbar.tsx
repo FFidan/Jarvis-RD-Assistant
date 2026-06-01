@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import type { BulkAction, SurfaceView } from '@/types';
 import { HardDeleteModal } from './HardDeleteModal';
+import { errorMessage } from '@/lib/errors';
 
 interface BulkToolbarProps {
   surface: SurfaceView;
@@ -77,7 +78,7 @@ export function BulkToolbar({ surface, papersOnPage }: BulkToolbarProps) {
       clear();
     },
     onError: (err) => {
-      toast.error('Bulk action failed', { description: err instanceof Error ? err.message : 'Unknown error' });
+      toast.error('Bulk action failed', { description: errorMessage(err) });
     },
   });
 

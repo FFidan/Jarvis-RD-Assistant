@@ -28,7 +28,7 @@ the first of the month when day is absent, and January 1 when month is absent.
 
 import logging
 import time as _time
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 import httpx
 from jarvis_common.event_log import log_event
-from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
+from jarvis_common.source_rate_limiter import SourceRateLimiter
 from lxml import (
     etree,  # type: ignore[reportAttributeAccessIssue]  # lxml stubs lack etree export typing
 )
@@ -476,17 +476,11 @@ class PubMedSource(PaperSource):
         await self.apply_startup_grace()
 
         # Persistent rate limiter (no-op when db_pool is None).
-        p_limiter: PersistentSourceRateLimiter | None = None
-        if self.db_pool is not None:
-            p_limiter = PersistentSourceRateLimiter(
-                source_type="pubmed",
-                user_id=user_id,
-                min_interval_seconds=self._rate_interval,
-                db_pool=self.db_pool,
-                fallback=self._rate_limiter,
-            )
+        p_limiter = self.make_persistent_rate_limiter(
+            user_id=user_id, min_interval_seconds=self._rate_interval
+        )
 
-        since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
+        since_utc = self._normalize_since_utc(since)
         mindate = since_utc.strftime("%Y/%m/%d")
         date_params = {"mindate": mindate, "datetype": "pdat"}
 

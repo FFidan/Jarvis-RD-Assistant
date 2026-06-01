@@ -14,6 +14,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { hardDeletePaper } from '@/lib/api';
+import { errorMessage } from '@/lib/errors';
 
 // ---------------------------------------------------------------------------
 // Per-row controlled mode (single paper, controlled open state)
@@ -101,7 +102,7 @@ function HardDeleteModalSingle({
     },
     onError: (err) =>
       toast.error('Failed to delete paper', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: errorMessage(err),
       }),
   });
 

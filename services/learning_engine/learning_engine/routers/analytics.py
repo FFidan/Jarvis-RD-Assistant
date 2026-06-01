@@ -5,6 +5,7 @@ import datetime
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
 from jarvis_common.auth import current_user_id_strict
+from jarvis_common.streak import compute_streak as _compute_streak_from_events
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import (
@@ -38,7 +39,7 @@ async def get_activity(
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT log_date, tasks_completed, cards_reviewed, papers_read, focus_hours, notes
+            SELECT log_date, tasks_completed, cards_reviewed, papers_read, focus_hours
             FROM daily_log
             WHERE user_id = $1
               AND log_date >= CURRENT_DATE - $2::int
@@ -159,28 +160,18 @@ async def get_llm_cost(
 def _compute_streak(rows: list, *, field: str) -> int:
     """Count consecutive days (descending from today/yesterday) where *field* > 0.
 
-    Mirrors the focus-streak algorithm in executive.py lines 99-119 exactly:
-    - Fetch rows already filtered to field > 0, ordered by log_date DESC.
-    - Allow the streak to begin on today or yesterday (handles the common case
-      where the user hasn't yet logged today).
-    - Walks rows forward in time (reversed desc), checking each expected date.
+    Delegates to ``jarvis_common.streak.compute_streak`` which implements the
+    same gaps-and-islands algorithm anchored to UTC.  The rows from daily_log
+    carry a ``log_date: date``; we convert each to a UTC-midnight datetime so
+    the shared helper can deduplicate and sort them.
     """
-    if not rows:
-        return 0
-    today = datetime.datetime.now(datetime.UTC).date()
-    expected = (
-        rows[0]["log_date"] if rows[0]["log_date"] == today else today - datetime.timedelta(days=1)
-    )
-    if rows[0]["log_date"] != expected:
-        return 0
-    streak = 0
-    for row in rows:
-        if row["log_date"] == expected:
-            streak += 1
-            expected -= datetime.timedelta(days=1)
-        else:
-            break
-    return streak
+    events = [
+        datetime.datetime(
+            row["log_date"].year, row["log_date"].month, row["log_date"].day, tzinfo=datetime.UTC
+        )
+        for row in rows
+    ]
+    return _compute_streak_from_events(events)
 
 
 # ---------------------------------------------------------------------------

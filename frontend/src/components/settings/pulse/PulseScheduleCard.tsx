@@ -19,6 +19,7 @@ import { useSyncedState } from './use-synced-state';
 import { useDebouncedConfig } from './use-debounced-config';
 import { CRON_TOOLTIP } from './pulse-constants';
 import { getConfigValue } from './pulse-utils';
+import { errorMessage } from '@/lib/errors';
 import type { ConfigEntry } from '@/types';
 
 function isValidCron(s: string): boolean {
@@ -180,7 +181,7 @@ export function PulseScheduleCard({
               {
                 onError: (err) =>
                   toast.error('Failed to update lookback window', {
-                    description: err instanceof Error ? err.message : 'Unknown error',
+                    description: errorMessage(err),
                   }),
               },
             )
@@ -206,7 +207,7 @@ export function PulseScheduleCard({
               {
                 onError: (err) =>
                   toast.error('Failed to update startup grace', {
-                    description: err instanceof Error ? err.message : 'Unknown error',
+                    description: errorMessage(err),
                   }),
               },
             )

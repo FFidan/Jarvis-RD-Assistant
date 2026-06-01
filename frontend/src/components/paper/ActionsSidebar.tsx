@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
+import { errorMessage } from '@/lib/errors';
 import type { RecentFeedback, PartialGenJob } from '@/types';
 
 const ACTION_TOOLTIPS: Record<string, string> = {
@@ -167,7 +168,7 @@ export function ActionsSidebar({
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
         setActionResult({
           type: 'error',
-          message: `Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+          message: `Analysis failed: ${errorMessage(err)}`,
         });
       }
     } finally {
@@ -184,7 +185,7 @@ export function ActionsSidebar({
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.detail(paperId) });
     },
     onError: (err) => {
-      setActionResult({ type: 'error', message: err instanceof Error ? err.message : 'Download failed' });
+      setActionResult({ type: 'error', message: errorMessage(err, 'Download failed') });
     },
   });
 
@@ -203,7 +204,7 @@ export function ActionsSidebar({
       });
     },
     onError: (err) => {
-      setActionResult({ type: 'error', message: err instanceof Error ? err.message : 'Processing failed' });
+      setActionResult({ type: 'error', message: errorMessage(err, 'Processing failed') });
     },
   });
 
@@ -219,7 +220,7 @@ export function ActionsSidebar({
       setActionResult({ type: 'success', message: `Summary queued (job ${data.job_id})` });
     },
     onError: (err) => {
-      setActionResult({ type: 'error', message: err instanceof Error ? err.message : 'Summarization failed' });
+      setActionResult({ type: 'error', message: errorMessage(err, 'Summarization failed') });
     },
   });
 
@@ -271,7 +272,7 @@ export function ActionsSidebar({
       startGenPoll(data.job_id);
     },
     onError: (err) => {
-      setActionResult({ type: 'error', message: err instanceof Error ? err.message : 'Generation failed' });
+      setActionResult({ type: 'error', message: errorMessage(err, 'Generation failed') });
     },
   });
 

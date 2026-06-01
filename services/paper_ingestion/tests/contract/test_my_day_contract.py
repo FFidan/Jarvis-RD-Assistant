@@ -20,7 +20,7 @@ idiomatic-mock territory; no DB predicate is stronger than a shape check.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -51,7 +51,10 @@ async def test_a57_get_journal_returns_own_entry(
     Verified: my_day.py:38-61 get_journal_entry — WHERE user_id=$1 AND date=$2.
     Survivor-of: test_journal_endpoints.py mock-unit tests.
     """
-    today = date.today().isoformat()
+    # Match the server's date: _seed_resources inserts the journal row with
+    # Postgres CURRENT_DATE (UTC), so query the UTC date — not Python-local
+    # date.today(), which diverges in the 22:00–00:00 UTC window and 404s.
+    today = datetime.now(UTC).date().isoformat()
 
     # contract_two_users seeds a journal entry for user A (see _seed_resources)
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:

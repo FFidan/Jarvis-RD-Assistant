@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { errorMessage } from '@/lib/errors';
 
 /** Validates a Telegram bot token format: <bot_id>:<token_string> */
 const BOT_TOKEN_RE = /^\d+:[A-Za-z0-9_-]{20,}$/;
@@ -122,7 +123,7 @@ export function TelegramBotTokenSection() {
         {saveMut.isError && !formatError && (
           <p className="text-sm text-destructive">
             Could not save:{' '}
-            {saveMut.error instanceof Error ? saveMut.error.message : 'unknown error'}
+            {errorMessage(saveMut.error, 'unknown error')}
           </p>
         )}
 

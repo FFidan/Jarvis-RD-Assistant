@@ -5,6 +5,7 @@ import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { toast } from 'sonner';
+import { errorMessage } from '@/lib/errors';
 
 interface ConfigSliderProps {
   id?: string;
@@ -64,7 +65,7 @@ export function ConfigSlider({
                   onCommit(v ?? value);
                 } catch (err) {
                   toast.error(`Failed to update ${commitErrorLabel}`, {
-                    description: err instanceof Error ? err.message : 'Unknown error',
+                    description: errorMessage(err),
                   });
                 }
               })()

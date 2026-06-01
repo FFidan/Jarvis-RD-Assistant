@@ -15,6 +15,7 @@ import {
   ApiError,
 } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
+import { errorMessage } from '@/lib/errors';
 import type { PulseDeck as PulseDeckType, PulseRating, PulseSourceDiagnostic } from '@/types';
 
 function sourceDiagnosticsFromStats(
@@ -110,7 +111,7 @@ export function PulseDeck() {
         </CardHeader>
         <CardContent className="flex items-center justify-between gap-4">
           <p className="text-muted-foreground text-sm">
-            {error instanceof Error ? error.message : 'Unknown error'}
+            {errorMessage(error)}
           </p>
           <Button variant="outline" size="sm" onClick={() => refetch()}>
             Retry

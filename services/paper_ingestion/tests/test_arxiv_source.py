@@ -161,7 +161,7 @@ async def test_fetch_new_since_calls_persistent_limiter_acquire_before_http():
     mock_limiter.acquire.side_effect = _track_acquire
 
     with patch(
-        "paper_ingestion.sources.arxiv_source.PersistentSourceRateLimiter",
+        "paper_ingestion.sources.base.PersistentSourceRateLimiter",
         return_value=mock_limiter,
     ):
         await source.fetch_new_since(since=since, topics=topics, limit=10)
@@ -181,7 +181,7 @@ async def test_fetch_new_since_no_persistent_limiter_when_no_pool():
     since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
     topics = [_make_topic("ML", ["machine learning"])]
 
-    with patch("paper_ingestion.sources.arxiv_source.PersistentSourceRateLimiter") as mock_cls:
+    with patch("paper_ingestion.sources.base.PersistentSourceRateLimiter") as mock_cls:
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
 
     mock_cls.assert_not_called()
@@ -217,7 +217,7 @@ async def test_fetch_new_since_writes_run_history_on_success():
     topics = [_make_topic("neural ODE", ["neural ODE"])]
 
     with patch(
-        "paper_ingestion.sources.arxiv_source.PersistentSourceRateLimiter",
+        "paper_ingestion.sources.base.PersistentSourceRateLimiter",
         return_value=mock_limiter,
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
@@ -270,7 +270,7 @@ async def test_fetch_new_since_writes_run_history_on_429_with_cooldown(monkeypat
     topics = [_make_topic("ML", ["machine learning"])]
 
     with patch(
-        "paper_ingestion.sources.arxiv_source.PersistentSourceRateLimiter",
+        "paper_ingestion.sources.base.PersistentSourceRateLimiter",
         return_value=mock_limiter,
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
