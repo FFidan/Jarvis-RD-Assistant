@@ -47,7 +47,7 @@ A breakdown of how many papers were ingested from each source (arXiv, Semantic S
 
 ### PapersByStatusChart
 
-A breakdown of your library by reading state: Inbox, Reading, To Read, Done, Archived. Use this to gauge how much of your library is actively engaged versus waiting in queue.
+A breakdown of your library by reading state: Inbox, To Read, Reading, Done, Trash. Use this to gauge how much of your library is actively engaged versus waiting in queue.
 
 ### ReviewsByRatingChart
 

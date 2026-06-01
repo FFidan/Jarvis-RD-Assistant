@@ -1,7 +1,5 @@
 # Performance Profiling — HOWTO
 
-<!-- Last updated 2026-05-18 for Task B1-4 (loadgen + gpu_probe wiring) -->
-
 `make profile` runs `scripts/profile.sh` end-to-end, dumping a snapshot under
 `artifacts/perf/<UTC-timestamp>/`. The harness is deliberately best-effort:
 each step degrades to a logged warning if its tool is missing, so a partial
@@ -40,12 +38,6 @@ docker exec jarvis_rd_assistant-postgres-1 psql -U jarvis -d jarvis -c \
 # 4. Re-run the workload, then:
 make profile
 ```
-
-The 2026-05-10 baseline run did NOT include `pg_stat_statements` data because
-the extension was not preloaded. Sub-10 ms wall-clock on every measured GET
-endpoint suggests Python is not the bottleneck on the read path; LLM-bound
-endpoints (Pulse generate, RAG chat) were not measured because they require
-Ollama warm-up plus a logged-in user session.
 
 ## Environment knobs
 
@@ -96,7 +88,7 @@ Outputs:
 - `flamegraph.svg` — py-spy 30s record (when granted ptrace)
 - `pg-stat-statements-top20.csv` — when extension is preloaded
 - `lighthouse.html` — when Chrome is available
-- `run-metadata.json` — GPU model, VRAM total/used at start, LiteLLM alias map,
+- `run-metadata.json` — GPU tier, VRAM total/used at start, LiteLLM alias map,
   `PERF_CONCURRENCY`, `OLLAMA_MAX_LOADED_MODELS`/`OLLAMA_NUM_PARALLEL`, git commit, UTC timestamp
 - `gpu-timeseries.jsonl` — one JSON-lines record per `PERF_GPU_POLL_SECONDS`; fields:
   `ts`, `gpu_name`, `vram_total_mb`, `vram_used_mb`, `gpu_util_pct`, `vram_loaded_bytes`
@@ -135,68 +127,23 @@ make profile
 
 The probe writes `{"span": "<name>", "ms": …, "ts": …, …}` JSONL lines.
 
-**Observer-effect caveat — synchronous writes on the asyncio event loop.** `perf_probe.py`
-appends JSONL records synchronously inside `__exit__`, which blocks the event loop for the
-duration of the file write. This is acceptable for profiling runs where the probe is the point,
-but it is NOT production-safe — do not enable `PERF_PROBE_ENABLED=1` in normal deployments.
-Additionally, `learning_engine` LLM paths (FSRS scheduling, card generation) are **not**
-instrumented by `perf_probe` (SYM-02) — only `paper_ingestion` hot paths are wired. Cross-service
-bottleneck analysis requires separate instrumentation (e.g. Langfuse traces).
+**Caveats:**
 
-**Caveat 1 — rebuild or you get nothing.** The deployed `jarvis/paper_ingestion`
-image is a pinned tag, not a live bind-mount of the source. If it was built
-before the probe code (or any code you want to measure) landed, the running
-container has no probes and the JSONL is silently empty. Always rebuild the app
-images from the commit under test before profiling.
+- `perf_probe.py` appends JSONL synchronously inside `__exit__`, blocking the event loop. Acceptable for profiling; NOT production-safe — do not enable `PERF_PROBE_ENABLED=1` in normal deployments.
+- Only `paper_ingestion` hot paths are wired; cross-service analysis requires separate instrumentation (e.g. Langfuse traces).
+- **Rebuild or you get nothing.** The deployed image is a pinned tag. If it was built before the probe code landed, the JSONL is silently empty. Always rebuild from the commit under test.
 
-**loadgen Scenario C drives the probed paths (since 2026-05-17).**
-`loadgen.sh` Scenario C mints a real owner session via `POST
-/api/auth/api-key-session` (exchanges the existing `JARVIS_API_KEY` for a
-`jarvis_session` cookie — no email/magic-link) and drives all four wired
-spans: `POST /api/papers/search-hybrid` (→ `embed_texts_post` +
-`hybrid_search_bm25_sql`), `POST /api/ask` decompose (→
-`prepare_cross_paper_rag` + `embed_texts_post`), `POST /api/pulse/generate`
-(→ `pulse_stage2_llm`, async worker). With probes armed it now collects real
-spans (verified: 54 spans, evidence-based bottleneck recorded during the confirmatory bench run).
+**loadgen Scenario C drives the probed paths** — it mints a real owner session via `POST /api/auth/api-key-session` and exercises all four spans: `embed_texts_post`, `hybrid_search_bm25_sql`, `prepare_cross_paper_rag`, `pulse_stage2_llm`.
 
-Preconditions / knobs:
-- Session mint needs **exactly one non-deleted user + an admin**, or
-  `API_KEY_LOGIN_ENABLED=true` (else Scenario C logs a warning and skips —
-  exit 0 preserved).
-- A **seeded corpus** makes `pulse_stage2_llm`/`prepare_cross_paper_rag`
-  absolute numbers meaningful; with an empty corpus they still emit (floors)
-  and `embed_texts_post`/`hybrid_search_bm25_sql` are corpus-independent.
-- `RAG_CONCURRENCY` (default ≤3) bounds the heavy `/api/ask` fan-out;
-  `PERF_PULSE_SETTLE_SECS` (default 25) lets the async Pulse worker emit its
-  span before `profile.sh` collects the JSONL.
+Preconditions:
 
-## Re-running on a 48 GB GPU host
-
-No constants to edit — all machine values (GPU model, VRAM, LiteLLM alias map, concurrency)
-are captured automatically into `run-metadata.json`. To reproduce on a 48 GB GPU host:
-
-```bash
-# 1. Check out / pull the branch.
-# 2. Bring up the stack:
-make up                # or make profile-stack-up for pg_stat_statements + ptrace
-
-# 3. Run exactly the same command:
-PERF_CONCURRENCY=10 PERF_PROBE_ENABLED=1 make profile
-
-# 4. Compare run-metadata.json across two runs (use the timestamps of interest):
-diff artifacts/perf/<old-ts>/run-metadata.json \
-     artifacts/perf/<new-ts>/run-metadata.json
-```
-
-The 48 GB run will show higher `vram_total_mb`, potentially lower `vram_used_mb_at_start`
-(more headroom for model paging), and the same git commit hash — making the comparison
-self-documenting. All three LLM models (qwen3:8b + qwen3:4b + qwen3-embedding:4b) fit
-simultaneously in 48 GB VRAM, eliminating cold-swap latency during Pulse/RAG captures.
+- Needs **one non-deleted user + an admin**, or `API_KEY_LOGIN_ENABLED=true` (else Scenario C skips with exit 0).
+- A **seeded corpus** makes LLM-path numbers meaningful; embed/BM25 spans fire regardless.
+- `RAG_CONCURRENCY` (default ≤3) bounds `/api/ask` fan-out; `PERF_PULSE_SETTLE_SECS` (default 25) lets the async Pulse worker flush before collection.
 
 ## What "good" looks like
 
 - Main bundle (`index-*.js`) target: **<= 1.0 MB raw / <= 300 kB gzip**.
-  As of 2026-05-10 the bundle is 1,022 kB / 301 kB gzip after Bucket G.
 - GET endpoints: p99 < 50 ms cold, < 10 ms warm.
 - Pulse generate: p95 dominated by LLM calls; Stage-2 already uses bounded
   concurrency (`asyncio.Semaphore(8)`), so reductions require either a faster
@@ -213,4 +160,3 @@ grep -oE 'from"\./vendor-[^"]*\.js"' frontend/dist/assets/index-*.js | sort -u
 ```
 
 to identify which vendor chunks the entry bundle eagerly imports.
-

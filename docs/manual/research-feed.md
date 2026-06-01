@@ -70,7 +70,7 @@ The Trash surface lists papers you have soft-deleted. Each paper has a **Restore
 
 In all surfaces except Trash, you can select multiple papers using the checkbox that appears on hover for each list item. Once one or more papers are selected:
 
-- A **bulk action toolbar** appears above the list with actions appropriate to the current surface (e.g. Save, Archive, Delete).
+- A **bulk action toolbar** appears above the list with actions appropriate to the current surface (e.g. Save, Mark as Done, Move to Trash).
 - Selecting all visible papers uses the header checkbox.
 
 ---

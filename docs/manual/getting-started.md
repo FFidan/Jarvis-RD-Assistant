@@ -114,7 +114,7 @@ If the setup wizard was not completed, a **dismissible Setup Banner** appears at
 
 <!-- screenshot: Onboarding tour overlay — step 1 pointing at Settings → Sources in the sidebar -->
 
-After completing setup, if your account has **no research topics and no papers** and you have not dismissed the tour, a **guided onboarding tour** starts automatically (powered by react-joyride). The tour has four steps:
+After completing setup, a **guided onboarding tour** starts automatically if your account has no research topics and no papers and you have not previously dismissed the tour. The tour is powered by react-joyride and has four steps:
 
 1. **Settings → Sources** — pointing to where you enable and configure paper sources.
 2. **Settings → Topics** — pointing to where you create and manage research topics.

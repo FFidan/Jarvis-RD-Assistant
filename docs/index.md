@@ -29,8 +29,6 @@ and developers.
 | [Architecture](ARCHITECTURE.md) | Service topology, runtime boundaries, data flows |
 | [Product Requirements](PRD.md) | Feature scope, personas, acceptance criteria |
 | [Engineering Standards](ENGINEERING_STANDARDS.md) | Coding conventions, API rules, DB rules, testing |
-| [Typography Contract](contracts/08-typography.md) | UI text formatting invariants |
-| [LLM Prompt Shape](contracts/09-llm-prompt-shape.md) | Prompt-construction contract enforced by AST check |
 | [Migrations](migrations-shim.md) | Migration convention, runner, multi-tenant history |
 
 ## System Contracts
@@ -42,12 +40,14 @@ and developers.
 | [Pulse](contracts/02-pulse.md) | Pulse generation pipeline |
 | [LLM Client](contracts/03-llm.md) | LLM call pattern, models, structured output |
 | [Observability](contracts/04-observability.md) | Langfuse tracing, health endpoints |
-| [Model Lifecycle](contracts/05-model-lifecycle.md) | Model adoption gates and retirement |
-| [Hardware-Aware Settings](contracts/06-hardware-aware-settings.md) | VRAM tiers, GPU detection |
+| [Models & Hardware](contracts/05-models-and-hardware.md) | Model adoption gates, VRAM tiers, GPU detection |
+| [Testing](contracts/07-testing.md) | Contract testing framework and patterns |
 
 ## User Guide
 
-End-user documentation lives under [User Guide](manual/index.md).
+| Document | Purpose |
+|---|---|
+| [User Guide](manual/index.md) | End-user manual — sign-in, features, Telegram integration |
 
 ---
 

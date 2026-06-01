@@ -34,12 +34,10 @@ Current release: **v0.5.0**.
 
 ## In progress
 
-- **Installer / first-run UX.** Guided, OS-aware preflight and a single-user
-  vs. multi-user setup choice so non-technical researchers can stand up an
-  instance with minimal friction.
-- **UI redesign + offline reader.** An information-architecture refresh, with
-  an installable PWA so already-processed material (summaries, extractions,
-  notes) and flashcard review work offline on a tablet.
+- **Tablet / PWA reading-experience polish.** Refinements to offline reading,
+  installable PWA affordances, and tablet layout optimizations for the already-shipped
+  information-architecture redesign so already-processed material (summaries,
+  extractions, notes) and flashcard review work seamlessly offline.
 
 ## Planned (exploratory — no dates)
 

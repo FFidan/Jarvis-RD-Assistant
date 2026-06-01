@@ -57,7 +57,6 @@ validation:
 #  - plans/     in-flight implementation plans (internal working docs)
 #  - specs/     dated transition specs (not evergreen)
 #  - perf/      profiling snapshots
-#  - screenshots/ UI screenshots (referenced inline by README, not standalone pages)
 #
 # Without this exclusion, `mkdocs build --strict` would fail because those
 # files contain relative links to source-code paths (not doc files) and MkDocs
@@ -69,12 +68,11 @@ exclude_docs: |
   plans/
   specs/
   perf/
-  screenshots/
   audit/
   manual/_meta.md
 
 # Curated allowlist — operator/developer docs + user manual scaffold.
-# archive/, plans/, specs/, perf/, screenshots/,
+# archive/, plans/, specs/, perf/,
 # audit/ remain excluded (see exclude_docs above).
 nav:
   - Home: index.md
@@ -97,11 +95,8 @@ nav:
       - Pulse: contracts/02-pulse.md
       - LLM Client: contracts/03-llm.md
       - Observability: contracts/04-observability.md
-      - Model Lifecycle: contracts/05-model-lifecycle.md
-      - Hardware-Aware Settings: contracts/06-hardware-aware-settings.md
+      - Models & Hardware: contracts/05-models-and-hardware.md
       - Testing Contract: contracts/07-testing.md
-      - Typography: contracts/08-typography.md
-      - LLM Prompt Shape: contracts/09-llm-prompt-shape.md
   - User Guide:
       - Overview: manual/index.md
       - Getting Started: manual/getting-started.md

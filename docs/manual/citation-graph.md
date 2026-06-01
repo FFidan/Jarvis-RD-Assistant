@@ -40,7 +40,7 @@ The **GraphControls** panel provides four layout algorithms:
 | **cose** | General-purpose force-directed layout; good for medium-sized networks |
 | **breadthfirst** | Tree-like radial layout; highlights citation chains clearly |
 | **circle** | Nodes evenly spaced on a circle; useful for small, dense networks |
-| **grid** | Uniform grid; useful when you want a compact overview |
+| **concentric** | Concentric rings; useful for showing structural layers in the citation network |
 
 Switch between layouts without re-fetching the citation data.
 

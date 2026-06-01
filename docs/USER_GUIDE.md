@@ -16,7 +16,7 @@ JARVIS uses magic links — there is no password.
 2. On the sign-in screen, enter your email address and click **Send sign-in link**.
 3. Check your inbox for the one-time link and click it. You are signed in for 30 days.
 
-If SMTP is not configured, click **Use API key instead** on the login page.
+If SMTP is not configured, click **Use API key instead** on the login page. For full details, see the [User Guide](manual/index.md).
 
 ### Where to get help
 

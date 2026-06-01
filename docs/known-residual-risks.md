@@ -67,23 +67,13 @@ Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host pu
 
 ## Auth hardening deferrals
 
-### H5 — Migration 043 live-fixture test deferred
+### H5 — Migration live-fixture test deferred
 
-Migration 043 uses a defensive PL/pgSQL constraint-name lookup. The live-fixture migration test is deferred to a future hardening pass with proper test infra.
+One schema migration uses a defensive PL/pgSQL constraint-name lookup. The
+live-fixture migration test covering this path is deferred to a future hardening
+pass with proper ephemeral-Postgres test infra.
 
 **Reopen criteria:** when a migration test harness with a real ephemeral Postgres instance is available.
-
-### L1 — Frozenset whitelist for `extra_sets` not enforced
-
-The `extra_sets` allowlist is not yet enforced — the current guard is `isinstance(s, str)`. Treat all callers as trusted. A future hardening pass should add an allowlist of known-safe set names.
-
-**Reopen criteria:** if `extra_sets` accepts caller-controlled input from any untrusted surface.
-
-### L4 — S3 backup encryption relies on bucket SSE only
-
-Backups are encrypted at rest by S3 server-side encryption but are not client-side encrypted before upload. A client-side openssl pipeline is deferred to a future infra pass.
-
-**Reopen criteria:** when compliance requirements mandate end-to-end encryption of backup files.
 
 ---
 
@@ -119,22 +109,20 @@ Service `requirements.txt` files use `>=` floors (some with ceilings); the hashe
 
 ## BUILDER-STAGE-BUILD-UNHASHED-1 — builder stage installs `build` without `--require-hashes`
 
-**Symptom:** All three service Dockerfiles (`paper_ingestion`, `learning_engine`, `telegram_bot`) use a Stage 1 `jarvis-common-builder` that runs `pip install --no-cache-dir build==1.2.2.post1` to produce the `jarvis_common` wheel. The `build` package and its transitives (`pyproject_hooks`, `packaging`) are installed without `--require-hashes` in the builder stage.
+The Stage 1 `jarvis-common-builder` installs `build==1.2.2.post1` (and its
+transitives) without `--require-hashes`. Stage 1 is ephemeral — only the
+produced wheel is copied into Stage 2. Stage 2's `pip install --require-hashes
+-r constraints.txt` covers every runtime dependency; the wheel enters via
+`--no-deps`, so its transitives never trigger a fresh unverified resolution.
 
-**Bounded by:** Stage 1 is ephemeral — only the produced wheel is lifted into Stage 2 (`COPY --from=jarvis-common-builder`). No builder-stage packages exist in the runtime image. Stage 2's `pip install --require-hashes -r constraints.txt` covers every runtime dep; the wheel itself enters via `pip install --no-deps`, so its declared transitives never trigger a fresh unverified resolution.
+**Residual surface:** the wheel-build toolchain only, not the runtime image.
 
-**Residual surface:** the wheel-build toolchain, not the runtime dependency surface.
+**Why deferred:** Stage 1 is not user-reachable; the runtime hash gate provides
+the security boundary. Harden by generating a `constraints-builder.txt` with
+`uv pip compile --generate-hashes` and switching the builder `RUN` to use it.
 
-**Operator attestation pattern (if hardening to zero unhashed pip invocations is desired):**
-
-1. Generate a hashed constraint set for the builder toolchain:
-   ```
-   echo "build==1.2.2.post1" > /tmp/builder-req.in
-   uv pip compile --generate-hashes /tmp/builder-req.in -o services/_shared/constraints-builder.txt
-   ```
-2. Add `COPY services/_shared/constraints-builder.txt ./` and change the builder-stage `RUN` to `pip install --require-hashes -r constraints-builder.txt`.
-
-Deferred per YAGNI — Stage 1's build environment is not user-reachable and the wheel produced is gated by the runtime hash gate's `--no-deps` install pattern.
+**Reopen criteria:** if Stage 1 gains user-reachable content or the build
+toolchain is updated to a version with a known CVE.
 
 ---
 
@@ -149,7 +137,7 @@ These document intentional deviations from the container-hardening sweep, each w
 
 ---
 
-## Deferred items from the 2026-06-01 audit round
+## Further known residual risks
 
 ### C5-3 — Cross-user isolation gate excludes RAG/search paths
 

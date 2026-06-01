@@ -1,15 +1,14 @@
 # 03 — LLM Call Contract
 **Status:** LIVING
-**Date:** 2026-05-02
 **Reviewers must update this contract in the same patch as any change to:**
 - The public surface of [libs/jarvis_common/jarvis_common/llm_client.py](../../libs/jarvis_common/jarvis_common/llm_client.py)
-- Any of the 7 LLM call sites enumerated in §2
+- Any of the LLM call sites enumerated in §2
 - The Pydantic response models in §4
 - The retry / fallback policy
 
-This contract describes the steady-state LLM call surface. The historical
-Instructor + Langfuse integration transition (canary → bulk → cleanup) has completed;
-only the end-state described here is in scope for new work.
+This contract describes the LLM call surface. All structured output flows
+through Instructor-patched `call_llm_structured`; raw streaming and embeddings
+are the documented exceptions (§6).
 
 ---
 
@@ -17,7 +16,7 @@ only the end-state described here is in scope for new work.
 
 **In scope.**
 - The single LLM choke point in `jarvis_common.llm_client`
-- Seven structured-output call sites in services
+- The structured-output call sites in services
 - Retry / timeout / fallback policy
 - Anti-hallucination integration (QuoteVerifier)
 - Streaming exceptions (the one place raw streaming is allowed)
@@ -33,21 +32,20 @@ only the end-state described here is in scope for new work.
 
 ## 1. The choke point
 
-After B.1 ships (instructor-langfuse-integration spec §2), `jarvis_common.llm_client` exports exactly four
-functions. No code outside this module may construct a chat-completions
-HTTP request directly.
+`jarvis_common.llm_client` exports exactly four public functions. No code
+outside this module may construct a chat-completions HTTP request directly.
 
-| Function | Purpose | Returns |
-|---|---|---|
-| `call_llm_structured` | Strict-JSON structured output | `T` (a Pydantic `BaseModel` subclass) |
-| `request_chat_completion_content` | Raw chat completion | `str` (think-blocks stripped) |
-| `embed_texts` | Embeddings | `list[list[float]]` |
-| `get_litellm_config` | Resolve LiteLLM base URL | `LiteLLMConfig` |
+| Function | File:line | Purpose | Returns |
+|---|---|---|---|
+| `call_llm_structured` | [llm_client.py:328](../../libs/jarvis_common/jarvis_common/llm_client.py#L328) | Strict-JSON structured output via Instructor | `T` (a Pydantic `BaseModel` subclass) |
+| `request_chat_completion_content` | [llm_client.py:226](../../libs/jarvis_common/jarvis_common/llm_client.py#L226) | Raw chat completion | `str` (think-blocks stripped) |
+| `embed_texts` | [llm_client.py:442](../../libs/jarvis_common/jarvis_common/llm_client.py#L442) | Embeddings | `list[list[float]]` |
+| `get_litellm_config` | [llm_client.py:123](../../libs/jarvis_common/jarvis_common/llm_client.py#L123) | Resolve LiteLLM base URL | `LiteLLMConfig` |
 
-`call_llm` and `call_llm_json_value` (pre-B.1 functions) are **DELETED** in
-the cutover commit. No backwards-compat alias.
+There is no `call_llm` or `call_llm_json_value` — the older dict-returning
+helpers were removed; there is no backwards-compat alias.
 
-### 1.1 `call_llm_structured` signature (target)
+### 1.1 `call_llm_structured` signature
 
 ```python
 async def call_llm_structured(
@@ -62,19 +60,18 @@ async def call_llm_structured(
 ) -> T: ...
 ```
 
-Implementation: expects `openai_client` to be already instructor-patched at service startup
-(see `app_factory.py:401` inside `make_init_langfuse_hook`); call site uses
-`chat.completions.create(...)` directly. Per inline `llm_client.py:380-382` comment
-"Do NOT call instructor.from_openai() again — the client is wrapped in the service lifespan".
+It expects `openai_client` to be already instructor-patched at service startup
+(built once in the service lifespan) and calls `chat.completions.create(...)`
+directly — it does NOT re-wrap with `instructor.from_openai()`.
 
 Either `prompt` (single user message) or `messages` (full chat list) is
-accepted; `prompt` is sugar for `messages=[{"role":"user","content":prompt}]`
-plus the `options.system` system message if set.
+accepted; when both are supplied, `prompt` is appended as a final user message,
+prepending the `options.system` system message if set and not already present.
 
-### 1.2 `ChatCompletionOptions` (unchanged from pre-B.1)
+### 1.2 `ChatCompletionOptions`
 
-`@dataclass(frozen=True)` at [llm_client.py:33-48](../../libs/jarvis_common/jarvis_common/llm_client.py#L33-L48). Default values:
-`model="smart"`, `max_tokens=2000`, `temperature=0.1`, `timeout=120.0`, `response_format=None`, `system=None`.
+`@dataclass(frozen=True)` at [llm_client.py:91-100](../../libs/jarvis_common/jarvis_common/llm_client.py#L91-L100). Default values:
+`model="smart"`, `max_tokens=2000`, `temperature=0.1`, `timeout=120.0` (`LLM_TIMEOUT_DEFAULT`), `response_format=None`, `system=None`.
 
 `response_format` is irrelevant to `call_llm_structured` (Instructor handles
 JSON-mode internally) — it remains for `request_chat_completion_content`.
@@ -83,21 +80,27 @@ JSON-mode internally) — it remains for `request_chat_completion_content`.
 
 ## 2. Per-site catalog
 
-Eight LLM call sites. Each site has its own row below; details in §4.
+Nine `call_llm_structured` call sites. Each site has its own row below; details in §4.
 
 | # | Site | File:line | Model alias | Output Pydantic | QuoteVerifier? |
 |---|---|---|---|---|---|
-| 1 | Pulse Stage-2 reranker | [pulse/scoring.py:282](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L282) | `"smart"` | `PulseScoringOutput` | Yes (post-LLM, on `reasoning`) |
-| 2 | Template-driven extraction | [extraction/core.py:157](../../services/paper_ingestion/paper_ingestion/extraction/core.py#L157) | `get_smart_model()` | dynamic via `create_model` over `ExtractedFieldOutput` | Yes (per-field `quote`) |
-| 3 | KG entity + relationship | [extraction/entities.py:288](../../services/paper_ingestion/paper_ingestion/extraction/entities.py#L288) | `get_fast_model()` | `KGExtractionOutput` | Yes (per-relationship `evidence`) |
-| 4 | Flashcard generation | [learning_engine/card_generator.py:119](../../services/learning_engine/learning_engine/card_generator.py#L119) | `validated_model(model)` (default `"smart"`) | `CardGenerationOutput` | Yes (per-card `evidence_quote`) |
-| 5 | Contradiction classifier | [services/contradictions.py:516](../../services/paper_ingestion/paper_ingestion/services/contradictions.py#L516) | `get_smart_model()` | `ContradictionClassification` | Yes (post-LLM, on `quote_a` and `quote_b`) |
-| 6 | Weekly digest | [weekly_summary.py:178](../../services/paper_ingestion/paper_ingestion/weekly_summary.py#L178) | `get_smart_model()` | `WeeklyDigestOutput` | Optional (per-theme cheap fuzzy match against title+brief corpus) |
-| 7 | Paper summarization | [services/summarization.py:241](../../services/paper_ingestion/paper_ingestion/services/summarization.py#L241) | `get_smart_model()` | `SummarizationOutput` | Yes (per-finding quote verified against chunk text) |
-| 8 | Query decomposition | [rag/decomposition.py:75](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L75) | `"fast"` (default, caller-overridable) | `RootModel[list[str]]` | No (structural sub-queries; no scientific claim to verify) |
+| 1 | Pulse Stage-2 reranker | [pulse/scoring.py:309](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L309) | `fast` (default; env-overridable) | `PulseScoringOutput` | Yes (post-LLM, on `reasoning`) |
+| 2 | Template-driven extraction | [extraction/core.py:188](../../services/paper_ingestion/paper_ingestion/extraction/core.py#L188) | `get_smart_model()` | dynamic via `create_model` over `ExtractedFieldOutput` | Yes (per-field `quote`) |
+| 3 | KG entity + relationship | [extraction/entities.py:146](../../services/paper_ingestion/paper_ingestion/extraction/entities.py#L146) | `get_fast_model()` | `KGExtractionOutput` | Yes (per-relationship `evidence`) |
+| 4 | Flashcard generation | [learning_engine/card_generator.py:106](../../services/learning_engine/learning_engine/card_generator.py#L106) | `validated_model(model)` (default `"smart"`) | `CardGenerationOutput` | Yes (per-card `evidence_quote`) |
+| 5 | Contradiction classifier | [services/contradictions.py:266](../../services/paper_ingestion/paper_ingestion/services/contradictions.py#L266) | `get_smart_model()` | `ContradictionClassification` | Yes (post-LLM, on `quote_a` and `quote_b`) |
+| 6 | Weekly digest | [weekly_summary.py:187](../../services/paper_ingestion/paper_ingestion/weekly_summary.py#L187) | `get_smart_model()` | `WeeklyDigestOutput` | Optional (per-theme cheap fuzzy match against title+brief corpus) |
+| 7 | Paper summarization | [services/summarization.py:272](../../services/paper_ingestion/paper_ingestion/services/summarization.py#L272) | `get_smart_model()` | `SummarizationOutput` | Yes (per-finding quote verified against chunk text) |
+| 8 | Query decomposition | [rag/decomposition.py:74](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L74) | `"fast"` (default, caller-overridable) | `RootModel[list[str]]` | No (structural sub-queries; no scientific claim to verify) |
+| 9 | RAG answer (`/ask`) | [routers/rag.py:132](../../services/paper_ingestion/paper_ingestion/routers/rag.py#L132) | resolved `smart` alias | `AskResponse` | Yes (sentence-level verifier on the answer; sources carry per-sentence confidence) |
 
-There is also a non-call-site streaming path and a non-structured scalar
-path; both stay outside Instructor — see §6.
+Site 9 is the conversational-RAG answer path: `_call_rag_llm` (wrapped by
+`@observe()`) is invoked by both `ask_paper` (`POST /api/papers/{paper_id}/ask`)
+and `ask_cross_paper` (`POST /api/ask`) with `max_tokens=700` and
+`timeout=LLM_TIMEOUT_DEFAULT`. The streaming variants of these endpoints take
+the raw-streaming path in §6.1 instead.
+
+There is also a non-call-site streaming path; it stays outside Instructor — see §6.
 
 ---
 
@@ -106,15 +109,15 @@ path; both stay outside Instructor — see §6.
 ### 3.1 Timeout
 
 Per-call timeout is owned by `ChatCompletionOptions.timeout`. Three named
-defaults at [llm_client.py:15-17](../../libs/jarvis_common/jarvis_common/llm_client.py#L15-L17):
+defaults at [llm_client.py:69-71](../../libs/jarvis_common/jarvis_common/llm_client.py#L69-L71):
 
 | Constant | Value | Used by |
 |---|---|---|
 | `LLM_TIMEOUT_SHORT` | 30 s | `decompose_query` (small fast prompt) |
-| `LLM_TIMEOUT_DEFAULT` | 120 s | All structured sites (sites 1–6) unless overridden |
+| `LLM_TIMEOUT_DEFAULT` | 120 s | Most structured sites (incl. the RAG answer site) unless overridden |
 | `LLM_TIMEOUT_LONG` | 300 s | `card_generator` (longer paper context) |
 
-Stage-level caps are owned by callers (e.g. Pulse Stage 2's 600 s cap; see
+Stage-level caps are owned by callers (e.g. Pulse Stage 2's outer wall-clock cap; see
 [02-pulse.md §5](02-pulse.md#5-timeout-concurrency-and-budget-policy)). The choke point does NOT enforce stage-level
 budgets; that's caller responsibility.
 
@@ -125,26 +128,29 @@ budgets; that's caller responsibility.
 message included; up to 2 retry round-trips are performed before
 `ValidationError` propagates to the call site.
 
-**Retries cost up to 3× round-trip time.** Caller stage budgets must
-account for this. Pulse's 600 s Stage-2 cap is the tightest constraint —
-if Stage-2 retry rate measured during canary exceeds the budget, the
-implementation plan reduces `max_retries` to 1 (per instructor-langfuse-integration spec §6.3).
+**Retries cost up to 3× round-trip time** — caller stage budgets must account
+for this. Pulse's Stage-2 wall-clock cap is the tightest constraint; Pulse
+lowers its structured-output retry budget to 1 via `PULSE_STAGE2_MAX_RETRIES`
+(see [02-pulse.md §5](02-pulse.md#5-timeout-concurrency-and-budget-policy)).
 
 ### 3.3 Fallback per site
 
 Every call site MUST wrap `call_llm_structured` in a `try/except` that
-catches `pydantic.ValidationError` AND the legacy exception classes
+catches `pydantic.ValidationError` AND the related exception classes
 (`ValueError`, `RuntimeError`, `httpx.HTTPError`, `KeyError`, `TypeError`).
 The fallback for each site is documented inline below.
 
 | Site | Fallback on exception |
 |---|---|
-| 1 Pulse Stage-2 | `ScoredCandidate` with `llm_relevance=None`, `llm_novelty=None`, `reasoning="LLM scoring failed"` ([scoring.py:320-331](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L320-L331)). The candidate stays in the deck with Stage 1 signals only. |
-| 2 Extraction | Re-raise. Caller `batch_extract` ([extraction/core.py:299-322](../../services/paper_ingestion/paper_ingestion/extraction/core.py#L299-L322)) catches and increments `failed`; per-paper isolation. |
+| 1 Pulse Stage-2 | `ScoredCandidate` with `llm_relevance=None`, `llm_novelty=None`, `reasoning="LLM scoring failed"`. The candidate stays in the deck with Stage 1 signals only. |
+| 2 Extraction | Re-raise. Caller `batch_extract` catches and increments `failed`; per-paper isolation. |
 | 3 KG entity | Re-raise. Caller in `routers/` catches and returns 500 (no per-paper isolation today; see Cleanup §7). |
-| 4 Card generator | `_call_llm_for_cards` returns `None` ([card_generator.py:125-127](../../services/learning_engine/learning_engine/card_generator.py#L125-L127)); caller returns `_empty_result()` (LOW confidence, zero cards). |
-| 5 Contradiction classifier | Caller `scan_contradictions` ([services/contradictions.py:556-567](../../services/paper_ingestion/paper_ingestion/services/contradictions.py#L556-L567)) catches and increments `llm_failures`; pair is skipped. |
-| 6 Weekly digest | Per-topic catch ([weekly_summary.py:195-197](../../services/paper_ingestion/paper_ingestion/weekly_summary.py#L195-L197)); falls back to default summary text and empty themes for that topic; other topics still process. |
+| 4 Card generator | The per-call helper returns `None`; caller returns `_empty_result()` (LOW confidence, zero cards). |
+| 5 Contradiction classifier | Caller `scan_contradictions` catches and increments `llm_failures`; pair is skipped. |
+| 6 Weekly digest | Per-topic catch; falls back to default summary text and empty themes for that topic; other topics still process. |
+| 7 Paper summarization | Re-raise to the summarize job/caller, which records the failure per paper. |
+| 8 Query decomposition | Caller falls back to the single original query (no sub-query expansion). |
+| 9 RAG answer | Timeout maps to HTTP 504; empty visible content maps to HTTP 502 with a degraded detail object rather than a blank answer. |
 
 Failure handling is **per-site**, not centralized. The contract requires
 that no site lets a `ValidationError` propagate to a user-visible error —
@@ -153,15 +159,13 @@ fallback semantics.
 
 ---
 
-## 4. Per-site Pydantic response models (target)
+## 4. Per-site Pydantic response models
 
 All models use `from pydantic import BaseModel, Field, Literal`. Constraint
-ranges below mirror existing post-LLM clamps in current code; once
-Instructor enforces them at parse time, the manual clamps are deleted.
+ranges are enforced by Instructor at parse time, so the call sites do not need
+to re-clamp the values afterward.
 
 ### 4.1 Site 1 — Pulse Stage-2 (`PulseScoringOutput`)
-
-Lives in `services/paper_ingestion/paper_ingestion/pulse/models.py` (new file).
 
 ```python
 class PulseScoringOutput(BaseModel):
@@ -170,7 +174,8 @@ class PulseScoringOutput(BaseModel):
     reasoning: str = Field(min_length=1, max_length=400)
 ```
 
-The post-LLM `max(1, min(10, …))` clamps in [scoring.py:292-293](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L292-L293) become unnecessary and are deleted.
+Instructor enforces the `1..10` range at parse time, so the scorer does not
+re-clamp `relevance` / `novelty`.
 
 ### 4.2 Site 2 — Extraction (`ExtractedFieldOutput` + dynamic per-template)
 
@@ -192,9 +197,9 @@ PaperExtractionOutput = create_model(
 )
 ```
 
-The template's `ExtractionField.name` MUST match `^[a-zA-Z_][a-zA-Z0-9_]*$`
-(Python identifier rule; enforced by a new validator on
-`ExtractionField.name` at [models/extractions.py:40-46](../../services/paper_ingestion/paper_ingestion/models/extractions.py#L40-L46) per spec §4.2).
+The template's `ExtractionField.name` must match `^[a-zA-Z_][a-zA-Z0-9_]*$`
+(the Python identifier rule, enforced on `ExtractionField.name` in
+[models/extractions.py](../../services/paper_ingestion/paper_ingestion/models/extractions.py)).
 
 ### 4.3 Site 3 — KG entity extraction (`KGExtractionOutput`)
 
@@ -215,8 +220,9 @@ class KGExtractionOutput(BaseModel):
     relationships: list[KGRelationshipCandidate] = Field(default_factory=list, max_length=10)
 ```
 
-The Literal constraint on `type` is **stricter** than current code. Today
-[entities.py:300](../../services/paper_ingestion/paper_ingestion/extraction/entities.py#L300) accepts any string and silently drops invalid `type`. After B.1, Instructor pressures the model to use the canonical names, retrying on mismatch.
+The `Literal` constraint on `type` pressures the model toward the canonical
+names; Instructor retries on mismatch rather than silently dropping an
+out-of-vocabulary type.
 
 ### 4.4 Site 4 — Card generation (`CardGenerationOutput`)
 
@@ -232,7 +238,8 @@ class CardGenerationOutput(BaseModel):
     cards: list[CardOutput] = Field(min_length=1, max_length=20)
 ```
 
-`VALID_CARD_TYPES = frozenset(...)` ([card_generator.py:30](../../services/learning_engine/learning_engine/card_generator.py#L30)) and the post-LLM `if card_type not in VALID_CARD_TYPES: card_type = "concept"` clamp are deleted.
+The `Literal` on `card_type` is the authority for valid card types — there is
+no separate post-LLM allow-list clamp.
 
 ### 4.5 Site 5 — Contradiction classifier (`ContradictionClassification`)
 
@@ -255,7 +262,7 @@ class ContradictionClassification(BaseModel):
 ```
 
 When the LLM returns `is_contradiction=True` without quotes, the validator
-fires and Instructor re-prompts. Stricter than [contradictions.py:528-531](../../services/paper_ingestion/paper_ingestion/services/contradictions.py#L528-L531) which silently drops such responses.
+fires and Instructor re-prompts rather than silently dropping the response.
 
 ### 4.6 Site 6 — Weekly digest (`WeeklyDigestOutput`)
 
@@ -295,52 +302,55 @@ ensures shape; QuoteVerifier ensures grounding. Both are required.
 
 ## 6. Streaming and scalar paths (Instructor exceptions)
 
-These paths do NOT use `call_llm_structured`:
-
 ### 6.1 RAG streaming
 
-[rag/streaming.py:319-325](../../services/paper_ingestion/paper_ingestion/rag/streaming.py#L319-L325) calls
+[rag/streaming.py:381](../../services/paper_ingestion/paper_ingestion/rag/streaming.py#L381) calls
 `http_client.stream("POST", "/v1/chat/completions", json={"stream": True, ...})`
 directly against the LiteLLM gateway. Streaming chat is intrinsically
 non-structured — Instructor doesn't apply.
 
-This is the **only** code outside `jarvis_common.llm_client` that
-constructs an LLM HTTP request directly. The contract permits it because
-streaming has its own framing (SSE token events) that Instructor cannot wrap.
+This is the **only** code outside `jarvis_common.llm_client` that constructs an
+LLM HTTP request directly. The contract permits it because streaming has its
+own framing (SSE token events) that Instructor cannot wrap. When the
+observability profile is enabled, this path is wrapped by
+`@observe(as_type="generation")` (see [04-observability.md §3](04-observability.md)).
 
-After [04-observability.md](04-observability.md) ships, this path is wrapped by `@observe(as_type="generation")`
-boundaries; that's the only B.2 work it gets.
+The streaming `/ask/stream` endpoints take this path; the non-streaming
+`/ask` answer goes through the structured site 9 (`AskResponse`).
 
-### 6.2 RAG scalar answers
+### 6.2 Raw scalar helper (`request_chat_completion_content`)
 
-[`request_chat_completion_content`](../../libs/jarvis_common/jarvis_common/llm_client.py#L200-L297) is the non-streaming scalar exception for RAG answer text. It sends to LiteLLM `/v1/chat/completions`, strips `<think>...</think>` blocks, records the served `smart` model, and raises `EmptyVisibleLLMContentError` when the response has no visible content after stripping.
+`request_chat_completion_content` ([llm_client.py:226](../../libs/jarvis_common/jarvis_common/llm_client.py#L226))
+is the non-streaming scalar exception: it sends to LiteLLM `/v1/chat/completions`,
+strips `<think>...</think>` blocks, records the served `smart` model, and raises
+`EmptyVisibleLLMContentError` ([llm_client.py:74](../../libs/jarvis_common/jarvis_common/llm_client.py#L74))
+when the response has no visible content after stripping. It is part of the
+public choke-point surface for plain-text completions that have no Pydantic shape.
 
-[`/api/papers/{paper_id}/ask`](../../services/paper_ingestion/paper_ingestion/routers/rag.py#L178-L269) and [`/api/ask`](../../services/paper_ingestion/paper_ingestion/routers/rag.py#L352-L435) call this helper with `max_tokens=700`. Timeout failures map to HTTP 504. Empty-visible scalar content maps to HTTP 502 with an explicit degraded detail object, rather than returning a blank answer.
+The conversational-RAG `/ask` answer routes (`ask_paper`, `ask_cross_paper`)
+return a structured `AskResponse` via site 9 and catch `EmptyVisibleLLMContentError`:
+timeout failures map to HTTP 504, and empty-visible content maps to HTTP 502
+with an explicit degraded detail object rather than a blank answer.
 
 ### 6.3 Query decomposition (`decompose_query`)
 
-[rag/decomposition.py:75-85](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L75-L85) uses `call_llm_structured` with `RootModel[list[str]]`:
+[rag/decomposition.py:74-85](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L74-L85) uses `call_llm_structured` with `RootModel[list[str]]`:
 
 ```python
-class QueryDecomposition(RootModel[list[str]]):
-    pass
-
 result = await call_llm_structured(
-    openai_client, response_model=QueryDecomposition, ...
+    openai_client, response_model=RootModel[list[str]], ...
 )
 sub_queries = result.root  # list[str]
 ```
 
-`call_llm_json_value` has been fully removed from this call site. No permitted exceptions remain.
+This is structured site 8 — it is on the choke-point path, listed here only
+because its output is a bare list rather than a nested model.
 
 ### 6.4 Embeddings (`embed_texts`)
 
-[llm_client.py:201-238](../../libs/jarvis_common/jarvis_common/llm_client.py#L201-L238). Different endpoint (`/v1/embeddings`), different return shape (`list[list[float]]`), no JSON parsing, no retry, no Pydantic. Default timeout 60 s. Errors wrapped as `RuntimeError`.
+[llm_client.py:442](../../libs/jarvis_common/jarvis_common/llm_client.py#L442). Different endpoint (`/v1/embeddings`), different return shape (`list[list[float]]`), no JSON parsing, no retry, no Pydantic. Default timeout 60 s. Errors wrapped as `RuntimeError`. It is a separate function family from the chat-completion sites.
 
-The contract for `embed_texts` is unchanged by B.1. It remains a separate
-function family.
-
-### 6.4 Canonical `@observe` import path
+### 6.5 Canonical `@observe` import path
 
 All services MUST import `@observe` from `jarvis_common.llm_client`, not from
 `langfuse` or `langfuse.decorators` directly. The `jarvis_common.llm_client`
@@ -360,7 +370,7 @@ The implementation MUST satisfy these. Testable.
 1. **Choke-point closure.** `grep -rn "POST.*v1/chat/completions\|client.stream.*chat/completions" services/ libs/ scripts/` returns matches ONLY in:
    - `libs/jarvis_common/jarvis_common/llm_client.py` (inside the choke-point)
    - `services/paper_ingestion/paper_ingestion/rag/streaming.py` (the streaming exception, §6.1)
-2. **No `dict[str, Any]` LLM returns post-B.1.** `grep -rn "call_llm\b\|call_llm_json_value\b" services/ libs/ scripts/` returns no hits in production code (only in test fixtures and historical docs).
+2. **No dict-returning LLM helpers.** `grep -rn "\bcall_llm\b\|\bcall_llm_json_value\b" services/ libs/ scripts/` returns no production hits — the older dict-returning helpers were removed in favor of `call_llm_structured`.
 3. **Every call site has a `try/except`.** Every invocation of
    `call_llm_structured` MUST be inside a `try/except` that catches at minimum
    `pydantic.ValidationError`, `ValueError`, `RuntimeError`, `httpx.HTTPError`.
@@ -382,49 +392,44 @@ The implementation MUST satisfy these. Testable.
 | Item | Candidate dispositions |
 |---|---|
 | KG site 3 lacks per-paper isolation in failure path | (a) Adopt `extraction/core.py`-style per-paper try/except in batch endpoints; (b) Accept current "endpoint 500" behavior with documented retry guidance |
-| `extraction/core.py` `ExtractionField.name` regex enforcement | (a) Add validator at template-create; backfill scan before B.1 cutover (mandated by spec §4.2); (b) Stay with `RootModel[dict[str, ExtractedFieldOutput]]` (less LLM steering, broader compat) |
-| Contradiction `quote_a`/`quote_b` model_validator strictness | (a) Keep validator (current spec); (b) Permit empty quotes when `is_contradiction=True` and downgrade confidence; today's code already silently drops these — the validator just makes it loud |
-| Streaming-path observability detail | Decided in [04-observability.md](04-observability.md) — currently planned as `@observe(as_type="generation")` per stream span, not per token |
-| Card-generator's custom `_verify_quote` vs the shared `QuoteVerifier` | (a) Keep custom (fuzzy match has different requirements); (b) Migrate to shared verifier; preserves anti-hallucination consistency. Out of scope for B.1 cleanup. |
+| Contradiction `quote_a`/`quote_b` model_validator strictness | (a) Keep the validator; (b) Permit empty quotes when `is_contradiction=True` and downgrade confidence |
+| Streaming-path observability detail | `@observe(as_type="generation")` per stream span, not per token (see [04-observability.md](04-observability.md)) |
+| Card-generator's custom `_verify_quote` vs the shared `QuoteVerifier` | (a) Keep custom (fuzzy match has different requirements); (b) Migrate to the shared verifier for anti-hallucination consistency |
 
 ---
 
 ## 9. Cross-contract references
 
 - **[01-settings.md §2.2](01-settings.md#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write)** — `llm.{smart,fast,embed}_model` and the cloud-provider keys live at the LiteLLM layer; this contract is concerned with the OpenAI-compatible HTTP path, not which underlying model the alias resolves to.
-- **[02-pulse.md §5](02-pulse.md#5-timeout-concurrency-and-budget-policy)** — Pulse Stage-2 owns the 600 s wall-clock cap; per-call timeout is 120 s, owned here.
-- **[04-observability.md §3](04-observability.md)** — every site here gets a `@observe(as_type="generation")` wrap on the choke-point function; per-site spans live on the surrounding `@observe()` boundary.
+- **[02-pulse.md §5](02-pulse.md#5-timeout-concurrency-and-budget-policy)** — Pulse Stage-2 owns its outer wall-clock cap; the per-call timeout (120 s) is owned here.
+- **[04-observability.md §3](04-observability.md)** — each site here gets a `@observe(as_type="generation")` wrap on the choke-point function; per-site spans live on the surrounding `@observe()` boundary.
 - **[docs/ENGINEERING_STANDARDS.md "Anti-Hallucination"](../ENGINEERING_STANDARDS.md#anti-hallucination-invariants)** — verifier requirements that this contract embeds in §5.
 
 ---
 
 ## 10. Verified Identifiers
 
-Every cited identifier was Read in the session producing this contract.
-
 | Citation | File:line | One-line behavior |
 |---|---|---|
-| `LiteLLMConfig` | libs/jarvis_common/jarvis_common/llm_client.py:20-30 | Frozen dataclass with `base_url` |
-| `ChatCompletionOptions` | libs/jarvis_common/jarvis_common/llm_client.py:33-48 | Frozen dataclass with model/max_tokens/temperature/timeout/response_format/system |
-| `LLM_TIMEOUT_SHORT/DEFAULT/LONG` | libs/jarvis_common/jarvis_common/llm_client.py:15-17 | 30 / 120 / 300 seconds |
-| `request_chat_completion_content` | libs/jarvis_common/jarvis_common/llm_client.py:79-127 | Raw chat completion; returns string |
-| `call_llm` (pre-B.1) | libs/jarvis_common/jarvis_common/llm_client.py:179-198 | Strict-JSON object; returns dict — DELETED in B.1 cutover |
-| `call_llm_json_value` (pre-B.1) | libs/jarvis_common/jarvis_common/llm_client.py:130-176 | Scalar/array/object JSON; returns Any — DELETED in B.1 cutover |
-| `embed_texts` | libs/jarvis_common/jarvis_common/llm_client.py:201-238 | Embeddings via `/v1/embeddings`; ordered vectors |
-| `LiteLLM /v1/chat/completions endpoint` | libs/jarvis_common/jarvis_common/llm_client.py:107 | OpenAI-compatible path; what `instructor.from_openai` will hit |
-| Site 1 `call_llm` invocation (Pulse Stage-2) | services/paper_ingestion/paper_ingestion/pulse/scoring.py:282 | Inside `_score_one`; uses `response_format={"type":"json_object"}` |
-| Site 2 `call_llm` invocation (extraction) | services/paper_ingestion/paper_ingestion/extraction/core.py:157 | Inside `extract_fields_for_paper`; uses `get_smart_model()` |
-| Site 3 `call_llm` invocation (entities) | services/paper_ingestion/paper_ingestion/extraction/entities.py:288 | Inside `extract_entities_for_paper`; uses `get_fast_model()` |
-| Site 4 `call_llm` invocation (cards) | services/learning_engine/learning_engine/card_generator.py:119 | Inside `_call_llm_for_cards` |
-| Site 5 `call_llm` invocation (contradictions) | services/paper_ingestion/paper_ingestion/services/contradictions.py:516 | Inside `_classify_candidate` |
-| Site 6 `call_llm` invocation (weekly) | services/paper_ingestion/paper_ingestion/weekly_summary.py:178 | Inside per-topic loop in `generate_weekly_summary` |
-| `decompose_query` `call_llm_structured` use | services/paper_ingestion/paper_ingestion/rag/decomposition.py:75-85 | Scalar list[str] via RootModel |
-| RAG streaming raw `client.stream` | services/paper_ingestion/paper_ingestion/rag/streaming.py:319-325 | The streaming exception (§6.1) |
-| `ExtractedField` storage model | services/paper_ingestion/paper_ingestion/models/extractions.py:81-89 | Existing storage shape; unchanged by B.1 |
-| `ExtractionField` template-field def | services/paper_ingestion/paper_ingestion/models/extractions.py:40-46 | Needs name regex validator added |
-| `EntityExtractionResponse` storage | services/paper_ingestion/paper_ingestion/models/kg.py:115-124 | Existing return shape; unchanged |
-| `VALID_CARD_TYPES` frozenset | services/learning_engine/learning_engine/card_generator.py:30 | Replaced by `Literal[...]` post-B.1 |
-| Card-generator `_verify_quote` fuzzy match | services/learning_engine/learning_engine/card_generator.py:72-79 | Custom verifier; preserved |
-| Pulse `verify_pulse_reasoning` | services/paper_ingestion/paper_ingestion/pulse/verification.py | QuoteVerifier-backed reasoning check |
-| Anti-hallucination spec | docs/ENGINEERING_STANDARDS.md:73-89 | Mandates evidence-backed claims |
-| Existing impl spec | Instructor + Langfuse integration spec (archived; not in the public tree) | Drove the transition to the steady state described above |
+| `LiteLLMConfig` | libs/jarvis_common/jarvis_common/llm_client.py:79-88 | Frozen dataclass with `base_url` |
+| `ChatCompletionOptions` | libs/jarvis_common/jarvis_common/llm_client.py:91-100 | Frozen dataclass: model/max_tokens/temperature/timeout/response_format/system |
+| `LLM_TIMEOUT_SHORT/DEFAULT/LONG` | libs/jarvis_common/jarvis_common/llm_client.py:69-71 | 30 / 120 / 300 seconds |
+| `EmptyVisibleLLMContentError` | libs/jarvis_common/jarvis_common/llm_client.py:74 | Raised when the scalar helper returns no visible content after `<think>` stripping |
+| `get_litellm_config` | libs/jarvis_common/jarvis_common/llm_client.py:123 | Resolves LiteLLM base URL → `LiteLLMConfig` |
+| `request_chat_completion_content` | libs/jarvis_common/jarvis_common/llm_client.py:226 | Raw chat completion; returns think-stripped string |
+| `call_llm_structured` | libs/jarvis_common/jarvis_common/llm_client.py:328 | Instructor-patched structured output; returns a validated `T` |
+| `embed_texts` | libs/jarvis_common/jarvis_common/llm_client.py:442 | Embeddings via `/v1/embeddings`; ordered vectors |
+| Site 1 `call_llm_structured` (Pulse Stage-2) | services/paper_ingestion/paper_ingestion/pulse/scoring.py:309 | Inside `_score_one`; `PulseScoringOutput` |
+| Site 2 `call_llm_structured` (extraction) | services/paper_ingestion/paper_ingestion/extraction/core.py:188 | `get_smart_model()`; dynamic per-template model |
+| Site 3 `call_llm_structured` (entities) | services/paper_ingestion/paper_ingestion/extraction/entities.py:146 | `get_fast_model()`; `KGExtractionOutput` |
+| Site 4 `call_llm_structured` (cards) | services/learning_engine/learning_engine/card_generator.py:106 | `CardGenerationOutput` |
+| Site 5 `call_llm_structured` (contradictions) | services/paper_ingestion/paper_ingestion/services/contradictions.py:266 | `ContradictionClassification` |
+| Site 6 `call_llm_structured` (weekly) | services/paper_ingestion/paper_ingestion/weekly_summary.py:187 | `WeeklyDigestOutput` |
+| Site 7 `call_llm_structured` (summarization) | services/paper_ingestion/paper_ingestion/services/summarization.py:272 | `SummarizationOutput` |
+| Site 8 `decompose_query` `call_llm_structured` | services/paper_ingestion/paper_ingestion/rag/decomposition.py:74 | `RootModel[list[str]]` sub-queries |
+| Site 9 RAG answer `_call_rag_llm` | services/paper_ingestion/paper_ingestion/routers/rag.py:132 | `AskResponse`; called by `ask_paper` / `ask_cross_paper` |
+| `AskResponse` model | services/paper_ingestion/paper_ingestion/models/rag.py:40-47 | answer + sources + confidence + per-sentence verification |
+| RAG streaming raw `client.stream` | services/paper_ingestion/paper_ingestion/rag/streaming.py:381 | The streaming exception (§6.1) |
+| `ExtractionField` template-field def | services/paper_ingestion/paper_ingestion/models/extractions.py | Name regex validator |
+| Card-generator `_verify_quote` fuzzy match | services/learning_engine/learning_engine/card_generator.py | Custom verifier |
+| Anti-hallucination standard | docs/ENGINEERING_STANDARDS.md | Mandates evidence-backed claims |

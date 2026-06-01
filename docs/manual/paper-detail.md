@@ -117,16 +117,26 @@ A visual step tracker shows which steps are complete, running, or queued. You ca
 Controls for managing this paper within your library:
 
 - **Star** — toggle a star on the paper for quick filtering in the Library.
-- **State transitions** — set the reading state: Inbox → Reading → To Read → Done → Archived.
-- **Hard-delete** — permanently delete the paper and all associated data after confirmation.
+- **State transitions** — move the paper through its reading workflow: Inbox → To Read → Reading → Done. Papers can be moved to **Trash** at any state (except trash itself); trashed papers can be restored or permanently deleted.
+- **Hard-delete** — permanently delete the paper and all associated data after confirmation (available from the Trash state).
+
+The five lifecycle states are:
+
+| State | Meaning |
+|-------|---------|
+| **Inbox** | Newly discovered; not yet sorted |
+| **To Read** | Saved to your reading list |
+| **Reading** | Currently reading |
+| **Done** | Finished |
+| **Trash** | Removed; restorable or permanently deletable |
 
 ### UserStateForm
 
-A form with three fields persisted per user:
+A form titled **Quick Rating** with three fields persisted per user:
 
-- **Tags** — free-text tags you assign to this paper.
-- **Priority** — a priority level for your own reading queue.
-- **Notes** — free-text notes. Saved immediately on blur.
+- **Rating (1–5)** — a slider for your personal rating of this paper.
+- **Comment** — a short free-text note about the paper.
+- **Flagged** — a checkbox to mark this paper for follow-up.
 
 ### ZoteroPanel
 
@@ -134,7 +144,7 @@ Shows the sync status with Zotero (not synced / synced / error). Provides a **Pu
 
 ### ContradictionsPanel
 
-Lists contradictions detected between this paper and other papers in your library. Each item shows the conflicting claim and the other paper involved. A **Recompute** button re-runs the contradiction-detection pipeline for this paper.
+Lists contradictions detected between this paper and other papers in your library. Each item shows the conflicting claim and the other paper involved. A **Scan contradictions** button queues a new contradiction-detection scan for this paper.
 
 ---
 

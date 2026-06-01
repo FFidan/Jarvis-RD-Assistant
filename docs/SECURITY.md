@@ -1,7 +1,6 @@
 # Security Notes
 
-Operational security guidance for JARVIS RD Assistant deployments. This is a
-living document; new sections are added per audit closeout.
+Operational security guidance for JARVIS RD Assistant deployments.
 
 ---
 
@@ -39,10 +38,9 @@ See `docs/known-residual-risks.md` for the full residual-risk register.
 
 ## Data Sharing Boundary
 
-This section states the committed data-sharing model for a JARVIS instance
-(decision D4, 2026-05-15).  The enforcement point is
-`assert_paper_ownership` / `assert_papers_ownership` in
-`libs/jarvis_common/jarvis_common/db_helpers.py`.
+This section states the committed data-sharing model for a JARVIS instance.
+The enforcement point is `assert_paper_ownership` / `assert_papers_ownership`
+in `libs/jarvis_common/jarvis_common/db_helpers.py`.
 
 ### What is shared (corpus layer)
 
@@ -74,16 +72,10 @@ The following is **never cross-visible** — every query is scoped to
 - Structured extractions-of-record.
 - Magic-link identity, session cookies, and user config values.
 
-### Design rationale
-
-This is the same posture as a shared scholarly library with private
-workspaces (comparable to Zotero group libraries or institutional repositories):
-the corpus is a shared resource; the intellectual work on top of it is private.
-
-The prior ``multitenant_enabled`` boolean on the ownership helpers was removed
-in this decision to make the corpus-sharing explicit and untoggleable.
+The corpus is a shared resource; the intellectual work on top of it is private
+(comparable to a shared scholarly library with per-user workspaces).
 Regression coverage lives in
-``libs/jarvis_common/tests/test_ownership_canonical_invariant.py``.
+`libs/jarvis_common/tests/test_ownership_canonical_invariant.py`.
 
 ---
 
@@ -129,7 +121,7 @@ calls. This header is only honored when all three guards pass:
 3. The supplied `user_id` exists in the `users` table and is not deleted.
 
 Any guard failure returns 403. The mechanism is implemented in
-`current_user_id_with_owner_override` in `libs/jarvis_common/jarvis_common/auth.py`.
+`current_user_id_strict_with_owner_override` in `libs/jarvis_common/jarvis_common/auth.py`.
 
 ### Config Key Rotation
 
@@ -167,9 +159,9 @@ The IP-allowlist call sites are:
 actual reverse-proxy host(s) — in this stack that is the Caddy container's
 bridge IP only. Do NOT set `trusted_proxy_hosts="*"` in any production
 deployment. The setting is exposed via `TRUSTED_PROXY_HOSTS` in
-`CoreSettings`; the historical `learning_engine` default of `"*"` is
-acceptable for single-host loopback but NOT for any deployment exposed
-beyond loopback.
+`CoreSettings`; the default value is `dashboard` (the Caddy reverse-proxy
+service), which is correct for the standard single-host stack. Override only
+when deploying behind a different proxy fleet.
 
 ---
 
@@ -186,17 +178,6 @@ admin actions.
 
 The audit log is readable by admins at `GET /api/admin/audit-log`
 (cursor-paginated, admin session required).
-
----
-
-## Leaked-secret remediation (resolved)
-
-An early-development bug accidentally git-tracked a Langfuse keypair despite the
-`secrets/*.txt` `.gitignore` rule. It was untracked and purged from published
-history in May 2026; the key is rotated-dead, and `setup.sh` regenerates a fresh
-keypair on the next provision. CI enforces this via `scripts/check-burned-secrets.sh`,
-which fails the build if a known-burned value ever reappears in the working tree.
-No further action is required.
 
 ---
 
@@ -239,30 +220,42 @@ The HMAC key is resolved at call time, in this order:
    `model-signing:` prefix domain-separates this key from any direct use of
    the bearer.
 
-If neither is set, `_hmac_key()` raises `RuntimeError`. The previous
-public-literal fallback (`"jarvis-dev-unsafe-hmac-key"`) was removed by audit
-H14 (2026-05-14).
-
-In production (`ENVIRONMENT=production`), `validate_production_config()` —
-called at lifespan startup — refuses to start unless at least one of the two
-paths above is configured.
+If neither is set, `_hmac_key()` raises `RuntimeError`. In production
+(`ENVIRONMENT=production`), `validate_production_config()` — called at lifespan
+startup — refuses to start unless at least one of the two paths above is
+configured.
 
 ### Key Rotation
 
-There is no in-place rotation framework. To rotate:
+There is no in-place rotation framework. To rotate the HMAC key:
 
-1. Update `JARVIS_MODEL_HMAC_KEY` (or `JARVIS_API_KEY` if you are relying on
-   derivation).
-2. Restart the affected services.
-3. Existing rows in `pulse_models` will fail HMAC verification on load. The
-   service handles this gracefully: `load_active_classifier` returns
-   `(None, {"available": False, "degradation_reason": "active model could
-   not be loaded"})`, and the scoring path falls back to zeros until a fresh
-   model is trained.
-4. The nightly `pulse.train_classifier` job (cron `30 3 * * *`) re-trains and
-   persists a new model signed with the new key. No manual migration is
-   required.
+1. Update `JARVIS_MODEL_HMAC_KEY` and restart the affected services.
+2. Existing `pulse_models` rows will fail HMAC verification and the scoring path
+   falls back to zeros until a new model is trained.
+3. The nightly `pulse.train_classifier` cron job re-trains automatically. To
+   force an immediate re-train, enqueue `pulse.train_classifier` via the jobs API.
 
-If you need an immediate re-train rather than waiting for the cron tick,
-enqueue `pulse.train_classifier` via the jobs API (one job per user with
-ratings).
+---
+
+## Ollama Security Posture
+
+The Ollama daemon handles local LLM inference. Key constraints:
+
+- **Image pin:** keep `OLLAMA_IMAGE` in `versions.env` at the tested pin
+  (`ollama/ollama:0.23.1`) or a newer validated pin. Downgrading below the
+  patched line reintroduces known vulnerabilities (see
+  [known-residual-risks.md](known-residual-risks.md) for the current CVE
+  posture entry).
+- **Host binding:** the default Compose configuration binds the Ollama host
+  port to loopback only (`127.0.0.1`), preventing browser and LAN clients from
+  calling the daemon directly.
+- **Docker network boundary:** every container on the `jarvis` Docker network
+  can reach `http://ollama:11434`. Do not attach untrusted sidecars to that
+  network.
+- **Shared daemon override:** if the operator configures an external shared
+  Ollama daemon instead of the bundled one, that daemon must be patched to an
+  equivalent or newer pin and bound to loopback or an equivalently trusted
+  private network.
+
+Review this posture whenever `OLLAMA_IMAGE` is updated or the Compose network
+topology changes.

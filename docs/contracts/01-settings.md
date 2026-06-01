@@ -1,10 +1,16 @@
 # 01 — Settings Contract
 **Status:** LIVING
-**Date:** 2026-05-02
 **Reviewers must update this contract in the same patch as any change to:**
-- `_ALLOWED_CONFIG_KEYS` or `_CONFIG_VALIDATORS` in [settings_service.py](../../services/paper_ingestion/paper_ingestion/services/settings_service.py)
+- `_ALLOWED_CONFIG_KEYS` in [config_metadata.py](../../services/paper_ingestion/paper_ingestion/services/config_metadata.py) or `_CONFIG_VALIDATORS` in [config_validators.py](../../services/paper_ingestion/paper_ingestion/services/config_validators.py)
 - DDL on `user_config`, `topics`, `tracked_authors`, `paper_sources`, `scheduled_nudges`
 - Any new code reading `user_config.value` in any service
+
+The `settings_service` package is split into submodules
+([settings_service.py](../../services/paper_ingestion/paper_ingestion/services/settings_service.py)
+re-exports them): `config_metadata` (allow-list + key classification),
+`config_validators` (validators), `config_db` (row I/O), `config_write`
+(write orchestration), `model_assignment`, `scheduler_effects`, `provider_test`,
+`analytics_queries`, `data_export`.
 
 ---
 
@@ -12,7 +18,7 @@
 
 **In scope.** Every user-controllable setting that backs a control in the
 frontend Settings UI or shapes runtime behavior. Storage shape, validation,
-who writes it, who reads it, and current LIVE/GHOST/PARTIAL status.
+who writes it, who reads it, and current wiring status (Active / Partial / Unwired).
 
 **Out of scope.**
 - Per-paper user state (`paper_user_state` columns) — covered by the
@@ -52,7 +58,7 @@ because their entities have richer state than a JSON value can carry
 ## 2. `user_config` key catalog
 
 The headline table. Every key the API may write through `PUT /api/config/{key}`
-must appear in `_ALLOWED_CONFIG_KEYS` ([settings_service.py:56-107](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L56-L107)). Status reflects whether the value is consulted by runtime
+must appear in `_ALLOWED_CONFIG_KEYS` ([config_metadata.py:34-85](../../services/paper_ingestion/paper_ingestion/services/config_metadata.py#L34-L85)). Status reflects whether the value is consulted by runtime
 behavior somewhere.
 
 Scope is part of the contract:
@@ -70,55 +76,66 @@ additional validation (token format check, Telegram API reachability test) befor
 Routing a bot token through the general `PUT /api/config/{key}` surface would bypass that
 validation and is an intentional non-regression: the omission is by design, not a gap.
 
-### 2.1 LIVE keys (written and read by code that affects user-visible behavior)
+### 2.1 Active keys (written and read by code that affects user-visible behavior)
 
 | Key | Default | Validator | Read sites | Notes |
 |---|---|---|---|---|
 | `pulse.enabled` | (none) | `_validate_bool` | scheduler.py — gates whether the `pulse_overnight` job runs | Master switch for Pulse subsystem |
-| `pulse.cron` | `"0 4 * * *"` | `_validate_cron` (rejects sub-hourly) | scheduler.py | On write, [settings_service.py:835-893](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L835-L893) reschedules the live job AND validates `next_run_time ∈ [now, now+366d]`; rolls back on failure |
-| `pulse.deck_size` | `_DEFAULT_DECK_SIZE` (10) | `_validate_positive_int` | [profile.py:187](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L187) | Final card count |
-| `pulse.stage2_top_k` | `_DEFAULT_STAGE2_TOP_K` (50) | `_validate_positive_int` | [profile.py:188](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L188) | Stage-1 cut feeding Stage-2 LLM rerank |
-| `pulse.weights` | `_DEFAULT_WEIGHTS` (in profile.py) | `_validate_pulse_weights` (requires 6 core keys; permits 4 optional; values ∈ [0,1]) | [profile.py:178-184](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L178-L184) merge-with-defaults; clamped to `[0,1]` (out-of-range logged) | Carries the 10 weight sliders. **4 are CONDITIONAL** (default 0.0; require user opt-in AND optional dep) — see [02-pulse.md §3.2](02-pulse.md#32-conditional-signals-live-conditional) |
-| `pulse.l2_lambda` | 0.5 | `_validate_l2_lambda` (range `[0.0, 2.0]`) | [profile.py:191-193](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L191-L193); applied at [scoring.py:161-174](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L161-L174) | Negative-centroid cosine penalty multiplier |
+| `pulse.cron` | `"0 4 * * *"` | `_validate_cron` (rejects sub-hourly) | scheduler.py | On write, `apply_pulse_cron` ([scheduler_effects.py:53](../../services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L53)) reschedules the live job AND validates `next_run_time ∈ [now, now+366d]`; rolls back on failure |
+| `pulse.deck_size` | `_DEFAULT_DECK_SIZE` (10) | `_validate_positive_int` | [profile.py:230](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L230) | Final card count |
+| `pulse.stage2_top_k` | `_DEFAULT_STAGE2_TOP_K` (40) | `_validate_positive_int` | [profile.py:231](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L231) | Stage-1 cut feeding Stage-2 LLM rerank |
+| `pulse.weights` | `_DEFAULT_WEIGHTS` (in profile.py) | `_validate_pulse_weights` (requires 6 core keys; permits 4 optional; values ∈ [0,1]) | [profile.py:221-231](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L221-L231) merge-with-defaults; clamped to `[0,1]` (out-of-range logged) | Carries the 10 weight sliders. **4 are CONDITIONAL** (default 0.0; require user opt-in AND optional dep) — see [02-pulse.md §3.2](02-pulse.md#32-conditional-signals-live-conditional) |
+| `pulse.l2_lambda` | 0.5 | `_validate_l2_lambda` (range `[0.0, 2.0]`) | [profile.py:236-237](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L236-L237) | Negative-centroid cosine penalty multiplier |
+| `pulse.lookback_days` | 7 | `_validate_lookback_days` (int in `[1, 90]`) | [profile.py:239-240](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L239-L240) | Discovery window: how far back Stage 1 looks for candidate papers |
+| `pulse.startup_grace_seconds` | 0.0 | `_validate_startup_grace_seconds` (float in `[0, 300]`) | [profile.py:241-242](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L241-L242) | Warmup pause before the first outbound HTTP burst |
 | `recommendation.enabled` | `True` (implicit) | (none — bool coerced) | [recommender.py:141-142](../../services/paper_ingestion/paper_ingestion/ingestion/recommender.py#L141-L142) | Gates `refresh_recommendations()` |
 | `recommendation.liked_weight` | (default in recommender) | (none) | [recommender.py:135-136](../../services/paper_ingestion/paper_ingestion/ingestion/recommender.py#L135-L136) | Weighted score: `liked_s * weight` |
 | `recommendation.project_weight` | (default in recommender) | (none) | [recommender.py:138-139](../../services/paper_ingestion/paper_ingestion/ingestion/recommender.py#L138-L139) | Weighted score: `proj_s * weight` |
-| `user.timezone` | `"UTC"` ([init.sql:48](../../db/init.sql#L48)) | (none) | telegram_bot scheduler (cron timezone) | On write, [settings_service.py:1299-1300](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L1299-L1300) calls `reload_telegram_nudges()` (best-effort POST) |
+| `user.timezone` | `"UTC"` ([init.sql:48](../../db/init.sql#L48)) | (none) | telegram_bot scheduler (cron timezone) | On write, calls `reload_telegram_nudges()` ([model_assignment.py:21](../../services/paper_ingestion/paper_ingestion/services/model_assignment.py#L21)) — best-effort POST |
 | `setup.completed` | (absent → false) | `_validate_bool` | [routers/system.py:144-149](../../services/paper_ingestion/paper_ingestion/routers/system.py#L144-L149) | Drives setup-wizard gate |
 | `telegram.owner_chat_id` | (none) | `_validate_optional_int` | telegram_bot/owner.py:48-51, helpers.py:65, system_commands.py:73 + 95-110 | Pairing flow writes; bot resolves owner via this row |
 | `zotero.api_key` | (none) | `_validate_nonempty_str` | [zotero_service.py:38, 87](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L38) (encrypted; decrypted on read) | Encrypted: stored in `encrypted_value` BYTEA, plaintext NULL'd |
 | `zotero.user_id` | (none) | `_validate_nonempty_str` | [zotero_service.py:88](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L88) | |
 | `zotero.library_type` | `"user"` (implicit on push) | `_validate_library_type` (`"user"` / `"group"`) | [zotero_service.py:89](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L89) | |
+| `zotero.group_id` | (none) | `_validate_group_id` (positive int or null) | `zotero_service.py` (consumed when `library_type="group"`) | `null` clears the field. `ZoteroClient` requires a non-null id at construction time when `library_type="group"`. |
 | `zotero.poll_enabled` | `False` | `_validate_bool` | `scheduler.py` per-user polling readiness | Per-user gate for scheduled Zotero polling. The scheduler job itself always runs; per-run fan-out only includes users with `poll_enabled=true` and usable Zotero credentials. |
-| `zotero.poll_cron` | (no default; cron string when set) | `_validate_zotero_cron` | [scheduler.py:103](../../services/paper_ingestion/paper_ingestion/scheduler.py#L103) | On write, [settings_service.py:895-934](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L895-L934) reschedules `zotero_library_sync` job |
-| `zotero.auto_push_on_star` | `False` (key absent → off) | `_validate_bool` | star handler in [routers/papers.py](../../services/paper_ingestion/paper_ingestion/routers/papers.py) — on `starred=False→True` transition AND key truthy AND project link present, enqueues existing `zotero.push` job | Wired 2026-05-02. Default-off; idempotent on already-starred state. |
-| `fsrs.desired_retention` | `0.9` ([init.sql:49](../../db/init.sql#L49)) | `_validate_desired_retention` (range `(0, 1)`) | Per-review fetch in `_build_fsrs_manager_from_db` ([learning_engine/routers/review.py](../../services/learning_engine/learning_engine/routers/review.py)) — fresh `FSRSManager` built inside the review transaction | Promoted PARTIAL→LIVE 2026-05-02; live-edit reactive |
-| `fsrs.learning_steps` | `[1, 10]` ([init.sql:50](../../db/init.sql#L50)) | `_validate_learning_steps` (`list[int]`, length 2, both positive) | Per-review fetch in `_build_fsrs_manager_from_db`; passed to py-fsrs `Scheduler(learning_steps=[timedelta(minutes=m) for m in steps])` | Wired GHOST→LIVE 2026-05-02; default `[1, 10]` matches the py-fsrs library default |
+| `zotero.poll_cron` | (no default; cron string when set) | `_validate_zotero_cron` | [scheduler.py:103](../../services/paper_ingestion/paper_ingestion/scheduler.py#L103) | On write, `apply_zotero_cron` ([scheduler_effects.py:113](../../services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L113)) reschedules the `zotero_library_sync` job |
+| `zotero.auto_push_on_star` | `False` (key absent → off) | `_validate_bool` | star handler in [routers/papers.py](../../services/paper_ingestion/paper_ingestion/routers/papers.py) — on `starred=False→True` transition AND key truthy AND project link present, enqueues existing `zotero.push` job | Default-off; idempotent on already-starred state. |
+| `fsrs.desired_retention` | `0.9` ([init.sql:49](../../db/init.sql#L49)) | `_validate_fsrs_retention` (range `(0, 1)`) | Per-review fetch in `_build_fsrs_manager_from_db` ([learning_engine/routers/review.py](../../services/learning_engine/learning_engine/routers/review.py)) — fresh `FSRSManager` built inside the review transaction | Live-edit reactive |
+| `fsrs.learning_steps` | `[1, 10]` ([init.sql:50](../../db/init.sql#L50)) | `_validate_fsrs_learning_steps` (`list[int]`, length 1–10, all positive) | Per-review fetch in `_build_fsrs_manager_from_db`; passed to py-fsrs `Scheduler(learning_steps=[timedelta(minutes=m) for m in steps])` | Default `[1, 10]` matches the py-fsrs library default |
 
-### 2.2 PARTIAL keys (consulted only at startup, only on a non-core endpoint, or pushed elsewhere on write)
+### 2.2 Partial keys (consulted only at startup, only on a non-core endpoint, or pushed elsewhere on write)
 
-| Key | Default | How / where consumed | Why it is PARTIAL |
+| Key | Default | How / where consumed | Why it is Partial |
 |---|---|---|---|
-| `llm.smart_model` | `"smart"` (init.sql seed) | On write: [settings_service.py:1082-1153](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L1082-L1153) calls `update_litellm_model` ([litellm_config.py:110-249](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L110-L249)) which rewrites `litellm_config/config.yaml` (or POSTs `/config/update` for cloud) | Runtime authority is LiteLLM's config file, not `user_config`. The `user_config` row exists for the UI's read-back display. If the YAML mount is `:ro` (SEC-002) the write raises `RuntimeError` and 400 propagates. **Status quo accepted 2026-05-02** — see §9. |
+| `llm.smart_model` | `"smart"` (init.sql seed) | On write: calls `update_litellm_model` ([litellm_config.py:178](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L178)) which rewrites `litellm/config.yaml` (or POSTs `/config/update` for cloud) | Runtime authority is LiteLLM's config file, not `user_config`. The `user_config` row exists for the UI's read-back display. If the YAML mount is `:ro` (SEC-002) the write raises `RuntimeError` and 400 propagates. See §9. |
 | `llm.fast_model` | `"fast"` | Same as above | Same |
 | `llm.embed_model` | `"embed"` | Same as above | Same |
 | `llm.anthropic.api_key` | (none) | Encrypted per-user credential. Read by [litellm_config.py:get_provider_api_key](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L52-L83) when a cloud model alias is selected; also read by `POST /api/providers/anthropic/test` ([routers/settings.py:429](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L429)) | Preferred BYO-provider path. Only consumed if the model alias is set to `anthropic/...` AND a cloud-provider POST is in flight; otherwise dormant. `.env` provider keys are bootstrap/legacy only, not the request-time Settings authority. |
 | `llm.openai.api_key` | (none) | Same encrypted per-user pattern | Same preferred BYO-provider path; `.env` `OPENAI_API_KEY` is bootstrap/legacy only |
 | `llm.google.api_key` | (none) | Same encrypted per-user pattern | Same preferred BYO-provider path; `.env` Google provider keys are bootstrap/legacy only |
 
-### 2.3 GHOST keys (allowed by API; no consumer reads them)
+### 2.3 System-wide admin keys (one deployment-wide value, admin-only)
 
-**Empty as of 2026-05-02.** All seven historical GHOST entries were resolved in
-the Settings cleanup sprint:
-five were deleted from `_ALLOWED_CONFIG_KEYS` and the seed (see §9.1) and two
-(`fsrs.learning_steps`, `zotero.auto_push_on_star`) were promoted to LIVE in
-§2.1.
+These keys are `SYSTEM_KEYS` (always `user_id IS NULL`, admin role required for browser sessions).
+Some are collected by the first-run setup wizard ([routers/setup.py](../../services/paper_ingestion/paper_ingestion/routers/setup.py)) and editable afterwards via `PUT /api/config/{key}`.
 
-**Verification protocol for newly added LIVE entries:** before the GHOST→LIVE
-promotion, ran `rg "<key>" services/ libs/ scripts/` to confirm no stale
-duplicate consumer. After promotion, ran a focused unit test that
-live-edits the value and asserts the new behavior shows up without service
-restart.
+| Key | Default | Validator | How / where consumed |
+|---|---|---|---|
+| `smtp.host` | (none) | `_validate_nonempty_str` | Outbound mail relay host. Written by the setup wizard; key names match `_SMTP_PLAINTEXT_KEYS` / `_SMTP_ENCRYPTED_KEYS` in `routers/setup.py`. |
+| `smtp.port` | (none) | `_validate_positive_int` | Relay port. |
+| `smtp.user` | (none) | `_validate_nonempty_str` | Relay auth user. |
+| `smtp.from` | (none) | `_validate_nonempty_str` | Default From address. |
+| `smtp.pass` | (none) | `_validate_nonempty_str` | Relay auth password. **Encrypted** (`_ENCRYPTED_KEYS`): stored as Fernet ciphertext in `encrypted_value`, masked on GET. |
+| `automation.fetch_interval_hours` | (none) | `_validate_positive_int` | Interval for the system-wide auto-fetch pipeline scheduler. |
+| `observability.langfuse_dashboard_url` | (none) | `_validate_langfuse_dashboard_url` (empty / `https://` / `http://localhost` / `http://127.0.0.1`) | The "Open Langfuse dashboard" link target in Settings → Observability. See [04-observability.md §8](04-observability.md#8-settings-ui-integration). |
+
+### 2.4 Unwired keys (allowed by API; no consumer reads them)
+
+**None currently.** No allow-listed key lacks a consumer. Any future Unwired→Active
+promotion MUST add a validator at the same time, and SHOULD be backed by a
+focused test that live-edits the value and asserts the new behavior appears
+without a service restart.
 
 ---
 
@@ -173,28 +190,30 @@ typed REST endpoints.
 
 ## 4. Validators and constraints
 
-Defined in `_CONFIG_VALIDATORS` ([settings_service.py:466-500](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L466-L500)). A `PUT /api/config/{key}` with no entry in this dict accepts any JSONB value once the key passes the `_ALLOWED_CONFIG_KEYS` allowlist.
+Defined in `_CONFIG_VALIDATORS` ([config_validators.py:231-271](../../services/paper_ingestion/paper_ingestion/services/config_validators.py#L231-L271)). A `PUT /api/config/{key}` with no entry in this dict accepts any JSONB value once the key passes the `_ALLOWED_CONFIG_KEYS` allowlist.
 
 | Validator | Applied to | Rule |
 |---|---|---|
 | `_validate_cron` | `pulse.cron` | Must parse via `CronTrigger.from_crontab`. Sub-hourly schedules rejected (Pulse runs are expensive) |
 | `_validate_pulse_weights` | `pulse.weights` | Dict; required keys: `embedding`, `topic`, `llm_relevance`, `llm_novelty`, `author_bonus`, `recency`. Optional: `citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier`. Each value ∈ [0,1] |
-| `_validate_positive_int` | `pulse.deck_size`, `pulse.stage2_top_k` | Strict positive int |
+| `_validate_positive_int` | `pulse.deck_size`, `pulse.stage2_top_k`, `automation.fetch_interval_hours`, `smtp.port` | Strict positive int |
 | `_validate_l2_lambda` | `pulse.l2_lambda` | Number in `[0.0, 2.0]`. Excludes bool. |
+| `_validate_lookback_days` | `pulse.lookback_days` | Int in `[1, 90]` |
+| `_validate_startup_grace_seconds` | `pulse.startup_grace_seconds` | Number in `[0, 300]` |
 | `_validate_bool` | `pulse.enabled`, `setup.completed`, `zotero.poll_enabled`, `zotero.auto_push_on_star` | Strict bool |
 | `_validate_optional_int` | `telegram.owner_chat_id` | int or null |
-| `_validate_nonempty_str` | `llm.{smart,fast,embed}_model`, `zotero.api_key`, `zotero.user_id`, `llm.{anthropic,openai,google}.api_key` | Non-empty trimmed string |
+| `_validate_nonempty_str` | `llm.{smart,fast,embed}_model`, `zotero.{api_key,user_id}`, `llm.{anthropic,openai,google}.api_key`, `smtp.{host,user,from,pass}` | Non-empty trimmed string |
 | `_validate_library_type` | `zotero.library_type` | `"user"` or `"group"` |
+| `_validate_group_id` | `zotero.group_id` | Positive int or null |
 | `_validate_zotero_cron` | `zotero.poll_cron` | Must parse via `CronTrigger.from_crontab` (no sub-hourly limit, unlike Pulse) |
-| `_validate_desired_retention` | `fsrs.desired_retention` | Number in open range `(0, 1)`; rejects bool, 0, 1, and out-of-range floats |
-| `_validate_learning_steps` | `fsrs.learning_steps` | `list[int]`, length 2, both strictly positive (minutes). Default `[1, 10]` matches py-fsrs library default |
+| `_validate_langfuse_dashboard_url` | `observability.langfuse_dashboard_url` | Empty / `https://` / loopback `http://` URL; rejects other schemes |
+| `_validate_fsrs_retention` | `fsrs.desired_retention` | Number in open range `(0, 1)`; rejects bool, 0, 1, and out-of-range floats |
+| `_validate_fsrs_learning_steps` | `fsrs.learning_steps` | `list[int]`, length 1–10, all strictly positive (minutes). Default `[1, 10]` matches the py-fsrs library default |
 
-Keys without validators (per `_CONFIG_VALIDATORS`):
-`recommendation.{liked_weight,project_weight,enabled}`, `user.timezone`. (The
-historical unvalidated GHOST set was retired in the 2026-05-02 cleanup;
-remaining unvalidated keys are recommendation weights and the timezone
-string. Any future GHOST→LIVE promotion MUST add a validator at the same
-time — that's the contract.)
+Keys without a custom validator (per `_CONFIG_VALIDATORS`):
+`recommendation.{liked_weight,project_weight,enabled}`, `user.timezone`. Any
+future Unwired→Active promotion MUST add a validator at the same time — that's the
+contract.
 
 ---
 
@@ -204,13 +223,12 @@ Some keys trigger work beyond the row write:
 
 | Key(s) | Side effect on PUT |
 |---|---|
-| `llm.{smart,fast,embed}_model` | `update_litellm_model` rewrites `litellm_config/config.yaml` or POSTs `/config/update`; then `reload_litellm()` ([settings_service.py:1082-1153](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L1082-L1153)). Fails 400 if mount is read-only (SEC-002) |
-| `pulse.cron` | `scheduler.reschedule_job("pulse_overnight", trigger=...)` + bounds check + DB rollback if `next_run_time` is invalid ([settings_service.py:835-893](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L835-L893)) |
-| `zotero.poll_cron` | `scheduler.reschedule_job("zotero_library_sync", trigger=...)` (best-effort; if job not yet registered, warning only) ([settings_service.py:895-934](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L895-L934)) |
-| `user.timezone` | Best-effort `POST /internal/reload-nudges` to telegram_bot ([settings_service.py:1299-1300](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L1299-L1300)) |
-| Any `_ENCRYPTED_KEYS` member | `value` column NULL'd; ciphertext written to `encrypted_value` BYTEA via `encrypt_secret` ([settings_service.py:1237-1249](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L1237-L1249)) |
-| `_NUDGE_JSONB_COLUMNS` member (none today) | `dynamic_update` would JSON-encode (currently empty set) |
-| `_SOURCE_JSONB_COLUMNS` `"config"` | `dynamic_update` JSON-encodes the value before write ([settings_service.py:279](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L279) + dynamic_update path) |
+| `llm.{smart,fast,embed}_model` | `update_litellm_model` rewrites `litellm/config.yaml` or POSTs `/config/update`; then `reload_litellm()` ([litellm_config.py:178](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L178), [litellm_config.py:483](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L483)). Fails 400 if mount is read-only (SEC-002) |
+| `pulse.cron` | `scheduler.reschedule_job("pulse_overnight", trigger=...)` + bounds check + DB rollback if `next_run_time` is invalid (`apply_pulse_cron`, [scheduler_effects.py:53](../../services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L53)) |
+| `zotero.poll_cron` | `scheduler.reschedule_job("zotero_library_sync", trigger=...)` (best-effort; if job not yet registered, warning only) (`apply_zotero_cron`, [scheduler_effects.py:113](../../services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L113)) |
+| `user.timezone` | Best-effort `POST /internal/reload-nudges` to telegram_bot (`reload_telegram_nudges`, [model_assignment.py:21](../../services/paper_ingestion/paper_ingestion/services/model_assignment.py#L21)) |
+| Any `_ENCRYPTED_KEYS` member | `value` column NULL'd; ciphertext written to `encrypted_value` BYTEA via `encrypt_secret`, in `write_config` ([config_write.py:132](../../services/paper_ingestion/paper_ingestion/services/config_write.py#L132)) |
+| `_SOURCE_JSONB_COLUMNS` `"config"` | `dynamic_update` JSON-encodes the value before write |
 
 GET responses for `_ENCRYPTED_KEYS` return `mask_secret(plaintext)`; GET for `_SECRET_KEYS \ _ENCRYPTED_KEYS` returns `"****"` if non-null. Plaintext **never** leaves the API.
 
@@ -221,9 +239,9 @@ GET responses for `_ENCRYPTED_KEYS` return `mask_secret(plaintext)`; GET for `_S
 | Failure | What happens | Where the error reaches |
 |---|---|---|
 | Unknown key on PUT | HTTP 400, `"Unknown config key: '<key>'"` | [routers/settings.py:210](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L210) |
-| Validator raises `ValueError` | HTTP 400 with message | [settings_service.py:1196-1201](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L1196-L1201) |
-| LiteLLM YAML read-only (SEC-002) | HTTP 400 — write rejected; user_config row NOT updated | `update_litellm_model` → `RuntimeError` → caught at [settings_service.py:1152-1153](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L1152-L1153) |
-| Pulse cron produces invalid `next_run_time` | HTTP 400; DB row rolled back to old value; live trigger reverted | [settings_service.py:858-892](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L858-L892) |
+| Validator raises `ValueError` | HTTP 400 with message | `write_config` ([config_write.py:132](../../services/paper_ingestion/paper_ingestion/services/config_write.py#L132)) |
+| LiteLLM YAML read-only (SEC-002) | HTTP 400 — write rejected; user_config row NOT updated | `update_litellm_model` → `RuntimeError` → caught in `write_config` |
+| Pulse cron produces invalid `next_run_time` | HTTP 400; DB row rolled back to old value; live trigger reverted | `apply_pulse_cron` ([scheduler_effects.py:53](../../services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L53)) |
 | Encrypted-secret decrypt fails on GET | NULL returned (read fails closed) | `_resolve_config_value` |
 | Unknown nudge id / source id | HTTP 404 | [routers/settings.py:293](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L293), [routers/settings.py:376](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L376) |
 | Zotero `LIKE 'zotero.%'` row decrypt fails | Whole config treated as missing → caller skips operation gracefully | [zotero_service.py:46-53](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L46-L53) |
@@ -247,74 +265,52 @@ The implementation MUST satisfy these. Testable.
 
 | Key | Status |
 |---|---|
-| `pulse.enabled` | LIVE |
-| `pulse.cron` | LIVE |
-| `pulse.deck_size` | LIVE |
-| `pulse.stage2_top_k` | LIVE |
-| `pulse.weights` | LIVE (4 of 10 weights are CONDITIONAL — see [02-pulse.md §3.2](02-pulse.md#32-conditional-signals-live-conditional)) |
-| `pulse.l2_lambda` | LIVE |
-| `recommendation.enabled` | LIVE |
-| `recommendation.liked_weight` | LIVE |
-| `recommendation.project_weight` | LIVE |
-| `user.timezone` | LIVE |
-| `setup.completed` | LIVE |
-| `telegram.owner_chat_id` | LIVE |
-| `zotero.api_key` | LIVE (encrypted) |
-| `zotero.user_id` | LIVE |
-| `zotero.library_type` | LIVE |
-| `zotero.poll_enabled` | LIVE |
-| `zotero.poll_cron` | LIVE |
-| `llm.smart_model` | PARTIAL (LiteLLM YAML is the runtime authority) |
-| `llm.fast_model` | PARTIAL (same) |
-| `llm.embed_model` | PARTIAL (same) |
-| `zotero.auto_push_on_star` | LIVE (wired 2026-05-02) |
-| `fsrs.desired_retention` | LIVE (per-review DB read; promoted from PARTIAL 2026-05-02) |
-| `fsrs.learning_steps` | LIVE (wired into py-fsrs Scheduler 2026-05-02) |
-| `llm.anthropic.api_key` | PARTIAL (used only when model alias is `anthropic/*` or for `/test` endpoint; status quo accepted) |
-| `llm.openai.api_key` | PARTIAL (status quo accepted) |
-| `llm.google.api_key` | PARTIAL (status quo accepted) |
-| `paper.max_daily` | DELETED 2026-05-02 (no consumer; superseded by `pulse.stage2_top_k` + `pulse.deck_size`) |
-| `paper.auto_generate_cards` | DELETED 2026-05-02 (no consumer; FSRS card generation is unconditional) |
-| `ui.page_size` | DELETED 2026-05-02 (UI-local React state) |
-| `ingestion.max_papers_per_run` | DELETED 2026-05-02 (subsumed by per-source plugin defaults) |
-| `ingestion.chunk_size` | DELETED 2026-05-02 (chunker is non-trivial; not user-tunable) |
-| `zotero.enabled` | DELETED 2026-05-02; remaining service/router reads removed in the 2026-05-12 audit closeout. Credentials gate push/test/annotation sync, and `zotero.poll_enabled` gates scheduled polling. |
+| `pulse.enabled` | Active |
+| `pulse.cron` | Active |
+| `pulse.deck_size` | Active |
+| `pulse.stage2_top_k` | Active |
+| `pulse.weights` | Active (4 of 10 weights are CONDITIONAL — see [02-pulse.md §3.2](02-pulse.md#32-conditional-signals-live-conditional)) |
+| `pulse.l2_lambda` | Active |
+| `recommendation.enabled` | Active |
+| `recommendation.liked_weight` | Active |
+| `recommendation.project_weight` | Active |
+| `user.timezone` | Active |
+| `setup.completed` | Active |
+| `telegram.owner_chat_id` | Active |
+| `zotero.api_key` | Active (encrypted) |
+| `zotero.user_id` | Active |
+| `zotero.library_type` | Active |
+| `zotero.poll_enabled` | Active |
+| `zotero.poll_cron` | Active |
+| `llm.smart_model` | Partial (LiteLLM YAML is the runtime authority) |
+| `llm.fast_model` | Partial (same) |
+| `llm.embed_model` | Partial (same) |
+| `zotero.group_id` | Active (consumed when `library_type="group"`) |
+| `zotero.auto_push_on_star` | Active |
+| `fsrs.desired_retention` | Active (per-review DB read) |
+| `fsrs.learning_steps` | Active (wired into the py-fsrs Scheduler) |
+| `smtp.{host,port,user,from,pass}` | Active (system-wide outbound-mail relay; `smtp.pass` encrypted) |
+| `automation.fetch_interval_hours` | Active (system-wide auto-fetch scheduler) |
+| `observability.langfuse_dashboard_url` | Active (Settings → Observability link target) |
+| `llm.anthropic.api_key` | Partial (used only when model alias is `anthropic/*` or for `/test` endpoint) |
+| `llm.openai.api_key` | Partial |
+| `llm.google.api_key` | Partial |
 
 ---
 
-## 9. Cleanup decisions
-
-### 9.1 Resolved 2026-05-02 (Settings cleanup sprint)
-
-All seven historical GHOST entries plus the `fsrs.desired_retention` PARTIAL and the `zotero.enabled` ANOMALY were resolved.
-
-| Item | Disposition | Implementation |
-|---|---|---|
-| `paper.max_daily` | DELETE-IT | Removed from `_ALLOWED_CONFIG_KEYS` and `db/init.sql` seed. No consumer existed. Stale rows in pre-existing DBs are harmless orphans. |
-| `paper.auto_generate_cards` | DELETE-IT (flipped from WIRE) | Pre-merge grounded grep confirmed no consumer in `services/`. Removed from `_ALLOWED_CONFIG_KEYS` and `db/init.sql` seed. |
-| `fsrs.learning_steps` | WIRE-IT | Added `_validate_learning_steps` validator. Read per-review in `_build_fsrs_manager_from_db`; passed to py-fsrs `Scheduler(learning_steps=...)`. Default `[1, 10]` matches the py-fsrs library default. |
-| `ui.page_size` | DELETE-IT | Removed from `_ALLOWED_CONFIG_KEYS`. Frontend pagination is local React state (already correct). |
-| `ingestion.max_papers_per_run` | DELETE-IT | Removed from `_ALLOWED_CONFIG_KEYS`. Subsumed by per-source plugin defaults. |
-| `ingestion.chunk_size` | DELETE-IT | Removed from `_ALLOWED_CONFIG_KEYS`. Chunker is non-trivial; not user-tunable. |
-| `zotero.auto_push_on_star` | WIRE-IT | Star handler in `routers/papers.py` now reads the key on `starred=False→True` transition AND project-link present, enqueues existing `zotero.push` job. Default-off; idempotent. |
-| `fsrs.desired_retention` (PARTIAL → LIVE) | Promote | Dropped `app.state._fsrs_desired_retention` startup cache in `learning_engine/main.py`. Per-review DB read in `_build_fsrs_manager_from_db`. Live-edit reactive. |
-| `zotero.enabled` (ANOMALY) | DELETE consumer | Deleted orphan reads in scheduler, router test, push, annotation sync, and polling. Polling is now gated by per-user `zotero.poll_enabled` plus configured credentials. The wildcard `LIKE 'zotero.%'` consumer in `zotero_service.py` is unaffected. |
-
-**No new migrations.** GHOST removal achieved by allow-list pruning + seed UPSERT removal in `db/init.sql` (idempotent). Stale rows in existing DBs become orphan reads on no remaining call site → harmless.
-
-### 9.2 Remaining accepted PARTIAL (status quo, doc-only)
+## 9. Accepted Partial keys (status quo)
 
 | Item | Why accepted |
 |---|---|
-| `llm.{smart,fast,embed}_model` PARTIAL | LiteLLM YAML is the deliberate runtime authority. The `user_config` row exists for UI read-back display only. See [03-llm.md §2](03-llm.md). |
-| `llm.{anthropic,openai,google}.api_key` PARTIAL | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. See [03-llm.md §2](03-llm.md). **Per-user encrypted BYO credentials are preferred** (not shared ops secrets): `write_config` sets `row_user_id = caller_user_id` ([settings_service.py:1203](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L1203)); reads are scoped to the caller's row with no cross-user fallback ([settings_service.py:535-542](../../services/paper_ingestion/paper_ingestion/services/settings_service.py#L535-L542)). The first-run/Settings wizard surfaces these keys for convenience but they remain per-user. `.env` provider-key variables are bootstrap/legacy only and must not become the request-time authority for user-controllable provider credentials. (CFG-1 design-clarification 2026-05-18) |
+| `llm.{smart,fast,embed}_model` Partial | LiteLLM YAML is the deliberate runtime authority. The `user_config` row exists for UI read-back display only. See [03-llm.md §1](03-llm.md). |
+| `llm.{anthropic,openai,google}.api_key` Partial | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. **Per-user encrypted BYO credentials are preferred** (not shared ops secrets): `write_config` sets `row_user_id = caller_user_id`, and reads are scoped to the caller's row with no cross-user fallback. The first-run / Settings wizard surfaces these keys for convenience but they remain per-user. `.env` provider-key variables are bootstrap/legacy only and must not become the request-time authority for user-controllable provider credentials. |
 
 ---
 
 ## 10. Cross-contract references
 
-- **[02-pulse.md](02-pulse.md) §3** — the four GHOST weights inside `pulse.weights` (`citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier`) — UI-exposed, validator-accepted, but no signal computation populates them.
-- **[03-llm.md](03-llm.md) §2** — `llm.{smart,fast,embed}_model` and the cloud-provider keys behave at the LiteLLM layer; this contract documents only the `user_config` storage plane.
+- **[02-pulse.md §3.2](02-pulse.md#32-conditional-signals-live-conditional)** — the four conditional weights inside `pulse.weights` (`citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier`) — UI-exposed and validator-accepted; populated only when the user opts in by raising the weight AND the optional dependency is present.
+- **[03-llm.md](03-llm.md) §1** — `llm.{smart,fast,embed}_model` and the cloud-provider keys behave at the LiteLLM layer; this contract documents only the `user_config` storage plane.
 - **[04-observability.md](04-observability.md)** — privacy rules forbid logging raw `user_config.value` for any key in `_SECRET_KEYS` / `_ENCRYPTED_KEYS`.
 - **Note:** `paper_user_state` columns (state, starred, state_before_trash) are NOT in this contract; they are per-paper user state, not user-controllable settings.
 
@@ -322,36 +318,30 @@ All seven historical GHOST entries plus the `fsrs.desired_retention` PARTIAL and
 
 ## 11. Verified Identifiers
 
-Every cited identifier was Read in the session producing this contract.
-Future agents who edit this file MUST re-Read before re-citing.
-
 | Citation | File:line | One-line behavior |
 |---|---|---|
-| `_ALLOWED_CONFIG_KEYS` frozenset | services/paper_ingestion/paper_ingestion/services/settings_service.py:56-107 | Allow-list of writeable user_config keys (24 keys post-2026-05-02 cleanup; 0 GHOST, 6 PARTIAL all in §9.2) |
-| `_SECRET_KEYS` / `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/services/settings_service.py:249-269 | Keys that get masked on GET; subset gets ciphertext on PUT |
-| `_CONFIG_VALIDATORS` | services/paper_ingestion/paper_ingestion/services/settings_service.py:466-500 | Per-key validator dispatch; missing entry = no validation |
-| `_PULSE_WEIGHT_KEYS` / `_PULSE_REQUIRED_WEIGHT_KEYS` | services/paper_ingestion/paper_ingestion/services/settings_service.py:285-301 | The 10 allowed weight keys; 6 are required |
-| `_validate_pulse_weights` | services/paper_ingestion/paper_ingestion/services/settings_service.py:319-330 | Enforces shape + value range on `pulse.weights` |
-| `_validate_cron` | services/paper_ingestion/paper_ingestion/services/settings_service.py:304-316 | Parses cron; rejects sub-hourly |
-| `_validate_l2_lambda` | services/paper_ingestion/paper_ingestion/services/settings_service.py:359-368 | Range [0.0, 2.0]; rejects bool |
-| `write_config` (was `set_config` handler body) | services/paper_ingestion/paper_ingestion/services/settings_service.py:1161-1303 | Allow-list + validator + encrypted-vs-plain write + side-effect dispatch |
-| Pulse cron rollback path (`apply_pulse_cron`) | services/paper_ingestion/paper_ingestion/services/settings_service.py:835-893 | Reschedules live job; bounds-checks; DB+scheduler rollback on invalid next_run_time |
-| Zotero cron live reschedule (`apply_zotero_cron`) | services/paper_ingestion/paper_ingestion/services/settings_service.py:895-934 | Best-effort job reschedule on poll_cron PUT |
-| Telegram nudge reload (`reload_telegram_nudges`) | services/paper_ingestion/paper_ingestion/services/settings_service.py:661-675 | POST `/internal/reload-nudges` to telegram_bot |
-| `update_litellm_model` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:110-249 | Rewrites litellm_config/config.yaml OR POSTs /config/update; raises RuntimeError if mount :ro |
-| `get_provider_api_key` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:52-83 | Decrypts cloud-provider key from user_config |
-| `_get_zotero_config` | services/paper_ingestion/paper_ingestion/integrations/zotero_service.py:24-59 | `LIKE 'zotero.%'` SELECT; decrypts `encrypted_value`; returns short-keyed dict |
-| Zotero push consumer reads | services/paper_ingestion/paper_ingestion/integrations/zotero_service.py:82-94 | Consumes `enabled`, `api_key`, `user_id`, `library_type` from the dict |
-| `pulse.weights` load + clamp | services/paper_ingestion/paper_ingestion/pulse/profile.py:166-194 | Loads from user_config, merges with `_DEFAULT_WEIGHTS`, clamps to [0,1] |
-| `_read_weights` (recommendation.*) | services/paper_ingestion/paper_ingestion/ingestion/recommender.py:126-143 | Reads liked/project weights + enabled flag |
-| `_get_zotero_poll_config` / `_list_zotero_polling_users` | services/paper_ingestion/paper_ingestion/scheduler.py | Reads the system cron for job registration; per-run fan-out only includes users with `zotero.poll_enabled=true` and required Zotero credentials |
-| `_build_fsrs_manager_from_db` | services/learning_engine/learning_engine/routers/review.py | Per-review fetch of `fsrs.desired_retention` + `fsrs.learning_steps`; constructs fresh `FSRSManager` inside the review transaction. Replaces the dropped startup cache. |
-| `FSRSManager.__init__` | services/learning_engine/learning_engine/fsrs_manager.py | Accepts `desired_retention: float` and `learning_steps: list[timedelta] \| None`; passes both to py-fsrs `Scheduler(...)` |
-| Star handler auto-push gating | services/paper_ingestion/paper_ingestion/routers/papers.py (`star_paper`) | Reads `zotero.auto_push_on_star`; on `starred=True` transition + project link + key truthy, enqueues `zotero.push` job |
-| `_validate_fsrs_retention` / `_validate_fsrs_learning_steps` | services/paper_ingestion/paper_ingestion/services/settings_service.py:446-463 | Range `(0,1)` for retention; `list[int]` length-2 positive for learning_steps |
+| `_ALLOWED_CONFIG_KEYS` frozenset | services/paper_ingestion/paper_ingestion/services/config_metadata.py:34-85 | Allow-list of writeable user_config keys (static keys; dynamic `llm.*` patterns accepted via `_classify_litellm_runtime_key`) |
+| `PERSONAL_KEYS` / `SYSTEM_KEYS` / `_classify_config_key` | services/paper_ingestion/paper_ingestion/services/config_metadata.py:149-224 | Per-key scope: personal (per-user row) vs system (admin-only, `user_id IS NULL`) |
+| `_SECRET_KEYS` / `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/services/config_metadata.py:227-247 | Keys masked on GET; subset gets ciphertext on PUT (incl. `smtp.pass`) |
+| `_CONFIG_VALIDATORS` | services/paper_ingestion/paper_ingestion/services/config_validators.py:231-271 | Per-key validator dispatch; missing entry = no custom validation |
+| `_PULSE_WEIGHT_KEYS` / `_PULSE_REQUIRED_WEIGHT_KEYS` | services/paper_ingestion/paper_ingestion/services/config_validators.py:31-47 | The 10 allowed weight keys; 6 are required |
+| `_validate_pulse_weights` | services/paper_ingestion/paper_ingestion/services/config_validators.py:83 | Enforces shape + value range on `pulse.weights` |
+| `_validate_cron` | services/paper_ingestion/paper_ingestion/services/config_validators.py:65 | Parses cron; rejects sub-hourly |
+| `_validate_l2_lambda` | services/paper_ingestion/paper_ingestion/services/config_validators.py:144 | Range [0.0, 2.0]; rejects bool |
+| `_validate_lookback_days` / `_validate_startup_grace_seconds` | services/paper_ingestion/paper_ingestion/services/config_validators.py:153-160 | Pulse discovery window [1,90] int; startup grace [0,300] |
+| `_validate_group_id` | services/paper_ingestion/paper_ingestion/services/config_validators.py:173 | `zotero.group_id`: positive int or null |
+| `_validate_langfuse_dashboard_url` | services/paper_ingestion/paper_ingestion/services/config_validators.py:188 | Empty / `https://` / loopback `http://`; rejects other schemes |
+| `_validate_fsrs_retention` / `_validate_fsrs_learning_steps` | services/paper_ingestion/paper_ingestion/services/config_validators.py:213-228 | Range `(0,1)` for retention; `list[int]` length 1–10 positive for learning_steps |
+| `write_config` | services/paper_ingestion/paper_ingestion/services/config_write.py:132 | Allow-list + validator + encrypted-vs-plain write + side-effect dispatch |
+| `apply_pulse_cron` | services/paper_ingestion/paper_ingestion/services/scheduler_effects.py:53 | Reschedules live `pulse_overnight` job; bounds-checks; DB+scheduler rollback on invalid next_run_time |
+| `apply_zotero_cron` | services/paper_ingestion/paper_ingestion/services/scheduler_effects.py:113 | Best-effort `zotero_library_sync` reschedule on poll_cron PUT |
+| `reload_telegram_nudges` | services/paper_ingestion/paper_ingestion/services/model_assignment.py:21 | POST `/internal/reload-nudges` to telegram_bot |
+| `update_litellm_model` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:178 | Rewrites litellm/config.yaml OR POSTs /config/update; raises RuntimeError if mount :ro |
+| `get_provider_api_key` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:52 | Decrypts cloud-provider key from user_config |
+| `pulse.weights` / lookback / grace load | services/paper_ingestion/paper_ingestion/pulse/profile.py:221-242 | Loads from user_config, merges with `_DEFAULT_WEIGHTS`, clamps to [0,1]; reads `pulse.lookback_days` (default 7) + `pulse.startup_grace_seconds` (default 0.0) |
+| `_build_fsrs_manager_from_db` | services/learning_engine/learning_engine/routers/review.py | Per-review fetch of `fsrs.desired_retention` + `fsrs.learning_steps`; constructs a fresh `FSRSManager` inside the review transaction |
 | `setup_completed` resolution | services/paper_ingestion/paper_ingestion/routers/system.py:144-149 | Reads `setup.completed`; gates wizard |
-| Telegram owner_chat_id resolution | services/telegram_bot/telegram_bot/owner.py:48-51, helpers.py:65, system_commands.py:73 + 95-110 | Resolver, fallback, pairing-write paths |
+| SMTP keys persisted | services/paper_ingestion/paper_ingestion/routers/setup.py | First-run wizard writes `smtp.*` rows; `smtp.pass` as Fernet ciphertext |
 | `user_config` table schema | db/init.sql:33-48 | `(user_id, key) UNIQUE NULLS NOT DISTINCT`, nullable `value`, `encrypted_value BYTEA`, updated_at |
-| `user_config` seeds | db/init.sql:43-53 | 6 seeded keys post-2026-05-02 cleanup (paper.max_daily and paper.auto_generate_cards seeds removed) |
-| `paper_sources` table + seeds | db/init.sql:71-88 | 3 sources seeded; arxiv enabled; semantic_scholar + local disabled |
+| `paper_sources` table + seeds | db/init.sql:71-88 | sources seeded; arxiv enabled; others disabled |
 | `topics` table | db/init.sql:90-97 | name, query_terms, category, enabled |

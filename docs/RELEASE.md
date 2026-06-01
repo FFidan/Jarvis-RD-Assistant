@@ -79,49 +79,18 @@ commits since the last Git tag.
 
 ## Docker Image Versioning
 
-Docker images for the four main services are built via `docker-compose.yml` and
-versioned using the `JARVIS_VERSION` environment variable (defaults to `0.5.0`):
-
-```yaml
-services:
-  paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.5.0}
-    build: # ... build context
-
-  learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.5.0}
-    build: # ... build context
-
-  telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.5.0}
-    build: # ... build context
-
-  dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.5.0}
-    build: # ... build context
-```
-
-### Pinning Versions for Deployment
-
-For production deployments, set `JARVIS_VERSION` in your `.env` or `versions.env`:
+The four main services (`paper_ingestion`, `learning_engine`, `telegram_bot`,
+`dashboard`) are tagged using the `JARVIS_VERSION` environment variable
+(defaults to `0.5.0`). Set it in `.env` or `versions.env` before building:
 
 ```bash
-# In .env or versions.env
 JARVIS_VERSION=0.5.0
-
-# Pull pre-built images (if using a remote registry)
-docker compose pull
-
-# Or build locally
 docker compose build
-
-# Deploy
 docker compose up -d
 ```
 
-Local builds use the compose file's `build:` blocks; the `image:` tag is applied
-to the built result, so future `pull` operations will work after the images have
-been pushed to a registry.
+The `image:` tag in `docker-compose.yml` is applied to the built result so that
+`docker compose pull` works after images have been pushed to a registry.
 
 ## Release Checklist
 
@@ -134,25 +103,25 @@ Before tagging a release:
 - [ ] `CHANGELOG.md` generated and reviewed.
 - [ ] `docs/known-residual-risks.md` updated with any newly accepted risks.
 - [ ] Docker images built and smoke-tested against a fresh stack.
-- [ ] Tag signed and pushed.
+- [ ] All external service keys verified (LiteLLM, Langfuse, SMTP, Telegram).
+- [ ] Tag annotated and pushed.
 
 ## Rollback Procedures
 
 ### Code Rollback
 
-To revert to a previous release:
+> **Database warning:** A `git reset --hard` without a matching database rollback
+> will leave the schema ahead of the code. Always coordinate a code rollback with
+> a database restore from backup (see below), or use a forward-only "reverse
+> migration" instead.
+
+To revert to a previous release after confirming the DB state is compatible:
 
 ```bash
-# Soft reset (keep current work, move HEAD back)
-git reset --soft vX.Y.Z
-
-# Hard reset (discard all changes since the tag)
-git reset --hard vX.Y.Z
-
-# Redeploy
+# Redeploy the target version
 docker compose down
 docker compose pull  # if images exist in registry
-docker compose build # or build locally
+# Or build locally against the tag's source
 docker compose up -d
 ```
 
@@ -161,7 +130,9 @@ docker compose up -d
 **Important:** Database migrations are intentionally **forward-only**. There is no
 automated rollback mechanism. To revert a schema change:
 
-1. **Restore from backup** — see `db/migrations/README.md` for backup procedures.
+1. **Restore from backup** — take a snapshot before upgrading; see
+   `scripts/backup.sh` for the backup procedure. The backup is AES-256 encrypted
+   when `ENC_KEYFILE` is set.
 2. **Manually craft a "reverse" migration** — if a change must be undone in-place,
    add a new migration that restores the old schema state (e.g., re-add a dropped
    column with default value).

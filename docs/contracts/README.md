@@ -1,58 +1,29 @@
 # JARVIS System Contracts
 
-Evergreen reference documents that describe **what the system promises** at the
-subsystem layer. Treat these as the canonical truth — when code disagrees with
-a contract, fix one of them in the same patch.
-
-## Why contracts exist (and how they differ from specs)
-
-- **Specs** (`docs/specs/`) describe a *transition*: how the system changes
-  between releases. They are dated, one-off, and become historical reference
-  after their work ships.
-- **Contracts** (this directory) describe the *steady state*: what every
-  participant — code, test, agent, future maintainer — can assume about a
-  subsystem. They are LIVING documents, updated whenever code changes break
-  an invariant.
-
-A contract that goes stale is worse than no contract. Every PR that changes a
-contract-bound surface MUST update the contract in the same commit.
+Evergreen reference documents that describe **what each subsystem promises** at
+its interface boundary. They are living documents: when code changes a
+contract-bound surface, update the contract in the same commit. A contract that
+goes stale is worse than no contract.
 
 ## Contracts in this set
 
 | # | Contract | Scope |
 |---|---|---|
-| 01 | [Settings](01-settings.md) | Every user-controllable setting (`user_config` keys + per-table) — what stores it, what reads it, current LIVE/GHOST status |
-| 02 | [Pulse](02-pulse.md) | The Pulse pipeline — stages, signals, weights, timeouts, fallback semantics |
-| 03 | [LLM](03-llm.md) | LLM call choke point — the public surface, per-site contracts, retry/fallback policy |
-| 04 | [Observability](04-observability.md) | Trace boundary policy, span types, privacy, sampling (forward-looking; B.2 not yet integrated) |
-| 05 | [Model Lifecycle](05-model-lifecycle.md) | Curated model catalog, hardware-aware recommendations, pull/delete lifecycle, and active model defaults |
-| 06 | [Hardware-Aware Settings](06-hardware-aware-settings.md) | Per-machine VRAM fit indicators, context-size controls, and model runtime safety UX |
-| 07 | [Testing](07-testing.md) | The four legitimate test shapes (pure unit / contract / boundary-adapter / E2E), the four prohibited anti-patterns, carve-out registry, rot-on-touch policy |
+| 01 | [Settings](01-settings.md) | Every user-controllable setting (`user_config` keys + typed tables) — what stores it, what reads it, validators, and side-effects on write. |
+| 02 | [Pulse](02-pulse.md) | The overnight Pulse pipeline — stages, signals, weights, timeouts, fallback semantics, diagnostics. |
+| 03 | [LLM](03-llm.md) | The LLM call choke point — public surface, per-site contracts, retry/fallback policy, anti-hallucination integration. |
+| 04 | [Observability](04-observability.md) | Langfuse trace-boundary policy, span types, privacy rules, opt-in posture, headless provisioning. |
+| 05 | [Models and Hardware](05-models-and-hardware.md) | Curated model catalog, hardware-aware recommendations, pull/delete lifecycle, active defaults, and per-machine VRAM-fit / context controls. |
+| 07 | [Testing](07-testing.md) | The four legitimate test shapes, the four prohibited anti-patterns, the carve-out registry, and the rot-on-touch policy. |
 
 ## How to read a contract
 
-Each contract follows the same skeleton:
-
-1. **What this covers (and does NOT)** — scope boundary
-2. **Storage / data model** or equivalent foundation
-3. **Behavioral promises** — per stage / per call site / per endpoint
-4. **Failure modes** — degraded vs fatal; recoverable vs not
-5. **Invariants** — assertable claims the code MUST satisfy
-6. **Status table** — LIVE / GHOST / PARTIAL / DEPRECATED for every cited identifier
-7. **Cleanup decisions deferred** — lists ghosts; does NOT prescribe fixes (that's the impl plan's job)
-8. **Cross-contract references** — pointers to sibling contracts
-9. **Verified Identifiers** — every cited symbol with `file:line — one-line behavior`
-
-## Status meanings
-
-| Status | Meaning |
-|---|---|
-| **LIVE** | Written by code, read by code, behavior reaches end-user. |
-| **GHOST** | Written by code (often by a UI control), but NEVER read. Configurable but inert. Decision pending: WIRE-IT or DELETE-IT. |
-| **PARTIAL** | Read in only some code paths, or read once at startup and not refreshed, or only consumed by a non-core endpoint (e.g., test-connection). |
-| **DEPRECATED** | Was LIVE in an earlier release; superseded but kept for backwards compatibility. Will be deleted in a named future cleanup. |
+Each contract follows roughly the same skeleton: scope boundary → storage / data
+model → behavioral promises (per stage / call site / endpoint) → failure modes →
+invariants → cross-contract references → a Verified Identifiers table mapping each
+cited symbol to `file:line`.
 
 ## Cross-references
 
-- [docs/ARCHITECTURE.md](../ARCHITECTURE.md) — service and runtime boundaries (high-level)
-- [docs/ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md) — durable engineering rules
+- [docs/ARCHITECTURE.md](../ARCHITECTURE.md) — service and runtime boundaries.
+- [docs/ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md) — durable engineering rules (including typography and LLM-prompt-shape conventions).

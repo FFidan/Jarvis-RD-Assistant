@@ -1,8 +1,8 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /projects -->
+<!-- verified-against-UI: 2026-06-01 | routes: /projects -->
 
 # Projects
 
-The **Projects** page at `/projects` lets you group related papers, tasks, and notes around a specific research question or deliverable.
+The **Projects** page at `/projects` lets you group related papers, tasks, and research notes around a specific question or deliverable. Each project is called a **chapter**.
 
 <!-- screenshot: projects -->
 
@@ -10,51 +10,63 @@ The **Projects** page at `/projects` lets you group related papers, tasks, and n
 
 ## Layout
 
-The Projects page uses a **two-pane layout**:
+The Projects page uses a two-pane layout:
 
-- **ChapterRail** (left) — a scrollable list of your projects. Click any project to open it in the right pane.
-- **ChapterPane → ProjectDetail** (right) — the detail view for the selected project, with tabs for different aspects of the project.
+- **ChapterRail** (left) — a scrollable list of all your chapters. Each row shows the chapter number (in Roman numerals), name, status chip, and a count of linked papers and open questions. Click any chapter to open it. A **New Chapter** button at the bottom of the rail opens a create dialog where you enter a name and optional description.
+- **ChapterPane** (right) — a scrollable document view for the selected chapter. If no chapter is selected, a placeholder prompts you to choose one from the rail.
 
 ---
 
-## ProjectDetail tabs
+## Chapter statuses
 
-### Overview
+The status chip on each chapter can be changed inline from the ChapterPane header.
 
-The Overview tab shows:
+| Status (display) | Meaning |
+|-----------------|---------|
+| **reading** | Actively working on this chapter |
+| **drafting** | Paused; work in progress |
+| **shipped** | Completed |
+| **idle** | Dormant; no active work |
 
-- **Description** — the project's name and description as entered when it was created.
-- **RecentActivity** — a chronological log of recent actions taken in this project: papers linked, tasks created or completed, notes updated.
-- **Questions** — a list of research questions associated with this project, which can be added and edited in the tab.
+---
 
-### Tasks
+## ChapterPane — the chapter document
 
-The Tasks tab is a simple task board for the project:
+Selecting a chapter opens its **ChapterPane**, a single scrollable document divided into labelled sections:
 
-- **Create** a task by typing in the input field and pressing Enter.
-- **Complete** a task using the checkbox next to it. Completed tasks move to a done list.
-- **Delete** a task using the remove button.
+### Header
 
-Tasks are scoped to the project and are not shared with other projects.
+The chapter name, an italic subtitle combining the description and deadline (if set), and a status chip that opens an inline status selector. A pencil button next to the deadline opens a date picker; "Clear deadline" removes it. A trash icon in the header triggers a delete confirmation for the chapter.
 
-### Milestones
+### § Open Questions
 
-The Milestones tab lets you define named milestones for the project with optional target dates. Use milestones to track progress towards deliverables such as a paper submission or a reading sprint.
+A list of research questions associated with this chapter. Add new questions and mark existing ones resolved directly in this section.
 
-### LinkedPapers
+### § Recent Activity
 
-The LinkedPapers tab lists all papers attached to this project. Papers can be linked to the project from this tab or from the [Paper Detail](paper-detail.md) page. A paper can belong to multiple projects simultaneously.
+A chronological log of recent actions in this chapter: papers linked, tasks created or completed, questions added.
+
+### § Milestones
+
+Named milestones with optional target dates. Use milestones to track progress toward deliverables such as a paper submission or a reading sprint. Add, edit, and delete milestones inline.
+
+### § Tasks
+
+A simple task list. Create tasks by entering text, complete them with the checkbox, and delete them with the remove button. Tasks are scoped to this chapter and not shared with other chapters.
+
+### § Papers
+
+All papers linked to this chapter. Link and unlink papers from this section. A paper can belong to multiple chapters simultaneously.
 
 ---
 
 ## Deep-link from My Day
 
-The **ProjectsSection** on the [My Day](home-my-day.md) page shows your active projects and links directly to their detail view here at `/projects`. This makes it easy to continue work on a project from your daily workspace without having to navigate manually.
+The **ProjectsSection** on the [My Day](home-my-day.md) page shows your active chapters and links directly to their detail view here at `/projects`. This makes it easy to continue chapter work from your daily workspace without navigating manually.
 
 ---
 
 ## Related pages
 
-- [My Day & Home](home-my-day.md) — ProjectsSection links to your active projects.
-- [Paper Detail](paper-detail.md) — link papers to projects from the UserStateForm in the right rail.
-- [Analytics](analytics.md) — activity charts reflect task and paper activity across all projects.
+- [My Day & Home](home-my-day.md) — ProjectsSection links to your active chapters.
+- [Analytics](analytics.md) — activity charts reflect task and paper activity across all chapters.

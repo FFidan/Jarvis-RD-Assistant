@@ -1,15 +1,17 @@
 # 07 — Testing Contract
 **Status:** LIVING
-**Date:** 2026-05-22
 **Reviewers must update this contract in the same patch as any change to:**
-- The public surface of [libs/jarvis_common/jarvis_common/testing.py](../../libs/jarvis_common/jarvis_common/testing.py) (canonical factories)
+- The public surface of [libs/jarvis_common/jarvis_common/testing.py](../../libs/jarvis_common/jarvis_common/testing.py) (the canonical-factory facade) or its submodules `testing_db.py` / `testing_telegram.py` / `testing_auth.py` / `testing_search.py`
 - The public surface of [libs/jarvis_common/jarvis_common/testing_contract_apps.py](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) (contract app/client helpers)
 - The set of `pytest.mark.*` markers registered in [pyproject.toml](../../pyproject.toml)
 - The carve-out registry in §5 (idiomatic-mock boundaries)
 - The autouse `_default_authenticated_user` stub in [services/paper_ingestion/tests/conftest.py](../../services/paper_ingestion/tests/conftest.py)
 - The pre-commit test-shape checker in [scripts/check-test-shape.py](../../scripts/check-test-shape.py)
 
-This contract describes **what a test in this repo must look like** — for every Python test added from 2026-05-22 onward. It is the steady-state counterpart to the 2026-05-22 recomposition closeout, which documented why the *existing* test suite drifted away from this shape.
+This contract describes **what a Python test in this repo must look like**.
+`jarvis_common.testing` is a backwards-compatible facade — `from
+jarvis_common.testing import X` resolves every canonical factory regardless of
+which submodule physically defines it.
 
 The contract is **machine-enforceable** where practical (pre-commit hook), **policy-enforceable** otherwise (PR review against the rules in §4).
 
@@ -26,7 +28,7 @@ The contract is **machine-enforceable** where practical (pre-commit hook), **pol
 - The rot-on-touch policy for legacy mock-units
 
 **Out of scope.**
-- Frontend testing (Vitest + Playwright) — see [ENGINEERING_STANDARDS.md §Testing](../ENGINEERING_STANDARDS.md#testing). A future `08-frontend-testing.md` may be added if needed.
+- Frontend testing (Vitest + Playwright) — see [ENGINEERING_STANDARDS.md §Testing](../ENGINEERING_STANDARDS.md#testing).
 - E2E Playwright spec authorship — see [frontend/e2e/](../../frontend/e2e/) and the `:e2e:mocked` / `:e2e:live` / `:e2e:mutating` lane conventions documented in `frontend/playwright.config.ts`
 - Performance benchmarks (`scripts/perf/`) — separate program
 - Migration tests (`db/migrations/`) — governed by [scripts/check-migrations-no-tx.sh](../../scripts/check-migrations-no-tx.sh)
@@ -321,8 +323,8 @@ Rules TS-01..TS-07 are machine-checked by [scripts/check-test-shape.py](../../sc
 | TS-03 | New contract test files (under `tests/contract/`) MUST declare `pytest.mark.contract` in their `pytestmark` | ERROR | Required by [pyproject.toml addopts](../../pyproject.toml) marker registration |
 | TS-04 | New contract test files under `services/paper_ingestion/tests/contract/` MUST declare `pytest.mark.real_auth` in their `pytestmark` | ERROR | The autouse `_default_authenticated_user` fixture would otherwise resolve `cookie_b` as user 1 (silent IDOR-test failure) |
 | TS-05 | New contract test files MUST set `loop_scope="session"` on `pytest.mark.asyncio` and on any `@pytest_asyncio.fixture` | ERROR | Fixture loop-mismatch causes "Task attached to a different loop" failures (pre-existing tech debt that the test recomposition program cleaned up) |
-| TS-06 | New contract test files MUST contain at least one `# Verified: <file>:<line>` comment per `def test_*` | WARN | Grounding convention — every cited production symbol must be Read at HEAD |
-| TS-07 | Test files MUST NOT redefine inline `_make_pool` / `_mock_pool` / `_make_embedder` / `_build_request` / `FakeRecord` / `_make_telegram_update` / `make_config` when the canonical version exists in [libs/jarvis_common/jarvis_common/testing.py](../../libs/jarvis_common/jarvis_common/testing.py) (canonical replacement for `make_config`: `jarvis_common.testing.make_bot_config` at [libs/jarvis_common/jarvis_common/testing.py:773](../../libs/jarvis_common/jarvis_common/testing.py)) | WARN | Factory dedup — keep [jarvis_common.testing](../../libs/jarvis_common/jarvis_common/testing.py) the single source of truth |
+| TS-06 | New contract test files MUST contain at least one `# Verified: <file>:<line>` comment per `def test_*` | WARN | Documents the production symbol the test exercises so a reviewer can confirm the cited line still matches behavior |
+| TS-07 | Test files MUST NOT redefine inline `_make_pool` / `_mock_pool` / `_make_embedder` / `_build_request` / `FakeRecord` / `_make_telegram_update` / `make_config` when the canonical version is importable from `jarvis_common.testing` (canonical replacement for `make_config`: `jarvis_common.testing.make_bot_config`, defined in [testing_telegram.py:92](../../libs/jarvis_common/jarvis_common/testing_telegram.py#L92)) | WARN | Factory dedup — keep [jarvis_common.testing](../../libs/jarvis_common/jarvis_common/testing.py) the single source of truth |
 | TS-08 | The carve-out registry (§5) MUST NOT be deleted or weakened without a paired contract update | ERROR (enforced by review) | Carve-outs protect CI cost + reliability — deleting one without a replacement plan is a real regression |
 
 ### 4.1 Why TS-01 + TS-02 are ERRORs, not WARNs
@@ -341,7 +343,7 @@ These boundaries MAY be mocked in test code at the carve-out edge (typically in 
 
 ### 5.1 Network / process boundaries
 
-Test populations updated 2026-05-22 after the W3 polish-wave deletions. Counts reflect tests REMAINING in the suite (not target deletions). Where a sidecar supersedes a row, the row stays in this registry but the population shrinks.
+Test-population counts below are approximate and reflect tests remaining in the suite. Where a faux sidecar supersedes a mocked boundary, the row stays in this registry but the legacy population shrinks over time.
 
 | Boundary | Mock mechanism | Test population guarded |
 |---|---|---|
@@ -350,7 +352,7 @@ Test populations updated 2026-05-22 after the W3 polish-wave deletions. Counts r
 | Qdrant client (`query_points`, `RecommendQuery`, `QdrantClient`) | `MagicMock` on `app.state.qdrant`; **superseded by `FauxQdrantClient` for new success-path** | **~25 residual** legacy tests; failure-branch + dimension-mismatch only |
 | `respx.mock` / `httpx_mock` for source HTTP | respx routes | ~200 tests (Zotero, S2, OpenAlex, arXiv, PubMed) — unchanged |
 | `AsyncOpenAI` / Langfuse / LiteLLM (Instructor-patched OpenAI) | `MagicMock` on `app.state.openai_client`; **superseded by `FauxLiteLLMServer` sidecar for new non-streaming and Instructor-patched tests**; legacy `MagicMock` path retained for error-path and Langfuse-specific tests | **~15 residual** legacy tests; error-path + observability boundary only |
-| Telegram Bot API (`bot.send_message`, `reply_text`, `Update`) | `make_telegram_update` + `AsyncMock` | ~120 tests — unchanged (PTB carve-out remains, W1B.1 adds HTTP-side contracts on top without removing PTB-side) |
+| Telegram Bot API (`bot.send_message`, `reply_text`, `Update`) | `make_telegram_update` + `AsyncMock` | ~120 tests (the PTB carve-out remains; HTTP-side contracts may be layered on top without removing the PTB-side mock) |
 
 ### 5.2 Library boundaries
 
@@ -407,7 +409,7 @@ The codebase has ~2,000 pre-existing tests that violate §2 (mostly handler-bypa
 
 ### 6.2 Faux-Ollama / faux-Qdrant / faux-LiteLLM sidecars (LIVE replacement path)
 
-The recomposition closeout (§"What WOULD actually move the needle") identified that replacing mocked Ollama / Qdrant with deterministic sidecars would unlock cleaner coverage for those boundaries. That replacement path is now LIVE for the shared `testing_sidecars` infrastructure: new success-path Ollama/LiteLLM and Qdrant integration coverage MUST use the faux sidecars when the behavior under test is our HTTP/vector integration. Keep the §5.1 carve-outs for legacy tests and for boundary failures the sidecars do not model yet.
+Replacing mocked Ollama / Qdrant / LiteLLM with deterministic sidecars unlocks cleaner coverage for those boundaries. The shared `testing_sidecars` infrastructure provides that path: new success-path Ollama / LiteLLM and Qdrant integration coverage MUST use the faux sidecars when the behavior under test is our HTTP / vector integration. Keep the §5.1 carve-outs for legacy tests and for boundary failures the sidecars do not model yet.
 
 **Available sidecars:**
 
@@ -430,44 +432,42 @@ A parallel `le_contract_app_with_litellm_sidecar` for the Learning Engine is a f
 
 ### 6.3 What this contract does NOT defer
 
-It does NOT defer the rules. As of 2026-05-22, no new PR may add a §2 anti-pattern test. The pre-commit check enforces TS-01 + TS-02 + TS-03 + TS-04 + TS-05 immediately on every commit touching test files.
+It does NOT defer the rules. No new PR may add a §2 anti-pattern test. The pre-commit check enforces TS-01 + TS-02 + TS-03 + TS-04 + TS-05 on every commit touching test files.
 
 ---
 
 ## 7. Cross-contract references
 
-- [docs/contracts/README.md](README.md) — contract pattern, status meanings (LIVE/GHOST/PARTIAL/DEPRECATED)
+- [docs/contracts/README.md](README.md) — the contract set and how to read a contract
 - [docs/contracts/01-settings.md](01-settings.md) — settings keys (some tested by contract tests in `test_settings_contract.py`)
 - [docs/contracts/02-pulse.md](02-pulse.md) — Pulse pipeline (tested by `test_pulse_contract.py` extensions)
 - [docs/contracts/03-llm.md](03-llm.md) — LLM choke point (tested via boundary-adapter tests for `call_llm_structured`)
 - [docs/contracts/04-observability.md](04-observability.md) — Langfuse trace boundaries (tested via boundary-adapter tests)
-- [docs/contracts/05-model-lifecycle.md](05-model-lifecycle.md) — model defaults (mock the curated catalog; contract test the resolver)
-- [docs/contracts/06-hardware-aware-settings.md](06-hardware-aware-settings.md) — per-machine fit indicators (pure-unit tests for the math; contract test for the API)
+- [docs/contracts/05-models-and-hardware.md](05-models-and-hardware.md) — model defaults + per-machine fit (mock the curated catalog; pure-unit tests for the fit math; contract test the API)
 - [docs/ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md) — mechanics (where tests live, deselect rules)
 
 ---
 
 ## 8. Verified Identifiers
 
-Every cited symbol has been Read at HEAD `master` after the recomposition merge (commit `77470954`).
+Each canonical factory below is importable from `jarvis_common.testing` (the
+facade); the `file:line` points at the submodule that defines it.
 
 | Citation | File:line | Behavior |
 |---|---|---|
-| `make_pool_and_conn` canonical factory | [libs/jarvis_common/jarvis_common/testing.py:67](../../libs/jarvis_common/jarvis_common/testing.py) | `(conn, *, fetchval_return, fetchrow_return, fetch_return, raise_on_acquire, ...)` → `(pool, conn)` tuple. Pre-Phase-B inline `_make_pool` replacement. |
-| `SharedConnPool` | [libs/jarvis_common/jarvis_common/testing.py:442](../../libs/jarvis_common/jarvis_common/testing.py) | Pool-shaped wrapper exposing a single contract_conn via `acquire()` AND direct pool methods (`fetch`/`fetchrow`/`fetchval`/`execute`/`executemany`). Direct-method support added during recomposition infra cleanup (2026-05-22). |
-| `contract_conn` fixture | [libs/jarvis_common/jarvis_common/testing.py:382](../../libs/jarvis_common/jarvis_common/testing.py) | Per-test asyncpg connection wrapped in a transaction that rollbacks on test exit. Requires `JARVIS_RUN_LIVE_PG=1`. |
-| `contract_two_users` fixture | [libs/jarvis_common/jarvis_common/testing.py:652](../../libs/jarvis_common/jarvis_common/testing.py) | Seeds two real DB users with valid session cookies + owned resources (paper, note, deck, etc.) all within the contract_conn transaction. |
-| `configure_contract_api_key` | [libs/jarvis_common/jarvis_common/testing_contract_apps.py:32](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) | Context manager that sets the contract API key and refreshes auth/settings caches before and after the test. |
-| `make_contract_client` | [libs/jarvis_common/jarvis_common/testing_contract_apps.py:50](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) | ASGI `httpx.AsyncClient` factory with the standard contract API-key header and optional session cookie. |
-| `patch_app_state` | [libs/jarvis_common/jarvis_common/testing_contract_apps.py:71](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) | Restores exact `app.state` attributes after contract app wiring. |
-| `patch_dependency_overrides` | [libs/jarvis_common/jarvis_common/testing_contract_apps.py:97](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py) | Patches FastAPI dependency overrides without clearing unrelated keys, then restores exact previous values. |
-| `_default_authenticated_user` autouse stub | [services/paper_ingestion/tests/conftest.py:135](../../services/paper_ingestion/tests/conftest.py) | Returns user_id=1 globally for all PI tests UNLESS test is marked `pytest.mark.real_auth`. The marker opt-out is mandatory for any PI contract test that depends on session cookies. |
-| `pytest.mark.contract` registration | [pyproject.toml](../../pyproject.toml) `[tool.pytest.ini_options].markers` | `"contract: DB-backed contract test (session container + per-test txn rollback); requires JARVIS_RUN_LIVE_PG=1"` |
-| `pytest.mark.real_auth` registration | [pyproject.toml](../../pyproject.toml) | `"real_auth: opt out of the autouse user-id stub; exercise the real session resolver"` |
-| `pytest.mark.live_pg` registration | [pyproject.toml](../../pyproject.toml) | `"live_pg: requires Docker-backed PostgreSQL and JARVIS_RUN_LIVE_PG=1"` |
-| Default `addopts` excludes | [pyproject.toml](../../pyproject.toml) | `addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"` — `contract` tests are collected-but-skipped without `JARVIS_RUN_LIVE_PG=1`. |
-| `test_baseline_invariants.py` (DO NOT DELETE) | [services/paper_ingestion/tests/test_baseline_invariants.py](../../services/paper_ingestion/tests/test_baseline_invariants.py) | 16 post-squash invariants gating the consolidated schema. Marked `live_pg`. |
-| Recomposition closeout (root-cause evidence) | 2026-05-22-recomposition-closeout.md | Plan-vs-actual + structural ceiling analysis. |
+| `make_pool_and_conn` canonical factory | [testing_db.py:101](../../libs/jarvis_common/jarvis_common/testing_db.py#L101) | `(conn, *, fetchval_return, fetchrow_return, fetch_return, raise_on_acquire, ...)` → `(pool, conn)` tuple. Canonical inline `_make_pool` replacement. |
+| `SharedConnPool` | [testing_db.py:703](../../libs/jarvis_common/jarvis_common/testing_db.py#L703) | Pool-shaped wrapper exposing a single contract_conn via `acquire()` AND direct pool methods (`fetch`/`fetchrow`/`fetchval`/`execute`/`executemany`). |
+| `contract_conn` fixture | [testing_db.py:642](../../libs/jarvis_common/jarvis_common/testing_db.py#L642) | Per-test asyncpg connection wrapped in a transaction that rolls back on test exit. Requires `JARVIS_RUN_LIVE_PG=1`. |
+| `contract_two_users` fixture | [testing_db.py:918](../../libs/jarvis_common/jarvis_common/testing_db.py#L918) | Seeds two real DB users with valid session cookies + owned resources (paper, note, deck, etc.) all within the contract_conn transaction. |
+| `make_bot_config` | [testing_telegram.py:92](../../libs/jarvis_common/jarvis_common/testing_telegram.py#L92) | Canonical `BotConfig` factory for telegram_bot tests (TS-07 `make_config` replacement). |
+| `configure_contract_api_key` | [testing_contract_apps.py:43](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py#L43) | Context manager that sets the contract API key and refreshes auth/settings caches before and after the test. |
+| `make_contract_client` | [testing_contract_apps.py:60](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py#L60) | ASGI `httpx.AsyncClient` factory with the standard contract API-key header and optional session cookie. |
+| `patch_app_state` | [testing_contract_apps.py:80](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py#L80) | Restores exact `app.state` attributes after contract app wiring. |
+| `patch_dependency_overrides` | [testing_contract_apps.py:105](../../libs/jarvis_common/jarvis_common/testing_contract_apps.py#L105) | Patches FastAPI dependency overrides without clearing unrelated keys, then restores exact previous values. |
+| `_default_authenticated_user` autouse stub | [services/paper_ingestion/tests/conftest.py:146](../../services/paper_ingestion/tests/conftest.py#L146) | Returns user_id=1 globally for all PI tests UNLESS the test is marked `pytest.mark.real_auth`. The marker opt-out is mandatory for any PI contract test that depends on session cookies. |
+| `pytest.mark.{contract,real_auth,live_pg}` registration | [pyproject.toml:138-143](../../pyproject.toml#L138-L143) | Marker descriptions in `[tool.pytest.ini_options].markers`. |
+| Default `addopts` excludes | [pyproject.toml:160](../../pyproject.toml#L160) | `addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"` — `contract` tests are collected-but-skipped without `JARVIS_RUN_LIVE_PG=1`. |
+| `test_baseline_invariants.py` (DO NOT DELETE) | [services/paper_ingestion/tests/test_baseline_invariants.py](../../services/paper_ingestion/tests/test_baseline_invariants.py) | Post-squash schema invariants. Marked `live_pg`. |
 | `scripts/check-test-shape.py` (enforcement) | [scripts/check-test-shape.py](../../scripts/check-test-shape.py) | Pre-commit hook implementing TS-01..TS-07 invariants (TS-08 is review-only). |
 
 ---

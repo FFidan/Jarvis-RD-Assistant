@@ -52,7 +52,7 @@ The audit log is a chronological record of security-relevant events on the insta
 
 A live operational dashboard showing the health of all backend services.
 
-**Services table:** A table of services (Postgres, Qdrant, Ollama, LiteLLM, Langfuse if configured) with their current status. The table **auto-refreshes every 30 seconds**; you can also click **Refresh now** to trigger an immediate check.
+**Services table:** A table of services (Postgres, Qdrant, Ollama, LiteLLM, Langfuse if configured) with their current status. The table **auto-refreshes every 30 seconds**.
 
 **Readiness checklist:** A checklist of deployment prerequisites (database migrations applied, required environment variables set, source API keys present, etc.). Each item shows a status indicator and a **remediation note** describing how to resolve it if it is failing.
 

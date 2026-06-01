@@ -31,15 +31,65 @@ Related docs:
 - User-facing changes require frontend tests and, when practical, a live smoke
   check against `http://127.0.0.1:3001`.
 
-### Typography contract
+### Typography
 
-Frontend headings follow a 4-level contract (page H1 / section marker /
-card title / inline label) with a "one caption per visual block" rule.
-Section markers (`MarkerCaption`) and inline small-caps labels
+Frontend headings follow a 4-level contract with a "one caption per visual
+block" rule. Section markers (`MarkerCaption`) and inline small-caps labels
 (`MarkerLabel`) live in `frontend/src/components/typography/`. There is no
-ESLint enforcement; reviewers run the hand-checklist in the contract doc
-against headline-touching diffs. Canonical source:
-[`contracts/08-typography.md`](contracts/08-typography.md).
+ESLint enforcement; reviewers run the hand-checklist below against
+headline-touching diffs.
+
+**The 4-level hierarchy:**
+
+```
+PAGE LEVEL (max 1 per route)
+  H1 — text-[28-32px] leading-tight tracking-tight text-strong
+  Subtitle — text-sm text-muted-foreground (one line, one paragraph)
+
+NAVIGATION LEVEL (tabs, surface chips)
+  Tab labels — owned by TabsTrigger / role=tab. Treat them as captions.
+  Rule — ban any heading inside TabsContent whose text equals or is a
+  word-stem subset of the active tab label.
+
+SECTION LEVEL (group of >=2 sibling sub-blocks, no other caption available)
+  SectionHeader / MarkerCaption — the existing § small-caps span,
+  used ONLY when:
+    a) the section contains >=2 sibling sub-blocks each with their own
+       CardTitle / heading, AND
+    b) no parent (page H1, tab label, Card containing this section) has
+       already named the same concept.
+  Forbidden uses — directly above a single Card, directly above a single
+  Cytoscape canvas, directly above a Tabs strip, inside a TabsContent,
+  inside a Card whose CardTitle would repeat it.
+
+CARD LEVEL (owns its visual border)
+  CardTitle — required if the card is more than a thin row of inputs.
+  CardDescription — optional, single short paragraph.
+  Rule — no SectionHeader above; no <h2>/<h3> directly below CardHeader
+  before the first <CardContent> child.
+
+INLINE LEVEL (form labels, field captions, micro-block titles)
+  Label component — for form inputs.
+  MarkerLabel — components/typography/MarkerLabel.tsx.
+
+DIALOG / SHEET LEVEL
+  DialogTitle / SheetTitle — required, owns the modal caption.
+  Rule — body must not open with another heading whose text equals the title.
+```
+
+**One caption per visual block:** each visual block (Card, TabsContent,
+Sheet, Section) is allowed at most one caption. Sub-blocks can each have their
+own caption, but the block-level caption must not be repeated by an immediate
+parent or child.
+
+**Hand-review checklist** (run against any PR touching frontend headings):
+
+- [ ] No `<SectionHeader>` rendered inside a `<TabsContent>` whose marker text matches the active tab label.
+- [ ] No `<SectionHeader>` immediately above a `<Card>` whose `<CardTitle>` shares the same word stem.
+- [ ] No `<h2>` or `<h3>` is a sibling of a `<CardHeader>` repeating the card label.
+- [ ] At most one caption per visual block (Card / TabsContent / Sheet / Section).
+- [ ] Page H1 is set exactly once per route, in the page component.
+- [ ] Sidebar item label, browser tab title, and page H1 use the same canonical name.
 
 ## API
 
@@ -50,8 +100,8 @@ against headline-touching diffs. Canonical source:
 - Validate payloads at the boundary. Avoid `dict[str, Any]` for public job
   payloads when a Pydantic model exists.
 - Sanitize SSE errors before sending them to the frontend. Use the shared
-  `routers/_sse.py` helpers (`sse_event()`, `SSE_DONE`) for all SSE responses
-  in `paper_ingestion`; do not inline SSE formatting.
+  `jarvis_common.sse` helpers (`sse_event()`, `SSE_DONE`) for all SSE responses;
+  do not inline SSE formatting.
 - Health endpoints should report dependency degradation honestly.
 - FastAPI lifespan setup must use `configure_lifespan` from
   `jarvis_common.app_factory`. The equal-length contract requires every init
@@ -132,6 +182,43 @@ deliberately thin; the contract carries the load-bearing rules.
   anti-patterns documented there (handler-bypass, mock-the-mock, SQL-substring,
   deep orchestration mock) are prohibited and enforced by
   [scripts/check-test-shape.py](../scripts/check-test-shape.py) on every commit.
+
+## LLM Prompt Shape
+
+Every `call_llm_structured(...)` callsite under `services/` or `libs/` (excluding tests) must satisfy one of two shapes. The convention is enforced by `scripts/check-llm-prompt-shape.py` on every commit and in CI.
+
+### Shape A — split-role (default)
+
+The instruction head lives in a system-role message; `prompt=` carries only data (typically wrapped via `wrap_delimited(...)` for untrusted text):
+
+```python
+safe_question, _ = wrap_delimited("user_question", question)
+return await call_llm_structured(
+    openai_client,
+    response_model=RootModel[list[str]],
+    prompt=safe_question,
+    options=ChatCompletionOptions(model="fast", system=SYSTEM),
+)
+```
+
+Alternatively, pass an explicit `messages=` list with a system entry when the user message is composed of multiple parts.
+
+### Shape B — carve-out
+
+For callsites where the prompt is fully trusted (no untrusted text interpolated), add the literal marker `# llm-prompt-shape: SINGLE-USER` on or immediately above the `call_llm_structured(` line, and document the rationale in the enclosing function's docstring. Every Shape B callsite is enumerable via its marker — `grep -rn 'llm-prompt-shape: SINGLE-USER'` lists them all.
+
+### Key rules
+
+- Keep instruction text in the *system* role; put untrusted data in the *user* role.
+- Wrap untrusted inputs with `wrap_delimited(tag, text)` from `jarvis_common.prompt_safety` — it escapes XML-style brackets and wraps in `<tag>…</tag>`. Pass `max_chars` to `wrap_delimited`; do not pre-truncate.
+- Never interpolate untrusted text into the system-role string.
+- Shape B is for rare, genuinely trusted callsites — not a shortcut for migration.
+
+### Anti-patterns to avoid
+
+- Interpolating untrusted data into `options.system`.
+- Pre-truncating before `wrap_delimited` (pass `max_chars` instead).
+- Using `# llm-prompt-shape: SINGLE-USER` without a docstring rationale.
 
 ## Docs
 

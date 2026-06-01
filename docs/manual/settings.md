@@ -40,13 +40,23 @@ Enable and configure the paper data sources the system uses to discover new pape
 
 **ADMIN only.**
 
-### LLM
+### LLM Models
 
 Configure which model aliases (**smart**, **fast**, **embed**) are mapped to which local or cloud models. The smart model is used for summarisation and reasoning; the fast model is used for lower-latency tasks; the embed model is used for generating embeddings.
 
 ### Providers
 
 Configure API keys and endpoints for cloud LLM providers (OpenAI, Anthropic, Gemini) and LiteLLM routing. Changes here affect which models are available for the LLM configuration item above.
+
+### AI Backend
+
+Select the inference backend and model used for LLM calls. The panel shows:
+
+- **Hardware Tier** — the automatically detected GPU/CPU tier for this machine, with a **Re-detect** button to refresh.
+- **Current Status** — the configured backend/model, the recently observed backend, and the recommended backend/model for the detected hardware tier.
+- **Backend selector** — toggle between **ollama** (local) and **vllm** (high-throughput GPU). The recommended option is labelled.
+- **Model dropdown** — choose from evaluated candidates for the selected backend and tier. A score and brief reasoning is shown for each candidate.
+- **Apply / Reset** — save the selection or revert to the last saved state.
 
 ---
 
@@ -68,7 +78,10 @@ Configure the outbound email relay for magic-link sign-in emails. Fields: SMTP h
 
 ### Pulse
 
-Configure Pulse-specific settings: the number of cards per deck, the relevance threshold for including a paper, and the decay rate for staleness.
+Configure Pulse-specific settings. The panel is divided into two cards:
+
+- **Schedule card** — toggle Pulse on/off, set the daily run time, and adjust the **deck size** (5–30 papers; slider), ranking candidates, lookback window, and startup grace period.
+- **Advanced tuning card** (collapsible) — **signal-weight sliders** for each scoring signal (topic relevance, recency, citation count, etc.), discovery seed balance (liked-papers weight and project-context weight), and L2 negative-feedback penalty. Weight presets are available for common configurations.
 
 ### Timer
 
@@ -80,9 +93,14 @@ Configure the Langfuse observability integration for tracing LLM calls. This set
 
 _This area is evolving; verified 2026-05-18._
 
-### Mode
+### Access Mode
 
-System-wide operational mode configuration (e.g. development vs production behaviour). Changes here take effect immediately but may require a service restart for some options.
+Control whether the instance allows additional user accounts beyond the admin account.
+
+- **Single-user** — only the admin account can log in.
+- **Multi-user** — additional accounts can be invited via magic-link (see [Admin & Multi-tenant](admin.md)).
+
+Changing the access mode requires an application restart by an administrator.
 
 ---
 

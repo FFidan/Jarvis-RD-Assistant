@@ -32,7 +32,7 @@ requests through nginx to `paper_ingestion` and `learning_engine`.
 `services/paper_ingestion/paper_ingestion/` is split by responsibility:
 
 - `routers/` - HTTP adapters. Keep business logic out of routers. SSE
-  formatting uses the shared `routers/_sse.py` helpers (`sse_event()`,
+  formatting uses the shared `jarvis_common.sse` helpers (`sse_event()`,
   `SSE_DONE`); do not inline SSE formatting in router handlers.
 - `queries/` - reusable SQL fragments and predicates. predicates.py owns
   canonical SQL predicates: VIEW_PREDICATES (10 named surfaces per spec §6), RECOMMENDER_EXCLUDE_SQL, and PULSE_CANDIDATE_EXCLUDE_SQL. Use these constants; never duplicate the SQL condition inline.
@@ -41,6 +41,9 @@ requests through nginx to `paper_ingestion` and `learning_engine`.
   processing ownership where applicable.
 - `extraction/` - anti-hallucination extraction and quote verification.
 - `pulse/` - proactive discovery and morning deck logic.
+- `rag/` - retrieval-augmented generation pipeline.
+- `pipelines/` - multi-step async processing pipelines.
+- `jobs/` - job handler registrations and task workers.
 - `sources/` - external paper source plugins registered via the source registry.
 - `integrations/` - Zotero and external service integrations.
 - `services/` - internal workflow services such as summarization and local PDF
@@ -95,8 +98,7 @@ task object, which `defer_async` enqueues into `procrastinate_jobs`.
 `libs/jarvis_common/jarvis_common/jobs.py`) to adapt a
 `procrastinate_jobs` row into the public job envelope the frontend
 expects.  SSE progress events are written to the sidecar
-`job_progress` table (added in migration 054) and pushed to listeners
-via `pg_notify`.
+`job_progress` table and pushed to listeners via `pg_notify`.
 
 ### Connector wiring
 
@@ -108,19 +110,16 @@ HTTP client.
 
 ## Authentication And Ownership
 
-Phase 1+2 (shipped 2026-05-10) replaced the single-user stubs with a real
-multi-user auth system. The current state:
-
-- **Magic-link auth** — `db/migrations/069_auth.sql` introduced `users`,
-  `magic_link_tokens`, and `user_sessions` tables. `jarvis_common.auth` resolves
-  the caller user from a session cookie; admin endpoints require `role='admin'`.
-- **Per-user ownership** — migrations 062–070 added `user_id` columns to
-  `daily_log`, `paper_recommendations`, `projects`, `tasks`, `milestones`,
+- **Magic-link auth** — `users`, `magic_link_tokens`, and `user_sessions` tables
+  (see `db/init.sql`). `jarvis_common.auth` resolves the caller user from a
+  session cookie; admin endpoints require `role='admin'`.
+- **Per-user ownership** — `user_id` columns across `daily_log`,
+  `paper_recommendations`, `projects`, `tasks`, `milestones`,
   `pulse_source_health`, `system_events`, and the multi-tenant sweep table. All
   read/write paths in routers thread `user_id` from `get_current_user`.
 - **IDOR guards** — router endpoints that read by PK assert ownership before
-  returning data. The defensive `_resolve_request_user_id` helper (added in the
-  final Phase 2 patch) tolerates mocked requests for test harnesses.
+  returning data. The defensive `_resolve_request_user_id` helper tolerates
+  mocked requests for test harnesses.
 - **Per-user secrets** — Zotero, SMTP, and other per-user credentials are stored
   encrypted via `jarvis_common.crypto` (MultiFernet, `JARVIS_CONFIG_KEY`); user
   config lives in `user_config` with JSONB values.
@@ -129,73 +128,33 @@ multi-user auth system. The current state:
 
 ### Cross-Service Auth Boundary (resolver DI)
 
-_Reconciled 2026-05-17. Supersedes any earlier informal
-"one canonical resolver, ~52 sites converted" wording — no such global
-convergence exists or is intended; the boundary below is the accurate one._
-
 `jarvis_common.auth` exposes two production user-id resolvers:
 
-- **`current_user_id_strict`** — resolves identity *only* from the session
-  (`request.state.user_id`). Hard 401 for callers without a session cookie. No
-  `X-Owner-User-Id` path.
-- **`current_user_id_strict_with_owner_override`** (and its
-  `Depends()` wrapper `get_current_user_id`) — same session-first behavior, but
-  additionally honors a verified `X-Owner-User-Id` header when the caller
-  presents a valid `X-API-Key`. This is the resolver a header-authenticated
-  cross-service caller (the Telegram bot, or a sibling backend service acting
-  per-user) needs; on a session-only resolver those header-auth calls 401.
+- **`current_user_id_strict`** — session-only. Hard 401 without a valid session
+  cookie. No `X-Owner-User-Id` path.
+- **`current_user_id_strict_with_owner_override`** (and its `Depends()` wrapper
+  `get_current_user_id`) — session-first, but also honors a verified
+  `X-Owner-User-Id` header when a valid `X-API-Key` is present. Required for
+  cross-service callers (the Telegram bot) making per-user requests.
 
-The override-capable resolver is applied **selectively, by reachability** — not
-globally — in *both* backend services. An endpoint gets it iff a
-header-authenticated cross-service caller actually reaches it per-user;
-everything else stays session-only **by design** (smaller attack surface, no
-header-spoofing path on browser-only endpoints).
-
-- **paper_ingestion** — owner-override-capable DI on the surfaces reached by
-  the Telegram bot and sibling services per-user: `papers`, `pulse`, `rag`,
-  `search`, `feed`, `notes`, `recommendations`, `recommendation_feedback`,
-  `snapshots` (`services/paper_ingestion/paper_ingestion/routers/`). The
-  remaining routers (`account`, `analytics`, `analyze`, `authors`,
-  `citations`, `contradictions`, `dashboard_api`, `discovery`, `extractions`,
-  `knowledge_graph`, `my_day`, `pdf`, `priority`, `settings`, `threads`,
-  `topics`, `zotero`) are session-only `current_user_id_strict` by design —
-  they are browser-only (or shared-catalog) and no header-auth caller reaches
-  them per-user.
-- **learning_engine** — the Telegram bot reaches exactly these LE endpoints
-  per-user with `X-API-Key` + `X-Owner-User-Id`:
-  `GET /api/review/next`, `POST /api/review/{card_id}`, `GET /api/stats`
-  (all in `services/learning_engine/learning_engine/routers/review.py`) and
-  `POST /api/executive/focus/log`
-  (`services/learning_engine/learning_engine/routers/executive.py`). Both
-  `review.py` and `executive.py` already use
-  `current_user_id_strict_with_owner_override` on every endpoint, so the
-  Telegram path resolves the paired owner correctly. **No other LE router is
-  reached by a header-auth caller per-user.** `analytics`, `cards`, `decks`,
-  `executive_intent`, `export`, `generation`, `milestones`, `project_papers`,
-  `project_questions`, `projects`, and `tasks` remain session-only
-  `current_user_id_strict` **by design** — they serve the browser dashboard
-  only; converting them would add an unused header-spoofing surface with no
-  caller to justify it.
-
-`scripts/check-no-unsafe-resolver.py` treats `current_user_id_strict`,
-`current_user_id_strict_with_owner_override`, and `get_current_user_id` as
-equally *safe* (all establish a non-None identity / hard 401). It enforces that
-every router endpoint has *some* safe resolver — it deliberately does **not**
-mandate the override-capable one, because the session-only choice above is
-intentional, not a gap.
+The override-capable resolver is applied **selectively, by reachability** — only
+on endpoints that a header-authenticated caller actually reaches per-user.
+Everything else uses session-only `current_user_id_strict` by design (smaller
+attack surface). `scripts/check-no-unsafe-resolver.py` enforces that every
+router endpoint has one of the three safe resolvers; it does not mandate the
+override-capable one because the session-only choice is intentional.
 
 ### Telegram Pairing
 
-Telegram chat-to-user pairing shipped in migration 071. The dashboard issues
-short-lived pairing tokens in `telegram_pairing_tokens`; the bot stores durable
-chat ownership in `telegram_user_pairings`. Telegram orchestrators now iterate
-paired users where the workflow has a per-user delivery surface. The legacy
-`TELEGRAM_CHAT_ID` path remains a compatibility fallback for installs that have
-not paired a chat yet.
+The dashboard issues short-lived pairing tokens in `telegram_pairing_tokens`;
+the bot stores durable chat ownership in `telegram_user_pairings` (see
+`db/init.sql`). Telegram orchestrators iterate paired users where the workflow
+has a per-user delivery surface. The legacy `TELEGRAM_CHAT_ID` path remains a
+compatibility fallback for installs that have not paired a chat yet.
 
 ### Canonical Corpus And user_library
 
-The canonical corpus refactor shipped in migration 072:
+The canonical corpus schema (see `db/init.sql`):
 
 - `papers.discovered_by` records who first introduced a canonical paper.
 - `user_library(user_id, paper_id, added_via)` records personal library
@@ -211,12 +170,9 @@ The canonical corpus refactor shipped in migration 072:
 
 ### Residual Risks
 
-Known open items post-Phase-2 (see `docs/known-residual-risks.md`):
-
-- `paper_digest.py` still has a single-tenant fallback when no Telegram pairing
-  exists. Remove it after production telemetry proves pairings are universal.
-- IDOR regression coverage is broader than the original Phase-2 pass but is not
-  yet a full live multi-user browser suite.
+See [known-residual-risks.md](known-residual-risks.md) for the full register of
+accepted deferrals, including IDOR regression coverage scope and RAG/search path
+isolation.
 
 ## Persistence
 

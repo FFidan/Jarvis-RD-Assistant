@@ -1,16 +1,7 @@
 # JARVIS RD Assistant — Docs
 
-This folder contains the source Markdown for the operator, developer, and
-user documentation.
+This folder contains the source Markdown for the mkdocs site.
 
-For the full rendered site, visit the [documentation site](../README.md).
+For the full rendered site, visit the [documentation site](https://FFidan.github.io/Jarvis-RD-Assistant/).
 
-## Quick Links
-
-- [Deployment Guide](DEPLOYMENT.md) — install, configure, and operate
-- [Architecture](ARCHITECTURE.md) — service topology and data flows
-- [Security](SECURITY.md) — threat model and secrets management
-- [User Guide](manual/index.md) — end-user manual (sign-in, features, Telegram)
-
-> The canonical edit targets are the Markdown files in this directory.
-> The rendered site is generated from these sources — always edit here.
+Edit the Markdown files in this directory — the site is generated from these sources.

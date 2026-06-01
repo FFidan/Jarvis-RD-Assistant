@@ -73,7 +73,7 @@ A compact list of your active projects with recent activity. Each project links 
 
 ### ThreadsSection
 
-A list of reading threads — papers you started reading but have not finished or archived. Each thread shows the paper title, how long ago you last opened it, and a **Resume** button.
+A list of reading threads — papers you started reading but have not finished or marked as Done. Each thread shows the paper title, how long ago you last opened it, and a **Resume** button.
 
 ### TodaysPulseSection
 
