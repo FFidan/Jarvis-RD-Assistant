@@ -639,7 +639,12 @@ async def test_project_detail_success():
         [{"id": 1, "name": "Milestone 1", "deadline": None, "completed": False}],  # milestones
     ]
 
-    await project_detail_callback(update, context)
+    with patch(
+        "telegram_bot.handlers.callback_handler.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, _PAIRED_USER_ID),
+    ):
+        await project_detail_callback(update, context)
 
     update.callback_query.answer.assert_awaited_once()
     update.callback_query.message.reply_text.assert_awaited_once()
@@ -653,7 +658,12 @@ async def test_project_detail_not_found():
     update, context, mock_db, _ = _make_callback_update_and_context("project_detail_999")
     mock_db.fetchrow.return_value = None
 
-    await project_detail_callback(update, context)
+    with patch(
+        "telegram_bot.handlers.callback_handler.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, _PAIRED_USER_ID),
+    ):
+        await project_detail_callback(update, context)
 
     update.callback_query.answer.assert_awaited_once()
     text = update.callback_query.message.reply_text.call_args[0][0]
@@ -702,10 +712,11 @@ async def test_task_done_not_found():
 # TG-SEC-03: task_done ownership pre-check (cross-tenant write prevention)
 #
 # complete_task(task_id, user_id=None) uses a `$2 IS NULL` catch-all that
-# matches ANY task by id.  A legacy owner (jarvis_user_id None) must NOT be
-# able to complete a paired user's task via that catch-all.  The consumer adds
-# a NULL-safe ownership pre-check (IS NOT DISTINCT FROM $2) before calling
-# complete_task.
+# matches ANY task by id.  The consumer adds a NULL-safe ownership pre-check
+# (IS NOT DISTINCT FROM $2) before calling complete_task.  Pairing is now the
+# sole identity mechanism so auth_check can no longer yield jarvis_user_id None;
+# these tests force that (impossible) result to prove the pre-check still holds
+# as defence-in-depth.
 # ---------------------------------------------------------------------------
 
 
@@ -715,15 +726,9 @@ def _ownership_fetchval(owner_user_id: int | None):
     *owner_user_id* is the task's actual ``user_id`` column value.  The returned
     callable yields ``1`` when the requested ``$2`` matches (NULL-safe), else
     ``None`` — mirroring the SQL predicate against a single seeded task row.
-
-    ``auth_check`` also calls ``fetchval`` for the ``owner_chat_id`` lookup
-    (single positional arg); that path returns ``None`` so paired-user auth
-    falls through to the ``telegram_user_pairings`` fetchrow.
     """
 
     async def _fetchval(query: str, *params):
-        if len(params) < 2:  # auth_check's owner_chat_id lookup
-            return None
         _task_id, requested_user_id = params[0], params[1]
         return 1 if owner_user_id == requested_user_id else None
 
@@ -731,16 +736,22 @@ def _ownership_fetchval(owner_user_id: int | None):
 
 
 @pytest.mark.asyncio
-async def test_task_done_legacy_owner_cannot_complete_paired_users_task():
-    """TG-SEC-03: a legacy owner (jarvis_user_id None) cannot complete a paired
-    user's task — the NULL-safe pre-check denies it and complete_task is skipped.
+async def test_task_done_null_user_cannot_complete_paired_users_task():
+    """TG-SEC-03: a NULL-user caller cannot complete a paired user's task — the
+    NULL-safe pre-check denies it and complete_task is skipped (defence-in-depth).
     """
     update, context, mock_db, _ = _make_callback_update_and_context("task_done_77")
-    # Task is owned by a real paired user (user_id=42), but caller is the
-    # legacy owner (jarvis_user_id None → env-var chat match).
+    # Task is owned by a real paired user (user_id=42), caller's jarvis_user_id is None.
     mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=42)
 
-    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
+    with (
+        patch(
+            "telegram_bot.handlers.callback_handler.auth_check",
+            new_callable=AsyncMock,
+            return_value=(True, None),  # forced impossible state — exercises the pre-check
+        ),
+        patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm,
+    ):
         pm_instance = AsyncMock()
         pm_instance.complete_task.return_value = {"id": 77, "status": "done"}
         mock_pm.return_value = pm_instance
@@ -754,15 +765,20 @@ async def test_task_done_legacy_owner_cannot_complete_paired_users_task():
 
 
 @pytest.mark.asyncio
-async def test_task_done_legacy_owner_can_complete_null_owned_task():
-    """TG-SEC-03: the single-tenant path still works — a legacy owner completes a
-    NULL-owned task (user_id IS NULL) successfully.
-    """
+async def test_task_done_null_user_can_complete_null_owned_task():
+    """TG-SEC-03: a NULL-user caller completes a NULL-owned task (user_id IS NULL)."""
     update, context, mock_db, _ = _make_callback_update_and_context("task_done_10")
-    # Task is NULL-owned; caller is the legacy owner (jarvis_user_id None) → match.
+    # Task is NULL-owned; caller's jarvis_user_id is None → match.
     mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=None)
 
-    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
+    with (
+        patch(
+            "telegram_bot.handlers.callback_handler.auth_check",
+            new_callable=AsyncMock,
+            return_value=(True, None),  # forced impossible state — exercises the pre-check
+        ),
+        patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm,
+    ):
         pm_instance = AsyncMock()
         pm_instance.complete_task.return_value = {"id": 10, "status": "done"}
         mock_pm.return_value = pm_instance
@@ -1126,20 +1142,25 @@ async def test_project_detail_with_user_id_scopes_milestone_fetch() -> None:
 
 @pytest.mark.asyncio
 async def test_project_detail_none_user_id_scoped_to_null_rows_only() -> None:
-    """TG-N2: legacy single-tenant path scopes project fetch to user_id IS NULL.
+    """TG-N2: a NULL jarvis_user_id scopes the project fetch to user_id IS NULL.
 
     Previously, the None branch used an unscoped SELECT that could return ANY
     project by id.  After the fix, IS NOT DISTINCT FROM NULL restricts the
     result to rows where user_id IS NULL — closing the unscoped catch-all.
+    auth_check can no longer yield (True, None); we force it to exercise this
+    defence-in-depth branch.
     """
-    # Single-tenant legacy path: auth_check returns (True, None)
     update, context, mock_db, _ = _make_callback_update_and_context(
         "project_detail_7", chat_id=_TEST_CHAT_ID
     )
-    # The env-var path returns jarvis_user_id=None for the legacy owner
     mock_db.fetchrow.return_value = None  # project not found under user_id=NULL
 
-    await project_detail_callback(update, context)
+    with patch(
+        "telegram_bot.handlers.callback_handler.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, None),  # forced impossible state — exercises the NULL-scoping branch
+    ):
+        await project_detail_callback(update, context)
 
     fetchrow_call = mock_db.fetchrow.call_args
     sql = fetchrow_call.args[0]
@@ -1148,7 +1169,7 @@ async def test_project_detail_none_user_id_scoped_to_null_rows_only() -> None:
         f"None path must use IS NOT DISTINCT FROM $2 (not unscoped); SQL={sql!r}"
     )
     assert bound_user_id is None, (
-        f"$2 must be None (NULL) for legacy single-tenant path; got {bound_user_id!r}"
+        f"$2 must be None (NULL) when jarvis_user_id is None; got {bound_user_id!r}"
     )
 
 

@@ -355,6 +355,20 @@ git pull
 
 `update.sh` loads pinned versions from `versions.env`, diffs running vs pinned images, prompts to pull stale services and rebuild local containers, and waits up to 180 s per service. On failure it prints: `git checkout HEAD~1 -- versions.env && ./update.sh`.
 
+### Upgrade notes
+
+**Telegram pairing (breaking change).** The Telegram bot now identifies chats
+exclusively via the `/pair` token flow. To pair: open the dashboard → Settings
+→ Integrations → Telegram, copy the one-time token, and send `/pair <token>`
+to the bot. The legacy `TELEGRAM_CHAT_ID` environment variable and the
+dashboard-code pairing path (`/start PAIR_<code>`) no longer work — any
+existing `TELEGRAM_CHAT_ID` value can be removed from `.env` after pairing.
+
+**Ownership migration (0092).** On first startup after upgrade, migration 0092
+re-assigns any pre-existing product rows with a NULL owner to the single admin
+account. This is automatic and non-destructive; it only runs when exactly one
+admin user exists (the normal single-tenant state).
+
 Makefile shortcuts for development:
 
 ```bash

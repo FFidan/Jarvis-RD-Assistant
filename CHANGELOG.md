@@ -2,6 +2,31 @@
 
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Changed / Breaking
+
+- **Telegram bot pairing is now token-only.** The bot authenticates chats
+  exclusively via the `/pair <token>` flow (token generated in Settings →
+  Integrations → Telegram). The legacy `TELEGRAM_CHAT_ID` environment variable
+  and the dashboard-code pairing path are removed. Unpaired chats are prompted
+  to `/pair`. Existing `TELEGRAM_CHAT_ID` values can be removed from `.env`.
+
+### Fixed
+
+- Task-completion and paper-summary background jobs now correctly attribute
+  activity to the owner's account in single-tenant deployments (previously
+  recorded as NULL).
+
+### Migrations
+
+- **0092** — Re-owns any legacy NULL-owned product rows (projects, tasks,
+  milestones, daily_log, etc.) to the single admin account. Runs automatically
+  on upgrade; only activates when exactly one admin user exists.
+
+---
+
 ## v0.5.0 (2026-05-24)
 
 ### Overview

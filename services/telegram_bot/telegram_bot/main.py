@@ -161,7 +161,7 @@ def main() -> None:
     application.add_handler(get_review_conversation_handler())
     register_callback_handlers(application)
 
-    logger.info("JARVIS Telegram Bot starting (chat_id=%s)", config.telegram_chat_id)
+    logger.info("JARVIS Telegram Bot starting")
     application.run_polling(allowed_updates=["message", "callback_query"])
 
 

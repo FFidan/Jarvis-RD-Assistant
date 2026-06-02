@@ -239,6 +239,7 @@ async def _paper_analyze_job(
         http_client,
         verifier,
         embedder,
+        user_id=user_id,
     )
 
     await ctx.update_progress(1.0, "Done")
@@ -272,7 +273,9 @@ async def _paper_summarize_job(
         raise RuntimeError("embedder not initialized")
 
     await ctx.update_progress(0.1, "Summarizing")
-    summary = await generate_paper_summary(paper_id, pool, http_client, verifier, embedder)
+    summary = await generate_paper_summary(
+        paper_id, pool, http_client, verifier, embedder, user_id=user_id
+    )
     await ctx.update_progress(1.0, "Done")
     return {"paper_id": paper_id, "summary_id": summary.id, "status": "summarized"}
 
@@ -417,7 +420,9 @@ async def _papers_batch_summarize_job(
         frac = (i / max(total, 1)) * 0.95
         await ctx.update_progress(frac, f"Summarizing paper {paper_id} ({i + 1}/{total})")
         try:
-            await generate_paper_summary(paper_id, pool, http_client, verifier, embedder)
+            await generate_paper_summary(
+                paper_id, pool, http_client, verifier, embedder, user_id=user_id
+            )
             summarized += 1
         except Exception as exc:  # noqa: BLE001
             failed += 1

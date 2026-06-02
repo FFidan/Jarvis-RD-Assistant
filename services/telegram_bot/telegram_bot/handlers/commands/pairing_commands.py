@@ -11,7 +11,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import get_config, get_db
+from telegram_bot.handlers.helpers import get_db
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -25,9 +25,9 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     (Settings → Integrations).  The token is consumed atomically: once used it
     cannot be replayed, and expired tokens are rejected with a clear error.
 
-    Unlike the legacy ``/start PAIR_<code>`` admin flow, this command does NOT
-    require the chat to be pre-authorised (no auth_required decorator) so that
-    brand-new users can pair without a chicken-and-egg problem.
+    This command does NOT require the chat to be pre-authorised (no
+    auth_required decorator) so that brand-new users can pair without a
+    chicken-and-egg problem.
 
     Concretely:
     - Look up ``telegram_pairing_tokens`` for the supplied token.
@@ -213,7 +213,7 @@ async def unpair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     Also purges any unconsumed pairing tokens for the user to keep the table
     tidy.  Reports success even when no pairing existed (idempotent).
 
-    Requires the chat to be authorised (legacy owner OR multi-tenant pairing).
+    Requires the chat to be authorised (i.e. already paired).
     """
     message = update.message
     chat = update.effective_chat
@@ -284,24 +284,12 @@ async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if row is None:
-        config = get_config(context)
-        # Check legacy single-tenant pairing too
-        env_chat_id = getattr(config, "telegram_chat_id", None)
-        is_legacy_owner = env_chat_id and chat.id == env_chat_id
-        if is_legacy_owner:
-            await message.reply_text(
-                "This chat is paired as the <b>system owner</b> (legacy single-tenant mode).\n\n"
-                "To migrate to per-user pairing, generate a token in Settings → Integrations "
-                "and run /pair.",
-                parse_mode="HTML",
-            )
-        else:
-            await message.reply_text(
-                "This chat is <b>not paired</b> to a JARVIS account.\n\n"
-                "Generate a pairing token from Settings → Integrations and run "
-                "<code>/pair &lt;token&gt;</code>.",
-                parse_mode="HTML",
-            )
+        await message.reply_text(
+            "This chat is <b>not paired</b> to a JARVIS account.\n\n"
+            "Generate a pairing token from Settings → Integrations and run "
+            "<code>/pair &lt;token&gt;</code>.",
+            parse_mode="HTML",
+        )
         return
 
     username_part = f" (@{row['telegram_username']})" if row["telegram_username"] else ""

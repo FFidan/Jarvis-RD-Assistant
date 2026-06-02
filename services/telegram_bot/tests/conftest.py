@@ -45,14 +45,8 @@ def _patch_log_event():
     Tests that specifically need to assert on log_event calls should override
     this patch within their own ``with patch(...)`` context.
     """
-    with (
-        patch(
-            "telegram_bot.handlers.commands._auth.log_event",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "telegram_bot.handlers.commands.system_commands.log_event",
-            new_callable=AsyncMock,
-        ),
+    with patch(
+        "telegram_bot.handlers.commands._auth.log_event",
+        new_callable=AsyncMock,
     ):
         yield

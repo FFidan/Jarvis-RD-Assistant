@@ -26,9 +26,8 @@ def auth_required(func: Any) -> Any:
     2. Emits a one-time ``auth`` event the first time a chat is seen (tracked
        via ``context.user_data["_auth_seen"]`` so the flag is per-chat session
        and does not leak across chats via a shared module-level set).
-    3. Rejects messages from unauthorised chats.
-    4. Rejects authorized chats that have no paired JARVIS user account,
-       prompting them to complete the pairing flow via the dashboard.
+    3. Rejects messages from unpaired chats, prompting them to complete the
+       pairing flow via the dashboard + ``/pair``.
 
     Parameters
     ----------
@@ -63,7 +62,7 @@ def auth_required(func: Any) -> Any:
                         context={"chat_id": update.effective_chat.id},
                     )
 
-            # --- auth gate ---
+            # --- auth gate (pairing is the sole identity mechanism) ---
             authorized, jarvis_user_id = await auth_check(update, config, db_pool)
             if not authorized:
                 chat_id = update.effective_chat.id if update.effective_chat else "unknown"
@@ -71,22 +70,10 @@ def auth_required(func: Any) -> Any:
                     "Unauthorised access attempt from chat_id=%s",
                     chat_id,
                 )
-                return
-            if jarvis_user_id is None:
-                # Authorized chat (env-var or legacy owner_chat_id) but no paired
-                # JARVIS account.  In multi-user mode every command requires a
-                # pairing — fail loudly so the user knows what to do.
-                logger.warning(
-                    "Authorized chat has no paired JARVIS user; blocking command chat_id=%s",
-                    update.effective_chat.id if update.effective_chat else "unknown",
-                )
                 if update.message is not None:
                     await update.message.reply_text(
-                        "⚠️ Your Telegram account is not yet linked to a JARVIS user.\n\n"
-                        "To pair, open the JARVIS dashboard → <b>Settings → Integrations</b> "
-                        "and follow the Telegram pairing steps. "
-                        "You will receive a deep-link that completes the pairing automatically.",
-                        parse_mode="HTML",
+                        "🔗 Link your JARVIS account first: open the dashboard → "
+                        "Settings → Integrations → Telegram, then run /pair <token>."
                     )
                 return
             if context.user_data is not None:

@@ -156,6 +156,7 @@ export function TelegramPairingSection() {
     mutationFn: requestTelegramPairToken,
     onSuccess: (data) => {
       setPendingToken(data);
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.status() });
     },
   });
 
@@ -163,6 +164,7 @@ export function TelegramPairingSection() {
     mutationFn: removeTelegramPairing,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pairing.userTelegram() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.setup.status() });
     },
   });
 

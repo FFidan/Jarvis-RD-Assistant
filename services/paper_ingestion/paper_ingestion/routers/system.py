@@ -84,19 +84,6 @@ class SetupStatus(BaseModel):
     telegram_paired: bool
 
 
-def _is_owner_chat_paired(value: Any) -> bool:
-    """Return True iff ``telegram.owner_chat_id`` contains a real chat id."""
-    if value is None:
-        return False
-    if isinstance(value, str) and value.lower() == "null":
-        return False
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return True
-    return False
-
-
 def _record_get(row: Any, key: str) -> Any:
     if hasattr(row, "get"):
         return row.get(key)
@@ -188,13 +175,14 @@ async def get_setup_status(
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT key, value FROM user_config WHERE key = ANY($1::text[]) AND user_id IS NULL",
-            ["setup.completed", "telegram.owner_chat_id"],
+            ["setup.completed"],
         )
         topics_row = await conn.fetchrow("SELECT COUNT(*) AS n FROM topics")
+        paired_row = await conn.fetchrow("SELECT COUNT(*) AS n FROM telegram_user_pairings")
 
     config: dict[str, Any] = {r["key"]: r["value"] for r in rows}
     setup_completed = _coerce_bool(config.get("setup.completed"), default=False)
-    telegram_paired = _is_owner_chat_paired(config.get("telegram.owner_chat_id"))
+    telegram_paired = int(paired_row["n"]) > 0 if paired_row else False
     topics_count = int(topics_row["n"]) if topics_row else 0
 
     telegram_configured = bool(get_paper_ingestion_settings().telegram_bot_token)

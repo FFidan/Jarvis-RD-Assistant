@@ -193,21 +193,22 @@ class JarvisScheduler:
                 "Please check service logs for details."
             )
             try:
-                from telegram_bot.owner import resolve_owner_chat_id
+                from telegram_bot.owner import list_user_pairings
 
-                owner = await resolve_owner_chat_id(self.db_pool, self.config)
-                if owner is None:
-                    logger.info(
-                        "Skipping failure alert for job %s (id=%d): no telegram owner paired",
+                pairings = await list_user_pairings(self.db_pool)
+                if not pairings:
+                    logger.warning(
+                        "Skipping failure alert for job %s (id=%d): no telegram pairings",
                         nudge_type,
                         nudge_id,
                     )
                     return
-                await self.bot.send_message(
-                    chat_id=owner,
-                    text=alert,
-                    parse_mode="HTML",
-                )
+                for pairing in pairings:
+                    await self.bot.send_message(
+                        chat_id=pairing.chat_id,
+                        text=alert,
+                        parse_mode="HTML",
+                    )
                 logger.info(
                     "Sent failure alert for job %s (id=%d)",
                     nudge_type,

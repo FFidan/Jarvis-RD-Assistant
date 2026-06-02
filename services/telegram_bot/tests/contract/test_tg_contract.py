@@ -378,120 +378,6 @@ async def test_pair_command_rejects_expired_token(contract_conn):
 
 
 # ---------------------------------------------------------------------------
-# A227: start_command — legacy _do_pairing DB path
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_a227_start_command_pairs_owner_via_telegram_pairing(contract_conn):
-    """Covers map row A227: start_command /start PAIR_<code> path writes
-    user_config.telegram.owner_chat_id and deletes the pairing code row.
-    Survivor-of: legacy _do_pairing DB assertions in test_pairing.py.
-    Verified: services/telegram_bot/telegram_bot/handlers/commands/system_commands.py:56 at HEAD.
-    """
-    from telegram_bot.handlers.commands.system_commands import start_command
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    # GIVEN: a valid pairing code in telegram_pairing
-    code = "STARTTEST-A227"
-    await contract_conn.execute(
-        "INSERT INTO telegram_pairing (code, expires_at) VALUES ($1, NOW() + INTERVAL '1 hour')",
-        code,
-    )
-
-    pool = TgContractPool(contract_conn)
-    update = _make_update_with_text(f"/start PAIR_{code}", chat_id=3301)
-    context = _make_context(pool)
-
-    await start_command(update, context)
-
-    # THEN: user_config row exists with the chat_id
-    row = await contract_conn.fetchrow(
-        "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
-    )
-    assert row is not None, "user_config telegram.owner_chat_id must be written by start_command"
-    value = row["value"]
-    assert int(value) == 3301
-
-    # AND: the pairing code is consumed (deleted)
-    code_row = await contract_conn.fetchrow(
-        "SELECT code FROM telegram_pairing WHERE code = $1", code
-    )
-    assert code_row is None, "telegram_pairing code must be deleted after pairing"
-
-    # PTB boundary: success reply sent
-    update.message.reply_text.assert_awaited_once()
-    reply_text: str = update.message.reply_text.call_args[0][0]
-    assert "Paired" in reply_text, f"Expected 'Paired' in reply; got: {reply_text!r}"
-
-
-# ---------------------------------------------------------------------------
-# MED-TG-01: to_jsonb($1::bigint) cast regression — chat_id → jsonb scalar
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_med_tg_01_do_pairing_chat_id_to_jsonb_cast(contract_conn):
-    """MED-TG-01: _do_pairing must convert chat.id (int) to jsonb via to_jsonb($1::bigint).
-
-    PostgreSQL has no implicit integer→jsonb cast. The fix ensures the SQL
-    uses to_jsonb($1::bigint) so chat_id is encoded as a jsonb number scalar.
-
-    This test verifies:
-    1. The INSERT succeeds (no DataError / ProgrammingError)
-    2. The stored value is a jsonb number matching the chat_id
-    """
-    from telegram_bot.handlers.commands.system_commands import _do_pairing
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    # GIVEN: a valid pairing code in telegram_pairing
-    code = "MEDTG01TEST"
-    await contract_conn.execute(
-        "INSERT INTO telegram_pairing (code, expires_at) VALUES ($1, NOW() + INTERVAL '1 hour')",
-        code,
-    )
-
-    pool = TgContractPool(contract_conn)
-    chat_id = 5432
-    update = _make_update_with_text(f"/start PAIR_{code}", chat_id=chat_id)
-    context = _make_context(pool)
-
-    # WHEN: _do_pairing executes
-    await _do_pairing(update, context, code)
-
-    # THEN: user_config row exists with value = jsonb number
-    row = await contract_conn.fetchrow(
-        "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
-    )
-    assert row is not None, "user_config telegram.owner_chat_id must be created"
-    value = row["value"]
-
-    # Verify the value is a jsonb number (can be extracted and converted to int)
-    assert isinstance(value, int), (
-        f"MED-TG-01: value must be jsonb-encoded as a number (got {type(value).__name__}); "
-        f"check that SQL uses to_jsonb($1::bigint)"
-    )
-    assert value == chat_id, f"MED-TG-01: value must match chat_id={chat_id}, got {value}"
-
-    # AND: the pairing code is consumed (deleted)
-    code_row = await contract_conn.fetchrow(
-        "SELECT code FROM telegram_pairing WHERE code = $1", code
-    )
-    assert code_row is None, "telegram_pairing code must be deleted after pairing"
-
-    # PTB boundary: success reply sent
-    update.message.reply_text.assert_awaited_once()
-    reply_text: str = update.message.reply_text.call_args[0][0]
-    assert "Paired" in reply_text, f"Expected 'Paired' in reply; got: {reply_text!r}"
-
-
-# ---------------------------------------------------------------------------
 # A233: briefing_command — direct DB reads under user scope
 # ---------------------------------------------------------------------------
 
@@ -890,15 +776,17 @@ async def test_a247_task_done_callback_marks_task_done_in_db(contract_conn, cont
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_a247b_task_done_callback_legacy_owner_cannot_complete_scoped_task(
+async def test_a247b_task_done_callback_null_user_cannot_complete_scoped_task(
     contract_conn, contract_two_users
 ):
-    """TG-SEC-03 (live PG): a legacy single-tenant owner chat (auth_check → (True, None))
-    must NOT be able to complete a paired user's task. Before the fix, the callback
-    called complete_task(user_id=None), whose ``$2 IS NULL`` clause is a catch-all that
-    matches any task by id — a cross-tenant write. The consumer-side ownership pre-check
-    (user_id IS NOT DISTINCT FROM $2) denies it: task_id_a is owned by user_a (non-NULL),
-    so ``IS NOT DISTINCT FROM NULL`` does not match → "not found", task left untouched.
+    """TG-SEC-03 (live PG): defence-in-depth. auth_check can no longer return
+    (True, None) — pairing is the sole identity mechanism — but we still force
+    that (impossible) result here to prove the callback's own consumer-side
+    ownership pre-check holds. Before the fix, complete_task(user_id=None) whose
+    ``$2 IS NULL`` clause is a catch-all that matches any task by id — a
+    cross-tenant write. The pre-check (user_id IS NOT DISTINCT FROM $2) denies
+    it: task_id_a is owned by user_a (non-NULL), so ``IS NOT DISTINCT FROM
+    NULL`` does not match → "not found", task left untouched.
     """
     from unittest.mock import patch
 
@@ -923,17 +811,17 @@ async def test_a247b_task_done_callback_legacy_owner_cannot_complete_scoped_task
     with patch(
         "telegram_bot.handlers.callback_handler.auth_check",
         new_callable=AsyncMock,
-        return_value=(True, None),  # legacy single-tenant owner — no paired user_id
+        return_value=(True, None),  # forced impossible state — exercises consumer-side defence
     ):
         await task_done_callback(update, context)
 
-    # The task remains in_progress — the legacy owner could NOT complete user A's task.
+    # The task remains in_progress — a NULL-user caller could NOT complete user A's task.
     row = await contract_conn.fetchrow(
         "SELECT status, completed_at FROM tasks WHERE id = $1", task_id_a
     )
     assert row is not None
     assert row["status"] == "in_progress", (
-        f"TG-SEC-03 leak: legacy owner completed a scoped task; status={row['status']!r}"
+        f"TG-SEC-03 leak: NULL-user caller completed a scoped task; status={row['status']!r}"
     )
     assert row["completed_at"] is None, "completed_at must stay NULL — task was not completed"
 
@@ -1453,12 +1341,11 @@ async def test_tg_pulse_now_command_enqueues_pulse_job(contract_conn, contract_t
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
 async def test_tg_start_command_welcome_path_no_pair_token(contract_conn, contract_two_users):
-    """W1B.1-11: /start with no PAIR_ arg returns welcome message; no DB state change.
+    """W1B.1-11: /start from a paired chat returns the welcome message; no DB state change.
 
-    The command detects no PAIR_ prefix, performs auth_check via real
-    telegram_user_pairings, and replies with a Welcome message.  No rows are
-    inserted or mutated.
-    Verified: system_commands.py:117–158 (start_command, non-pairing path).
+    The command performs auth_check via real telegram_user_pairings and replies
+    with a Welcome message.  No rows are inserted or mutated.
+    Verified: system_commands.py start_command at HEAD.
 
     RED proof: removing the welcome reply_text() call → reply_text.assert_awaited_once() fails.
     """

@@ -10,8 +10,6 @@ import type {
   Nudge,
   ExtractionTemplate,
   SetupStatus,
-  TelegramPairing,
-  TelegramPairingStatus,
   SmtpConfig,
   SmtpConfigInput,
   SourceConfigPatch,
@@ -141,18 +139,6 @@ export const saveFirstRunCloudKeys = (body: FirstRunCloudKeysBody) =>
   apiFetch<FirstRunCloudKeysResponse>('/api/setup/cloud-llm-keys', {
     method: 'POST',
     body: JSON.stringify(body),
-  });
-
-export const createPairingCode = () =>
-  apiFetch<TelegramPairing>('/api/telegram/pairing', { method: 'POST' });
-
-export const getPairingStatus = () =>
-  apiFetch<TelegramPairingStatus>('/api/telegram/pairing/status');
-
-export const unpairTelegram = () =>
-  apiFetch<void>('/api/config/telegram.owner_chat_id', {
-    method: 'PUT',
-    body: JSON.stringify({ key: 'telegram.owner_chat_id', value: null }),
   });
 
 // --- Per-user multi-tenant Telegram pairing ---

@@ -209,8 +209,6 @@ export const QUERY_KEYS = {
 
   // ── Telegram pairing ──────────────────────────────────────────────────────
   pairing: {
-    status: () => ["pairing-status"] as const,
-    statusInitial: () => ["pairing-status-initial"] as const,
     userTelegram: () => ["user-telegram-pairing"] as const,
     botTokenStatus: () => ["telegram-bot-token-status"] as const,
   },

@@ -1,13 +1,9 @@
-"""Tests for the /start PAIR_<code> deep-link pairing flow and DB-fallback auth.
+"""Tests for /start (pairing-gated) and /pair rate-limiting.
 
-Covers:
-- /start PAIR_<valid>   -> persists chat id into user_config, replies success
-- /start PAIR_<expired> -> deletes code, replies error
-- /start PAIR_<unknown> -> replies error
-- /start (no payload)   -> still auth-gated; unauthed chat yields no reply
-- _auth_check: env-var priority over DB
-- _auth_check: DB fallback when env-var is None
-- _auth_check: DB null -> unauthorised
+Pairing (``telegram_user_pairings``) is the sole bot-identity mechanism, so:
+- /start from a paired chat   -> welcome message
+- /start from an unpaired chat -> /pair guidance (no welcome)
+- /pair                        -> rate-limited at 5 calls / 60 s per chat
 """
 
 from __future__ import annotations
@@ -20,32 +16,27 @@ from jarvis_common.testing import FakeAcquireCM, FakeTxnCM, make_bot_config, mak
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands import start_command  # noqa: E402
 from telegram_bot.handlers.commands.pairing_commands import pair_command  # noqa: E402
-from telegram_bot.handlers.commands.system_commands import _handle_pairing  # noqa: E402
-from telegram_bot.handlers.helpers import auth_check as _auth_check  # noqa: E402
 
-_OWNER_CHAT_ID = 777
+_PAIRED_CHAT_ID = 777
 
 
-def _make_config(telegram_chat_id: int | None = _OWNER_CHAT_ID):
-    # BotConfig is frozen and types telegram_chat_id as int, but at runtime
-    # dataclass(frozen=True) doesn't enforce type hints, so passing None works
-    # for the auth-fallback path tests.
+def _make_config(telegram_chat_id: int | None = None):
     return make_bot_config(BotConfig, telegram_chat_id=telegram_chat_id)
 
 
 def _make_conn(fetchrow_return=None, fetchrow_side_effect=None, fetchval_return=None):
     conn = MagicMock()
     conn.fetchrow = AsyncMock(return_value=fetchrow_return, side_effect=fetchrow_side_effect)
-    conn.fetchval = AsyncMock(return_value=fetchval_return)  # existing-owner check
+    conn.fetchval = AsyncMock(return_value=fetchval_return)
     conn.execute = AsyncMock(return_value="EXECUTE 1")
     conn.transaction = MagicMock(return_value=FakeTxnCM())
     return conn
 
 
-def _make_pool(conn, *, fetchval_return=None):
+def _make_pool(conn, *, fetchrow_return=None):
     pool = MagicMock()
     pool.acquire = MagicMock(return_value=FakeAcquireCM(conn))
-    pool.fetchval = AsyncMock(return_value=fetchval_return)
+    pool.fetchrow = AsyncMock(return_value=fetchrow_return)
     return pool
 
 
@@ -61,241 +52,37 @@ def _make_context(pool, config):
 
 
 # ---------------------------------------------------------------------------
-# /start PAIR_* tests
+# /start — pairing-gated welcome / guidance
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_start_with_valid_pair_code_stores_chat_id():
-    """Valid pairing code persists chat.id into user_config and confirms."""
-    future = datetime.now(UTC) + timedelta(minutes=5)
-    conn = _make_conn(fetchrow_return={"expires_at": future})
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=42, text="/start PAIR_ABC123")
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
+async def test_start_unpaired_chat_shows_pair_guidance():
+    """Plain /start from an unpaired chat replies with /pair guidance, no welcome."""
+    pool = _make_pool(_make_conn(), fetchrow_return=None)  # no pairing row
+    update = make_telegram_update(chat_id=999, text="/start")
+    context = _make_context(pool, _make_config())
 
     await start_command(update, context)
-
-    # fetchrow took the code
-    assert conn.fetchrow.await_count == 1
-    assert conn.fetchrow.await_args.args[1] == "ABC123"
-
-    # Two execute calls: INSERT … ON CONFLICT (upsert) into user_config, DELETE telegram_pairing
-    assert conn.execute.await_count == 2
-    upsert_call = conn.execute.await_args_list[0]
-    assert "user_config" in upsert_call.args[0]
-    # Fix H4: chat.id is passed directly (int), not json.dumps(int) — asyncpg
-    # JSONB codec applies json.dumps internally, so the stored value is a JSON
-    # number, not a JSON string.
-    assert upsert_call.args[1] == 42
-    delete_call = conn.execute.await_args_list[1]
-    assert "DELETE FROM telegram_pairing" in delete_call.args[0]
-    assert delete_call.args[1] == "ABC123"
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
-    assert "Paired" in text
+    assert "/pair" in text
+    assert "Welcome" not in text
 
 
 @pytest.mark.asyncio
-async def test_start_with_expired_pair_code_replies_error():
-    """Expired pairing code is deleted and user gets an error reply."""
-    past = datetime.now(UTC) - timedelta(minutes=5)
-    conn = _make_conn(fetchrow_return={"expires_at": past})
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=42, text="/start PAIR_STALE")
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    await start_command(update, context)
-
-    # Exactly one execute (DELETE of the stale code) and no user_config write
-    assert conn.execute.await_count == 1
-    del_call = conn.execute.await_args_list[0]
-    assert "DELETE FROM telegram_pairing" in del_call.args[0]
-    assert del_call.args[1] == "STALE"
-
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
-    assert "Invalid or expired" in text
-
-
-@pytest.mark.asyncio
-async def test_start_with_unknown_pair_code_replies_error():
-    """Unknown pairing code yields the same error, no DB writes."""
-    conn = _make_conn(fetchrow_return=None)
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=42, text="/start PAIR_NOPE")
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    await start_command(update, context)
-
-    assert conn.execute.await_count == 0
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.call_args[0][0]
-    assert "Invalid or expired" in text
-
-
-@pytest.mark.asyncio
-async def test_start_without_payload_requires_auth():
-    """Plain /start from an unauthorised chat sends no reply."""
-    pool = _make_pool(_make_conn(), fetchval_return=None)  # DB null
-    update = make_telegram_update(chat_id=999, text="/start")  # not owner, not in DB
-    context = _make_context(pool, _make_config(telegram_chat_id=_OWNER_CHAT_ID))
-
-    await start_command(update, context)
-
-    update.message.reply_text.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_start_without_payload_authed_sends_welcome():
-    """Plain /start from the authorised chat sends the welcome message."""
-    pool = _make_pool(_make_conn(), fetchval_return=None)
-    update = make_telegram_update(chat_id=_OWNER_CHAT_ID, text="/start")
-    context = _make_context(pool, _make_config(telegram_chat_id=_OWNER_CHAT_ID))
+async def test_start_paired_chat_sends_welcome():
+    """Plain /start from a paired chat sends the welcome message."""
+    pool = _make_pool(_make_conn(), fetchrow_return={"user_id": 1})
+    update = make_telegram_update(chat_id=_PAIRED_CHAT_ID, text="/start")
+    context = _make_context(pool, _make_config())
 
     await start_command(update, context)
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "Welcome" in text
-
-
-# ---------------------------------------------------------------------------
-# _auth_check fallback tests
-# ---------------------------------------------------------------------------
-
-
-def _attach_pairing_fetchrow(pool, *, return_value=None):
-    """Wire pool.fetchrow used by auth_check's telegram_user_pairings lookup."""
-    pool.fetchrow = AsyncMock(return_value=return_value)
-    return pool
-
-
-@pytest.mark.asyncio
-async def test_auth_check_env_var_priority():
-    """Env var match returns (True, None) even when DB has no paired chat."""
-    pool = _make_pool(_make_conn(), fetchval_return=None)
-    update = make_telegram_update(chat_id=_OWNER_CHAT_ID, text="irrelevant")
-    config = _make_config(telegram_chat_id=_OWNER_CHAT_ID)
-
-    assert await _auth_check(update, config, pool) == (True, None)
-    # DB is NOT consulted when env var already matched
-    pool.fetchval.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_auth_check_db_fallback():
-    """When env var is missing, DB-stored chat id grants access as owner."""
-    pool = _attach_pairing_fetchrow(_make_pool(_make_conn(), fetchval_return=555))
-    update = make_telegram_update(chat_id=555, text="irrelevant")
-    config = _make_config(telegram_chat_id=None)
-
-    assert await _auth_check(update, config, pool) == (True, None)
-    pool.fetchval.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_auth_check_db_null():
-    """Env var missing + DB null + no pairing row -> unauthorised."""
-    pool = _attach_pairing_fetchrow(_make_pool(_make_conn(), fetchval_return=None))
-    update = make_telegram_update(chat_id=555, text="irrelevant")
-    config = _make_config(telegram_chat_id=None)
-
-    assert await _auth_check(update, config, pool) == (False, None)
-
-
-@pytest.mark.asyncio
-async def test_auth_check_db_string_coerced():
-    """DB value stored as a string is still coerced to int for comparison."""
-    pool = _attach_pairing_fetchrow(_make_pool(_make_conn(), fetchval_return="555"))
-    update = make_telegram_update(chat_id=555, text="irrelevant")
-    config = _make_config(telegram_chat_id=None)
-
-    assert await _auth_check(update, config, pool) == (True, None)
-
-
-# ---------------------------------------------------------------------------
-# Regression: pairing must INSERT (not UPDATE) so fresh installs work
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_telegram_pairing_inserts_on_fresh_install():
-    """SEC-102: pairing uses INSERT … ON CONFLICT so it works on a fresh install.
-
-    A bare UPDATE would silently update 0 rows if 'telegram.owner_chat_id'
-    doesn't exist yet (e.g. init.sql seeded it as null but a manual wipe removed
-    the row).  The correct fix is an upsert.
-    """
-    future = datetime.now(UTC) + timedelta(minutes=5)
-    conn = _make_conn(fetchrow_return={"expires_at": future})
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=99, text="/start PAIR_FRESHDB")
-    # fresh install: no env-var TELEGRAM_CHAT_ID configured
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    await start_command(update, context)
-
-    # The user_config write must use INSERT … ON CONFLICT, not bare UPDATE.
-    upsert_call = conn.execute.await_args_list[0]
-    sql: str = upsert_call.args[0]
-    assert "INSERT INTO user_config" in sql, (
-        f"Expected INSERT INTO user_config upsert but got: {sql!r}"
-    )
-    assert "ON CONFLICT" in sql, f"Expected ON CONFLICT clause but got: {sql!r}"
-    # Fix H4: chat.id is passed as a native int; asyncpg codec serialises it.
-    assert upsert_call.args[1] == 99
-    # Success reply must be sent
-    update.message.reply_text.assert_awaited_once()
-    reply_text = update.message.reply_text.call_args[0][0]
-    assert "Paired" in reply_text
-
-
-# ---------------------------------------------------------------------------
-# Regression H4: chat.id must reach asyncpg as a native int (no double-encode)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_pairing_stores_chat_id_as_native_int_not_json_string():
-    """H4 regression: _handle_pairing passes chat.id directly, not json.dumps(chat.id).
-
-    asyncpg's JSONB codec (encoder=json.dumps) serialises the value itself.
-    Wrapping in json.dumps first produces a JSON *string* ("42") instead of a
-    JSON *number* (42) — i.e. jsonb_typeof would return 'string', not 'number'.
-
-    This test verifies via a codec round-trip that the value received by
-    conn.execute is a native Python int, not a pre-serialised string.
-    """
-    import json as _json
-
-    future = datetime.now(UTC) + timedelta(minutes=5)
-    conn = _make_conn(fetchrow_return={"expires_at": future})
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=123456789, text="/start PAIR_H4TEST")
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    await start_command(update, context)
-
-    upsert_call = conn.execute.await_args_list[0]
-    raw_value = upsert_call.args[1]
-
-    # The value passed must be a native int, not a pre-serialised string.
-    assert isinstance(raw_value, int), (
-        f"Expected int but got {type(raw_value).__name__!r}: {raw_value!r}. "
-        "Pass chat.id directly — asyncpg's JSONB codec serialises it."
-    )
-    assert raw_value == 123456789
-
-    # Codec round-trip: json.dumps(int) → '123456789' → json.loads → int
-    # This is what Postgres stores; jsonb_typeof would be 'number', not 'string'.
-    encoded = _json.dumps(raw_value)
-    decoded = _json.loads(encoded)
-    assert isinstance(decoded, int), (
-        f"After JSONB codec round-trip, value should decode as int, got {type(decoded)}"
-    )
-    assert decoded == 123456789
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +105,7 @@ async def test_pair_command_rate_limited_after_five_calls() -> None:
     future = datetime.now(UTC) + timedelta(minutes=5)
     conn = _make_conn(fetchrow_return={"user_id": 1, "expires_at": future, "consumed_at": None})
     pool = _make_pool(conn)
-    config = _make_config(telegram_chat_id=None)
+    config = _make_config()
 
     chat_id = 555_001
     results: list = []
@@ -338,208 +125,4 @@ async def test_pair_command_rate_limited_after_five_calls() -> None:
     # 6th is stopped before acquire(), so total acquire count must be exactly 5.
     assert pool.acquire.call_count == 5, (
         f"Expected 5 DB acquires (one per non-rate-limited call), got {pool.acquire.call_count}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# M-05: _handle_pairing uses @rate_limit (5 attempts per 60s via start_command)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_start_pair_rate_limited_after_five_calls() -> None:
-    """M-05: /start PAIR_<code> is guarded by @rate_limit(max_calls=5, window_seconds=60).
-
-    The previous inline timestamp-mutation in _handle_pairing had a TOCTOU
-    race.  After M-05 the guard is the @rate_limit decorator on
-    _handle_pairing_rate_gate — which holds a per-key asyncio.Lock.
-
-    After 5 allowed calls the 6th must be stopped before pool.acquire().
-    """
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    future = datetime.now(UTC) + timedelta(minutes=5)
-    conn = _make_conn(fetchrow_return={"expires_at": future})
-    pool = _make_pool(conn)
-    config = _make_config(telegram_chat_id=None)
-
-    chat_id = 555_002
-    for _ in range(5):
-        update = make_telegram_update(chat_id=chat_id, text="/start PAIR_TESTCODE")
-        context = _make_context(pool, config)
-        await start_command(update, context)
-
-    assert pool.acquire.call_count == 5, (
-        f"Expected 5 DB acquires for 5 non-rate-limited calls, got {pool.acquire.call_count}"
-    )
-
-    # 6th call must be rate-limited — DB acquire must not increase.
-    last_update = make_telegram_update(chat_id=chat_id, text="/start PAIR_TESTCODE")
-    last_context = _make_context(pool, config)
-    await start_command(last_update, last_context)
-
-    assert pool.acquire.call_count == 5, (
-        "6th /start PAIR_* call must not reach DB (rate gate fires first)"
-    )
-    last_update.message.reply_text.assert_awaited_once()
-    reply: str = last_update.message.reply_text.call_args[0][0]
-    assert "rate" in reply.lower() or "limit" in reply.lower(), (
-        f"Expected rate-limit reply on 6th call, got: {reply!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# H3/H4: existing-owner check + log safety (migrated from test_pairing_takeover.py)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def _clear_pairing_timestamps():
-    """Reset rate-limit timestamps before/after each H3/H4 test."""
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-    yield
-    _timestamps.clear()
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_clear_pairing_timestamps")
-async def test_already_paired_rejected():
-    """If an owner is already stored, pairing is refused and DB is NOT overwritten (H3)."""
-    conn = _make_conn(fetchval_return='"999"')
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=42)
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    await _handle_pairing(update, context, "VALID_CODE")
-
-    conn.fetchrow.assert_not_awaited()
-    conn.execute.assert_not_awaited()
-    update.message.reply_text.assert_awaited_once()
-    reply_text = update.message.reply_text.call_args[0][0]
-    assert "already paired" in reply_text
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_clear_pairing_timestamps")
-async def test_already_paired_integer_owner_rejected():
-    """Owner stored as bare integer string is also treated as already-paired (H3)."""
-    conn = _make_conn(fetchval_return="777")
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=42)
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    await _handle_pairing(update, context, "SOME_CODE")
-
-    conn.execute.assert_not_awaited()
-    reply_text = update.message.reply_text.call_args[0][0]
-    assert "already paired" in reply_text
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_clear_pairing_timestamps")
-async def test_no_existing_owner_allows_pairing():
-    """When no owner is set, valid pairing code is accepted and owner is written (H3)."""
-    from datetime import UTC, datetime, timedelta
-
-    future = datetime.now(UTC) + timedelta(minutes=5)
-    conn = _make_conn(fetchval_return=None, fetchrow_return={"expires_at": future})
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=42)
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    await _handle_pairing(update, context, "GOODCODE")
-
-    assert conn.execute.await_count == 2
-    update.message.reply_text.assert_awaited_once()
-    reply_text = update.message.reply_text.call_args[0][0]
-    assert "Paired" in reply_text
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_clear_pairing_timestamps")
-async def test_pairing_logs_hash_not_raw_code(caplog):
-    """On exception inside _handle_pairing, raw code must NOT appear in log output (H4)."""
-    import hashlib
-    import logging
-
-    conn = _make_conn()
-    conn.fetchval = AsyncMock(side_effect=RuntimeError("db exploded"))
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=42)
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    raw_code = "SUPERSECRETCODE123"
-
-    with caplog.at_level(logging.ERROR):
-        await _handle_pairing(update, context, raw_code)
-
-    for record in caplog.records:
-        assert raw_code not in record.getMessage(), (
-            f"Raw pairing code leaked in log: {record.getMessage()!r}"
-        )
-
-    failure_messages = [
-        r.getMessage() for r in caplog.records if "pairing_failed" in r.getMessage()
-    ]
-    assert failure_messages, "Expected at least one 'pairing_failed' log entry"
-
-    expected_hash = hashlib.sha256(raw_code.encode()).hexdigest()[:8]
-    assert any(expected_hash in msg for msg in failure_messages), (
-        f"Expected code_hash {expected_hash!r} in log, got: {failure_messages}"
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_clear_pairing_timestamps")
-async def test_pairing_rate_limit_triggers():
-    """6th pairing attempt within 60 s from the same chat_id must be rejected (H3 rate-limit)."""
-    conn = _make_conn(fetchval_return=None, fetchrow_return=None)
-    pool = _make_pool(conn)
-    update = make_telegram_update(chat_id=42)
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    for i in range(5):
-        update.message.reply_text.reset_mock()
-        await _handle_pairing(update, context, f"BAD_CODE_{i}")
-        reply_text = update.message.reply_text.call_args[0][0]
-        assert "Invalid or expired" in reply_text, f"Attempt {i + 1} should hit DB"
-
-    fetchrow_count_before = conn.fetchrow.await_count
-    update.message.reply_text.reset_mock()
-    await _handle_pairing(update, context, "BAD_CODE_5")
-
-    assert conn.fetchrow.await_count == fetchrow_count_before, (
-        "6th attempt should have been rate-limited before reaching DB"
-    )
-    reply_text = update.message.reply_text.call_args[0][0]
-    assert (
-        "Rate limit exceeded" in reply_text
-        or "Too many pairing" in reply_text
-        or "wait" in reply_text.lower()
-    ), f"Expected rate-limit message, got: {reply_text!r}"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_clear_pairing_timestamps")
-async def test_pairing_rate_limit_different_chats_independent():
-    """Rate limit is per-chat — two different chat IDs each get their own counter."""
-    conn = _make_conn(fetchval_return=None, fetchrow_return=None)
-    pool = _make_pool(conn)
-    context = _make_context(pool, _make_config(telegram_chat_id=None))
-
-    update_a = make_telegram_update(chat_id=10)
-    for _ in range(5):
-        await _handle_pairing(update_a, context, "CODE_A")
-
-    update_b = make_telegram_update(chat_id=20)
-    update_b.message.reply_text.reset_mock()
-    await _handle_pairing(update_b, context, "CODE_B")
-
-    reply_text = update_b.message.reply_text.call_args[0][0]
-    assert "Too many pairing attempts" not in reply_text, (
-        "Different chat_id should not be rate-limited"
     )

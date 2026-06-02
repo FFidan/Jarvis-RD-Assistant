@@ -284,3 +284,49 @@ async def test_sub_ctx_scaling_math():
     # inner=1.0 → outer=1.0
     await sub.update_progress(1.0, "done")
     assert pytest.approx(outer_ctx.update_progress.await_args_list[-1].args[0], abs=1e-9) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# PI-UID-01 — _paper_summarize_job must forward user_id to generate_paper_summary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_summarize_job_forwards_user_id(monkeypatch):
+    """_paper_summarize_job must pass the payload's user_id through to
+    generate_paper_summary as a keyword.
+
+    Before the fix the 4 call sites omitted user_id, so background-job summaries
+    were written with user_id=NULL regardless of the authenticated caller. We
+    stub the heavy summarization module (matching this file's convention) and
+    assert the handler forwards user_id= to it.
+    """
+    from paper_ingestion.paper_jobs import _paper_summarize_job  # noqa: PLC0415
+
+    user_id = 42
+
+    # Stub the heavy summarization module (autouse _install_stubs replaces the
+    # `paper_ingestion.services` package with a bare MagicMock; install the
+    # submodule the handler imports). setitem auto-reverts at teardown.
+    _summ_stub = MagicMock()
+    _summ_stub.generate_paper_summary = AsyncMock(return_value=MagicMock(id=1))
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", _summ_stub)
+
+    # Mock pool: assert_paper_ownership does `fetchrow("SELECT discovered_by ...")`;
+    # discovered_by == caller → ownership granted without a second query.
+    pool = _make_pool({"discovered_by": user_id})
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.verifier = MagicMock()
+    svc.embedder = MagicMock()
+
+    await _paper_summarize_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"paper_id": 7, "user_id": user_id},
+        ctx=_make_ctx(),
+    )
+
+    _summ_stub.generate_paper_summary.assert_awaited_once()
+    assert _summ_stub.generate_paper_summary.await_args.kwargs.get("user_id") == user_id

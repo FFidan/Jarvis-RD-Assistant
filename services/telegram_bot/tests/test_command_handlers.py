@@ -675,14 +675,15 @@ async def test_briefing_scopes_papers_to_user_library_when_paired():
 
 @pytest.mark.asyncio
 async def test_briefing_unpaired_owner_gets_pairing_message():
-    """B4: /briefing by an authorized-but-unpaired chat is blocked with pairing instruction."""
+    """S6: /briefing from an unpaired chat (auth_check -> (False, None)) is
+    blocked with the /pair guidance reply."""
     update, context, mock_db, mock_http = _make_update_and_context()
     update.message.reply_text = AsyncMock()
 
     with patch(
         "telegram_bot.handlers.commands._auth.auth_check",
         new_callable=AsyncMock,
-        return_value=(True, None),
+        return_value=(False, None),
     ):
         await briefing_command(update, context)
 
@@ -759,14 +760,15 @@ async def test_projects_scopes_listing_to_paired_user():
 
 @pytest.mark.asyncio
 async def test_projects_unpaired_owner_gets_pairing_message():
-    """B4: /projects by an authorized-but-unpaired chat is blocked with pairing instruction."""
+    """S6: /projects from an unpaired chat (auth_check -> (False, None)) is
+    blocked with the /pair guidance reply."""
     update, context, mock_db, _ = _make_update_and_context()
     update.message.reply_text = AsyncMock()
 
     with patch(
         "telegram_bot.handlers.commands._auth.auth_check",
         new_callable=AsyncMock,
-        return_value=(True, None),
+        return_value=(False, None),
     ):
         await projects_command(update, context)
 
@@ -979,15 +981,15 @@ async def test_focus_alarm_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_auth_required_blocks_unpaired_owner_with_pairing_message():
-    """B4: authorized chat with jarvis_user_id=None gets a pair-instruction reply."""
+    """S6: an unpaired chat (auth_check -> (False, None)) gets a /pair guidance reply."""
     update, context, _, mock_http = _make_update_and_context()
     update.message.reply_text = AsyncMock()
 
-    # auth_check returns (True, None) — authorized but no jarvis_user_id
+    # Pairing is the sole identity mechanism: an unpaired chat is (False, None).
     with patch(
         "telegram_bot.handlers.commands._auth.auth_check",
         new_callable=AsyncMock,
-        return_value=(True, None),
+        return_value=(False, None),
     ):
         await help_command(update, context)
 

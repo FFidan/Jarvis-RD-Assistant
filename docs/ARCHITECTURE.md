@@ -113,10 +113,14 @@ HTTP client.
 - **Magic-link auth** — `users`, `magic_link_tokens`, and `user_sessions` tables
   (see `db/init.sql`). `jarvis_common.auth` resolves the caller user from a
   session cookie; admin endpoints require `role='admin'`.
-- **Per-user ownership** — `user_id` columns across `daily_log`,
+- **Per-user ownership** — every product row (`daily_log`,
   `paper_recommendations`, `projects`, `tasks`, `milestones`,
-  `pulse_source_health`, `system_events`, and the multi-tenant sweep table. All
-  read/write paths in routers thread `user_id` from `get_current_user`.
+  `pulse_source_health`, `system_events`, and others) carries a non-NULL
+  `user_id`. Single-tenant deployments are multi-tenant with exactly one user;
+  there is no NULL-owned product data. Migration 0092 re-owns any legacy
+  NULL-valued rows to the single admin on upgrade (runs only when exactly one
+  admin exists). All read/write paths in routers thread `user_id` from
+  `get_current_user`.
 - **IDOR guards** — router endpoints that read by PK assert ownership before
   returning data. The defensive `_resolve_request_user_id` helper tolerates
   mocked requests for test harnesses.
@@ -148,9 +152,12 @@ override-capable one because the session-only choice is intentional.
 
 The dashboard issues short-lived pairing tokens in `telegram_pairing_tokens`;
 the bot stores durable chat ownership in `telegram_user_pairings` (see
-`db/init.sql`). Telegram orchestrators iterate paired users where the workflow
-has a per-user delivery surface. The legacy `TELEGRAM_CHAT_ID` path remains a
-compatibility fallback for installs that have not paired a chat yet.
+`db/init.sql`). A chat is authenticated **exclusively** via the `/pair <token>`
+flow — the token is generated in Settings → Integrations → Telegram and
+submitted once. Telegram orchestrators iterate paired users where the workflow
+has a per-user delivery surface. Unpaired chats receive a prompt to run
+`/pair`. The `TELEGRAM_CHAT_ID` env var and the legacy dashboard-code pairing
+path are no longer active.
 
 ### Canonical Corpus And user_library
 

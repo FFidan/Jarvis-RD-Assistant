@@ -17,9 +17,9 @@ vi.mock('@/lib/api', () => ({
   createTopic: vi.fn().mockResolvedValue({ id: 1, name: 'test' }),
   setConfig: vi.fn().mockResolvedValue({ key: 'pulse.cron', value: '0 4 * * *' }),
   markSetupCompleted: vi.fn().mockResolvedValue(undefined),
-  createPairingCode: vi.fn(),
-  getPairingStatus: vi.fn().mockResolvedValue({ paired: false, chat_id: null }),
-  unpairTelegram: vi.fn(),
+  requestTelegramPairToken: vi.fn(),
+  getTelegramPairing: vi.fn().mockResolvedValue({ paired: false, chat_id: null, telegram_username: null, paired_at: null }),
+  removeTelegramPairing: vi.fn(),
 }));
 
 const api = await import('@/lib/api');

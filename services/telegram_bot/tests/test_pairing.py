@@ -146,9 +146,16 @@ async def test_pair_already_consumed_token_replies_error():
 
 @pytest.mark.asyncio
 async def test_unpair_not_paired_chat_replies_informational():
-    """Unpair with no active pairing gives an informational reply."""
+    """Unpair when the DELETE removes 0 rows gives an informational reply.
+
+    The chat is authorised (auth_check finds a pairing row via pool.fetchrow),
+    but the in-transaction DELETE returns "DELETE 0" — e.g. a race where the
+    row vanished — so the handler reports no active pairing.
+    """
     conn = _make_conn(fetchval_return=None, execute_return="DELETE 0")
-    pool = _make_pool(conn)
+    # auth_check (decorator) uses pool.fetchrow → must find a pairing row so the
+    # chat is authorised and the handler body runs.
+    pool = _make_pool(conn, fetchrow_return={"user_id": 1})
     update = make_telegram_update(chat_id=777)
     config = _make_config(telegram_chat_id=777)
     context = _make_context(pool, config=config, args=[])
@@ -173,10 +180,10 @@ async def test_unpair_not_paired_chat_replies_informational():
 
 @pytest.mark.asyncio
 async def test_whoami_unpaired_chat_shows_instructions():
-    """Unpaired chat shows how to pair."""
+    """Unpaired chat shows how to pair (no legacy-owner branch)."""
     pool = _make_pool(_make_conn(), fetchrow_return=None)
     update = make_telegram_update(chat_id=99999)
-    config = _make_config(telegram_chat_id=777)  # different chat → not legacy owner
+    config = _make_config(telegram_chat_id=777)
     context = _make_context(pool, config=config, args=[])
 
     await whoami_command(update, context)
@@ -187,8 +194,10 @@ async def test_whoami_unpaired_chat_shows_instructions():
 
 
 @pytest.mark.asyncio
-async def test_whoami_legacy_owner_shows_system_owner_message():
-    """Chat matching config.telegram_chat_id but no per-user pairing gets legacy-owner message."""
+async def test_whoami_unpaired_even_when_chat_matches_env_var():
+    """A chat whose id matches the legacy env-var still reports 'not paired'
+    when there is no telegram_user_pairings row — the legacy-owner branch is
+    retired."""
     pool = _make_pool(_make_conn(), fetchrow_return=None)
     update = make_telegram_update(chat_id=777)
     config = _make_config(telegram_chat_id=777)
@@ -198,12 +207,9 @@ async def test_whoami_legacy_owner_shows_system_owner_message():
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
-    # Should mention legacy / system owner
-    assert (
-        "system owner" in text.lower()
-        or "legacy" in text.lower()
-        or "single-tenant" in text.lower()
-    )
+    assert "not paired" in text.lower()
+    assert "system owner" not in text.lower()
+    assert "legacy" not in text.lower()
 
 
 # ---------------------------------------------------------------------------

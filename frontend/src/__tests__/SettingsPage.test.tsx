@@ -73,9 +73,6 @@ vi.mock('@/lib/api', () => ({
     telegram_configured: false,
     telegram_paired: false,
   }),
-  createPairingCode: vi.fn(),
-  getPairingStatus: vi.fn().mockResolvedValue({ paired: false, chat_id: null }),
-  unpairTelegram: vi.fn(),
   fetchAccount: vi.fn().mockResolvedValue({
     id: 1,
     email: 'test@example.com',

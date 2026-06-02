@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { createTopic, markSetupCompleted, setConfig } from '@/lib/api';
 import { SetupStep } from '@/components/setup/SetupStep';
 import { SystemCheck } from '@/components/setup/SystemCheck';
-import { PairTelegram } from '@/components/setup/PairTelegram';
+import { TelegramPairingSection } from '@/components/settings/TelegramPairingSection';
 import { SourceApiKeysStep } from '@/components/setup/SourceApiKeysStep';
 import { timeToCron } from '@/lib/cron-utils';
 import type { Topic } from '@/types';
@@ -324,7 +324,7 @@ function TelegramStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
         </>
       }
     >
-      <PairTelegram onPaired={onNext} />
+      <TelegramPairingSection />
     </SetupStep>
   );
 }

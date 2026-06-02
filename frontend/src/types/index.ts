@@ -280,18 +280,6 @@ export interface SetupStatus {
   telegram_paired: boolean;
 }
 
-export interface TelegramPairing {
-  code: string;
-  deep_link: string;
-  expires_at: string; // ISO 8601
-  bot_username_missing?: boolean;
-}
-
-export interface TelegramPairingStatus {
-  paired: boolean;
-  chat_id: number | null;
-}
-
 // --- Analytics ---
 
 export interface ActivityRow {

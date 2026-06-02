@@ -47,9 +47,8 @@ def get_http(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
 def get_jarvis_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
     """Return the JARVIS user-id cached by ``auth_required`` in ``context.user_data``.
 
-    Returns ``None`` when ``context.user_data`` is unavailable or when the chat
-    is on the legacy single-tenant (env-var / ``user_config``) auth path where
-    no per-user id exists.
+    Returns ``None`` only when ``context.user_data`` is unavailable; for an
+    authorised (paired) chat the decorator always stashes a real integer id.
     """
     return context.user_data.get("jarvis_user_id") if context.user_data is not None else None
 
@@ -74,43 +73,28 @@ async def auth_check(
     config: BotConfig,
     db_pool: asyncpg.Pool,
 ) -> tuple[bool, int | None]:
-    """Check whether the incoming chat is authorised and return its user_id.
+    """Check whether the incoming chat is paired and return its user_id.
+
+    Pairing (``telegram_user_pairings``) is the sole bot-identity mechanism;
+    there is no legacy env-var / dashboard-owner path.
 
     Returns
     -------
     tuple[bool, int | None]
-        ``(True, user_id)`` for paired multi-tenant chats — the user_id is the
-        DB PK from ``telegram_user_pairings`` and MUST be used to scope all
-        per-user queries downstream.
-        ``(True, None)`` for the legacy single-tenant owner paths (env-var
-        match or ``user_config.telegram.owner_chat_id``) — downstream queries
-        stay unscoped to preserve owner visibility.
-        ``(False, None)`` for unauthorised chats.
+        ``(True, user_id)`` when the chat is paired — the user_id is the DB PK
+        from ``telegram_user_pairings`` and MUST be used to scope all per-user
+        queries downstream.
+        ``(False, None)`` when unauthorised (no chat, DB error, or no pairing
+        row for this chat_id).
 
-    Priority order:
-    1. ``TELEGRAM_CHAT_ID`` env var (via ``config.telegram_chat_id``).
-    2. DB fallback: ``user_config.telegram.owner_chat_id`` (dashboard pairing).
-    3. Multi-tenant pairing: ``telegram_user_pairings.chat_id`` (migration 071).
+    Invariant: ``authorized is True`` ⟺ ``user_id is not None``.
+
+    The *config* parameter is retained for call-site stability but is no longer
+    consulted by this function.
     """
     chat = update.effective_chat
     if chat is None:
         return False, None
-    env_chat_id = getattr(config, "telegram_chat_id", None)
-    if env_chat_id and chat.id == env_chat_id:
-        return True, None
-    try:
-        row = await db_pool.fetchval(
-            "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
-        )
-    except Exception:
-        logger.warning("auth_check: DB error reading owner_chat_id; denying request", exc_info=True)
-        return False, None
-    if row is not None:
-        try:
-            if chat.id == int(row):
-                return True, None
-        except (ValueError, TypeError):
-            pass
     try:
         pairing_row = await db_pool.fetchrow(
             "SELECT user_id FROM telegram_user_pairings WHERE chat_id = $1",

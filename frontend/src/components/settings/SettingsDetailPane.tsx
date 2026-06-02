@@ -18,7 +18,6 @@ import { ExtractionTemplateSection } from './ExtractionTemplateSection';
 import { PulseSection } from './PulseSection';
 import { TimerSection } from './TimerSection';
 import { TelegramPairingSection } from './TelegramPairingSection';
-import { PairTelegram } from '@/components/setup/PairTelegram';
 import { ZoteroSection } from './ZoteroSection';
 import { TopicSection } from './TopicSection';
 import { AuthorSection } from './AuthorSection';
@@ -147,21 +146,7 @@ function DetailContent({
 
   if (section === 'integrations') {
     if (item === 'telegram') {
-      return (
-        <div className="space-y-8">
-          <TelegramPairingSection />
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-sm font-medium">System Telegram pairing</h3>
-              <p className="text-sm text-muted-foreground mt-0.5">
-                Pair this JARVIS instance to a Telegram chat for system notifications
-                (setup wizard / admin).
-              </p>
-            </div>
-            <PairTelegram />
-          </div>
-        </div>
-      );
+      return <TelegramPairingSection />;
     }
     if (item === 'bot-token') {
       return isAdmin

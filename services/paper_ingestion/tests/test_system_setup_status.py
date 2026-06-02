@@ -12,11 +12,9 @@ from tests.conftest import FakeRecord, _make_pool_and_conn
 def _user_config_rows(
     *,
     setup_completed=False,
-    owner_chat_id=None,
 ) -> list[FakeRecord]:
     rows: list[FakeRecord] = [
         FakeRecord(key="setup.completed", value=setup_completed),
-        FakeRecord(key="telegram.owner_chat_id", value=owner_chat_id),
     ]
     return rows
 
@@ -60,14 +58,15 @@ def _install_user_config(
     conn,
     *,
     setup_completed=False,
-    owner_chat_id=None,
+    telegram_paired: bool = False,
     topics_count: int = 0,
 ):
-    conn.fetch.return_value = _user_config_rows(
-        setup_completed=setup_completed,
-        owner_chat_id=owner_chat_id,
-    )
-    conn.fetchrow.return_value = FakeRecord(n=topics_count)
+    conn.fetch.return_value = _user_config_rows(setup_completed=setup_completed)
+    # get_setup_status calls fetchrow twice: topics count then telegram_user_pairings count.
+    conn.fetchrow.side_effect = [
+        FakeRecord(n=topics_count),
+        FakeRecord(n=1 if telegram_paired else 0),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +77,7 @@ def _install_user_config(
 @pytest.mark.asyncio
 async def test_setup_status_reads_user_config(_app, monkeypatch):
     app, conn = _app
-    _install_user_config(conn, setup_completed=True, owner_chat_id=42, topics_count=3)
+    _install_user_config(conn, setup_completed=True, telegram_paired=True, topics_count=3)
     _patch_probe(monkeypatch, models_ready=False)
 
     async with httpx.AsyncClient(
@@ -176,7 +175,7 @@ async def test_setup_status_topics_count_from_db(_app, monkeypatch):
 @pytest.mark.asyncio
 async def test_setup_status_telegram_paired_false_when_null(_app, monkeypatch):
     app, conn = _app
-    _install_user_config(conn, owner_chat_id=None)
+    _install_user_config(conn, telegram_paired=False)
     _patch_probe(monkeypatch, models_ready=False)
 
     async with httpx.AsyncClient(

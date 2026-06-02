@@ -74,6 +74,11 @@ The following is **never cross-visible** — every query is scoped to
 - Structured extractions-of-record.
 - Magic-link identity, session cookies, and user config values.
 
+Every product row in the database carries a non-NULL `user_id` — there is no
+NULL-owned product data. Single-tenant deployments are treated as multi-tenant
+with one user; ownership is enforced by the same server-side scoping that
+applies in the multi-user case.
+
 The corpus is a shared resource; the intellectual work on top of it is private
 (comparable to a shared scholarly library with per-user workspaces).
 Regression coverage lives in
@@ -124,6 +129,13 @@ calls. This header is only honored when all three guards pass:
 
 Any guard failure returns 403. The mechanism is implemented in
 `current_user_id_strict_with_owner_override` in `libs/jarvis_common/jarvis_common/auth.py`.
+
+The bot resolves the `user_id` it injects from `telegram_user_pairings` — the
+durable record written when a user runs `/pair <token>` in the bot. This is
+the bot's sole identity mechanism; it does not rely on a fixed chat-id
+environment variable. The `telegram.owner_chat_id` config key and the
+`TELEGRAM_CHAT_ID` environment variable are retained as inert tombstones (not
+read at runtime) and may be removed in a future cleanup.
 
 ### Config Key Rotation
 

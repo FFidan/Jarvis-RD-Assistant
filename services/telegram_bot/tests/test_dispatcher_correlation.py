@@ -6,14 +6,13 @@ Covers:
 - test_dispatcher_emits_auth_event_on_first_message_per_chat: first call emits
   category='auth'; second call from the same chat does not (per-session flag via
   context.user_data["_auth_seen"]).
-- test_dispatcher_emits_config_event_when_setting_changes: successful pairing emits
-  category='config'.
+- test_start_*: /start authenticates via the telegram_user_pairings lookup —
+  paired chats get the welcome, unpaired chats get the /pair guidance.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -195,70 +194,50 @@ async def test_dispatcher_auth_event_not_emitted_for_second_distinct_chat():
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_emits_config_event_when_setting_changes():
-    """Successful /start PAIR_<code> flow emits a category='config' event.
-
-    The event must be emitted after the user_config upsert succeeds but before
-    the confirmation reply.
-    """
+async def test_start_paired_chat_sends_welcome_via_pairing_lookup():
+    """/start authenticates via the telegram_user_pairings lookup (no PAIR_
+    deep-link, no config event). A paired chat receives the welcome message."""
     from telegram_bot.handlers.commands.system_commands import start_command
 
-    future = datetime.now(UTC) + timedelta(minutes=5)
-
-    # Build a conn that succeeds through the full pairing flow:
-    # fetchval → None (no existing owner), fetchrow → valid expiry, execute → OK
-    conn = MagicMock()
-    conn.fetchval = AsyncMock(return_value=None)
-    conn.fetchrow = AsyncMock(return_value={"expires_at": future})
-    conn.execute = AsyncMock(return_value="EXECUTE 1")
-
-    class _TxnCM:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_):
-            return None
-
-    class _AcquireCM:
-        def __init__(self, c):
-            self._c = c
-
-        async def __aenter__(self):
-            return self._c
-
-        async def __aexit__(self, *_):
-            return None
-
     pool = MagicMock()
-    pool.acquire = MagicMock(return_value=_AcquireCM(conn))
-    pool.fetchval = AsyncMock(return_value=None)
-    conn.transaction = MagicMock(return_value=_TxnCM())
+    pool.fetchrow = AsyncMock(return_value={"user_id": 1})  # paired
 
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = 42
     update.message = MagicMock()
-    update.message.text = "/start PAIR_VALIDCODE"
+    update.message.text = "/start"
     update.message.reply_text = AsyncMock()
 
     context = _make_context(pool, make_bot_config(BotConfig, telegram_chat_id=None))
 
-    mock_log_event = AsyncMock()
+    await start_command(update, context)
 
-    # Patch log_event in both modules that import it
-    with (
-        patch("telegram_bot.handlers.commands.system_commands.log_event", mock_log_event),
-        patch("telegram_bot.handlers.commands._auth.log_event", AsyncMock()),
-    ):
-        await start_command(update, context)
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Welcome" in text
 
-    config_calls = [
-        c for c in mock_log_event.await_args_list if c.kwargs.get("category") == "config"
-    ]
-    assert len(config_calls) == 1, (
-        f"Expected exactly one config event, got {len(config_calls)}: {config_calls}"
-    )
-    kw = config_calls[0].kwargs
-    assert kw["message"] == "setting_changed"
-    assert kw["context"]["command"] == "start_pairing"
-    assert kw["context"]["chat_id"] == 42
+
+@pytest.mark.asyncio
+async def test_start_unpaired_chat_shows_pair_guidance():
+    """/start from an unpaired chat replies with /pair guidance, not welcome."""
+    from telegram_bot.handlers.commands.system_commands import start_command
+
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(return_value=None)  # unpaired
+
+    update = MagicMock()
+    update.effective_chat = MagicMock()
+    update.effective_chat.id = 42
+    update.message = MagicMock()
+    update.message.text = "/start"
+    update.message.reply_text = AsyncMock()
+
+    context = _make_context(pool, make_bot_config(BotConfig, telegram_chat_id=None))
+
+    await start_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "/pair" in text
+    assert "Welcome" not in text

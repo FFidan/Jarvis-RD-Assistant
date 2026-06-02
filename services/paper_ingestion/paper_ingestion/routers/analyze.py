@@ -188,6 +188,7 @@ async def _analyze_stream(
             http_client,
             verifier,
             embedder,
+            user_id=user_id,
         )
     except Exception as exc:
         logger.error("Summarization failed for paper %d: %s", paper_id, exc, exc_info=True)
