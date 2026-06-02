@@ -103,6 +103,16 @@ class BotConfig(JarvisCommonSettings):
         description="JARVIS API key for authenticated backend calls (JARVIS_API_KEY).",
     )
 
+    # --- Public base URL ------------------------------------------------
+    jarvis_base_url: str | None = Field(
+        default=None,
+        alias="JARVIS_BASE_URL",
+        description=(
+            "Absolute public base URL of the JARVIS dashboard (JARVIS_BASE_URL). "
+            "Used to build working deep-links in Telegram digests; None omits the link."
+        ),
+    )
+
     @field_validator("telegram_chat_id", mode="before")
     @classmethod
     def _coerce_chat_id(cls, v: object) -> int | None:

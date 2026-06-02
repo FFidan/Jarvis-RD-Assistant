@@ -1,13 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { streamSSE, streamAnalyze, type StreamEvent, type AnalyzeEvent } from '@/lib/sse';
 import { createSSEReader } from '@/lib/sse-reader';
+import { toast } from 'sonner';
+
+// Mock sonner — sse.ts now transitively imports `@/lib/api/core`, which
+// imports `toast` from sonner for the session-expired toast.
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 // Mock auth store — must be defined before importing sse to ensure
-// the module-level import in sse.ts resolves to this mock.
+// the module-level import in sse.ts resolves to this mock. `isAuthenticated`
+// MUST be truthy: handleAuthFailure early-returns (no toast, no logout) when
+// the session is not authenticated.
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
       getApiKey: vi.fn(() => null),
+      isAuthenticated: true,
       logout: vi.fn(),
     })),
   },
@@ -106,8 +114,10 @@ describe('streamSSE', () => {
     const { useAuthStore } = await import('@/stores/auth-store');
     const logoutMock = vi.fn();
     // Partial AuthState mock — only the fields used by this code path.
+    // isAuthenticated must be true or handleAuthFailure early-returns.
     vi.mocked(useAuthStore.getState).mockReturnValue({
       getApiKey: vi.fn(() => null),
+      isAuthenticated: true,
       logout: logoutMock,
     } as unknown as ReturnType<typeof useAuthStore.getState>);
 
@@ -126,6 +136,7 @@ describe('streamSSE', () => {
     // Partial AuthState mock — only the fields used by this code path.
     vi.mocked(useAuthStore.getState).mockReturnValue({
       getApiKey: vi.fn(() => null),
+      isAuthenticated: true,
       logout: logoutMock,
     } as unknown as ReturnType<typeof useAuthStore.getState>);
 
@@ -136,6 +147,41 @@ describe('streamSSE', () => {
     const gen = streamSSE('/api/ask/stream', { question: 'test' });
     await expect(gen.next()).rejects.toThrow('Forbidden — you do not have permission to access this resource');
     expect(logoutMock).not.toHaveBeenCalled();
+  });
+
+  it('routes 401 through handleAuthFailure: N parallel 401s toast once, logout per-call', async () => {
+    const { useAuthStore } = await import('@/stores/auth-store');
+    const logoutMock = vi.fn();
+    vi.mocked(useAuthStore.getState).mockReturnValue({
+      getApiKey: vi.fn(() => null),
+      isAuthenticated: true,
+      logout: logoutMock,
+    } as unknown as ReturnType<typeof useAuthStore.getState>);
+    vi.mocked(toast.error).mockClear();
+
+    // Jump the clock far into the future, well past any prior test's 5s
+    // debounce window (which was stamped with the real Date.now), so the first
+    // of this burst always clears the gate — order-independent.
+    vi.spyOn(Date, 'now').mockReturnValue(4_000_000_000_000);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('Unauthorized', { status: 401 }),
+    );
+
+    // Fire 3 parallel streamSSE calls that all 401 in the same debounce window.
+    const results = await Promise.allSettled(
+      [0, 1, 2].map((i) => streamSSE(`/api/ask/stream/${i}`, { question: 'test' }).next()),
+    );
+
+    expect(results.every((r) => r.status === 'rejected')).toBe(true);
+    // Debounce singleton collapses the burst to one toast …
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringMatching(/session expired/i),
+      expect.objectContaining({ duration: 6000 }),
+    );
+    // … but logout fires once per call (not debounced).
+    expect(logoutMock).toHaveBeenCalledTimes(3);
   });
 
   it('reader.cancel is called in finally block after stream completes', async () => {

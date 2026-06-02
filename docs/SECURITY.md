@@ -18,6 +18,8 @@ JARVIS uses three distinct credential types with strictly bounded authority:
 
 The `JARVIS_API_KEY` is an ops secret, not a user password. Anyone who holds it can call service endpoints but cannot read or write another user's papers, cards, or settings — the user-data layer requires a valid session identity.
 
+The session layer includes a deliberate 24-hour `SESSION_GRACE` window (in `session_middleware.py`): a session expired by no more than 24 hours still resolves the user's identity (without renewing `expires_at`) so that reviews captured offline can reconcile after a realistic offline gap. This is an intentional offline-tolerance design choice, not a misconfiguration. `revoked_at` and `deleted_at` still hard-fail immediately regardless of the grace window — explicit revocation is never relaxed.
+
 ### In-Scope Attackers
 
 - Unauthenticated network-level attacker (open dashboard port, no session or key).

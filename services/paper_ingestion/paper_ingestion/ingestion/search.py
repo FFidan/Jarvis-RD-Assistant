@@ -215,7 +215,12 @@ class EmbeddingSearchMixin:
         """
         from jarvis_common.settings import get_reranker_settings
 
-        if len(chunks) <= top_k:
+        # PI-CORR-02: only skip reranking when there are strictly FEWER candidates
+        # than top_k. At len(chunks) == top_k the reranker must still run: it
+        # reorders the candidates by relevance rather than returning them in their
+        # input (vector-similarity) order. A `<=` guard silently dropped that
+        # reordering at the equal-count boundary.
+        if len(chunks) < top_k:
             return chunks[:top_k]
 
         backend = get_reranker_settings().reranker_backend

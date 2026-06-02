@@ -48,9 +48,11 @@ def _balance_chunk(chunk: str, open_stack: list[str]) -> tuple[str, list[str]]:
     # Prepend re-openers for tags inherited from the previous chunk.
     prefix = "".join(open_stack)
 
-    # Scan for opens/closes inside this chunk to track what is opened or
-    # closed here.
-    local_stack: list[str] = []
+    # Seed with inherited openers (TG-BUG-02) so a chunk that closes — or never
+    # touches — a tag opened in a prior chunk balances it: the suffix closes
+    # everything still open at chunk end, making each chunk self-contained valid
+    # HTML (Telegram parses every message in isolation).
+    local_stack: list[str] = list(open_stack)
     pos = 0
     while pos < len(chunk):
         open_match = _OPEN_TAG_RE.search(chunk, pos)
@@ -236,11 +238,15 @@ async def run_paper_digest(
         if digest and digest.get("topics"):
             text = format_weekly_digest(digest)
             lines = text.split("\n")
-            lines.append(
-                "\n\U0001f4f1 "
-                '<a href="/feed?surface=inbox&amp;filter=pulse-this-week">'
-                "View in JARVIS inbox</a>"
-            )
+            # TG-BUG-01: Telegram cannot render a relative href, so only emit
+            # the inbox deep-link when an absolute base URL is configured.
+            if config.jarvis_base_url:
+                lines.append(
+                    "\n\U0001f4f1 "
+                    f'<a href="{config.jarvis_base_url}'
+                    '/feed?surface=inbox&amp;filter=pulse-this-week">'
+                    "View in JARVIS inbox</a>"
+                )
             try:
                 await _send_chunked(bot, pairing.chat_id, lines)
                 logger.info(

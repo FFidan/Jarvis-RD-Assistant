@@ -95,26 +95,43 @@ async def test_send_chunked_splits_long_messages():
     assert "line-4-" in sent_text
 
 
-def test_balance_chunk_no_double_count_inherited_tags():
-    """Inherited tags must not be closed in the suffix, preventing malformed HTML.
+def test_balance_chunk_seeds_local_stack_with_inherited_tags():
+    """TG-BUG-02: each chunk must be independently balanced HTML.
 
-    Regression test for HIGH-TG-02: when a chunk inherits tags from the previous
-    chunk, those inherited tags are re-opened in the prefix but must NOT be closed
-    in the suffix. This prevents the double-close bug where tags get closed at the
-    end of one chunk and then re-opened/re-closed at the start of the next.
+    Telegram parses every message in isolation, so a chunk must re-open
+    inherited tags (prefix) AND close everything still open at its end
+    (suffix). Seeding ``local_stack`` with ``open_stack`` means inherited tags
+    are tracked and closed, so the chunk Telegram receives is self-contained
+    valid HTML rather than carrying an unclosed opener.
     """
-    # Chunk that inherits an italic tag but doesn't open/close any new tags
+    # Chunk inherits an italic tag and opens/closes a bold tag internally.
     balanced, updated_stack = _balance_chunk("<b>hello</b>", open_stack=["<i>"])
 
-    # The inherited <i> is re-opened in the prefix, the chunk is added.
-    # The suffix is empty because no new tags are open at chunk end.
-    # Result: italic stays open, bold is properly paired.
-    assert balanced == "<i><b>hello</b>", f"Expected '<i><b>hello</b>', got {balanced!r}"
+    # The inherited <i> is re-opened in the prefix; <b>hello</b> pairs locally;
+    # the still-open inherited <i> is closed in the suffix → self-balanced.
+    assert balanced == "<i><b>hello</b></i>", f"Expected '<i><b>hello</b></i>', got {balanced!r}"
 
-    # No new tags opened in this chunk, so the updated stack is empty.
-    # The inherited italic is NOT returned here; it stays active due to the
-    # prefix mechanism and will be re-specified in the next chunk's open_stack.
-    assert updated_stack == [], f"Expected [], got {updated_stack!r}"
+    # The inherited <i> is still open at chunk end, so it carries forward.
+    assert updated_stack == ["<i>"], f"Expected ['<i>'], got {updated_stack!r}"
+
+
+def test_balance_chunk_closes_tag_opened_in_prior_chunk():
+    """TG-BUG-02 (regression): a chunk that closes an inherited tag is balanced.
+
+    Before the fix, ``local_stack`` ignored ``open_stack``, so a chunk that
+    only contained text after an inherited opener was emitted with an unclosed
+    opener (``<b>text``) — malformed HTML. After the fix, the inherited opener
+    is closed in the suffix and the carry-state is correct.
+    """
+    import re
+
+    # Chunk inherits <b> and adds only text (closes nothing, opens nothing).
+    balanced, updated_stack = _balance_chunk("more text", open_stack=["<b>"])
+
+    opens = len(re.findall(r"<b>", balanced, re.IGNORECASE))
+    closes = len(re.findall(r"</b>", balanced, re.IGNORECASE))
+    assert opens == closes == 1, f"Inherited <b> must be balanced in-chunk; got {balanced!r}"
+    assert updated_stack == ["<b>"], f"Inherited opener must carry forward; got {updated_stack!r}"
 
 
 @pytest.mark.asyncio
@@ -209,6 +226,92 @@ async def test_run_paper_digest_uses_llm_digest_when_topics_present():
     )
     assert any("digest line" in line for line in delivered_lines), (
         f"Expected formatted digest content in delivered lines; got: {delivered_lines}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_paper_digest_emits_absolute_inbox_link_when_base_url_set():
+    """TG-BUG-01: with jarvis_base_url set, the inbox link is an absolute URL.
+
+    A relative href (``/feed?...``) cannot be rendered as a working link by
+    Telegram; the digest must prepend the configured base URL.
+    """
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    db_pool = AsyncMock()
+    config = make_bot_config(
+        BotConfig,
+        telegram_chat_id=1234,
+        jarvis_api_key=SecretStr("secret"),
+        jarvis_base_url="https://jarvis.example.com",
+    )
+
+    from telegram_bot.owner import UserPairing
+
+    deliveries: list[list[str]] = []
+
+    async def _capturing_send(_bot, _chat_id: int, lines: list[str]) -> None:
+        deliveries.append(lines)
+
+    with (
+        patch(
+            "telegram_bot.owner.list_user_pairings",
+            AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
+        ),
+        patch.object(
+            paper_digest,
+            "_fetch_digest_from_api",
+            AsyncMock(return_value={"topics": [{"name": "AI"}], "total_papers": 1}),
+        ),
+        patch.object(paper_digest, "format_weekly_digest", return_value="digest line"),
+        patch.object(paper_digest, "_send_chunked", side_effect=_capturing_send),
+    ):
+        await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
+
+    assert len(deliveries) == 1
+    joined = "\n".join(deliveries[0])
+    assert "https://jarvis.example.com/feed?surface=inbox" in joined, (
+        f"Expected absolute inbox link; got: {joined!r}"
+    )
+    # No bare relative href should leak through.
+    assert '<a href="/feed' not in joined, f"Relative href must not be emitted; got: {joined!r}"
+
+
+@pytest.mark.asyncio
+async def test_run_paper_digest_omits_inbox_link_without_base_url():
+    """TG-BUG-01: with jarvis_base_url unset, no broken relative link is emitted."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    db_pool = AsyncMock()
+    config = make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret"))
+    assert config.jarvis_base_url is None  # guard: default
+
+    from telegram_bot.owner import UserPairing
+
+    deliveries: list[list[str]] = []
+
+    async def _capturing_send(_bot, _chat_id: int, lines: list[str]) -> None:
+        deliveries.append(lines)
+
+    with (
+        patch(
+            "telegram_bot.owner.list_user_pairings",
+            AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
+        ),
+        patch.object(
+            paper_digest,
+            "_fetch_digest_from_api",
+            AsyncMock(return_value={"topics": [{"name": "AI"}], "total_papers": 1}),
+        ),
+        patch.object(paper_digest, "format_weekly_digest", return_value="digest line"),
+        patch.object(paper_digest, "_send_chunked", side_effect=_capturing_send),
+    ):
+        await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
+
+    assert len(deliveries) == 1
+    joined = "\n".join(deliveries[0])
+    assert "/feed?surface=inbox" not in joined, (
+        f"No relative/broken inbox link should be emitted without a base URL; got: {joined!r}"
     )
 
 

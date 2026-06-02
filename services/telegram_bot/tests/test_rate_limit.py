@@ -76,6 +76,47 @@ async def test_rate_limit_gc_always_prunes_stale_timestamps():
 
 
 @pytest.mark.asyncio
+async def test_rate_limit_evicts_idle_keys_to_bound_dict_growth():
+    """TG-SEC-01: keys whose stamps all age out are evicted from the dicts.
+
+    The GC prunes stale timestamps in place but never removed the now-empty
+    key, so ``_timestamps`` and ``_locks`` grew one entry per unique
+    ``chat:command`` forever (unbounded memory for one-off / long-idle chats).
+    After an idle key's stamps age out beyond the horizon, a subsequent
+    decorated call must GC-and-evict it so the dicts stay bounded.
+    """
+    _timestamps.clear()
+    _locks.clear()
+
+    window_seconds = 60
+
+    @rate_limit(max_calls=3, window_seconds=window_seconds)
+    async def _noop(update, context):  # type: ignore[no-untyped-def]
+        return "ok"
+
+    # A one-off chat (idle_chat) makes a single call, then never returns. Its
+    # stamp ages out beyond the horizon, leaving a dangling key.
+    idle_chat = 99020
+    idle_key = f"{idle_chat}:{_noop.__module__}.{_noop.__qualname__}"
+    context = _make_context()
+    assert await _noop(make_telegram_update(chat_id=idle_chat), context) == "ok"
+    assert idle_key in _timestamps
+    assert idle_key in _locks
+    # Force the idle key's only stamp far outside the eviction horizon.
+    from telegram_bot.handlers.rate_limit import _MAX_HORIZON_SECONDS
+
+    _timestamps[idle_key] = [time.monotonic() - (_MAX_HORIZON_SECONDS * 2)]
+
+    # A different active chat makes a call. Its invocation must sweep out the
+    # idle key (no recent activity within the horizon) from BOTH dicts.
+    active_chat = 99021
+    await _noop(make_telegram_update(chat_id=active_chat), context)
+
+    assert idle_key not in _timestamps, "Aged-out idle key must be evicted from _timestamps"
+    assert idle_key not in _locks, "Aged-out idle key must be evicted from _locks"
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_sliding_window_blocks_excess_calls():
     """Sliding-window: calls beyond max_calls within window are rejected."""
     _timestamps.clear()

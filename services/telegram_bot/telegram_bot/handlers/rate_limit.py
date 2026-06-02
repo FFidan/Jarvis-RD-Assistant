@@ -27,6 +27,37 @@ _timestamps: dict[str, list[float]] = defaultdict(list)
 # appends, allowing max_calls+N invocations to slip through).
 _locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
+# Upper bound on any sliding-window/cooldown horizon a handler configures.
+# A key idle beyond this can never affect a future rate decision, so it is
+# safe to evict. Generous so legitimate long cooldowns (e.g. /pulse_now) keep
+# their state.
+_MAX_HORIZON_SECONDS = 3600
+
+
+def _evict_idle_keys(now: float, active_key: str) -> None:
+    """Evict keys with no recent activity to bound dict growth (TG-SEC-01).
+
+    The GC prunes stale timestamps in place but never removed the now-empty
+    keys, so ``_timestamps``/``_locks`` grew one entry per unique
+    ``chat:command`` forever (one-off / long-idle chats leak memory). This
+    opportunistic sweep, run on each invocation, drops keys whose every stamp
+    has aged beyond the longest window any decorator could care about.
+
+    *active_key* (the caller currently inside its own lock, about to append a
+    fresh stamp) is skipped. A lock is only evicted when it is not currently
+    locked — a coroutine awaiting/holding it must keep its lock identity.
+    Synchronous (no ``await``), so the scan is atomic w.r.t. other coroutines.
+    """
+    horizon = _MAX_HORIZON_SECONDS
+    for key in [k for k in _timestamps if k != active_key]:
+        stamps = _timestamps[key]
+        if stamps and now - stamps[-1] < horizon:
+            continue  # has activity within any plausible window — keep
+        del _timestamps[key]
+        lock = _locks.get(key)
+        if lock is not None and not lock.locked():
+            del _locks[key]
+
 
 def rate_limit(
     max_calls: int = 5,
@@ -124,6 +155,9 @@ def rate_limit(
                     return None
 
                 stamps.append(now)
+
+                # TG-SEC-01: bound dict growth by evicting long-idle keys.
+                _evict_idle_keys(now, key)
 
             return await func(update, context)
 

@@ -18,6 +18,7 @@ from typing import Any
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import require_admin_or_api_key, verify_api_key
+from jarvis_common.db_helpers import escape_like
 from jarvis_common.sse import sse_event, sse_keepalive
 from starlette.responses import StreamingResponse
 
@@ -80,7 +81,7 @@ async def list_events(
     until: datetime | None = None,
     cursor: int | None = None,
     limit: int = Query(50, ge=1, le=200),
-    q: str | None = None,
+    q: str | None = Query(default=None, max_length=500),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict[str, Any]:
     """Return up to *limit* system_events ordered by id DESC with optional filters.
@@ -122,8 +123,11 @@ async def list_events(
         idx += 1
 
     if q is not None:
-        conditions.append(f"message ILIKE ${idx}")
-        params.append(f"%{q}%")
+        # PI-SEC-02: escape LIKE metacharacters in the user term and pair the
+        # predicate with ESCAPE '\' so '%'/'_' match literally instead of acting
+        # as wildcards (information disclosure / full-scan DoS).
+        conditions.append(f"message ILIKE ${idx} ESCAPE '\\'")
+        params.append(f"%{escape_like(q)}%")
         idx += 1
 
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""

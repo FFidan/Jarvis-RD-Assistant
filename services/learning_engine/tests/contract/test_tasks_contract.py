@@ -111,6 +111,53 @@ async def test_create_task_non_owner_project_gets_404(
     )
 
 
+async def test_create_task_parent_owned_by_other_user_gets_404(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """User A cannot parent a new task under user B's task — 404, no row written (LE-SEC-01 IDOR).
+
+    The project FK only proves the parent exists; without an ownership check the
+    caller could attach a child under another tenant's task and leak structure.
+    """
+    project_id_a = contract_two_users.project_id_a
+    b_task_id = await contract_conn.fetchval(
+        "INSERT INTO tasks (project_id, title, user_id) VALUES ($1, 'B private task', $2) "
+        "RETURNING id",
+        contract_two_users.project_id_b,
+        contract_two_users.user_b_id,
+    )
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            f"/api/projects/{project_id_a}/tasks",
+            json={"title": "IDOR child", "parent_task_id": b_task_id},
+        )
+
+    assert resp.status_code == 404, (
+        f"IDOR: user A got {resp.status_code} parenting under user B's task {b_task_id} "
+        f"(expected 404). Body: {resp.text[:300]}"
+    )
+    count = await contract_conn.fetchval("SELECT count(*) FROM tasks WHERE title = 'IDOR child'")
+    assert count == 0, f"IDOR child task was written despite 404 ({count} rows)"
+
+
+async def test_create_task_parent_owned_by_caller_gets_201(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """Positive control: user A can parent a new task under their own task — 201."""
+    project_id_a = contract_two_users.project_id_a
+    parent_task_id = contract_two_users.task_id_a
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            f"/api/projects/{project_id_a}/tasks",
+            json={"title": "Owned subtask", "parent_task_id": parent_task_id},
+        )
+
+    assert resp.status_code == 201, (
+        f"Owner expected 201 parenting under own task {parent_task_id}; "
+        f"got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # §A223 — PUT /api/tasks/{id} — owner update; 404 for non-owner
 # ---------------------------------------------------------------------------

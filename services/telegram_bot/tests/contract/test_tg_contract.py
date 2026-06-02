@@ -888,6 +888,62 @@ async def test_a247_task_done_callback_marks_task_done_in_db(contract_conn, cont
     assert "done" in reply_text.lower(), f"Expected 'done' in reply; got: {reply_text!r}"
 
 
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a247b_task_done_callback_legacy_owner_cannot_complete_scoped_task(
+    contract_conn, contract_two_users
+):
+    """TG-SEC-03 (live PG): a legacy single-tenant owner chat (auth_check → (True, None))
+    must NOT be able to complete a paired user's task. Before the fix, the callback
+    called complete_task(user_id=None), whose ``$2 IS NULL`` clause is a catch-all that
+    matches any task by id — a cross-tenant write. The consumer-side ownership pre-check
+    (user_id IS NOT DISTINCT FROM $2) denies it: task_id_a is owned by user_a (non-NULL),
+    so ``IS NOT DISTINCT FROM NULL`` does not match → "not found", task left untouched.
+    """
+    from unittest.mock import patch
+
+    from telegram_bot.handlers.callback_handler import task_done_callback
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    task_id_a = contract_two_users.task_id_a  # owned by user_a_id (non-NULL)
+
+    await contract_conn.execute(
+        "UPDATE tasks SET status = 'in_progress', completed_at = NULL WHERE id = $1", task_id_a
+    )
+
+    pool = TgContractPool(contract_conn)
+    from jarvis_common.testing import make_bot_config
+
+    config = make_bot_config(BotConfig, telegram_chat_id=None)
+    update = _make_callback_update(chat_id=11002, callback_data=f"task_done_{task_id_a}")
+    context = _make_context(pool, config)
+
+    with patch(
+        "telegram_bot.handlers.callback_handler.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, None),  # legacy single-tenant owner — no paired user_id
+    ):
+        await task_done_callback(update, context)
+
+    # The task remains in_progress — the legacy owner could NOT complete user A's task.
+    row = await contract_conn.fetchrow(
+        "SELECT status, completed_at FROM tasks WHERE id = $1", task_id_a
+    )
+    assert row is not None
+    assert row["status"] == "in_progress", (
+        f"TG-SEC-03 leak: legacy owner completed a scoped task; status={row['status']!r}"
+    )
+    assert row["completed_at"] is None, "completed_at must stay NULL — task was not completed"
+
+    update.callback_query.message.reply_text.assert_awaited_once()
+    reply_text: str = update.callback_query.message.reply_text.call_args[0][0]
+    assert "not found" in reply_text.lower(), (
+        f"Expected 'not found' for the denied legacy-owner completion; got: {reply_text!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers shared by tests 1–11 below
 # ---------------------------------------------------------------------------

@@ -174,10 +174,19 @@ async def star_paper(
             was_new_star = bool(upsert_result["is_new_row"]) or not bool(
                 upsert_result["prev_starred"]
             )
+        # PI-SEC-01: scope the link count to the caller's own projects. The
+        # Zotero auto-push decision below keys off this count; an unscoped count
+        # let another user's project link trigger A's push. NULL-safe predicate
+        # keeps single-user mode (user_id IS NULL) counting all rows.
         project_link_count = (
             await conn.fetchval(
-                "SELECT COUNT(*) FROM project_papers WHERE paper_id = $1",
+                """SELECT COUNT(*)
+                   FROM project_papers pp
+                   JOIN projects pr ON pr.id = pp.project_id
+                     AND ($2::bigint IS NULL OR pr.user_id IS NOT DISTINCT FROM $2)
+                   WHERE pp.paper_id = $1""",
                 paper_id,
+                user_id,
             )
             or 0
         )

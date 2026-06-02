@@ -1344,6 +1344,93 @@ async def test_paper_detail_has_project_links_flag(
     )
 
 
+async def test_paper_detail_has_project_links_not_leaked_across_users(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """PI-SEC-01: has_project_links must be scoped to the caller's projects.
+
+    User B links A's paper to B's *own* project. When user A views the paper
+    detail, has_project_links must be False — B's link must not surface to A
+    (it gates the "Send to Zotero" button, so a leak is a cross-tenant signal).
+
+    Before the fix the COUNT(*) over project_papers was unscoped, so A saw True.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers_detail.py:89
+    # (get_paper_detail's project-link count must JOIN projects scoped to user_id).
+    """
+    paper_id_a = contract_two_users.paper_id_a
+    project_id_b = contract_two_users.project_id_b
+
+    # User B links A's paper into B's project (B owns project_id_b).
+    await contract_conn.execute(
+        "INSERT INTO project_papers (project_id, paper_id) VALUES ($1, $2)",
+        project_id_b,
+        paper_id_a,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get(f"/api/papers/{paper_id_a}")
+
+    assert resp.status_code == 200, resp.text[:300]
+    assert resp.json().get("has_project_links") in (False, None), (
+        "User B's project link must NOT surface as has_project_links to user A; "
+        f"got {resp.json().get('has_project_links')!r}"
+    )
+
+
+async def test_star_zotero_autopush_not_triggered_by_other_users_link(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key, monkeypatch
+):
+    """PI-SEC-01 behavior delta: starring a paper only *another* user has linked
+    must NOT trigger the Zotero auto-push.
+
+    star_paper enqueues zotero.push iff (off->on star) AND (caller's project
+    link count > 0) AND (auto_push_on_star). With the unscoped count, user A
+    starring a paper that only user B linked would count B's link and wrongly
+    enqueue a push. After scoping, A's link count is 0 → no enqueue.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers_lifecycle.py:177
+    # (star_paper's project-link count must JOIN projects scoped to user_id).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import jarvis_common.task_registry as task_registry
+
+    paper_id_a = contract_two_users.paper_id_a
+    project_id_b = contract_two_users.project_id_b
+    user_a_id = contract_two_users.user_a_id
+
+    # Enable auto-push for user A.
+    await contract_conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES ($1, 'zotero.auto_push_on_star', 'true'::jsonb)""",
+        user_a_id,
+    )
+    # Ensure A's paper is currently unstarred so the call is an off->on transition.
+    await contract_conn.execute(
+        "UPDATE paper_user_state SET starred = FALSE WHERE paper_id = $1 AND user_id = $2",
+        paper_id_a,
+        user_a_id,
+    )
+    # Only user B links A's paper into B's own project.
+    await contract_conn.execute(
+        "INSERT INTO project_papers (project_id, paper_id) VALUES ($1, $2)",
+        project_id_b,
+        paper_id_a,
+    )
+
+    mock_task = MagicMock()
+    mock_enqueue = AsyncMock()
+    mock_task.defer_async = mock_enqueue
+    monkeypatch.setitem(task_registry._TASK_MAP, "zotero.push", mock_task)
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.put(f"/api/papers/{paper_id_a}/star")
+
+    assert resp.status_code == 200, resp.text[:300]
+    mock_enqueue.assert_not_awaited()
+
+
 async def test_feedback_rejects_user_initiated_paper(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):

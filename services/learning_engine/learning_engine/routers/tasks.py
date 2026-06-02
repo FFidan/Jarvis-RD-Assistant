@@ -98,6 +98,15 @@ async def create_task(
         # Verify project exists and belongs to the caller (same conn as insert — avoid TOCTOU)
         await _assert_project_owner(conn, project_id, user_id)
 
+        if body.parent_task_id is not None:
+            parent = await conn.fetchval(
+                "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
+                body.parent_task_id,
+                user_id,
+            )
+            if parent is None:
+                raise HTTPException(status_code=404, detail="Parent task not found")
+
         try:
             row = await conn.fetchrow(
                 """

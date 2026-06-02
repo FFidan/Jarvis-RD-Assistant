@@ -145,14 +145,85 @@ async def test_sr01_search_preview_merged_dedup_response_shape(
 
 
 # ---------------------------------------------------------------------------
-# SR-02 (DEFERRED) — production code at search_helpers.py:454+ references
-# `papers.zotero_item_key` but no DB migration defines that column. The
-# contract DB therefore cannot exercise the _load_local_library_matches path
-# without first adding the schema. IDOR scoping behavior is still asserted
-# via existing carve-out adapter tests in test_search_multi_source.py that
-# mock the library_match query directly. Reopen when a migration adds
-# papers.zotero_item_key.
+# SR-02: search-preview library_match.has_project_links must be caller-scoped.
+# (Reopened: papers.zotero_item_key now exists in db/init.sql, so the real
+# _load_local_library_matches query runs against the contract DB.)
 # ---------------------------------------------------------------------------
+
+
+async def test_sr02_search_preview_has_project_links_not_leaked_across_users(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key, monkeypatch
+):
+    """PI-SEC-01/05: search-preview's per-result has_project_links must be scoped
+    to the caller's own projects.
+
+    A preview result matches user A's owned paper (paper_id_a) by external_id.
+    User B links that paper to B's *own* project. When user A runs the preview,
+    the matched library row's has_project_links must be False — B's link must not
+    surface to A. With the unscoped EXISTS(project_papers) subquery it leaked True.
+
+    Runs the REAL _load_local_library_matches (not stubbed) against live PG.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/search_helpers.py:442
+    # (the has_project_links EXISTS subquery must scope to the caller's projects).
+    """
+    from datetime import date
+
+    from paper_ingestion.models import PaperCreate, SourceType
+
+    paper_id_a = contract_two_users.paper_id_a
+    project_id_b = contract_two_users.project_id_b
+
+    # Make the preview result match A's seeded paper by external_id (the seed uses
+    # external_id='iso-ext-a' and url='https://example.test/a').
+    matching_paper = PaperCreate(
+        external_id="iso-ext-a",
+        source_type="arxiv",
+        title="Some Other Title",
+        authors=["A. Author"],
+        abstract="abstract",
+        url="https://example.test/a",
+        published_date=date(2024, 1, 1),
+    )
+
+    # Only user B links A's paper into B's own project.
+    await contract_conn.execute(
+        "INSERT INTO project_papers (project_id, paper_id) VALUES ($1, $2)",
+        project_id_b,
+        paper_id_a,
+    )
+
+    async def _stub_resolver(source_types, db_pool, http_client, request):
+        return {SourceType.ARXIV: _stub_plugin_returning([matching_paper])}, {}
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.search._resolve_sources_for_search",
+        _stub_resolver,
+    )
+    # NOTE: _load_local_library_matches is deliberately NOT stubbed here so the
+    # real scoped query is exercised against the contract DB.
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/search-preview",
+            json={"query": "test", "source_types": ["arxiv"], "max_results": 5},
+        )
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    matched = [
+        r
+        for r in body["results"]
+        if r.get("library_match") and r["library_match"].get("paper_id") == paper_id_a
+    ]
+    assert matched, (
+        f"Expected the preview result to match A's library paper {paper_id_a}; "
+        f"results: {[r.get('library_match') for r in body['results']]}"
+    )
+    assert matched[0]["library_match"]["has_project_links"] is False, (
+        "User B's project link must NOT surface as has_project_links to user A; "
+        f"got {matched[0]['library_match']}"
+    )
 
 
 # ---------------------------------------------------------------------------

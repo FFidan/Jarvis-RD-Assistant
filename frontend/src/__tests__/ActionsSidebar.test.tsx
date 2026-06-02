@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -45,6 +45,23 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 const { downloadPdf, processPdf, summarizePaper, fetchDecks } = await import('@/lib/api');
 const { streamAnalyze } = await import('@/lib/sse');
+
+// Radix UI Select uses pointer-capture and scrollIntoView APIs not present in jsdom.
+// Polyfill them globally so Select interaction tests can open the dropdown and pick options.
+beforeAll(() => {
+  if (!window.HTMLElement.prototype.hasPointerCapture) {
+    window.HTMLElement.prototype.hasPointerCapture = () => false;
+  }
+  if (!window.HTMLElement.prototype.setPointerCapture) {
+    window.HTMLElement.prototype.setPointerCapture = () => {};
+  }
+  if (!window.HTMLElement.prototype.releasePointerCapture) {
+    window.HTMLElement.prototype.releasePointerCapture = () => {};
+  }
+  if (!window.HTMLElement.prototype.scrollIntoView) {
+    window.HTMLElement.prototype.scrollIntoView = () => {};
+  }
+});
 
 function renderSidebar(paperId = 42) {
   const queryClient = new QueryClient({
@@ -358,6 +375,98 @@ describe('ActionsSidebar', () => {
     const generateBtn = screen.getByRole('button', { name: /Generate Cards/ });
     // Still disabled because no deck is selected (!deckId), even though hasChunks=true
     expect(generateBtn).toBeDisabled();
+  });
+
+  // ----- safe-href guard in action_link render (FE-004 / isSafeRelativeHref) -----
+  //
+  // The actionResult.action_link is set from the generate-cards poll path (failed job).
+  // Radix Select requires hasPointerCapture in jsdom; polyfill it for these tests.
+  // Approach: mock generateCardsJob + getJob to immediately produce a failed job with
+  // an action_link, then trigger generate by directly calling the combobox + generate
+  // button with the pointer-capture polyfill in scope.
+
+  it('action_link with safe href renders as a router Link, not inert text', async () => {
+    const user = userEvent.setup();
+
+    // Trigger a failed card-generate job with a safe (relative) action_link.
+    const { getJob } = await import('@/lib/api');
+    vi.mocked(getJob).mockResolvedValue({
+      id: 'test-job-link', kind: 'card.generate', status: 'failed',
+      progress: 0, progress_message: null,
+      result: null,
+      error: { message: 'Not enough chunks', action_link: { label: 'Process Paper', href: '/paper/1' } },
+      created_at: '2026-01-01T00:00:00Z', started_at: null, finished_at: null,
+    } as never);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ActionsSidebar paperId={42} hasChunks pdfDownloaded hasSummary />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // Wait for decks to load, then select the deck
+    await screen.findByText('Target Deck');
+    await user.click(screen.getByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: 'ML Fundamentals' }));
+
+    // Click Generate Cards (enabled: hasChunks=true, deck selected)
+    await user.click(screen.getByRole('button', { name: /Generate Cards/ }));
+
+    // Wait for the failed action_link to appear (generous timeout: the
+    // generate→poll→render chain is slower on contended CI runners).
+    await waitFor(
+      () => {
+        expect(screen.getByText('Process Paper')).toBeInTheDocument();
+      },
+      { timeout: 4000 },
+    );
+
+    // Safe href → rendered as a react-router Link (renders as <a> in MemoryRouter)
+    const link = screen.getByRole('link', { name: 'Process Paper' });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', '/paper/1');
+  });
+
+  it('action_link with unsafe href renders as inert span, not a navigable link', async () => {
+    const user = userEvent.setup();
+
+    const { getJob } = await import('@/lib/api');
+    vi.mocked(getJob).mockResolvedValue({
+      id: 'test-job-unsafe', kind: 'card.generate', status: 'failed',
+      progress: 0, progress_message: null,
+      result: null,
+      error: { message: 'Injection attempt', action_link: { label: 'Click me', href: 'javascript:alert(1)' } },
+      created_at: '2026-01-01T00:00:00Z', started_at: null, finished_at: null,
+    } as never);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ActionsSidebar paperId={42} hasChunks pdfDownloaded hasSummary />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('Target Deck');
+    await user.click(screen.getByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: 'ML Fundamentals' }));
+    await user.click(screen.getByRole('button', { name: /Generate Cards/ }));
+
+    await waitFor(
+      () => {
+        expect(screen.getByText('Click me')).toBeInTheDocument();
+      },
+      { timeout: 4000 },
+    );
+
+    // Unsafe href → rendered as inert <span>, NOT a link/anchor
+    expect(screen.queryByRole('link', { name: 'Click me' })).not.toBeInTheDocument();
+    const inertLabel = screen.getByText('Click me');
+    expect(inertLabel.tagName.toLowerCase()).toBe('span');
   });
 
   it('renders tooltip info icons for visible action buttons', async () => {

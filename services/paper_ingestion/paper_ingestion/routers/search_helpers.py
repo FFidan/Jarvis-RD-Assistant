@@ -442,6 +442,8 @@ async def _load_local_library_matches(
                        EXISTS (
                            SELECT 1
                            FROM project_papers pp
+                           JOIN projects pr ON pr.id = pp.project_id
+                             AND ($1::bigint IS NULL OR pr.user_id IS NOT DISTINCT FROM $1)
                            WHERE pp.paper_id = p.id
                        ) AS has_project_links
                 FROM papers p
@@ -469,6 +471,8 @@ async def _load_local_library_matches(
                        EXISTS (
                            SELECT 1
                            FROM project_papers pp
+                           JOIN projects pr ON pr.id = pp.project_id
+                             AND ($1::bigint IS NULL OR pr.user_id IS NOT DISTINCT FROM $1)
                            WHERE pp.paper_id = p.id
                        ) AS has_project_links
                 FROM papers p

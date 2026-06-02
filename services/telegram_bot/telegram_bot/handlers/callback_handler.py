@@ -303,6 +303,18 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     task_id = int(match.group(1))
 
     db = get_db(context)
+    # TG-SEC-03: scope ownership with the NULL-safe predicate (NOT complete_task's
+    # $2-IS-NULL catch-all). A legacy owner (jarvis_user_id None) may complete only
+    # NULL-owned tasks; a paired user only their own. Prevents cross-tenant writes.
+    owns = await db.fetchval(
+        "SELECT 1 FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+        task_id,
+        jarvis_user_id,
+    )
+    if not owns:
+        await query.message.reply_text(f"Task <b>{task_id}</b> not found.", parse_mode="HTML")
+        return
+
     pm = ProjectManager(db)
     result = await pm.complete_task(task_id, user_id=jarvis_user_id)
 

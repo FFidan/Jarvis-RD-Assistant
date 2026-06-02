@@ -82,6 +82,9 @@ class SystemEventHandler(logging.Handler):
         self._task: asyncio.Task | None = None
         self._dropped = 0
         self._was_in_outage = False
+        # JC-BUG-01: stop signal for graceful drain on aclose().
+        # asyncio.Event() is safe to construct outside a running loop (Python 3.10+).
+        self._stop: asyncio.Event = asyncio.Event()
 
     def emit(self, record: logging.LogRecord) -> None:
         """Non-blocking: serialize *record* and enqueue it; start the drain task if idle."""
@@ -113,68 +116,100 @@ class SystemEventHandler(logging.Handler):
         if self._task is None or self._task.done():
             try:
                 loop = asyncio.get_running_loop()
+                # Clear any prior stop signal so a restarted task isn't permanently stopped.
+                self._stop.clear()
                 self._task = loop.create_task(self._drain_loop())
             except RuntimeError:
                 pass
 
     async def _drain_loop(self) -> None:
         while True:
-            await asyncio.sleep(self._flush_interval)
+            # JC-BUG-01: interruptible wait — aclose() sets _stop to wake the loop
+            # immediately rather than waiting out the full flush interval.
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._flush_interval)
+            except TimeoutError:
+                pass  # Normal flush interval elapsed; continue to drain.
+
             batch: list[dict] = []
             while not self._queue.empty() and len(batch) < 100:
                 try:
                     batch.append(self._queue.get_nowait())
                 except asyncio.QueueEmpty:
                     break
-            if not batch:
-                continue
-            try:
-                async with self._pool.acquire() as conn:
-                    await conn.executemany(
-                        "INSERT INTO system_events "
-                        "(level, category, source, message, context, correlation_id) "
-                        "VALUES ($1, $2, $3, $4, $5::jsonb, $6)",
-                        [
-                            (
-                                e["level"],
-                                e["category"],
-                                e["source"],
-                                e["message"][:65535],
-                                e["context"],
-                                e["correlation_id"],
-                            )
-                            for e in batch
-                        ],
-                    )
-                    if self._was_in_outage and self._dropped > 0:
-                        # L-06: reset outage flags BEFORE the recovery INSERT so a
-                        # failing INSERT cannot re-trigger the recovery branch on
-                        # every subsequent drain (infinite emit loop). Snapshot
-                        # the dropped count for the row payload first.
-                        dropped_count = self._dropped
-                        self._dropped = 0
-                        self._was_in_outage = False
-                        await conn.execute(
-                            "INSERT INTO system_events (level, category, source, message) "
-                            "VALUES ($1, $2, $3, $4)",
-                            "error",
-                            "error",
-                            "SystemEventHandler",
-                            f"dropped {dropped_count} events during outage",
+
+            if batch:
+                try:
+                    async with self._pool.acquire() as conn:
+                        await conn.executemany(
+                            "INSERT INTO system_events "
+                            "(level, category, source, message, context, correlation_id) "
+                            "VALUES ($1, $2, $3, $4, $5::jsonb, $6)",
+                            [
+                                (
+                                    e["level"],
+                                    e["category"],
+                                    e["source"],
+                                    e["message"][:65535],
+                                    e["context"],
+                                    e["correlation_id"],
+                                )
+                                for e in batch
+                            ],
                         )
-            except Exception:
-                self._was_in_outage = True
-                for e in batch:
-                    sys.stderr.write(f"[SystemEventHandler outage] {e}\n")
+                        if self._was_in_outage and self._dropped > 0:
+                            # L-06: reset outage flags BEFORE the recovery INSERT so a
+                            # failing INSERT cannot re-trigger the recovery branch on
+                            # every subsequent drain (infinite emit loop). Snapshot
+                            # the dropped count for the row payload first.
+                            dropped_count = self._dropped
+                            self._dropped = 0
+                            self._was_in_outage = False
+                            await conn.execute(
+                                "INSERT INTO system_events (level, category, source, message) "
+                                "VALUES ($1, $2, $3, $4)",
+                                "error",
+                                "error",
+                                "SystemEventHandler",
+                                f"dropped {dropped_count} events during outage",
+                            )
+                except Exception:
+                    self._was_in_outage = True
+                    # JC-BUG-02: batch events were removed from the queue via
+                    # get_nowait() and are permanently lost to the durable store;
+                    # increment _dropped so the recovery row reports an accurate count.
+                    self._dropped += len(batch)
+                    for e in batch:
+                        sys.stderr.write(f"[SystemEventHandler outage] {e}\n")
+
+            # JC-BUG-01: after draining, exit if stop was signalled and queue is empty.
+            if self._stop.is_set() and self._queue.empty():
+                return
 
     async def aclose(self) -> None:
-        """Cancel the background drain task; call during shutdown to flush pending events."""
-        if self._task is not None:
+        """Flush pending events and stop the background drain task gracefully.
+
+        Sets the stop signal so the drain loop wakes immediately, performs a
+        final drain of any queued events, then exits cleanly.  If the drain
+        loop is blocked (e.g. pool.acquire() stalled on exhaustion), waits up
+        to ``max(flush_interval * 2, 5.0)`` seconds then cancels the task so
+        aclose() always terminates.  Safe to call when no task was ever started.
+        """
+        if self._task is None or self._task.done():
+            return
+        # JC-BUG-01: signal the loop to stop after the next (immediate) drain
+        # rather than bluntly cancelling it and losing queued events.
+        self._stop.set()
+        try:
+            await asyncio.wait_for(self._task, timeout=max(self._flush_interval * 2, 5.0))
+        except TimeoutError:
             self._task.cancel()
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):
                 pass
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 # L-07: keys carrying user-identifying or credential material that must never

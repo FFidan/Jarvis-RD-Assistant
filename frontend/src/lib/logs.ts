@@ -6,7 +6,10 @@
 
 import { useAuthStore } from '@/stores/auth-store';
 import { apiFetch } from '@/lib/api';
-import { createSSEReader } from '@/lib/sse-reader';
+// Leaf import (not the barrel): handleAuthFailure is an internal helper, not
+// part of @/lib/api's public surface.
+import { handleAuthFailure } from '@/lib/api/core';
+import { createSSEReader, SSEGetError } from '@/lib/sse-reader';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,6 +119,9 @@ export function streamCorrelation(
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
+      // Route a genuine auth failure through the centralized handler
+      // (debounced session-expired toast + logout) before surfacing onDone.
+      if (err instanceof SSEGetError) handleAuthFailure(err.status);
       // swallow other errors — caller sees onDone
     }
     opts.onDone();

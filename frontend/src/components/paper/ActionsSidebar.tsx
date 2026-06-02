@@ -6,6 +6,7 @@ import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircl
 import { downloadPdf, processPdf, summarizePaper, generateCardsJob, getJob, fetchDecks } from '@/lib/api';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { streamAnalyze } from '@/lib/sse';
+import { isSafeRelativeHref } from '@/lib/safe-href';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -424,14 +425,17 @@ export function ActionsSidebar({
       {actionResult && (
         <div className={`text-sm rounded-md border p-2 ${actionResult.type === 'error' ? 'border-destructive/30 bg-destructive/10 text-destructive' : 'border-green-500/30 bg-green-500/10 text-[var(--status-ok)]'}`}>
           <p className="font-medium">{actionResult.message}</p>
-          {actionResult.action_link && (
-            <Link
-              to={actionResult.action_link.href}
-              className="underline hover:opacity-80 text-xs mt-1 block"
-            >
-              {actionResult.action_link.label}
-            </Link>
-          )}
+          {actionResult.action_link &&
+            (isSafeRelativeHref(actionResult.action_link.href) ? (
+              <Link
+                to={actionResult.action_link.href}
+                className="underline hover:opacity-80 text-xs mt-1 block"
+              >
+                {actionResult.action_link.label}
+              </Link>
+            ) : (
+              <span className="text-xs mt-1 block">{actionResult.action_link.label}</span>
+            ))}
           {/* Per-stage Retry button — only shown for SSE pipeline errors */}
           {actionResult.type === 'error' && failedStage && (
             <Button

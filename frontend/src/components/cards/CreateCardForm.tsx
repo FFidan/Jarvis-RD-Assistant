@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Link } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
+import { isSafeRelativeHref } from '@/lib/safe-href';
 import { createCard, generateCardsJob, getJob, fetchDecks } from '@/lib/api';
 import type { Job } from '@/stores/job-store';
 import type { PartialGenJob } from '@/types';
@@ -311,15 +312,18 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
           {errorPayload && (
             <div className="text-sm text-destructive space-y-1">
               <p>{errorPayload.message}</p>
-              {errorPayload.action_link && (
-                <Link
-                  to={errorPayload.action_link.href}
-                  className="underline hover:opacity-80"
-                  onClick={() => onOpenChange(false)}
-                >
-                  {errorPayload.action_link.label}
-                </Link>
-              )}
+              {errorPayload.action_link &&
+                (isSafeRelativeHref(errorPayload.action_link.href) ? (
+                  <Link
+                    to={errorPayload.action_link.href}
+                    className="underline hover:opacity-80"
+                    onClick={() => onOpenChange(false)}
+                  >
+                    {errorPayload.action_link.label}
+                  </Link>
+                ) : (
+                  <span className="block">{errorPayload.action_link.label}</span>
+                ))}
             </div>
           )}
         </div>

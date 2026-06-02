@@ -63,3 +63,22 @@ def test_config_from_env_missing_database_url_raises_systemexit():
     with patch.dict(os.environ, env, clear=True):
         with pytest.raises(SystemExit):
             BotConfig.from_env()
+
+
+def test_config_jarvis_base_url_defaults_to_none():
+    """TG-BUG-01: jarvis_base_url defaults to None when JARVIS_BASE_URL is unset."""
+    env = _minimal_env(chat_id="12345")
+    with patch.dict(os.environ, env, clear=True):
+        config = BotConfig.from_env()
+
+    assert config.jarvis_base_url is None
+
+
+def test_config_reads_jarvis_base_url_from_env():
+    """TG-BUG-01: jarvis_base_url is sourced from JARVIS_BASE_URL."""
+    env = _minimal_env(chat_id="12345")
+    env["JARVIS_BASE_URL"] = "https://jarvis.example.com"
+    with patch.dict(os.environ, env, clear=True):
+        config = BotConfig.from_env()
+
+    assert config.jarvis_base_url == "https://jarvis.example.com"

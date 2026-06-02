@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
+_MAX_REVIEW_DURATION_MS = 86_400_000  # 24h in ms — upper bound for a single review's duration
+
 # --- Enums ---
 
 
@@ -93,7 +95,7 @@ class ReviewRequest(BaseModel):
     """Request body for submitting a review."""
 
     rating: Rating
-    review_duration_ms: int | None = Field(default=None, ge=0)
+    review_duration_ms: int | None = Field(default=None, ge=0, le=_MAX_REVIEW_DURATION_MS)
 
 
 class GenerateCardsRequest(BaseModel):
@@ -163,7 +165,7 @@ class ReviewSyncEvent(BaseModel):
     card_id: int
     rating: Rating
     reviewed_at: datetime
-    review_duration_ms: int | None = Field(default=None, ge=0)
+    review_duration_ms: int | None = Field(default=None, ge=0, le=_MAX_REVIEW_DURATION_MS)
 
 
 class ReviewSyncRequest(BaseModel):

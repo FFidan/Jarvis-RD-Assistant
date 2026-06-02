@@ -1,6 +1,6 @@
 # Known Residual Risks
 
-_Last updated: 2026-06-01_
+_Last updated: 2026-06-02_
 
 This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Closed and falsified findings, plus internal CI/test-infra tracking, are archived separately and are not part of the published site.
 
@@ -94,6 +94,10 @@ Service `requirements.txt` files use `>=` floors (some with ceilings); the hashe
 ### Search upsert `user_id` stamping
 
 `POST /api/search` performs external-source fetch + DB upsert via `pdf_workflow.upsert_paper`, which doesn't currently stamp `user_id` on the new row. Full multi-user end-to-end isolation requires this. Recommended follow-up.
+
+### TG-BLOAT-01 — `BotConfig.from_env()` sync/async split deferred
+
+`from_env()` runs its one-shot DB bot-token read via `asyncio.run(...)`. This is correct today — `from_env()` is only called from the synchronous `main()` before `run_polling()` starts the event loop, so there is no running loop to conflict with. Splitting it into a sync `from_env()` + an `async_from_env()` was scoped as a bloat-reduction but carries no current bug; deferred out of the bugs/security pass to keep its regression surface zero.
 
 ---
 

@@ -59,6 +59,8 @@ async def test_star_no_project_links_does_not_enqueue():
 
     # fetchrow[0]: CTE RETURNING → new star (off→on transition)
     conn.fetchrow.side_effect = [
+        # assert_paper_ownership: discovered_by == caller → fast-grant (user_id=1).
+        {"discovered_by": 1},
         {"is_new_row": True, "prev_starred": False},
     ]
     # fetchval[0] = COUNT(*) project_papers → 0 links; fetchval[1] = auto_push_on_star → True
@@ -67,7 +69,7 @@ async def test_star_no_project_links_does_not_enqueue():
     mock_task, mock_enqueue = _mock_zotero_push_task()
     with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
-            _mock_request(), paper_id=10, db_pool=pool, user_id=None
+            _mock_request(), paper_id=10, db_pool=pool, user_id=1
         )
 
     assert result == {"status": "ok", "paper_id": 10}
@@ -89,6 +91,8 @@ async def test_star_with_project_links_and_toggle_on_enqueues_zotero_push():
 
     # fetchrow[0]: CTE RETURNING (new off→on star)
     conn.fetchrow.side_effect = [
+        # assert_paper_ownership: discovered_by == caller → fast-grant (user_id=1).
+        {"discovered_by": 1},
         {"is_new_row": True, "prev_starred": False},
     ]
     # fetchval[0] = COUNT(*) → 2 links; fetchval[1] = auto_push_on_star → True
@@ -97,7 +101,7 @@ async def test_star_with_project_links_and_toggle_on_enqueues_zotero_push():
     mock_task, mock_enqueue = _mock_zotero_push_task()
     with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
-            _mock_request(), paper_id=10, db_pool=pool, user_id=None
+            _mock_request(), paper_id=10, db_pool=pool, user_id=1
         )
 
     assert result == {"status": "ok", "paper_id": 10}
@@ -123,6 +127,8 @@ async def test_star_with_project_links_toggle_off_does_not_enqueue():
 
     # fetchrow[0]: CTE RETURNING
     conn.fetchrow.side_effect = [
+        # assert_paper_ownership: discovered_by == caller → fast-grant (user_id=1).
+        {"discovered_by": 1},
         {"is_new_row": True, "prev_starred": False},
     ]
     # fetchval[0] = COUNT(*) → 1 link; fetchval[1] = auto_push_on_star → False
@@ -131,7 +137,7 @@ async def test_star_with_project_links_toggle_off_does_not_enqueue():
     mock_task, mock_enqueue = _mock_zotero_push_task()
     with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
-            _mock_request(), paper_id=10, db_pool=pool, user_id=None
+            _mock_request(), paper_id=10, db_pool=pool, user_id=1
         )
 
     assert result == {"status": "ok", "paper_id": 10}
@@ -154,6 +160,8 @@ async def test_star_with_project_links_toggle_not_set_does_not_enqueue():
 
     # fetchrow[0]: CTE RETURNING
     conn.fetchrow.side_effect = [
+        # assert_paper_ownership: discovered_by == caller → fast-grant (user_id=1).
+        {"discovered_by": 1},
         {"is_new_row": True, "prev_starred": False},
     ]
     # fetchval[0] = COUNT(*) → 1 link; fetchval[1] = auto_push_on_star → None (key absent)
@@ -162,7 +170,7 @@ async def test_star_with_project_links_toggle_not_set_does_not_enqueue():
     mock_task, mock_enqueue = _mock_zotero_push_task()
     with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
-            _mock_request(), paper_id=10, db_pool=pool, user_id=None
+            _mock_request(), paper_id=10, db_pool=pool, user_id=1
         )
 
     assert result == {"status": "ok", "paper_id": 10}
@@ -185,6 +193,8 @@ async def test_star_enqueue_failure_is_best_effort():
 
     # fetchrow[0]: CTE RETURNING (new star → triggers enqueue)
     conn.fetchrow.side_effect = [
+        # assert_paper_ownership: discovered_by == caller → fast-grant (user_id=1).
+        {"discovered_by": 1},
         {"is_new_row": True, "prev_starred": False},
     ]
     # fetchval[0] = COUNT(*) → 1 link; fetchval[1] = auto_push_on_star → True
@@ -198,7 +208,7 @@ async def test_star_enqueue_failure_is_best_effort():
     ):
         # Must NOT raise
         result = await papers.star_paper.__wrapped__(
-            _mock_request(), paper_id=10, db_pool=pool, user_id=None
+            _mock_request(), paper_id=10, db_pool=pool, user_id=1
         )
 
     assert result == {"status": "ok", "paper_id": 10}
@@ -224,6 +234,8 @@ async def test_star_already_starred_does_not_double_enqueue():
 
     # fetchrow[0]: CTE RETURNING (already starred: no transition)
     conn.fetchrow.side_effect = [
+        # assert_paper_ownership: discovered_by == caller → fast-grant (user_id=1).
+        {"discovered_by": 1},
         {"is_new_row": False, "prev_starred": True},  # existing row, was already starred
     ]
     # fetchval[0] = COUNT(*) → 1 link; fetchval[1] = auto_push_on_star → True
@@ -232,7 +244,7 @@ async def test_star_already_starred_does_not_double_enqueue():
     mock_task, mock_enqueue = _mock_zotero_push_task()
     with patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}):
         result = await papers.star_paper.__wrapped__(
-            _mock_request(), paper_id=10, db_pool=pool, user_id=None
+            _mock_request(), paper_id=10, db_pool=pool, user_id=1
         )
 
     assert result == {"status": "ok", "paper_id": 10}

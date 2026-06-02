@@ -10,6 +10,10 @@
  */
 
 import { useAuthStore } from '@/stores/auth-store';
+// Import from the leaf module, not the barrel: handleAuthFailure is an internal
+// helper and is intentionally NOT re-exported from @/lib/api. Importing the leaf
+// also keeps the module graph acyclic.
+import { handleAuthFailure } from '@/lib/api/core';
 
 export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNVERIFIED';
 
@@ -115,11 +119,19 @@ async function* parseSSEFrames(response: Response): AsyncGenerator<string> {
   yield* readSSEFrames(response.body.getReader());
 }
 
-export async function* streamSSE(
+/**
+ * Shared POST-SSE driver: authenticated POST, ok-check (with auth routing),
+ * frame parse, and JSON.parse-yield. `streamSSE` and `streamAnalyze` delegate
+ * here so the auth/error/parse logic lives in exactly one place.
+ *
+ * @param errorLabel prefix for the generic non-auth error (`SSE ` / `Analyze SSE `).
+ */
+async function* _postSSEStream<T>(
   url: string,
-  body: object,
-  signal?: AbortSignal,
-): AsyncGenerator<StreamEvent> {
+  body: string | object,
+  signal: AbortSignal | undefined,
+  errorLabel: string,
+): AsyncGenerator<T> {
   const apiKey = useAuthStore.getState().getApiKey();
   const res = await fetch(url, {
     method: 'POST',
@@ -129,28 +141,40 @@ export async function* streamSSE(
       'Content-Type': 'application/json',
       ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     },
-    body: JSON.stringify(body),
+    body: typeof body === 'string' ? body : JSON.stringify(body),
     signal,
   });
 
   if (!res.ok) {
     if (res.status === 401) {
-      useAuthStore.getState().logout();
+      // Centralized auth handling: debounced session-expired toast + logout.
+      handleAuthFailure(401);
       throw new Error('Unauthorized — session ended');
     }
     if (res.status === 403) {
+      // 403 is permission-denied for an authenticated user — no logout.
       throw new Error('Forbidden — you do not have permission to access this resource');
     }
-    throw new Error(`SSE ${res.status}: ${res.status >= 500 ? 'Server error' : 'Request failed'}`);
+    throw new Error(
+      `${errorLabel}${res.status}: ${res.status >= 500 ? 'Server error' : 'Request failed'}`,
+    );
   }
 
   for await (const data of parseSSEFrames(res)) {
     try {
-      yield JSON.parse(data) as StreamEvent;
+      yield JSON.parse(data) as T;
     } catch {
       console.warn('[sse] malformed frame skipped', data.slice(0, 120));
     }
   }
+}
+
+export function streamSSE(
+  url: string,
+  body: object,
+  signal?: AbortSignal,
+): AsyncGenerator<StreamEvent> {
+  return _postSSEStream<StreamEvent>(url, body, signal, 'SSE ');
 }
 
 /**
@@ -158,39 +182,9 @@ export async function* streamSSE(
  *
  * Yields AnalyzeEvent objects as the backend progresses through each step.
  */
-export async function* streamAnalyze(
+export function streamAnalyze(
   paperId: number,
   signal?: AbortSignal,
 ): AsyncGenerator<AnalyzeEvent> {
-  const apiKey = useAuthStore.getState().getApiKey();
-  const res = await fetch(`/api/papers/${paperId}/analyze`, {
-    method: 'POST',
-    // Include the jarvis_session cookie alongside any X-API-Key.
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
-    },
-    body: '{}',
-    signal,
-  });
-
-  if (!res.ok) {
-    if (res.status === 401) {
-      useAuthStore.getState().logout();
-      throw new Error('Unauthorized — session ended');
-    }
-    if (res.status === 403) {
-      throw new Error('Forbidden — you do not have permission to access this resource');
-    }
-    throw new Error(`Analyze SSE ${res.status}: ${res.status >= 500 ? 'Server error' : 'Request failed'}`);
-  }
-
-  for await (const data of parseSSEFrames(res)) {
-    try {
-      yield JSON.parse(data) as AnalyzeEvent;
-    } catch {
-      console.warn('[sse] malformed frame skipped', data.slice(0, 120));
-    }
-  }
+  return _postSSEStream<AnalyzeEvent>(`/api/papers/${paperId}/analyze`, '{}', signal, 'Analyze SSE ');
 }

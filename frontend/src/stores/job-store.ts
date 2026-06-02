@@ -12,9 +12,11 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth-store';
 import { createJob as apiCreateJob, listJobs as apiListJobs, cancelJob as apiCancelJob, getJob as apiGetJob } from '@/lib/api';
-import { createSSEReader } from '@/lib/sse-reader';
+import { createSSEReader, SSEGetError } from '@/lib/sse-reader';
+import { handleAuthFailure } from '@/lib/api/core';
 import { queryClient } from '@/lib/query-client';
 import { getNavigate } from '@/lib/navigate-bridge';
+import { isSafeRelativeHref } from '@/lib/safe-href';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { errorMessage } from '@/lib/errors';
 
@@ -234,7 +236,7 @@ export const useJobStore = create<JobStore>()(
                 action: {
                   label: actionLink.label,
                   onClick: () => {
-                    if (actionLink.href.startsWith('/') && !actionLink.href.startsWith('//')) {
+                    if (isSafeRelativeHref(actionLink.href)) {
                       const nav = getNavigate();
                       if (nav) {
                         nav(actionLink.href);
@@ -334,15 +336,12 @@ export const useJobStore = create<JobStore>()(
           } catch (err) {
             // AbortError means we intentionally cancelled — not an error.
             if (err instanceof DOMException && err.name === 'AbortError') return;
-            // createSSEReader throws "SSE GET failed: <status>" on non-ok responses.
-            // Auth failures → logout and drop the job.
-            if (err instanceof Error) {
-              const authMatch = /SSE GET failed: (401|403)/.exec(err.message);
-              if (authMatch) {
-                get().removeJob(jobId);
-                useAuthStore.getState().logout();
-                return;
-              }
+            // SSE GET auth failure: 401 ends the session (debounced logout via handleAuthFailure);
+            // 403 is a permission error — drop the job but do NOT log out.
+            if (err instanceof SSEGetError && (err.status === 401 || err.status === 403)) {
+              get().removeJob(jobId);
+              handleAuthFailure(err.status);
+              return;
             }
             // Other errors: reconcile if possible, otherwise reconnect with backoff.
             await _reconcileOrRetry(currentReconnectDelay);

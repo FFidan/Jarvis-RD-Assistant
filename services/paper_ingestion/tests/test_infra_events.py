@@ -322,6 +322,44 @@ def test_load_ingest_key_logs_on_oserror(monkeypatch, caplog):
     )
 
 
+def test_over_limit_batch_is_capped_not_413(app_and_pool):
+    """PI-SEC-03: an over-limit batch is accepted up to the cap; the overflow is
+    counted as ``skipped`` and the endpoint still returns 200.
+
+    Vector retries on any non-2xx, so a hard 413 would trigger an infinite retry
+    storm. The chosen policy caps the batch (accept up to MAX, skip the rest) and
+    returns 200 so Vector treats the delivery as successful.
+    """
+    from paper_ingestion.routers import infra_events as m
+
+    app, _pool, conn = app_and_pool
+    client = TestClient(app)
+
+    cap = m._MAX_INFRA_BATCH
+    over = cap + 25
+    batch = [{"source": "nginx", "message": f"evt-{i}"} for i in range(over)]
+
+    resp = client.post(
+        "/infra-events",
+        json=batch,
+        headers={"X-Infra-Key": "test-infra-secret"},
+    )
+
+    # Must NOT be a 413 (Vector would retry forever) — capped + 200 instead.
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    assert body["accepted"] == cap, f"expected accepted=={cap}; got {body['accepted']}"
+    assert body["skipped"] >= over - cap, (
+        f"overflow must be counted as skipped; got skipped={body['skipped']}"
+    )
+
+    # Only the capped number of rows reaches the DB insert.
+    inserted_rows = conn.executemany.call_args[0][1]
+    assert len(inserted_rows) == cap, (
+        f"DB insert must be capped to {cap} rows; got {len(inserted_rows)}"
+    )
+
+
 def test_ingest_infra_events_counts_skipped_malformed_lines(app_and_pool, caplog):
     app, _pool, _conn = app_and_pool
     client = TestClient(app)

@@ -699,6 +699,123 @@ async def test_task_done_not_found():
 
 
 # ---------------------------------------------------------------------------
+# TG-SEC-03: task_done ownership pre-check (cross-tenant write prevention)
+#
+# complete_task(task_id, user_id=None) uses a `$2 IS NULL` catch-all that
+# matches ANY task by id.  A legacy owner (jarvis_user_id None) must NOT be
+# able to complete a paired user's task via that catch-all.  The consumer adds
+# a NULL-safe ownership pre-check (IS NOT DISTINCT FROM $2) before calling
+# complete_task.
+# ---------------------------------------------------------------------------
+
+
+def _ownership_fetchval(owner_user_id: int | None):
+    """Return a fetchval side-effect simulating ``user_id IS NOT DISTINCT FROM $2``.
+
+    *owner_user_id* is the task's actual ``user_id`` column value.  The returned
+    callable yields ``1`` when the requested ``$2`` matches (NULL-safe), else
+    ``None`` — mirroring the SQL predicate against a single seeded task row.
+
+    ``auth_check`` also calls ``fetchval`` for the ``owner_chat_id`` lookup
+    (single positional arg); that path returns ``None`` so paired-user auth
+    falls through to the ``telegram_user_pairings`` fetchrow.
+    """
+
+    async def _fetchval(query: str, *params):
+        if len(params) < 2:  # auth_check's owner_chat_id lookup
+            return None
+        _task_id, requested_user_id = params[0], params[1]
+        return 1 if owner_user_id == requested_user_id else None
+
+    return _fetchval
+
+
+@pytest.mark.asyncio
+async def test_task_done_legacy_owner_cannot_complete_paired_users_task():
+    """TG-SEC-03: a legacy owner (jarvis_user_id None) cannot complete a paired
+    user's task — the NULL-safe pre-check denies it and complete_task is skipped.
+    """
+    update, context, mock_db, _ = _make_callback_update_and_context("task_done_77")
+    # Task is owned by a real paired user (user_id=42), but caller is the
+    # legacy owner (jarvis_user_id None → env-var chat match).
+    mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=42)
+
+    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
+        pm_instance = AsyncMock()
+        pm_instance.complete_task.return_value = {"id": 77, "status": "done"}
+        mock_pm.return_value = pm_instance
+
+        await task_done_callback(update, context)
+
+    # complete_task must NOT run — the cross-tenant write is blocked.
+    pm_instance.complete_task.assert_not_awaited()
+    text = update.callback_query.message.reply_text.call_args[0][0]
+    assert "not found" in text.lower() or "77" in text
+
+
+@pytest.mark.asyncio
+async def test_task_done_legacy_owner_can_complete_null_owned_task():
+    """TG-SEC-03: the single-tenant path still works — a legacy owner completes a
+    NULL-owned task (user_id IS NULL) successfully.
+    """
+    update, context, mock_db, _ = _make_callback_update_and_context("task_done_10")
+    # Task is NULL-owned; caller is the legacy owner (jarvis_user_id None) → match.
+    mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=None)
+
+    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
+        pm_instance = AsyncMock()
+        pm_instance.complete_task.return_value = {"id": 10, "status": "done"}
+        mock_pm.return_value = pm_instance
+
+        await task_done_callback(update, context)
+
+    pm_instance.complete_task.assert_awaited_once()
+    assert pm_instance.complete_task.await_args.kwargs["user_id"] is None
+    text = update.callback_query.message.reply_text.call_args[0][0]
+    assert "done" in text.lower() or "10" in text
+
+
+@pytest.mark.asyncio
+async def test_task_done_paired_user_can_complete_own_task():
+    """TG-SEC-03: a paired user can complete their OWN task."""
+    update, context, mock_db, _ = _make_paired_callback("task_done_5")
+    # auth_check's pairing lookup (fetchrow) → user_id 42; ownership check
+    # (fetchval) sees a task owned by 42 → match.
+    mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=_PAIRED_USER_ID)
+
+    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
+        pm_instance = AsyncMock()
+        pm_instance.complete_task.return_value = {"id": 5, "status": "done"}
+        mock_pm.return_value = pm_instance
+
+        await task_done_callback(update, context)
+
+    pm_instance.complete_task.assert_awaited_once()
+    assert pm_instance.complete_task.await_args.kwargs["user_id"] == _PAIRED_USER_ID
+    text = update.callback_query.message.reply_text.call_args[0][0]
+    assert "done" in text.lower() or "5" in text
+
+
+@pytest.mark.asyncio
+async def test_task_done_paired_user_cannot_complete_another_users_task():
+    """TG-SEC-03: a paired user cannot complete another paired user's task."""
+    update, context, mock_db, _ = _make_paired_callback("task_done_9")
+    # Caller is paired user 42; task is owned by a DIFFERENT user (99) → no match.
+    mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=99)
+
+    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
+        pm_instance = AsyncMock()
+        pm_instance.complete_task.return_value = {"id": 9, "status": "done"}
+        mock_pm.return_value = pm_instance
+
+        await task_done_callback(update, context)
+
+    pm_instance.complete_task.assert_not_awaited()
+    text = update.callback_query.message.reply_text.call_args[0][0]
+    assert "not found" in text.lower() or "9" in text
+
+
+# ---------------------------------------------------------------------------
 # Tests: start_review
 # ---------------------------------------------------------------------------
 

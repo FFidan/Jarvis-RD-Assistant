@@ -397,42 +397,75 @@ describe('JobStore', () => {
     expect(useJobStore.getState().activeAborts['job-zotero-transient']).toBeUndefined();
   });
 
-  it.each([401, 403] as const)(
-    'subscribe: %s SSE response clears auth-failed external Zotero jobs from busy state',
-    async (statusCode) => {
-      const { useAuthStore } = await import('@/stores/auth-store');
-      const logout = vi.fn();
-      vi.mocked(useAuthStore.getState).mockReturnValue({
-        getApiKey: vi.fn(() => 'test-key'),
-        getUser: vi.fn(() => null),
-        logout,
-        isAuthenticated: true,
-        authTime: null,
-        apiKey: 'test-key',
-        user: null,
-        lastError: null,
-        login: vi.fn(),
-        loginWithSession: vi.fn(),
-        isSessionValid: vi.fn(() => true),
-        expireSession: vi.fn(),
-      });
+  it('subscribe: 401 SSE response drops the job and logs out (session invalid)', async () => {
+    const { useAuthStore } = await import('@/stores/auth-store');
+    const logout = vi.fn();
+    vi.mocked(useAuthStore.getState).mockReturnValue({
+      getApiKey: vi.fn(() => 'test-key'),
+      getUser: vi.fn(() => null),
+      logout,
+      isAuthenticated: true,
+      authTime: null,
+      apiKey: 'test-key',
+      user: null,
+      lastError: null,
+      login: vi.fn(),
+      loginWithSession: vi.fn(),
+      isSessionValid: vi.fn(() => true),
+      expireSession: vi.fn(),
+    });
 
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: statusCode }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 401 }));
 
-      useJobStore.getState().trackExternalJob({
-        jobId: 'job-zotero-auth',
-        kind: 'zotero.push',
-        payload: { paper_id: 88 },
-        status: 'queued',
-      });
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-zotero-auth',
+      kind: 'zotero.push',
+      payload: { paper_id: 88 },
+      status: 'queued',
+    });
 
-      await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
 
-      expect(logout).toHaveBeenCalledTimes(1);
-      expect(useJobStore.getState().jobs['job-zotero-auth']).toBeUndefined();
-      expect(useJobStore.getState().activeAborts['job-zotero-auth']).toBeUndefined();
-    },
-  );
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(useJobStore.getState().jobs['job-zotero-auth']).toBeUndefined();
+    expect(useJobStore.getState().activeAborts['job-zotero-auth']).toBeUndefined();
+  });
+
+  it('subscribe: 403 SSE drops the job but does NOT log out (permission error, not session-invalid)', async () => {
+    const { useAuthStore } = await import('@/stores/auth-store');
+    const logout = vi.fn();
+    vi.mocked(useAuthStore.getState).mockReturnValue({
+      getApiKey: vi.fn(() => 'test-key'),
+      getUser: vi.fn(() => null),
+      logout,
+      isAuthenticated: true,
+      authTime: null,
+      apiKey: 'test-key',
+      user: null,
+      lastError: null,
+      login: vi.fn(),
+      loginWithSession: vi.fn(),
+      isSessionValid: vi.fn(() => true),
+      expireSession: vi.fn(),
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 403 }));
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-403-no-logout',
+      kind: 'zotero.push',
+      payload: { paper_id: 99 },
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Job must be removed (permission error is unrecoverable for this job)
+    expect(useJobStore.getState().jobs['job-403-no-logout']).toBeUndefined();
+    expect(useJobStore.getState().activeAborts['job-403-no-logout']).toBeUndefined();
+    // 403 = permission denied (authenticated user, no access). Must NOT log out.
+    expect(logout).not.toHaveBeenCalled();
+  });
 
   // ----- subscribe / SSE progress events -----
 

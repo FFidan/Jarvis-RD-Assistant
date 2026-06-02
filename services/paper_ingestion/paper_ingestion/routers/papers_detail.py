@@ -86,9 +86,18 @@ async def get_paper_detail(
             paper_id,
             user_id,
         )
+        # PI-SEC-01: scope the link count to the caller's own projects. Without
+        # the projects JOIN this counted other users' links too, leaking a
+        # cross-tenant signal (gates the "Send to Zotero" button). NULL-safe
+        # predicate keeps single-user mode (user_id IS NULL) counting all rows.
         project_link_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM project_papers WHERE paper_id = $1",
+            """SELECT COUNT(*)
+               FROM project_papers pp
+               JOIN projects pr ON pr.id = pp.project_id
+                 AND ($2::bigint IS NULL OR pr.user_id IS NOT DISTINCT FROM $2)
+               WHERE pp.paper_id = $1""",
             paper_id,
+            user_id,
         )
         last_process_job_status = await conn.fetchval(
             """

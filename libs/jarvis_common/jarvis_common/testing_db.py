@@ -777,6 +777,7 @@ class TwoUsers:
     card_id_a: int
     deck_id_a: int
     project_id_a: int
+    project_id_b: int
     task_id_a: int
     journal_id_a: int
     topic_id_a: int
@@ -922,7 +923,7 @@ def _make_contract_two_users_fixture():
         user_a_id, cookie_a = await _seed_user(contract_conn, "iso-user-a@contract.example.com")
         user_b_id, cookie_b = await _seed_user(contract_conn, "iso-user-b@contract.example.com")
         res_a = await _seed_resources(contract_conn, user_a_id, "a")
-        await _seed_resources(contract_conn, user_b_id, "b")
+        res_b = await _seed_resources(contract_conn, user_b_id, "b")
         return TwoUsers(
             user_a_id=user_a_id,
             user_b_id=user_b_id,
@@ -933,6 +934,7 @@ def _make_contract_two_users_fixture():
             card_id_a=res_a["card_id"],
             deck_id_a=res_a["deck_id"],
             project_id_a=res_a["project_id"],
+            project_id_b=res_b["project_id"],
             task_id_a=res_a["task_id"],
             journal_id_a=res_a["journal_id"],
             topic_id_a=res_a["topic_id"],

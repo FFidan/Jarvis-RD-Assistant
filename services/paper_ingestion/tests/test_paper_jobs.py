@@ -183,6 +183,88 @@ async def test_paper_process_job_sub_ctx_scales_progress(tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
+# PI-CORR-01 — TOCTOU in _paper_analyze_job: paper deleted mid-download
+# ---------------------------------------------------------------------------
+
+
+def _make_pool_with_side_effects(side_effects: list) -> MagicMock:
+    """Return an asyncpg pool mock whose fetchrow yields *side_effects* in order.
+
+    Each ``pool.acquire()`` call returns the same conn (async-CM yielding itself),
+    so successive fetchrow calls across acquire blocks consume the side-effect list.
+    """
+    conn = MagicMock()
+    conn.fetchrow = AsyncMock(side_effect=side_effects)
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=conn)
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_paper_analyze_job_raises_job_error_when_row_deleted_mid_download(
+    tmp_path, monkeypatch
+):
+    """PI-CORR-01: if the paper row is deleted between the initial load and the
+    post-download UPDATE, the UPDATE ... RETURNING returns None.
+
+    Before the fix the handler dereferenced ``row["pdf_local_path"]`` on a None
+    row → TypeError. After the fix it must raise JobError instead so the job is
+    marked failed cleanly (not as an unexpected crash).
+
+    user_id=None → assert_paper_ownership short-circuits (single-user mode), so
+    the only conn.fetchrow calls are: [0] initial paper load, [1] post-download
+    UPDATE RETURNING (the deletion race returns None here).
+    """
+    from jarvis_common.jobs import JobError  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_analyze_job  # noqa: PLC0415
+
+    # _paper_analyze_job imports run_process_pdf + generate_paper_summary from
+    # paper_ingestion.services.*; the autouse _install_stubs fixture replaces
+    # paper_ingestion.services with a bare MagicMock (not a package), so stub the
+    # submodules the handler imports. Use monkeypatch.setitem so the stubs are
+    # auto-removed at teardown (a bare sys.modules assignment would leak into
+    # later tests that import the real summarization module). The None-row guard
+    # fires before either submodule is invoked, so these are import stubs only.
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
+    _summ_stub = MagicMock()
+    _summ_stub.generate_paper_summary = AsyncMock()
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", _summ_stub)
+
+    # Initial load: remote paper, not yet downloaded → enters the download branch.
+    initial_row = {
+        "id": 7,
+        "source_type": "arxiv",
+        "pdf_url": "https://example.test/a.pdf",
+        "pdf_downloaded": False,
+        "pdf_local_path": None,
+    }
+    # fetchrow[0] = initial load; fetchrow[1] = post-download UPDATE → None (deleted).
+    pool = _make_pool_with_side_effects([initial_row, None])
+    ctx = _make_ctx()
+
+    # Populate svc so the handler resolves pdf_processor/embedder/verifier.
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    pdf_proc = MagicMock()
+    # download_pdf is awaited; return a path inside tmp_path so a (would-be) later
+    # path check would pass — but the None row must short-circuit before that.
+    pdf_proc.download_pdf = AsyncMock(return_value=tmp_path / "a.pdf")
+    svc.pdf_processor = pdf_proc
+    svc.embedder = MagicMock()
+    svc.verifier = MagicMock()
+
+    with pytest.raises(JobError):
+        await _paper_analyze_job(
+            pool=pool,
+            http_client=MagicMock(),
+            payload={"paper_id": 7},  # user_id absent → None → single-user mode
+            ctx=ctx,
+        )
+
+
 @pytest.mark.asyncio
 async def test_sub_ctx_scaling_math():
     """Unit-test _SubCtx.update_progress arithmetic in isolation."""

@@ -11,6 +11,14 @@
 
 import { readSSEFrames } from '@/lib/sse';
 
+/** Error thrown by createSSEReader on a non-ok response, carrying the HTTP status. */
+export class SSEGetError extends Error {
+  constructor(public status: number) {
+    super(`SSE GET failed: ${status}`);
+    this.name = 'SSEGetError';
+  }
+}
+
 export async function* createSSEReader(
   url: string,
   init?: { headers?: HeadersInit; signal?: AbortSignal },
@@ -23,7 +31,10 @@ export async function* createSSEReader(
   });
 
   if (!res.ok || !res.body) {
-    throw new Error(`SSE GET failed: ${res.status}`);
+    // Carry the HTTP status so callers can route auth failures centrally.
+    // The message is preserved verbatim for back-compatible callers that
+    // string-match `SSE GET failed: <status>` (e.g. the job store).
+    throw new SSEGetError(res.status);
   }
 
   yield* readSSEFrames(res.body.getReader());

@@ -200,6 +200,11 @@ async def _paper_analyze_job(
                 str(pdf_path_obj),
                 paper_id,
             )
+        # PI-CORR-01: the row can be deleted between the initial load and this
+        # post-download UPDATE (TOCTOU). UPDATE ... RETURNING then yields None;
+        # dereferencing it below would raise an opaque TypeError. Fail cleanly.
+        if row is None:
+            raise JobError(f"Paper {paper_id} deleted during download")
     else:
         await ctx.update_progress(0.0, "Download skipped" if is_local else "Already downloaded")
 
