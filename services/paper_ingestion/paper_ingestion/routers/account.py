@@ -28,7 +28,7 @@ import logging
 import secrets
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import current_user_id_strict
 from jarvis_common.email import send_magic_link
@@ -86,13 +86,15 @@ _ACCOUNT_SELECT = (
 
 @router.get("", response_model=AccountResponse)
 @limiter.limit("60/minute")
-async def get_account(request: Request) -> AccountResponse:
+async def get_account(
+    request: Request,
+    user_id: int = Depends(current_user_id_strict),
+) -> AccountResponse:
     """Return the authenticated caller's own profile.
 
     Scoped strictly to ``current_user_id_strict`` — there is no path
     parameter and no way to read another user's row.
     """
-    user_id = await current_user_id_strict(request)
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
         row = await conn.fetchrow(_ACCOUNT_SELECT, user_id)
@@ -104,7 +106,11 @@ async def get_account(request: Request) -> AccountResponse:
 
 @router.patch("", response_model=AccountUpdateResponse)
 @limiter.limit("20/minute")
-async def update_account(body: AccountUpdate, request: Request) -> AccountUpdateResponse:
+async def update_account(
+    body: AccountUpdate,
+    request: Request,
+    user_id: int = Depends(current_user_id_strict),
+) -> AccountUpdateResponse:
     """Update the caller's own profile.
 
     - ``display_name`` is applied immediately (empty string clears it).
@@ -113,7 +119,6 @@ async def update_account(body: AccountUpdate, request: Request) -> AccountUpdate
       ``POST /api/account/confirm-email``. An email already in use by a
       non-deleted user is rejected with 409.
     """
-    user_id = await current_user_id_strict(request)
     pool = request.app.state.db_pool
     _audit = _audit_pool(request)
     email_verification_sent = False
@@ -198,7 +203,11 @@ async def update_account(body: AccountUpdate, request: Request) -> AccountUpdate
 
 @router.post("/confirm-email", response_model=AccountResponse)
 @limiter.limit("10/minute")
-async def confirm_email_change(body: ConfirmEmailChangeBody, request: Request) -> AccountResponse:
+async def confirm_email_change(
+    body: ConfirmEmailChangeBody,
+    request: Request,
+    user_id: int = Depends(current_user_id_strict),
+) -> AccountResponse:
     """Consume an email-change token and swap ``users.email``.
 
     Mirrors ``/api/auth/verify``: the token row is selected ``FOR UPDATE``
@@ -208,7 +217,6 @@ async def confirm_email_change(body: ConfirmEmailChangeBody, request: Request) -
     must own the token's ``user_id`` (defence in depth on top of the
     unguessable token).
     """
-    user_id = await current_user_id_strict(request)
     pool = request.app.state.db_pool
     token_hash = _hash_token(body.token)
     now = datetime.now(UTC)

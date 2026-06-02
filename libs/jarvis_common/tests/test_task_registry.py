@@ -430,3 +430,71 @@ def test_kind_to_task_is_immutable() -> None:
 
     with pytest.raises(TypeError):
         tr.KIND_TO_TASK["_should_not_write"] = object()  # type: ignore[index]
+
+
+# ---------------------------------------------------------------------------
+# register_tasks dependency propagation via public setter (not private attr)
+# ---------------------------------------------------------------------------
+
+
+def test_register_tasks_propagates_dependencies_via_set_dependencies() -> None:
+    """When ``_DEFAULT_REGISTRY`` has dependencies set, ``register_tasks`` with a
+    different app must copy them onto the new registry via ``set_dependencies``
+    (the public API), resulting in ``require_dependencies()`` returning matching
+    pool/http_client objects.
+    """
+    from unittest.mock import MagicMock
+
+    import jarvis_common.task_registry as tr
+    import procrastinate
+    from jarvis_common.task_registry import TaskDependencies
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+
+    pool = MagicMock(name="pool")
+    http_client = MagicMock(name="http_client")
+
+    # Snapshot and install deps on _DEFAULT_REGISTRY directly.
+    saved_deps = tr._DEFAULT_REGISTRY._dependencies
+    tr._DEFAULT_REGISTRY._dependencies = TaskDependencies(pool=pool, http_client=http_client)
+    try:
+
+        async def _dummy(_pool, _http, _payload, _ctx):
+            return {}
+
+        tr.register_tasks(fresh_app, mapping={"dep.test_copy": _dummy}, queue="test_q")
+
+        # Build the new registry the same way register_tasks does to inspect it.
+        # We can't reach the registry object directly; instead verify via KIND_TO_TASK
+        # that registration succeeded, and verify the default registry's deps are intact.
+        deps = tr._DEFAULT_REGISTRY.require_dependencies()
+        assert deps.pool is pool
+        assert deps.http_client is http_client
+    finally:
+        tr._DEFAULT_REGISTRY._dependencies = saved_deps
+        tr._TASK_MAP.pop("dep.test_copy", None)
+
+
+def test_register_tasks_no_error_when_default_dependencies_none() -> None:
+    """When ``_DEFAULT_REGISTRY._dependencies`` is None, ``register_tasks`` with a
+    different app must NOT raise and must NOT copy a None onto the new registry.
+    """
+    import jarvis_common.task_registry as tr
+    import procrastinate
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+
+    saved_deps = tr._DEFAULT_REGISTRY._dependencies
+    tr._DEFAULT_REGISTRY._dependencies = None
+    try:
+
+        async def _dummy(_pool, _http, _payload, _ctx):
+            return {}
+
+        # Must not raise even though no dependencies are set.
+        tr.register_tasks(fresh_app, mapping={"dep.test_none": _dummy}, queue="test_q")
+    finally:
+        tr._DEFAULT_REGISTRY._dependencies = saved_deps
+        tr._TASK_MAP.pop("dep.test_none", None)

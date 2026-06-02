@@ -17,8 +17,14 @@ import pytest
 # but NOT installed into sys.modules here (that would pollute collection).
 # ---------------------------------------------------------------------------
 
+# Import the real path-traversal guard so the stubbed pdf_processor module
+# exposes genuine traversal semantics (a bare MagicMock attribute would always
+# be truthy and silently disable the guard).
+from paper_ingestion.pdf_processor import check_pdf_path_safe as _real_check_pdf_path_safe
+
 _pdf_proc_stub = MagicMock()
 _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
+_pdf_proc_stub.check_pdf_path_safe = _real_check_pdf_path_safe
 
 _main_stub = MagicMock()
 _workflow_stub = MagicMock()
@@ -39,6 +45,7 @@ def _install_stubs(monkeypatch):
     # Reset shared stubs so mutations from previous tests don't bleed through.
     _pdf_proc_stub.reset_mock()
     _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
+    _pdf_proc_stub.check_pdf_path_safe = _real_check_pdf_path_safe
     _main_stub.reset_mock()
     _workflow_stub.reset_mock()
 

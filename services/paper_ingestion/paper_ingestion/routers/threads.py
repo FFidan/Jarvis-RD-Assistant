@@ -66,6 +66,7 @@ def _to_response(row: asyncpg.Record) -> ThreadResponse:
 async def list_threads(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[ThreadResponse]:
     """List the caller's open threads, most-recently-touched first.
 
@@ -73,7 +74,6 @@ async def list_threads(
     threads; done/archived threads are excluded from the My-Day surface). The
     smart-hero "thread" mode consumes ``[0]`` (most recently touched).
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             f"SELECT {_ROW_COLS} FROM thread "  # noqa: S608 (static column list)
@@ -95,9 +95,9 @@ async def get_thread(
     request: Request,
     thread_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ThreadResponse:
     """Fetch a single thread the caller owns (404 otherwise — no leak)."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             f"SELECT {_ROW_COLS} FROM thread "  # noqa: S608
@@ -121,9 +121,9 @@ async def create_thread(
     request: Request,
     body: ThreadCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ThreadResponse:
     """Create a user-owned thread (the manual create path of §4.1)."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "INSERT INTO thread (user_id, title, anchor, progress) "
@@ -149,13 +149,13 @@ async def update_thread(
     thread_id: int,
     body: ThreadUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ThreadResponse:
     """Partial update. Any write also bumps ``last_at`` (it is activity).
 
     Used by the prototype's update-progress affordance and "mark done"
     (status='done'). User-scoped: a non-owned id is a 404, never an update.
     """
-    user_id = await current_user_id_strict(request)
     fields = body.model_dump(exclude_unset=True, include=_THREAD_ALLOWED_COLUMNS)
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -194,12 +194,12 @@ async def resume_thread(
     request: Request,
     thread_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ThreadResponse:
     """The prototype's ``resume →`` action: bump ``last_at`` and return.
 
     Resuming a thread re-floats it to the top of § Open threads / the hero.
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "UPDATE thread SET last_at = NOW() "
@@ -224,6 +224,7 @@ async def seed_thread_from_pomodoro(
     request: Request,
     body: ThreadCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ThreadSeedResponse:
     """Auto-seed a thread from an interrupted Pomodoro session (§4.1, OQ-2).
 
@@ -232,7 +233,6 @@ async def seed_thread_from_pomodoro(
     rather than duplicated — an interrupted-then-resumed-then-interrupted loop
     must not spawn N threads.
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             existing = await conn.fetchrow(
@@ -274,6 +274,7 @@ async def seed_thread_from_eod(
     request: Request,
     body: ThreadCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ThreadSeedResponse:
     """Auto-seed from the EOD "make this a thread" action (spec §3.10 / §4.3).
 
@@ -282,7 +283,6 @@ async def seed_thread_from_eod(
     Pomodoro producer (the same blocker carried across two EODs must not
     duplicate).
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             existing = await conn.fetchrow(

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -91,7 +90,7 @@ async def test_get_contradictions_cross_tenant_isolation() -> None:
     that user_id=2 (user B) gets an empty result when the DB returns nothing
     (simulating that neither paper_a nor paper_b is in user B's library).
     """
-    from jarvis_common.auth import verify_api_key
+    from jarvis_common.auth import current_user_id_strict, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -110,20 +109,17 @@ async def test_get_contradictions_cross_tenant_isolation() -> None:
 
     app.dependency_overrides[get_db_pool] = override_db_pool
     app.dependency_overrides[verify_api_key] = override_api_key
+    # Override current_user_id_strict (Depends-wired) to return user_id=2.
+    app.dependency_overrides[current_user_id_strict] = lambda: 2
 
-    # Patch current_user_id_strict in the contradictions router to return user_id=2.
-    with patch(
-        "paper_ingestion.routers.contradictions.current_user_id_strict",
-        new=AsyncMock(return_value=2),
-    ):
-        try:
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get("/api/contradictions")
-        finally:
-            app.dependency_overrides.clear()
-            app.state.limiter.enabled = True
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/api/contradictions")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -140,7 +136,7 @@ async def test_get_contradictions_cross_tenant_isolation() -> None:
 @pytest.mark.asyncio
 async def test_get_contradictions_user_id_threaded_to_sql() -> None:
     """Verify the user_id is included in the SQL query params."""
-    from jarvis_common.auth import verify_api_key
+    from jarvis_common.auth import current_user_id_strict, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -158,8 +154,9 @@ async def test_get_contradictions_user_id_threaded_to_sql() -> None:
 
     app.dependency_overrides[get_db_pool] = override_db_pool
     app.dependency_overrides[verify_api_key] = override_api_key
+    # current_user_id_strict (Depends-wired) resolves to 1 (user A).
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
 
-    # The autofixture patches current_user_id_strict to return 1 (user A).
     try:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"

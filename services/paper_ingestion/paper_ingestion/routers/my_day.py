@@ -39,6 +39,7 @@ async def get_journal_entry(
     request: Request,
     date: date = Query(..., description="ISO date YYYY-MM-DD"),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> JournalEntryResponse | None:
     """Fetch a journal entry for the given date.
 
@@ -47,7 +48,6 @@ async def get_journal_entry(
     console 404 for days the user has not journaled. The query is scoped to the
     caller's ``user_id``, so a non-owner simply sees no row (same empty state).
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT id, date, prompts, created_at, updated_at "
@@ -78,9 +78,9 @@ async def upsert_journal_entry(
     request: Request,
     body: JournalEntryCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> JournalEntryResponse:
     """Create or update a journal entry for the given date."""
-    user_id = await current_user_id_strict(request)
     prompts_dict = body.prompts.model_dump(exclude_none=True)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -129,10 +129,9 @@ async def get_yesterday(
         description="Caller UTC offset in minutes east of UTC (JS -getTimezoneOffset()).",
     ),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> YesterdaySummary:
     """On-the-fly § Yesterday rollup for the authenticated caller only."""
-    user_id = await current_user_id_strict(request)
-
     offset = timedelta(minutes=tz_offset_minutes)
     now_local = datetime.now(UTC) + offset
     yesterday_local_date = (now_local - timedelta(days=1)).date()

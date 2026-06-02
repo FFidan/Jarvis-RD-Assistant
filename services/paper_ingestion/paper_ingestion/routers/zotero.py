@@ -36,6 +36,7 @@ async def test_zotero_connection(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
+    user_id_for_config: int = Depends(current_user_id_strict),
 ) -> dict:
     """Test Zotero credentials from user_config.
 
@@ -48,7 +49,6 @@ async def test_zotero_connection(
         _get_zotero_config,
     )
 
-    user_id_for_config = await current_user_id_strict(request)
     try:
         cfg = await _get_zotero_config(db_pool, user_id=user_id_for_config)
     except ZoteroConfigDecryptError:
@@ -102,12 +102,12 @@ async def push_paper_to_zotero(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> dict:
     """Enqueue a zotero.push job for the given paper.
 
     Returns ``{"job_id": "...", "status": "queued"}``.
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
         if not exists:
@@ -134,13 +134,13 @@ async def get_paper_zotero_state(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> dict:
     """Return the Zotero sync state for a paper.
 
     Returns ``{"zotero_item_key", "zotero_citation_key", "zotero_last_pushed_at"}``
     (all fields may be ``null`` if the paper has not been pushed).
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow(
@@ -172,12 +172,12 @@ async def resync_paper_to_zotero(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> dict:
     """Enqueue a zotero.resync job for the given paper (force re-push).
 
     Returns ``{"job_id": "...", "status": "queued"}``.
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
         if not exists:
@@ -208,9 +208,9 @@ async def sync_annotations_for_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> JobEnqueuedResponse:
     """Enqueue Zotero annotation import for a linked paper."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
         if not exists:
@@ -236,6 +236,7 @@ async def sync_annotations_for_paper(
 async def poll_now(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> JobEnqueuedResponse:
     """Trigger manual Zotero sync — enqueues a ``zotero.sync_from_zotero`` job.
 
@@ -245,7 +246,6 @@ async def poll_now(
     from jarvis_common.task_registry import KIND_TO_TASK
 
     logger.info("zotero.poll: enqueueing sync job")
-    user_id = await current_user_id_strict(request)
     jarvis_job_id = str(uuid.uuid4())
     # Thread caller user_id so per-user paper attribution works in multi-user
     # mode. This is an interactive user-triggered poll, not a cron.

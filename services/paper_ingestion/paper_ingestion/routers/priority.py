@@ -26,6 +26,7 @@ async def compute_paper_priority(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> PaperPriorityResponse:
     """Compute and store the priority score for a paper.
 
@@ -39,7 +40,6 @@ async def compute_paper_priority(
     PaperPriorityResponse
         ``{paper_id, priority_score, priority_level}``
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         paper = await conn.fetchrow(

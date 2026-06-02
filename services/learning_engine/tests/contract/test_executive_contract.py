@@ -185,6 +185,70 @@ async def test_get_my_day_bundle_response_keys(contract_two_users, _le_app, _con
     )
 
 
+async def test_my_day_bundle_intent_fragment_shape(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """GET /api/executive/my-day-bundle ``intent`` fragment is exactly
+    ``{intent, updated_at}`` with the seeded text and an ISO-8601 ``updated_at``.
+
+    Pins the bundle's intent fragment to the canonical intent_repo.get_today
+    shape (PR5-T2 dedup): same keys, intent_text passthrough, updated_at as an
+    ISO string. This is the equivalence guard for replacing the inline
+    _INTENT_SQL + _intent_payload with intent_repo.get_today.
+    """
+    await contract_conn.execute(
+        """INSERT INTO daily_intent (user_id, intent_date, intent_text, updated_at)
+           VALUES ($1, CURRENT_DATE, 'Bundle intent for A', NOW())
+           ON CONFLICT (user_id, intent_date)
+           DO UPDATE SET intent_text = EXCLUDED.intent_text, updated_at = NOW()""",
+        contract_two_users.user_a_id,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/executive/my-day-bundle")
+
+    assert resp.status_code == 200, (
+        f"GET my-day-bundle failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    intent = resp.json()["intent"]
+    # Exact key set — no extra/missing fields.
+    assert set(intent.keys()) == {"intent", "updated_at"}, f"intent fragment keys drifted: {intent}"
+    assert intent["intent"] == "Bundle intent for A", f"intent text mismatch: {intent}"
+    # updated_at is an ISO-8601 string (parseable), not a raw datetime/None.
+    assert isinstance(intent["updated_at"], str), (
+        f"updated_at must be an ISO string; got {intent['updated_at']!r}"
+    )
+    import datetime as _dt
+
+    _dt.datetime.fromisoformat(intent["updated_at"])  # raises if not ISO-8601
+
+
+async def test_my_day_bundle_intent_fragment_null_when_no_row(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """With NO daily_intent row for today, the bundle ``intent`` fragment is
+    exactly ``{intent: None, updated_at: None}``.
+
+    Pins the empty-state of the PR5-T2 dedup: intent_repo.get_today must return
+    the same None/None shape the deleted _intent_payload produced on a miss
+    (the dedup removed _intent_payload's explicit None-guard).
+    """
+    await contract_conn.execute(
+        "DELETE FROM daily_intent WHERE user_id = $1 AND intent_date = CURRENT_DATE",
+        contract_two_users.user_a_id,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/executive/my-day-bundle")
+
+    assert resp.status_code == 200, (
+        f"GET my-day-bundle failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    assert resp.json()["intent"] == {"intent": None, "updated_at": None}, (
+        f"empty-state intent fragment drifted: {resp.json()['intent']}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # §A196 — POST /api/executive/tasks — quick-add; 404 for non-owned project
 # ---------------------------------------------------------------------------

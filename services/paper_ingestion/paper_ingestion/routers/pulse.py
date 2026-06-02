@@ -44,7 +44,7 @@ from paper_ingestion.models import (
 )
 from paper_ingestion.pulse.deck import load_history, load_last_nonempty_deck, load_today
 from paper_ingestion.pulse.training import FEATURE_NAMES
-from paper_ingestion.routers._paper_helpers import (
+from paper_ingestion.services.paper_state_helpers import (
     _upsert_recommendation_feedback,
     _upsert_state_and_starred,
 )

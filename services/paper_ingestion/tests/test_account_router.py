@@ -67,6 +67,6 @@ async def test_email_verification_sent_false_when_smtp_raises() -> None:
         "paper_ingestion.routers.account.send_magic_link",
         AsyncMock(side_effect=RuntimeError("SMTP failure")),
     ):
-        response = await update_account(body=body, request=request)
+        response = await update_account(body=body, request=request, user_id=1)
 
     assert response.email_verification_sent is False

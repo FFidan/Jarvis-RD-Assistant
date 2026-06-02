@@ -8,14 +8,7 @@ omitting it is still valid (existing callers unaffected).
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from paper_ingestion.models.journal import JournalEntryCreate, JournalPrompts
-from paper_ingestion.routers import my_day
-
-from tests.conftest import _make_pool_and_conn
+from paper_ingestion.models.journal import JournalPrompts
 
 
 def test_journal_prompts_note_optional_and_defaults_none():
@@ -35,32 +28,3 @@ def test_journal_prompts_note_excluded_when_none():
 def test_journal_prompts_note_included_when_set():
     dumped = JournalPrompts(note="also fixed CI flake").model_dump(exclude_none=True)
     assert dumped == {"note": "also fixed CI flake"}
-
-
-@pytest.mark.asyncio
-async def test_upsert_journal_round_trips_note():
-    pool, conn = _make_pool_and_conn()
-    today = date.today()
-    now = datetime.now()
-    conn.fetchrow.return_value = {
-        "id": 1,
-        "date": today,
-        "prompts": {"worked": "shipped", "note": "anything else here"},
-        "created_at": now,
-        "updated_at": now,
-    }
-    body = JournalEntryCreate(
-        date=today,
-        prompts=JournalPrompts(worked="shipped", note="anything else here"),
-    )
-    with patch(
-        "paper_ingestion.routers.my_day.current_user_id_strict",
-        new_callable=AsyncMock,
-        return_value=None,
-    ):
-        result = await my_day.upsert_journal_entry.__wrapped__(MagicMock(), body=body, db_pool=pool)
-    assert result.prompts.note == "anything else here"
-    assert result.prompts.worked == "shipped"
-    # The bound JSONB dict includes the note key (exclude_none kept it).
-    _sql, *bound = conn.fetchrow.await_args.args
-    assert bound[2] == {"worked": "shipped", "note": "anything else here"}

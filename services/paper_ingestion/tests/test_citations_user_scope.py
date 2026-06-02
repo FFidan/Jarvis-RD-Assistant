@@ -11,7 +11,7 @@ these functions are pure DB-query orchestrators with no other I/O.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -163,7 +163,7 @@ async def test_get_citations_strips_invisible_counter_parties() -> None:
     """
     import httpx
     from httpx import ASGITransport
-    from jarvis_common.auth import verify_api_key
+    from jarvis_common.auth import current_user_id_strict, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -197,19 +197,16 @@ async def test_get_citations_strips_invisible_counter_parties() -> None:
 
     app.dependency_overrides[get_db_pool] = override_db_pool
     app.dependency_overrides[verify_api_key] = override_api_key
+    app.dependency_overrides[current_user_id_strict] = lambda: user_a_id
 
-    with patch(
-        "paper_ingestion.routers.citations.current_user_id_strict",
-        new=AsyncMock(return_value=user_a_id),
-    ):
-        try:
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get(f"/api/citations/{p1_id}")
-        finally:
-            app.dependency_overrides.clear()
-            app.state.limiter.enabled = True
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get(f"/api/citations/{p1_id}")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -227,7 +224,7 @@ async def test_get_citations_keeps_visible_counter_parties() -> None:
     """
     import httpx
     from httpx import ASGITransport
-    from jarvis_common.auth import verify_api_key
+    from jarvis_common.auth import current_user_id_strict, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -258,19 +255,16 @@ async def test_get_citations_keeps_visible_counter_parties() -> None:
 
     app.dependency_overrides[get_db_pool] = override_db_pool
     app.dependency_overrides[verify_api_key] = override_api_key
+    app.dependency_overrides[current_user_id_strict] = lambda: user_a_id
 
-    with patch(
-        "paper_ingestion.routers.citations.current_user_id_strict",
-        new=AsyncMock(return_value=user_a_id),
-    ):
-        try:
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get(f"/api/citations/{p1_id}")
-        finally:
-            app.dependency_overrides.clear()
-            app.state.limiter.enabled = True
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get(f"/api/citations/{p1_id}")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
 
     assert resp.status_code == 200, resp.text
     body = resp.json()

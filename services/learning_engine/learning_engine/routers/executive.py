@@ -22,6 +22,7 @@ from learning_engine.models import (
     QuickAddTaskRequest,
     TaskResponse,
 )
+from learning_engine.repos import intent_repo
 
 router = APIRouter(prefix="/api/executive", tags=["executive"])
 
@@ -180,15 +181,11 @@ async def get_my_day(
 
 # --- /my-day-bundle: one round-trip superset of the ~11 My-Day page calls ----
 # Each fragment re-queries the SAME tables the dedicated endpoints hit (intent
-# → daily_intent, threads → thread, yesterday → tasks+daily_log, journal →
-# journal_entries). Logic is mirrored from intent_repo / routers.threads /
-# routers.my_day (paper_ingestion) — NOT imported, learning_engine owns its own
-# pool and queries Postgres directly.
-
-_INTENT_SQL = (
-    "SELECT intent_text, updated_at FROM daily_intent "
-    "WHERE user_id IS NOT DISTINCT FROM $1 AND intent_date = CURRENT_DATE"
-)
+# → intent_repo.get_today, threads → thread, yesterday → tasks+daily_log, journal
+# → journal_entries). The threads/yesterday/journal SQL is mirrored from
+# routers.threads / routers.my_day (paper_ingestion) — NOT imported, those live
+# in another service; learning_engine owns its own pool and queries Postgres
+# directly. The intent fragment reuses learning_engine's own intent_repo.
 
 _THREADS_SQL = (
     "SELECT id, title, anchor, progress, last_at, status, created_at "
@@ -218,21 +215,6 @@ _YDAY_DEFERRED_SQL = (
 _YDAY_LOG_SQL = (
     "SELECT focus_hours, cards_reviewed FROM daily_log WHERE user_id = $1 AND log_date = $2"
 )
-
-
-def _intent_payload(row: Any) -> dict[str, Any]:
-    """Serialize a ``daily_intent`` row to the bundle's ``intent`` fragment.
-
-    Returns ``{intent: None, updated_at: None}`` when *row* is falsy
-    (no entry today).
-    """
-    if not row:
-        return {"intent": None, "updated_at": None}
-    updated = row["updated_at"]
-    return {
-        "intent": row["intent_text"],
-        "updated_at": updated.isoformat() if updated else None,
-    }
 
 
 def _thread_payload(row: Any) -> dict[str, Any]:
@@ -314,7 +296,7 @@ async def get_my_day_bundle(
 
     (
         tasks,
-        intent_row,
+        intent,
         thread_rows,
         journal_row,
         yday_done,
@@ -322,13 +304,23 @@ async def get_my_day_bundle(
         yday_log,
     ) = await asyncio.gather(
         _fetch(db_pool, _TASKS_SQL, user_id),
-        _fetchrow(db_pool, _INTENT_SQL, user_id),
+        # Reuse the canonical intent reader. get_today acquires its own pooled
+        # connection (gather-safe) and already returns the bundle's exact
+        # {intent, updated_at} fragment shape — no extra serialization needed.
+        intent_repo.get_today(db_pool, user_id),
         _fetch(db_pool, _THREADS_SQL, user_id),
         _fetchrow(db_pool, _JOURNAL_TODAY_SQL, user_id),
         _fetch(db_pool, _YDAY_DONE_SQL, user_id, start_utc, end_utc),
         _fetch(db_pool, _YDAY_DEFERRED_SQL, user_id, start_utc, end_utc),
         _fetchrow(db_pool, _YDAY_LOG_SQL, user_id, yesterday_local_date),
     )
+    # asyncio.gather widens each unpacked element to the union of all gathered
+    # return types; re-pin the asyncpg Record rows to Any (as already done for
+    # yday_log) so row-subscript access stays untyped. intent is the canonical
+    # IntentRow dict and is used as-is.
+    tasks: Any = tasks
+    yday_done: Any = yday_done
+    yday_deferred: Any = yday_deferred
     yday_log: Any = yday_log
 
     yesterday = {
@@ -346,7 +338,7 @@ async def get_my_day_bundle(
 
     return {
         "tasks": [MyDayTaskItem.model_validate(dict(t)).model_dump(mode="json") for t in tasks],
-        "intent": _intent_payload(intent_row),
+        "intent": intent,
         "threads": [_thread_payload(r) for r in thread_rows],
         "yesterday": yesterday,
         "journal": _journal_payload(journal_row),

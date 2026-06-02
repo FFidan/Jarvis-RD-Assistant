@@ -19,7 +19,7 @@ from tests.conftest import _make_pool_and_conn
 def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
     from jarvis_common import verify_api_key
-    from jarvis_common.auth import require_admin
+    from jarvis_common.auth import current_user_id_strict, require_admin
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
     from paper_ingestion.routers import settings as _settings_mod
@@ -32,6 +32,9 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    # set_config resolves the caller via Depends(current_user_id_strict); steer it
+    # to a concrete user (the route hard-401s sessionless callers otherwise).
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
     # Admin-gate the settings endpoints (see test_settings._app).
     app.dependency_overrides[require_admin] = lambda: None
     _orig_require_admin = _settings_mod.require_admin

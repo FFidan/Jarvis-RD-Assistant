@@ -233,9 +233,9 @@ async def extract_paper(
     paper_id: int,
     body: ExtractionRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> JobCreateResponse:
     """Enqueue structured field extraction for a single paper."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     import uuid  # noqa: PLC0415
@@ -258,9 +258,9 @@ async def get_paper_extractions(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[ExtractionResponse]:
     """Get all extractions for a paper."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         try:
@@ -300,9 +300,9 @@ async def batch_extract_papers(
     request: Request,
     body: BatchExtractionRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> dict[str, object]:
     """Enqueue a background job to batch-extract fields for multiple papers."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         for paper_id in body.paper_ids:
             await assert_paper_ownership(conn, paper_id, user_id)
@@ -328,6 +328,7 @@ async def get_extraction_table(
     paper_ids: str | None = None,
     format: str = Query(default="json", pattern="^(json|csv)$"),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[ExtractionTableRow] | StreamingResponse:
     """Get cross-paper extraction comparison table.
 
@@ -340,7 +341,6 @@ async def get_extraction_table(
     format : str, optional
         Response format: ``json`` (default) or ``csv``.
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         # Fetch template fields (needed for CSV column headers)
         try:

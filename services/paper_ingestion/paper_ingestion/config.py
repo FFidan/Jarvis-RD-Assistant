@@ -47,9 +47,26 @@ from jarvis_common.config import JarvisCommonSettings
 from pydantic import Field, SecretStr
 
 __all__ = [
+    "ALLOWED_PDF_DOMAINS",
     "PaperIngestionSettings",
     "get_paper_ingestion_settings",
 ]
+
+# ---------------------------------------------------------------------------
+# Module-level constants (no heavy imports required)
+# ---------------------------------------------------------------------------
+
+#: Domains from which PDF downloads are permitted.  Source plugins import
+#: this directly so they never transitively pull the heavy pdf_processor module.
+ALLOWED_PDF_DOMAINS: frozenset[str] = frozenset(
+    {
+        "arxiv.org",
+        "export.arxiv.org",
+        "www.arxiv.org",
+        "pdfs.semanticscholar.org",
+        "www.semanticscholar.org",
+    }
+)
 
 
 class PaperIngestionSettings(JarvisCommonSettings):

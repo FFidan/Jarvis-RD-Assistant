@@ -27,6 +27,7 @@ from paper_ingestion.pdf_processor import (
     MAX_PDF_SIZE,
     PDFProcessor,
     _validate_pdf_url,
+    check_pdf_path_safe,
 )
 
 # ---------------------------------------------------------------------------
@@ -600,3 +601,51 @@ def test_max_pdf_size_is_100mb() -> None:
 def test_max_pdf_pages_is_500() -> None:
     """MAX_PDF_PAGES must be 500."""
     assert MAX_PDF_PAGES == 500
+
+
+# ---------------------------------------------------------------------------
+# PR5-T5: check_pdf_path_safe — single path-traversal guard helper
+# ---------------------------------------------------------------------------
+
+
+def test_check_pdf_path_safe_inside_storage_returns_true(tmp_path: Path) -> None:
+    """A file genuinely inside the storage root resolves as safe."""
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    inside = storage / "1.pdf"
+    assert check_pdf_path_safe(inside, storage) is True
+
+
+def test_check_pdf_path_safe_traversal_path_returns_false(tmp_path: Path) -> None:
+    """A `storage/../etc/passwd`-style traversal escapes the root → unsafe."""
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    traversal = storage / ".." / "etc" / "passwd"
+    assert check_pdf_path_safe(traversal, storage) is False
+
+
+def test_check_pdf_path_safe_absolute_outside_returns_false(tmp_path: Path) -> None:
+    """An absolute path outside the storage root → unsafe."""
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    outside = tmp_path / "elsewhere" / "leak.pdf"
+    assert check_pdf_path_safe(outside, storage) is False
+
+
+def test_check_pdf_path_safe_accepts_str_storage(tmp_path: Path) -> None:
+    """`storage` may be passed as a str (callers pass the configured path string)."""
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    inside = storage / "2.pdf"
+    assert check_pdf_path_safe(inside, str(storage)) is True
+
+
+def test_check_pdf_path_safe_default_uses_live_module_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting `storage` reads the live module-level PDF_STORAGE_PATH at call time."""
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    monkeypatch.setattr(pdf_processor, "PDF_STORAGE_PATH", str(storage))
+    assert check_pdf_path_safe(storage / "3.pdf") is True
+    assert check_pdf_path_safe(tmp_path / "outside.pdf") is False

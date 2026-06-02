@@ -19,7 +19,7 @@ from paper_ingestion.models import (
     MarkReadResponse,
     UserStateResponse,
 )
-from paper_ingestion.routers._paper_helpers import _upsert_state_and_starred
+from paper_ingestion.services.paper_state_helpers import _upsert_state_and_starred
 
 logger = logging.getLogger(__name__)
 router = APIRouter(

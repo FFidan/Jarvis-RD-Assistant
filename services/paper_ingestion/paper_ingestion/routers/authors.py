@@ -43,9 +43,9 @@ _AUTHOR_ALLOWED_COLUMNS: set[str] = {"enabled", "s2_author_id"}
 async def list_tracked_authors(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[TrackedAuthorResponse]:
     """List all tracked authors for the current user."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT * FROM tracked_authors"
@@ -61,9 +61,9 @@ async def create_tracked_author(
     request: Request,
     body: TrackedAuthorCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> TrackedAuthorResponse:
     """Add a new tracked author for the current user."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         # Check for duplicates scoped to this user
         existing = await conn.fetchrow(
@@ -94,9 +94,9 @@ async def update_tracked_author(
     author_id: int,
     body: TrackedAuthorUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> TrackedAuthorResponse:
     """Update a tracked author (enable/disable, change S2 ID)."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         existing = await conn.fetchrow(
             "SELECT * FROM tracked_authors WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
@@ -126,9 +126,9 @@ async def delete_tracked_author(
     request: Request,
     author_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> None:
     """Remove a tracked author."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await delete_or_404(
             conn,
@@ -154,6 +154,7 @@ async def delete_tracked_author(
 async def auto_detect_authors(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> AutoDetectResponse:
     """Auto-detect authors from starred or highly-rated papers.
 
@@ -161,7 +162,6 @@ async def auto_detect_authors(
     authors to the tracked_authors table with source ``auto_starred``
     or ``auto_rated``.
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT author_name,

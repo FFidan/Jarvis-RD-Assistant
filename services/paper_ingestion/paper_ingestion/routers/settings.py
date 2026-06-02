@@ -141,13 +141,13 @@ def _has_browser_session(request: Request) -> bool:
 async def list_config(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    caller_user_id: int = Depends(current_user_id_strict),
 ) -> list[ConfigEntry]:
     """Return all config entries.
 
     Browser users only receive personal settings unless they are admins.
     API-key-only callers preserve the legacy single-tenant view.
     """
-    caller_user_id = await current_user_id_strict(request)
     browser_session = _has_browser_session(request)
     role = getattr(request.state, "user_role", None)
     personal_keys = sorted(PERSONAL_KEYS)
@@ -186,12 +186,12 @@ async def get_config(
     request: Request,
     key: str,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    caller_user_id: int = Depends(current_user_id_strict),
 ) -> ConfigEntry:
     if not _is_allowed_config_key(key):
         raise HTTPException(404, f"Config key '{key}' not found")
     if _classify_config_key(key) == "system" and _has_browser_session(request):
         await require_admin(request)
-    caller_user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         row = await _fetch_effective_config_row(conn, key, caller_user_id, is_admin=is_admin)
@@ -209,6 +209,7 @@ async def set_config(
     body: ConfigEntry,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     scheduler=Depends(get_scheduler),
+    caller_user_id: int = Depends(current_user_id_strict),
 ) -> ConfigEntry:
     if not _is_allowed_config_key(key):
         raise HTTPException(status_code=400, detail=f"Unknown config key: {key!r}")
@@ -218,7 +219,6 @@ async def set_config(
     # write directly to user_config via SQL, bypassing this gate.
     if _classify_config_key(key) == "system":
         await require_admin(request)
-    caller_user_id = await current_user_id_strict(request)
 
     # Delegate the full write + side-effects to the service layer.
     # require_admin and audit logging stay here so patch paths on this module
@@ -276,9 +276,9 @@ async def set_config(
 async def papers_by_source(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[dict]:
     """Return paper counts grouped by source type."""
-    user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         return await fetch_papers_by_source(conn, user_id, is_admin=is_admin)
@@ -289,9 +289,9 @@ async def papers_by_source(
 async def papers_by_status(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[dict]:
     """Return paper counts grouped by user-state status."""
-    user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         return await fetch_papers_by_status(conn, user_id, is_admin=is_admin)
@@ -309,13 +309,13 @@ async def test_provider(
     provider: str,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     _: None = Depends(verify_api_key),
+    caller_user_id: int = Depends(current_user_id_strict),
 ) -> ProviderTestResponse:
     """Probe a cloud LLM provider with its stored API key to verify connectivity."""
     if provider not in _SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=400, detail="unsupported provider")
 
     config_key = f"llm.{provider}.api_key"
-    caller_user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         row = await _fetch_effective_config_row(conn, config_key, caller_user_id, is_admin=is_admin)
@@ -341,13 +341,15 @@ async def test_provider(
 
 @router.get("/me/export")
 @limiter.limit("5/minute")
-async def export_my_data(request: Request) -> Any:
+async def export_my_data(
+    request: Request,
+    caller_user_id: int = Depends(current_user_id_strict),
+) -> Any:
     """Stream a ZIP of the calling user's structured data (GDPR export).
 
     JSON dumps only — no PDF binaries, no embeddings. Scoped to
     ``current_user_id_strict`` so a caller can never read another user's data.
     """
-    caller_user_id = await current_user_id_strict(request)
     pool = request.app.state.db_pool
 
     data = await build_export_zip(pool, caller_user_id)

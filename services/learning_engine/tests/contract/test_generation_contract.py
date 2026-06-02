@@ -145,7 +145,7 @@ async def test_generate_cards_core_revalidates_paper_ownership(
     """
     from fastapi import HTTPException
 
-    from learning_engine.routers.generation import generate_cards_core
+    from learning_engine.generation_service import generate_cards_core
 
     paper_id_a = contract_two_users.paper_id_a
     user_b_id = contract_two_users.user_b_id
@@ -406,10 +406,10 @@ async def test_generation_w2_deck_create_persists_cards(
 ):
     """generate_cards_core persists LLM-generated cards to DB under real transaction.
 
-    # Verified: services/learning_engine/learning_engine/routers/generation.py:43-192
+    # Verified: services/learning_engine/learning_engine/generation_service.py:38-187
     # Survivor-of: test_generation.py mock-unit assertions on generate_cards_core DB inserts
     """
-    from learning_engine.routers.generation import generate_cards_core
+    from learning_engine.generation_service import generate_cards_core
     from learning_engine.card_models import CardGenerationOutput, CardOutput
     from jarvis_common.llm_client import LiteLLMConfig
     from learning_engine.card_generator import CardGenerator

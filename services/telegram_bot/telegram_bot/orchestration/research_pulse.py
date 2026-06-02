@@ -13,6 +13,7 @@ import asyncpg
 import httpx
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
+from telegram_bot import owner as _owner
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_paper_card, truncate
 from telegram_bot.handlers.helpers import _owner_headers
@@ -164,9 +165,7 @@ async def run_research_pulse(
     config : BotConfig
         Bot configuration (service URLs and API key).
     """
-    from telegram_bot.owner import list_user_pairings
-
-    pairings = await list_user_pairings(db_pool)
+    pairings = await _owner.list_user_pairings(db_pool)
     if not pairings:
         logger.warning(
             "research_pulse skipped: no Telegram pairings exist — use /pair in Telegram to set up"

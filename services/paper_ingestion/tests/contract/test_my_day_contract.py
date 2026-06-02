@@ -275,6 +275,53 @@ async def test_a158_create_thread_inserts_row_with_correct_user_id(
 
 
 # ---------------------------------------------------------------------------
+# note round-trip: POST /api/my-day/journal with note → GET confirms persisted
+# ---------------------------------------------------------------------------
+
+
+async def test_journal_note_round_trips(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """note field in JournalPrompts round-trips through the real upsert route.
+
+    Strictly stronger than the deleted .__wrapped__ mock-binding assertion:
+    drives the actual HTTP handler end-to-end via live-PG and confirms both
+    the POST response and a subsequent GET return the same note value.
+
+    Covers: my_day.py upsert_journal_entry + get_journal_entry, JSONB note key.
+    """
+    # Use a far-future date to avoid colliding with _seed_resources data.
+    test_date = (datetime.now(UTC).date() + timedelta(days=60)).isoformat()
+    note_text = "contract: anything else here round-trip"
+    payload = {
+        "date": test_date,
+        "prompts": {"worked": "shipped contract", "note": note_text},
+    }
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_post = await c.post("/api/my-day/journal", json=payload)
+
+    assert resp_post.status_code == 200, resp_post.text[:300]
+    post_body = resp_post.json()
+    assert post_body["prompts"]["note"] == note_text, (
+        f"POST response prompts.note mismatch: {post_body['prompts']}"
+    )
+    assert post_body["prompts"]["worked"] == "shipped contract"
+
+    # GET must return the same note value (persisted in JSONB).
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_get = await c.get(f"/api/my-day/journal?date={test_date}")
+
+    assert resp_get.status_code == 200, resp_get.text[:300]
+    get_body = resp_get.json()
+    assert get_body["prompts"]["note"] == note_text, (
+        f"GET response prompts.note mismatch after upsert: {get_body['prompts']}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # A159: PATCH /api/my-day/threads/{id} — update persists; 404 for non-owner
 # ---------------------------------------------------------------------------
 

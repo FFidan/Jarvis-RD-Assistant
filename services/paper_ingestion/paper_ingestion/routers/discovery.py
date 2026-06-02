@@ -36,6 +36,7 @@ async def find_similar_papers(
     limit: int = Query(default=5, ge=1, le=20),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder: Embedder | None = Depends(get_embedder),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[dict]:
     """Find papers semantically similar to the given paper.
 
@@ -53,7 +54,6 @@ async def find_similar_papers(
     list[dict]
         Similar papers with similarity scores and matching snippets.
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         paper_row = await conn.fetchrow(
@@ -129,6 +129,7 @@ async def discover_papers(
     body: DiscoverRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder: Embedder | None = Depends(get_embedder),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[dict]:
     """Discover papers similar to a set of seed papers.
 
@@ -148,7 +149,6 @@ async def discover_papers(
     if body.paper_ids and len(body.paper_ids) > 200:
         raise HTTPException(status_code=400, detail="paper_ids cannot exceed 200 items")
     # Validate that all seed paper IDs exist + are owned by the caller
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         for paper_id in body.paper_ids:
             await assert_paper_ownership(conn, paper_id, user_id)

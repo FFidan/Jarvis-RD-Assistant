@@ -152,6 +152,7 @@ def _make_priority_client(user_id_override=None):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from jarvis_common import current_user_id_or_none, verify_api_key
+    from jarvis_common.auth import current_user_id_strict
     from paper_ingestion.deps import get_db_pool, limiter
     from paper_ingestion.routers import priority as priority_router
 
@@ -172,6 +173,8 @@ def _make_priority_client(user_id_override=None):
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[current_user_id_or_none] = lambda: user_id_override
+    # compute_paper_priority resolves the caller via Depends(current_user_id_strict).
+    app.dependency_overrides[current_user_id_strict] = lambda: user_id_override
 
     tc = TestClient(app, raise_server_exceptions=False)
     return tc, pool, conn, app
@@ -199,16 +202,10 @@ def test_compute_paper_priority_single_user_mode_skips_ownership():
     conn.execute.return_value = "UPDATE 1"
 
     try:
-        with (
-            patch(
-                "paper_ingestion.routers.priority.current_user_id_strict",
-                new=AsyncMock(return_value=None),
-            ),
-            patch(
-                "paper_ingestion.routers.priority.assert_paper_ownership",
-                new=AsyncMock(return_value=None),
-            ) as mock_ownership,
-        ):
+        with patch(
+            "paper_ingestion.routers.priority.assert_paper_ownership",
+            new=AsyncMock(return_value=None),
+        ) as mock_ownership:
             resp = tc.post("/api/papers/7/priority")
     finally:
         app.dependency_overrides.clear()

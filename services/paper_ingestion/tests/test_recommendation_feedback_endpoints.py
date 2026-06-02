@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from paper_ingestion.routers import recommendation_feedback
-from paper_ingestion.routers._paper_helpers import _upsert_recommendation_feedback
+from paper_ingestion.services.paper_state_helpers import _upsert_recommendation_feedback
 
 from tests.conftest import _make_pool_and_conn
 

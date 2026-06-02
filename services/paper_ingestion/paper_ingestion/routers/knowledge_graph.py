@@ -98,9 +98,9 @@ async def extract_entities(
     http_client: httpx.AsyncClient = Depends(get_http_client),
     embedder=Depends(get_optional_embedder),
     qdrant=Depends(get_optional_qdrant),
+    user_id: int = Depends(current_user_id_strict),
 ) -> EntityExtractionResponse:
     """Trigger entity extraction for a single paper."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         attribution_user_id: int = user_id
@@ -138,6 +138,7 @@ async def get_graph(
     entity_type: str | None = None,
     min_paper_count: int = Query(default=1, ge=1),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> KnowledgeGraphResponse:
     """Get the full knowledge graph or filtered subset."""
     if entity_type is not None and entity_type not in VALID_ENTITY_TYPES:
@@ -146,7 +147,6 @@ async def get_graph(
             detail=f"Invalid entity_type: {entity_type}. Valid types: {sorted(VALID_ENTITY_TYPES)}",
         )
 
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         data = await get_knowledge_graph(conn, entity_type, min_paper_count, user_id=user_id)
 
@@ -194,6 +194,7 @@ async def list_entities(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[EntityResponse]:
     """List entities with pagination and filtering."""
     if entity_type is not None and entity_type not in VALID_ENTITY_TYPES:
@@ -202,7 +203,6 @@ async def list_entities(
             detail=f"Invalid entity_type: {entity_type}. Valid types: {sorted(VALID_ENTITY_TYPES)}",
         )
 
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         if entity_type:
             if user_id is not None:
@@ -270,9 +270,9 @@ async def get_entity_detail(
     request: Request,
     entity_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> EntityDetailResponse:
     """Get entity detail with relationships and papers."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         entity = await conn.fetchrow("SELECT * FROM entities WHERE id = $1", entity_id)
         if not entity:
@@ -383,9 +383,9 @@ async def kg_query(
     request: Request,
     q: str = Query(..., min_length=1),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> KGQueryResponse:
     """Query the knowledge graph with natural language."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         results = await query_knowledge_graph(conn, q, user_id=user_id)
     return KGQueryResponse(results=results, query=q)

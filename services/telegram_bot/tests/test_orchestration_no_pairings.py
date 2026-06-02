@@ -29,8 +29,9 @@ def mock_deps():
 
 async def _assert_skips_with_warning(run_fn, caplog, mock_deps) -> None:
     db_pool, bot, http_client, config = mock_deps
-    # list_user_pairings is imported via deferred `from telegram_bot.owner import …`
-    # inside each run_* function body, so patch the canonical source location.
+    # run_* functions call `owner.list_user_pairings(...)` via a module-level
+    # `from telegram_bot import owner as _owner`, so patching the attribute on the
+    # owner module — the canonical source location — is intercepted at the call site.
     with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
         caplog.set_level(logging.WARNING)
         await run_fn(http_client=http_client, db_pool=db_pool, bot=bot, config=config)

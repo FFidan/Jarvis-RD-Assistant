@@ -29,12 +29,12 @@ router = APIRouter(prefix="/api", tags=["dashboard"])
 async def get_dashboard_metrics(
     request: Request,
     pool: asyncpg.Pool = Depends(get_db_pool),  # type: ignore[type-arg]
+    user_id: int = Depends(current_user_id_strict),
 ) -> DashboardMetrics:
     """Return aggregate counts for the dashboard home page.
 
     Mirrors the SQL previously embedded in ``dashboard/app.py``.
     """
-    user_id = await current_user_id_strict(request)
     async with pool.acquire() as conn:
         # Paper-count metrics scope through ``user_library`` (the caller's
         # library) instead of the legacy ``papers.user_id`` predicate.

@@ -187,10 +187,9 @@ These document intentional deviations from the container-hardening sweep, each w
 
 ### LOW-DRY-001 — Minor un-hoisted duplications (low priority)
 
-Three small consolidation items accepted as low-priority code-quality debt:
+Two small consolidation items accepted as low-priority code-quality debt:
 
 - `build_jobs_router(service_name=…)` accepts a `service_name` parameter that no code path currently uses. Retained to avoid touching every call-site; remove when the router is next refactored.
-- The `_paper_helpers.py` 2-hop shim in `paper_ingestion` (3 callers) was left intact. Consolidate opportunistically.
 - One inline copy of the paper-visibility SQL predicate remains at `paper_ingestion/services/summarization.py`; the other copies were hoisted to a shared `paper_visible_sql()` helper. Hoist this last copy when that file is next edited.
 
 **Reopen criteria:** any of the above files are touched in a refactor — opportunistic cleanup at that point.
@@ -214,3 +213,20 @@ Three small consolidation items accepted as low-priority code-quality debt:
 **Why retained:** removing the barrel would require updating every call site that currently patches `paper_ingestion.services.config.get_paper_ingestion_settings` in tests, and the production consumer that imports from that path. The marginal leanness gain does not justify the regression surface. An export-snapshot test guards the barrel's interface.
 
 **Reopen criteria:** if a refactor already touches the majority of call sites, remove the barrel in the same pass.
+
+---
+
+## Deferred from the 2026-06-02 public-readiness fix plan
+
+Low-value-or-high-churn items deliberately deferred during the public-readiness fix plan (PR-5). Each is behavior-neutral debt, not a correctness or security risk.
+
+- **`services_client` full migration (Telegram bot).** The bot routes most product-data calls through the typed `services_client`, but some call sites still query the shared Postgres directly. PR-5 corrected the module docstring ("most", not "all") rather than migrating every site — the remaining migration is a larger, separate effort.
+- **`_owner_headers` promotion.** The Telegram `_owner_headers` helper stays at its current call-site location (pinned by tests); promoting it to a shared module is not worth the churn.
+- **Service-layer `HTTPException` coupling.** A few service functions raise FastAPI `HTTPException` directly rather than a domain error the router translates. Left as-is; decoupling is a broad refactor.
+- **`db_helpers` split.** `paper_ingestion`'s `db_helpers` mixes a few concerns; splitting it touches many importers for marginal gain.
+- **`JOB_HANDLER_OWNER` / `noop.test` queue.** The job-handler-owner `Literal` typing and the `noop.test` queue entry are retained as-is; tightening them is cosmetic.
+- **Redundant My-Day journal fetch.** `GET /api/my-day/journal` overlaps the nullable `journal` field already returned by the my-day-bundle; the separate fetch is kept to avoid a frontend refactor.
+- **`jarvis_common` test-code wheel exclusion.** The `jarvis_common` wheel ships its `testing_*.py` modules (~25 KB). A `packages.find` exclude is ineffective for top-level modules (only a `testing_sidecars/` subpackage would drop); a correct fix means relocating six modules into a `jarvis_common/testing/` subpackage plus updating 100+ test imports — not worth the gain. Runtime-safe regardless (zero non-test runtime imports of `jarvis_common.testing*`).
+- **`jobs.py` 503-vs-404 caller mapping.** The broad job-row-lookup failure now logs a WARNING (observability fix shipped in PR-2); mapping transient DB errors to HTTP 503 at the callers is a separate enhancement — re-raising today would surface as an unhandled 500, so the status-code mapping is deferred.
+
+**Intended behavior note — auth-first ordering (PR-5 auth-idiom migration).** `paper_ingestion` route handlers now resolve identity via `Depends(current_user_id_strict)` (previously an imperative in-body call). Consequence: an *unauthenticated* request to a migrated endpoint now fails authentication (401) *before* request-body validation runs, whereas the old imperative order could surface a 422/400 body-validation error first. This is intended and more consistent/secure (uniform auth-first across all endpoints); behavior for authenticated callers is unchanged. The non-route `analyze._analyze_stream` generator retains an imperative resolve (it is not a route and has no rate-limiter).

@@ -34,8 +34,8 @@ async def list_topics(
 async def list_my_subscriptions(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[int]:
-    user_id = await current_user_id_strict(request)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     async with db_pool.acquire() as conn:
@@ -52,8 +52,8 @@ async def subscribe_to_topic(
     request: Request,
     topic_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> None:
-    user_id = await current_user_id_strict(request)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     async with db_pool.acquire() as conn:
@@ -74,8 +74,8 @@ async def unsubscribe_from_topic(
     request: Request,
     topic_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> None:
-    user_id = await current_user_id_strict(request)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     async with db_pool.acquire() as conn:

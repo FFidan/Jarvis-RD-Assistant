@@ -335,7 +335,11 @@ def register_tasks(
         registry = _DEFAULT_REGISTRY
     else:
         registry = TaskRegistry(procrastinate_app, task_map=_TASK_MAP)
-        registry._dependencies = _DEFAULT_REGISTRY._dependencies
+        if _DEFAULT_REGISTRY._dependencies is not None:
+            registry.set_dependencies(
+                pool=_DEFAULT_REGISTRY._dependencies.pool,
+                http_client=_DEFAULT_REGISTRY._dependencies.http_client,
+            )
     registry.register_tasks(mapping, queue)
 
 

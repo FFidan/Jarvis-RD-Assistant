@@ -16,6 +16,7 @@ from apscheduler.triggers.cron import CronTrigger
 from telegram import Bot
 
 from telegram_bot import formatters
+from telegram_bot import owner as _owner
 from telegram_bot.config import BotConfig
 
 logger = logging.getLogger(__name__)
@@ -193,9 +194,7 @@ class JarvisScheduler:
                 "Please check service logs for details."
             )
             try:
-                from telegram_bot.owner import list_user_pairings
-
-                pairings = await list_user_pairings(self.db_pool)
+                pairings = await _owner.list_user_pairings(self.db_pool)
                 if not pairings:
                     logger.warning(
                         "Skipping failure alert for job %s (id=%d): no telegram pairings",

@@ -35,9 +35,9 @@ async def get_contradictions(
     status: str | None = Query(default="verified", pattern="^(verified|dismissed|false_positive)$"),
     limit: int = Query(default=20, ge=1, le=100),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ContradictionListResponse:
     """List persisted quote-verified contradictions."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         contradictions, total = await list_contradictions(
             conn,
@@ -55,9 +55,9 @@ async def scan_contradictions(
     request: Request,
     body: ContradictionScanRequest | None = Body(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> JobCreateResponse:
     """Enqueue a bounded cross-paper contradiction scan."""
-    user_id = await current_user_id_strict(request)
     payload = body.model_dump() if body else {"paper_id": None, "limit": 25}
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["contradictions.scan"].defer_async(
@@ -77,9 +77,9 @@ async def scan_paper_contradictions(
     paper_id: int,
     body: ContradictionScanRequest | None = Body(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> JobCreateResponse:
     """Enqueue a contradiction scan focused on one paper."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     limit = body.limit if body else 25

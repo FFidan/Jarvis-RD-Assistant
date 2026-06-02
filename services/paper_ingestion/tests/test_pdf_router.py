@@ -107,6 +107,7 @@ async def test_download_pdf_releases_conn_before_http():
         paper_id=1,
         db_pool=pool,
         pdf_processor=processor,
+        user_id=1,
     )
 
     # acquire() must have been called exactly twice
@@ -138,6 +139,7 @@ async def test_download_pdf_catches_http_error():
             paper_id=1,
             db_pool=pool,
             pdf_processor=processor,
+            user_id=1,
         )
 
     assert exc_info.value.status_code == 502

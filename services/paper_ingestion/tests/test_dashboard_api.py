@@ -85,6 +85,7 @@ def _make_detail_paper_record(paper_id: int = 1) -> FakeRecord:
 def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import current_user_id_strict
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -95,6 +96,7 @@ def _app():
     # Dashboard routes now use the shared dependency from paper_ingestion.main/app.deps.
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
     yield app, conn
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True

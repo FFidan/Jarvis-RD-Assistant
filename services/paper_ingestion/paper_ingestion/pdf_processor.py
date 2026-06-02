@@ -18,7 +18,7 @@ import fitz  # fitz (PyMuPDF) retained for page snapshot generation only; text e
 import httpx
 from jarvis_common.settings import get_core_settings
 
-from paper_ingestion.config import get_paper_ingestion_settings
+from paper_ingestion.config import ALLOWED_PDF_DOMAINS, get_paper_ingestion_settings
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import ChunkForEmbedding
 
@@ -32,6 +32,7 @@ __all__ = [
     "MAX_PDF_SIZE",
     "SNAPSHOT_DPI",
     "SNAPSHOT_STORAGE_PATH",
+    "check_pdf_path_safe",
     "_validate_pdf_url",
 ]
 
@@ -42,15 +43,20 @@ SNAPSHOT_DPI = 150
 MAX_PDF_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_PDF_PAGES = 500  # Reject PDFs with excessive page counts (anti-bomb)
 
-ALLOWED_PDF_DOMAINS: frozenset[str] = frozenset(
-    {
-        "arxiv.org",
-        "export.arxiv.org",
-        "www.arxiv.org",
-        "pdfs.semanticscholar.org",
-        "www.semanticscholar.org",
-    }
-)
+# Sentinel: resolve the live module-level PDF_STORAGE_PATH at call time rather
+# than freezing it as a default-arg value (keeps monkeypatch.setattr working).
+_STORAGE_DEFAULT = object()
+
+
+def check_pdf_path_safe(pdf_path: Path, storage: Path | str = _STORAGE_DEFAULT) -> bool:  # type: ignore[assignment]
+    """True iff pdf_path resolves to a location inside `storage` (path-traversal guard).
+
+    When `storage` is omitted, the live module-level PDF_STORAGE_PATH is used.
+    """
+    if storage is _STORAGE_DEFAULT:
+        storage = PDF_STORAGE_PATH
+    return pdf_path.resolve().is_relative_to(Path(storage).resolve())
+
 
 # ---------------------------------------------------------------------------
 # Docling PDF text extraction (page-bounded provenance; replaces Marker)

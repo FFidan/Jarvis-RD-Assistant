@@ -17,7 +17,7 @@ from jarvis_common.db_helpers import assert_paper_ownership, assert_papers_owner
 from jarvis_common.jobs import JobError, ProgressContext
 
 from paper_ingestion._state import get_services
-from paper_ingestion.pdf_processor import PDF_STORAGE_PATH
+from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, check_pdf_path_safe
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ async def _paper_process_job(
         raise JobError(f"PDF not yet downloaded for paper {paper_id}")
 
     pdf_path = Path(row["pdf_local_path"])
-    if not pdf_path.resolve().is_relative_to(Path(PDF_STORAGE_PATH).resolve()):
+    if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
         raise JobError(f"Invalid PDF path for paper {paper_id}")
     if not pdf_path.exists():
         raise JobError(f"PDF file missing from disk for paper {paper_id}")
@@ -216,7 +216,7 @@ async def _paper_analyze_job(
         raise JobError(f"PDF path not set for paper {paper_id}")
 
     pdf_path = Path(pdf_local_path)
-    if not pdf_path.resolve().is_relative_to(Path(PDF_STORAGE_PATH).resolve()):
+    if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
         raise JobError(f"Invalid PDF path for paper {paper_id}")
     if not pdf_path.exists():
         raise JobError(f"PDF file missing from disk for paper {paper_id}")
@@ -336,7 +336,7 @@ async def _papers_batch_process_job(
                 skipped += 1
                 continue
             pdf_path = Path(row["pdf_local_path"])
-            if not pdf_path.resolve().is_relative_to(Path(PDF_STORAGE_PATH).resolve()):
+            if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
                 skipped += 1
                 continue
             if not pdf_path.exists():

@@ -43,9 +43,9 @@ class FetchAndProcessResponse(BaseModel):
 async def get_missing_foundational(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[MissingFoundationalPaper]:
     """Return high-citation citation stubs already discovered from local papers."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -92,9 +92,9 @@ async def fetch_and_process_foundational(
     request: Request,
     body: FetchAndProcessRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> FetchAndProcessResponse:
     """Promote a citation stub and enqueue processing only when a PDF exists."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow(
             """
@@ -144,9 +144,9 @@ async def fetch_and_process_foundational(
 async def feedback_summary(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> dict:
     """Return per-paper positive and negative recommendation feedback counts."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """

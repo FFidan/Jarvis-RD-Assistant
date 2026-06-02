@@ -16,7 +16,7 @@ from paper_ingestion.models import (
     FeedbackResponse,
     MarkReadResponse,
 )
-from paper_ingestion.routers._paper_helpers import _upsert_recommendation_feedback
+from paper_ingestion.services.paper_state_helpers import _upsert_recommendation_feedback
 
 logger = logging.getLogger(__name__)
 router = APIRouter(

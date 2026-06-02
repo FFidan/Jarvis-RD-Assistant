@@ -25,7 +25,7 @@ async def list_project_papers(
     project_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
-) -> list[dict]:
+) -> list[ProjectPaperItem]:
     """List papers linked to a project."""
     async with db_pool.acquire() as conn:
         # Scope project lookup by owner — IDOR otherwise.
@@ -42,7 +42,7 @@ async def list_project_papers(
             """,
             project_id,
         )
-    return [dict(r) for r in rows]
+    return [ProjectPaperItem(**dict(r)) for r in rows]
 
 
 @router.post(

@@ -8,6 +8,7 @@ import asyncpg
 import httpx
 from telegram import Bot
 
+from telegram_bot import owner as _owner
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_weekly_digest, truncate
 from telegram_bot.handlers.helpers import _owner_headers
@@ -225,9 +226,7 @@ async def run_paper_digest(
     config : BotConfig
         Bot configuration.
     """
-    from telegram_bot.owner import list_user_pairings
-
-    pairings = await list_user_pairings(db_pool)
+    pairings = await _owner.list_user_pairings(db_pool)
     if not pairings:
         logger.warning(
             "paper_digest skipped: no Telegram pairings exist — use /pair in Telegram to set up"

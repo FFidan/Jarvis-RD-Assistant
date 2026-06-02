@@ -8,7 +8,7 @@ Uses the ``__wrapped__`` pattern (same as test_journal_endpoints.py).
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from paper_ingestion.routers import my_day
@@ -18,14 +18,6 @@ from tests.conftest import _make_pool_and_conn
 
 def _mock_request():
     return MagicMock()
-
-
-def _patch_uid(uid: int = 42):
-    return patch(
-        "paper_ingestion.routers.my_day.current_user_id_strict",
-        new_callable=AsyncMock,
-        return_value=uid,
-    )
 
 
 class _FrozenDateTime(datetime):
@@ -49,9 +41,9 @@ async def test_yesterday_utc_boundary_default_offset():
     ]
     conn.fetchrow.return_value = {"focus_hours": 3.5, "cards_reviewed": 12}
 
-    with _patch_uid(42), patch("paper_ingestion.routers.my_day.datetime", _FrozenDateTime):
+    with patch("paper_ingestion.routers.my_day.datetime", _FrozenDateTime):
         result = await my_day.get_yesterday.__wrapped__(
-            _mock_request(), tz_offset_minutes=0, db_pool=pool
+            _mock_request(), tz_offset_minutes=0, db_pool=pool, user_id=42
         )
 
     assert result.date == date(2026, 5, 14)
@@ -80,9 +72,9 @@ async def test_yesterday_positive_offset_shifts_window():
     conn.fetch.side_effect = [[], []]
     conn.fetchrow.return_value = None
 
-    with _patch_uid(7), patch("paper_ingestion.routers.my_day.datetime", _FrozenDateTime):
+    with patch("paper_ingestion.routers.my_day.datetime", _FrozenDateTime):
         result = await my_day.get_yesterday.__wrapped__(
-            _mock_request(), tz_offset_minutes=120, db_pool=pool
+            _mock_request(), tz_offset_minutes=120, db_pool=pool, user_id=7
         )
 
     assert result.date == date(2026, 5, 14)
@@ -103,9 +95,9 @@ async def test_yesterday_negative_offset_rolls_local_day_back():
     conn.fetch.side_effect = [[], [{"id": 9, "title": "carry me", "status": "blocked"}]]
     conn.fetchrow.return_value = None
 
-    with _patch_uid(3), patch("paper_ingestion.routers.my_day.datetime", _FrozenDateTime):
+    with patch("paper_ingestion.routers.my_day.datetime", _FrozenDateTime):
         result = await my_day.get_yesterday.__wrapped__(
-            _mock_request(), tz_offset_minutes=-300, db_pool=pool
+            _mock_request(), tz_offset_minutes=-300, db_pool=pool, user_id=3
         )
 
     assert result.date == date(2026, 5, 13)

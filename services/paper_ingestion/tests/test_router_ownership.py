@@ -32,6 +32,7 @@ from tests.conftest import FakeRecord, _make_pool_and_conn
 def _app():
     """Minimal app instance with mocked DB pool and disabled auth/limiter."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import current_user_id_strict
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -43,6 +44,10 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    # Depends-wired routes (extract_paper, find_similar_papers) resolve the
+    # caller via current_user_id_strict; pin it. Still-imperative routes in
+    # this file resolve via the autouse module-symbol monkeypatch.
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
 
     yield app, conn
     app.dependency_overrides.clear()

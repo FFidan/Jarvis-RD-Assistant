@@ -13,7 +13,7 @@ from jarvis_common.library import fan_out_to_topic_users
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.models import PaperSourceConfig
-from paper_ingestion.pdf_processor import PDF_STORAGE_PATH
+from paper_ingestion.pdf_processor import PDF_STORAGE_PATH, check_pdf_path_safe
 from paper_ingestion.services.pdf_workflow import run_process_pdf, upsert_paper
 from paper_ingestion.sources.registry import get_source_class
 
@@ -211,11 +211,10 @@ async def run_auto_pipeline(app) -> None:
                         exc_info=True,
                     )
 
-        storage_resolved = Path(PDF_STORAGE_PATH).resolve()
         process_tasks = []
         for row in to_process:
             pdf_path = Path(row["pdf_local_path"])
-            if not pdf_path.resolve().is_relative_to(storage_resolved):
+            if not check_pdf_path_safe(pdf_path, PDF_STORAGE_PATH):
                 logger.warning(
                     "Skipping paper %d: pdf_local_path outside storage dir",
                     row["id"],

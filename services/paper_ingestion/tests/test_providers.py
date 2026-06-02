@@ -37,16 +37,26 @@ def fernet_key(monkeypatch):
 @pytest.fixture()
 def _app():
     """Minimal paper_ingestion app with mocked DB and auth disabled."""
+    from unittest.mock import AsyncMock
+
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import current_user_id_strict
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool
+    # set_config reads request.app.state.http_client; provide a stub so the test
+    # does not depend on a sibling test having set it on the shared app singleton.
+    app.state.http_client = AsyncMock()
     app.state.limiter.enabled = False
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    # get_config / set_config / test_provider resolve the caller via
+    # Depends(current_user_id_strict); steer it to a concrete user (the routes
+    # hard-401 sessionless callers otherwise).
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
 
     yield app, conn
 

@@ -1,4 +1,4 @@
-"""Thin typed REST client for all product-data calls the bot makes to backend services.
+"""Thin typed REST client for most product-data calls the bot makes to backend services.
 
 Each function is a pure transport + parse layer: it builds the canonical
 ``_owner_headers``, issues exactly one HTTP call, calls

@@ -63,6 +63,7 @@ async def test_download_pdf_maps_upstream_http_failure_to_502():
             paper_id=1,
             db_pool=pool,
             pdf_processor=processor,
+            user_id=1,
         )
 
     assert exc_info.value.status_code == 502
@@ -100,12 +101,16 @@ async def test_process_pdf_rejects_paths_outside_storage(tmp_path, monkeypatch):
             db_pool=pool,
             pdf_processor=pdf_processor,
             embedder=embedder,
+            user_id=1,
         )
 
     assert exc_info.value.status_code == 400
 
 
 # Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
+# PR5-T5 traversal coverage: the route-level guard is exercised by
+# test_process_pdf_rejects_paths_outside_storage above (now via check_pdf_path_safe),
+# and the helper's `..`/outside/absolute cases are unit-tested in test_pdf_processor.py.
 
 
 @pytest.mark.asyncio
@@ -142,6 +147,7 @@ async def test_process_pdf_delegates_to_run_process_pdf(tmp_path, monkeypatch):
         db_pool=pool,
         pdf_processor=processor,
         embedder=embedder,
+        user_id=1,
     )
 
     assert result == {"paper_id": 1, "chunk_count": 8, "status": "processed"}
@@ -226,6 +232,7 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
             limit=10,
             force=False,
             db_pool=pool,
+            user_id=1,
         )
 
     assert result == {
@@ -296,6 +303,7 @@ async def test_process_pdf_dev_mode_exposes_error_detail(tmp_path, monkeypatch):
                 db_pool=pool,
                 pdf_processor=processor,
                 embedder=embedder,
+                user_id=1,
             )
 
     assert exc_info.value.status_code == 502
@@ -335,7 +343,6 @@ async def test_upload_pdf_single_user_mode_does_not_write_library(tmp_path, monk
     storage_dir = tmp_path / "pdfs"
     storage_dir.mkdir()
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=None))
     add_to_library = AsyncMock()
     monkeypatch.setattr(pdf, "add_to_library", add_to_library, raising=False)
 
@@ -371,6 +378,7 @@ async def test_upload_pdf_single_user_mode_does_not_write_library(tmp_path, monk
         authors="",
         abstract="",
         db_pool=pool,
+        user_id=None,
     )
 
     add_to_library.assert_not_awaited()
@@ -394,6 +402,7 @@ def test_process_pdf_async_response_model_no_500():
 
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+    from jarvis_common.auth import current_user_id_strict
     from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
     from paper_ingestion.routers.pdf import router
 
@@ -407,6 +416,8 @@ def test_process_pdf_async_response_model_no_500():
     app.dependency_overrides[get_db_pool] = lambda: fake_pool
     app.dependency_overrides[get_pdf_processor] = lambda: MagicMock()
     app.dependency_overrides[get_embedder] = lambda: MagicMock()
+    # process_pdf resolves the caller via Depends(current_user_id_strict).
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
 
     import jarvis_common.task_registry as task_registry
 

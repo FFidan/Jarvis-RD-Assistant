@@ -61,12 +61,22 @@ def test_zotero_service_functions_exist():
     assert inspect.iscoroutinefunction(resync_paper_to_zotero)
 
 
+@pytest.mark.real_auth
 @pytest.mark.asyncio
 async def test_test_zotero_connection_reads_current_user_config(monkeypatch):
-    """Credential tests should prefer the browser user's Zotero config row."""
-    from paper_ingestion.routers import zotero
+    """Credential tests should prefer the browser user's Zotero config row.
 
-    monkeypatch.setattr(zotero, "current_user_id_strict", AsyncMock(return_value=42))
+    Drives POST /api/zotero/test through the full router stack via the ASGI
+    client. ``current_user_id_strict`` is resolved by FastAPI ``Depends`` so it
+    is steered through ``app.dependency_overrides`` (not a module monkeypatch).
+    """
+    from jarvis_common import verify_api_key
+    from jarvis_common.auth import current_user_id_strict
+    from paper_ingestion.deps import get_db_pool, get_http_client
+    from paper_ingestion.main import app
+
+    pool = MagicMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
     get_config = AsyncMock(
         return_value={"api_key": "key", "user_id": "123", "library_type": "user"}
     )
@@ -77,22 +87,40 @@ async def test_test_zotero_connection_reads_current_user_config(monkeypatch):
     mock_client = MagicMock()
     mock_client.return_value.test_connection = AsyncMock(return_value=True)
 
-    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient", mock_client):
-        pool = MagicMock()
-        result = await zotero.test_zotero_connection.__wrapped__(
-            MagicMock(),
-            db_pool=pool,
-            http_client=AsyncMock(spec=httpx.AsyncClient),
-        )
+    app.state.limiter.enabled = False
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[get_http_client] = lambda: http_client
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict] = lambda: 42
+    try:
+        with patch("paper_ingestion.integrations.zotero_client.ZoteroClient", mock_client):
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post("/api/zotero/test", headers={"X-API-Key": "test"})
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
 
-    assert result == {"ok": True}
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"ok": True}
     get_config.assert_awaited_once_with(pool, user_id=42)
 
 
+@pytest.mark.real_auth
 @pytest.mark.asyncio
 async def test_get_paper_zotero_state_checks_ownership(monkeypatch):
-    """Zotero state reads expose paper-specific metadata and must enforce ownership."""
+    """Zotero state reads expose paper-specific metadata and must enforce ownership.
+
+    Drives GET /api/papers/{id}/zotero through the full router stack; the
+    ownership guard is stubbed to deny, and ``current_user_id_strict`` is steered
+    via ``app.dependency_overrides`` (the route resolves it through ``Depends``).
+    """
     from fastapi import HTTPException
+    from jarvis_common import verify_api_key
+    from jarvis_common.auth import current_user_id_strict
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
     from paper_ingestion.routers import zotero
 
     pool, conn = _make_pool_and_conn()
@@ -101,19 +129,24 @@ async def test_get_paper_zotero_state_checks_ownership(monkeypatch):
         "zotero_citation_key": "Smith2026",
         "zotero_last_pushed_at": None,
     }
-    monkeypatch.setattr(zotero, "current_user_id_strict", AsyncMock(return_value=42))
     deny = HTTPException(status_code=403, detail="paper not owned by current user")
     ownership = AsyncMock(side_effect=deny)
     monkeypatch.setattr(zotero, "assert_paper_ownership", ownership)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await zotero.get_paper_zotero_state.__wrapped__(
-            MagicMock(),
-            paper_id=7,
-            db_pool=pool,
-        )
+    app.state.limiter.enabled = False
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict] = lambda: 42
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/api/papers/7/zotero", headers={"X-API-Key": "test"})
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
 
-    assert exc_info.value.status_code == 403
+    assert resp.status_code == 403
     ownership.assert_awaited_once_with(conn, 7, 42)
 
 
@@ -124,9 +157,15 @@ async def test_get_paper_zotero_state_checks_ownership(monkeypatch):
 
 @pytest.fixture()
 def _app():
-    """FastAPI app with mocked DB pool, bypassed API-key auth, and disabled rate limiter."""
+    """FastAPI app with mocked DB pool, bypassed API-key auth, and disabled rate limiter.
+
+    ``current_user_id_strict`` (resolved via ``Depends`` on the zotero routes) is
+    steered to user 1 through ``app.dependency_overrides`` — the same identity the
+    legacy in-body resolver produced for these single-tenant tests.
+    """
     from jarvis_common import verify_api_key
-    from paper_ingestion.deps import get_db_pool
+    from jarvis_common.auth import current_user_id_strict
+    from paper_ingestion.deps import get_db_pool, get_http_client
     from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
@@ -134,7 +173,9 @@ def _app():
     app.state.limiter.enabled = False
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock(spec=httpx.AsyncClient)
     app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
     yield app, conn
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
@@ -204,20 +245,16 @@ async def test_test_zotero_connection_returns_user_visible_detail_on_decrypt_err
 ):
     """test_zotero_connection returns {ok: False, detail: ...} and warns on decrypt error.
 
-    Uses the FastAPI test client via dependency_overrides + monkeypatch so the full
-    router stack (rate-limiter, exception handling) is exercised without bypassing
-    the handler via __wrapped__.
+    Uses the FastAPI test client via dependency_overrides so the full router
+    stack (rate-limiter, exception handling) is exercised. ``current_user_id_strict``
+    is resolved via ``Depends`` and steered to user 1 by the ``_app`` fixture.
     """
     import logging
 
     from paper_ingestion.integrations.zotero_service import ZoteroConfigDecryptError
-    from paper_ingestion.routers import zotero
 
     app, _conn = _app
 
-    # Patch current_user_id_strict on the router module (called as a plain coroutine,
-    # not via Depends, so module-level monkeypatch is the correct seam).
-    monkeypatch.setattr(zotero, "current_user_id_strict", AsyncMock(return_value=99))
     monkeypatch.setattr(
         "paper_ingestion.integrations.zotero_service._get_zotero_config",
         AsyncMock(side_effect=ZoteroConfigDecryptError("api_key")),

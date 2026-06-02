@@ -247,17 +247,11 @@ async def test_query_knowledge_graph_scoped_branches_carry_predicate(query, mark
 
 
 @pytest.mark.asyncio
-async def test_get_entity_detail_relationships_scoped_to_caller(monkeypatch):
+async def test_get_entity_detail_relationships_scoped_to_caller():
     """get_entity_detail must scope its entity_relationships fetch to the
     caller's visible papers; the unscoped (user_id=None) branch is unchanged.
     """
     import paper_ingestion.routers.knowledge_graph as kg_router
-
-    monkeypatch.setattr(
-        kg_router,
-        "current_user_id_strict",
-        AsyncMock(return_value=2),  # user B
-    )
 
     conn = AsyncMock()
     # entity lookup, visibility check, relationship fetch, papers fetch.
@@ -301,6 +295,7 @@ async def test_get_entity_detail_relationships_scoped_to_caller(monkeypatch):
         MagicMock(),
         entity_id=1,
         db_pool=pool,
+        user_id=2,  # user B — now a Depends-wired param, threaded explicitly
     )
 
     assert [r.id for r in result.relationships] == [2]

@@ -19,6 +19,7 @@ from paper_ingestion.deps import (
     get_verifier,
     limiter,
 )
+from paper_ingestion.pdf_processor import check_pdf_path_safe
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["analyze"])
@@ -135,7 +136,7 @@ async def _analyze_stream(
         from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
         pdf_storage = get_paper_ingestion_settings().pdf_storage_path
-        if not pdf_path.resolve().is_relative_to(Path(pdf_storage).resolve()):
+        if not check_pdf_path_safe(pdf_path, pdf_storage):
             yield sse_event({"type": "error", "step": "processing", "message": "Invalid PDF path"})
             yield SSE_DONE
             return
@@ -218,6 +219,7 @@ async def analyze_paper(
     pdf_processor=Depends(get_pdf_processor),
     embedder=Depends(get_embedder),
     verifier=Depends(get_verifier),
+    user_id: int = Depends(current_user_id_strict),
 ) -> dict[str, str] | StreamingResponse:
     """Chain download → process → summarize with SSE progress events.
 
@@ -228,7 +230,6 @@ async def analyze_paper(
     With ``?async=true``: enqueues a ``paper.analyze`` job and returns
     ``{"job_id": "...", "status": "queued"}`` immediately.
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 

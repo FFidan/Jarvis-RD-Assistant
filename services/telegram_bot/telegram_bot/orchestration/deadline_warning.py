@@ -7,6 +7,7 @@ import asyncpg
 import httpx
 from telegram import Bot
 
+from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import escape, truncate
@@ -85,9 +86,7 @@ async def run_deadline_warning(
     config : BotConfig
         Bot configuration.
     """
-    from telegram_bot.owner import list_user_pairings
-
-    pairings = await list_user_pairings(db_pool)
+    pairings = await _owner.list_user_pairings(db_pool)
     if not pairings:
         logger.warning(
             "deadline_warning skipped: no Telegram pairings exist — use /pair in Telegram to set up"

@@ -40,9 +40,9 @@ async def get_citation_graph(
     paper_ids: Annotated[list[int], Query(max_length=100)],
     depth: int = Query(default=1, ge=1, le=2),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> CitationGraphResponse:
     """Build a citation graph for the given paper IDs."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         # Strict-fail: raise 403/404 on first paper the caller does not own.
         # Per-id loop is O(n) DB round-trips but correct and simple (YAGNI).
@@ -56,13 +56,13 @@ async def get_citation_graph(
 async def batch_fetch_citations(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> BatchCitationFetchResponse:
     """Enqueue a citations.batch_fetch job for papers without citations_fetched_at.
 
     The job is durable and visible in the jobs table.  The handler runs in the
     paper_ingestion worker loop (``citations_jobs.py``).
     """
-    user_id = await current_user_id_strict(request)
     jarvis_job_id = str(uuid.uuid4())
     # Pass caller user_id for audit-trail attribution. The job body is still
     # system-wide discovery (batched across all papers), but the user that
@@ -78,9 +78,9 @@ async def fetch_citations_for_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     s2_source: SemanticScholarSource = Depends(get_s2_source),
+    user_id: int = Depends(current_user_id_strict),
 ) -> CitationFetchResponse:
     """Trigger citation fetch from S2 for a single paper."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     # Pass pool so S2 API calls happen outside DB connection scope (PI-014)
@@ -93,9 +93,9 @@ async def get_paper_citations(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[CitationRelation]:
     """Get stored citation relationships for a paper."""
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 

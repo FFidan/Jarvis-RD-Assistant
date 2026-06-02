@@ -150,16 +150,16 @@ async def test_get_zotero_state_404_for_nonexistent_paper(_zotero_app):
 
     Exercises the real papers SELECT (not a mock fetchrow return_value).
     """
-    from unittest.mock import AsyncMock, patch
-
-    from jarvis_common.testing_contract_apps import make_contract_client
+    from jarvis_common.auth import current_user_id_strict
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_dependency_overrides,
+    )
 
     # Use a very large ID that cannot exist in the rolled-back test transaction.
     nonexistent_paper_id = 999_999_999
 
-    import paper_ingestion.routers.zotero as zotero_mod
-
-    with patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=1)):
+    with patch_dependency_overrides(_zotero_app, set_overrides={current_user_id_strict: lambda: 1}):
         async with make_contract_client(_zotero_app, None) as client:
             resp = await client.get(f"/api/papers/{nonexistent_paper_id}/zotero")
 
@@ -182,9 +182,11 @@ async def test_get_zotero_state_403_for_non_owner(contract_conn, _zotero_app):
     a real paper owned by user A and calls as user B, letting the real ownership
     guard enforce the 403.
     """
-    from unittest.mock import AsyncMock, patch
-
-    from jarvis_common.testing_contract_apps import make_contract_client
+    from jarvis_common.auth import current_user_id_strict
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_dependency_overrides,
+    )
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -198,10 +200,10 @@ async def test_get_zotero_state_403_for_non_owner(contract_conn, _zotero_app):
         "zotero-intruder-b@test.invalid",
     )
 
-    import paper_ingestion.routers.zotero as zotero_mod
-
     # Call as intruder (user B), not the owner.
-    with patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=intruder_id)):
+    with patch_dependency_overrides(
+        _zotero_app, set_overrides={current_user_id_strict: lambda: intruder_id}
+    ):
         async with make_contract_client(_zotero_app, None) as client:
             resp = await client.get(f"/api/papers/{paper_id}/zotero")
 
@@ -227,7 +229,11 @@ async def test_a170_push_to_zotero_owner_gets_202(contract_conn, _zotero_app):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     import jarvis_common.task_registry as task_registry
-    from jarvis_common.testing_contract_apps import make_contract_client
+    from jarvis_common.auth import current_user_id_strict
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_dependency_overrides,
+    )
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -238,10 +244,10 @@ async def test_a170_push_to_zotero_owner_gets_202(contract_conn, _zotero_app):
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock(return_value=None)
 
-    import paper_ingestion.routers.zotero as zotero_mod
-
     with (
-        patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=owner_id)),
+        patch_dependency_overrides(
+            _zotero_app, set_overrides={current_user_id_strict: lambda: owner_id}
+        ),
         patch.dict(task_registry._TASK_MAP, {"zotero.push": mock_task}),
     ):
         async with make_contract_client(_zotero_app, None) as client:
@@ -264,9 +270,11 @@ async def test_a170_push_to_zotero_non_owner_gets_403(contract_conn, _zotero_app
     assert_paper_ownership fires before the procrastinate enqueue.
     No mock for KIND_TO_TASK needed (guard raises before reaching it).
     """
-    from unittest.mock import AsyncMock, patch
-
-    from jarvis_common.testing_contract_apps import make_contract_client
+    from jarvis_common.auth import current_user_id_strict
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_dependency_overrides,
+    )
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -278,9 +286,9 @@ async def test_a170_push_to_zotero_non_owner_gets_403(contract_conn, _zotero_app
         " VALUES ('a170-intruder@contract.example.com', 'user') RETURNING id"
     )
 
-    import paper_ingestion.routers.zotero as zotero_mod
-
-    with patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=intruder_id)):
+    with patch_dependency_overrides(
+        _zotero_app, set_overrides={current_user_id_strict: lambda: intruder_id}
+    ):
         async with make_contract_client(_zotero_app, None) as client:
             resp = await client.post(f"/api/papers/{paper_id}/zotero")
 
@@ -305,7 +313,11 @@ async def test_a172_resync_owner_gets_202(contract_conn, _zotero_app):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     import jarvis_common.task_registry as task_registry
-    from jarvis_common.testing_contract_apps import make_contract_client
+    from jarvis_common.auth import current_user_id_strict
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_dependency_overrides,
+    )
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -316,10 +328,10 @@ async def test_a172_resync_owner_gets_202(contract_conn, _zotero_app):
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock(return_value=None)
 
-    import paper_ingestion.routers.zotero as zotero_mod
-
     with (
-        patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=owner_id)),
+        patch_dependency_overrides(
+            _zotero_app, set_overrides={current_user_id_strict: lambda: owner_id}
+        ),
         patch.dict(task_registry._TASK_MAP, {"zotero.resync": mock_task}),
     ):
         async with make_contract_client(_zotero_app, None) as client:
@@ -338,9 +350,11 @@ async def test_a172_resync_non_owner_gets_403(contract_conn, _zotero_app):
 
     assert_paper_ownership fires before the procrastinate enqueue.
     """
-    from unittest.mock import AsyncMock, patch
-
-    from jarvis_common.testing_contract_apps import make_contract_client
+    from jarvis_common.auth import current_user_id_strict
+    from jarvis_common.testing_contract_apps import (
+        make_contract_client,
+        patch_dependency_overrides,
+    )
 
     owner_id, paper_id = await _seed_user_and_paper(
         contract_conn,
@@ -352,9 +366,9 @@ async def test_a172_resync_non_owner_gets_403(contract_conn, _zotero_app):
         " VALUES ('a172-intruder@contract.example.com', 'user') RETURNING id"
     )
 
-    import paper_ingestion.routers.zotero as zotero_mod
-
-    with patch.object(zotero_mod, "current_user_id_strict", AsyncMock(return_value=intruder_id)):
+    with patch_dependency_overrides(
+        _zotero_app, set_overrides={current_user_id_strict: lambda: intruder_id}
+    ):
         async with make_contract_client(_zotero_app, None) as client:
             resp = await client.post(f"/api/zotero/resync/{paper_id}")
 

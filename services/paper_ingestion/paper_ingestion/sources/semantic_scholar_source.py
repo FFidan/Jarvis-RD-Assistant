@@ -20,8 +20,8 @@ from jarvis_common.event_log import log_event
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.text_utils import author_matches
 
+from paper_ingestion.config import ALLOWED_PDF_DOMAINS
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
-from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
 from paper_ingestion.sources.base import PaperSource, SourceQuery
 from paper_ingestion.sources.registry import register_source
 

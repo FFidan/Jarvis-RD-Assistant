@@ -10,7 +10,7 @@ from __future__ import annotations
 import procrastinate
 from jarvis_common.task_registry import register_tasks
 
-from learning_engine.routers.generation import _card_generate_batch_job, _card_generate_job
+from learning_engine.generation_service import _card_generate_batch_job, _card_generate_job
 
 # ---------------------------------------------------------------------------
 # kind → handler mapping for the learning_engine queue

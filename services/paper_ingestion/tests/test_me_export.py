@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import io
 import zipfile
-from types import SimpleNamespace
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock
 
-import paper_ingestion.routers.settings as settings_router
+import httpx
 import pytest
+from httpx import ASGITransport
 
 
 class _FakeCursor:
@@ -48,26 +49,51 @@ def _build_pool(conn: AsyncMock) -> MagicMock:
     return pool
 
 
-def _request(pool: MagicMock) -> SimpleNamespace:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)))
+@contextmanager
+def _export_app(pool: MagicMock):
+    """Wire the PI app to *pool* and steer the caller to user 1.
+
+    ``export_my_data`` reads ``request.app.state.db_pool`` and resolves
+    ``current_user_id_strict`` via ``Depends`` — the latter is steered through
+    ``app.dependency_overrides`` (a module-symbol swap no longer reaches the route).
+    """
+    from jarvis_common import verify_api_key
+    from jarvis_common.auth import current_user_id_strict
+    from paper_ingestion.main import app
+
+    _orig_pool = getattr(app.state, "db_pool", None)
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
+    try:
+        yield app
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+        if _orig_pool is not None:
+            app.state.db_pool = _orig_pool
 
 
-async def _drain(resp) -> bytes:
-    chunks = []
-    async for c in resp.body_iterator:
-        chunks.append(c if isinstance(c, bytes) else c.encode())
-    return b"".join(chunks)
+async def _get_export(app) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.get("/api/me/export", headers={"X-API-Key": "test"})
 
 
+@pytest.mark.real_auth
 @pytest.mark.asyncio
-async def test_export_returns_zip_of_caller_data(monkeypatch) -> None:
+async def test_export_returns_zip_of_caller_data() -> None:
     conn = _build_conn({1: ['{"id": 1, "title": "mine"}']})
     pool = _build_pool(conn)
-    monkeypatch.setattr(settings_router, "current_user_id_strict", AsyncMock(return_value=1))
 
-    resp = await settings_router.export_my_data.__wrapped__(_request(pool))
-    assert resp.media_type == "application/zip"
-    body = await _drain(resp)
+    with _export_app(pool) as app:
+        resp = await _get_export(app)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "application/zip"
+    body = resp.content
 
     with zipfile.ZipFile(io.BytesIO(body)) as zf:
         names = zf.namelist()
@@ -76,15 +102,18 @@ async def test_export_returns_zip_of_caller_data(monkeypatch) -> None:
         assert b"mine" in zf.read("papers.jsonl")
 
 
+@pytest.mark.real_auth
 @pytest.mark.asyncio
-async def test_export_excludes_other_users_data(monkeypatch) -> None:
+async def test_export_excludes_other_users_data() -> None:
     # Only user 2 has rows; caller is user 1 → must get empty papers.jsonl.
     conn = _build_conn({2: ['{"id": 9, "title": "not yours"}']})
     pool = _build_pool(conn)
-    monkeypatch.setattr(settings_router, "current_user_id_strict", AsyncMock(return_value=1))
 
-    resp = await settings_router.export_my_data.__wrapped__(_request(pool))
-    body = await _drain(resp)
+    with _export_app(pool) as app:
+        resp = await _get_export(app)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.content
     with zipfile.ZipFile(io.BytesIO(body)) as zf:
         assert zf.read("papers.jsonl") == b""
         assert b"not yours" not in zf.read("papers.jsonl")

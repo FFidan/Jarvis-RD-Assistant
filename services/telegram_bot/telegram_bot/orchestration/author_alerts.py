@@ -6,6 +6,7 @@ import asyncpg
 import httpx
 from telegram import Bot
 
+from telegram_bot import owner as _owner
 from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_author_alert
@@ -38,9 +39,7 @@ async def run_author_alerts(
     config : BotConfig
         Bot configuration.
     """
-    from telegram_bot.owner import list_user_pairings
-
-    pairings = await list_user_pairings(db_pool)
+    pairings = await _owner.list_user_pairings(db_pool)
     if not pairings:
         logger.warning(
             "author_alerts skipped: no Telegram pairings exist — use /pair in Telegram to set up"

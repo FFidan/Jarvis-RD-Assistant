@@ -87,7 +87,6 @@ async def test_upload_pdf_dedupe_adds_existing_paper_to_callers_library(tmp_path
     storage_dir = tmp_path / "pdfs"
     storage_dir.mkdir()
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=99))
 
     add_to_library_mock = AsyncMock()
     monkeypatch.setattr(pdf, "add_to_library", add_to_library_mock, raising=False)
@@ -106,6 +105,7 @@ async def test_upload_pdf_dedupe_adds_existing_paper_to_callers_library(tmp_path
         authors="Chen, Rubanova",
         abstract="",
         db_pool=pool,
+        user_id=99,
     )
 
     # Must NOT raise 409 — returns the existing paper with status 200
@@ -131,7 +131,6 @@ async def test_upload_pdf_dedupe_idempotent_same_user_reraises_no_error(tmp_path
     storage_dir = tmp_path / "pdfs"
     storage_dir.mkdir()
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=42))
 
     add_to_library_mock = AsyncMock()
     monkeypatch.setattr(pdf, "add_to_library", add_to_library_mock, raising=False)
@@ -150,6 +149,7 @@ async def test_upload_pdf_dedupe_idempotent_same_user_reraises_no_error(tmp_path
         authors="",
         abstract="",
         db_pool=pool,
+        user_id=42,
     )
 
     assert response.id == 73
@@ -168,7 +168,6 @@ async def test_upload_pdf_dedupe_no_library_write_when_unauthenticated(tmp_path,
     storage_dir = tmp_path / "pdfs"
     storage_dir.mkdir()
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=None))
 
     add_to_library_mock = AsyncMock()
     monkeypatch.setattr(pdf, "add_to_library", add_to_library_mock, raising=False)
@@ -187,6 +186,7 @@ async def test_upload_pdf_dedupe_no_library_write_when_unauthenticated(tmp_path,
         authors="",
         abstract="",
         db_pool=pool,
+        user_id=None,
     )
 
     assert response.id == 73
