@@ -22,6 +22,52 @@ pytestmark = [
 
 
 # ---------------------------------------------------------------------------
+# get_or_create_stub_paper — idempotent upsert refreshes citation_count
+# ---------------------------------------------------------------------------
+
+
+async def test_get_or_create_stub_paper_idempotent_and_refreshes_citation_count(
+    contract_conn,
+):
+    """Two calls with the same S2 identifier return the same id, create no
+    duplicate row, and the 2nd call REFRESHES citation_count via ON CONFLICT.
+
+    Tested at the contract layer (real connection) because the behavior under
+    test lives in the ON CONFLICT ... DO UPDATE path — an AsyncMock'd fetchrow
+    cannot exercise that. Verified: citations.py get_or_create_stub_paper.
+    """
+    from paper_ingestion.citations import get_or_create_stub_paper
+
+    s2_first = {
+        "paperId": "abc123",
+        "title": "Idempotent Stub Paper",
+        "authors": [{"name": "Ada Lovelace"}],
+        "year": 2020,
+        "citationCount": 5,
+    }
+    # Same paperId, higher citation_count — must update the existing row.
+    s2_second = {**s2_first, "citationCount": 42}
+
+    id_first = await get_or_create_stub_paper(contract_conn, s2_first)
+    id_second = await get_or_create_stub_paper(contract_conn, s2_second)
+
+    assert id_first is not None
+    assert id_first == id_second, "same identifier must return the same paper id"
+
+    row_count = await contract_conn.fetchval(
+        "SELECT count(*) FROM papers WHERE external_id = $1", "s2:abc123"
+    )
+    assert row_count == 1, f"no duplicate row may be created; got {row_count}"
+
+    refreshed = await contract_conn.fetchval(
+        "SELECT citation_count FROM papers WHERE external_id = $1", "s2:abc123"
+    )
+    assert refreshed == 42, (
+        f"the 2nd call must refresh citation_count via ON CONFLICT DO UPDATE; got {refreshed}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # A25: GET /api/citations/graph — citation graph scoped to owner's papers
 # ---------------------------------------------------------------------------
 

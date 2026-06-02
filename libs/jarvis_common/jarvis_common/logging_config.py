@@ -203,6 +203,16 @@ class SystemEventHandler(logging.Handler):
         try:
             await asyncio.wait_for(self._task, timeout=max(self._flush_interval * 2, 5.0))
         except TimeoutError:
+            # Drain is wedged (e.g. pool exhausted): cancelling drops whatever is
+            # still queued. Count it so the next recovery row reports an accurate
+            # total, and leave a stderr breadcrumb since the durable store is gone.
+            stranded = self._queue.qsize()
+            if stranded:
+                self._dropped += stranded
+                sys.stderr.write(
+                    f"[SystemEventHandler aclose] dropped {stranded} queued events "
+                    "(drain cancelled on timeout)\n"
+                )
             self._task.cancel()
             try:
                 await self._task

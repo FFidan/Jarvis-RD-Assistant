@@ -17,6 +17,19 @@ logger = logging.getLogger(__name__)
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _HEALTH_PATHS = frozenset({"/health", "/health/", "/health/live", "/healthz", "/health/readiness"})
 
+# Known always-reachable status endpoints that the logged-out frontend polls on
+# a loop (dashboard metrics + the two setup gates). Each unauthenticated poll
+# would otherwise emit an `auth.session.missing` audit row, drowning the audit
+# log in benign noise and burying genuine security events. We skip the AUDIT for
+# these paths only — the 401 is still raised, and every other path still audits.
+_AUTH_MISSING_AUDIT_SKIP_PATHS = frozenset(
+    {
+        "/api/dashboard/metrics",
+        "/api/system/setup-status",
+        "/api/setup/status",
+    }
+)
+
 # Production secret-strength gate (SEC-A). Minimum lengths mirror the project
 # convention enforced by scripts/production-readiness-check.sh so the boot gate
 # and the readiness script agree.
@@ -284,7 +297,7 @@ async def current_user_id_strict(request: Request) -> int:
     if uid is None:
         try:
             pool = _request_db_pool(request)
-            if pool is not None:
+            if pool is not None and request.url.path not in _AUTH_MISSING_AUDIT_SKIP_PATHS:
                 await log_audit(
                     pool,
                     action="auth.session.missing",
@@ -326,6 +339,13 @@ def _parse_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Netw
 # Parsed once on first use (or on explicit refresh); avoids re-parsing CIDRs per request.
 _CACHED_ALLOWED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None
 
+# Deny-by-default code value (mirrors CoreSettings.owner_override_allowed_cidrs).
+# When the resolved setting still equals this, the operator has not widened the
+# allowlist, so only loopback callers can use X-Owner-User-Id.
+_LOOPBACK_ONLY_DEFAULT = "127.0.0.0/8"
+# Guards the startup warning so it fires at most once per process.
+_LOOPBACK_DEFAULT_WARNED = False
+
 
 def refresh_allowed_networks_cache() -> None:
     """Re-parse ``OWNER_OVERRIDE_ALLOWED_CIDRS`` and update the module-level cache.
@@ -333,9 +353,25 @@ def refresh_allowed_networks_cache() -> None:
     Mirror of :func:`refresh_api_key_cache`.  Call this at app lifespan startup
     (or in tests that monkeypatch ``OWNER_OVERRIDE_ALLOWED_CIDRS``) so the
     cached value reflects the current environment.
+
+    Emits a one-time warning when the allowlist is still the loopback-only
+    default — a non-loopback caller (e.g. a containerized bot on a bridge
+    network) would then be denied unless the operator widens it.
     """
-    global _CACHED_ALLOWED_NETWORKS
+    global _CACHED_ALLOWED_NETWORKS, _LOOPBACK_DEFAULT_WARNED
     _CACHED_ALLOWED_NETWORKS = _parse_allowed_networks()
+    if (
+        not _LOOPBACK_DEFAULT_WARNED
+        and get_core_settings().owner_override_allowed_cidrs.strip() == _LOOPBACK_ONLY_DEFAULT
+    ):
+        _LOOPBACK_DEFAULT_WARNED = True
+        logger.warning(
+            "OWNER_OVERRIDE_ALLOWED_CIDRS is the loopback-only default (%s): "
+            "X-Owner-User-Id override is restricted to loopback. Non-loopback "
+            "callers (e.g. a containerized bot on a bridge network) must set "
+            "OWNER_OVERRIDE_ALLOWED_CIDRS to include their source range.",
+            _LOOPBACK_ONLY_DEFAULT,
+        )
 
 
 def _ip_in_allowlist(ip_str: str | None) -> bool:

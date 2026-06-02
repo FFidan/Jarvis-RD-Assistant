@@ -5,9 +5,10 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import 'katex/dist/katex.min.css';
 import type { ReactNode } from 'react';
 
-// Hardened sanitize schema: extends defaultSchema but restricts src protocol to
-// allow only http, https, and data: URIs (fine-grained data: filtering is done
-// in the img component override below — reject everything except data:image/*).
+// Hardened sanitize schema: extends defaultSchema but allows the 'data' scheme
+// for src so rehype-sanitize doesn't strip data URIs before they reach urlTransform.
+// Fine-grained data: filtering (allow only data:image/*; reject data:text/html etc.)
+// is enforced by urlTransform (first gate) and the img component override (second gate).
 const sanitizeSchema = {
   ...defaultSchema,
   protocols: {

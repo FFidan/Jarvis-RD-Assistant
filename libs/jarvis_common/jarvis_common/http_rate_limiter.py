@@ -1,6 +1,7 @@
 """Rate limiting shared across JARVIS services."""
 
 import ipaddress
+import logging
 from collections.abc import Callable
 
 from fastapi import Request
@@ -9,6 +10,8 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 
 from jarvis_common.config import get_jarvis_common_settings
+
+logger = logging.getLogger(__name__)
 
 # Trusted proxy CIDRs loaded once at import time.
 # Override / extend via TRUSTED_PROXY_CIDRS env var (comma-separated CIDRs).
@@ -69,11 +72,26 @@ def _real_ip(request: Request) -> str:
     3. If all entries in XFF are trusted (pathological), return request.client.host.
     4. If no XFF header, return request.client.host.
     """
-    # SEC-006: CF-Connecting-IP only trusted when operator explicitly enables it.
+    # SEC-006: CF-Connecting-IP only trusted when operator explicitly enables it,
+    # and only when it is a single well-formed IP. A malformed value (e.g. a
+    # forged comma-separated list) must not be trusted — fall through to the
+    # validated XFF walk instead of crashing or honouring the bad value.
     if get_jarvis_common_settings().trust_cf_connecting_ip:
         cf_ip = request.headers.get("CF-Connecting-IP")
         if cf_ip:
-            return cf_ip.strip()
+            candidate = cf_ip.strip()
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                # malformed → fall through to XFF validation below.
+                # Log: with trust opted in, a malformed value is an operational
+                # anomaly (misconfigured proxy or a forging attempt) worth surfacing.
+                logger.warning(
+                    "Malformed CF-Connecting-IP header ignored (not a single IP): %r",
+                    candidate,
+                )
+            else:
+                return candidate
 
     xff = request.headers.get("X-Forwarded-For")
     if not xff:

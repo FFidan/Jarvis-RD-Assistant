@@ -38,7 +38,12 @@ _EXPORT_QUERIES: tuple[tuple[str, str], ...] = (
     ("milestones", "SELECT row_to_json(t) FROM milestones t WHERE t.user_id = $1"),
     ("journal_entries", "SELECT row_to_json(t) FROM journal_entries t WHERE t.user_id = $1"),
     ("daily_log", "SELECT row_to_json(t) FROM daily_log t WHERE t.user_id = $1"),
-    ("user_config", "SELECT row_to_json(t) FROM user_config t WHERE t.user_id = $1"),
+    (
+        # Drop encrypted_value (a secret) and the internal id; keep created_at (user data).
+        "user_config",
+        "SELECT row_to_json(t) FROM (SELECT key, value, user_id, created_at, updated_at "
+        "FROM user_config WHERE user_id = $1) t",
+    ),
 )
 
 

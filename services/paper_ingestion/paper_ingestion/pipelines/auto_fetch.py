@@ -171,7 +171,11 @@ async def run_auto_pipeline(app) -> None:
             for row in to_download
         ]
         if download_tasks:
-            await asyncio.gather(*download_tasks)
+            # return_exceptions: a single failing task must not abort siblings.
+            results = await asyncio.gather(*download_tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.warning("auto_pipeline: download task failed: %s", r, exc_info=r)
 
         # 3b. Process papers that have a PDF but haven't been chunked/embedded yet
         async with db_pool.acquire() as conn:
@@ -219,7 +223,11 @@ async def run_auto_pipeline(app) -> None:
                 continue
             process_tasks.append(asyncio.create_task(_extract_and_embed_paper(row["id"], pdf_path)))
         if process_tasks:
-            await asyncio.gather(*process_tasks)
+            # return_exceptions: a single failing task must not abort siblings.
+            results = await asyncio.gather(*process_tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.warning("auto_pipeline: process task failed: %s", r, exc_info=r)
 
         logger.info("auto_pipeline: run complete")
 

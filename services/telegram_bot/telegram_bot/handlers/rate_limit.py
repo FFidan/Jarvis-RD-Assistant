@@ -103,6 +103,10 @@ def rate_limit(
             chat_id = str(update.effective_chat.id)
             key = f"{chat_id}:{func.__module__}.{func.__qualname__}"
 
+            # Decide allow/deny under the lock; perform the user-facing reply
+            # OUTSIDE the lock so same-key callers aren't serialized across the
+            # network round-trip. ``denial`` is None when the call is allowed.
+            denial: str | None = None
             async with _locks[key]:
                 now = time.monotonic()
                 horizon = max(window_seconds, cooldown_seconds)
@@ -113,51 +117,43 @@ def rate_limit(
                 stamps[:] = [t for t in stamps if now - t < horizon]
 
                 # --- cooldown check (heavy commands) ---
-                if cooldown_seconds and stamps:
-                    elapsed = now - stamps[-1]
-                    if elapsed < cooldown_seconds:
-                        remaining = int(cooldown_seconds - elapsed)
-                        logger.warning(
-                            "Rate-limited %s (cooldown %ds remaining) chat=%s",
-                            func.__name__,
-                            remaining,
-                            chat_id,
-                        )
-                        if update.message:
-                            await update.message.reply_text(
-                                f"Please wait {remaining}s before using this command again."
-                            )
-                        elif update.callback_query:
-                            await update.callback_query.answer(
-                                text="Rate limit exceeded — try again later", show_alert=True
-                            )
-                        return None
-
-                # --- sliding window check ---
-                recent = [t for t in stamps if now - t < window_seconds]
-                if len(recent) >= max_calls:
+                if cooldown_seconds and stamps and (now - stamps[-1]) < cooldown_seconds:
+                    remaining = int(cooldown_seconds - (now - stamps[-1]))
                     logger.warning(
-                        "Rate-limited %s (%d/%d in %ds) chat=%s",
+                        "Rate-limited %s (cooldown %ds remaining) chat=%s",
                         func.__name__,
-                        len(recent),
-                        max_calls,
-                        window_seconds,
+                        remaining,
                         chat_id,
                     )
-                    if update.message:
-                        await update.message.reply_text(
+                    denial = f"Please wait {remaining}s before using this command again."
+                else:
+                    # --- sliding window check ---
+                    recent = [t for t in stamps if now - t < window_seconds]
+                    if len(recent) >= max_calls:
+                        logger.warning(
+                            "Rate-limited %s (%d/%d in %ds) chat=%s",
+                            func.__name__,
+                            len(recent),
+                            max_calls,
+                            window_seconds,
+                            chat_id,
+                        )
+                        denial = (
                             f"Rate limit exceeded — max {max_calls} calls per {window_seconds}s."
                         )
-                    elif update.callback_query:
-                        await update.callback_query.answer(
-                            text="Rate limit exceeded — try again later", show_alert=True
-                        )
-                    return None
+                    else:
+                        stamps.append(now)
+                        # TG-SEC-01: bound dict growth by evicting long-idle keys.
+                        _evict_idle_keys(now, key)
 
-                stamps.append(now)
-
-                # TG-SEC-01: bound dict growth by evicting long-idle keys.
-                _evict_idle_keys(now, key)
+            if denial is not None:
+                if update.message:
+                    await update.message.reply_text(denial)
+                elif update.callback_query:
+                    await update.callback_query.answer(
+                        text="Rate limit exceeded — try again later", show_alert=True
+                    )
+                return None
 
             return await func(update, context)
 

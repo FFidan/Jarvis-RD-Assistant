@@ -104,6 +104,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by auth_check invariant
 
     await query.answer()
 
@@ -150,6 +151,7 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not authorized:
         await query.answer()  # H1: every path answers exactly once
         return
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by auth_check invariant
 
     if not query.data or not (m := _PAPER_ACTION_RE.match(query.data)):
         await query.answer()

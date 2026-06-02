@@ -152,6 +152,32 @@ async def test_first_batch_failure_message_contains_context():
     assert "0 chunks persisted" in str(exc_info.value)
 
 
+# ---------------------------------------------------------------------------
+# None-dimension guard: unknown collection dimension must skip the mismatch check
+# ---------------------------------------------------------------------------
+
+
+def test_raise_for_collection_dimension_mismatch_skips_when_dimension_unknown():
+    """A None current_dimension means "unknown" (Qdrant info lacked a size) and
+    must NOT raise — only a concrete, mismatching dimension is an error."""
+    from paper_ingestion.ingestion.embedding_config import (
+        raise_for_collection_dimension_mismatch,
+    )
+
+    # Must not raise: None == "we couldn't determine the dimension", skip the check.
+    raise_for_collection_dimension_mismatch("c", None, expected_dimension=2560)
+
+
+def test_raise_for_collection_dimension_mismatch_still_raises_on_real_mismatch():
+    """Regression guard: a concrete mismatching dimension still raises."""
+    from paper_ingestion.ingestion.embedding_config import (
+        raise_for_collection_dimension_mismatch,
+    )
+
+    with pytest.raises(RuntimeError):
+        raise_for_collection_dimension_mismatch("c", 1024, expected_dimension=2560)
+
+
 @pytest.mark.asyncio
 async def test_subsequent_batch_failure_still_raises_embedding_batch_error():
     """Mid-batch failure (after first batch succeeds) continues to raise

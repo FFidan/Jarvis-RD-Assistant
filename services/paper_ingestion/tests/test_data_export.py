@@ -104,6 +104,35 @@ async def test_export_papers_scoped_via_user_library_join() -> None:
 
 
 @pytest.mark.asyncio
+async def test_export_user_config_omits_encrypted_value_keeps_created_at() -> None:
+    """user_config export must NOT leak encrypted_value (a secret) but MUST keep
+    created_at (real user data). Mirrors the discovered_by SQL-string style above:
+    the mock pool can't distinguish SQL semantics, so assert on the query text.
+    """
+    user_config_sql = next(
+        (sql for name, sql in _EXPORT_QUERIES if name == "user_config"),
+        None,
+    )
+    assert user_config_sql is not None, "user_config entry missing from _EXPORT_QUERIES"
+    assert "encrypted_value" not in user_config_sql, (
+        "user_config export must NOT include encrypted_value — it is a secret"
+    )
+    assert "created_at" in user_config_sql, (
+        "user_config export must KEEP created_at — it is real user data"
+    )
+    # Positive guard: the query MUST use the explicit safe column list, not a
+    # ``t.*`` / ``row_to_json(t)``-over-the-whole-table wildcard. The leaky
+    # wildcard form omits this literal, so reverting to it turns this RED —
+    # whereas the two assertions above also pass on the wildcard (which never
+    # spells "encrypted_value" yet leaks it at runtime). This is the real fix.
+    assert "key, value, user_id, created_at, updated_at" in user_config_sql, (
+        "user_config export must enumerate explicit columns "
+        "(key, value, user_id, created_at, updated_at) — not a SELECT * wildcard "
+        "that would leak encrypted_value via row_to_json at runtime"
+    )
+
+
+@pytest.mark.asyncio
 async def test_export_papers_returns_only_user_library_rows() -> None:
     """CFG-GDPR-1: papers.jsonl contains only rows returned for this user_id.
 

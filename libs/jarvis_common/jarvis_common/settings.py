@@ -100,8 +100,11 @@ class CoreSettings(BaseSettings):
     # a list-typed field and reject plain "dashboard,foo" strings.
     trusted_proxy_hosts: str = "dashboard"
     # Comma-separated CIDRs allowed to use X-Owner-User-Id override.
-    # Defaults to loopback + docker-bridge ranges.
-    owner_override_allowed_cidrs: str = "127.0.0.0/8,172.16.0.0/12"
+    # Deny-by-default: loopback only. The compose deploy injects the docker
+    # bridge range (OWNER_OVERRIDE_ALLOWED_CIDRS tracks JARVIS_NET_SUBNET), so a
+    # containerized bot is trusted there; any other non-loopback caller must
+    # widen this explicitly.
+    owner_override_allowed_cidrs: str = "127.0.0.0/8"
     # Comma-separated CIDRs allowed to POST to the infra-ingest endpoint.
     # Default-deny: empty means infra-ingest is unprovisioned and _check_auth
     # returns 503. Operator must explicitly opt in by setting the env var,

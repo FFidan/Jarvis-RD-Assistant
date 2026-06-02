@@ -69,6 +69,32 @@ async def test_build_fsrs_manager_single_step_emits_warning(caplog):
     )
 
 
+# --- _to_utc helper (TZ-UTC-1) ---
+
+
+def test_to_utc_naive_gets_utc_tzinfo():
+    """A naive datetime must have tzinfo=UTC attached; the value must be unchanged."""
+    from datetime import UTC, datetime
+
+    from learning_engine.routers.review import _to_utc
+
+    naive = datetime(2024, 3, 15, 10, 30, 0)
+    result = _to_utc(naive)
+    assert result.tzinfo is UTC
+    assert result.replace(tzinfo=None) == naive
+
+
+def test_to_utc_aware_returned_unchanged():
+    """An already-aware datetime must be returned exactly as-is."""
+    from datetime import UTC, datetime
+
+    from learning_engine.routers.review import _to_utc
+
+    aware = datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
+    result = _to_utc(aware)
+    assert result is aware
+
+
 @pytest.mark.asyncio
 async def test_build_fsrs_manager_two_steps_no_warning(caplog):
     """A standard 2-element list must build FSRSManager without any warning."""

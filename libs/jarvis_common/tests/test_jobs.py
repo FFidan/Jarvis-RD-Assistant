@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -445,6 +445,55 @@ class _DictRecord:
 
     def items(self):
         return self._data.items()
+
+
+# ---------------------------------------------------------------------------
+# get_procrastinate_job_for_jarvis_id: broad-except observability
+# ---------------------------------------------------------------------------
+
+
+class TestProcrastinateLookupBroadExcept:
+    """A non-schema lookup failure must be logged at WARNING and return None.
+
+    Narrow ``Undefined*`` handlers (unmigrated-schema graceful degradation) keep
+    returning None silently; only the trailing broad ``except Exception`` is
+    upgraded from a silent DEBUG swallow to a WARNING with a traceback so an
+    unexpected DB/driver error is observable. It must still return None (no
+    raise) — no caller maps this to a 503.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_schema_error_logs_warning_and_returns_none(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from jarvis_common.jobs import get_procrastinate_job_for_jarvis_id
+
+        # conn.fetchrow raises a generic, non-Undefined* error.
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(side_effect=RuntimeError("connection reset"))
+
+        pool_cm = MagicMock()
+        pool_cm.__aenter__ = MagicMock(return_value=_async_return(conn))
+        pool_cm.__aexit__ = MagicMock(return_value=_async_return(None))
+
+        pool = MagicMock()
+        pool.acquire = MagicMock(return_value=pool_cm)
+
+        with caplog.at_level(logging.WARNING, logger="jarvis_common.jobs"):
+            result = await get_procrastinate_job_for_jarvis_id(pool, "job-xyz")
+
+        assert result is None, "Unexpected lookup error must degrade to None, not raise"
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "Broad-except branch must emit a WARNING (was a silent DEBUG)"
+        assert warnings[0].exc_info is not None, (
+            "WARNING must carry exc_info=True so the traceback is captured"
+        )
+        assert "job-xyz" in warnings[0].getMessage(), (
+            "WARNING must include the jarvis_job_id for triage"
+        )
 
 
 # ---------------------------------------------------------------------------

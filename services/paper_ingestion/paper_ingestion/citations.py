@@ -54,10 +54,9 @@ async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
 
     external_id = f"s2:{paper_id}"
 
-    # Check if paper already exists
-    existing = await conn.fetchrow("SELECT id FROM papers WHERE external_id = $1", external_id)
-    if existing:
-        return existing["id"]
+    # No pre-check SELECT: the INSERT ... ON CONFLICT DO UPDATE below handles both
+    # the new-row and existing-row cases, and crucially refreshes citation_count
+    # on every call (a SELECT short-circuit left it stale).
 
     # Build authors list
     authors = [a.get("name", "") for a in (paper_data.get("authors") or []) if a.get("name")]

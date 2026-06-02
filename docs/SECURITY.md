@@ -116,7 +116,7 @@ explicitly set in the environment. An explicit env var always wins.
 | `JARVIS_CONFIG_KEY_OLD` | Previous Fernet key — enables zero-downtime rotation via MultiFernet. Set during key rotation; remove after. | No (rotation only) |
 | `JARVIS_MODEL_HMAC_KEY` | Dedicated HMAC-SHA256 key for Pulse classifier pickle signing (see below). Min 32 chars. | Yes (startup refuses if absent; derivation from `JARVIS_API_KEY` is refused in production) |
 | `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | SMTP relay credentials for magic-link delivery. Without these (or when set to empty strings, which are silently ignored — see the SMTP entry in [known-residual-risks.md](known-residual-risks.md)), links fall back to container stdout. | Strongly recommended |
-| `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the jarvis bridge subnet (tracks `JARVIS_NET_SUBNET`, default `10.137.241.0/24`) so the bot is trusted. The bare code default (`127.0.0.0/8,172.16.0.0/12`) is a fallback only. | No (compose default is correct) |
+| `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the jarvis bridge subnet (tracks `JARVIS_NET_SUBNET`, default `10.137.241.0/24`) so the bot is trusted. The bare code default (`127.0.0.0/8`) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly. | No (compose default is correct) |
 
 ### X-Owner-User-Id Mechanism
 

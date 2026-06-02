@@ -276,6 +276,122 @@ async def test_rate_limit_cooldown_branch_uses_callback_answer_when_message_is_n
 
 
 # ---------------------------------------------------------------------------
+# Lock held only around the decision — the network reply runs OUTSIDE the lock
+# ---------------------------------------------------------------------------
+
+
+class _RecordingLock:
+    """An asyncio.Lock-shaped CM that records when it is entered and exited."""
+
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+        self._inner = asyncio.Lock()
+
+    async def __aenter__(self) -> _RecordingLock:
+        await self._inner.acquire()
+        self._events.append("lock-enter")
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        self._events.append("lock-exit")
+        self._inner.release()
+
+    def locked(self) -> bool:
+        return self._inner.locked()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_releases_lock_before_blocked_reply_runs():
+    """The denial reply must be awaited AFTER the per-key lock is released.
+
+    Replying inside the lock serializes same-key callers across a network
+    round-trip. The decision is computed under the lock; the reply runs once
+    the lock is released, so a blocked caller never holds the lock during I/O.
+    """
+    _timestamps.clear()
+    _locks.clear()
+
+    chat_id = 99030
+    events: list[str] = []
+
+    @rate_limit(max_calls=1, window_seconds=60)
+    async def _guarded(update, context):  # type: ignore[no-untyped-def]
+        return "ok"
+
+    key = f"{chat_id}:{_guarded.__module__}.{_guarded.__qualname__}"
+    _locks[key] = _RecordingLock(events)  # type: ignore[assignment]
+
+    context = _make_context()
+
+    async def _reply(*_a, **_k) -> None:
+        events.append("reply")
+
+    # First call consumes the only slot.
+    update1 = make_telegram_update(chat_id=chat_id)
+    update1.message.reply_text = AsyncMock(side_effect=_reply)
+    assert await _guarded(update1, context) == "ok"
+
+    # Scope ordering assertions to the blocked (second) call only.
+    events.clear()
+
+    # Second call is blocked → must reply, but only after lock-exit.
+    update2 = make_telegram_update(chat_id=chat_id)
+    update2.message.reply_text = AsyncMock(side_effect=_reply)
+    assert await _guarded(update2, context) is None
+
+    update2.message.reply_text.assert_awaited_once()
+    assert "reply" in events, "Blocked call must reply"
+    assert events.index("lock-exit") < events.index("reply"), (
+        f"Lock must be released before the reply is awaited; order was: {events}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_releases_lock_before_callback_answer_runs():
+    """Same as above for the callback_query.answer denial branch."""
+    _timestamps.clear()
+    _locks.clear()
+
+    chat_id = 99031
+    events: list[str] = []
+
+    @rate_limit(max_calls=1, window_seconds=60)
+    async def _guarded(update, context):  # type: ignore[no-untyped-def]
+        return "ok"
+
+    key = f"{chat_id}:{_guarded.__module__}.{_guarded.__qualname__}"
+    _locks[key] = _RecordingLock(events)  # type: ignore[assignment]
+
+    context = _make_context()
+
+    async def _answer(*_a, **_k) -> None:
+        events.append("answer")
+
+    def _make_cb_update() -> MagicMock:
+        u = MagicMock()
+        u.effective_chat = MagicMock()
+        u.effective_chat.id = chat_id
+        u.message = None
+        u.callback_query = MagicMock()
+        u.callback_query.answer = AsyncMock(side_effect=_answer)
+        return u
+
+    first = _make_cb_update()
+    assert await _guarded(first, context) == "ok"
+
+    # Scope ordering assertions to the blocked (second) call only.
+    events.clear()
+
+    second = _make_cb_update()
+    assert await _guarded(second, context) is None
+
+    second.callback_query.answer.assert_awaited_once()
+    assert events.index("lock-exit") < events.index("answer"), (
+        f"Lock must be released before callback.answer is awaited; order was: {events}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # DOM-D-06: TOCTOU under concurrency
 # ---------------------------------------------------------------------------
 

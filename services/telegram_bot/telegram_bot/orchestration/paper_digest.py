@@ -1,5 +1,6 @@
 """Weekly paper digest workflow."""
 
+import html
 import logging
 import re
 
@@ -243,7 +244,7 @@ async def run_paper_digest(
             if config.jarvis_base_url:
                 lines.append(
                     "\n\U0001f4f1 "
-                    f'<a href="{config.jarvis_base_url}'
+                    f'<a href="{html.escape(config.jarvis_base_url, quote=True)}'
                     '/feed?surface=inbox&amp;filter=pulse-this-week">'
                     "View in JARVIS inbox</a>"
                 )

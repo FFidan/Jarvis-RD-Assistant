@@ -389,8 +389,8 @@ automatically to cover the jarvis bridge subnet (it tracks `JARVIS_NET_SUBNET`,
 default `10.137.241.0/24`), so no change is needed for the default stack. **If
 you override `JARVIS_NET_SUBNET`, the allowlist follows it** — only set
 `OWNER_OVERRIDE_ALLOWED_CIDRS` explicitly if the bot reaches the services from
-some other network. (The bare code default `127.0.0.0/8,172.16.0.0/12` does
-*not* cover the jarvis bridge — the compose stack overrides it.)
+some other network. (The bare code default `127.0.0.0/8` is loopback-only and
+does *not* cover the jarvis bridge — the compose stack overrides it.)
 
 **Ownership migration (0092).** On first startup after upgrade, migration 0092
 re-assigns any pre-existing product rows with a NULL owner to the single admin

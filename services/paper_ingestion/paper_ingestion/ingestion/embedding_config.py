@@ -97,6 +97,8 @@ def raise_for_collection_dimension_mismatch(
     """Raise when an existing Qdrant collection does not match the active embed config."""
     expected_dimension = EMBEDDING_DIMENSION if expected_dimension is None else expected_dimension
     model_name = model_name or EMBEDDING_MODEL_NAME
+    if current_dimension is None:
+        return  # unknown dimension (no size in collection info) — nothing to compare against
     if current_dimension == expected_dimension:
         return
     raise RuntimeError(

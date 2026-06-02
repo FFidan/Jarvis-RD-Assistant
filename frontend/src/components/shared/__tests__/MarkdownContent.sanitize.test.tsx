@@ -45,4 +45,31 @@ describe('MarkdownContent — XSS sanitization (SEC-XSS-002)', () => {
     expect(img?.getAttribute('src')).toBe('https://example.com/x.png');
     expect(img?.getAttribute('alt')).toBe('ok');
   });
+
+  // SEC-XSS-003: data: URI tightening — only data:image/* is allowed.
+  it('allows data:image/png;base64 src — renders <img> with the data URI', () => {
+    const dataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const { container } = render(
+      <MarkdownContent>{`![png](${dataUri})`}</MarkdownContent>,
+    );
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toBe(dataUri);
+  });
+
+  it('blocks data:text/html src — renders no <img> element', () => {
+    const { container } = render(
+      <MarkdownContent>{'![xss](data:text/html,<script>alert(1)</script>)'}</MarkdownContent>,
+    );
+    const img = container.querySelector('img');
+    expect(img).toBeNull();
+  });
+
+  it('blocks bare data: (non-image) src — renders no <img> element', () => {
+    const { container } = render(
+      <MarkdownContent>{'![bare](data:application/javascript,alert(1))'}</MarkdownContent>,
+    );
+    const img = container.querySelector('img');
+    expect(img).toBeNull();
+  });
 });

@@ -218,3 +218,67 @@ async def test_sync_reviews_concurrent_different_keys_all_synced(
     assert log_rows == _N_CONCURRENT, (
         f"Expected {_N_CONCURRENT} review_log rows for distinct concurrent syncs; found {log_rows}"
     )
+
+
+# ---------------------------------------------------------------------------
+# naive reviewed_at counts on the correct UTC day (end-to-end _to_utc proof)
+# ---------------------------------------------------------------------------
+#
+# Verified: services/learning_engine/learning_engine/routers/review.py:279-281 —
+#   reviewed_at_utc = _to_utc(event.reviewed_at).astimezone(UTC); compared to
+#   datetime.now(UTC).date() to drive the new_today daily_log increment.
+# Verified: services/learning_engine/learning_engine/routers/review.py:285-296 —
+#   new_today > 0 → INSERT INTO daily_log (..., log_date=CURRENT_DATE, ...).
+
+
+async def test_sync_reviews_naive_reviewed_at_counts_on_utc_day(
+    contract_two_users,
+    contract_conn,
+    _le_app,
+    _configure_api_key,
+) -> None:
+    """A sync event whose ``reviewed_at`` is a NAIVE datetime (no tzinfo/offset)
+    representing "now" in UTC must be counted on the correct UTC day.
+
+    This is the end-to-end proof that the ``_to_utc`` normalisation actually
+    fixes the streak/day-counting bug: the route reads ``reviewed_at`` (parsed
+    by pydantic into a naive datetime, exactly as a JS client sending an
+    offset-less ISO string would produce), normalises it to UTC, and increments
+    today's ``daily_log.cards_reviewed`` only when it lands on the current UTC
+    day.  If the naive value were mishandled (treated as some other zone, or the
+    comparison crashed) the day's count would be wrong / the row absent.
+    """
+    card_id = contract_two_users.card_id_a
+    user_a_id = contract_two_users.user_a_id
+
+    # Naive "now" in UTC — no tzinfo, no offset suffix. e.g. "2026-06-02T12:34:56".
+    naive_now_utc = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    assert "+" not in naive_now_utc and "Z" not in naive_now_utc, (
+        "reviewed_at under test must be naive (no tz offset) to prove the fix"
+    )
+
+    event_payload = {
+        "idempotency_key": f"naive-utc-{uuid.uuid4()}",
+        "card_id": card_id,
+        "rating": 3,
+        "reviewed_at": naive_now_utc,
+        "review_duration_ms": 700,
+    }
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/review/sync", json={"reviews": [event_payload]})
+    assert resp.status_code == 200, f"sync_reviews returned {resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    assert body["synced"] == 1, f"naive-UTC event should sync exactly once; got {body}"
+
+    # Observable: the event is counted on the current UTC day in daily_log.
+    # The seed creates no daily_log rows, so a row here proves the increment fired.
+    cards_reviewed = await contract_conn.fetchval(
+        "SELECT cards_reviewed FROM daily_log "
+        "WHERE user_id = $1 AND log_date = (NOW() AT TIME ZONE 'UTC')::date",
+        user_a_id,
+    )
+    assert cards_reviewed == 1, (
+        "a naive reviewed_at == now(UTC) must be counted on the current UTC day "
+        f"(daily_log.cards_reviewed for CURRENT_DATE); got {cards_reviewed!r}"
+    )

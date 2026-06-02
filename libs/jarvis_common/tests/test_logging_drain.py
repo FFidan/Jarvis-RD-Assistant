@@ -305,3 +305,81 @@ async def test_aclose_terminates_when_acquire_blocks() -> None:
     # Drain task must be done after aclose() returns.
     assert handler._task is not None
     assert handler._task.done(), "Drain task must be done after aclose() returns"
+
+
+async def test_aclose_counts_dropped_on_timeout_cancel() -> None:
+    """aclose() timeout-cancel must count the events still queued as dropped.
+
+    Pre-condition (bug): the ``except TimeoutError`` branch cancels the blocked
+    drain task but the events still sitting in the queue are silently lost —
+    ``_dropped`` is never incremented, so the recovery row under-reports.
+
+    Post-condition (fix): on timeout, ``_dropped`` increases by ``qsize()``
+    (the events still queued behind the blocked drain).
+    """
+    # Pool whose acquire() blocks forever → once the drain loop pulls its first
+    # batch and reaches acquire() it never returns; any events emitted afterwards
+    # pile up in the queue and are lost when aclose() times out and cancels.
+    blocking_event = asyncio.Event()  # never set
+
+    pool = MagicMock()
+
+    @asynccontextmanager
+    async def _blocking_acquire():
+        await blocking_event.wait()
+        yield AsyncMock()  # unreachable
+
+    pool.acquire = _blocking_acquire
+
+    handler = SystemEventHandler(pool, ring_buffer_size=100, flush_interval_s=0.01)
+
+    # One event triggers the first batch → drain enters the blocking acquire().
+    handler.emit(
+        logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname="",
+            lineno=0,
+            msg="batch trigger",
+            args=(),
+            exc_info=None,
+        )
+    )
+
+    loop = asyncio.get_running_loop()
+    if handler._task is None or handler._task.done():
+        handler._task = loop.create_task(handler._drain_loop())
+
+    # Let the drain loop pull that event into its batch and block on acquire().
+    await asyncio.sleep(0.05)
+
+    # Now emit 3 MORE events — these stay in the queue behind the blocked drain.
+    for i in range(3):
+        handler.emit(
+            logging.LogRecord(
+                name="test",
+                level=logging.WARNING,
+                pathname="",
+                lineno=0,
+                msg=f"stranded event {i}",
+                args=(),
+                exc_info=None,
+            )
+        )
+
+    dropped_before = handler._dropped
+    queued_at_timeout = handler._queue.qsize()
+    assert queued_at_timeout == 3, (
+        f"3 events should be stranded in the queue, got {queued_at_timeout}"
+    )
+
+    await asyncio.wait_for(handler.aclose(), timeout=8.0)
+
+    assert handler._task is not None
+    assert handler._task.done(), "Drain task must be done after aclose() returns"
+
+    # The events still queued when aclose timed out must be counted as dropped.
+    assert handler._dropped == dropped_before + queued_at_timeout, (
+        f"aclose timeout-cancel must add the {queued_at_timeout} still-queued "
+        f"events to _dropped (was {dropped_before}, got {handler._dropped})"
+    )

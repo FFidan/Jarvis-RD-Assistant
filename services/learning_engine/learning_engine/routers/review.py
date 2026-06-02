@@ -25,6 +25,10 @@ from learning_engine.models import (
 logger = logging.getLogger(__name__)
 
 
+def _to_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 async def _build_fsrs_manager_from_db(
     conn: asyncpg.pool.PoolConnectionProxy,
     user_id: int | None = None,
@@ -272,11 +276,7 @@ async def sync_reviews(
                         event.card_id,
                         user_id,
                     )
-                    reviewed_at_utc = (
-                        event.reviewed_at.astimezone(UTC)
-                        if event.reviewed_at.tzinfo is not None
-                        else event.reviewed_at
-                    )
+                    reviewed_at_utc = _to_utc(event.reviewed_at).astimezone(UTC)
                     if reviewed_at_utc.date() == datetime.now(UTC).date():
                         new_today += 1
                 applied.add(event.idempotency_key)

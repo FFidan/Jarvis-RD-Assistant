@@ -287,7 +287,7 @@ async def get_procrastinate_job_for_jarvis_id(
         # procrastinate_jobs missing (migration 052 not applied).
         return None
     except Exception:
-        logger.debug("procrastinate row lookup failed for job %s", jarvis_job_id, exc_info=True)
+        logger.warning("procrastinate row lookup failed for job %s", jarvis_job_id, exc_info=True)
         return None
     if row is None:
         return None

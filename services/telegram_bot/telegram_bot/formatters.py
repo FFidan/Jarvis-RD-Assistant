@@ -96,7 +96,7 @@ def sanitize_user_input(text: str, max_len: int) -> str:
     str
         Cleaned, length-capped string safe for use in queries and display.
     """
-    return _BIDI_ZW_RE.sub("", text[:max_len])
+    return _BIDI_ZW_RE.sub("", text)[:max_len]
 
 
 def truncate(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:

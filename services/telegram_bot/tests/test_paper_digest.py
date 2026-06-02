@@ -278,6 +278,53 @@ async def test_run_paper_digest_emits_absolute_inbox_link_when_base_url_set():
 
 
 @pytest.mark.asyncio
+async def test_run_paper_digest_escapes_quote_in_base_url_href():
+    """A double-quote in jarvis_base_url must be HTML-escaped, not break the href.
+
+    Without escaping, a base URL containing ``"`` closes the ``href="..."``
+    attribute early, producing malformed/injectable Telegram HTML.
+    """
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    db_pool = AsyncMock()
+    config = make_bot_config(
+        BotConfig,
+        telegram_chat_id=1234,
+        jarvis_api_key=SecretStr("secret"),
+        jarvis_base_url='https://jarvis.example.com/"><script>',
+    )
+
+    from telegram_bot.owner import UserPairing
+
+    deliveries: list[list[str]] = []
+
+    async def _capturing_send(_bot, _chat_id: int, lines: list[str]) -> None:
+        deliveries.append(lines)
+
+    with (
+        patch(
+            "telegram_bot.owner.list_user_pairings",
+            AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
+        ),
+        patch.object(
+            paper_digest,
+            "_fetch_digest_from_api",
+            AsyncMock(return_value={"topics": [{"name": "AI"}], "total_papers": 1}),
+        ),
+        patch.object(paper_digest, "format_weekly_digest", return_value="digest line"),
+        patch.object(paper_digest, "_send_chunked", side_effect=_capturing_send),
+    ):
+        await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
+
+    assert len(deliveries) == 1
+    joined = "\n".join(deliveries[0])
+    # The raw quote must not survive verbatim inside the href attribute.
+    assert '"><script>' not in joined, f"Unescaped quote broke the href; got: {joined!r}"
+    # It must appear in its escaped form.
+    assert "&quot;&gt;&lt;script&gt;" in joined, f"Quote was not HTML-escaped; got: {joined!r}"
+
+
+@pytest.mark.asyncio
 async def test_run_paper_digest_omits_inbox_link_without_base_url():
     """TG-BUG-01: with jarvis_base_url unset, no broken relative link is emitted."""
     bot = AsyncMock()
