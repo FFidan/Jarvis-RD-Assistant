@@ -446,7 +446,7 @@ async def test_fetch_new_paper_count_correct_url_and_returns_total(config: BotCo
 async def test_fetch_new_paper_count_date_from_is_iso_approx_now_minus_hours(
     config: BotConfig,
 ) -> None:
-    """date_from sent to the API is an ISO string approximating now - hours."""
+    """date_from sent to the API is the DATE of now - hours (day granularity)."""
     http = _make_http(make_http_response({"total": 0}))
 
     before = datetime.now(UTC)
@@ -458,16 +458,18 @@ async def test_fetch_new_paper_count_date_from_is_iso_approx_now_minus_hours(
     date_from_str = params.get("date_from", "")
     assert date_from_str, "date_from param must be present"
 
-    # Parse it back and verify it is within the expected window
-    date_from_dt = datetime.fromisoformat(date_from_str)
-    # Make both tz-aware for comparison
-    if date_from_dt.tzinfo is None:
-        date_from_dt = date_from_dt.replace(tzinfo=UTC)
-    expected_earliest = before - timedelta(hours=24, seconds=5)
-    expected_latest = after - timedelta(hours=24) + timedelta(seconds=5)
-    assert expected_earliest <= date_from_dt <= expected_latest, (
-        f"date_from {date_from_dt!r} not in expected window "
-        f"[{expected_earliest!r}, {expected_latest!r}]"
+    # C2 regression guard: /api/papers/feed's date_from is a DATE param — a full
+    # datetime ISO string is rejected with 422. Must be a pure date (no time).
+    assert "T" not in date_from_str, f"date_from must be a date (no time), got {date_from_str!r}"
+
+    # It is the calendar date of (now - hours). before/after differ only across
+    # a midnight boundary, so accept either.
+    expected_dates = {
+        (before - timedelta(hours=24)).date().isoformat(),
+        (after - timedelta(hours=24)).date().isoformat(),
+    }
+    assert date_from_str in expected_dates, (
+        f"date_from {date_from_str!r} is not the date of now-24h ({expected_dates})"
     )
 
 

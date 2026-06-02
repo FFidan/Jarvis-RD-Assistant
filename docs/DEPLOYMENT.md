@@ -365,10 +365,14 @@ dashboard-code pairing path (`/start PAIR_<code>`) no longer work — any
 existing `TELEGRAM_CHAT_ID` value can be removed from `.env` after pairing.
 
 **Telegram owner-override network.** The bot calls service endpoints with
-`X-Owner-User-Id` to make per-user requests. `OWNER_OVERRIDE_ALLOWED_CIDRS`
-must cover the bot container's source IP — the default
-(`127.0.0.0/8,172.16.0.0/12`) covers the standard Docker bridge and requires
-no change for the bundled compose stack.
+`X-Owner-User-Id` to make per-user requests, trusted only from
+`OWNER_OVERRIDE_ALLOWED_CIDRS`. The bundled compose stack sets this
+automatically to cover the jarvis bridge subnet (it tracks `JARVIS_NET_SUBNET`,
+default `10.137.241.0/24`), so no change is needed for the default stack. **If
+you override `JARVIS_NET_SUBNET`, the allowlist follows it** — only set
+`OWNER_OVERRIDE_ALLOWED_CIDRS` explicitly if the bot reaches the services from
+some other network. (The bare code default `127.0.0.0/8,172.16.0.0/12` does
+*not* cover the jarvis bridge — the compose stack overrides it.)
 
 **Ownership migration (0092).** On first startup after upgrade, migration 0092
 re-assigns any pre-existing product rows with a NULL owner to the single admin

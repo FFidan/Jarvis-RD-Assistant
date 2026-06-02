@@ -43,14 +43,32 @@ async def _run_briefing_for_chat(
     user_id : int
         DB user PK for scoping all per-user queries.
     """
-    new_papers_count = await services_client.fetch_new_paper_count(http_client, config, user_id)
-    due_cards = await services_client.fetch_due_card_count(http_client, config, user_id)
-    tasks = await services_client.fetch_tasks(
-        http_client, config, user_id, status="in_progress", limit=10
-    )
-    milestones = await services_client.fetch_upcoming_milestones(
-        http_client, config, user_id, within_days=7
-    )
+    # Each section degrades independently: a transient backend failure on one
+    # gather must not suppress the whole briefing (mirrors the /briefing command).
+    try:
+        new_papers_count = await services_client.fetch_new_paper_count(http_client, config, user_id)
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.warning("daily briefing: new-papers count failed for user_id=%s", user_id)
+        new_papers_count = 0
+    try:
+        due_cards = await services_client.fetch_due_card_count(http_client, config, user_id)
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.warning("daily briefing: due-cards count failed for user_id=%s", user_id)
+        due_cards = 0
+    try:
+        tasks = await services_client.fetch_tasks(
+            http_client, config, user_id, status="in_progress", limit=10
+        )
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.warning("daily briefing: tasks fetch failed for user_id=%s", user_id)
+        tasks = []
+    try:
+        milestones = await services_client.fetch_upcoming_milestones(
+            http_client, config, user_id, within_days=7
+        )
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.warning("daily briefing: milestones fetch failed for user_id=%s", user_id)
+        milestones = []
 
     message = format_morning_briefing(new_papers_count, due_cards, tasks, milestones)
 

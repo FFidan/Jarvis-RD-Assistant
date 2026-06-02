@@ -34,6 +34,11 @@ x-shared-env: &shared-env
   PULSE_STAGE2_MODEL: ${PULSE_STAGE2_MODEL:-fast}
   PULSE_STAGE2_MAX_RETRIES: ${PULSE_STAGE2_MAX_RETRIES:-1}
   JARVIS_TRUST_CF_CONNECTING_IP: ${JARVIS_TRUST_CF_CONNECTING_IP:-false}
+  # Source CIDRs allowed to use the X-Owner-User-Id override (the Telegram bot's
+  # per-user service calls). MUST include the jarvis bridge subnet so the bot is
+  # trusted; defaults track JARVIS_NET_SUBNET. If you override JARVIS_NET_SUBNET,
+  # this follows it. Loopback covers same-host calls.
+  OWNER_OVERRIDE_ALLOWED_CIDRS: ${OWNER_OVERRIDE_ALLOWED_CIDRS:-127.0.0.0/8,${JARVIS_NET_SUBNET:-10.137.241.0/24}}
   TELEGRAM_BOT_URL: ${TELEGRAM_BOT_URL:-http://telegram_bot:8002}
   OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-false}
   LANGFUSE_HOST: ${LANGFUSE_HOST:-}

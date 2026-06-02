@@ -148,6 +148,41 @@ async def test_generate_paper_summary_returns_existing_summary():
 
 
 @pytest.mark.asyncio
+async def test_generate_paper_summary_idempotency_scoped_by_user_id():
+    """The idempotency lookup must be scoped by user_id.
+
+    paper_summaries is per-user (UNIQUE (paper_id, user_id)); an unscoped
+    'WHERE paper_id = $1' check would return ANOTHER user's summary content to
+    the caller. The check must bind the caller's user_id.
+    """
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [_paper_row(), {"id": 1}]  # paper found, existing summary
+    pool = _make_pool(conn)
+
+    patch_ctx, _llm_mock = _patched_call_llm()
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "row_to_summary_response", return_value="existing"),
+        patch_ctx,
+    ):
+        await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=MagicMock(),
+            embedder=MagicMock(),
+            user_id=42,
+        )
+
+    # fetchrow[0] = paper-existence check; fetchrow[1] = the idempotency lookup.
+    idempotency_call = conn.fetchrow.call_args_list[1]
+    assert 42 in idempotency_call.args, (
+        "idempotency check must bind the caller's user_id so the query scopes "
+        f"per-user; call args were {idempotency_call.args!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_generate_paper_summary_raises_on_missing_paper():
     """A missing paper must raise PaperNotFoundError (not HTTPException) before any LLM call."""
     conn = AsyncMock()

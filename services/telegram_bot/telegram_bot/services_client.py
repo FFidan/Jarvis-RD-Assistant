@@ -285,7 +285,9 @@ async def fetch_new_paper_count(
     since = datetime.now(UTC) - timedelta(hours=hours)
     resp = await http.get(
         f"{config.paper_ingestion_url}/api/papers/feed",
-        params={"date_from": since.isoformat(), "limit": 1},
+        # /api/papers/feed's date_from is a DATE param — send a date string
+        # (day granularity); a full datetime ISO string is rejected with 422.
+        params={"date_from": since.date().isoformat(), "limit": 1},
         headers=_owner_headers(config, user_id),
     )
     resp.raise_for_status()

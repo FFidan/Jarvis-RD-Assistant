@@ -219,9 +219,14 @@ async def generate_paper_summary(
             if not paper_row:
                 raise PaperNotFoundError(f"Paper {paper_id} not found")
 
-            # Idempotency: return existing summary
+            # Idempotency: return the caller's existing summary. Scoped by
+            # user_id — paper_summaries is per-user (UNIQUE (paper_id, user_id)),
+            # so an unscoped check would return another user's summary content.
             existing = await conn.fetchrow(
-                "SELECT * FROM paper_summaries WHERE paper_id = $1", paper_id
+                "SELECT * FROM paper_summaries"
+                " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                paper_id,
+                user_id,
             )
             if existing:
                 return row_to_summary_response(existing)

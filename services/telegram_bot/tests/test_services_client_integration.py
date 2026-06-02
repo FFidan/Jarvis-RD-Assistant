@@ -69,6 +69,7 @@ from telegram_bot.config import BotConfig
 from telegram_bot.services_client import (
     check_authors,
     complete_task,
+    fetch_new_paper_count,
     fetch_tasks,
     fetch_upcoming_milestones,
 )
@@ -475,3 +476,33 @@ async def test_check_authors_returns_matches_shape(_int_pool, _seed, monkeypatch
     for entry in result["matches"]:
         assert "author_name" in entry, f"Match entry missing 'author_name': {entry}"
         assert "papers" in entry, f"Match entry missing 'papers': {entry}"
+
+
+# ---------------------------------------------------------------------------
+# T5 — fetch_new_paper_count drives GET /api/papers/feed without a 422
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_new_paper_count_no_422(_int_pool, _seed, monkeypatch):
+    """services_client.fetch_new_paper_count drives GET /api/papers/feed.
+
+    Regression guard for audit finding C2: the feed's date_from is a DATE query
+    param; sending a full datetime ISO string is rejected with HTTP 422. The
+    client must send a date string. This hits the REAL endpoint, so a regression
+    to datetime would raise_for_status (422) here — a failure the mock-based unit
+    test cannot catch.
+    """
+    user_id = _seed["user_id"]
+
+    with configure_contract_api_key(monkeypatch) as key:
+        with monkeypatch.context() as m:
+            m.setattr("jarvis_common.auth._ip_in_allowlist", lambda _ip: True)
+
+            config = _make_config(key, pi_url="http://test")
+            with _pi_app_wired(_int_pool):
+                async with _pi_client(_int_pool, key) as http:
+                    count = await fetch_new_paper_count(http, config, user_id, hours=24)
+
+    assert isinstance(count, int) and count >= 0, (
+        f"fetch_new_paper_count must return a non-negative int (no 422); got {count!r}"
+    )
