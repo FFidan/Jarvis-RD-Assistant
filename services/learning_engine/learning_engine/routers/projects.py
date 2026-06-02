@@ -3,7 +3,10 @@
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_strict
+from jarvis_common.auth import (
+    current_user_id_strict,
+    current_user_id_strict_with_owner_override,
+)
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import (
@@ -42,7 +45,7 @@ async def list_projects(
     request: Request,
     status: str | None = Query(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> list[ProjectResponse]:
     """List all projects, optionally filtered by status."""
     if status and status not in _VALID_STATUSES:
@@ -90,7 +93,7 @@ async def create_project(
     request: Request,
     body: ProjectCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> ProjectResponse:
     """Create a new project."""
     async with db_pool.acquire() as conn:
@@ -121,7 +124,7 @@ async def get_project(
     request: Request,
     project_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> ProjectDetailResponse:
     """Get a project with task and milestone counts."""
     async with db_pool.acquire() as conn:

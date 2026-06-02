@@ -1,39 +1,152 @@
-"""Unit tests for author_alert_log dedupe scoping (SEC-AUTHALERT-1).
+"""Bot-behavior tests for the author-alerts orchestrator.
 
-Both insert sites were consolidated into
-``libs/jarvis_common.db_helpers.record_author_alert``; the SQL string now
-lives in one place. The 3-col unique index lives in db/init.sql.
+The bot no longer matches authors or writes the dedupe log itself; that logic
+(plus per-user ``last_checked_at``) now lives behind the Paper Ingestion
+service.  ``run_author_alerts`` simply calls
+``services_client.check_authors`` once per paired user and renders one Telegram
+message per ``match`` in the response.
+
+These tests assert that delegated behavior at the http_client boundary.  (The
+SQL-shape invariant for ``db_helpers.record_author_alert`` — formerly checked
+here — is now owned by the Paper Ingestion / jarvis_common test suite that
+actually calls it.)
 """
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
-_DEDUPE_COLUMNS_RE = re.compile(
-    r"author_alert_log\s*\(\s*tracked_author_id\s*,\s*paper_id\s*,\s*user_id\s*\)"
-)
-_DEDUPE_CONFLICT_RE = re.compile(
-    r"ON\s+CONFLICT\s*\(\s*tracked_author_id\s*,\s*paper_id\s*,\s*user_id\s*\)",
-    re.IGNORECASE,
-)
-
-_DEDUPE_SOURCES = ("libs/jarvis_common/jarvis_common/db_helpers.py",)
+import httpx
+import pytest
+from jarvis_common.testing import make_bot_config
+from jarvis_common.testing_telegram import make_http_response
+from pydantic import SecretStr
+from telegram_bot.config import BotConfig
+from telegram_bot.orchestration import author_alerts as author_alerts_mod
 
 
-def test_author_alerts_module_uses_user_scoped_dedupe() -> None:
-    """All INSERT sites must scope dedupe to (tracked_author_id, paper_id, user_id).
+@pytest.mark.asyncio
+async def test_run_author_alerts_calls_check_authors_per_pairing() -> None:
+    """Each paired user gets exactly one owner-scoped POST /api/authors/check."""
+    bot = AsyncMock()
+    pool = AsyncMock()
+    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
 
-    Migration 0091 drops the old 2-column unique constraint and creates a
-    3-column unique index; any 2-column ON CONFLICT after that point would
-    fail at runtime with `there is no unique or exclusion constraint matching
-    the ON CONFLICT specification`.
-    """
-    for relpath in _DEDUPE_SOURCES:
-        src = Path(relpath).read_text()
-        assert _DEDUPE_COLUMNS_RE.search(src), (
-            f"alert-log column list missing user_id (3-column form) in {relpath}"
-        )
-        assert _DEDUPE_CONFLICT_RE.search(src), (
-            f"alert-log conflict target missing user_id (3-column form) in {relpath}"
-        )
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.post.return_value = make_http_response(
+        {"matches": [], "new_papers": 0, "authors_checked": 0}
+    )
+
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(
+            return_value=[
+                UserPairing(user_id=1, chat_id=100),
+                UserPairing(user_id=2, chat_id=200),
+            ]
+        ),
+    ):
+        await author_alerts_mod.run_author_alerts(http_client, pool, bot, config)
+
+    assert http_client.post.await_count == 2
+    seen_owner_ids = set()
+    for call in http_client.post.await_args_list:
+        url = call.args[0]
+        assert url.endswith("/api/authors/check")
+        assert call.kwargs["headers"]["X-API-Key"] == "secret"
+        seen_owner_ids.add(call.kwargs["headers"]["X-Owner-User-Id"])
+    assert seen_owner_ids == {"1", "2"}
+    # No matches → nothing sent.
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_author_alerts_renders_one_message_per_match() -> None:
+    """Each match in the service response becomes one HTML alert to that chat."""
+    bot = AsyncMock()
+    pool = AsyncMock()
+    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.post.return_value = make_http_response(
+        {
+            "matches": [
+                {
+                    "author_name": "Alice Smith",
+                    "papers": [{"id": 1, "title": "Paper A", "url": "https://e.x/a"}],
+                },
+                {
+                    "author_name": "Bob Jones",
+                    "papers": [{"id": 2, "title": "Paper B", "url": "https://e.x/b"}],
+                },
+            ],
+            "new_papers": 2,
+            "authors_checked": 2,
+        }
+    )
+
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=7, chat_id=555)]),
+    ):
+        await author_alerts_mod.run_author_alerts(http_client, pool, bot, config)
+
+    assert bot.send_message.await_count == 2
+    sent_texts = []
+    for call in bot.send_message.await_args_list:
+        assert call.kwargs["chat_id"] == 555
+        assert call.kwargs["parse_mode"] == "HTML"
+        sent_texts.append(call.kwargs["text"])
+    joined = "\n".join(sent_texts)
+    assert "Alice Smith" in joined
+    assert "Bob Jones" in joined
+
+
+@pytest.mark.asyncio
+async def test_run_author_alerts_one_pairing_error_does_not_abort_others() -> None:
+    """A 5xx on one pairing's check is logged-and-skipped; later pairings still run."""
+    bot = AsyncMock()
+    pool = AsyncMock()
+    config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
+
+    ok_resp = make_http_response(
+        {
+            "matches": [
+                {
+                    "author_name": "Carol",
+                    "papers": [{"id": 3, "title": "Paper C", "url": "https://e.x/c"}],
+                }
+            ],
+            "new_papers": 1,
+            "authors_checked": 1,
+        }
+    )
+    err_resp = make_http_response({"detail": "boom"}, status=503)
+
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    # First pairing errors, second succeeds.
+    http_client.post.side_effect = [err_resp, ok_resp]
+
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(
+            return_value=[
+                UserPairing(user_id=1, chat_id=100),
+                UserPairing(user_id=2, chat_id=200),
+            ]
+        ),
+    ):
+        await author_alerts_mod.run_author_alerts(http_client, pool, bot, config)
+
+    # Both pairings attempted; only the healthy one delivered.
+    assert http_client.post.await_count == 2
+    bot.send_message.assert_awaited_once()
+    _, kwargs = bot.send_message.await_args
+    assert kwargs["chat_id"] == 200
+    assert "Carol" in kwargs["text"]

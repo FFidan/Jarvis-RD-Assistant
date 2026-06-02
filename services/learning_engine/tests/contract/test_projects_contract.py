@@ -121,6 +121,26 @@ async def test_update_project_user_b_gets_404(contract_two_users, _le_app, _conf
     )
 
 
+async def test_get_project_cross_tenant_returns_404(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """User B GET on user A's project detail → 404 (scoping holds under owner-override resolver).
+
+    GET /api/projects/{id} now resolves identity via the owner-override
+    resolver, but the ``WHERE id = $1 AND user_id = $2`` filter still scopes
+    the session-authenticated caller (user B) to their own rows.
+    """
+    project_id = contract_two_users.project_id_a
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.get(f"/api/projects/{project_id}")
+
+    assert resp.status_code != 401, f"GET /api/projects/{project_id}: got 401 — session wiring bug"
+    assert resp.status_code == 404, (
+        f"cross-tenant: user B got {resp.status_code} reading user A's project {project_id} "
+        f"(expected 404). Body: {resp.text[:300]}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # §A216 — DELETE /api/projects/{id} — owner can delete; non-owner gets 404
 # ---------------------------------------------------------------------------

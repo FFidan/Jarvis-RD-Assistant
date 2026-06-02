@@ -206,3 +206,71 @@ async def test_delete_milestone_owner_gets_204(
         ms_id,
     )
     assert still_exists is None, f"Milestone {ms_id} still in DB after DELETE 204"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/milestones/upcoming — cross-project deadline feed (owner-scoped)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_ms(
+    conn, project_id: int, user_id: int, name: str, offset_days: int, completed=False
+):
+    return await conn.fetchval(
+        """INSERT INTO milestones (project_id, name, deadline, completed, user_id)
+           VALUES ($1, $2, NOW() + make_interval(days => $3), $4, $5) RETURNING id""",
+        project_id,
+        name,
+        offset_days,
+        completed,
+        user_id,
+    )
+
+
+async def test_upcoming_milestones_window_and_scoping(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """?within_days=7 returns only A's incomplete, future, in-window milestones
+    ordered by deadline with project_name — excludes out-of-window, completed,
+    past-due, and user-B rows."""
+    pid_a = contract_two_users.project_id_a
+    ms_2d = await _seed_ms(contract_conn, pid_a, contract_two_users.user_a_id, "MS +2d", 2)
+    ms_5d = await _seed_ms(contract_conn, pid_a, contract_two_users.user_a_id, "MS +5d", 5)
+    ms_20d = await _seed_ms(contract_conn, pid_a, contract_two_users.user_a_id, "MS +20d", 20)
+    ms_done = await _seed_ms(
+        contract_conn, pid_a, contract_two_users.user_a_id, "MS done", 3, completed=True
+    )
+    ms_past = await _seed_ms(contract_conn, pid_a, contract_two_users.user_a_id, "MS past", -2)
+    # User B milestone within the window — must not appear for A.
+    ms_b = await _seed_ms(
+        contract_conn, contract_two_users.project_id_b, contract_two_users.user_b_id, "B +2d", 2
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/milestones/upcoming?within_days=7")
+
+    assert resp.status_code == 200, (
+        f"GET /api/milestones/upcoming failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    rows = resp.json()
+    returned_ids = [m["id"] for m in rows]
+    assert returned_ids == [ms_2d, ms_5d], (
+        f"expected only A's +2d,+5d ordered by deadline; got {returned_ids}"
+    )
+    assert ms_20d not in returned_ids, "out-of-window milestone leaked"
+    assert ms_done not in returned_ids, "completed milestone leaked"
+    assert ms_past not in returned_ids, "past-due milestone leaked"
+    assert ms_b not in returned_ids, "scoping leak: user B's milestone returned to A"
+    assert all(m["project_name"] is not None for m in rows), "project_name missing from JOIN"
+
+
+async def test_upcoming_milestones_bounds_validation(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """within_days bounds: 0 → 422, 91 → 422."""
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        r_low = await c.get("/api/milestones/upcoming?within_days=0")
+        r_high = await c.get("/api/milestones/upcoming?within_days=91")
+
+    assert r_low.status_code == 422, f"within_days=0 expected 422, got {r_low.status_code}"
+    assert r_high.status_code == 422, f"within_days=91 expected 422, got {r_high.status_code}"

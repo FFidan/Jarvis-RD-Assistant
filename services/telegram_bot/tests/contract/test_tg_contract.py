@@ -163,14 +163,6 @@ def _make_callback_update(*, chat_id: int = 42, callback_data: str) -> MagicMock
     return update
 
 
-def _make_http_response(json_data: Any) -> MagicMock:
-    """Build a minimal httpx Response-shaped mock."""
-    resp = MagicMock()
-    resp.json = MagicMock(return_value=json_data)
-    resp.raise_for_status = MagicMock()
-    return resp
-
-
 # ---------------------------------------------------------------------------
 # Contract: pair_command persists to telegram_user_pairings
 # ---------------------------------------------------------------------------
@@ -378,458 +370,56 @@ async def test_pair_command_rejects_expired_token(contract_conn):
 
 
 # ---------------------------------------------------------------------------
-# A233: briefing_command — direct DB reads under user scope
+# A233/A236/A237/A238/A239/A246/A247/A247b — DELETED in the Telegram→REST
+# decoupling (T15).
+#
+# These were DB-state contract tests: they seeded a real DB and asserted DB
+# state (task status, project rows) after invoking a product handler.  Those
+# handlers now route through the service REST API (services_client) instead of
+# writing the DB directly, so the DB-state assertions are obsolete.  Their two
+# guarantees are now covered elsewhere:
+#
+#   (a) "the bot issues the right REST call (URL + X-Owner-User-Id) and renders
+#       correctly" — covered by the http-mock unit tests in
+#       services/telegram_bot/tests/test_command_handlers.py and
+#       test_callback_handlers.py:
+#         A233 briefing  → test_briefing_returns_text,
+#                          test_briefing_scopes_to_user_via_owner_header_when_paired
+#         A236 /tasks    → test_tasks_scopes_query_to_paired_user,
+#                          test_tasks_scopes_query_with_project_filter
+#         A237 /done     → test_done_success, test_done_passes_user_id_via_owner_header
+#         A238 /projects → test_projects_with_data, test_projects_scopes_listing_to_paired_user
+#         A239 /newproject → test_newproject_success,
+#                          test_newproject_passes_user_id_via_owner_header
+#         A246 project_detail → test_project_detail_success, test_project_detail_not_found
+#         A247 task_done → test_task_done_success,
+#                          test_task_done_forwards_owner_user_id_for_paired_user
+#
+#   (b) the service-side DB write / cross-tenant enforcement — covered by the
+#       learning_engine contract tests (real live-PG):
+#         A236 list-scoping → test_tasks_contract.py::test_list_tasks_owner_sees_own_task,
+#                          test_list_tasks_non_owner_project_gets_404
+#         A237 done+daily_log → test_tasks_contract.py::test_status_to_done_increments_daily_log
+#                          (+ second/redone/coalesce variants)
+#         A238/A239 project scope+insert → test_projects_contract.py::
+#                          test_create_project_row_has_caller_user_id,
+#                          test_create_project_absent_from_user_b_list
+#         A246 project cross-tenant → test_projects_contract.py::
+#                          test_get_project_cross_tenant_returns_404
+#         A247/A247b TG-SEC-03 → test_tasks_contract.py::
+#                          test_update_task_user_b_gets_404,
+#                          test_update_task_cross_tenant_returns_404 (404 + row unchanged),
+#                          plus bot-half test_callback_handlers.py::
+#                          test_task_done_non_owned_task_returns_not_found_no_leak.
+#
+# TG-SEC-03 specifically: the old A247b forced auth_check → (True, None) to
+# exercise a consumer-side ``$2 IS NULL`` catch-all in complete_task.  That
+# direct-DB path no longer exists in the bot — the handler PUTs to the LE, which
+# enforces ownership via X-Owner-User-Id and returns 404 for non-owned tasks
+# (test_update_task_cross_tenant_returns_404 proves the row stays unchanged;
+# test_task_done_non_owned_task_returns_not_found_no_leak proves the bot renders
+# "not found" with no existence leak).
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_a233_briefing_command_reads_tasks_from_real_db(contract_conn, contract_two_users):
-    """Covers map row A233: briefing_command reads in-progress tasks scoped by
-    user_id from real DB and includes them in the morning briefing reply.
-    Verified: services/telegram_bot/telegram_bot/handlers/commands/paper_commands.py:165 at HEAD.
-    """
-    from unittest.mock import patch
-
-    from telegram_bot.handlers.commands.paper_commands import briefing_command
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    user_a_id = contract_two_users.user_a_id
-    task_id_a = contract_two_users.task_id_a
-
-    # Ensure the seeded task is 'in_progress' (default from seed is 'in_progress')
-    await contract_conn.execute(
-        "UPDATE tasks SET status = 'in_progress' WHERE id = $1",
-        task_id_a,
-    )
-
-    pool = TgContractPool(contract_conn)
-    update = _make_update_with_text("/briefing", chat_id=4401)
-    from jarvis_common.testing import make_bot_config
-
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
-    context = _make_context(pool, config)
-    context.user_data = {"jarvis_user_id": user_a_id}
-
-    http_mock = context.application.bot_data["http_client"]
-    http_mock.get = AsyncMock(return_value=_make_http_response({"due_now": 3}))
-
-    with patch(
-        "telegram_bot.handlers.commands._auth.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, user_a_id),
-    ):
-        await briefing_command(update, context)
-
-    # THEN: reply_text was called (briefing sent)
-    update.message.reply_text.assert_awaited_once()
-    reply_text: str = update.message.reply_text.call_args[0][0]
-    # The briefing must mention the seeded in-progress task title
-    from jarvis_common.testing import A_TASK_TITLE
-
-    assert A_TASK_TITLE in reply_text or len(reply_text) > 0, (
-        f"Expected briefing reply to be non-empty; got: {reply_text!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# A236: tasks_command — LE HTTP boundary + DB-state assertions
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_a236_tasks_command_returns_in_progress_tasks_for_user(
-    contract_conn, contract_two_users
-):
-    """Covers map row A236: tasks_command queries tasks table scoped to user_id.
-    User B's tasks must NOT appear in user A's response.
-    Verified: services/telegram_bot/telegram_bot/handlers/commands/task_commands.py:22 at HEAD.
-    """
-    from unittest.mock import patch
-
-    from jarvis_common.testing import A_TASK_TITLE
-    from telegram_bot.handlers.commands.task_commands import tasks_command
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    user_a_id = contract_two_users.user_a_id
-    task_id_a = contract_two_users.task_id_a
-
-    # Ensure task is in_progress
-    await contract_conn.execute("UPDATE tasks SET status = 'in_progress' WHERE id = $1", task_id_a)
-
-    pool = TgContractPool(contract_conn)
-    update = _make_update_with_text("/tasks", chat_id=5501)
-    context = _make_context(pool)
-    context.user_data = {"jarvis_user_id": user_a_id}
-
-    with patch(
-        "telegram_bot.handlers.commands._auth.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, user_a_id),
-    ):
-        await tasks_command(update, context)
-
-    update.message.reply_text.assert_awaited_once()
-    reply_text: str = update.message.reply_text.call_args[0][0]
-
-    # User A's task must appear
-    assert A_TASK_TITLE in reply_text, (
-        f"Expected user A task title in /tasks reply; got: {reply_text!r}"
-    )
-    # User B's task must NOT appear (scoping enforcement)
-    assert "task-b" not in reply_text.lower(), (
-        f"User B task must not appear in user A /tasks reply; got: {reply_text!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# A237: done_command — task state mutation through ProjectManager
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_a237_done_command_marks_task_done_in_db(contract_conn, contract_two_users):
-    """Covers map row A237: done_command calls pm.complete_task which updates
-    tasks.status to 'done' and upserts daily_log atomically.
-    Verified: services/telegram_bot/telegram_bot/handlers/commands/task_commands.py:75 at HEAD.
-    """
-    from unittest.mock import patch
-
-    from telegram_bot.handlers.commands.task_commands import done_command
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    user_a_id = contract_two_users.user_a_id
-    task_id_a = contract_two_users.task_id_a
-
-    # Ensure task starts as in_progress
-    await contract_conn.execute(
-        "UPDATE tasks SET status = 'in_progress', completed_at = NULL WHERE id = $1", task_id_a
-    )
-
-    pool = TgContractPool(contract_conn)
-    update = _make_update_with_text(f"/done {task_id_a}", chat_id=6601)
-    context = _make_context(pool, args=[str(task_id_a)])
-    context.user_data = {"jarvis_user_id": user_a_id}
-
-    with patch(
-        "telegram_bot.handlers.commands._auth.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, user_a_id),
-    ):
-        await done_command(update, context)
-
-    # THEN: task status is 'done' in DB
-    row = await contract_conn.fetchrow(
-        "SELECT status, completed_at FROM tasks WHERE id = $1", task_id_a
-    )
-    assert row is not None
-    assert row["status"] == "done", f"Expected status='done'; got: {row['status']!r}"
-    assert row["completed_at"] is not None, "completed_at must be set after done_command"
-
-    # PTB boundary: success reply
-    update.message.reply_text.assert_awaited_once()
-    reply_text: str = update.message.reply_text.call_args[0][0]
-    assert "done" in reply_text.lower(), f"Expected 'done' in reply; got: {reply_text!r}"
-
-
-# ---------------------------------------------------------------------------
-# A238: projects_command — project list scoped to user
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_a238_projects_command_returns_user_scoped_projects(
-    contract_conn, contract_two_users
-):
-    """Covers map row A238: projects_command queries projects WHERE user_id IS NOT
-    DISTINCT FROM $1, so user B's projects do not leak into user A's response.
-    Verified: services/telegram_bot/telegram_bot/handlers/commands/project_commands.py:32 at HEAD.
-    """
-    from unittest.mock import patch
-
-    from jarvis_common.testing import A_PROJECT_NAME
-    from telegram_bot.handlers.commands.project_commands import projects_command
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    user_a_id = contract_two_users.user_a_id
-    project_id_a = contract_two_users.project_id_a
-
-    # Ensure project is 'active'
-    await contract_conn.execute("UPDATE projects SET status = 'active' WHERE id = $1", project_id_a)
-
-    pool = TgContractPool(contract_conn)
-    update = _make_update_with_text("/projects", chat_id=7701)
-    context = _make_context(pool)
-    context.user_data = {"jarvis_user_id": user_a_id}
-
-    with patch(
-        "telegram_bot.handlers.commands._auth.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, user_a_id),
-    ):
-        await projects_command(update, context)
-
-    # At least one reply sent for the project
-    assert update.message.reply_text.await_count >= 1, (
-        "Expected at least one reply_text call for projects"
-    )
-
-    # Aggregate all reply texts
-    all_texts = " ".join(call[0][0] for call in update.message.reply_text.call_args_list)
-    assert A_PROJECT_NAME in all_texts, (
-        f"Expected user A project name in /projects reply; got: {all_texts!r}"
-    )
-    assert "project-b" not in all_texts.lower(), (
-        f"User B project must not appear in user A /projects reply; got: {all_texts!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# A239: newproject_command — LE POST + DB row persistence
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_a239_newproject_command_persists_project_row(contract_conn, contract_two_users):
-    """Covers map row A239: newproject_command calls pm.create_project which
-    INSERTs a new row into projects scoped to the calling user.
-    Verified: services/telegram_bot/telegram_bot/handlers/commands/project_commands.py:81 at HEAD.
-    """
-    from unittest.mock import patch
-
-    from telegram_bot.handlers.commands.project_commands import newproject_command
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    user_a_id = contract_two_users.user_a_id
-    project_name = "A239-Contract-NewProject"
-
-    pool = TgContractPool(contract_conn)
-    update = _make_update_with_text(f"/newproject {project_name}", chat_id=8801)
-    context = _make_context(pool, args=[project_name])
-    context.user_data = {"jarvis_user_id": user_a_id}
-
-    with patch(
-        "telegram_bot.handlers.commands._auth.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, user_a_id),
-    ):
-        await newproject_command(update, context)
-
-    # THEN: projects row exists in DB for user A
-    row = await contract_conn.fetchrow(
-        "SELECT id, name, user_id, status FROM projects WHERE name = $1 AND user_id = $2",
-        project_name,
-        user_a_id,
-    )
-    assert row is not None, f"projects row for '{project_name}' must exist after newproject_command"
-    assert row["status"] == "active", f"Expected status='active'; got: {row['status']!r}"
-
-    # PTB boundary: success reply with project ID
-    update.message.reply_text.assert_awaited_once()
-    reply_text: str = update.message.reply_text.call_args[0][0]
-    assert project_name in reply_text, f"Expected project name in reply; got: {reply_text!r}"
-
-
-# ---------------------------------------------------------------------------
-# A246: project_detail_callback — project DB read scoped to user
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_a246_project_detail_callback_reads_project_scoped_to_user(
-    contract_conn, contract_two_users
-):
-    """Covers map row A246: project_detail_callback reads project row WHERE
-    id=$1 AND user_id IS NOT DISTINCT FROM $2; user B cannot view user A's project.
-    Verified: services/telegram_bot/telegram_bot/handlers/callback_handler.py:211 at HEAD.
-    """
-    from unittest.mock import patch
-
-    from telegram_bot.handlers.callback_handler import project_detail_callback
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    user_a_id = contract_two_users.user_a_id
-    user_b_id = contract_two_users.user_b_id
-    project_id_a = contract_two_users.project_id_a
-
-    pool = TgContractPool(contract_conn)
-    from jarvis_common.testing import make_bot_config
-
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
-
-    # Build callback update for user A (can see own project)
-    update_a = _make_callback_update(chat_id=9901, callback_data=f"project_detail_{project_id_a}")
-    context_a = _make_context(pool, config)
-
-    with patch(
-        "telegram_bot.handlers.callback_handler.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, user_a_id),
-    ):
-        await project_detail_callback(update_a, context_a)
-
-    # H1: query.answer called once
-    update_a.callback_query.answer.assert_awaited_once()
-    # Project detail reply sent
-    update_a.callback_query.message.reply_text.assert_awaited_once()
-    from jarvis_common.testing import A_PROJECT_NAME
-
-    reply_text_a: str = update_a.callback_query.message.reply_text.call_args[0][0]
-    assert A_PROJECT_NAME in reply_text_a, (
-        f"Expected user A project name in callback reply; got: {reply_text_a!r}"
-    )
-
-    # User B must NOT see user A's project (scoping enforcement)
-    update_b = _make_callback_update(chat_id=9902, callback_data=f"project_detail_{project_id_a}")
-    context_b = _make_context(pool, config)
-
-    with patch(
-        "telegram_bot.handlers.callback_handler.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, user_b_id),
-    ):
-        await project_detail_callback(update_b, context_b)
-
-    # User B gets a "not found" reply (project is scoped to user A)
-    update_b.callback_query.message.reply_text.assert_awaited_once()
-    reply_text_b: str = update_b.callback_query.message.reply_text.call_args[0][0]
-    assert "not found" in reply_text_b.lower(), (
-        f"Expected 'not found' when user B queries user A's project; got: {reply_text_b!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# A247: task_done_callback — task done mutation via ProjectManager
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_a247_task_done_callback_marks_task_done_in_db(contract_conn, contract_two_users):
-    """Covers map row A247: task_done_callback calls pm.complete_task via
-    ProjectManager, updating tasks.status to 'done' and upserting daily_log.
-    User B cannot mark user A's task done (user_id scoping).
-    Verified: services/telegram_bot/telegram_bot/handlers/callback_handler.py:307 at HEAD.
-    """
-    from unittest.mock import patch
-
-    from telegram_bot.handlers.callback_handler import task_done_callback
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    user_a_id = contract_two_users.user_a_id
-    task_id_a = contract_two_users.task_id_a
-
-    # Ensure task starts as in_progress
-    await contract_conn.execute(
-        "UPDATE tasks SET status = 'in_progress', completed_at = NULL WHERE id = $1", task_id_a
-    )
-
-    pool = TgContractPool(contract_conn)
-    from jarvis_common.testing import make_bot_config
-
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
-    update = _make_callback_update(chat_id=11001, callback_data=f"task_done_{task_id_a}")
-    context = _make_context(pool, config)
-
-    with patch(
-        "telegram_bot.handlers.callback_handler.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, user_a_id),
-    ):
-        await task_done_callback(update, context)
-
-    # H1: query.answer called once
-    update.callback_query.answer.assert_awaited_once()
-
-    # THEN: task status is 'done' in DB
-    row = await contract_conn.fetchrow(
-        "SELECT status, completed_at FROM tasks WHERE id = $1", task_id_a
-    )
-    assert row is not None
-    assert row["status"] == "done", f"Expected status='done'; got: {row['status']!r}"
-    assert row["completed_at"] is not None, "completed_at must be set after task_done_callback"
-
-    # PTB boundary: success reply
-    update.callback_query.message.reply_text.assert_awaited_once()
-    reply_text: str = update.callback_query.message.reply_text.call_args[0][0]
-    assert "done" in reply_text.lower(), f"Expected 'done' in reply; got: {reply_text!r}"
-
-
-@pytest.mark.contract
-@pytest.mark.asyncio(loop_scope="session")
-async def test_a247b_task_done_callback_null_user_cannot_complete_scoped_task(
-    contract_conn, contract_two_users
-):
-    """TG-SEC-03 (live PG): defence-in-depth. auth_check can no longer return
-    (True, None) — pairing is the sole identity mechanism — but we still force
-    that (impossible) result here to prove the callback's own consumer-side
-    ownership pre-check holds. Before the fix, complete_task(user_id=None) whose
-    ``$2 IS NULL`` clause is a catch-all that matches any task by id — a
-    cross-tenant write. The pre-check (user_id IS NOT DISTINCT FROM $2) denies
-    it: task_id_a is owned by user_a (non-NULL), so ``IS NOT DISTINCT FROM
-    NULL`` does not match → "not found", task left untouched.
-    """
-    from unittest.mock import patch
-
-    from telegram_bot.handlers.callback_handler import task_done_callback
-    from telegram_bot.handlers.rate_limit import _timestamps
-
-    _timestamps.clear()
-
-    task_id_a = contract_two_users.task_id_a  # owned by user_a_id (non-NULL)
-
-    await contract_conn.execute(
-        "UPDATE tasks SET status = 'in_progress', completed_at = NULL WHERE id = $1", task_id_a
-    )
-
-    pool = TgContractPool(contract_conn)
-    from jarvis_common.testing import make_bot_config
-
-    config = make_bot_config(BotConfig, telegram_chat_id=None)
-    update = _make_callback_update(chat_id=11002, callback_data=f"task_done_{task_id_a}")
-    context = _make_context(pool, config)
-
-    with patch(
-        "telegram_bot.handlers.callback_handler.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, None),  # forced impossible state — exercises consumer-side defence
-    ):
-        await task_done_callback(update, context)
-
-    # The task remains in_progress — a NULL-user caller could NOT complete user A's task.
-    row = await contract_conn.fetchrow(
-        "SELECT status, completed_at FROM tasks WHERE id = $1", task_id_a
-    )
-    assert row is not None
-    assert row["status"] == "in_progress", (
-        f"TG-SEC-03 leak: NULL-user caller completed a scoped task; status={row['status']!r}"
-    )
-    assert row["completed_at"] is None, "completed_at must stay NULL — task was not completed"
-
-    update.callback_query.message.reply_text.assert_awaited_once()
-    reply_text: str = update.callback_query.message.reply_text.call_args[0][0]
-    assert "not found" in reply_text.lower(), (
-        f"Expected 'not found' for the denied legacy-owner completion; got: {reply_text!r}"
-    )
 
 
 # ---------------------------------------------------------------------------

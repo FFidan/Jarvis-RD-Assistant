@@ -7,6 +7,7 @@ import asyncpg
 import httpx
 from telegram import Bot
 
+from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import escape, truncate
 
@@ -27,9 +28,9 @@ async def _send_deadline_warning(
     chat_id : int
         Target Telegram chat ID.
     milestones : list
-        asyncpg records with name, deadline, project_name.
+        Milestone dicts with name, deadline, project_name.
     """
-    lines = ["\u26a0\ufe0f <b>Deadline Warning</b>\n"]
+    lines = ["⚠️ <b>Deadline Warning</b>\n"]
     now = datetime.now(UTC)
 
     capped = milestones[:10]
@@ -59,50 +60,6 @@ async def _send_deadline_warning(
         logger.exception("Failed to send deadline warning to chat_id=%d", chat_id)
 
 
-async def _fetch_milestones_for_user(
-    db_pool: asyncpg.Pool,
-    user_id: int | None,
-) -> list:
-    """Fetch milestones due in the next 3 days, scoped to *user_id*.
-
-    When *user_id* is ``None`` (legacy single-tenant mode), returns all
-    upcoming milestones regardless of ownership.
-
-    Parameters
-    ----------
-    db_pool : asyncpg.Pool
-        Database connection pool.
-    user_id : int or None
-        DB user PK to scope the query; ``None`` = unscoped legacy mode.
-
-    Returns
-    -------
-    list
-        asyncpg records with name, deadline, project_name.
-    """
-    if user_id is not None:
-        return await db_pool.fetch(
-            """SELECT m.name, m.deadline, p.name as project_name
-            FROM milestones m
-            JOIN projects p ON m.project_id = p.id
-            WHERE m.completed = FALSE
-              AND m.deadline <= NOW() + INTERVAL '3 days'
-              AND m.deadline > NOW()
-              AND m.user_id IS NOT DISTINCT FROM $1
-            ORDER BY m.deadline""",
-            user_id,
-        )
-    return await db_pool.fetch(
-        """SELECT m.name, m.deadline, p.name as project_name
-        FROM milestones m
-        JOIN projects p ON m.project_id = p.id
-        WHERE m.completed = FALSE
-          AND m.deadline <= NOW() + INTERVAL '3 days'
-          AND m.deadline > NOW()
-        ORDER BY m.deadline"""
-    )
-
-
 async def run_deadline_warning(
     http_client: httpx.AsyncClient,
     db_pool: asyncpg.Pool,
@@ -112,15 +69,17 @@ async def run_deadline_warning(
     """Send warnings for milestones due in the next 3 days.
 
     Iterates ``telegram_user_pairings`` and delivers per-user warnings scoped
-    to each user's own milestones.  Skips with a warning when no pairings
-    exist.
+    to each user's own milestones (fetched via ``services_client``).  Skips
+    with a warning when no pairings exist.  ``db_pool`` is used only to list
+    pairings; each pairing's REST fetch is wrapped so one user's backend error
+    does not abort the whole run.
 
     Parameters
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
     db_pool : asyncpg.Pool
-        Database connection pool.
+        Database connection pool (used only to list pairings).
     bot : Bot
         Telegram bot instance.
     config : BotConfig
@@ -136,7 +95,17 @@ async def run_deadline_warning(
         return
 
     for pairing in pairings:
-        milestones = await _fetch_milestones_for_user(db_pool, pairing.user_id)
+        try:
+            milestones = await services_client.fetch_upcoming_milestones(
+                http_client, config, pairing.user_id, within_days=3
+            )
+        except Exception:
+            logger.exception(
+                "Failed to fetch upcoming milestones for user_id=%s (chat_id=%d)",
+                pairing.user_id,
+                pairing.chat_id,
+            )
+            continue
         if not milestones:
             logger.info(
                 "No upcoming deadlines for user_id=%s (chat_id=%d)",

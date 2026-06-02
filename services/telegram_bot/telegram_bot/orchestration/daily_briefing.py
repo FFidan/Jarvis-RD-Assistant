@@ -6,9 +6,9 @@ import asyncpg
 import httpx
 from telegram import Bot
 
+from telegram_bot import services_client
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_morning_briefing
-from telegram_bot.handlers.helpers import _owner_headers
 
 logger = logging.getLogger(__name__)
 
@@ -19,110 +19,40 @@ async def _run_briefing_for_chat(
     bot: Bot,
     config: BotConfig,
     chat_id: int,
-    user_id: int | None = None,
+    user_id: int,
 ) -> None:
     """Send the daily briefing to a single chat.
+
+    All product data is gathered via ``services_client`` (REST), the same
+    gather the ``/briefing`` command uses.  ``db_pool`` is unused here (the
+    scheduler dispatches every orchestrator with the canonical
+    ``(http_client, db_pool, bot, config)`` contract).
 
     Parameters
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
     db_pool : asyncpg.Pool
-        Database connection pool.
+        Unused — kept for the scheduler's orchestrator contract.
     bot : Bot
         Telegram bot instance.
     config : BotConfig
         Bot configuration.
     chat_id : int
         Target Telegram chat ID.
-    user_id : int | None
-        DB user PK for scoping paper queries. None = single-tenant (matches NULL rows).
+    user_id : int
+        DB user PK for scoping all per-user queries.
     """
-    async with db_pool.acquire() as conn:
-        # New papers in the last 24 hours — scoped to the user's library when
-        # user_id is set (canonical-corpus model: membership lives in
-        # user_library, not papers.user_id).  Falls back to a sitewide count
-        # for legacy single-tenant mode (user_id=None).
-        if user_id is not None:
-            row = await conn.fetchrow(
-                """SELECT COUNT(*) AS count
-                   FROM papers p
-                   JOIN user_library ul ON ul.paper_id = p.id
-                   WHERE ul.user_id = $1
-                     AND p.created_at >= NOW() - INTERVAL '24 hours'""",
-                user_id,
-            )
-        else:
-            row = await conn.fetchrow(
-                "SELECT COUNT(*) AS count FROM papers"
-                " WHERE created_at >= NOW() - INTERVAL '24 hours'"
-            )
-        new_papers_count = row["count"] if row else 0
-
-        # In-progress tasks — scoped by user_id when available
-        if user_id is not None:
-            tasks = await conn.fetch(
-                """SELECT t.title, p.name as project_name
-                FROM tasks t
-                LEFT JOIN projects p ON t.project_id = p.id
-                WHERE t.status = 'in_progress'
-                  AND t.user_id IS NOT DISTINCT FROM $1
-                ORDER BY t.priority
-                LIMIT 10""",
-                user_id,
-            )
-        else:
-            tasks = await conn.fetch(
-                """SELECT t.title, p.name as project_name
-                FROM tasks t
-                LEFT JOIN projects p ON t.project_id = p.id
-                WHERE t.status = 'in_progress'
-                ORDER BY t.priority
-                LIMIT 10"""
-            )
-
-        # Upcoming milestones (next 7 days) — scoped to the user's milestones
-        # via milestones.user_id (migration 066).  NULL milestones are system-
-        # shared and visible to all users in single-tenant mode.
-        if user_id is not None:
-            milestones = await conn.fetch(
-                """SELECT m.name, m.deadline, p.name as project_name
-                FROM milestones m
-                LEFT JOIN projects p ON m.project_id = p.id
-                WHERE m.completed = FALSE
-                  AND m.deadline <= NOW() + INTERVAL '7 days'
-                  AND m.user_id IS NOT DISTINCT FROM $1
-                ORDER BY m.deadline""",
-                user_id,
-            )
-        else:
-            milestones = await conn.fetch(
-                """SELECT m.name, m.deadline, p.name as project_name
-                FROM milestones m
-                LEFT JOIN projects p ON m.project_id = p.id
-                WHERE m.completed = FALSE AND m.deadline <= NOW() + INTERVAL '7 days'
-                ORDER BY m.deadline"""
-            )
-
-    # Due cards from learning engine
-    due_cards = 0
-    try:
-        resp = await http_client.get(
-            f"{config.learning_engine_url}/api/stats",
-            headers=_owner_headers(config, user_id),
-        )
-        resp.raise_for_status()
-        stats = resp.json()
-        due_cards = stats.get("due_now", 0)
-    except (httpx.HTTPError, KeyError, ValueError):
-        logger.warning("Could not fetch learning engine stats")
-
-    message = format_morning_briefing(
-        new_papers_count,
-        due_cards,
-        [dict(t) for t in tasks],
-        [dict(m) for m in milestones],
+    new_papers_count = await services_client.fetch_new_paper_count(http_client, config, user_id)
+    due_cards = await services_client.fetch_due_card_count(http_client, config, user_id)
+    tasks = await services_client.fetch_tasks(
+        http_client, config, user_id, status="in_progress", limit=10
     )
+    milestones = await services_client.fetch_upcoming_milestones(
+        http_client, config, user_id, within_days=7
+    )
+
+    message = format_morning_briefing(new_papers_count, due_cards, tasks, milestones)
 
     try:
         await bot.send_message(chat_id=chat_id, text=message, parse_mode="HTML")
@@ -140,14 +70,15 @@ async def run_daily_briefing(
     """Send a combined morning briefing with papers, cards, and tasks.
 
     Iterates ``telegram_user_pairings`` and delivers per-user briefings.
-    Skips with a warning when no pairings exist.
+    Skips with a warning when no pairings exist.  Each pairing's REST gather
+    is wrapped so one user's backend error does not abort the whole run.
 
     Parameters
     ----------
     http_client : httpx.AsyncClient
         Shared HTTP client.
     db_pool : asyncpg.Pool
-        Database connection pool.
+        Database connection pool (used only to list pairings).
     bot : Bot
         Telegram bot instance.
     config : BotConfig
@@ -163,6 +94,14 @@ async def run_daily_briefing(
         return
 
     for pairing in pairings:
-        await _run_briefing_for_chat(
-            http_client, db_pool, bot, config, pairing.chat_id, pairing.user_id
-        )
+        try:
+            await _run_briefing_for_chat(
+                http_client, db_pool, bot, config, pairing.chat_id, pairing.user_id
+            )
+        except Exception:
+            logger.exception(
+                "Failed to build daily briefing for user_id=%s (chat_id=%d)",
+                pairing.user_id,
+                pairing.chat_id,
+            )
+            continue

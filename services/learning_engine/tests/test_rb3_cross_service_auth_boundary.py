@@ -7,21 +7,33 @@ header-authenticated owner is honored — a session-only resolver would 401 the
 bot.
 
 Conversely, the LE routers the Telegram bot never reaches per-user
-(``cards``, ``tasks``, ``analytics``, ``decks``, …) are intentionally left on
-session-only ``current_user_id_strict``. Converting them would add an unused
-header-spoofing surface with no caller to justify it. The session-only choice
-is *by design*, not a gap — this file pins that intent.
+(``cards``, ``analytics``, ``decks``, …) are intentionally left on session-only
+``current_user_id_strict``. Converting them would add an unused header-spoofing
+surface with no caller to justify it. The session-only choice is *by design*,
+not a gap — this file pins that intent. The DELETE task/project handlers also
+stay session-only on purpose (pinned below to guard against accidental
+widening alongside their read/update siblings).
 
-Telegram→LE call sites (grounded at HEAD 2026-05-17):
-- ``GET  /api/review/next``         -> review.get_next_review
+Telegram→LE call sites (grounded at HEAD 2026-06-02):
+- ``GET  /api/review/next``           -> review.get_next_review
   (services/telegram_bot/.../handlers/review_handler.py)
-- ``POST /api/review/{card_id:int}`` -> review.submit_review
+- ``POST /api/review/{card_id:int}``  -> review.submit_review
   (services/telegram_bot/.../handlers/review_handler.py)
-- ``GET  /api/stats``               -> review.get_stats
+- ``GET  /api/stats``                 -> review.get_stats
   (services/telegram_bot/.../handlers/commands/paper_commands.py,
    orchestration/daily_briefing.py, orchestration/review_reminder.py)
-- ``POST /api/executive/focus/log`` -> executive.log_focus_session
+- ``POST /api/executive/focus/log``   -> executive.log_focus_session
   (services/telegram_bot/.../handlers/commands/system_commands.py)
+- ``GET  /api/projects``              -> projects.list_projects
+- ``POST /api/projects``              -> projects.create_project
+- ``GET  /api/projects/{id}``         -> projects.get_project
+- ``GET  /api/projects/{id}/tasks``   -> tasks.list_tasks
+- ``PUT  /api/tasks/{id}``            -> tasks.update_task
+- ``GET  /api/tasks``                 -> tasks.list_all_tasks (cross-project)
+- ``GET  /api/projects/{id}/milestones`` -> milestones.list_milestones
+- ``GET  /api/milestones/upcoming``   -> milestones.list_upcoming_milestones
+  (the project/task/milestone group is reached by the Telegram bot per-user
+   with X-Owner-User-Id once the REST-decoupling lands.)
 
 The handlers carry an ``@limiter.limit`` decorator, so the undecorated
 function is reached via ``.__wrapped__`` (mirrors test_review_sync.py).
@@ -36,7 +48,7 @@ from jarvis_common.auth import (
     current_user_id_strict,
     current_user_id_strict_with_owner_override,
 )
-from learning_engine.routers import cards, executive, review
+from learning_engine.routers import cards, executive, milestones, projects, review, tasks
 
 
 def _user_id_dep(func):
@@ -151,3 +163,93 @@ def test_get_my_day_bundle_uses_owner_override_resolver() -> None:
         _user_id_dep(executive.get_my_day_bundle).dependency
         is current_user_id_strict_with_owner_override
     )
+
+
+# ---------------------------------------------------------------------------
+# T8: project/task/milestone read+update endpoints — owner-override pinned
+# (Telegram REST-decoupling reaches these per-user with X-Owner-User-Id)
+# ---------------------------------------------------------------------------
+
+
+def test_list_projects_uses_owner_override_resolver() -> None:
+    """GET /api/projects must honor X-Owner-User-Id for the Telegram bot."""
+    assert (
+        _user_id_dep(projects.list_projects).dependency
+        is current_user_id_strict_with_owner_override
+    )
+
+
+def test_create_project_uses_owner_override_resolver() -> None:
+    """POST /api/projects must honor X-Owner-User-Id for the Telegram bot."""
+    assert (
+        _user_id_dep(projects.create_project).dependency
+        is current_user_id_strict_with_owner_override
+    )
+
+
+def test_get_project_uses_owner_override_resolver() -> None:
+    """GET /api/projects/{id} must honor X-Owner-User-Id for the Telegram bot."""
+    assert (
+        _user_id_dep(projects.get_project).dependency is current_user_id_strict_with_owner_override
+    )
+
+
+def test_list_tasks_uses_owner_override_resolver() -> None:
+    """GET /api/projects/{id}/tasks must honor X-Owner-User-Id for the Telegram bot."""
+    assert _user_id_dep(tasks.list_tasks).dependency is current_user_id_strict_with_owner_override
+
+
+def test_update_task_uses_owner_override_resolver() -> None:
+    """PUT /api/tasks/{id} must honor X-Owner-User-Id (bot marks tasks done)."""
+    assert _user_id_dep(tasks.update_task).dependency is current_user_id_strict_with_owner_override
+
+
+def test_list_all_tasks_uses_owner_override_resolver() -> None:
+    """GET /api/tasks (cross-project) must honor X-Owner-User-Id for the Telegram bot."""
+    assert (
+        _user_id_dep(tasks.list_all_tasks).dependency is current_user_id_strict_with_owner_override
+    )
+
+
+def test_list_milestones_uses_owner_override_resolver() -> None:
+    """GET /api/projects/{id}/milestones must honor X-Owner-User-Id for the Telegram bot."""
+    assert (
+        _user_id_dep(milestones.list_milestones).dependency
+        is current_user_id_strict_with_owner_override
+    )
+
+
+def test_list_upcoming_milestones_uses_owner_override_resolver() -> None:
+    """GET /api/milestones/upcoming must honor X-Owner-User-Id for the Telegram bot."""
+    assert (
+        _user_id_dep(milestones.list_upcoming_milestones).dependency
+        is current_user_id_strict_with_owner_override
+    )
+
+
+# ---------------------------------------------------------------------------
+# T8: DELETE endpoints stay session-only by design — guard against accidental
+# widening when their read/update siblings were converted to owner-override.
+# ---------------------------------------------------------------------------
+
+
+def test_delete_task_is_session_only_by_design() -> None:
+    """DELETE /api/tasks/{id} is NOT widened — no Telegram caller deletes tasks.
+
+    Leaving it session-only keeps a destructive operation off the
+    X-Owner-User-Id surface. Fails loudly if a future change widens it.
+    """
+    dep = _user_id_dep(tasks.delete_task)
+    assert dep.dependency is current_user_id_strict
+    assert dep.dependency is not current_user_id_strict_with_owner_override
+
+
+def test_delete_project_is_session_only_by_design() -> None:
+    """DELETE /api/projects/{id} is NOT widened — no Telegram caller deletes projects.
+
+    Leaving it session-only keeps a destructive (cascading) operation off the
+    X-Owner-User-Id surface. Fails loudly if a future change widens it.
+    """
+    dep = _user_id_dep(projects.delete_project)
+    assert dep.dependency is current_user_id_strict
+    assert dep.dependency is not current_user_id_strict_with_owner_override

@@ -10,11 +10,15 @@ from datetime import UTC, datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import author_matches, delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_strict
+from jarvis_common.auth import (
+    current_user_id_strict,
+    current_user_id_strict_with_owner_override,
+)
 from jarvis_common.db_helpers import record_author_alert
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
+    AuthorAlertMatch,
     AuthorCheckResponse,
     AutoDetectResponse,
     TrackedAuthorCreate,
@@ -225,13 +229,20 @@ async def auto_detect_authors(
 async def check_tracked_authors(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> AuthorCheckResponse:
     """Check tracked authors against recent papers (last 24 hours).
 
     Matches papers by S2 author ID (if available) or normalized name.
     Logs matches in author_alert_log for deduplication.
+
+    The recent-papers scan is GLOBAL: papers are a shared corpus and
+    discovery is topic-driven, not author-driven, so a tracked author's new
+    paper may never be in the caller's library. Per-user scoping stays
+    correct via the tracked_authors query and the per-user author_alert_log
+    dedup. Newly-alerted papers are returned grouped by author in ``matches``
+    so callers (web app + Telegram bot) can render alert cards.
     """
-    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         authors = await conn.fetch(
             "SELECT * FROM tracked_authors"
@@ -239,24 +250,29 @@ async def check_tracked_authors(
             user_id,
         )
         if not authors:
-            return AuthorCheckResponse(new_papers=0, authors_checked=0)
+            return AuthorCheckResponse(new_papers=0, authors_checked=0, matches=[])
 
-        # Fetch papers from the last 24 hours scoped to the caller's library
+        # Fetch papers from the last 24 hours across the whole shared corpus.
+        # Columns selected are exactly what the bot's format_paper_card consumes
+        # (NULL-tolerant); tldr/summary_brief live on paper_summaries, not papers,
+        # and are rendered as empty by the card when absent.
         recent_papers = await conn.fetch(
-            """SELECT p.id, p.authors, p.metadata
+            """SELECT p.id, p.title, p.authors, p.published_date,
+                      p.source_type, p.url, p.metadata
             FROM papers p
-            JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
             WHERE p.created_at >= NOW() - INTERVAL '24 hours'""",
-            user_id,
         )
 
         total_new = 0
+        matches: list[AuthorAlertMatch] = []
 
         async with conn.transaction():
             for author_row in authors:
                 author_id = author_row["id"]
                 tracked_name = author_row["author_name"]
                 s2_id = author_row["s2_author_id"]
+
+                new_papers_for_author: list[dict] = []
 
                 for paper in recent_papers:
                     paper_id = paper["id"]
@@ -292,6 +308,26 @@ async def check_tracked_authors(
                         )
                         if was_new:
                             total_new += 1
+                            # Carry the format_paper_card keys (NULL-tolerant).
+                            new_papers_for_author.append(
+                                {
+                                    "id": paper_id,
+                                    "title": paper["title"],
+                                    "authors": list(paper_authors),
+                                    "published_date": paper["published_date"],
+                                    "source_type": paper["source_type"],
+                                    "url": paper["url"],
+                                    "metadata": paper_metadata,
+                                }
+                            )
+
+                if new_papers_for_author:
+                    matches.append(
+                        AuthorAlertMatch(
+                            author_name=tracked_name,
+                            papers=new_papers_for_author,
+                        )
+                    )
 
                 # Update last_checked_at
                 await conn.execute(
@@ -302,4 +338,8 @@ async def check_tracked_authors(
                     user_id,
                 )
 
-    return AuthorCheckResponse(new_papers=total_new, authors_checked=len(authors))
+    return AuthorCheckResponse(
+        new_papers=total_new,
+        authors_checked=len(authors),
+        matches=matches,
+    )

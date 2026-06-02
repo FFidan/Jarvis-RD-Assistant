@@ -188,6 +188,31 @@ async def test_update_task_user_b_gets_404(contract_two_users, _le_app, _configu
     )
 
 
+async def test_update_task_cross_tenant_returns_404(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """User B's PUT against user A's task → 404, and A's row is unchanged.
+
+    Even though update_task now resolves identity via the owner-override
+    resolver, the ``WHERE id = $1 AND user_id = $2`` ownership filter still
+    scopes the session-authenticated caller (user B) to their own rows.
+    """
+    task_id = contract_two_users.task_id_a
+    before = await contract_conn.fetchval("SELECT title FROM tasks WHERE id = $1", task_id)
+
+    async with _client(_le_app, contract_two_users.cookie_b) as c:
+        resp = await c.put(f"/api/tasks/{task_id}", json={"title": "ZZZ-CROSS-TENANT-HIJACK"})
+
+    assert resp.status_code == 404, (
+        f"cross-tenant: user B got {resp.status_code} updating user A's task {task_id} "
+        f"(expected 404). Body: {resp.text[:300]}"
+    )
+    after = await contract_conn.fetchval("SELECT title FROM tasks WHERE id = $1", task_id)
+    assert after == before, (
+        f"cross-tenant write leaked: task {task_id} title changed from {before!r} to {after!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # §A224 — DELETE /api/tasks/{id} — owner delete; 404 for non-owner
 # ---------------------------------------------------------------------------
@@ -315,3 +340,193 @@ async def test_unlink_paper_non_owner_task_gets_404(
         f"IDOR: user B got {resp.status_code} unlinking paper from user A's task "
         f"{task_id_a} (expected 404). Body: {resp.text[:300]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# BUG-1 (S8) — PUT /api/tasks/{id} status→done bumps daily_log.tasks_completed
+# update_task is the sole writer of daily_log.tasks_completed.
+# ---------------------------------------------------------------------------
+
+
+async def _mark_done(le_app, cookie: str, task_id: int):
+    async with _client(le_app, cookie) as c:
+        return await c.put(f"/api/tasks/{task_id}", json={"status": "done"})
+
+
+async def test_status_to_done_increments_daily_log(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """First todo→done transition today inserts daily_log with tasks_completed=1."""
+    task_id = contract_two_users.task_id_a
+    resp = await _mark_done(_le_app, contract_two_users.cookie_a, task_id)
+    assert resp.status_code == 200, f"mark-done failed: {resp.status_code}: {resp.text[:300]}"
+
+    count = await contract_conn.fetchval(
+        "SELECT tasks_completed FROM daily_log WHERE user_id = $1 AND log_date = CURRENT_DATE",
+        contract_two_users.user_a_id,
+    )
+    assert count == 1, f"expected tasks_completed=1 after one done transition, got {count!r}"
+
+
+async def test_second_done_same_day_increments_to_two(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """A second distinct task→done the same day bumps the counter to 2 (ON CONFLICT path)."""
+    task_id_1 = contract_two_users.task_id_a
+    task_id_2 = await contract_conn.fetchval(
+        "INSERT INTO tasks (project_id, title, status, user_id) "
+        "VALUES ($1, 'Second task', 'todo', $2) RETURNING id",
+        contract_two_users.project_id_a,
+        contract_two_users.user_a_id,
+    )
+
+    r1 = await _mark_done(_le_app, contract_two_users.cookie_a, task_id_1)
+    r2 = await _mark_done(_le_app, contract_two_users.cookie_a, task_id_2)
+    assert r1.status_code == 200 and r2.status_code == 200
+
+    count = await contract_conn.fetchval(
+        "SELECT tasks_completed FROM daily_log WHERE user_id = $1 AND log_date = CURRENT_DATE",
+        contract_two_users.user_a_id,
+    )
+    assert count == 2, f"expected tasks_completed=2 after two done transitions, got {count!r}"
+
+
+async def test_redone_already_done_task_does_not_increment(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """Re-PUT status=done on an already-done task must NOT double-count (idempotent guard)."""
+    task_id = contract_two_users.task_id_a
+    first = await _mark_done(_le_app, contract_two_users.cookie_a, task_id)
+    assert first.status_code == 200
+    # Second PUT: existing status is already 'done' → guard suppresses the bump.
+    second = await _mark_done(_le_app, contract_two_users.cookie_a, task_id)
+    assert second.status_code == 200
+
+    count = await contract_conn.fetchval(
+        "SELECT tasks_completed FROM daily_log WHERE user_id = $1 AND log_date = CURRENT_DATE",
+        contract_two_users.user_a_id,
+    )
+    assert count == 1, f"re-PUT of already-done task double-counted: expected 1, got {count!r}"
+
+
+async def test_done_with_null_tasks_completed_coalesces_to_one(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """An existing daily_log row with NULL tasks_completed becomes 1, not NULL (COALESCE path)."""
+    # Seed today's row with an explicit NULL counter (column is nullable).
+    await contract_conn.execute(
+        "INSERT INTO daily_log (user_id, log_date, tasks_completed) "
+        "VALUES ($1, CURRENT_DATE, NULL)",
+        contract_two_users.user_a_id,
+    )
+    task_id = contract_two_users.task_id_a
+    resp = await _mark_done(_le_app, contract_two_users.cookie_a, task_id)
+    assert resp.status_code == 200
+
+    count = await contract_conn.fetchval(
+        "SELECT tasks_completed FROM daily_log WHERE user_id = $1 AND log_date = CURRENT_DATE",
+        contract_two_users.user_a_id,
+    )
+    assert count == 1, f"COALESCE path failed: expected 1 from NULL+1, got {count!r}"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/tasks — cross-project task list (owner-scoped, LEFT JOIN project_name)
+# ---------------------------------------------------------------------------
+
+
+async def test_list_all_tasks_in_progress_across_projects_scoped_to_caller(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """?status=in_progress returns only A's in-progress tasks across all A's
+    projects, each carrying its project_name; never leaks user B's tasks."""
+    # A second project for user A, plus one in_progress task in each project.
+    project_id_a2 = await contract_conn.fetchval(
+        "INSERT INTO projects (name, user_id) VALUES ('A-second-project', $1) RETURNING id",
+        contract_two_users.user_a_id,
+    )
+    t_a1 = await contract_conn.fetchval(
+        "INSERT INTO tasks (project_id, title, status, user_id) "
+        "VALUES ($1, 'A inprog 1', 'in_progress', $2) RETURNING id",
+        contract_two_users.project_id_a,
+        contract_two_users.user_a_id,
+    )
+    t_a2 = await contract_conn.fetchval(
+        "INSERT INTO tasks (project_id, title, status, user_id) "
+        "VALUES ($1, 'A inprog 2', 'in_progress', $2) RETURNING id",
+        project_id_a2,
+        contract_two_users.user_a_id,
+    )
+    # User B in_progress task — must not appear.
+    await contract_conn.execute(
+        "INSERT INTO tasks (project_id, title, status, user_id) "
+        "VALUES ($1, 'B inprog', 'in_progress', $2)",
+        contract_two_users.project_id_b,
+        contract_two_users.user_b_id,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/tasks?status=in_progress")
+
+    assert resp.status_code == 200, f"GET /api/tasks failed: {resp.status_code}: {resp.text[:300]}"
+    rows = resp.json()
+    returned_ids = {t["id"] for t in rows}
+    assert {t_a1, t_a2} <= returned_ids, f"missing A's in-progress tasks: {returned_ids}"
+    assert all(t["status"] == "in_progress" for t in rows)
+    # Each carries a non-null project_name (both belong to a project).
+    by_id = {t["id"]: t for t in rows}
+    assert by_id[t_a1]["project_name"] is not None
+    assert by_id[t_a2]["project_name"] == "A-second-project"
+
+
+async def test_list_all_tasks_project_less_task_has_null_project_name(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """A quick-add task with project_id NULL appears via LEFT JOIN with project_name None."""
+    t_null = await contract_conn.fetchval(
+        "INSERT INTO tasks (project_id, title, status, user_id) "
+        "VALUES (NULL, 'Quick add', 'in_progress', $1) RETURNING id",
+        contract_two_users.user_a_id,
+    )
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/tasks?status=in_progress")
+
+    assert resp.status_code == 200
+    by_id = {t["id"]: t for t in resp.json()}
+    assert t_null in by_id, "LEFT JOIN dropped the project-less task"
+    assert by_id[t_null]["project_id"] is None
+    assert by_id[t_null]["project_name"] is None
+
+
+async def test_list_all_tasks_other_users_project_id_returns_empty(
+    contract_two_users, _le_app, _configure_api_key
+):
+    """?project_id pointing at user B's project returns [] for user A (scoped by user_id, no leak)."""
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get(f"/api/tasks?project_id={contract_two_users.project_id_b}")
+
+    assert resp.status_code == 200
+    assert resp.json() == [], "scoping leak: user A saw rows when filtering on user B's project_id"
+
+
+async def test_list_all_tasks_bounds_validation(contract_two_users, _le_app, _configure_api_key):
+    """limit/status bounds: limit=0 → 422, limit=201 → 422, status=bogus → 422."""
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        r_low = await c.get("/api/tasks?limit=0")
+        r_high = await c.get("/api/tasks?limit=201")
+        r_status = await c.get("/api/tasks?status=bogus")
+
+    assert r_low.status_code == 422, f"limit=0 expected 422, got {r_low.status_code}"
+    assert r_high.status_code == 422, f"limit=201 expected 422, got {r_high.status_code}"
+    assert r_status.status_code == 422, f"status=bogus expected 422, got {r_status.status_code}"
+
+
+async def test_list_all_tasks_empty_returns_empty_list(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """A filter matching no rows returns [] (not an error)."""
+    # No 'blocked' tasks seeded for user A.
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/tasks?status=blocked")
+    assert resp.status_code == 200
+    assert resp.json() == []

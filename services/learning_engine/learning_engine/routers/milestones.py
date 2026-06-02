@@ -1,12 +1,20 @@
 """Milestones CRUD router."""
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_strict
+from jarvis_common.auth import (
+    current_user_id_strict,
+    current_user_id_strict_with_owner_override,
+)
 
 from learning_engine.deps import get_db_pool, limiter
-from learning_engine.models import MilestoneCreate, MilestoneResponse, MilestoneUpdate
+from learning_engine.models import (
+    MilestoneCreate,
+    MilestoneDeadlineItem,
+    MilestoneResponse,
+    MilestoneUpdate,
+)
 from learning_engine.routers._guards import assert_project_owner as _assert_project_owner
 
 router = APIRouter(prefix="/api", tags=["milestones"])
@@ -25,7 +33,7 @@ async def list_milestones(
     request: Request,
     project_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> list[MilestoneResponse]:
     """List milestones for a project."""
     async with db_pool.acquire() as conn:
@@ -40,6 +48,41 @@ async def list_milestones(
             user_id,
         )
     return [MilestoneResponse(**dict(row)) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/milestones/upcoming  (cross-project deadline feed)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/milestones/upcoming", response_model=list[MilestoneDeadlineItem])
+@limiter.limit("60/minute")
+async def list_upcoming_milestones(
+    request: Request,
+    within_days: int = Query(default=7, ge=1, le=90),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> list[MilestoneDeadlineItem]:
+    """List the caller's incomplete, future milestones due within ``within_days``.
+
+    Cross-project deadline feed (Telegram daily briefing). Scoped to the caller
+    via ``m.user_id``; ``make_interval`` parameterises the window (no string
+    concat).
+    """
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT m.id, m.name, m.deadline, pr.name AS project_name
+               FROM milestones m
+               JOIN projects pr ON pr.id = m.project_id
+               WHERE m.completed = FALSE
+                 AND m.deadline > NOW()
+                 AND m.deadline <= NOW() + make_interval(days => $1)
+                 AND m.user_id = $2
+               ORDER BY m.deadline""",
+            within_days,
+            user_id,
+        )
+    return [MilestoneDeadlineItem(**dict(row)) for row in rows]
 
 
 # ---------------------------------------------------------------------------

@@ -329,6 +329,9 @@ class TaskResponse(BaseModel):
     completed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # Populated only by the cross-project GET /api/tasks list (LEFT JOIN on
+    # projects). Per-project endpoints leave this None.
+    project_name: str | None = None
 
 
 class MilestoneCreate(BaseModel):
@@ -364,6 +367,20 @@ class MilestoneResponse(BaseModel):
     completed: bool = False
     completed_at: datetime | None = None
     created_at: datetime
+
+
+class MilestoneDeadlineItem(BaseModel):
+    """Flat upcoming-deadline row for GET /api/milestones/upcoming.
+
+    Cross-project deadline feed (e.g. the Telegram daily briefing): carries the
+    parent project's name via a JOIN so callers needn't resolve it separately.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    deadline: datetime
+    project_name: str | None = None
 
 
 class TaskPaperLinkCreate(BaseModel):

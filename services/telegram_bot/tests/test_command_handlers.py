@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.testing import make_bot_config
+from jarvis_common.testing_telegram import make_http_response
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.commands import (  # noqa: E402
@@ -305,25 +306,42 @@ async def test_stats_failure():
 
 @pytest.mark.asyncio
 async def test_briefing_returns_text():
-    """/briefing returns composite morning briefing."""
-    update, context, mock_db, mock_http = _make_update_and_context()
-    # New papers count
-    mock_db.fetchrow.return_value = {"cnt": 3}
-    # Tasks and milestones
-    mock_db.fetch.side_effect = [
-        [{"title": "Task 1", "project_name": "Proj"}],  # tasks
-        [],  # milestones
+    """/briefing returns composite morning briefing assembled from REST gathers."""
+    update, context, _, mock_http = _make_update_and_context()
+    # Briefing issues four GETs in order: new-paper feed, stats (due cards),
+    # tasks, upcoming milestones.
+    mock_http.get.side_effect = [
+        make_http_response({"total": 3}),  # fetch_new_paper_count → feed
+        make_http_response({"due_now": 5}),  # fetch_due_card_count → stats
+        make_http_response([{"title": "Task 1", "project_name": "Proj"}]),  # fetch_tasks
+        make_http_response([]),  # fetch_upcoming_milestones
     ]
-    # Learning engine stats
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"due_now": 5}
-    mock_http.get.return_value = mock_resp
 
     await briefing_command(update, context)
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "Briefing" in text or "briefing" in text.lower()
+    assert "Task 1" in text
+
+
+@pytest.mark.asyncio
+async def test_briefing_partial_degradation_on_milestones_failure():
+    """R7: a failed individual gather leaves that section empty, not the whole briefing."""
+    update, context, _, mock_http = _make_update_and_context()
+    mock_http.get.side_effect = [
+        make_http_response({"total": 1}),  # new-paper count OK
+        make_http_response({"due_now": 2}),  # due cards OK
+        make_http_response([{"title": "Task 1", "project_name": "Proj"}]),  # tasks OK
+        make_http_response(None, status=500),  # milestones fail → 5xx
+    ]
+
+    await briefing_command(update, context)
+
+    # Briefing still sends, with the working sections rendered.
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Briefing" in text or "briefing" in text.lower()
+    assert "Task 1" in text
 
 
 # ---------------------------------------------------------------------------
@@ -334,8 +352,8 @@ async def test_briefing_returns_text():
 @pytest.mark.asyncio
 async def test_projects_empty():
     """/projects with no active projects sends 'No active projects'."""
-    update, context, mock_db, _ = _make_update_and_context()
-    mock_db.fetch.return_value = []
+    update, context, _, mock_http = _make_update_and_context()
+    mock_http.get.return_value = make_http_response([])
     await projects_command(update, context)
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
@@ -344,20 +362,38 @@ async def test_projects_empty():
 
 @pytest.mark.asyncio
 async def test_projects_with_data():
-    """/projects with active projects lists them."""
-    update, context, mock_db, _ = _make_update_and_context()
-    mock_db.fetch.return_value = [
-        {
-            "id": 1,
-            "name": "Project Alpha",
-            "status": "active",
-            "description": "A research project",
-            "deadline": None,
-        },
-    ]
+    """/projects with active projects lists them via GET /api/projects?status=active."""
+    update, context, _, mock_http = _make_update_and_context()
+    mock_http.get.return_value = make_http_response(
+        [
+            {
+                "id": 1,
+                "name": "Project Alpha",
+                "status": "active",
+                "description": "A research project",
+                "deadline": None,
+            },
+        ]
+    )
     await projects_command(update, context)
+
+    mock_http.get.assert_awaited_once()
+    call = mock_http.get.await_args
+    assert "/api/projects" in call.args[0]
+    assert call.kwargs["params"] == {"status": "active"}
     text = update.message.reply_text.call_args_list[0][0][0]
     assert "Project Alpha" in text
+
+
+@pytest.mark.asyncio
+async def test_projects_backend_failure_sends_graceful_reply():
+    """R7: a 5xx from the projects endpoint yields a short failure reply, not a crash."""
+    update, context, _, mock_http = _make_update_and_context()
+    mock_http.get.return_value = make_http_response(None, status=503)
+    await projects_command(update, context)
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Couldn't reach" in text or "try again" in text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -367,24 +403,34 @@ async def test_projects_with_data():
 
 @pytest.mark.asyncio
 async def test_tasks_no_project_id():
-    """/tasks without project_id lists all in-progress tasks."""
-    update, context, mock_db, _ = _make_update_and_context(args=[])
-    mock_db.fetch.return_value = [
-        {"id": 1, "title": "Fix bug", "status": "in_progress", "project_name": "Proj"},
-    ]
+    """/tasks without project_id lists all in-progress tasks via GET /api/tasks."""
+    update, context, _, mock_http = _make_update_and_context(args=[])
+    mock_http.get.return_value = make_http_response(
+        [{"id": 1, "title": "Fix bug", "status": "in_progress", "project_name": "Proj"}]
+    )
     await tasks_command(update, context)
+
+    mock_http.get.assert_awaited_once()
+    call = mock_http.get.await_args
+    assert "/api/tasks" in call.args[0]
+    assert call.kwargs["params"]["status"] == "in_progress"
+    assert "project_id" not in call.kwargs["params"]
     text = update.message.reply_text.call_args[0][0]
     assert "Fix bug" in text
 
 
 @pytest.mark.asyncio
 async def test_tasks_with_project_id():
-    """/tasks <project_id> filters tasks by project."""
-    update, context, mock_db, _ = _make_update_and_context(args=["1"])
-    mock_db.fetch.return_value = [
-        {"id": 2, "title": "Write tests", "status": "in_progress", "project_name": "Proj"},
-    ]
+    """/tasks <project_id> filters tasks by project via ?project_id=."""
+    update, context, _, mock_http = _make_update_and_context(args=["1"])
+    mock_http.get.return_value = make_http_response(
+        [{"id": 2, "title": "Write tests", "status": "in_progress", "project_name": "Proj"}]
+    )
     await tasks_command(update, context)
+
+    call = mock_http.get.await_args
+    assert call.kwargs["params"]["project_id"] == 1
+    assert call.kwargs["params"]["status"] == "in_progress"
     text = update.message.reply_text.call_args[0][0]
     assert "Write tests" in text
 
@@ -392,11 +438,22 @@ async def test_tasks_with_project_id():
 @pytest.mark.asyncio
 async def test_tasks_empty():
     """/tasks with no tasks sends 'No in-progress tasks'."""
-    update, context, mock_db, _ = _make_update_and_context(args=[])
-    mock_db.fetch.return_value = []
+    update, context, _, mock_http = _make_update_and_context(args=[])
+    mock_http.get.return_value = make_http_response([])
     await tasks_command(update, context)
     text = update.message.reply_text.call_args[0][0]
     assert "No in-progress" in text
+
+
+@pytest.mark.asyncio
+async def test_tasks_backend_failure_sends_graceful_reply():
+    """R7: a 5xx from the tasks endpoint yields a short failure reply, not a crash."""
+    update, context, _, mock_http = _make_update_and_context(args=[])
+    mock_http.get.return_value = make_http_response(None, status=502)
+    await tasks_command(update, context)
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Couldn't reach" in text or "try again" in text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -415,34 +472,44 @@ async def test_done_no_args_prompts():
 
 @pytest.mark.asyncio
 async def test_done_nonexistent_error():
-    """/done with nonexistent task_id sends error."""
-    update, context, _mock_db, _ = _make_update_and_context(args=["999"])
+    """/done with nonexistent task_id (PUT → 404 → None) sends 'not found'."""
+    update, context, _, mock_http = _make_update_and_context(args=["999"])
+    mock_http.put.return_value = make_http_response(None, status=404)
 
-    with patch("telegram_bot.handlers.commands.task_commands.ProjectManager") as mock_pm:
-        pm_instance = AsyncMock()
-        pm_instance.complete_task.return_value = {}
-        mock_pm.return_value = pm_instance
+    await done_command(update, context)
 
-        await done_command(update, context)
-
+    mock_http.put.assert_awaited_once()
+    call = mock_http.put.await_args
+    assert "/api/tasks/999" in call.args[0]
+    assert call.kwargs["json"] == {"status": "done"}
     text = update.message.reply_text.call_args[0][0]
     assert "not found" in text.lower() or "999" in text
 
 
 @pytest.mark.asyncio
 async def test_done_success():
-    """/done <task_id> marks a task as done."""
-    update, context, _mock_db, _ = _make_update_and_context(args=["5"])
+    """/done <task_id> marks a task as done via PUT /api/tasks/{id}."""
+    update, context, _, mock_http = _make_update_and_context(args=["5"])
+    mock_http.put.return_value = make_http_response({"id": 5, "status": "done"})
 
-    with patch("telegram_bot.handlers.commands.task_commands.ProjectManager") as mock_pm:
-        pm_instance = AsyncMock()
-        pm_instance.complete_task.return_value = {"id": 5, "status": "done"}
-        mock_pm.return_value = pm_instance
+    await done_command(update, context)
 
-        await done_command(update, context)
-
+    mock_http.put.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "done" in text.lower() or "5" in text
+
+
+@pytest.mark.asyncio
+async def test_done_backend_failure_sends_graceful_reply():
+    """R7: a 5xx from the task-update endpoint yields a short failure reply, not a crash."""
+    update, context, _, mock_http = _make_update_and_context(args=["5"])
+    mock_http.put.return_value = make_http_response(None, status=500)
+
+    await done_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Couldn't reach" in text or "try again" in text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -461,11 +528,16 @@ async def test_newproject_no_args_prompts():
 
 @pytest.mark.asyncio
 async def test_newproject_success():
-    """/newproject <name> creates a project."""
-    update, context, mock_db, _ = _make_update_and_context(args=["My", "Project"])
-    mock_db.fetchrow.return_value = {"id": 42}
+    """/newproject <name> creates a project via POST /api/projects."""
+    update, context, _, mock_http = _make_update_and_context(args=["My", "Project"])
+    mock_http.post.return_value = make_http_response({"id": 42})
 
     await newproject_command(update, context)
+
+    mock_http.post.assert_awaited_once()
+    call = mock_http.post.await_args
+    assert "/api/projects" in call.args[0]
+    assert call.kwargs["json"]["name"] == "My Project"
     text = update.message.reply_text.call_args[0][0]
     assert "My Project" in text
     assert "42" in text
@@ -648,36 +720,31 @@ async def test_papers_search_strips_zero_width_space():
 
 
 @pytest.mark.asyncio
-async def test_briefing_scopes_papers_to_user_library_when_paired():
-    """/briefing run by a paired user counts papers via user_library JOIN."""
-    update, context, mock_db, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
-    mock_db.fetchrow.return_value = {"cnt": 0}
-    mock_db.fetch.side_effect = [[], []]
-    stats_resp = MagicMock()
-    stats_resp.raise_for_status = MagicMock()
-    stats_resp.json.return_value = {"due_now": 0}
-    mock_http.get.return_value = stats_resp
+async def test_briefing_scopes_to_user_via_owner_header_when_paired():
+    """/briefing run by a paired user forwards X-Owner-User-Id on every REST gather."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_http.get.side_effect = [
+        make_http_response({"total": 0}),  # new papers
+        make_http_response({"due_now": 0}),  # due cards
+        make_http_response([]),  # tasks
+        make_http_response([]),  # milestones
+    ]
 
     with _paired_auth_patch(7):
         await briefing_command(update, context)
 
-    papers_sql = mock_db.fetchrow.await_args.args[0]
-    assert "user_library" in papers_sql
-    assert "ul.user_id = $1" in papers_sql
-    assert mock_db.fetchrow.await_args.args[1] == 7
-
-    fetch_calls = mock_db.fetch.await_args_list
-    tasks_sql = fetch_calls[0].args[0]
-    milestones_sql = fetch_calls[1].args[0]
-    assert "t.user_id IS NOT DISTINCT FROM" in tasks_sql
-    assert "m.user_id IS NOT DISTINCT FROM" in milestones_sql
+    # All four gathers carry the owner header scoping the response to user 7.
+    assert mock_http.get.await_count == 4
+    for call in mock_http.get.await_args_list:
+        assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
 
 
 @pytest.mark.asyncio
 async def test_briefing_unpaired_owner_gets_pairing_message():
     """S6: /briefing from an unpaired chat (auth_check -> (False, None)) is
     blocked with the /pair guidance reply."""
-    update, context, mock_db, mock_http = _make_update_and_context()
+    update, context, _, mock_http = _make_update_and_context()
     update.message.reply_text = AsyncMock()
 
     with patch(
@@ -690,79 +757,82 @@ async def test_briefing_unpaired_owner_gets_pairing_message():
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "pair" in text.lower() or "Settings" in text
-    # No DB queries for the briefing itself should have been issued
-    mock_db.fetchrow.assert_not_awaited()
+    # No backend call for the briefing itself should have been issued
+    mock_http.get.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_tasks_scopes_query_to_paired_user():
-    """/tasks run by a paired user adds an `t.user_id IS NOT DISTINCT FROM` filter."""
-    update, context, mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7, args=[])
-    mock_db.fetch.return_value = []
+    """A12: /tasks run by a paired user forwards X-Owner-User-Id + ?status=in_progress."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7, args=[])
+    context.user_data["jarvis_user_id"] = 7
+    mock_http.get.return_value = make_http_response([])
 
     with _paired_auth_patch(7):
         await tasks_command(update, context)
 
-    sql, *params = mock_db.fetch.await_args.args
-    assert "t.user_id IS NOT DISTINCT FROM $1" in sql
-    assert params == [7]
+    call = mock_http.get.await_args
+    assert "/api/tasks" in call.args[0]
+    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+    assert call.kwargs["params"]["status"] == "in_progress"
 
 
 @pytest.mark.asyncio
 async def test_tasks_scopes_query_with_project_filter():
-    """/tasks <project_id> from a paired user scopes by BOTH user_id and project_id."""
-    update, context, mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7, args=["3"])
-    mock_db.fetch.return_value = []
+    """/tasks <project_id> from a paired user scopes by owner header + ?project_id=."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7, args=["3"])
+    context.user_data["jarvis_user_id"] = 7
+    mock_http.get.return_value = make_http_response([])
 
     with _paired_auth_patch(7):
         await tasks_command(update, context)
 
-    sql, *params = mock_db.fetch.await_args.args
-    assert "t.user_id IS NOT DISTINCT FROM $1" in sql
-    assert "t.project_id = $2" in sql
-    assert params == [7, 3]
+    call = mock_http.get.await_args
+    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+    assert call.kwargs["params"]["status"] == "in_progress"
+    assert call.kwargs["params"]["project_id"] == 3
 
 
 @pytest.mark.asyncio
-async def test_done_passes_user_id_to_complete_task():
-    """/done from a paired user forwards jarvis_user_id to ProjectManager."""
-    update, context, _mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7, args=["5"])
+async def test_done_passes_user_id_via_owner_header():
+    """/done from a paired user forwards X-Owner-User-Id on the PUT /api/tasks call."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7, args=["5"])
+    context.user_data["jarvis_user_id"] = 7
+    # 404 → unowned/nonexistent task → "not found"
+    mock_http.put.return_value = make_http_response(None, status=404)
 
-    with (
-        _paired_auth_patch(7),
-        patch("telegram_bot.handlers.commands.task_commands.ProjectManager") as mock_pm,
-    ):
-        pm_instance = AsyncMock()
-        pm_instance.complete_task.return_value = {}
-        mock_pm.return_value = pm_instance
-
+    with _paired_auth_patch(7):
         await done_command(update, context)
 
-    # Task wasn't owned -> reply says "not found"
+    mock_http.put.assert_awaited_once()
+    call = mock_http.put.await_args
+    assert "/api/tasks/5" in call.args[0]
+    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
     text = update.message.reply_text.call_args[0][0]
     assert "not found" in text.lower() or "5" in text
-    pm_instance.complete_task.assert_awaited_once_with(5, user_id=7)
 
 
 @pytest.mark.asyncio
 async def test_projects_scopes_listing_to_paired_user():
-    """/projects from a paired user filters by `user_id IS NOT DISTINCT FROM`."""
-    update, context, mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7)
-    mock_db.fetch.return_value = []
+    """A13: /projects from a paired user forwards X-Owner-User-Id + ?status=active."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_http.get.return_value = make_http_response([])
 
     with _paired_auth_patch(7):
         await projects_command(update, context)
 
-    sql, *params = mock_db.fetch.await_args.args
-    assert "user_id IS NOT DISTINCT FROM $1" in sql
-    assert params == [7]
+    call = mock_http.get.await_args
+    assert "/api/projects" in call.args[0]
+    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+    assert call.kwargs["params"] == {"status": "active"}
 
 
 @pytest.mark.asyncio
 async def test_projects_unpaired_owner_gets_pairing_message():
     """S6: /projects from an unpaired chat (auth_check -> (False, None)) is
     blocked with the /pair guidance reply."""
-    update, context, mock_db, _ = _make_update_and_context()
+    update, context, _, mock_http = _make_update_and_context()
     update.message.reply_text = AsyncMock()
 
     with patch(
@@ -775,25 +845,26 @@ async def test_projects_unpaired_owner_gets_pairing_message():
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "pair" in text.lower() or "Settings" in text
-    mock_db.fetch.assert_not_awaited()
+    mock_http.get.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_newproject_passes_user_id_to_create_project():
-    """/newproject from a paired user forwards jarvis_user_id to ProjectManager."""
-    update, context, _mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7, args=["Alpha"])
+async def test_newproject_passes_user_id_via_owner_header():
+    """/newproject from a paired user forwards X-Owner-User-Id on the POST /api/projects call."""
+    update, context, _, mock_http = _make_paired_update_and_context(
+        jarvis_user_id=7, args=["Alpha"]
+    )
+    context.user_data["jarvis_user_id"] = 7
+    mock_http.post.return_value = make_http_response({"id": 42})
 
-    with (
-        _paired_auth_patch(7),
-        patch("telegram_bot.handlers.commands.project_commands.ProjectManager") as mock_pm,
-    ):
-        pm_instance = AsyncMock()
-        pm_instance.create_project.return_value = {"id": 42}
-        mock_pm.return_value = pm_instance
-
+    with _paired_auth_patch(7):
         await newproject_command(update, context)
 
-    pm_instance.create_project.assert_awaited_once_with("Alpha", user_id=7)
+    mock_http.post.assert_awaited_once()
+    call = mock_http.post.await_args
+    assert "/api/projects" in call.args[0]
+    assert call.kwargs["headers"].get("X-Owner-User-Id") == "7"
+    assert call.kwargs["json"]["name"] == "Alpha"
 
 
 # ---------------------------------------------------------------------------
@@ -907,21 +978,23 @@ async def test_pulse_now_command_sends_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
-    """/briefing sends X-Owner-User-Id on the /api/stats HTTP call."""
-    update, context, mock_db, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    """/briefing sends X-Owner-User-Id + X-API-Key on the /api/stats (due cards) call."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
     context.user_data["jarvis_user_id"] = 7
-    mock_db.fetchrow.return_value = {"cnt": 0}
-    mock_db.fetch.side_effect = [[], []]
-    stats_resp = MagicMock()
-    stats_resp.raise_for_status = MagicMock()
-    stats_resp.json.return_value = {"due_now": 0}
-    mock_http.get.return_value = stats_resp
+    mock_http.get.side_effect = [
+        make_http_response({"total": 0}),  # new papers
+        make_http_response({"due_now": 0}),  # due cards → /api/stats
+        make_http_response([]),  # tasks
+        make_http_response([]),  # milestones
+    ]
 
     with _paired_auth_patch(7):
         await briefing_command(update, context)
 
-    mock_http.get.assert_awaited_once()
-    headers = mock_http.get.await_args[1]["headers"]
+    # Locate the /api/stats (due-card) GET and verify it carries both headers.
+    stats_calls = [c for c in mock_http.get.await_args_list if c.args[0].endswith("/api/stats")]
+    assert stats_calls, "briefing must call /api/stats for due-card count"
+    headers = stats_calls[0].kwargs["headers"]
     assert headers.get("X-Owner-User-Id") == "7"
     assert headers.get("X-API-Key") == "test-key"
 

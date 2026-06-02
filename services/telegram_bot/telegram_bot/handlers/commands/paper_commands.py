@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
 
+import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from telegram_bot import services_client
 from telegram_bot.formatters import (
     format_morning_briefing,
     format_paper_card,
@@ -19,7 +20,6 @@ from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import (
     _owner_headers,
     get_config,
-    get_db,
     get_http,
     get_jarvis_user_id,
 )
@@ -170,77 +170,45 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Handle ``/briefing`` — composite morning briefing (papers, cards, tasks, milestones)."""
     if update.message is None:
         return
-    db = get_db(context)
     http = get_http(context)
     config = get_config(context)
     user_id = get_jarvis_user_id(context)
-    # New papers in last 24 hours — scoped to the user's library when paired.
-    since = datetime.now(UTC) - timedelta(hours=24)
-    if user_id is not None:
-        row = await db.fetchrow(
-            "SELECT COUNT(*) AS cnt FROM papers p "
-            "JOIN user_library ul ON ul.paper_id = p.id "
-            "WHERE ul.user_id = $1 AND p.created_at >= $2",
-            user_id,
-            since,
-        )
-    else:
-        row = await db.fetchrow("SELECT COUNT(*) AS cnt FROM papers WHERE created_at >= $1", since)
-    new_papers_count = row["cnt"] if row else 0
+    assert user_id is not None  # noqa: S101 — guaranteed by @auth_required
 
-    # Due cards from learning engine
+    # Each section degrades independently: a transient failure on one gather
+    # leaves that section empty/zero rather than aborting the whole briefing.
+
+    # New papers in last 24 hours.
+    new_papers_count = 0
+    try:
+        new_papers_count = await services_client.fetch_new_paper_count(http, config, user_id)
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.exception("Failed to fetch new-paper count for briefing")
+
+    # Due cards from learning engine.
     due_cards = 0
     try:
-        resp = await http.get(
-            f"{config.learning_engine_url}/api/stats",
-            headers=_owner_headers(config, user_id),
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        stats = resp.json()
-        due_cards = stats.get("due_now", 0)
-    except Exception:
-        logger.exception("Failed to fetch stats for briefing")
+        due_cards = await services_client.fetch_due_card_count(http, config, user_id)
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.exception("Failed to fetch due-card count for briefing")
 
-    # In-progress tasks — scoped by user_id when paired.
-    if user_id is not None:
-        task_rows = await db.fetch(
-            "SELECT t.title, p.name AS project_name "
-            "FROM tasks t LEFT JOIN projects p ON t.project_id = p.id "
-            "WHERE t.status = 'in_progress' AND t.user_id IS NOT DISTINCT FROM $1 "
-            "ORDER BY t.created_at DESC LIMIT 10",
-            user_id,
+    # In-progress tasks.
+    tasks: list[dict] = []
+    try:
+        tasks = await services_client.fetch_tasks(
+            http, config, user_id, status="in_progress", limit=10
         )
-    else:
-        task_rows = await db.fetch(
-            "SELECT t.title, p.name AS project_name "
-            "FROM tasks t LEFT JOIN projects p ON t.project_id = p.id "
-            "WHERE t.status = 'in_progress' "
-            "ORDER BY t.created_at DESC LIMIT 10"
-        )
-    tasks = [dict(r) for r in task_rows]
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.exception("Failed to fetch tasks for briefing")
 
-    # Upcoming milestones (next 7 days) — scoped by user_id when paired.
-    deadline_cutoff = datetime.now(UTC) + timedelta(days=7)
-    if user_id is not None:
-        milestone_rows = await db.fetch(
-            "SELECT m.name, m.deadline, p.name AS project_name "
-            "FROM milestones m LEFT JOIN projects p ON m.project_id = p.id "
-            "WHERE m.completed = false AND m.deadline <= $1 "
-            "AND m.user_id IS NOT DISTINCT FROM $2 "
-            "ORDER BY m.deadline ASC LIMIT 10",
-            deadline_cutoff,
-            user_id,
+    # Upcoming milestones (next 7 days).
+    milestones: list[dict] = []
+    try:
+        milestones = await services_client.fetch_upcoming_milestones(
+            http, config, user_id, within_days=7
         )
-    else:
-        milestone_rows = await db.fetch(
-            "SELECT m.name, m.deadline, p.name AS project_name "
-            "FROM milestones m LEFT JOIN projects p ON m.project_id = p.id "
-            "WHERE m.completed = false AND m.deadline <= $1 "
-            "ORDER BY m.deadline ASC LIMIT 10",
-            deadline_cutoff,
-        )
-    milestones = [dict(r) for r in milestone_rows]
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.exception("Failed to fetch milestones for briefing")
 
     text = format_morning_briefing(new_papers_count, due_cards, tasks, milestones)
     await update.message.reply_text(text, parse_mode="HTML")

@@ -12,10 +12,12 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import telegram
 import telegram_bot.handlers.review_handler as _review_handler_mod
 from jarvis_common.testing import make_bot_config
+from jarvis_common.testing_telegram import make_http_response
 from telegram import Message, Update
 from telegram.ext import ContextTypes
 from telegram_bot.config import BotConfig
@@ -625,18 +627,22 @@ async def test_paper_feedback_invalid_callback_data():
 
 @pytest.mark.asyncio
 async def test_project_detail_success():
-    """project_detail callback shows project status."""
-    update, context, mock_db, _ = _make_callback_update_and_context("project_detail_3")
-    mock_db.fetchrow.return_value = {
-        "id": 3,
-        "name": "My Project",
-        "status": "active",
-        "description": "A project",
-        "deadline": None,
-    }
-    mock_db.fetch.side_effect = [
-        [{"id": 1, "title": "Task A", "status": "in_progress"}],  # tasks
-        [{"id": 1, "name": "Milestone 1", "deadline": None, "completed": False}],  # milestones
+    """project_detail callback shows project status (project/tasks/milestones via REST)."""
+    update, context, _, mock_http = _make_callback_update_and_context("project_detail_3")
+    mock_http.get.side_effect = [
+        make_http_response(
+            {
+                "id": 3,
+                "name": "My Project",
+                "status": "active",
+                "description": "A project",
+                "deadline": None,
+            }
+        ),  # fetch_project
+        make_http_response([{"id": 1, "title": "Task A", "status": "in_progress"}]),  # tasks
+        make_http_response(
+            [{"id": 1, "name": "Milestone 1", "deadline": None, "completed": False}]
+        ),  # milestones
     ]
 
     with patch(
@@ -651,12 +657,21 @@ async def test_project_detail_success():
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "My Project" in text
 
+    # The three GETs hit project, tasks, milestones — all forwarding owner identity.
+    assert mock_http.get.await_count == 3
+    urls = [c.args[0] for c in mock_http.get.await_args_list]
+    assert urls[0].endswith("/api/projects/3")
+    assert urls[1].endswith("/api/projects/3/tasks")
+    assert urls[2].endswith("/api/projects/3/milestones")
+    for c in mock_http.get.await_args_list:
+        assert c.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+
 
 @pytest.mark.asyncio
 async def test_project_detail_not_found():
-    """project_detail callback sends 'not found' when project does not exist."""
-    update, context, mock_db, _ = _make_callback_update_and_context("project_detail_999")
-    mock_db.fetchrow.return_value = None
+    """project_detail callback sends 'not found' when project does not exist (404)."""
+    update, context, _, mock_http = _make_callback_update_and_context("project_detail_999")
+    mock_http.get.return_value = make_http_response(None, status=404)  # fetch_project → None
 
     with patch(
         "telegram_bot.handlers.callback_handler.auth_check",
@@ -670,6 +685,25 @@ async def test_project_detail_not_found():
     assert "not found" in text.lower()
 
 
+@pytest.mark.asyncio
+async def test_project_detail_service_error_replies_gracefully():
+    """R7: a 5xx/timeout from any of the 3 REST calls → graceful '⚠️' reply, no crash."""
+    update, context, _, mock_http = _make_callback_update_and_context("project_detail_3")
+    # First call (fetch_project) raises → graceful handling kicks in.
+    mock_http.get.side_effect = httpx.ReadTimeout("timed out")
+
+    with patch(
+        "telegram_bot.handlers.callback_handler.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, _PAIRED_USER_ID),
+    ):
+        await project_detail_callback(update, context)
+
+    update.callback_query.answer.assert_awaited_once()
+    text = update.callback_query.message.reply_text.call_args[0][0]
+    assert "⚠️" in text or "couldn't" in text.lower()
+
+
 # ---------------------------------------------------------------------------
 # Tests: task_done
 # ---------------------------------------------------------------------------
@@ -677,158 +711,111 @@ async def test_project_detail_not_found():
 
 @pytest.mark.asyncio
 async def test_task_done_success():
-    """task_done callback marks a task as done."""
-    update, context, *_ = _make_callback_update_and_context("task_done_10")
+    """task_done callback marks a task done via PUT /api/tasks/{id} {status: done}."""
+    update, context, _, mock_http = _make_callback_update_and_context("task_done_10")
+    mock_http.put.return_value = make_http_response({"id": 10, "status": "done"})
 
-    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
-        pm_instance = AsyncMock()
-        pm_instance.complete_task.return_value = {"id": 10, "status": "done"}
-        mock_pm.return_value = pm_instance
-
+    with patch(
+        "telegram_bot.handlers.callback_handler.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, _PAIRED_USER_ID),
+    ):
         await task_done_callback(update, context)
 
     update.callback_query.answer.assert_awaited_once()
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "done" in text.lower() or "10" in text
 
+    mock_http.put.assert_awaited_once()
+    put_call = mock_http.put.await_args
+    assert put_call.args[0].endswith("/api/tasks/10")
+    assert put_call.kwargs["json"] == {"status": "done"}
+    assert put_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+
 
 @pytest.mark.asyncio
 async def test_task_done_not_found():
-    """task_done callback sends 'not found' when task does not exist."""
-    update, context, *_ = _make_callback_update_and_context("task_done_999")
+    """task_done callback sends 'not found' when the LE endpoint returns 404.
 
-    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
-        pm_instance = AsyncMock()
-        pm_instance.complete_task.return_value = {}
-        mock_pm.return_value = pm_instance
+    A 404 covers both genuinely missing tasks and non-owned ones (ownership is
+    enforced server-side), so there is no existence leak.
+    """
+    update, context, _, mock_http = _make_callback_update_and_context("task_done_999")
+    mock_http.put.return_value = make_http_response(None, status=404)
 
+    with patch(
+        "telegram_bot.handlers.callback_handler.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, _PAIRED_USER_ID),
+    ):
         await task_done_callback(update, context)
 
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "not found" in text.lower() or "999" in text
 
 
+@pytest.mark.asyncio
+async def test_task_done_service_error_replies_gracefully():
+    """R7: a 5xx/timeout from the LE PUT → graceful '⚠️' reply, no hung callback."""
+    update, context, _, mock_http = _make_callback_update_and_context("task_done_10")
+    mock_http.put.side_effect = httpx.ConnectError("connection refused")
+
+    with patch(
+        "telegram_bot.handlers.callback_handler.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, _PAIRED_USER_ID),
+    ):
+        await task_done_callback(update, context)
+
+    update.callback_query.answer.assert_awaited_once()
+    text = update.callback_query.message.reply_text.call_args[0][0]
+    assert "⚠️" in text or "couldn't" in text.lower()
+
+
 # ---------------------------------------------------------------------------
-# TG-SEC-03: task_done ownership pre-check (cross-tenant write prevention)
+# TG-SEC-03: cross-tenant task-done writes are now blocked server-side.
 #
-# complete_task(task_id, user_id=None) uses a `$2 IS NULL` catch-all that
-# matches ANY task by id.  The consumer adds a NULL-safe ownership pre-check
-# (IS NOT DISTINCT FROM $2) before calling complete_task.  Pairing is now the
-# sole identity mechanism so auth_check can no longer yield jarvis_user_id None;
-# these tests force that (impossible) result to prove the pre-check still holds
-# as defence-in-depth.
+# Post-REST-migration, task_done_callback no longer runs an ownership pre-check
+# in the bot — it PUTs to the Learning Engine, which scopes by the forwarded
+# X-Owner-User-Id header.  A non-owned task therefore returns 404 (→ "not
+# found", no existence leak).  The cross-tenant *denial* guarantee is proven by
+# the LE contract test (T8: test_update_task_cross_tenant_returns_404); the bot
+# tests below assert the two things the bot is responsible for: forwarding the
+# owner identity, and surfacing a 404 as "not found".
 # ---------------------------------------------------------------------------
 
 
-def _ownership_fetchval(owner_user_id: int | None):
-    """Return a fetchval side-effect simulating ``user_id IS NOT DISTINCT FROM $2``.
-
-    *owner_user_id* is the task's actual ``user_id`` column value.  The returned
-    callable yields ``1`` when the requested ``$2`` matches (NULL-safe), else
-    ``None`` — mirroring the SQL predicate against a single seeded task row.
-    """
-
-    async def _fetchval(query: str, *params):
-        _task_id, requested_user_id = params[0], params[1]
-        return 1 if owner_user_id == requested_user_id else None
-
-    return _fetchval
-
-
 @pytest.mark.asyncio
-async def test_task_done_null_user_cannot_complete_paired_users_task():
-    """TG-SEC-03: a NULL-user caller cannot complete a paired user's task — the
-    NULL-safe pre-check denies it and complete_task is skipped (defence-in-depth).
-    """
-    update, context, mock_db, _ = _make_callback_update_and_context("task_done_77")
-    # Task is owned by a real paired user (user_id=42), caller's jarvis_user_id is None.
-    mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=42)
+async def test_task_done_forwards_owner_user_id_for_paired_user():
+    """TG-SEC-03 (bot half): the PUT forwards X-Owner-User-Id so the LE can scope."""
+    update, context, _, mock_http = _make_paired_callback("task_done_5")
+    mock_http.put.return_value = make_http_response({"id": 5, "status": "done"})
 
-    with (
-        patch(
-            "telegram_bot.handlers.callback_handler.auth_check",
-            new_callable=AsyncMock,
-            return_value=(True, None),  # forced impossible state — exercises the pre-check
-        ),
-        patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm,
-    ):
-        pm_instance = AsyncMock()
-        pm_instance.complete_task.return_value = {"id": 77, "status": "done"}
-        mock_pm.return_value = pm_instance
+    await task_done_callback(update, context)
 
-        await task_done_callback(update, context)
-
-    # complete_task must NOT run — the cross-tenant write is blocked.
-    pm_instance.complete_task.assert_not_awaited()
-    text = update.callback_query.message.reply_text.call_args[0][0]
-    assert "not found" in text.lower() or "77" in text
-
-
-@pytest.mark.asyncio
-async def test_task_done_null_user_can_complete_null_owned_task():
-    """TG-SEC-03: a NULL-user caller completes a NULL-owned task (user_id IS NULL)."""
-    update, context, mock_db, _ = _make_callback_update_and_context("task_done_10")
-    # Task is NULL-owned; caller's jarvis_user_id is None → match.
-    mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=None)
-
-    with (
-        patch(
-            "telegram_bot.handlers.callback_handler.auth_check",
-            new_callable=AsyncMock,
-            return_value=(True, None),  # forced impossible state — exercises the pre-check
-        ),
-        patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm,
-    ):
-        pm_instance = AsyncMock()
-        pm_instance.complete_task.return_value = {"id": 10, "status": "done"}
-        mock_pm.return_value = pm_instance
-
-        await task_done_callback(update, context)
-
-    pm_instance.complete_task.assert_awaited_once()
-    assert pm_instance.complete_task.await_args.kwargs["user_id"] is None
-    text = update.callback_query.message.reply_text.call_args[0][0]
-    assert "done" in text.lower() or "10" in text
-
-
-@pytest.mark.asyncio
-async def test_task_done_paired_user_can_complete_own_task():
-    """TG-SEC-03: a paired user can complete their OWN task."""
-    update, context, mock_db, _ = _make_paired_callback("task_done_5")
-    # auth_check's pairing lookup (fetchrow) → user_id 42; ownership check
-    # (fetchval) sees a task owned by 42 → match.
-    mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=_PAIRED_USER_ID)
-
-    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
-        pm_instance = AsyncMock()
-        pm_instance.complete_task.return_value = {"id": 5, "status": "done"}
-        mock_pm.return_value = pm_instance
-
-        await task_done_callback(update, context)
-
-    pm_instance.complete_task.assert_awaited_once()
-    assert pm_instance.complete_task.await_args.kwargs["user_id"] == _PAIRED_USER_ID
+    mock_http.put.assert_awaited_once()
+    put_call = mock_http.put.await_args
+    assert put_call.args[0].endswith("/api/tasks/5")
+    assert put_call.kwargs["json"] == {"status": "done"}
+    assert put_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert put_call.kwargs["headers"].get("X-API-Key") == "test-key"
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "done" in text.lower() or "5" in text
 
 
 @pytest.mark.asyncio
-async def test_task_done_paired_user_cannot_complete_another_users_task():
-    """TG-SEC-03: a paired user cannot complete another paired user's task."""
-    update, context, mock_db, _ = _make_paired_callback("task_done_9")
-    # Caller is paired user 42; task is owned by a DIFFERENT user (99) → no match.
-    mock_db.fetchval.side_effect = _ownership_fetchval(owner_user_id=99)
+async def test_task_done_non_owned_task_returns_not_found_no_leak():
+    """TG-SEC-03 (bot half): a non-owned task → LE 404 → 'not found' (no existence leak)."""
+    update, context, _, mock_http = _make_paired_callback("task_done_9")
+    # The LE scopes by X-Owner-User-Id; another user's task is invisible → 404.
+    mock_http.put.return_value = make_http_response(None, status=404)
 
-    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
-        pm_instance = AsyncMock()
-        pm_instance.complete_task.return_value = {"id": 9, "status": "done"}
-        mock_pm.return_value = pm_instance
+    await task_done_callback(update, context)
 
-        await task_done_callback(update, context)
-
-    pm_instance.complete_task.assert_not_awaited()
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "not found" in text.lower() or "9" in text
+    # No "marked as done" confirmation leaks for a non-owned task.
+    assert "done" not in text.lower() or "not found" in text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1055,122 +1042,68 @@ async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
 
 # ---------------------------------------------------------------------------
 # TG-N2: project_detail user-scoping defense-in-depth
+#
+# Post-REST-migration the bot no longer issues SQL; per-user scoping is enforced
+# by forwarding X-Owner-User-Id on every backend GET (the Learning Engine scopes
+# the SQL).  These tests assert the header is forwarded on each of the three
+# project-detail GETs (project, tasks, milestones).
 # ---------------------------------------------------------------------------
+
+
+def _project_detail_responses() -> list:
+    """Three successful REST responses for project / tasks / milestones."""
+    return [
+        make_http_response(
+            {
+                "id": 3,
+                "name": "Scoped Project",
+                "status": "active",
+                "description": None,
+                "deadline": None,
+            }
+        ),
+        make_http_response([{"id": 1, "title": "T1", "status": "todo"}]),
+        make_http_response([{"id": 1, "name": "M1", "deadline": None, "completed": False}]),
+    ]
 
 
 @pytest.mark.asyncio
 async def test_project_detail_with_user_id_scopes_project_fetch() -> None:
-    """TG-N2: when user_id is present, project fetch uses IS NOT DISTINCT FROM $2."""
-    update, context, mock_db, _ = _make_paired_callback("project_detail_3")
-    # auth_check calls fetchrow for the pairing lookup (first call);
-    # project_detail_callback then calls fetchrow for the project (second call).
-    project_row = {
-        "id": 3,
-        "name": "Scoped Project",
-        "status": "active",
-        "description": None,
-        "deadline": None,
-    }
-    mock_db.fetchrow.side_effect = [
-        {"user_id": _PAIRED_USER_ID},  # auth_check pairing lookup
-        project_row,  # project fetch
-    ]
-    mock_db.fetch.return_value = []
+    """TG-N2: the project GET forwards X-Owner-User-Id so the LE scopes it."""
+    update, context, _, mock_http = _make_paired_callback("project_detail_3")
+    mock_http.get.side_effect = _project_detail_responses()
 
     await project_detail_callback(update, context)
 
-    # The project fetchrow is the SECOND call
-    fetchrow_call = mock_db.fetchrow.call_args_list[1]
-    sql = fetchrow_call.args[0]
-    args = fetchrow_call.args[1:]
-    assert "IS NOT DISTINCT FROM $2" in sql, (
-        f"project fetch must use IS NOT DISTINCT FROM $2; SQL={sql!r}"
-    )
-    assert args[0] == 3, f"$1 must be project_id=3; got {args[0]!r}"
-    assert args[1] == _PAIRED_USER_ID, f"$2 must be user_id={_PAIRED_USER_ID}; got {args[1]!r}"
+    project_call = mock_http.get.await_args_list[0]
+    assert project_call.args[0].endswith("/api/projects/3")
+    assert project_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
 async def test_project_detail_with_user_id_scopes_task_fetch() -> None:
-    """TG-N2: tasks query must include user_id predicate after project gate."""
-    update, context, mock_db, _ = _make_paired_callback("project_detail_3")
-    mock_db.fetchrow.side_effect = [
-        {"user_id": _PAIRED_USER_ID},  # auth_check pairing lookup
-        {"id": 3, "name": "P", "status": "active", "description": None, "deadline": None},
-    ]
-    # Two fetch calls: tasks then milestones
-    mock_db.fetch.side_effect = [
-        [{"id": 1, "title": "T1", "status": "todo"}],
-        [],
-    ]
+    """TG-N2: the tasks GET forwards X-Owner-User-Id so the LE scopes it."""
+    update, context, _, mock_http = _make_paired_callback("project_detail_3")
+    mock_http.get.side_effect = _project_detail_responses()
 
     await project_detail_callback(update, context)
 
-    task_fetch_call = mock_db.fetch.call_args_list[0]
-    task_sql = task_fetch_call.args[0]
-    task_args = task_fetch_call.args[1:]
-    assert "IS NOT DISTINCT FROM $2" in task_sql, (
-        f"tasks query must scope by user_id; SQL={task_sql!r}"
-    )
-    assert task_args[0] == 3, f"$1 must be project_id=3; got {task_args[0]!r}"
-    assert task_args[1] == _PAIRED_USER_ID, f"$2 must be user_id; got {task_args[1]!r}"
+    task_call = mock_http.get.await_args_list[1]
+    assert task_call.args[0].endswith("/api/projects/3/tasks")
+    assert task_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
 
 
 @pytest.mark.asyncio
 async def test_project_detail_with_user_id_scopes_milestone_fetch() -> None:
-    """TG-N2: milestones query must include user_id predicate after project gate."""
-    update, context, mock_db, _ = _make_paired_callback("project_detail_3")
-    mock_db.fetchrow.side_effect = [
-        {"user_id": _PAIRED_USER_ID},  # auth_check pairing lookup
-        {"id": 3, "name": "P", "status": "active", "description": None, "deadline": None},
-    ]
-    mock_db.fetch.side_effect = [
-        [],
-        [{"id": 1, "name": "M1", "deadline": None, "completed": False}],
-    ]
+    """TG-N2: the milestones GET forwards X-Owner-User-Id so the LE scopes it."""
+    update, context, _, mock_http = _make_paired_callback("project_detail_3")
+    mock_http.get.side_effect = _project_detail_responses()
 
     await project_detail_callback(update, context)
 
-    milestone_fetch_call = mock_db.fetch.call_args_list[1]
-    milestone_sql = milestone_fetch_call.args[0]
-    milestone_args = milestone_fetch_call.args[1:]
-    assert "IS NOT DISTINCT FROM $2" in milestone_sql, (
-        f"milestones query must scope by user_id; SQL={milestone_sql!r}"
-    )
-    assert milestone_args[1] == _PAIRED_USER_ID, f"$2 must be user_id; got {milestone_args[1]!r}"
-
-
-@pytest.mark.asyncio
-async def test_project_detail_none_user_id_scoped_to_null_rows_only() -> None:
-    """TG-N2: a NULL jarvis_user_id scopes the project fetch to user_id IS NULL.
-
-    Previously, the None branch used an unscoped SELECT that could return ANY
-    project by id.  After the fix, IS NOT DISTINCT FROM NULL restricts the
-    result to rows where user_id IS NULL — closing the unscoped catch-all.
-    auth_check can no longer yield (True, None); we force it to exercise this
-    defence-in-depth branch.
-    """
-    update, context, mock_db, _ = _make_callback_update_and_context(
-        "project_detail_7", chat_id=_TEST_CHAT_ID
-    )
-    mock_db.fetchrow.return_value = None  # project not found under user_id=NULL
-
-    with patch(
-        "telegram_bot.handlers.callback_handler.auth_check",
-        new_callable=AsyncMock,
-        return_value=(True, None),  # forced impossible state — exercises the NULL-scoping branch
-    ):
-        await project_detail_callback(update, context)
-
-    fetchrow_call = mock_db.fetchrow.call_args
-    sql = fetchrow_call.args[0]
-    bound_user_id = fetchrow_call.args[2]  # third positional arg = $2
-    assert "IS NOT DISTINCT FROM $2" in sql, (
-        f"None path must use IS NOT DISTINCT FROM $2 (not unscoped); SQL={sql!r}"
-    )
-    assert bound_user_id is None, (
-        f"$2 must be None (NULL) when jarvis_user_id is None; got {bound_user_id!r}"
-    )
+    milestone_call = mock_http.get.await_args_list[2]
+    assert milestone_call.args[0].endswith("/api/projects/3/milestones")
+    assert milestone_call.kwargs["headers"].get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
 
 
 # ---------------------------------------------------------------------------

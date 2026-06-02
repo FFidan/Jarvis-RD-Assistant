@@ -231,8 +231,224 @@ async def test_a24_check_authors_returns_only_own_user_results(
     body = resp.json()
     assert "new_papers" in body, f"Missing 'new_papers' key: {body}"
     assert "authors_checked" in body, f"Missing 'authors_checked' key: {body}"
+    assert "matches" in body, f"Missing 'matches' key: {body}"
     assert isinstance(body["new_papers"], int) and body["new_papers"] >= 0
     assert isinstance(body["authors_checked"], int) and body["authors_checked"] >= 0
+    assert isinstance(body["matches"], list)
+
+
+# ---------------------------------------------------------------------------
+# T9: POST /api/authors/check — global recent-papers corpus (the bug fix)
+#
+# The recent-papers scan must NOT be scoped to the caller's library: discovery
+# is topic-driven, so a tracked author's new paper may never be in the user's
+# library. A library-scoped JOIN silently suppressed those alerts.
+# ---------------------------------------------------------------------------
+
+
+async def _track_author(conn, user_id: int, name: str) -> int:
+    """Insert an enabled tracked author for *user_id*; return its id."""
+    return await conn.fetchval(
+        "INSERT INTO tracked_authors (author_name, user_id, source, enabled) "
+        "VALUES ($1, $2, 'manual', TRUE) RETURNING id",
+        name,
+        user_id,
+    )
+
+
+async def _insert_recent_paper(conn, *, ext: str, authors: list[str], metadata=None) -> int:
+    """Insert a recent (now()) paper with NO library/user-state rows; return id.
+
+    Leaving metadata as None exercises the NULL-tolerant path; passing an empty
+    list of authors etc. is the caller's choice. created_at defaults to now()
+    so the paper is inside the 24h window.
+    """
+    return await conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, metadata)
+           VALUES ($1, 'arxiv', $2, $3::text[], $4, $5)
+           RETURNING id""",
+        ext,
+        f"Recent paper {ext}",
+        authors,
+        f"https://example.test/{ext}",
+        metadata,
+    )
+
+
+async def test_t9_check_matches_global_corpus_paper_not_in_library(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Corpus bug (red→green): a tracked author's new paper that is NOT in the
+    caller's library still produces a match.
+
+    Verified: authors.py check_tracked_authors — global recent-papers scan
+    (no user_library JOIN).
+    """
+    await _track_author(contract_conn, contract_two_users.user_a_id, "Grace Hopper")
+    paper_id = await _insert_recent_paper(
+        contract_conn,
+        ext="t9-global",
+        authors=["Grace Hopper", "Co Author"],
+        metadata={"foo": "bar"},
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/authors/check")
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    assert body["new_papers"] >= 1, f"Global corpus paper not matched: {body}"
+
+    # The matched paper is the one we inserted (not in the user's library).
+    matched_ids = {p["id"] for m in body["matches"] for p in m["papers"]}
+    assert paper_id in matched_ids, (
+        f"Paper {paper_id} (not in library) missing from matches: {body['matches']}"
+    )
+
+
+async def test_t9_check_uses_owner_override_resolver(_pi_app_with_pool):
+    """Widen: check_tracked_authors resolves identity via the owner-override
+    resolver so the bot can call it with X-Owner-User-Id.
+
+    Dependency-identity assert against the route's declared dependency.
+    """
+    from jarvis_common.auth import current_user_id_strict_with_owner_override
+
+    # Find the /api/authors/check route and confirm its handler closes over the
+    # owner-override resolver (called imperatively inside the body).
+    import inspect
+
+    from paper_ingestion.routers import authors as authors_mod
+
+    src = inspect.getsource(authors_mod.check_tracked_authors)
+    assert "current_user_id_strict_with_owner_override" in src, (
+        "check_tracked_authors must resolve identity via current_user_id_strict_with_owner_override"
+    )
+    # The symbol is imported into the router module namespace.
+    assert (
+        authors_mod.current_user_id_strict_with_owner_override
+        is current_user_id_strict_with_owner_override
+    )
+
+
+async def test_t9_check_enriches_matches_with_card_keys(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Enrich: matches groups newly-alerted papers by author and carries the
+    format_paper_card keys; new_papers count is consistent with matches.
+
+    Verified: authors.py check_tracked_authors — AuthorAlertMatch shape.
+    """
+    await _track_author(contract_conn, contract_two_users.user_a_id, "Ada Lovelace")
+    paper_id = await _insert_recent_paper(
+        contract_conn,
+        ext="t9-enrich",
+        authors=["Ada Lovelace"],
+        metadata={"s2_author_ids": []},
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/authors/check")
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+
+    # The newly-alerted paper count equals the total papers across matches.
+    total_in_matches = sum(len(m["papers"]) for m in body["matches"])
+    assert body["new_papers"] == total_in_matches, (
+        f"new_papers ({body['new_papers']}) != papers in matches ({total_in_matches})"
+    )
+
+    ada = next((m for m in body["matches"] if m["author_name"] == "Ada Lovelace"), None)
+    assert ada is not None, f"Ada Lovelace not in matches: {body['matches']}"
+    paper = next((p for p in ada["papers"] if p["id"] == paper_id), None)
+    assert paper is not None, f"Inserted paper missing from Ada's matches: {ada}"
+    for key in ("id", "title", "authors", "published_date", "source_type", "url", "metadata"):
+        assert key in paper, f"Card key '{key}' missing from match paper: {paper}"
+    assert paper["authors"] == ["Ada Lovelace"]
+    assert paper["source_type"] == "arxiv"
+
+
+async def test_t9_check_dedup_second_call_empty_and_log_row_exists(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """Dedup: a second check returns new_papers==0 and matches==[]; the
+    author_alert_log row persists after the first call.
+
+    Verified: authors.py check_tracked_authors — per-user record_author_alert.
+    """
+    author_id = await _track_author(contract_conn, contract_two_users.user_a_id, "Alan Turing")
+    paper_id = await _insert_recent_paper(
+        contract_conn,
+        ext="t9-dedup",
+        authors=["Alan Turing"],
+        metadata={},
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp1 = await c.post("/api/authors/check")
+    assert resp1.status_code == 200, resp1.text[:300]
+    assert resp1.json()["new_papers"] >= 1
+
+    # author_alert_log row exists (per-user dedup ledger) after the first call.
+    log_row = await contract_conn.fetchval(
+        "SELECT id FROM author_alert_log "
+        "WHERE tracked_author_id = $1 AND paper_id = $2 AND user_id = $3",
+        author_id,
+        paper_id,
+        contract_two_users.user_a_id,
+    )
+    assert log_row is not None, "author_alert_log row missing after first check"
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp2 = await c.post("/api/authors/check")
+    assert resp2.status_code == 200, resp2.text[:300]
+    body2 = resp2.json()
+    assert body2["new_papers"] == 0, f"Second call must dedup: {body2}"
+    assert body2["matches"] == [], f"Second call matches must be empty: {body2}"
+
+
+async def test_t9_check_null_metadata_does_not_500(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """NULL-tolerant: a matched paper with NULL metadata (and no summary)
+    serializes without a 500.
+
+    Verified: authors.py check_tracked_authors — `paper_metadata = paper["metadata"] or {}`.
+    """
+    await _track_author(contract_conn, contract_two_users.user_a_id, "Margaret Hamilton")
+    # Force a genuine SQL NULL metadata (override the '{}' default).
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, metadata)
+           VALUES ('t9-null', 'arxiv', 'Null meta paper', ARRAY['Margaret Hamilton'],
+                   'https://example.test/t9-null', NULL)
+           RETURNING id""",
+    )
+    null_meta = await contract_conn.fetchval("SELECT metadata FROM papers WHERE id = $1", paper_id)
+    assert null_meta is None, "metadata should be SQL NULL for this fixture"
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/authors/check")
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    matched_ids = {p["id"] for m in body["matches"] for p in m["papers"]}
+    assert paper_id in matched_ids, f"NULL-metadata paper not matched: {body['matches']}"
+    paper = next(p for m in body["matches"] for p in m["papers"] if p["id"] == paper_id)
+    # metadata coerced to {} (the `or {}` guard), serializes cleanly.
+    assert paper["metadata"] == {}
 
 
 # ---------------------------------------------------------------------------

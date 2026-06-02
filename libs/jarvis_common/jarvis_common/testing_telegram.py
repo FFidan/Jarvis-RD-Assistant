@@ -13,10 +13,13 @@ __all__ = [
     "FakeTxnCM",
     "make_telegram_update",
     "make_bot_config",
+    "make_http_response",
 ]
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+
+import httpx
 
 # ---------------------------------------------------------------------------
 # FakeAcquireCM / FakeTxnCM  (telegram_bot pairing tests, D8-04)
@@ -112,3 +115,46 @@ def make_bot_config(bot_config_cls: Any, **overrides: Any) -> Any:
     )
     defaults.update(overrides)
     return bot_config_cls(**defaults)
+
+
+# ---------------------------------------------------------------------------
+# HTTP response mock helper  (services_client tests)
+# ---------------------------------------------------------------------------
+
+
+def make_http_response(json_data: Any, *, status: int = 200) -> MagicMock:
+    """Build a minimal httpx Response-shaped mock.
+
+    Parameters
+    ----------
+    json_data:
+        The value returned by ``.json()``.
+    status:
+        HTTP status code stored in ``.status_code``.  When *status* >= 400,
+        ``.raise_for_status()`` raises ``httpx.HTTPStatusError``; otherwise it
+        is a no-op.
+
+    Returns
+    -------
+    MagicMock
+        A mock that satisfies the ``raise_for_status → json()`` contract used
+        by ``services_client`` and other bot REST helpers.
+    """
+    resp = MagicMock()
+    resp.status_code = status
+
+    if status >= 400:
+        # Build a minimal real HTTPStatusError so isinstance checks work.
+        _request = httpx.Request("GET", "http://test")
+        _response = httpx.Response(status_code=status, request=_request)
+        _exc = httpx.HTTPStatusError(
+            message=f"HTTP {status}",
+            request=_request,
+            response=_response,
+        )
+        resp.raise_for_status = MagicMock(side_effect=_exc)
+    else:
+        resp.raise_for_status = MagicMock()  # no-op
+
+    resp.json = MagicMock(return_value=json_data)
+    return resp

@@ -137,6 +137,11 @@ environment variable. The `telegram.owner_chat_id` config key and the
 `TELEGRAM_CHAT_ID` environment variable are retained as inert tombstones (not
 read at runtime) and may be removed in a future cleanup.
 
+The bot's product-data tenant isolation (projects, tasks, milestones, papers,
+author alerts) is enforced entirely server-side by the service endpoints it
+calls — the same routes the web app uses. The bot is a REST caller, not a
+second writer implementing its own scoping.
+
 ### Config Key Rotation
 
 To rotate `JARVIS_CONFIG_KEY` without downtime:

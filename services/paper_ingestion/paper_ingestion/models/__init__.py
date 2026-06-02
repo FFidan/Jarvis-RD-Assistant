@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     # __getattr__ below handles all actual imports at runtime; this block is
     # only evaluated by mypy / pyright (TYPE_CHECKING is False at runtime).
     from paper_ingestion.models.authors import (
+        AuthorAlertMatch,
         AuthorCheckResponse,
         AutoDetectResponse,
         TrackedAuthorCreate,
@@ -154,6 +155,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 _SYMBOL_MODULE: dict[str, str] = {
     # authors
+    "AuthorAlertMatch": "paper_ingestion.models.authors",
     "AuthorCheckResponse": "paper_ingestion.models.authors",
     "AutoDetectResponse": "paper_ingestion.models.authors",
     "TrackedAuthorCreate": "paper_ingestion.models.authors",
@@ -279,6 +281,7 @@ __all__ = [
     "AskResponse",
     "AskSourceItem",
     "AskVerifiedSentence",
+    "AuthorAlertMatch",
     "AuthorCheckResponse",
     "AutoDetectResponse",
     "BatchCitationFetchResponse",

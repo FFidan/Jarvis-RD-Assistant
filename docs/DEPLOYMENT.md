@@ -364,6 +364,12 @@ to the bot. The legacy `TELEGRAM_CHAT_ID` environment variable and the
 dashboard-code pairing path (`/start PAIR_<code>`) no longer work — any
 existing `TELEGRAM_CHAT_ID` value can be removed from `.env` after pairing.
 
+**Telegram owner-override network.** The bot calls service endpoints with
+`X-Owner-User-Id` to make per-user requests. `OWNER_OVERRIDE_ALLOWED_CIDRS`
+must cover the bot container's source IP — the default
+(`127.0.0.0/8,172.16.0.0/12`) covers the standard Docker bridge and requires
+no change for the bundled compose stack.
+
 **Ownership migration (0092).** On first startup after upgrade, migration 0092
 re-assigns any pre-existing product rows with a NULL owner to the single admin
 account. This is automatic and non-destructive; it only runs when exactly one

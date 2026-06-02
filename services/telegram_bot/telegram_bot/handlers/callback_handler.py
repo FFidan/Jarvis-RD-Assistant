@@ -20,10 +20,10 @@ import re
 from telegram import Message, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
+from telegram_bot import services_client
 from telegram_bot.formatters import format_paper_detail, format_project_status
 from telegram_bot.handlers.helpers import _owner_headers, auth_check, get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
-from telegram_bot.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +235,7 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by auth_check invariant
 
     await query.answer()
 
@@ -242,38 +243,21 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
         return
     project_id = int(match.group(1))
 
-    db = get_db(context)
-    user_id: int | None = jarvis_user_id
-
-    # Single query handles both multi-tenant (user_id IS NOT NULL) and
-    # legacy single-tenant (user_id IS NULL) paths without an unscoped catch-all.
-    project_row = await db.fetchrow(
-        "SELECT id, name, status, description, deadline FROM projects "
-        "WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
-        project_id,
-        user_id,
-    )
-    if not project_row:
-        await query.message.reply_text("Project not found.", parse_mode="HTML")
+    config = get_config(context)
+    http = get_http(context)
+    try:
+        project = await services_client.fetch_project(http, config, jarvis_user_id, project_id)
+        if project is None:
+            await query.message.reply_text("Project not found.", parse_mode="HTML")
+            return
+        tasks = await services_client.fetch_project_tasks(http, config, jarvis_user_id, project_id)
+        milestones = await services_client.fetch_project_milestones(
+            http, config, jarvis_user_id, project_id
+        )
+    except Exception:
+        logger.exception("Failed to load project detail for id=%s", project_id)
+        await query.message.reply_text("⚠️ Couldn't load that right now.", parse_mode="HTML")
         return
-
-    project = dict(project_row)
-
-    task_rows = await db.fetch(
-        "SELECT id, title, status FROM tasks "
-        "WHERE project_id = $1 AND user_id IS NOT DISTINCT FROM $2 ORDER BY created_at",
-        project_id,
-        user_id,
-    )
-    tasks = [dict(r) for r in task_rows]
-
-    milestone_rows = await db.fetch(
-        "SELECT id, name, deadline, completed FROM milestones "
-        "WHERE project_id = $1 AND user_id IS NOT DISTINCT FROM $2 ORDER BY deadline",
-        project_id,
-        user_id,
-    )
-    milestones = [dict(r) for r in milestone_rows]
 
     text = format_project_status(project, tasks, milestones)
     await query.message.reply_text(text, parse_mode="HTML")
@@ -281,7 +265,12 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
 
 @rate_limit(max_calls=10, window_seconds=60)
 async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``task_done_{id}`` — mark a task as complete via ProjectManager."""
+    """Handle ``task_done_{id}`` — mark a task done via the Learning Engine REST API.
+
+    Ownership is enforced server-side: the LE ``PUT /api/tasks/{id}`` endpoint scopes
+    by the forwarded ``X-Owner-User-Id`` header, so a non-owned task returns 404 →
+    "not found" with no existence leak (TG-SEC-03 now lives in the LE contract).
+    """
     query = update.callback_query
     if query is None:
         return
@@ -293,6 +282,7 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
+    assert jarvis_user_id is not None  # noqa: S101 — guaranteed by auth_check invariant
     if context.user_data is not None:
         context.user_data["jarvis_user_id"] = jarvis_user_id
 
@@ -302,23 +292,16 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     task_id = int(match.group(1))
 
-    db = get_db(context)
-    # TG-SEC-03: scope ownership with the NULL-safe predicate (NOT complete_task's
-    # $2-IS-NULL catch-all). A legacy owner (jarvis_user_id None) may complete only
-    # NULL-owned tasks; a paired user only their own. Prevents cross-tenant writes.
-    owns = await db.fetchval(
-        "SELECT 1 FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
-        task_id,
-        jarvis_user_id,
-    )
-    if not owns:
-        await query.message.reply_text(f"Task <b>{task_id}</b> not found.", parse_mode="HTML")
+    config = get_config(context)
+    http = get_http(context)
+    try:
+        result = await services_client.complete_task(http, config, jarvis_user_id, task_id)
+    except Exception:
+        logger.exception("Failed to complete task id=%s", task_id)
+        await query.message.reply_text("⚠️ Couldn't load that right now.", parse_mode="HTML")
         return
 
-    pm = ProjectManager(db)
-    result = await pm.complete_task(task_id, user_id=jarvis_user_id)
-
-    if not result:
+    if result is None:
         await query.message.reply_text(f"Task <b>{task_id}</b> not found.", parse_mode="HTML")
     else:
         await query.message.reply_text(

@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from telegram_bot import services_client
 from telegram_bot.formatters import escape, truncate
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import get_db, get_jarvis_user_id
+from telegram_bot.handlers.helpers import get_config, get_http, get_jarvis_user_id
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.handlers.types import TaskRow
-from telegram_bot.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,10 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Handle ``/tasks [project_id]`` — list in-progress tasks, optionally filtered by project."""
     if update.message is None:
         return
-    db = get_db(context)
+    http = get_http(context)
+    config = get_config(context)
     user_id = get_jarvis_user_id(context)
+    assert user_id is not None  # noqa: S101 — guaranteed by @auth_required
     project_id = None
     if context.args:
         try:
@@ -33,19 +36,14 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text("Usage: /tasks [project_id]", parse_mode="HTML")
             return
 
-    base_sql = (
-        "SELECT t.id, t.title, t.status, p.name AS project_name "
-        "FROM tasks t LEFT JOIN projects p ON t.project_id = p.id "
-        "WHERE t.status = 'in_progress'"
-    )
-    params: list[object] = []
-    if user_id is not None:
-        base_sql += f" AND t.user_id IS NOT DISTINCT FROM ${len(params) + 1}"
-        params.append(user_id)
-    if project_id is not None:
-        base_sql += f" AND t.project_id = ${len(params) + 1}"
-        params.append(project_id)
-    rows = await db.fetch(base_sql + " ORDER BY t.created_at DESC LIMIT 20", *params)
+    try:
+        rows = await services_client.fetch_tasks(
+            http, config, user_id, status="in_progress", project_id=project_id
+        )
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.exception("Failed to fetch tasks")
+        await update.message.reply_text("⚠️ Couldn't reach JARVIS, try again.", parse_mode="HTML")
+        return
 
     if not rows:
         await update.message.reply_text("No in-progress tasks.", parse_mode="HTML")
@@ -73,7 +71,7 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 @rate_limit(max_calls=10, window_seconds=60)
 @auth_required
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/done <task_id>`` — mark a task as complete via ProjectManager."""
+    """Handle ``/done <task_id>`` — mark a task as complete via the learning engine."""
     if update.message is None:
         return
     if not context.args:
@@ -86,12 +84,18 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Task ID must be a number.", parse_mode="HTML")
         return
 
-    db = get_db(context)
+    http = get_http(context)
+    config = get_config(context)
     user_id = get_jarvis_user_id(context)
-    pm = ProjectManager(db)
-    result = await pm.complete_task(task_id, user_id=user_id)
+    assert user_id is not None  # noqa: S101 — guaranteed by @auth_required
+    try:
+        result = await services_client.complete_task(http, config, user_id, task_id)
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.exception("Failed to complete task %s", task_id)
+        await update.message.reply_text("⚠️ Couldn't reach JARVIS, try again.", parse_mode="HTML")
+        return
 
-    if not result:
+    if result is None:
         await update.message.reply_text(f"Task <b>{task_id}</b> not found.", parse_mode="HTML")
     else:
         await update.message.reply_text(

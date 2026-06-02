@@ -17,7 +17,13 @@ Related docs:
   chunking, embeddings, RAG, extraction, Pulse, Zotero, and source integrations.
 - `learning_engine` - FastAPI service for FSRS cards, reviews, projects,
   analytics, and card generation.
-- `telegram_bot` - optional push-notification and inline-review service.
+- `telegram_bot` - optional push-notification and interaction service. It is a
+  thin REST client: commands, inline callbacks, and scheduled jobs (daily
+  briefing, deadline warnings, author alerts) all call the `learning_engine`
+  and `paper_ingestion` REST APIs using `X-Owner-User-Id` owner-override.
+  Direct Postgres access is limited to the bot's own pairing table
+  (`telegram_user_pairings`) and the nudge scheduler — all product-data tenant
+  scoping is enforced server-side by the service endpoints the bot calls.
 - `frontend` - React dashboard served through nginx. Host port defaults to
   `3001`; container port is `3000`.
 - `postgres` - primary state store.

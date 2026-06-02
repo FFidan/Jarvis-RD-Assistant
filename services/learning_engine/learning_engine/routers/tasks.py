@@ -1,11 +1,14 @@
 """Tasks CRUD router with paper-link management."""
 
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import assert_paper_ownership, delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_strict
+from jarvis_common.auth import (
+    current_user_id_strict,
+    current_user_id_strict_with_owner_override,
+)
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import (
@@ -45,7 +48,7 @@ async def list_tasks(
     project_id: int,
     status: str | None = Query(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> list[TaskResponse]:
     """List tasks for a project, optionally filtered by status."""
     if status is not None and status not in _VALID_TASK_STATUSES:
@@ -76,6 +79,51 @@ async def list_tasks(
                 project_id,
                 user_id,
             )
+    return [TaskResponse(**dict(row)) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/tasks  (cross-project task list)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tasks", response_model=list[TaskResponse])
+@limiter.limit("60/minute")
+async def list_all_tasks(
+    request: Request,
+    status: Literal["todo", "in_progress", "done", "blocked"] | None = None,
+    project_id: int | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> list[TaskResponse]:
+    """List the caller's tasks across all projects.
+
+    LEFT JOIN on projects so quick-add tasks (``project_id IS NULL``) are
+    included with ``project_name`` None. Scoped to the caller via
+    ``t.user_id``; optional ``status`` / ``project_id`` narrow the result.
+    """
+    clauses = ["t.user_id = $1"]
+    params: list[Any] = [user_id]
+    if status is not None:
+        params.append(status)
+        clauses.append(f"t.status = ${len(params)}")
+    if project_id is not None:
+        params.append(project_id)
+        clauses.append(f"t.project_id = ${len(params)}")
+    params.append(limit)
+    limit_pos = len(params)
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT t.*, pr.name AS project_name
+                FROM tasks t
+                LEFT JOIN projects pr ON pr.id = t.project_id
+                WHERE {" AND ".join(clauses)}
+                ORDER BY t.priority, t.created_at DESC
+                LIMIT ${limit_pos}""",
+            *params,
+        )
     return [TaskResponse(**dict(row)) for row in rows]
 
 
@@ -147,7 +195,7 @@ async def update_task(
     task_id: int,
     body: TaskUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    user_id: int = Depends(current_user_id_strict),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> TaskResponse:
     """Update a task. Auto-sets completed_at when status changes to done."""
     async with db_pool.acquire() as conn:
@@ -166,7 +214,10 @@ async def update_task(
 
             # Auto-set completed_at when status transitions to/from done
             extra_sets = ["updated_at = NOW()"]
-            if updates_dict.get("status") == "done" and existing["status"] != "done":
+            transitioned_to_done = (
+                updates_dict.get("status") == "done" and existing["status"] != "done"
+            )
+            if transitioned_to_done:
                 extra_sets.append("completed_at = NOW()")
             elif updates_dict.get("status") and updates_dict["status"] != "done":
                 extra_sets.append("completed_at = NULL")
@@ -181,6 +232,20 @@ async def update_task(
             )
             if row is None:
                 raise HTTPException(status_code=404, detail="Task not found or was deleted")
+
+            # BUG-1 (S8): update_task is the sole writer of daily_log.tasks_completed.
+            # On a genuine todo→done transition, bump today's counter (COALESCE
+            # because the column is nullable). The existing!=done guard makes a
+            # re-PUT of an already-done task idempotent (no double-count).
+            if transitioned_to_done:
+                await conn.execute(
+                    """INSERT INTO daily_log (user_id, log_date, tasks_completed)
+                       VALUES ($1, CURRENT_DATE, 1)
+                       ON CONFLICT (user_id, log_date)
+                       DO UPDATE SET tasks_completed
+                           = COALESCE(daily_log.tasks_completed, 0) + 1""",
+                    user_id,
+                )
     return TaskResponse(**dict(row))
 
 

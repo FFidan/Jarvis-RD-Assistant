@@ -155,16 +155,6 @@ These document intentional deviations from the container-hardening sweep, each w
 
 ---
 
-### B5-5 — Telegram bot queries shared schema directly instead of service API
-
-**Finding:** `telegram_bot` queries Postgres directly for tasks, projects, and milestones even though `learning_engine` exposes REST APIs for those resources, coupling the bot to the shared schema.
-
-**Why deferred:** single-deployment, single-user product. The direct queries are correct and the schema is stable.
-
-**Reopen criteria:** if the shared schema churns (column renames, table splits, migration changes that affect the queried tables), or if `telegram_bot` is deployed independently of `learning_engine`.
-
----
-
 ### B3-006 — `/api/papers/process_batch` uses an underscore in the path
 
 **Finding:** `/api/papers/process_batch` uses an underscore separator while peer routes use hyphens.

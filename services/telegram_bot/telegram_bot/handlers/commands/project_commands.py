@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from telegram_bot import services_client
 from telegram_bot.formatters import escape, sanitize_user_input, truncate
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import get_db, get_jarvis_user_id
+from telegram_bot.handlers.helpers import get_config, get_http, get_jarvis_user_id
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.handlers.types import ProjectRow
-from telegram_bot.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +35,16 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Handle ``/projects`` — list all active projects with status and description."""
     if update.message is None:
         return
-    db = get_db(context)
+    http = get_http(context)
+    config = get_config(context)
     user_id = get_jarvis_user_id(context)
-    if user_id is not None:
-        rows = await db.fetch(
-            "SELECT id, name, status, description, deadline "
-            "FROM projects WHERE status = 'active' "
-            "AND user_id IS NOT DISTINCT FROM $1 ORDER BY created_at DESC",
-            user_id,
-        )
-    else:
-        rows = await db.fetch(
-            "SELECT id, name, status, description, deadline "
-            "FROM projects WHERE status = 'active' ORDER BY created_at DESC"
-        )
+    assert user_id is not None  # noqa: S101 — guaranteed by @auth_required
+    try:
+        rows = await services_client.fetch_projects(http, config, user_id, status="active")
+    except (httpx.HTTPError, ValueError, KeyError):
+        logger.exception("Failed to fetch projects")
+        await update.message.reply_text("⚠️ Couldn't reach JARVIS, try again.", parse_mode="HTML")
+        return
 
     if not rows:
         await update.message.reply_text("No active projects.", parse_mode="HTML")
@@ -79,7 +76,7 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 @rate_limit(max_calls=5, window_seconds=60)
 @auth_required
 async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/newproject <name>`` — create a new project via ProjectManager."""
+    """Handle ``/newproject <name>`` — create a new project via the learning engine."""
     if update.message is None:
         return
     if not context.args:
@@ -87,11 +84,12 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     name = sanitize_user_input(" ".join(context.args), 200)
-    db = get_db(context)
+    http = get_http(context)
+    config = get_config(context)
     user_id = get_jarvis_user_id(context)
+    assert user_id is not None  # noqa: S101 — guaranteed by @auth_required
     try:
-        pm = ProjectManager(db)
-        result = await pm.create_project(name, user_id=user_id)
+        result = await services_client.create_project(http, config, user_id, name=name)
         project_id = result["id"]
         await update.message.reply_text(
             f"✅ Project <b>{escape(name)}</b> created (ID: {project_id}).",

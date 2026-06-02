@@ -14,7 +14,9 @@ pytestmark = pytest.mark.asyncio
 def mock_deps():
     """Stock asyncpg.Pool / Bot / httpx.AsyncClient / BotConfig fixtures."""
     db_pool = MagicMock()
-    # db_pool.fetch must be awaitable for deadline_warning (milestones query)
+    # list_user_pairings (the only db_pool consumer that runs before the guard)
+    # is patched in each test, so db_pool.fetch is never reached — but keep it
+    # awaitable as a defensive default.
     db_pool.fetch = AsyncMock(return_value=[])
     bot = AsyncMock()
     http_client = AsyncMock()
@@ -72,23 +74,12 @@ async def test_research_pulse_skips_with_warning_when_no_pairings(caplog, mock_d
 
 
 async def test_deadline_warning_skips_with_warning_when_no_pairings(caplog, mock_deps):
-    """deadline_warning fetches milestones before checking pairings.
+    """deadline_warning guards on pairings FIRST and warns + returns when empty.
 
-    We must return at least one milestone so the function reaches the pairings
-    guard; an empty milestones list exits early (log.INFO) before that check.
+    Milestones are now fetched per-pairing via services_client (REST), so the
+    pairings guard runs before any milestone lookup; the generic helper covers
+    this case without special milestone setup.
     """
     from telegram_bot.orchestration.deadline_warning import run_deadline_warning
 
-    db_pool, bot, http_client, config = mock_deps
-    # Return a fake milestone so the function proceeds past the milestones guard.
-    db_pool.fetch = AsyncMock(
-        return_value=[{"name": "Draft", "deadline": "2099-01-01", "project_name": "P"}]
-    )
-    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=[])):
-        caplog.set_level(logging.WARNING)
-        await run_deadline_warning(http_client=http_client, db_pool=db_pool, bot=bot, config=config)
-    bot.send_message.assert_not_called()
-    assert any(r.levelno >= logging.WARNING for r in caplog.records), (
-        f"expected at least one WARNING log when no pairings found; got: "
-        f"{[(r.levelname, r.message) for r in caplog.records]}"
-    )
+    await _assert_skips_with_warning(run_deadline_warning, caplog, mock_deps)

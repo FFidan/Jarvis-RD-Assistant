@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jarvis_common.testing import make_bot_config
+from jarvis_common.testing_telegram import make_http_response
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.commands.project_commands import projects_command
@@ -24,14 +25,14 @@ def _make_update_and_context(args=None):
     context = MagicMock()
     context.args = args or []
     context.user_data = {"jarvis_user_id": 1}
-    db = AsyncMock()
+    http = AsyncMock()
     context.application = MagicMock()
     context.application.bot_data = {
         "config": make_bot_config(BotConfig, telegram_chat_id=_TEST_CHAT_ID),
-        "db_pool": db,
-        "http_client": AsyncMock(),
+        "db_pool": AsyncMock(),
+        "http_client": http,
     }
-    return update, context, db
+    return update, context, http
 
 
 @pytest.fixture(autouse=True)
@@ -55,17 +56,19 @@ def _default_auth_patch():
 
 @pytest.mark.asyncio
 async def test_projects_command_renders_explicit_project_row_fields() -> None:
-    """Project list rendering should use the selected project row fields."""
-    update, context, db = _make_update_and_context()
-    db.fetch.return_value = [
-        {
-            "id": 42,
-            "name": "Project <Alpha>",
-            "status": "active",
-            "description": "Important <work>",
-            "deadline": None,
-        }
-    ]
+    """Project list rendering should use the REST project row fields."""
+    update, context, http = _make_update_and_context()
+    http.get.return_value = make_http_response(
+        [
+            {
+                "id": 42,
+                "name": "Project <Alpha>",
+                "status": "active",
+                "description": "Important <work>",
+                "deadline": None,
+            }
+        ]
+    )
 
     await projects_command(update, context)
 
@@ -83,16 +86,18 @@ async def test_projects_command_renders_explicit_project_row_fields() -> None:
 
 @pytest.mark.asyncio
 async def test_tasks_command_renders_joined_project_name_when_present() -> None:
-    """Task list rendering should include the LEFT JOIN project name when supplied."""
-    update, context, db = _make_update_and_context()
-    db.fetch.return_value = [
-        {
-            "id": 7,
-            "title": "Write <tests>",
-            "status": "in_progress",
-            "project_name": "Cleanup <Wave>",
-        }
-    ]
+    """Task list rendering should include the project_name field when supplied."""
+    update, context, http = _make_update_and_context()
+    http.get.return_value = make_http_response(
+        [
+            {
+                "id": 7,
+                "title": "Write <tests>",
+                "status": "in_progress",
+                "project_name": "Cleanup <Wave>",
+            }
+        ]
+    )
 
     await tasks_command(update, context)
 

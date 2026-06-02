@@ -41,8 +41,21 @@ class AutoDetectResponse(BaseModel):
     authors: list[TrackedAuthorResponse]
 
 
+class AuthorAlertMatch(BaseModel):
+    """A tracked author and the newly-alerted papers matched for them.
+
+    ``papers`` carries the keys the Telegram bot's ``format_paper_card``
+    consumes (``id, title, authors, published_date, source_type, url,
+    metadata``); values are NULL-tolerant.
+    """
+
+    author_name: str
+    papers: list[dict]
+
+
 class AuthorCheckResponse(BaseModel):
     """Response for check tracked authors endpoint."""
 
     new_papers: int
     authors_checked: int
+    matches: list[AuthorAlertMatch] = []
