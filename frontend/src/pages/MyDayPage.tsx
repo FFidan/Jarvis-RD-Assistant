@@ -68,16 +68,16 @@ export function MyDayPage() {
     const today = todayIso();
 
     // threads → ThreadsSection + HeroNow both use ['my-day', 'threads']
-    queryClient.setQueryData(['my-day', 'threads'], bundle.threads);
+    queryClient.setQueryData(QUERY_KEYS.myDay.threads(), bundle.threads);
 
     // yesterday — key includes tz offset to match YesterdaySection exactly
-    queryClient.setQueryData(['my-day', 'yesterday', tzOffsetMinutes], bundle.yesterday);
+    queryClient.setQueryData(QUERY_KEYS.myDay.yesterday(tzOffsetMinutes), bundle.yesterday);
 
     // intent — matches IntentSection's ['intent', 'today']
-    queryClient.setQueryData(['intent', 'today'], bundle.intent);
+    queryClient.setQueryData(QUERY_KEYS.intent.today(), bundle.intent);
 
     // journal — matches EndOfDaySection's ['journalEntry', today]
-    queryClient.setQueryData(['journalEntry', today], bundle.journal);
+    queryClient.setQueryData(QUERY_KEYS.journal.entry(today), bundle.journal);
   }, [bundle, queryClient, tzOffsetMinutes]);
 
   useEffect(() => {

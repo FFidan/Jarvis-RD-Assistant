@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { create } from 'zustand';
 import { ActionsSidebar } from '@/components/paper/ActionsSidebar';
 import type { AnalyzeEvent } from '@/lib/sse';
+import type { Job } from '@/stores/job-store';
 
 // --- Mock SSE streamAnalyze ---
 
@@ -23,6 +25,68 @@ vi.mock('@/lib/sse', () => ({
   }),
 }));
 
+// --- Mock job-store ---
+//
+// Backed by a REAL (minimal) zustand store so that placing a terminal Job into
+// `jobs` triggers a component re-render — exactly how the production store
+// drives the ActionsSidebar terminal-feedback useEffect. trackExternalJob and
+// isRunning remain spies so call assertions still work.
+
+interface MockJobState {
+  trackExternalJob: (job: { jobId: string }) => string;
+  isRunning: () => boolean;
+  jobs: Record<string, Job>;
+}
+
+const jobStoreMocks = vi.hoisted(() => ({
+  trackExternalJob: vi.fn((job: { jobId: string }) => job.jobId),
+  isRunning: vi.fn(() => false),
+}));
+
+const useMockJobStore = create<MockJobState>(() => ({
+  trackExternalJob: jobStoreMocks.trackExternalJob,
+  isRunning: jobStoreMocks.isRunning,
+  jobs: {},
+}));
+
+/** Place a terminal (or any) Job into the mock store, triggering a re-render. */
+function setMockJob(jobId: string, job: Job) {
+  act(() => {
+    useMockJobStore.setState((s) => ({ jobs: { ...s.jobs, [jobId]: job } }));
+  });
+}
+
+function makeJob(overrides: Partial<Job> & Pick<Job, 'id' | 'status'>): Job {
+  return {
+    kind: 'card.generate',
+    progress: 1,
+    progress_message: null,
+    payload: { paper_id: 42, deck_id: 1 },
+    result: null,
+    error: null,
+    created_at: '2026-01-01T00:00:00Z',
+    started_at: null,
+    finished_at: null,
+    ...overrides,
+  };
+}
+
+vi.mock('@/stores/job-store', () => ({
+  useJobStore: <T,>(selector: (state: MockJobState) => T): T =>
+    useMockJobStore(selector),
+}));
+
+// --- Mock handleAuthFailure from @/lib/api/core ---
+
+const apiCoreMocks = vi.hoisted(() => ({
+  handleAuthFailure: vi.fn(),
+  apiFetch: vi.fn(),
+}));
+vi.mock('@/lib/api/core', () => ({
+  handleAuthFailure: apiCoreMocks.handleAuthFailure,
+  apiFetch: apiCoreMocks.apiFetch,
+}));
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
   return {
@@ -31,12 +95,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     processPdf: vi.fn().mockResolvedValue({ job_id: 'job-process-001', status: 'queued' }),
     summarizePaper: vi.fn().mockResolvedValue({ job_id: 'job-summary-001', status: 'queued' }),
     generateCardsJob: vi.fn().mockResolvedValue({ job_id: 'test-job-001', status: 'queued' }),
-    getJob: vi.fn().mockResolvedValue({
-      id: 'test-job-001', kind: 'card.generate', status: 'succeeded',
-      progress: 1.0, progress_message: 'Done',
-      result: { cards_created: 3, confidence: 'HIGH' }, error: null,
-      created_at: '2026-01-01T00:00:00Z', started_at: null, finished_at: null,
-    }),
     fetchDecks: vi.fn().mockResolvedValue([
       { id: 1, name: 'ML Fundamentals', description: null, card_count: 10, due_count: 0, topic_id: null, created_at: '2026-01-01T00:00:00Z' },
     ]),
@@ -89,6 +147,14 @@ describe('ActionsSidebar', () => {
     vi.mocked(fetchDecks).mockResolvedValue([
       { id: 1, name: 'ML Fundamentals', description: null, card_count: 10, due_count: 0, topic_id: null, created_at: '2026-01-01T00:00:00Z' },
     ]);
+    // Re-apply job-store mock defaults
+    jobStoreMocks.trackExternalJob.mockImplementation((job: { jobId: string }) => job.jobId);
+    jobStoreMocks.isRunning.mockReturnValue(false);
+    useMockJobStore.setState({
+      trackExternalJob: jobStoreMocks.trackExternalJob,
+      isRunning: jobStoreMocks.isRunning,
+      jobs: {},
+    });
   });
 
   it('renders "Analyze Paper" button text', () => {
@@ -377,26 +443,16 @@ describe('ActionsSidebar', () => {
     expect(generateBtn).toBeDisabled();
   });
 
-  // ----- safe-href guard in action_link render (FE-004 / isSafeRelativeHref) -----
+  // ----- card.generate job tracked via job-store (replaced setInterval polling) -----
   //
-  // The actionResult.action_link is set from the generate-cards poll path (failed job).
-  // Radix Select requires hasPointerCapture in jsdom; polyfill it for these tests.
-  // Approach: mock generateCardsJob + getJob to immediately produce a failed job with
-  // an action_link, then trigger generate by directly calling the combobox + generate
-  // button with the pointer-capture polyfill in scope.
+  // PR3-T6: generateCardsJob result is now wired into the job-store via
+  // trackExternalJob, not a manual setInterval(getJob, 1000) loop. This
+  // ensures 401s during SSE tracking route through handleAuthFailure (the
+  // store's subscriber calls handleAuthFailure on 401 and stops — no infinite
+  // reconnect).
 
-  it('action_link with safe href renders as a router Link, not inert text', async () => {
+  it('Generate Cards wires the job into the store via trackExternalJob, not setInterval polling', async () => {
     const user = userEvent.setup();
-
-    // Trigger a failed card-generate job with a safe (relative) action_link.
-    const { getJob } = await import('@/lib/api');
-    vi.mocked(getJob).mockResolvedValue({
-      id: 'test-job-link', kind: 'card.generate', status: 'failed',
-      progress: 0, progress_message: null,
-      result: null,
-      error: { message: 'Not enough chunks', action_link: { label: 'Process Paper', href: '/paper/1' } },
-      created_at: '2026-01-01T00:00:00Z', started_at: null, finished_at: null,
-    } as never);
 
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -407,41 +463,30 @@ describe('ActionsSidebar', () => {
       </QueryClientProvider>,
     );
 
-    // Wait for decks to load, then select the deck
+    // Wait for decks to load, select the deck, then click Generate Cards
     await screen.findByText('Target Deck');
     await user.click(screen.getByRole('combobox'));
     await user.click(await screen.findByRole('option', { name: 'ML Fundamentals' }));
-
-    // Click Generate Cards (enabled: hasChunks=true, deck selected)
     await user.click(screen.getByRole('button', { name: /Generate Cards/ }));
 
-    // Wait for the failed action_link to appear (generous timeout: the
-    // generate→poll→render chain is slower on contended CI runners).
-    await waitFor(
-      () => {
-        expect(screen.getByText('Process Paper')).toBeInTheDocument();
-      },
-      { timeout: 4000 },
-    );
-
-    // Safe href → rendered as a react-router Link (renders as <a> in MemoryRouter)
-    const link = screen.getByRole('link', { name: 'Process Paper' });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute('href', '/paper/1');
+    await waitFor(() => {
+      expect(jobStoreMocks.trackExternalJob).toHaveBeenCalledWith({
+        jobId: 'test-job-001',
+        kind: 'card.generate',
+        payload: { paper_id: 42, deck_id: 1 },
+        status: 'queued',
+      });
+    });
   });
 
-  it('action_link with unsafe href renders as inert span, not a navigable link', async () => {
+  it('Generate Cards delegates tracking to the store exactly once (no setInterval poll loop)', async () => {
     const user = userEvent.setup();
 
-    const { getJob } = await import('@/lib/api');
-    vi.mocked(getJob).mockResolvedValue({
-      id: 'test-job-unsafe', kind: 'card.generate', status: 'failed',
-      progress: 0, progress_message: null,
-      result: null,
-      error: { message: 'Injection attempt', action_link: { label: 'Click me', href: 'javascript:alert(1)' } },
-      created_at: '2026-01-01T00:00:00Z', started_at: null, finished_at: null,
-    } as never);
-
+    // The component's only responsibility is to hand the job off to the store
+    // via trackExternalJob — once. It does NOT run its own setInterval(getJob)
+    // poll loop (the source of the prior 401 leak). 401→handleAuthFailure
+    // routing lives in the STORE's SSE subscriber and is covered by the
+    // job-store's own tests; asserting it here would be circular.
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
@@ -456,17 +501,94 @@ describe('ActionsSidebar', () => {
     await user.click(await screen.findByRole('option', { name: 'ML Fundamentals' }));
     await user.click(screen.getByRole('button', { name: /Generate Cards/ }));
 
-    await waitFor(
-      () => {
-        expect(screen.getByText('Click me')).toBeInTheDocument();
-      },
-      { timeout: 4000 },
-    );
+    await waitFor(() => {
+      expect(jobStoreMocks.trackExternalJob).toHaveBeenCalledTimes(1);
+    });
 
-    // Unsafe href → rendered as inert <span>, NOT a link/anchor
-    expect(screen.queryByRole('link', { name: 'Click me' })).not.toBeInTheDocument();
-    const inertLabel = screen.getByText('Click me');
-    expect(inertLabel.tagName.toLowerCase()).toBe('span');
+    // Give any (hypothetical) poll loop a chance to fire repeated calls — it must not.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(jobStoreMocks.trackExternalJob).toHaveBeenCalledTimes(1);
+  });
+
+  // ----- card.generate TERMINAL feedback banner (restored after PR3 regression) -----
+  //
+  // The store only invalidates queries (success) / fires a transient toast
+  // (failure). The PERSISTENT, actionable banner is the component's job: a
+  // useEffect watches the tracked genJob's status and sets actionResult on
+  // terminal. These tests drive a terminal Job into the mock store to fire it.
+
+  /** Render with all stages done, select the deck, and click Generate Cards. */
+  async function startGenerate() {
+    const user = userEvent.setup();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ActionsSidebar paperId={42} hasChunks pdfDownloaded hasSummary />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Target Deck');
+    await user.click(screen.getByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: 'ML Fundamentals' }));
+    await user.click(screen.getByRole('button', { name: /Generate Cards/ }));
+    await waitFor(() => expect(jobStoreMocks.trackExternalJob).toHaveBeenCalled());
+  }
+
+  it('a succeeded card.generate job shows the "Generated N cards" success banner', async () => {
+    await startGenerate();
+
+    // Store transitions the tracked job (id 'test-job-001') to succeeded with
+    // the backend result shape ({cards_created, confidence}).
+    setMockJob('test-job-001', makeJob({
+      id: 'test-job-001',
+      status: 'succeeded',
+      result: { cards_created: 7, confidence: 'HIGH' },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Generated 7 cards (confidence: HIGH)')).toBeInTheDocument();
+    });
+  });
+
+  it('a failed card.generate job with a SAFE action_link renders a recovery Link', async () => {
+    await startGenerate();
+
+    setMockJob('test-job-001', makeJob({
+      id: 'test-job-001',
+      status: 'failed',
+      error: {
+        message: 'Paper not processed yet',
+        action_link: { label: 'Process Paper first', href: '/paper/1?action=process' },
+      },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Paper not processed yet')).toBeInTheDocument();
+    });
+    // Safe relative href → rendered as a navigable Link (role=link).
+    const link = screen.getByRole('link', { name: 'Process Paper first' });
+    expect(link).toHaveAttribute('href', '/paper/1?action=process');
+  });
+
+  it('a failed card.generate job with an UNSAFE action_link renders an inert span, not a Link', async () => {
+    await startGenerate();
+
+    setMockJob('test-job-001', makeJob({
+      id: 'test-job-001',
+      status: 'failed',
+      error: {
+        message: 'Generation failed',
+        action_link: { label: 'Click here', href: 'javascript:alert(1)' },
+      },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Generation failed')).toBeInTheDocument();
+    });
+    // Unsafe href → label shown as inert text, NOT a Link.
+    expect(screen.getByText('Click here')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Click here' })).not.toBeInTheDocument();
   });
 
   it('renders tooltip info icons for visible action buttons', async () => {

@@ -561,14 +561,16 @@ async def test_pulse_history_user_isolation(
     )
 
 
-# §A-PULSE-05 — GET /api/pulse/today: 404 when no deck for today (fresh user)
-# Verified: routers/pulse.py:141-202 (get_today → 404 when load_today returns None)
+# §A-PULSE-05 — GET /api/pulse/today: 200 + null when no deck for today (fresh user)
+# Verified: routers/pulse.py get_today → returns None (HTTP 200 + JSON null) when
+# load_today returns None. Empty state, not an error — the dashboard renders an
+# empty Pulse card instead of logging a console 404 on first run.
 
 
-async def test_pulse_today_404_for_user_with_no_deck(
+async def test_pulse_today_empty_returns_200_null_for_user_with_no_deck(
     contract_conn, _pi_pulse_app, _configure_api_key
 ):
-    """GET /api/pulse/today returns 404 for a user who has never generated a deck."""
+    """GET /api/pulse/today returns 200 + JSON null for a user with no deck (empty state)."""
     user_id = await contract_conn.fetchval(
         "INSERT INTO users (email, role) VALUES ('pulse-nodeck@contract.example.com', 'user') RETURNING id"
     )
@@ -587,9 +589,11 @@ async def test_pulse_today_404_for_user_with_no_deck(
     ) as c:
         resp = await c.get("/api/pulse/today")
 
-    assert resp.status_code == 404, (
-        f"User with no deck must get 404 from /api/pulse/today; got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 200, (
+        f"User with no deck must get 200 (empty state) from /api/pulse/today; "
+        f"got {resp.status_code}: {resp.text}"
     )
+    assert resp.json() is None, f"Empty Pulse state must serialize to JSON null; got {resp.text}"
 
 
 # §A-PULSE-06 — GET /api/pulse/source-health: returns list (empty for fresh user)

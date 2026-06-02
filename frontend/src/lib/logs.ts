@@ -5,7 +5,7 @@
  */
 
 import { useAuthStore } from '@/stores/auth-store';
-import { apiFetch } from '@/lib/api';
+import { apiFetch } from '@/lib/api/core';
 // Leaf import (not the barrel): handleAuthFailure is an internal helper, not
 // part of @/lib/api's public surface.
 import { handleAuthFailure } from '@/lib/api/core';

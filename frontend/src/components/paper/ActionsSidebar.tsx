@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircle } from 'lucide-react';
-import { downloadPdf, processPdf, summarizePaper, generateCardsJob, getJob, fetchDecks } from '@/lib/api';
+import { downloadPdf, processPdf, summarizePaper, generateCardsJob, fetchDecks } from '@/lib/api';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { streamAnalyze } from '@/lib/sse';
 import { isSafeRelativeHref } from '@/lib/safe-href';
@@ -21,7 +21,7 @@ import {
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
 import { errorMessage } from '@/lib/errors';
-import type { RecentFeedback, PartialGenJob } from '@/types';
+import type { RecentFeedback } from '@/types';
 
 const ACTION_TOOLTIPS: Record<string, string> = {
   analyze:
@@ -78,6 +78,9 @@ export function ActionsSidebar({
 }: ActionsSidebarProps) {
   const queryClient = useQueryClient();
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
+  const isRunning = useJobStore((s) => s.isRunning);
+  const [genJobId, setGenJobId] = useState<string | null>(null);
+  const genJob = useJobStore((s) => (genJobId ? s.jobs[genJobId] ?? null : null));
   const [deckId, setDeckId] = useState<string>('');
   const [maxCards, setMaxCards] = useState('5');
   const [actionResult, setActionResult] = useState<{ type: 'success' | 'error'; message: string; action_link?: { label: string; href: string } } | null>(null);
@@ -89,19 +92,38 @@ export function ActionsSidebar({
   /** The stage that last failed during a streamAnalyze run — used for per-stage Retry. */
   const [failedStage, setFailedStage] = useState<'downloading' | 'processing' | 'summarizing' | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const genPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [genJob, setGenJob] = useState<Job | PartialGenJob | null>(null);
 
   useEffect(() => () => {
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
     }
-    if (genPollRef.current !== null) {
-      clearInterval(genPollRef.current);
-      genPollRef.current = null;
-    }
   }, []);
+
+  // Restore terminal feedback for the tracked card.generate job. The store
+  // (job-store.ts:222-253) only invalidates queries (success) or fires a
+  // transient toast (failure); it does NOT set the persistent banner. Mirror
+  // the old poll-loop terminal feedback here, then stop watching this job.
+  useEffect(() => {
+    if (!genJob || !TERMINAL_STATUSES.includes(genJob.status)) return;
+    if (genJob.status === 'succeeded') {
+      const r = (genJob.result ?? {}) as { cards_created?: number; confidence?: string | number };
+      const detail = r.cards_created != null
+        ? `Generated ${r.cards_created} cards${r.confidence != null ? ` (confidence: ${r.confidence})` : ''}`
+        : 'Cards generated';
+      setActionResult({ type: 'success', message: detail });
+    } else if (genJob.status === 'failed') {
+      setActionResult({
+        type: 'error',
+        message: genJob.error?.message ?? 'Generation failed',
+        action_link: genJob.error?.action_link,
+      });
+    }
+    setGenJobId(null);
+    // Depend on the status transition only — `genJob` identity churns on every
+    // progress frame, but the banner should fire once at terminal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [genJob?.status]);
 
   const { data: decks = [] } = useQuery({
     queryKey: QUERY_KEYS.decks.list(),
@@ -225,59 +247,24 @@ export function ActionsSidebar({
     },
   });
 
-  const stopGenPoll = () => {
-    if (genPollRef.current !== null) {
-      clearInterval(genPollRef.current);
-      genPollRef.current = null;
-    }
-  };
-
-  const startGenPoll = (id: string) => {
-    stopGenPoll();
-    genPollRef.current = setInterval(async () => {
-      try {
-        const row = await getJob(id);
-        setGenJob(row);
-        if (TERMINAL_STATUSES.includes(row.status)) {
-          stopGenPoll();
-          if (row.status === 'succeeded' && row.result) {
-            const res = row.result as { cards_created?: number; confidence?: string };
-            setActionResult({
-              type: 'success',
-              message: `Generated ${res.cards_created ?? '?'} cards (confidence: ${res.confidence ?? '?'})`,
-            });
-            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.all() });
-            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.decks.list() });
-          } else if (row.status === 'failed') {
-            const errPayload = row.error;
-            const msg = errPayload?.message ?? 'Generation failed';
-            setActionResult({
-              type: 'error',
-              message: msg,
-              action_link: errPayload?.action_link,
-            });
-          }
-          setGenJob(null);
-        }
-      } catch (err) {
-        console.error('[ActionsSidebar] gen poll error', err);
-      }
-    }, 1000);
-  };
-
   const generateMut = useMutation({
     mutationFn: () => generateCardsJob(paperId, Number(deckId), Number(maxCards)),
     onSuccess: (data) => {
       setActionResult(null);
-      setGenJob({ status: 'queued' } satisfies PartialGenJob);
-      startGenPoll(data.job_id);
+      const id = trackExternalJob({
+        jobId: data.job_id,
+        kind: 'card.generate',
+        payload: { paper_id: paperId, deck_id: Number(deckId) },
+        status: 'queued',
+      });
+      setGenJobId(id);
     },
     onError: (err) => {
       setActionResult({ type: 'error', message: errorMessage(err, 'Generation failed') });
     },
   });
 
-  const isGenPending = generateMut.isPending || (genJob !== null && !TERMINAL_STATUSES.includes(genJob.status));
+  const isGenPending = generateMut.isPending || isRunning('card.generate', { paper_id: paperId, deck_id: Number(deckId) });
   const anyPending = downloadMut.isPending || processMut.isPending || summarizeMut.isPending || isGenPending || isAnalyzing;
 
   const analyzeLabel = (() => {
@@ -517,9 +504,9 @@ export function ActionsSidebar({
           {genJob && !TERMINAL_STATUSES.includes(genJob.status) && (
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground">
-                {('progress_message' in genJob ? genJob.progress_message : null) ?? (genJob.status === 'queued' ? 'Queued…' : 'Generating…')}
+                {genJob.progress_message ?? (genJob.status === 'queued' ? 'Queued…' : 'Generating…')}
               </p>
-              {'progress' in genJob && genJob.progress != null && (
+              {genJob.progress != null && (
                 <div className="h-1 w-full rounded-full bg-muted">
                   <div
                     className="h-1 rounded-full bg-primary transition-all"

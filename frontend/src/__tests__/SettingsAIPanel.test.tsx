@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { SettingsAIPanel } from '@/pages/SettingsAIPanel';
+import { AIPanel } from '@/components/settings/AIPanel';
 import * as api from '@/lib/api';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,7 +10,7 @@ vi.mock('@/lib/api');
 
 // ── Structural contract: no inline literal keys ────────────────────────────
 const PANEL_SRC = fs.readFileSync(
-  path.resolve(__dirname, '../pages/SettingsAIPanel.tsx'),
+  path.resolve(__dirname, '../components/settings/AIPanel.tsx'),
   'utf-8',
 );
 
@@ -57,7 +57,7 @@ const baseSetupStatus = {
   hw_tier_changed: false,
 };
 
-describe('SettingsAIPanel', () => {
+describe('AIPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default: no hw change, banner hidden
@@ -67,7 +67,7 @@ describe('SettingsAIPanel', () => {
 
   it('renders configured state and candidate dropdown', async () => {
     vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
-    render(wrap(<SettingsAIPanel />));
+    render(wrap(<AIPanel />));
     expect(await screen.findByText(/ge-48/)).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Qwen3-14B-AWQ/ })).toBeInTheDocument();
   });
@@ -78,7 +78,7 @@ describe('SettingsAIPanel', () => {
       observed_backend: 'ollama/qwen3:1.7b',
       observed_recent_share: 0.94,
     } as any);
-    render(wrap(<SettingsAIPanel />));
+    render(wrap(<AIPanel />));
     expect(await screen.findByRole('alert')).toHaveTextContent(/offline/i);
   });
 
@@ -99,7 +99,7 @@ describe('SettingsAIPanel', () => {
       ],
     } as any);
 
-    render(wrap(<SettingsAIPanel />));
+    render(wrap(<AIPanel />));
 
     expect(await screen.findByTestId('candidate-issues')).toHaveTextContent(/curated model catalog/i);
     expect(screen.getByText('Configured').nextElementSibling!).toHaveTextContent(
@@ -122,7 +122,7 @@ describe('SettingsAIPanel', () => {
       hw_tier_baseline: 'lt-24',
       hw_tier_current: 'ge-48',
     } as any);
-    render(wrap(<SettingsAIPanel />));
+    render(wrap(<AIPanel />));
     const banner = await screen.findByTestId('hw-change-banner');
     expect(banner).toBeInTheDocument();
     expect(banner).toHaveTextContent(/hardware tier has changed/i);
@@ -134,7 +134,7 @@ describe('SettingsAIPanel', () => {
   it('does not show hw-change banner when hw_tier_changed is false', async () => {
     vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
     // hw_tier_changed defaults to false in baseSetupStatus
-    render(wrap(<SettingsAIPanel />));
+    render(wrap(<AIPanel />));
     // Wait for the settings to load so queries settle
     await screen.findByText(/ge-48/);
     expect(screen.queryByTestId('hw-change-banner')).not.toBeInTheDocument();

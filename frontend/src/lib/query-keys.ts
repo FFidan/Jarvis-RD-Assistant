@@ -29,6 +29,11 @@ export const QUERY_KEYS = {
     firstRun: () => ["first-run-status"] as const,
   },
 
+  // ── AI settings ───────────────────────────────────────────────────────────
+  aiSettings: {
+    settings: () => ["ai-settings"] as const,
+  },
+
   // ── Admin ─────────────────────────────────────────────────────────────────
   admin: {
     auditLog: (actionPrefix: string) => ["admin", "audit-log", actionPrefix] as const,

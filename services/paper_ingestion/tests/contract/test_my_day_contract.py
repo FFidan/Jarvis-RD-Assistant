@@ -79,20 +79,28 @@ async def test_a57_get_journal_returns_own_entry(
         assert a_prompts != b_prompts or True  # relaxed: structure equality fine if both empty
 
 
-async def test_a57_get_journal_404_for_missing_date(
+async def test_a57_get_journal_empty_returns_200_null_for_missing_date(
     contract_two_users,
     _pi_app_with_pool,
     _configure_api_key,
 ):
-    """Covers map row A57: GET /api/my-day/journal?date= returns 404 when no entry exists.
+    """Covers map row A57: GET /api/my-day/journal?date= returns 200 + JSON null
+    when no entry exists for that date (empty state, not an error).
 
-    Verified: my_day.py:53-54 — raise HTTPException(404).
+    Verified: my_day.py get_journal_entry → returns None (HTTP 200 + JSON null)
+    when the row is missing. The query is scoped to the caller's user_id, so this
+    is a pure empty-state case (no separate ownership 404 to preserve).
     """
     far_future = "2099-01-01"
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get(f"/api/my-day/journal?date={far_future}")
 
-    assert resp.status_code == 404, f"Expected 404 for missing entry, got {resp.status_code}"
+    assert resp.status_code == 200, (
+        f"Missing journal entry must return 200 (empty state); got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert resp.json() is None, (
+        f"Empty journal state must serialize to JSON null; got {resp.text[:300]}"
+    )
 
 
 # ---------------------------------------------------------------------------

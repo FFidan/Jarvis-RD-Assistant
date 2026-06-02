@@ -6,6 +6,7 @@ import { listEvents, streamCorrelation } from '@/lib/logs';
 import type { SystemEvent } from '@/lib/logs';
 import type { Job } from '@/stores/job-store';
 import { LEVEL_BADGE_CLASSES, CATEGORY_BADGE_CLASSES } from './utils';
+import { formatTimestamp } from '@/lib/relative-time';
 import { ChevronDown, ChevronRight, Wifi, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -167,7 +168,7 @@ export function LiveTab() {
                 className="flex items-start gap-3 px-3 py-2 text-xs hover:bg-muted/30"
               >
                 <span className="text-muted-foreground shrink-0 font-mono whitespace-nowrap">
-                  {new Date(ev.created_at).toLocaleTimeString()}
+                  {formatTimestamp(ev.created_at)}
                 </span>
                 <span
                   className={cn(

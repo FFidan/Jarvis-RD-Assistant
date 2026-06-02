@@ -36,6 +36,7 @@ import { CorrelationGroup } from '@/components/logs/CorrelationGroup';
 import { ErrorSparkLine, buildSparkBuckets } from '@/components/logs/ErrorSparkLine';
 import { listEvents } from '@/lib/logs';
 import type { SystemEvent } from '@/lib/logs';
+import { formatTimestamp, formatTime } from '@/lib/relative-time';
 
 const mockListEvents = vi.mocked(listEvents);
 
@@ -408,6 +409,74 @@ describe('ErrorSparkLine', () => {
       </QueryClientProvider>,
     );
     expect(screen.getByTestId('error-sparkline')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LiveTab — Recent Events timestamp includes date
+// ---------------------------------------------------------------------------
+
+describe('LiveTab — Recent Events show date in timestamp', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The recent-events timestamp uses formatTimestamp(), which calls
+  // toLocaleString(undefined, …) — i.e. it is LOCALE-sensitive (no fixed
+  // 'en-US' pin like formatDate). Asserting a hardcoded "May 8" would be brittle
+  // across CI locales. Instead we derive the expected string from the SAME
+  // formatter and prove the rendered cell (a) shows that exact string and
+  // (b) includes a date portion the time-only formatter does NOT — guarding the
+  // regression (bare time string) in any locale.
+  const ISO = '2026-05-08T10:00:00Z';
+
+  it('renders the date+time timestamp (not a bare time string) for a recent event row', async () => {
+    mockListEvents.mockResolvedValue({
+      events: [
+        makeEvent({ id: 999, created_at: ISO, message: 'Date display test event' }),
+      ],
+      next_cursor: null,
+    });
+
+    renderPage(); // defaults to Live tab
+
+    await waitFor(() => {
+      expect(screen.getByText('Date display test event')).toBeInTheDocument();
+    });
+
+    // (a) The cell shows the full date+time string for this ISO.
+    const expectedFull = formatTimestamp(ISO);
+    expect(screen.getByText(expectedFull)).toBeInTheDocument();
+
+    // (b) Regression guard, locale-independent: the rendered timestamp must
+    // include a DATE portion — i.e. it is strictly longer than / not equal to
+    // the bare time-only formatting, and contains the day-of-month "8".
+    const timeOnly = formatTime(ISO);
+    expect(expectedFull).not.toBe(timeOnly);
+    expect(expectedFull).toMatch(/8/);
+  });
+
+  it('each recent event row timestamp includes both date and time', async () => {
+    const iso2 = '2026-05-08T14:30:00Z';
+    mockListEvents.mockResolvedValue({
+      events: [
+        makeEvent({ id: 1001, created_at: ISO, message: 'Event one' }),
+        makeEvent({ id: 1002, created_at: iso2, message: 'Event two' }),
+      ],
+      next_cursor: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Event one')).toBeInTheDocument();
+      expect(screen.getByText('Event two')).toBeInTheDocument();
+    });
+
+    // Each row renders its own date+time timestamp via the locale-aware
+    // formatter (asserted against that same formatter, locale-independent).
+    expect(screen.getByText(formatTimestamp(ISO))).toBeInTheDocument();
+    expect(screen.getByText(formatTimestamp(iso2))).toBeInTheDocument();
   });
 });
 

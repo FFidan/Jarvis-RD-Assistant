@@ -132,32 +132,31 @@ async def generate_pulse(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/today", response_model=PulseDeckResponse)
+@router.get("/today", response_model=PulseDeckResponse | None)
 @limiter.limit("30/minute")
 async def get_today(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
-) -> PulseDeckResponse:
+) -> PulseDeckResponse | None:
     """Fetch today's Pulse deck, falling back to the last non-empty deck within 7 days.
 
     Returns
     -------
-    PulseDeckResponse
+    PulseDeckResponse | None
         - Today's deck when card_count > 0 (``is_stale=False``).
         - A stale fallback deck (``is_stale=True``, ``stale_age_days`` set,
           ``stale_diagnostics`` populated from source_health) when today's deck
           exists but has no cards.
         - Today's empty deck with ``empty_reason="no_data_yet"`` when no
           non-empty deck exists within the last 7 days.
-    Raises
-    ------
-    HTTPException(404)
-        When no deck has been generated for today at all.
+        - ``None`` (HTTP 200 + JSON ``null``) when no deck has been generated
+          for today at all — empty state, not an error, so the dashboard does
+          not log a console 404 on first run.
     """
     deck = await load_today(db_pool, user_id=user_id)
     if deck is None:
-        raise HTTPException(status_code=404, detail="No Pulse deck for today")
+        return None
 
     # Today's deck has cards — return as-is (new fields stay at defaults)
     if deck.card_count > 0:

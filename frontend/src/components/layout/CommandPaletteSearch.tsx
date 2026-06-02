@@ -1,7 +1,7 @@
 import { Command } from 'cmdk';
 import { Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { useCommandPalette } from '@/stores/command-palette-store';
 import { useCommandPaletteController } from '@/hooks/useCommandPalette';
 import type { SearchPreviewResult } from '@/types';
@@ -33,9 +33,15 @@ export function CommandPaletteSearch() {
 
   function handleSelect(result: SearchPreviewResult) {
     const paperId = result.library_match?.paper_id;
-    if (paperId == null) return; // not in the library yet — nothing to open
     close();
-    navigate(`/paper/${paperId}`);
+    if (paperId != null) {
+      navigate(`/paper/${paperId}`);
+    } else {
+      // Not in the library yet — open the Discover/search surface so the user
+      // can search external sources and add it (matches the in-app "Discover
+      // papers" CTA; the search surface does not accept a prefilled query).
+      navigate('/feed?surface=search');
+    }
   }
 
   const trimmedQuery = query.trim();
@@ -66,6 +72,9 @@ export function CommandPaletteSearch() {
       <Dialog open={isOpen} onOpenChange={(next) => (next ? open() : close())}>
         <DialogContent className="max-w-xl p-0 gap-0 overflow-hidden">
           <DialogTitle className="sr-only">Search papers, notes and cards</DialogTitle>
+          <DialogDescription className="sr-only">
+            Search your library and discover new papers. Press Enter to open a paper or navigate to Discover.
+          </DialogDescription>
           <Command
             shouldFilter={false}
             label="Search papers, notes and cards"
@@ -121,8 +130,7 @@ export function CommandPaletteSearch() {
                       key={resultKey(result)}
                       value={resultKey(result)}
                       onSelect={() => handleSelect(result)}
-                      disabled={!inLibrary}
-                      className="flex flex-col gap-0.5 rounded-md px-3 py-2 cursor-pointer data-[selected=true]:bg-paper data-[disabled=true]:opacity-50 data-[disabled=true]:cursor-not-allowed"
+                      className="flex flex-col gap-0.5 rounded-md px-3 py-2 cursor-pointer data-[selected=true]:bg-paper"
                     >
                       <span className="text-[13px] font-medium text-ink line-clamp-1">
                         {result.title}

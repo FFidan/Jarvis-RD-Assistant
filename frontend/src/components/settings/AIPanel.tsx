@@ -1,5 +1,5 @@
 /**
- * SettingsAIPanel — AI backend configuration panel.
+ * AIPanel — AI backend configuration panel.
  *
  * Shows hardware tier, configured vs observed backend, candidate list, and
  * allows the user to apply a new backend/model combination.
@@ -25,13 +25,11 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 import { errorMessage } from '@/lib/errors';
 
-const QUERY_KEY = ['ai-settings'] as const;
-
-export function SettingsAIPanel() {
+export function AIPanel() {
   const qc = useQueryClient();
 
   const { data, isLoading, error: loadError } = useQuery({
-    queryKey: QUERY_KEY,
+    queryKey: QUERY_KEYS.aiSettings.settings(),
     queryFn: getAISettings,
     staleTime: 30_000,
   });
@@ -55,14 +53,14 @@ export function SettingsAIPanel() {
   const redetectMut = useMutation({
     mutationFn: redetectHW,
     onSuccess: (fresh) => {
-      qc.setQueryData(QUERY_KEY, fresh);
+      qc.setQueryData(QUERY_KEYS.aiSettings.settings(), fresh);
     },
   });
 
   const applyMut = useMutation({
     mutationFn: postAISettings,
     onSuccess: (fresh) => {
-      qc.setQueryData(QUERY_KEY, fresh);
+      qc.setQueryData(QUERY_KEYS.aiSettings.settings(), fresh);
     },
   });
 

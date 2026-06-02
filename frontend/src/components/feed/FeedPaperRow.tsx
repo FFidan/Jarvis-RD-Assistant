@@ -209,15 +209,16 @@ function FeedPaperRowInner({
               ★ {paper.recommendation_reason}
             </Badge>
           )}
-          <span
-            className="text-xs text-muted-foreground"
-            title={
-              paper.created_at
-                ? `Published: ${formatDate(paper.published_date ?? paper.created_at)}`
-                : undefined
-            }
-          >
-            {formatDate(paper.created_at)}
+          <span className="text-xs text-muted-foreground">
+            {formatDate(paper.published_date ?? paper.created_at)}
+            {paper.published_date && (
+              <span
+                className="ml-1 text-xs text-muted-foreground/60"
+                title={`Added: ${formatDate(paper.created_at)}`}
+              >
+                (added {formatDate(paper.created_at)})
+              </span>
+            )}
           </span>
 
           {/* State-switch action button bar — icon-only buttons use Radix Tooltip (B.3) */}

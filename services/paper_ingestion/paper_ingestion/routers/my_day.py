@@ -13,7 +13,7 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from jarvis_common.auth import current_user_id_strict
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -33,14 +33,20 @@ router = APIRouter(prefix="/api/my-day", tags=["my-day"])
 # ---------------------------------------------------------------------------
 
 
-@router.get("/journal", response_model=JournalEntryResponse)
+@router.get("/journal", response_model=JournalEntryResponse | None)
 @limiter.limit("60/minute")
 async def get_journal_entry(
     request: Request,
     date: date = Query(..., description="ISO date YYYY-MM-DD"),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> JournalEntryResponse:
-    """Fetch a journal entry for the given date (404 if not found)."""
+) -> JournalEntryResponse | None:
+    """Fetch a journal entry for the given date.
+
+    Returns ``None`` (HTTP 200 + JSON ``null``) when the user has no entry for
+    that date — an empty state, not an error, so the dashboard does not log a
+    console 404 for days the user has not journaled. The query is scoped to the
+    caller's ``user_id``, so a non-owner simply sees no row (same empty state).
+    """
     user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -51,7 +57,7 @@ async def get_journal_entry(
             date,
         )
     if row is None:
-        raise HTTPException(status_code=404, detail="Journal entry not found")
+        return None
     return JournalEntryResponse(
         id=row["id"],
         date=row["date"],

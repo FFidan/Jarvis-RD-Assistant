@@ -6,7 +6,7 @@
  *  2. Section heading (serif text-3xl)
  *  3. The mounted section component for the active (section, item) pair
  */
-import { SettingsAIPanel } from '@/pages/SettingsAIPanel';
+import { AIPanel } from './AIPanel';
 import { AccountSection } from './AccountSection';
 import { AppearanceSection } from './AppearanceSection';
 import { IngestionSection } from './IngestionSection';
@@ -131,7 +131,7 @@ function DetailContent({
         </div>
       );
     }
-    if (item === 'ai') return <SettingsAIPanel />;
+    if (item === 'ai') return <AIPanel />;
   }
 
   if (section === 'system') {

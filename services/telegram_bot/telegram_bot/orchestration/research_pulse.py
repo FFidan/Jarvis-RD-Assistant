@@ -91,7 +91,11 @@ async def _deliver_pulse_to_chat(
             timeout=30.0,
         )
         resp.raise_for_status()
-        deck = resp.json() or {}
+        body = resp.json()
+        # /api/pulse/today returns HTTP 200 + JSON null when no deck exists for
+        # today (empty state, not an error). Coalesce null/non-dict to {} so the
+        # cards lookup below never dereferences None.
+        deck = body if isinstance(body, dict) else {}
     except httpx.HTTPStatusError as exc:
         if exc.response is not None and exc.response.status_code == 404:
             await _send(

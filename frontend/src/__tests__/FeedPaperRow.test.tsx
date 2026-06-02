@@ -178,6 +178,39 @@ describe('FeedPaperRow', () => {
     expect(onToggleSelect).toHaveBeenCalledWith(paper.id);
   });
 
+  it('shows publication date prominently and added date as secondary', () => {
+    // paper has published_date='2026-01-01', created_at='2026-01-02T00:00:00Z'.
+    // The PRIMARY (prominent) date node must be the publication date ("Jan 1,
+    // 2026"). The added date ("Jan 2, 2026") may only appear as SECONDARY —
+    // inside the muted "(added …)" span / its title attribute — never as the
+    // primary date. This fails if the primary were reverted to created_at.
+    renderRow({ paper });
+
+    // Primary date node: matches on the span's DIRECT text node only
+    // (Testing Library's getNodeText excludes child elements), so this resolves
+    // the prominent date — the publication date "Jan 1, 2026".
+    expect(screen.getByText('Jan 1, 2026')).toBeInTheDocument();
+
+    // The added date appears only as secondary: a "(added Jan 2, 2026)" span
+    // carrying title="Added: Jan 2, 2026" — never as a standalone primary date.
+    const secondary = screen.getByText('(added Jan 2, 2026)');
+    expect(secondary).toBeInTheDocument();
+    expect(secondary).toHaveAttribute('title', 'Added: Jan 2, 2026');
+
+    // No element exposes a bare "Jan 2, 2026" as its own text node — the added
+    // date is only ever wrapped in the "(added …)" secondary span. If the
+    // primary date were reverted to created_at, a bare "Jan 2, 2026" primary
+    // node would appear here and this assertion would fail.
+    expect(screen.queryAllByText('Jan 2, 2026')).toHaveLength(0);
+  });
+
+  it('falls back to added date when published_date is absent', () => {
+    const paperNoPublished: FeedPaper = { ...paper, published_date: null };
+    renderRow({ paper: paperNoPublished });
+    // Falls back to showing created_at ("Jan 2, 2026") — not "N/A"
+    expect(screen.getByText('Jan 2, 2026')).toBeInTheDocument();
+  });
+
   it('recommendation badge renders with star glyph', () => {
     const recommendedPaper: FeedPaper = {
       ...paper,

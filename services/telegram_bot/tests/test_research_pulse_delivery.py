@@ -51,7 +51,7 @@ def _make_deck(num_cards: int = 3) -> dict:
     }
 
 
-def _ok_response(payload: dict) -> MagicMock:
+def _ok_response(payload: dict | None) -> MagicMock:
     resp = MagicMock()
     resp.raise_for_status.return_value = None
     resp.json.return_value = payload
@@ -99,6 +99,30 @@ async def test_empty_deck_sends_fallback_message():
         request=MagicMock(),
         response=MagicMock(status_code=404),
     )
+    db_pool = AsyncMock()
+
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+        await research_pulse.run_research_pulse(
+            http_client,
+            db_pool,
+            bot,
+            make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+        )
+
+    bot.send_message.assert_awaited()
+    sent_text = bot.send_message.await_args.kwargs["text"]
+    assert "/pulse_now" in sent_text or "No Pulse" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_null_body_sends_fallback_message():
+    """``/api/pulse/today`` now returns 200 + JSON null (not 404) for an empty
+    deck. The orchestrator must coalesce the null body to an empty deck and send
+    the friendly fallback rather than crashing on ``None.cards``.
+    """
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.return_value = _ok_response(None)  # 200 + JSON null
     db_pool = AsyncMock()
 
     with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
