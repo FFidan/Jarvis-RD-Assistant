@@ -5,6 +5,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+---
+
+## v0.5.0 (2026-06-02)
+
 ### Changed / Breaking
 
 - **Telegram bot pairing is now token-only.** The bot authenticates chats

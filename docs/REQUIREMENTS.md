@@ -5,7 +5,7 @@
 - **Docker Engine** 24+ with Docker Compose v2
 - **RAM**: 4 GB minimum, 8 GB recommended (for local LLMs via Ollama)
 - **Disk**: 20 GB+ (PDFs and page snapshots accumulate over time)
-- **GPU**: NVIDIA GPU optional (faster Ollama inference; CPU works fine)
+- **GPU**: NVIDIA GPU optional (faster Ollama inference; CPU works fine). GPU acceleration is enabled via the `docker-compose.gpu.yml` overlay; `setup.sh` adds it automatically when it detects the Docker nvidia runtime.
 - **OS**: Linux recommended. macOS supported. Windows via WSL2.
 - **Python**: 3.12+ for all services
 
@@ -54,7 +54,7 @@ Ollama is loopback-only by default. Security posture: [docs/SECURITY.md](SECURIT
 
 | Variable | API | Notes |
 |----------|-----|-------|
-| `OPENALEX_API_KEY` | OpenAlex | Free key; mandatory since Feb 2026 |
+| `OPENALEX_API_KEY` | OpenAlex | Optional; improves rate limits, not required |
 | `PUBMED_API_KEY` | PubMed E-utilities | Optional; upgrades rate limit 3→10 req/s |
 | `UNPAYWALL_EMAIL` | Unpaywall | Any email; required by ToS |
 
@@ -77,8 +77,9 @@ Default `litellm/config.yaml` enables Ollama-backed aliases only.
 ## Telegram
 
 - Bot Token required — create via [@BotFather](https://t.me/BotFather)
-- Chat ID required — get via [@userinfobot](https://t.me/userinfobot)
+- Pair each user via the web dashboard: go to **Settings → Integrations → Telegram**, copy the pairing token shown there, then send `/pair <token>` to your bot in Telegram. No Chat ID lookup is needed.
 - `telegram_bot` service starts only when the `telegram` profile is enabled
+- **Nudge/digest scheduling** uses a single global timezone (`user.timezone` in Settings). Per-user timezone scheduling is a tracked future enhancement; in multi-user deployments all nudges fire on the single configured timezone.
 
 ## Shared Library (`libs/jarvis_common`)
 
@@ -100,7 +101,7 @@ Changes require rebuilding affected Docker containers.
 | `DEV_MODE` | `false` | Bypass API key auth (dev only) |
 | `JARVIS_API_KEY` | — | Inter-service auth; required in production |
 | `SEMANTIC_SCHOLAR_API_KEY` | — | Optional; increases S2 rate limit |
-| `OPENALEX_API_KEY` | — | Free key; mandatory for OpenAlex since Feb 2026 |
+| `OPENALEX_API_KEY` | — | Optional; improves OpenAlex rate limits, not required |
 | `PUBMED_API_KEY` | — | Optional NCBI key; upgrades PubMed rate limit |
 | `UNPAYWALL_EMAIL` | — | Any email; required by Unpaywall ToS |
 | `ZOTERO_API_KEY` | — | Zotero Web API key |

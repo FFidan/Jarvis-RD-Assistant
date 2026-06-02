@@ -33,6 +33,15 @@
 
 ## Quickstart
 
+**Before you start:**
+
+- Docker Engine 24+ with Compose v2, `openssl`, `git`
+- ~20 GB free disk space
+- NVIDIA GPU optional (CPU works fine)
+- `./setup.sh --check` verifies all of these (read-only preflight)
+- **Windows:** use WSL2 + Docker Desktop
+- **Non-interactive installs:** use `scripts/jarvis-setup.sh` for CI / cloud-init
+
 ```bash
 git clone https://github.com/FFidan/Jarvis-RD-Assistant.git
 cd Jarvis-RD-Assistant
