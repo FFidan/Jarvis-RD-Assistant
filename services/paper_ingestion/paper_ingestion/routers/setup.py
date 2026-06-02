@@ -32,6 +32,7 @@ This router lives at ``/api/setup/*``. The pre-existing
 admin is logged in. Both can coexist.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -445,8 +446,42 @@ async def _read_smtp_config(pool: Any) -> SmtpConfigResponse:
     )
 
 
+async def _reject_non_public_host(host: str) -> None:
+    """Resolve host; reject private/loopback/link-local/reserved/multicast (SSRF guard).
+
+    The SMTP-test endpoint is reachable pre-auth in bootstrap mode, so without this an
+    operator-supplied host could be pointed at an internal address (e.g. the cloud
+    metadata endpoint) to probe the internal network.
+    """
+    import ipaddress  # noqa: PLC0415
+
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(host, None)  # non-blocking (fn is async)
+    except OSError as exc:
+        raise ValueError("Could not resolve SMTP host") from exc
+    for info in infos:
+        sockaddr = info[4]  # getaddrinfo 5-tuple: (family, type, proto, canonname, sockaddr)
+        ip = ipaddress.ip_address(sockaddr[0])  # sockaddr[0] is the address (AF_INET and AF_INET6)
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise ValueError("SMTP host resolves to a non-public address")
+
+
 async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
     """Best-effort SMTP test send. Returns None on success, error string on failure."""
+    try:
+        await _reject_non_public_host(body.host)
+    except ValueError as exc:
+        logger.warning("setup smtp test_send blocked: %s", exc, exc_info=True)
+        return str(exc)
+
     try:
         import aiosmtplib  # noqa: PLC0415
     except ImportError:
@@ -476,7 +511,7 @@ async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("setup smtp test_send failed: %s", exc, exc_info=True)
-        return str(exc)[:300]
+        return "SMTP connection failed — check host, port, and credentials."
     return None
 
 

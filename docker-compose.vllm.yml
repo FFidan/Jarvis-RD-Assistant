@@ -109,12 +109,14 @@ services:
       HF_HOME: /tmp/hf-cache/huggingface
       # Suppress HF token warning — model is public, no token needed.
       TRANSFORMERS_OFFLINE: "0"
+    # docker-compose.gpu.yml is the canonical GPU overlay for the DEFAULT
+    # services (ollama, paper_ingestion) — base docker-compose.yml is CPU-safe.
+    # vllm keeps its own reservation here because it is GPU-only and
+    # profile-guarded (profiles: [vllm]); it never starts on a CPU-only host.
     deploy:
       resources:
         reservations:
           devices:
-            # Mirrors the ollama service GPU reservation block exactly
-            # (docker-compose.yml lines 138–144).
             - driver: nvidia
               count: 1
               capabilities: [gpu]

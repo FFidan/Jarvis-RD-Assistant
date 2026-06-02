@@ -196,6 +196,20 @@ print(recommend_models(${_vram_mb}).summary)
   else
     info "no GPU — Ollama on CPU (slower, OK)"
   fi
+  # Advisory only (never touches the fail counter): whether the Docker daemon
+  # exposes the nvidia runtime decides if the GPU overlay can engage at start.
+  if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+    info "Docker nvidia runtime present — GPU overlay will engage on start"
+  else
+    info "Docker nvidia runtime not found — services run CPU-only (slower, OK)"
+  fi
+  # Advisory only: low free disk in the install dir invites a mid-pull failure
+  # (model + image layers run to several GB). 20 GB is a soft floor.
+  local _free_kb=""
+  _free_kb="$(df -Pk . 2>/dev/null | awk 'NR==2{print $4}' || true)"
+  if [ -n "$_free_kb" ] && [ "$_free_kb" -eq "$_free_kb" ] 2>/dev/null && [ "$_free_kb" -lt 20971520 ]; then
+    warn "Low free disk: $((_free_kb / 1048576)) GB free here — recommend ≥20 GB for model + image layers."
+  fi
   if [ -f .env ]; then info ".env exists (re-run setup.sh to regenerate)"; else info ".env not yet generated"; fi
 
   # Non-fatal heads-up: the docker network is pinned to JARVIS_NET_SUBNET; a
@@ -236,7 +250,7 @@ print(recommend_models(${_vram_mb}).summary)
 # ``scripts/init-secrets.sh``.
 require_langfuse_secrets() {
   local missing=()
-  for v in LANGFUSE_NEXTAUTH_SECRET LANGFUSE_SALT LANGFUSE_PG_PASSWORD; do
+  for v in LANGFUSE_NEXTAUTH_SECRET LANGFUSE_SALT LANGFUSE_PG_PASSWORD LANGFUSE_INIT_USER_PASSWORD; do
     if ! grep -qE "^${v}=.+" .env 2>/dev/null; then
       missing+=("$v")
     fi
@@ -450,7 +464,7 @@ else
 fi
 
 # Port pre-check — warn only. Probes all ports JARVIS exposes on the host.
-JARVIS_PORTS=(3001 4000 5432 5678 6333 8010 8011 11434)
+JARVIS_PORTS=(3001 4000 5432 6333 8010 8011 11434)
 PORTS_IN_USE=()
 for port in "${JARVIS_PORTS[@]}"; do
   if command -v ss >/dev/null 2>&1; then
@@ -946,8 +960,30 @@ if [ "${USE_OBSERVABILITY_PROFILE:-0}" -eq 1 ]; then
 fi
 
 printf '\n'
-info "Starting services with: docker compose ${PROFILE_ARGS[*]:-} up -d"
-if ! docker compose "${PROFILE_ARGS[@]}" up -d; then
+# GPU overlay is opt-in based on the Docker nvidia runtime (NOT host nvidia-smi):
+# only when the runtime is wired do we add docker-compose.gpu.yml, which re-adds
+# the GPU reservation for ollama + paper_ingestion. CPU-only hosts stay on the
+# base compose so install never hard-fails for lack of a GPU.
+COMPOSE_OVERLAY=()
+if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+  COMPOSE_OVERLAY=(-f docker-compose.gpu.yml)
+  info "Docker nvidia runtime detected — enabling GPU overlay"
+else
+  info "Docker nvidia runtime not found — CPU-only (Ollama on CPU; slower, OK)"
+fi
+# An explicit -f list suppresses Compose's implicit docker-compose.override.yml
+# auto-load, so when that file exists we must list it back explicitly. gpu BEFORE
+# override so a dev override's `deploy: !reset null` on ollama still wins.
+if [ -f docker-compose.override.yml ]; then
+  COMPOSE_FILE_ARGS=(-f docker-compose.yml "${COMPOSE_OVERLAY[@]}" -f docker-compose.override.yml)
+elif [ "${#COMPOSE_OVERLAY[@]}" -gt 0 ]; then
+  COMPOSE_FILE_ARGS=(-f docker-compose.yml "${COMPOSE_OVERLAY[@]}")
+else
+  # No override, no overlay: keep Compose's implicit discovery untouched.
+  COMPOSE_FILE_ARGS=()
+fi
+info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} up -d"
+if ! docker compose "${COMPOSE_FILE_ARGS[@]}" "${PROFILE_ARGS[@]}" up -d; then
   die "docker compose up failed." \
       "Inspect logs: docker compose logs --tail=200"
 fi

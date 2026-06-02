@@ -94,13 +94,9 @@ services:
       - OLLAMA_FLASH_ATTENTION=1
       - OLLAMA_KEEP_ALIVE=24h
       - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-2}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # Base compose is CPU-safe — no GPU device reservation here so CPU-only hosts
+    # can `docker compose up`. setup.sh layers docker-compose.gpu.yml when the
+    # Docker nvidia runtime is present to re-enable the GPU reservation.
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/11434 && printf 'GET /api/version HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
       interval: 10s
@@ -293,13 +289,9 @@ services:
       - hf_cache:/tmp/hf_cache  # Persist HuggingFace cache (Docling layout/table models) across recreation
       - ./litellm:/app/litellm_config:ro  # shared config for model updates (SEC-002: ro)
     mem_limit: 6g
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # Base compose is CPU-safe — no GPU device reservation here so CPU-only hosts
+    # can `docker compose up`. setup.sh layers docker-compose.gpu.yml when the
+    # Docker nvidia runtime is present to re-enable the GPU reservation.
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8000/health', timeout=10).raise_for_status()\""]
       interval: 30s

@@ -67,6 +67,24 @@ OpenAlex requires `OPENALEX_EMAIL` or `OPENALEX_API_KEY`. PubMed works without a
 
 ---
 
+## GPU acceleration (optional)
+
+The default stack is CPU-safe. Ollama runs on CPU out of the box — slower for large models, but fully functional.
+
+`setup.sh` automatically enables GPU support when it detects the Docker nvidia runtime (`docker info` probe). On a CUDA-capable host with the NVIDIA Container Toolkit installed, no extra step is needed — `setup.sh` merges `docker-compose.gpu.yml` into the startup command, which re-adds the `nvidia` device reservations for `ollama` and `paper_ingestion`.
+
+To start with GPU manually (without running `setup.sh`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
+
+**Makefile targets (`make up`, `make profile-stack-up`) always run CPU-only.** They do not include the GPU overlay, regardless of hardware. Use the explicit `-f` form above if you want GPU acceleration outside of `setup.sh`.
+
+The `./setup.sh --check` command reports GPU toolkit availability as an informational item.
+
+---
+
 ## Observability (optional, off by default)
 
 LLM-call tracing via Langfuse is opt-in. `OBSERVABILITY_ENABLED` defaults to `false` and the Langfuse SDK is never constructed — zero overhead.

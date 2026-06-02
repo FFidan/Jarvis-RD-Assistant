@@ -495,6 +495,52 @@ async def test_e1_setup_status_contains_setup_mode(setup_client, contract_conn):
     )
 
 
+async def test_smtp_test_send_rejects_private_host(setup_client, monkeypatch):
+    """POST /api/setup/smtp with test_send to a private/link-local host is blocked (SSRF guard).
+
+    The SMTP-test endpoint is reachable pre-auth in bootstrap mode. Without a guard a
+    caller could point the test send at an internal address (e.g. the cloud metadata
+    endpoint 169.254.169.254) to probe the internal network. The guard must reject the
+    host BEFORE any aiosmtplib connection is attempted.
+
+    ``configure_smtp`` catches test-send failures into the 200 body (it does NOT raise
+    4xx), so the contract is: HTTP 200, ``test_sent`` is False, ``aiosmtplib.send`` was
+    NEVER called, and ``test_error`` does not reflect the attacker-supplied host string.
+    Verified: setup.py _send_test_email (guard at top) + configure_smtp (catches into body) at HEAD.
+    """
+    import aiosmtplib
+    from unittest.mock import AsyncMock
+
+    mock_send = AsyncMock(name="aiosmtplib.send")
+    monkeypatch.setattr(aiosmtplib, "send", mock_send)
+
+    resp = await setup_client.post(
+        "/api/setup/smtp",
+        json={
+            "host": "169.254.169.254",
+            "port": 80,
+            "from_email": "a@b.com",
+            "test_send": True,
+            "test_recipient": "a@b.com",
+        },
+    )
+
+    # configure_smtp catches the guard failure into the 200 body — it does not raise 4xx.
+    assert resp.status_code == 200, (
+        f"Expected 200 (failure caught into body); got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["test_sent"] is False, (
+        f"test_sent must be False when the host is blocked; got: {body}"
+    )
+    # The guard must reject the host BEFORE any SMTP connection is attempted.
+    mock_send.assert_not_called()
+    # The raw host/IP must not be reflected back to the caller (no SSRF probe oracle).
+    assert "169.254.169.254" not in (body.get("test_error") or ""), (
+        f"test_error must not reflect the attacker-supplied host; got: {body['test_error']!r}"
+    )
+
+
 async def test_e1_setup_admin_creates_session_and_user(setup_client, contract_conn):
     """POST /api/setup/admin creates both a users row AND a sessions row atomically.
 

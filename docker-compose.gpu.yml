@@ -1,0 +1,11 @@
+# GPU overlay — added by setup.sh ONLY when the Docker nvidia runtime is present.
+# Base docker-compose.yml is CPU-safe; this re-enables GPU device reservations.
+# Order matters with docker-compose.override.yml: apply this BEFORE override so a
+# dev-box override's `deploy: !reset null` on ollama still wins.
+services:
+  ollama:
+    deploy:
+      resources: { reservations: { devices: [ { driver: nvidia, count: 1, capabilities: [gpu] } ] } }
+  paper_ingestion:
+    deploy:
+      resources: { reservations: { devices: [ { driver: nvidia, count: 1, capabilities: [gpu] } ] } }

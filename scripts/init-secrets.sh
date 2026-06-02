@@ -76,6 +76,8 @@ sync_secret() {
           value=$(openssl rand -hex 16) ;;
         LANGFUSE_PG_PASSWORD)
           value=$(openssl rand -hex 24) ;;
+        LANGFUSE_INIT_USER_PASSWORD)
+          value=$(openssl rand -hex 32) ;;
         BACKUP_ENCRYPT_KEY)
           value=$(openssl rand -base64 32 | tr -d '\n') ;;
         *)
@@ -146,9 +148,10 @@ sync_secret JARVIS_MODEL_HMAC_KEY jarvis_model_hmac_key.txt "openssl rand -hex 3
 # injected via an entrypoint shim that reads them from /run/secrets/*.
 # We still write values into .env (sync_secret does that on the first leg)
 # and mirror copies into ./secrets/ so the Docker Secret bind-mount works.
-sync_secret LANGFUSE_NEXTAUTH_SECRET langfuse_nextauth_secret.txt "openssl rand -hex 32"
-sync_secret LANGFUSE_SALT            langfuse_salt.txt            "openssl rand -hex 16"
-sync_secret LANGFUSE_PG_PASSWORD     langfuse_pg_password.txt     "openssl rand -hex 24"
+sync_secret LANGFUSE_NEXTAUTH_SECRET      langfuse_nextauth_secret.txt      "openssl rand -hex 32"
+sync_secret LANGFUSE_SALT                 langfuse_salt.txt                 "openssl rand -hex 16"
+sync_secret LANGFUSE_PG_PASSWORD          langfuse_pg_password.txt          "openssl rand -hex 24"
+sync_secret LANGFUSE_INIT_USER_PASSWORD   langfuse_init_user_password.txt   "openssl rand -hex 32"
 
 # ---------------------------------------------------------------------------
 # Cloudflare Tunnel (--profile tunnel)
