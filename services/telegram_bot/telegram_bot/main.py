@@ -89,6 +89,9 @@ async def post_init(application: Application) -> None:
             BotCommand("tasks", "List in-progress tasks"),
             BotCommand("done", "Mark task complete"),
             BotCommand("focus", "Start a focus session"),
+            BotCommand("pair", "Pair this chat to your JARVIS account"),
+            BotCommand("unpair", "Unlink this chat from your account"),
+            BotCommand("whoami", "Show which account this chat is paired to"),
         ]
     )
 

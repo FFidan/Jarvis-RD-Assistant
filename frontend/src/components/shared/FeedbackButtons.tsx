@@ -41,9 +41,6 @@ export function FeedbackButtons({
   className,
   showReasonInput = false,
 }: FeedbackButtonsProps) {
-  // Spec §5.2 origin gate — hidden for user-initiated papers
-  if (discoveryOrigin === 'user_initiated') return null;
-
   const queryClient = useQueryClient();
   const [reason, setReason] = useState('');
   const [reasonOpen, setReasonOpen] = useState(false);
@@ -71,6 +68,10 @@ export function FeedbackButtons({
         description: errorMessage(err),
       }),
   });
+
+  // Spec §5.2 origin gate — hidden for user-initiated papers. MUST stay below all
+  // hook calls so hook order is identical on every render (react-hooks/rules-of-hooks).
+  if (discoveryOrigin === 'user_initiated') return null;
 
   const handleThumb = (signal: 'positive' | 'negative') => {
     const currentSignal = recentFeedback?.signal ?? lastSignal;

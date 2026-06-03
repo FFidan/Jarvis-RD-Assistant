@@ -24,7 +24,7 @@ To connect your Telegram account:
 2. The panel shows your current pairing status. If you are not yet paired, a **Generate pairing code** button is available.
 3. Click **Generate pairing code**. A short one-time code is displayed on screen.
 4. Open Telegram and start a conversation with the JARVIS bot (your administrator will have shared the bot username with you).
-5. Send the pairing code to the bot in the chat.
+5. In the chat, send the command `/pair <code>` — replace `<code>` with the code from step 3 (for example, `/pair AB12CD`).
 6. Return to Settings. The panel will update to show your account as **Paired**, along with your Telegram username.
 
 Pairing is also offered as an optional step during the post-login setup wizard (step 6). If you skipped it there, you can complete it here at any time.

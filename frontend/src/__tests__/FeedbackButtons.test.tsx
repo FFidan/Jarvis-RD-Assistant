@@ -139,4 +139,18 @@ describe('FeedbackButtons', () => {
       expect(clearFeedback).not.toHaveBeenCalled();
     });
   });
+
+  it('does not violate rules-of-hooks when discoveryOrigin toggles across renders', () => {
+    const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const Wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { rerender } = render(
+      <FeedbackButtons paperId={1} discoveryOrigin="pulse" source="pulse_thumbs" />,
+      { wrapper: Wrapper },
+    );
+    expect(() =>
+      rerender(<FeedbackButtons paperId={1} discoveryOrigin="user_initiated" source="pulse_thumbs" />),
+    ).not.toThrow();
+  });
 });

@@ -64,6 +64,21 @@ async def test_setup_status_includes_hw_fields(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_setup_status_reports_effective_backend_when_unset(monkeypatch) -> None:
+    """With no JARVIS_LLM_BACKEND override, current_backend reports the effective
+    runtime default ('ollama'), not null (OPS-01)."""
+    monkeypatch.delenv("JARVIS_LLM_BACKEND", raising=False)
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_status(request)
+
+    assert res.current_backend == "ollama"
+
+
+@pytest.mark.asyncio
 async def test_setup_status_returns_503_on_db_failure() -> None:
     """get_status must raise HTTP 503 when the DB query fails (fail-closed; MED-PI-02)."""
     conn = AsyncMock()

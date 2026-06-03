@@ -4,7 +4,10 @@
  * Scope:
  * - Magic-link form is the default mode and submits to requestMagicLink.
  * - "Use API key instead" toggle reveals the API-key form (legacy path).
- * - The legacy API-key form preserves the old autoComplete contract (FE-006).
+ * - 422 from requestMagicLink surfaces as an email-validation message.
+ * - The page renders a <main> landmark.
+ * - Errors are announced via role="alert".
+ * - The API-key input opts out of browser credential storage.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -15,7 +18,8 @@ import { LoginPage } from '@/pages/LoginPage';
 const requestMagicLinkMock = vi.fn().mockResolvedValue({ sent: true });
 const loginMock = vi.fn().mockResolvedValue(false);
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/api')>()),
   requestMagicLink: (email: string) => requestMagicLinkMock(email),
 }));
 
@@ -25,7 +29,7 @@ vi.mock('@/stores/auth-store', () => {
   const useAuthStore = () => ({ login: loginMock });
   // LoginPage reads useAuthStore.getState().lastError after a failed login to
   // surface the precise backend message (e.g. the 403 multi-tenant message).
-  useAuthStore.getState = () => ({ lastError: storeLastError });
+  useAuthStore.getState = () => ({ lastError: storeLastError, getApiKey: () => null, isAuthenticated: false });
   return { useAuthStore };
 });
 
@@ -89,12 +93,12 @@ describe('LoginPage', () => {
     expect(input).toHaveAttribute('type', 'password');
   });
 
-  it('legacy API-key input preserves autoComplete="current-password"', async () => {
+  it('API-key input opts out of browser credential storage', async () => {
     const user = userEvent.setup();
     renderLoginPage();
     await user.click(screen.getByRole('button', { name: /use api key instead/i }));
     const input = screen.getByPlaceholderText(/Enter JARVIS_API_KEY/i);
-    expect(input).toHaveAttribute('autocomplete', 'current-password');
+    expect(input).toHaveAttribute('autocomplete', 'off');
   });
 
   it('shows initial error from query param', () => {
@@ -104,5 +108,26 @@ describe('LoginPage', () => {
       </MemoryRouter>,
     );
     expect(screen.getByText(/invalid token/i)).toBeInTheDocument();
+  });
+
+  it('maps a 422 from request-link to an email-validation message, not a connection error', async () => {
+    const { ApiError } = await import('@/lib/api');
+    requestMagicLinkMock.mockRejectedValueOnce(new ApiError(422, '{"detail":"value is not a valid email address"}'));
+    renderLoginPage();
+    await userEvent.type(screen.getByLabelText('Email'), 'not-an-email@x');
+    await userEvent.click(screen.getByRole('button', { name: /send magic link/i }));
+    expect(await screen.findByText(/valid email/i)).toBeInTheDocument();
+    expect(screen.queryByText(/check your connection/i)).not.toBeInTheDocument();
+  });
+
+  it('renders a <main> landmark', () => {
+    renderLoginPage();
+    expect(screen.getByRole('main')).toBeInTheDocument();
+  });
+
+  it('announces email-required error via role="alert"', async () => {
+    renderLoginPage();
+    await userEvent.click(screen.getByRole('button', { name: /send magic link/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/email is required/i);
   });
 });

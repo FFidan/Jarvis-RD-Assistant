@@ -230,3 +230,10 @@ Low-value-or-high-churn items deliberately deferred during the public-readiness 
 - **`jobs.py` 503-vs-404 caller mapping.** The broad job-row-lookup failure now logs a WARNING (observability fix shipped in PR-2); mapping transient DB errors to HTTP 503 at the callers is a separate enhancement — re-raising today would surface as an unhandled 500, so the status-code mapping is deferred.
 
 **Intended behavior note — auth-first ordering (PR-5 auth-idiom migration).** `paper_ingestion` route handlers now resolve identity via `Depends(current_user_id_strict)` (previously an imperative in-body call). Consequence: an *unauthenticated* request to a migrated endpoint now fails authentication (401) *before* request-body validation runs, whereas the old imperative order could surface a 422/400 body-validation error first. This is intended and more consistent/secure (uniform auth-first across all endpoints); behavior for authenticated callers is unchanged. The non-route `analyze._analyze_stream` generator retains an imperative resolve (it is not a route and has no rate-limiter).
+
+---
+
+## Deferred from the 2026-06-03 public-readiness fix plan
+
+- **TEST-01 — Pytest non-fatal warnings (2026-06-03).** Pytest emits 123 non-fatal warnings (unawaited-coroutine in async mocks, `@pytest.mark.asyncio` on sync tests, `ORJSONResponse` deprecation). Cosmetic test-hygiene; full suite passes. Deferred.
+- **UI-01 (contrast portion) — Dark-mode destructive text contrast (2026-06-03).** Dark-mode contrast of destructive error text (`text-destructive`) is below WCAG AA per Lighthouse. Proper fix is a theme-token adjustment affecting all destructive text; deferred to a theming pass.

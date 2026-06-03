@@ -266,7 +266,10 @@ async def get_status(request: Request) -> SetupStatusResponse:
 
     baseline = os.getenv("JARVIS_HW_TIER") or None
     current = detect_tier()
-    backend = os.getenv("JARVIS_LLM_BACKEND") or None
+    # Effective backend = explicit override, else the runtime default the LLM
+    # router actually uses (rag.py: os.getenv("JARVIS_LLM_BACKEND", "ollama")).
+    # recommended_backend (the tier suggestion) is reported separately — don't conflate.
+    backend = os.getenv("JARVIS_LLM_BACKEND") or "ollama"
     served, share = observed_share("smart")
     recommended = "vllm" if current in ("24-48", "ge-48") else "ollama"
     changed = bool(baseline and baseline != current)

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { requestMagicLink } from '@/lib/api';
+import { requestMagicLink, ApiError } from '@/lib/api';
 
 /**
  * Magic-link login surface.
@@ -39,10 +39,15 @@ export function LoginPage() {
       await requestMagicLink(email.trim());
       setInfo('Check your email — we just sent you a sign-in link.');
       setEmail('');
-    } catch {
-      // Backend returns sent:true unconditionally; a thrown error means a
-      // real network/CORS failure, not "email not found". Surface it.
-      setError('Could not send link — check your connection and try again.');
+    } catch (err) {
+      // A 422 means the submitted value failed server-side email validation
+      // (request-link otherwise returns sent:true unconditionally to avoid user
+      // enumeration). Surface an input-specific message; anything else is transport.
+      if (err instanceof ApiError && err.status === 422) {
+        setError('Please enter a valid email address.');
+      } else {
+        setError('Could not send link — check your connection and try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -69,7 +74,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+    <main className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">JARVIS RD Assistant</CardTitle>
@@ -99,8 +104,8 @@ export function LoginPage() {
                   disabled={loading}
                 />
               </div>
-              {error && <p className="text-sm text-destructive">{error}</p>}
-              {info && <p className="text-sm text-emerald-600">{info}</p>}
+              {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+              {info && <p className="text-sm text-emerald-600" aria-live="polite">{info}</p>}
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? 'Sending...' : 'Send magic link'}
               </Button>
@@ -129,12 +134,12 @@ export function LoginPage() {
                     setError('');
                   }}
                   placeholder="Enter JARVIS_API_KEY"
-                  autoComplete="current-password"
+                  autoComplete="off"
                   autoFocus
                   disabled={loading}
                 />
               </div>
-              {error && <p className="text-sm text-destructive">{error}</p>}
+              {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? 'Verifying...' : 'Sign In'}
               </Button>
@@ -152,6 +157,6 @@ export function LoginPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </main>
   );
 }

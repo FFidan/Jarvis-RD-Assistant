@@ -27,7 +27,7 @@ site_name: JARVIS RD Assistant — Operator & Developer Docs
 site_description: >-
   Deployment, architecture, engineering standards, security, and API contracts
   for JARVIS RD Assistant operators and developers.
-site_url: ""   # default *.github.io — no custom domain, no CNAME
+site_url: "https://FFidan.github.io/Jarvis-RD-Assistant/"
 
 # Repo link shown in the Material theme header
 repo_url: https://github.com/FFidan/Jarvis-RD-Assistant
@@ -69,6 +69,7 @@ exclude_docs: |
   specs/
   perf/
   audit/
+  personal/
   manual/_meta.md
 
 # Curated allowlist — operator/developer docs + user manual scaffold.

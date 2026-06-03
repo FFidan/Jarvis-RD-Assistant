@@ -41,7 +41,7 @@ export default tseslint.config(
         'warn',
         { assertionStyle: 'never' },
       ],
-      'react-hooks/rules-of-hooks': 'warn',
+      'react-hooks/rules-of-hooks': 'error',
       'no-useless-escape': 'warn',
       'require-yield': 'warn',
       'prefer-const': 'warn',

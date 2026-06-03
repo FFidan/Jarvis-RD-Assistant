@@ -549,7 +549,7 @@ async def test_newproject_success():
 
 
 def test_format_help_contains_all_commands():
-    """format_help() must include all 13 bot commands."""
+    """format_help() must include all bot commands, including pairing/account."""
     from telegram_bot.formatters import format_help
 
     text = format_help()
@@ -559,6 +559,7 @@ def test_format_help_contains_all_commands():
         "/papers",
         "/briefing",
         "/next",
+        "/inbox",
         "/pulse_now",
         "/review",
         "/stats",
@@ -568,6 +569,9 @@ def test_format_help_contains_all_commands():
         "/done",
         "/focus",
         "/cancel",
+        "/pair",
+        "/unpair",
+        "/whoami",
     ]
     for cmd in expected_commands:
         assert cmd in text, f"format_help() is missing {cmd!r}"
@@ -611,6 +615,10 @@ async def test_post_init_calls_set_my_commands():
     bot_mock.set_my_commands.assert_awaited_once()
     commands = bot_mock.set_my_commands.call_args[0][0]
     assert len(commands) >= 12, f"Expected ≥12 commands, got {len(commands)}"
+    names = {c.command for c in commands}
+    assert {"pair", "unpair", "whoami"}.issubset(names), (
+        f"missing pairing commands in autocomplete: {names}"
+    )
 
 
 # ---------------------------------------------------------------------------

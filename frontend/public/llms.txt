@@ -1,0 +1,10 @@
+# JARVIS RD Assistant
+
+> A self-hosted research assistant for ingesting, organizing, and reviewing scientific papers.
+
+This URL serves an authentication-gated single-page application shell; there is
+no public content to crawl here. Project documentation and source are below.
+
+## Links
+- Documentation: https://FFidan.github.io/Jarvis-RD-Assistant/
+- Source: https://github.com/FFidan/Jarvis-RD-Assistant
