@@ -82,3 +82,23 @@ def test_config_reads_jarvis_base_url_from_env():
         config = BotConfig.from_env()
 
     assert config.jarvis_base_url == "https://jarvis.example.com"
+
+
+def test_config_reads_token_from_secret_file_when_env_unset(tmp_path):
+    """Docker-secret convention: when only TELEGRAM_BOT_TOKEN_FILE is set (the bare
+    TELEGRAM_BOT_TOKEN env is absent), the token is read from that secret file.
+
+    Guards the bug where BotConfig (JarvisCommonSettings) does not apply the
+    ``_FILE`` indirection, so the documented Docker-secret token path silently
+    yielded an empty token and the bot exited.
+    """
+    secret = tmp_path / "telegram_bot_token"
+    secret.write_text("123456:secret-token-from-file\n")
+    env = {
+        "TELEGRAM_BOT_TOKEN_FILE": str(secret),
+        "DATABASE_URL": "postgres://localhost/test",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        config = BotConfig.from_env()
+
+    assert config.telegram_token == "123456:secret-token-from-file"

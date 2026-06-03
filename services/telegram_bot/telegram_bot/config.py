@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from pathlib import Path
 
 import asyncpg
 from jarvis_common import init_pg_connection
@@ -149,6 +151,18 @@ class BotConfig(JarvisCommonSettings):
         # value, so changing it is a UI save + container restart, never an
         # .env edit. Falls back to the env token when the DB has none.
         token = cfg.telegram_token
+        if not token:
+            # BotConfig (JarvisCommonSettings) does not apply the `_FILE` secret
+            # indirection, so the bare TELEGRAM_BOT_TOKEN env is empty when only
+            # the Docker secret (TELEGRAM_BOT_TOKEN_FILE) is mounted — which is the
+            # documented convention. Read that secret file directly so a preserved
+            # .env/secret token works without requiring the first-run wizard.
+            token_file = os.environ.get("TELEGRAM_BOT_TOKEN_FILE", "")
+            if token_file:
+                try:
+                    token = Path(token_file).read_text().strip()
+                except OSError:
+                    logger.warning("TELEGRAM_BOT_TOKEN_FILE=%r could not be read", token_file)
         db_token = asyncio.run(_read_db_bot_token(resolved_url))
         if db_token:
             token = db_token
