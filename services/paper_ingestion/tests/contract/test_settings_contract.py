@@ -542,14 +542,20 @@ async def test_settings_ai_apply_failure_returns_generic_502(_ai_settings_client
 
     # Verified: routers/settings_ai.py:94-102 (try/except → HTTPException 502)
     """
-    from unittest.mock import patch
+    from unittest.mock import AsyncMock, patch
 
     from paper_ingestion.routers import settings_ai as _sai_mod
 
     sentinel = "SENSITIVE_INTERNAL_DETAIL_xyz_123"
     monkeypatch.setenv("JARVIS_HW_TIER", "ge-48")
 
-    with patch.object(_sai_mod._APPLIER, "apply", side_effect=Exception(sentinel)):
+    # Bypass the ollama pull/validate pre-check (it has no real Ollama here and is
+    # covered separately by test_settings_ai_apply.py) so this test exercises its
+    # actual subject: the _APPLIER.apply failure → generic 502 (no str(exc) leak).
+    with (
+        patch.object(_sai_mod, "_ensure_ollama_model_present", new=AsyncMock(return_value=None)),
+        patch.object(_sai_mod._APPLIER, "apply", side_effect=Exception(sentinel)),
+    ):
         resp = await _ai_settings_client.post(
             "/api/settings/ai",
             json={"backend": "ollama", "model": "qwen3:14b"},

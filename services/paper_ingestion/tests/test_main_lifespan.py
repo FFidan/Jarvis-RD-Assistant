@@ -251,10 +251,11 @@ async def test_autoconfigure_models_hook_sets_flag_and_writes_user_config() -> N
     ):
         await _autoconfigure_models_hook(app)
 
-    # At least 3 INSERT calls: one per role (smart, fast, embed) + flag.
+    # At least 3 INSERT calls: smart + fast roles + flag (embed is not
+    # auto-configured — it is dimension-locked to the Qdrant collection).
     execute_calls = [str(call) for call in conn.execute.await_args_list]
     insert_calls = [c for c in execute_calls if "INSERT INTO user_config" in c]
-    assert len(insert_calls) >= 4  # 3 roles + autoconfigured flag
+    assert len(insert_calls) >= 3  # 2 roles + autoconfigured flag
 
 
 @pytest.mark.asyncio
@@ -266,7 +267,7 @@ async def test_autoconfigure_models_hook_stores_bare_string_not_double_encoded()
     in json.dumps() a second time would produce ``'"mistral-nemo"'`` in the DB
     (a JSON-encoded JSON string) instead of the bare string ``"mistral-nemo"``.
     """
-    from unittest.mock import AsyncMock, MagicMock, call
+    from unittest.mock import AsyncMock, MagicMock
 
     from fastapi import FastAPI
     from paper_ingestion.main import _autoconfigure_models_hook
@@ -305,7 +306,7 @@ async def test_autoconfigure_models_hook_stores_bare_string_not_double_encoded()
         await _autoconfigure_models_hook(app)
 
     # Collect every INSERT INTO user_config call that sets an llm.* key.
-    llm_inserts: list[call] = [
+    llm_inserts = [
         c
         for c in conn.execute.await_args_list
         if len(c.args) >= 3 and isinstance(c.args[1], str) and c.args[1].startswith("llm.")
@@ -399,6 +400,111 @@ async def test_rehydrate_litellm_aliases_skips_no_db_connected(
         for record in caplog.records
         if record.levelno == logging.INFO
     ), f"Expected INFO log about 'no admin db attached'; got: {[r.message for r in caplog.records]}"
+
+
+# ---------------------------------------------------------------------------
+# _rehydrate_litellm_aliases — alias-placeholder guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rehydrate_litellm_aliases_skips_bare_alias(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When user_config stores a bare alias ("smart"), rehydrate must skip it.
+
+    Defense-in-depth: a stray re-seed could write "smart"/"fast"/"embed" back
+    into user_config.  If forwarded to LiteLLM as ``ollama/smart`` that 404s.
+    The guard in _rehydrate_litellm_aliases must catch and log these values.
+    """
+    import logging
+    from unittest.mock import AsyncMock, MagicMock
+
+    from paper_ingestion.main import _rehydrate_litellm_aliases
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    # llm.smart_model → bare alias "smart" (should be skipped)
+    # llm.fast_model  → real model (should be forwarded)
+    # llm.embed_model → None (no row — should be skipped as usual)
+    conn.fetchrow.side_effect = [
+        {"value": "smart"},  # llm.smart_model — bare alias
+        {"value": "qwen3:4b"},  # llm.fast_model  — real model
+        None,  # llm.embed_model  — not set
+    ]
+
+    mock_update = AsyncMock(return_value=True)
+    with (
+        caplog.at_level(logging.INFO, logger="paper_ingestion.main"),
+        patch(
+            "paper_ingestion.services.litellm_config.update_litellm_model",
+            new=mock_update,
+        ),
+    ):
+        await _rehydrate_litellm_aliases(pool)
+
+    # update_litellm_model must NOT have been called with the bare alias key.
+    called_keys = [call.args[0] for call in mock_update.await_args_list]
+    assert "llm.smart_model" not in called_keys, (
+        f"update_litellm_model was unexpectedly called for llm.smart_model "
+        f"(bare alias 'smart'); calls: {mock_update.await_args_list}"
+    )
+
+    # The real model must still be forwarded.
+    assert "llm.fast_model" in called_keys, (
+        f"update_litellm_model was not called for llm.fast_model; "
+        f"calls: {mock_update.await_args_list}"
+    )
+
+    # An INFO log must mention the skipped key.
+    assert any(
+        "llm.smart_model" in record.message and "alias" in record.message.lower()
+        for record in caplog.records
+        if record.levelno == logging.INFO
+    ), (
+        f"Expected INFO log about alias skip for llm.smart_model; got: {[r.message for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rehydrate_litellm_aliases_forwards_real_model() -> None:
+    """When user_config stores a real model id, rehydrate must forward it to LiteLLM."""
+    from unittest.mock import AsyncMock, MagicMock, call
+
+    from paper_ingestion.main import _rehydrate_litellm_aliases
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    # All three keys return real model names.
+    conn.fetchrow.side_effect = [
+        {"value": "qwen3:8b"},  # llm.smart_model
+        {"value": "qwen3:4b"},  # llm.fast_model
+        {"value": "nomic-embed-text"},  # llm.embed_model
+    ]
+
+    mock_update = AsyncMock(return_value=True)
+    with patch(
+        "paper_ingestion.services.litellm_config.update_litellm_model",
+        new=mock_update,
+    ):
+        await _rehydrate_litellm_aliases(pool)
+
+    mock_update.assert_any_await("llm.smart_model", "qwen3:8b")
+    # Verify the exact call for smart_model is present with the right model id.
+    assert call("llm.smart_model", "qwen3:8b") in mock_update.await_args_list, (
+        f"Expected call('llm.smart_model', 'qwen3:8b') not found; "
+        f"actual calls: {mock_update.await_args_list}"
+    )
 
 
 # ---------------------------------------------------------------------------

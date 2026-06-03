@@ -139,4 +139,44 @@ describe('AIPanel', () => {
     await screen.findByText(/ge-48/);
     expect(screen.queryByTestId('hw-change-banner')).not.toBeInTheDocument();
   });
+
+  it('shows gpu-cpu-mismatch banner and suppresses hw-change banner when GPU baseline runs on CPU', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
+    vi.mocked(api.getFirstRunStatus).mockResolvedValue({
+      ...baseSetupStatus,
+      configured: true,
+      hw_tier_baseline: '24-48',
+      hw_tier_current: 'cpu',
+      hw_tier_changed: true,
+    } as any);
+    render(wrap(<AIPanel />));
+    expect(await screen.findByTestId('gpu-cpu-mismatch-banner')).toBeInTheDocument();
+    expect(screen.queryByTestId('hw-change-banner')).toBeNull();
+  });
+
+  it('does not show gpu-cpu-mismatch banner when baseline and current tier match', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
+    vi.mocked(api.getFirstRunStatus).mockResolvedValue({
+      ...baseSetupStatus,
+      hw_tier_baseline: '24-48',
+      hw_tier_current: '24-48',
+      hw_tier_changed: false,
+    } as any);
+    render(wrap(<AIPanel />));
+    await screen.findByText(/ge-48/);
+    expect(screen.queryByTestId('gpu-cpu-mismatch-banner')).not.toBeInTheDocument();
+  });
+
+  it('does not show gpu-cpu-mismatch banner when baseline is cpu', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
+    vi.mocked(api.getFirstRunStatus).mockResolvedValue({
+      ...baseSetupStatus,
+      hw_tier_baseline: 'cpu',
+      hw_tier_current: 'cpu',
+      hw_tier_changed: false,
+    } as any);
+    render(wrap(<AIPanel />));
+    await screen.findByText(/ge-48/);
+    expect(screen.queryByTestId('gpu-cpu-mismatch-banner')).not.toBeInTheDocument();
+  });
 });

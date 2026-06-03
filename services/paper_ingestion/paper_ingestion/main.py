@@ -43,6 +43,7 @@ from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
 )
 from jarvis_common.cached_transport import CachingTransport
+from jarvis_common.db_helpers import _ALIAS_MODELS
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.settings import get_core_settings
 from jarvis_common.verify import QuoteVerifier
@@ -228,6 +229,13 @@ async def _rehydrate_litellm_aliases(pool: Any) -> None:
         if row is None:
             continue
         model_id: str = row["value"]
+        if model_id in _ALIAS_MODELS:
+            logger.info(
+                "Skipping rehydrate of %s: stored value %r is an alias placeholder, not a model",
+                config_key,
+                model_id,
+            )
+            continue
         try:
             await update_litellm_model(config_key, model_id)
         except RuntimeError as exc:
@@ -266,10 +274,15 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
         hardware.tier,
         hardware.vram_gb,
     )
+    # Only smart + fast are auto-configured. The embed model is dimension-locked
+    # to the Qdrant collection (EMBEDDING_MODEL_NAME / qwen3-embedding:4b): the
+    # tier recommender can pick a different embedder (e.g. mxbai-embed-large) that
+    # is neither pulled nor dimension-compatible, which would silently break
+    # embeddings. Leaving llm.embed_model unset keeps the LiteLLM `embed` alias on
+    # its pulled static default; switching embedders is a deliberate re-embed op.
     role_key_pairs = [
         ("smart", "llm.smart_model"),
         ("fast", "llm.fast_model"),
-        ("embed", "llm.embed_model"),
     ]
     for role, config_key in role_key_pairs:
         if config_key not in ROLE_TO_ALIAS:

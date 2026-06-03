@@ -129,38 +129,35 @@ prompt_ai_backend() {
       ;;
   esac
 
-  # 24-48 or ge-48: show the wizard
-  local rec_model; rec_model=$(_default_model_for_tier "$tier" vllm)
+  # 24-48 or ge-48: GPU box. Default to Ollama-on-GPU (wired + works out of the box).
+  # vLLM is an advanced, MANUAL overlay (not auto-started) — offer it as info only.
+  local ollama_model; ollama_model=$(_default_model_for_tier "$tier" ollama)
   cat <<EOF
 
 === AI Backend ============================================
 Detected hardware tier: ${tier}
 
-Recommended:
-  Backend:    vLLM
-  Model:      ${rec_model}
-  Reasoning:  vLLM handles concurrent load cleanly at this VRAM;
-              Ollama with 8B-class models fails at conc>=4.
-
-This will:
-  * pull vLLM weights (~5-20 GB to HuggingFace cache, one-time)
-  * activate the docker-compose vllm profile
-  * set the LiteLLM 'smart' alias to vLLM
-
-  [1] Use recommended (vLLM)            <- default
-  [2] Stick with Ollama  (slower under concurrent load)
-  [3] Cancel -- I'll configure later in Settings
+  [1] Ollama on your GPU   (recommended, default) — model: ${ollama_model}
+  [2] vLLM                 (advanced; manual overlay, not auto-started)
+  [3] Cancel — I'll configure later in Settings
 EOF
   read -rp "Choice [1]: " _choice
   case "${_choice:-1}" in
-    2) NI_LLM_BACKEND="ollama"; NI_SMART_MODEL=$(_default_model_for_tier "$tier" ollama) ;;
     3) die "AI backend setup cancelled" "Re-run setup.sh; current config remains untouched" ;;
-    *) NI_LLM_BACKEND="vllm";   NI_SMART_MODEL="${rec_model}" ;;
+    2)
+      NI_LLM_BACKEND="ollama"; NI_SMART_MODEL="${ollama_model}"
+      printf '%svLLM is a manual, advanced overlay and is not started automatically.%s\n' "$C_BOLD" "$C_RESET"
+      printf 'Your stack is configured for Ollama-on-GPU now. To run vLLM later:\n'
+      printf '  docker compose -f docker-compose.yml -f docker-compose.vllm.yml --profile vllm up -d\n'
+      printf 'then set the LiteLLM `smart` alias to vLLM in Settings.\n'
+      ;;
+    *) NI_LLM_BACKEND="ollama"; NI_SMART_MODEL="${ollama_model}" ;;
   esac
 }
 
 run_doctor() {
   local fail=0
+  local _gpu_detected=0
   printf '%s--- setup.sh --check (read-only) -------------------------------%s\n' "$C_BOLD" "$C_RESET"
   if command -v docker >/dev/null 2>&1; then ok "docker present"; else err "docker missing — $(os_install_hint docker)"; fail=1; fi
   if docker compose version >/dev/null 2>&1; then ok "docker compose v2 present"; else err "docker compose v2 missing"; fail=1; fi
@@ -176,6 +173,7 @@ run_doctor() {
   local _vram_mb=""
   if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
     ok "GPU detected"
+    _gpu_detected=1
     _vram_mb="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -d ' ' || true)"
     if [ -n "$_vram_mb" ] && [ "$_vram_mb" -eq "$_vram_mb" ] 2>/dev/null; then
       # Try to import hardware_fit and print the summary — DRY: threshold logic
@@ -200,6 +198,8 @@ print(recommend_models(${_vram_mb}).summary)
   # exposes the nvidia runtime decides if the GPU overlay can engage at start.
   if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
     info "Docker nvidia runtime present — GPU overlay will engage on start"
+  elif [ "$_gpu_detected" -eq 1 ]; then
+    warn "GPU detected but the Docker NVIDIA runtime is not configured — the stack will run on CPU. Install nvidia-container-toolkit, then: nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
   else
     info "Docker nvidia runtime not found — services run CPU-only (slower, OK)"
   fi
@@ -304,6 +304,8 @@ printf '%s================================================================%s\n\n
 # Resolve repo root (the directory this script lives in).
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+# shellcheck source=scripts/setup_lib.sh
+source "${SCRIPT_DIR}/scripts/setup_lib.sh"
 
 # -----------------------------------------------------------------------------
 # Flag parsing  (must happen after cd "$SCRIPT_DIR" so relative paths resolve)
@@ -579,10 +581,7 @@ fi
 # Auto-resolve backend when non-interactive and --backend not specified.
 if [ "${NI_LLM_BACKEND:-auto}" = "auto" ] && [ "$NON_INTERACTIVE" -eq 1 ]; then
   NI_HW_TIER=$(detect_hw_tier)
-  case "$NI_HW_TIER" in
-    24-48|ge-48) NI_LLM_BACKEND="vllm" ;;
-    *)           NI_LLM_BACKEND="ollama" ;;
-  esac
+  NI_LLM_BACKEND="ollama"
   [ -z "${NI_SMART_MODEL:-}" ] && NI_SMART_MODEL=$(_default_model_for_tier "$NI_HW_TIER" "$NI_LLM_BACKEND")
 fi
 
@@ -852,8 +851,8 @@ sub_value() {
       printf '%s' "${NI_LLM_BACKEND:-auto}" ;;
     JARVIS_SMART_MODEL)
       printf '%s' "${NI_SMART_MODEL:-}" ;;
-    COMPOSE_PROFILES)
-      [ "${NI_LLM_BACKEND:-}" = "vllm" ] && printf 'vllm' || printf '' ;;
+    COMPOSE_PROFILES) printf '' ;;
+    OLLAMA_MODELS) compute_ollama_models "${NI_SMART_MODEL:-qwen3:8b}" ;;
     *) return 1 ;;
   esac
   return 0
@@ -982,6 +981,13 @@ else
   # No override, no overlay: keep Compose's implicit discovery untouched.
   COMPOSE_FILE_ARGS=()
 fi
+# Persist the resolved compose-file set so a later bare `docker compose up` uses
+# the same overlays. Written UNCONDITIONALLY so a GPU→CPU re-run (or a vanished
+# nvidia runtime) overwrites a stale `docker-compose.gpu.yml` entry — a leftover
+# GPU overlay on a now-CPU host fails the device reservation.
+_has_override=0; [ -f docker-compose.override.yml ] && _has_override=1
+_has_nvidia=0; [ "${#COMPOSE_OVERLAY[@]}" -gt 0 ] && _has_nvidia=1
+upsert_env_var COMPOSE_FILE "$(compute_compose_file "$_has_nvidia" "$_has_override")"
 info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} up -d"
 if ! docker compose "${COMPOSE_FILE_ARGS[@]}" "${PROFILE_ARGS[@]}" up -d; then
   die "docker compose up failed." \

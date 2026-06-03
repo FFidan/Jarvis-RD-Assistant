@@ -13,6 +13,13 @@ bash scripts/init-secrets.sh   # idempotent; generates API key, config key, HMAC
 docker compose up -d           # waits for postgres → init-migrations → all services
 ```
 
+> **GPU users:** run `bash setup.sh` instead of the bare `docker compose up -d` above.
+> `setup.sh` detects the NVIDIA container runtime, merges `docker-compose.gpu.yml`, and
+> persists `COMPOSE_FILE` to `.env` so that every subsequent `docker compose up -d` keeps
+> the GPU overlay. A plain `docker compose up -d` only uses the GPU **after** `setup.sh`
+> has written `COMPOSE_FILE` to `.env`; run it bare before that and the overlay is silently
+> dropped and Ollama runs on CPU.
+
 Required `.env` vars (`init-secrets.sh` generates any that are blank):
 
 | Var | Purpose |
@@ -44,6 +51,12 @@ $EDITOR .env     # optional: set TELEGRAM_BOT_TOKEN for Telegram
 docker compose up -d
 ```
 
+> **GPU users:** run `bash setup.sh` in place of the bare `docker compose up -d` above.
+> `setup.sh` detects the NVIDIA container runtime, merges `docker-compose.gpu.yml`, and
+> persists `COMPOSE_FILE` to `.env`. Subsequent `docker compose up -d` calls keep the GPU
+> because they read `COMPOSE_FILE` from `.env`. Without this step the overlay is dropped and
+> the stack silently runs on CPU.
+
 **Telegram is optional.** If you enable it, two machines must **never** share a bot token — Telegram routes updates to whichever client polled last. Create a separate bot via @BotFather per machine.
 
 After the stack is healthy, open the dashboard. The setup wizard runs on first visit and guides you through timezone, Pulse schedule, and Telegram pairing.
@@ -71,17 +84,35 @@ OpenAlex requires `OPENALEX_EMAIL` or `OPENALEX_API_KEY`. PubMed works without a
 
 The default stack is CPU-safe. Ollama runs on CPU out of the box — slower for large models, but fully functional.
 
-`setup.sh` automatically enables GPU support when it detects the Docker nvidia runtime (`docker info` probe). On a CUDA-capable host with the NVIDIA Container Toolkit installed, no extra step is needed — `setup.sh` merges `docker-compose.gpu.yml` into the startup command, which re-adds the `nvidia` device reservations for `ollama` and `paper_ingestion`.
+### Standard GPU overlay (auto-engaged by `setup.sh`)
 
-To start with GPU manually (without running `setup.sh`):
+`setup.sh` automatically enables GPU support when it detects the Docker NVIDIA runtime (`docker info` probe). On a CUDA-capable host with the NVIDIA Container Toolkit installed, run `setup.sh` once — it merges `docker-compose.gpu.yml` into the active compose file list and **persists `COMPOSE_FILE` to `.env`**, so every subsequent `docker compose up -d` call continues to use the GPU overlay without any extra flags.
+
+To start with the GPU overlay manually (without running `setup.sh`):
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 ```
 
-**Makefile targets (`make up`, `make profile-stack-up`) always run CPU-only.** They do not include the GPU overlay, regardless of hardware. Use the explicit `-f` form above if you want GPU acceleration outside of `setup.sh`.
+Note: this one-off command does **not** persist `COMPOSE_FILE`. To make it permanent, add to `.env`:
+
+```
+COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+```
+
+**Makefile targets (`make up`, `make profile-stack-up`) always run CPU-only.** They do not include the GPU overlay, regardless of hardware. Use the explicit `-f` form or the `.env` `COMPOSE_FILE` setting for GPU acceleration outside of `setup.sh`.
 
 The `./setup.sh --check` command reports GPU toolkit availability as an informational item.
+
+### vLLM overlay (optional, manual)
+
+vLLM is a **separate, optional overlay** — it is not auto-started by `setup.sh`. Use it to serve large models locally at higher throughput than Ollama.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.vllm.yml --profile vllm up -d
+```
+
+After the vLLM container is healthy, point the LiteLLM `smart` alias at it: open **Settings → Models** and update the `smart` model alias to your vLLM endpoint (e.g. `openai/meta-llama/Meta-Llama-3-8B-Instruct` with `api_base` set to your vLLM URL).
 
 ---
 
@@ -466,6 +497,7 @@ bash scripts/production-readiness-check.sh
 | Pulse generates 0 cards but job shows "done" | All enabled sources returned zero candidates, were rate-limited, or are unconfigured | Open Settings → Pulse → Diagnostics. For OpenAlex set `OPENALEX_EMAIL`; for arXiv wait `Retry-After` (≥30 s). |
 | Embedding dimension mismatch on startup | Qdrant collection dimension doesn't match the active embedding model | Set `EMBEDDING_MODEL_NAME=qwen3-embedding:4b` and `EMBEDDING_DIMENSION=2560`, pull the model, then run `REEMBED_RECREATE_COLLECTION=true REEMBED_SNAPSHOT_CONFIRMED=true python -m scripts.reembed` if the collection dimension is still wrong. |
 | Re-embedding too slow | `scripts/reembed.py` defaults to the HTTP-bound LiteLLM path | Switch to local backend: `REEMBED_BACKEND=local python -m scripts.reembed` (requires sentence-transformers). Benchmark first with `REEMBED_BENCHMARK=true`. |
+| `password authentication failed for user "jarvis"` after changing `POSTGRES_PASSWORD` | Postgres bakes the password into its data volume on first init; a later `.env` change is not applied to an existing volume | Reset the volume: `docker compose down && docker volume rm <project>_postgres_data && docker compose up -d` — this destroys local DB data. The `<project>` prefix is your compose project name (the repo directory name by default; visible in `docker compose ps`). Run `setup.sh` afterwards if you need the GPU overlay re-engaged. |
 
 ---
 

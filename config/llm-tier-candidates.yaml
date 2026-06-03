@@ -22,7 +22,7 @@ generated_at: 2026-05-22
 tiers:
 
   cpu:
-    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
       - backend: ollama
         model: qwen3:1.7b
@@ -32,7 +32,7 @@ tiers:
         reasoning: "CPU-only inference; smallest Qwen3 thinking variant. ~1.3 GB RAM. Conservative pick by family consistency; no bench evidence required at this tier."
 
   lt-8:
-    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
       - backend: ollama
         model: qwen3:1.7b
@@ -48,7 +48,7 @@ tiers:
         reasoning: "Llama 3.2 3B alternative — non-thinking, fits comfortably under 8 GB."
 
   8-16:
-    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
       - backend: ollama
         model: qwen2.5:7b-instruct
@@ -64,7 +64,7 @@ tiers:
         reasoning: "DeepSeek-R1 distill on qwen-7b, thinking-mode. Bench-validated on the ≈16 GB tier (RTX 5060 Ti) at ~5 GB Q4 native. Scores above qwen2.5 baseline on reasoning prompts but shows weaker citation grounding (uses internal Paper N labels instead of arxiv IDs). Thinking-model option for users who want chain-of-thought reasoning; non-thinking qwen2.5 stays #1 for citation quality."
 
   16-24:
-    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
       - backend: vllm
         model: Qwen/Qwen2.5-7B-Instruct-AWQ
@@ -82,7 +82,7 @@ tiers:
         reasoning: "Conservative Ollama fallback for users who don't want vLLM. Inferred from 8-16 winner; comfortable in 16-24 VRAM."
 
   24-48:
-    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
       - backend: vllm
         model: Qwen/Qwen2.5-7B-Instruct-AWQ
@@ -100,7 +100,7 @@ tiers:
         reasoning: "Conservative Ollama fallback. Comfortable in 24-48 VRAM."
 
   ge-48:
-    fallback_for_tier: { backend: ollama, model: qwen3:1.7b }
+    fallback_for_tier: { backend: ollama, model: qwen3:4b }
     candidates:
       - backend: vllm
         model: Qwen/Qwen3-14B-AWQ

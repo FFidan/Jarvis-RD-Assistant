@@ -1921,10 +1921,8 @@ ALTER TABLE ONLY public.user_topic_subscriptions
     ADD CONSTRAINT user_topic_subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 -- Seed data (re-homed to end of schema so all constraints/indexes exist)
+-- llm.*_model are seeded at first boot by _autoconfigure_models_hook from the detected hardware tier (not pre-seeded, so autoconfigure's INSERT is not blocked).
 INSERT INTO user_config (key, value) VALUES
-    ('llm.smart_model', '"smart"'),
-    ('llm.fast_model', '"fast"'),
-    ('llm.embed_model', '"embed"'),
     ('user.timezone', '"UTC"'),
     ('fsrs.desired_retention', '0.9'),
     ('fsrs.learning_steps', '[1, 10]')

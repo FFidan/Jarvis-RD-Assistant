@@ -118,9 +118,17 @@ export function AIPanel() {
     data?.configured_backend != null &&
     !data.observed_backend.startsWith(data.configured_backend);
 
-  // HW-change banner: shown when the detected hardware tier has changed
-  // since the baseline recorded at last boot.
-  const showHWChangeBanner = setupStatus?.hw_tier_changed === true;
+  // GPU-on-CPU mismatch: GPU was detected at install (baseline is a GPU tier)
+  // but the container is now on CPU (overlay not engaged / GPU gone).
+  // detect_tier runs INSIDE the paper_ingestion container, so
+  // hw_tier_current === "cpu" means the container isn't getting the GPU.
+  const gpuCpuMismatch =
+    setupStatus?.hw_tier_baseline != null &&
+    setupStatus.hw_tier_baseline !== 'cpu' &&
+    setupStatus?.hw_tier_current === 'cpu';
+  // Suppress the generic hw-change banner when the more specific GPU-on-CPU
+  // banner is showing (baseline!==current also makes hw_tier_changed true).
+  const showHWChangeBanner = setupStatus?.hw_tier_changed === true && !gpuCpuMismatch;
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading AI settings…</p>;
@@ -162,6 +170,23 @@ export function AIPanel() {
           </p>
         )}
       </section>
+
+      {/* GPU-on-CPU mismatch banner — GPU was present at install but the stack is
+          now running on CPU (overlay not engaged). No dismiss button: this is a
+          config-fix prompt, not a transient notice. */}
+      {gpuCpuMismatch && (
+        <div
+          role="alert"
+          data-testid="gpu-cpu-mismatch-banner"
+          className="flex items-start justify-between gap-3 rounded-md border border-amber-500 bg-amber-50 dark:bg-amber-950/20 px-4 py-3 text-sm text-amber-900 dark:text-amber-300"
+        >
+          <span>
+            A GPU was detected at install but the stack is running on CPU — your GPU
+            isn&apos;t being used. Re-run <code>setup.sh</code> (or set <code>COMPOSE_FILE</code> to
+            include <code>docker-compose.gpu.yml</code>) and confirm the NVIDIA container runtime is installed.
+          </span>
+        </div>
+      )}
 
       {/* HW-change banner — shown when the hardware tier has changed since baseline.
           Amber/orange to distinguish from the yellow offline banner.
