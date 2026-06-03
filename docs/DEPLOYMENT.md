@@ -133,34 +133,79 @@ Full contract and rotation procedure: [docs/contracts/04-observability.md](contr
 
 ---
 
-## Remote access via Tailscale
+## Remote access (optional)
 
-Reach the webapp from outside your LAN with zero inbound ports. Install Tailscale
-on the host **and** the client (phone/laptop), then `sudo tailscale up` on both.
+By default the dashboard is reachable only on the machine it runs on
+(`http://localhost:3001`): it binds to loopback (`DASHBOARD_BIND_HOST`) and nginx
+answers only to a `Host` allowlist (`DASHBOARD_SERVER_NAME`, below). **If you only
+use JARVIS on that one machine, skip this section** — nothing needs to be exposed.
 
-The dashboard binds to **`127.0.0.1` by default** (`DASHBOARD_BIND_HOST`, the
-secure default), so a *direct* `http://<host>.<tailnet>.ts.net:3001` is refused —
-the port isn't exposed on the Tailscale interface. Pick one of:
+To reach it from another device — your phone, or a laptop away from home —
+without putting it on the open internet, common options are:
 
-**Recommended — `tailscale serve`** (clean HTTPS URL, keeps the loopback bind):
+- **A reverse proxy with TLS** on your own domain — the Caddy `local-https` /
+  `letsencrypt` profiles (see *Deployment Modes* below).
+- **A Cloudflare Tunnel** — outbound-only, no open ports.
+- **A mesh VPN** — your devices share one private encrypted network.
+
+These are alternatives; pick whichever suits you. The walkthrough below is **one
+example** (Tailscale, a mesh VPN), not a requirement.
+
+### Example: Tailscale
+
+**What it is.** Tailscale is a zero-config mesh VPN built on WireGuard. You
+install it on each device and sign in; they join a private, end-to-end-encrypted
+network (a "tailnet") and can reach one another by a stable name (MagicDNS, e.g.
+`my-host.my-tailnet.ts.net`) straight through NAT and firewalls — nothing is
+published to the public internet. Free for personal use (<https://tailscale.com>).
+
+**Why it helps here.** Install it on the JARVIS host and on your phone, and the
+dashboard becomes reachable from the phone over the private tailnet with **zero
+open inbound ports** on your router.
+
+> **Scope of the steps below:** they assume the **default single-host setup** —
+> dashboard on plain-HTTP loopback `:3001`, Tailscale running on the **same host**
+> (on WSL2: inside the same distro as Docker, not the Windows host). If you front
+> the app with Caddy (`local-https`/`letsencrypt`), use Caddy's domain for remote
+> access instead. Adjust the port if you changed `DASHBOARD_HOST_PORT`.
+
+**1. Install Tailscale and join the tailnet** on both the host and the client:
 
 ```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale set --operator=$(whoami)   # one-time: run `tailscale serve` without sudo
-tailscale serve --bg --https=443 http://127.0.0.1:3001
+curl -fsSL https://tailscale.com/install.sh | sh   # on the host (Linux/WSL2)
+sudo tailscale up
 ```
 
-Then open `https://<host>.<tailnet>.ts.net` (no port). `tailscale serve` proxies
-the tailnet to the dashboard's loopback port, so `DASHBOARD_BIND_HOST` stays
-`127.0.0.1`. Requires HTTPS enabled in the admin console (Settings → Features →
-HTTPS Certificates).
+Install the Tailscale app on the phone and sign in to the same account.
 
-**Alternative — direct port access:** set `DASHBOARD_BIND_HOST=0.0.0.0` in `.env`
-and `docker compose up -d dashboard`, then open
-`http://<host>.<tailnet>.ts.net:3001`. Simpler, but binds the port on all
-interfaces (acceptable on a private tailnet; less tight than `serve`).
+**2. Allow the host's tailnet name.** The dashboard nginx rejects (`444`) any
+`Host` it doesn't recognise (`localhost`/`127.0.0.1` by default; the Caddy
+profiles rewrite `Host`→`localhost`). Add your MagicDNS name so access isn't
+refused — a `444` surfaces as a `502` through a proxy:
 
-Telegram works without any change — the bot polls outbound only.
+```bash
+echo 'DASHBOARD_SERVER_NAME=<host>.<tailnet>.ts.net' >> .env
+docker compose up -d dashboard
+```
+
+**3. Expose the dashboard on the tailnet** — two ways:
+
+- **`tailscale serve`** (clean HTTPS URL, keeps the loopback bind):
+
+  ```bash
+  sudo tailscale set --operator=$(whoami)   # one-time: run `serve` without sudo
+  tailscale serve --bg --https=443 http://127.0.0.1:3001
+  ```
+
+  Then open `https://<host>.<tailnet>.ts.net` (no port). Requires HTTPS enabled
+  in the Tailscale admin console (Settings → Features → HTTPS Certificates).
+
+- **Direct port** (simpler): also set `DASHBOARD_BIND_HOST=0.0.0.0`, run
+  `docker compose up -d dashboard`, and open
+  `http://<host>.<tailnet>.ts.net:3001`. Binds the port on all interfaces —
+  fine on a private tailnet, looser than `serve`.
+
+Telegram needs no change for any of this — the bot only makes outbound calls.
 
 ---
 
