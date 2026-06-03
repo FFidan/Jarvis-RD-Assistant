@@ -71,9 +71,10 @@ os_install_hint() {  # $1 = tool name (informational)
 }
 
 detect_hw_tier() {  # echoes: cpu | lt-8 | 8-16 | 16-24 | 24-48 | ge-48
-  command -v nvidia-smi >/dev/null && nvidia-smi -L | grep -q . || { echo cpu; return; }
+  local smi; smi=$(resolve_nvidia_smi) || { echo cpu; return; }
+  "$smi" -L 2>/dev/null | grep -q . || { echo cpu; return; }
   local mb
-  mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+  mb=$("$smi" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
   [ -z "$mb" ] && { echo cpu; return; }
   case "$mb" in *[!0-9]*) echo cpu; return ;; esac
   if   [ "$mb" -lt 8000  ]; then echo lt-8
@@ -170,11 +171,12 @@ run_doctor() {
   # static pointer to Settings → System/Models is printed instead.
   local tier; tier=$(detect_hw_tier)
   info "HW tier: ${tier}"
-  local _vram_mb=""
-  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+  local _vram_mb="" _smi=""
+  _smi="$(resolve_nvidia_smi || true)"
+  if [ -n "$_smi" ] && "$_smi" -L >/dev/null 2>&1; then
     ok "GPU detected"
     _gpu_detected=1
-    _vram_mb="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -d ' ' || true)"
+    _vram_mb="$("$_smi" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -d ' ' || true)"
     if [ -n "$_vram_mb" ] && [ "$_vram_mb" -eq "$_vram_mb" ] 2>/dev/null; then
       # Try to import hardware_fit and print the summary — DRY: threshold logic
       # lives only in hardware_fit.py, never reimplemented here.

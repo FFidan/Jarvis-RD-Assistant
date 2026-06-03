@@ -52,10 +52,10 @@ Configure API keys and endpoints for cloud LLM providers (OpenAI, Anthropic, Gem
 
 Select the inference backend and model used for LLM calls. The panel shows:
 
-- **Hardware Tier** — the automatically detected GPU/CPU tier for this machine, with a **Re-detect** button to refresh.
-- **Current Status** — the configured backend/model, the recently observed backend, and the recommended backend/model for the detected hardware tier.
-- **Backend selector** — toggle between **ollama** (local) and **vllm** (high-throughput GPU). The recommended option is labelled.
-- **Model dropdown** — choose from evaluated candidates for the selected backend and tier. A score and brief reasoning is shown for each candidate.
+- **Hardware Tier** — the automatically detected GPU/CPU tier for this machine, with a **Re-detect** button to refresh. If a GPU was present at install but the stack is running on CPU (overlay not engaged), an amber banner here tells you to re-run `setup.sh`.
+- **Current Status** — the configured backend/model, the recently observed backend, and the recommended model for the detected hardware tier.
+- **Backend selector** — toggle between **ollama** (local, the recommended default on every tier) and **vllm** (advanced, high-throughput GPU). vLLM is a manual overlay that is not auto-started — see "GPU acceleration" in the deployment guide; the recommended **model** still scales with the detected tier.
+- **Model dropdown** — choose from evaluated candidates for the selected backend and tier. A score and brief reasoning is shown for each candidate. Applying a not-yet-pulled Ollama model pulls it first, so the backend never routes to a missing model.
 - **Apply / Reset** — save the selection or revert to the last saved state.
 
 ---

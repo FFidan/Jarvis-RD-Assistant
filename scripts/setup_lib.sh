@@ -1,11 +1,30 @@
 #!/usr/bin/env bash
 # Shared setup.sh helpers, factored out so they can be unit-tested directly
-# (setup.sh itself is not cleanly sourceable). Three small concerns:
+# (setup.sh itself is not cleanly sourceable). Concerns:
 #   - compute_compose_file   : which compose overlays to persist into .env
 #   - compute_ollama_models  : which Ollama tags the bootstrap must pull
 #   - upsert_env_var          : idempotent in-place .env key write
+#   - resolve_nvidia_smi      : locate nvidia-smi (PATH or the WSL2 location)
 # Sourced by setup.sh (which cd's to the repo root first, so the relative `.env`
 # in upsert_env_var resolves correctly).
+
+# resolve_nvidia_smi -> echoes a usable nvidia-smi path, or returns 1 if none.
+# WSL2 ships nvidia-smi at /usr/lib/wsl/lib/nvidia-smi but does NOT put it on
+# PATH in non-login shells, so a bare `command -v nvidia-smi` wrongly concludes
+# "no GPU" on a CUDA-capable WSL2 host. Check PATH first, then the WSL location
+# (overridable via JARVIS_WSL_NVIDIA_SMI for testing).
+resolve_nvidia_smi() {
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    command -v nvidia-smi
+    return 0
+  fi
+  local wsl="${JARVIS_WSL_NVIDIA_SMI:-/usr/lib/wsl/lib/nvidia-smi}"
+  if [ -x "$wsl" ]; then
+    printf '%s\n' "$wsl"
+    return 0
+  fi
+  return 1
+}
 
 # compute_compose_file NVIDIA_PRESENT OVERRIDE_PRESENT -> echoes colon-joined COMPOSE_FILE.
 # gpu.yml is added only when the Docker nvidia runtime is present; override.yml is

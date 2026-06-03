@@ -103,3 +103,56 @@ def test_ollama_models_default_smart() -> None:
 def test_ollama_models_dedupes_when_smart_is_fast_or_embed() -> None:
     assert _ollama_models("qwen3:4b") == "qwen3:4b,qwen3-embedding:4b"
     assert _ollama_models("qwen3-embedding:4b") == "qwen3:4b,qwen3-embedding:4b"
+
+
+_BASH = shutil.which("bash") or "/bin/bash"
+
+
+def _resolve_smi(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run resolve_nvidia_smi with a controlled PATH / JARVIS_WSL_NVIDIA_SMI.
+
+    bash is invoked by absolute path so the controlled (often near-empty) PATH
+    only governs the in-shell `command -v nvidia-smi` lookup, not finding bash.
+    """
+    return subprocess.run(
+        [_BASH, "-c", f'source "{LIB}"; resolve_nvidia_smi'],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+
+def test_resolve_nvidia_smi_prefers_path(tmp_path: Path) -> None:
+    """When nvidia-smi is on PATH, that path is returned."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    smi = bindir / "nvidia-smi"
+    smi.write_text("#!/bin/sh\n")
+    smi.chmod(0o755)
+    proc = _resolve_smi({"PATH": str(bindir)})
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == str(smi)
+
+
+def test_resolve_nvidia_smi_falls_back_to_wsl_path(tmp_path: Path) -> None:
+    """When nvidia-smi is NOT on PATH, the WSL2 location is used (the REDACTED-HOST case)."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    wsl = tmp_path / "wsl-nvidia-smi"
+    wsl.write_text("#!/bin/sh\n")
+    wsl.chmod(0o755)
+    proc = _resolve_smi({"PATH": str(empty), "JARVIS_WSL_NVIDIA_SMI": str(wsl)})
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == str(wsl)
+
+
+def test_resolve_nvidia_smi_returns_nonzero_when_absent(tmp_path: Path) -> None:
+    """No nvidia-smi on PATH and no WSL binary → non-zero exit, empty output."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    proc = _resolve_smi(
+        {"PATH": str(empty), "JARVIS_WSL_NVIDIA_SMI": str(tmp_path / "nonexistent")}
+    )
+    assert proc.returncode == 1
+    assert proc.stdout.strip() == ""

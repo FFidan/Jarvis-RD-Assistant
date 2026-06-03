@@ -135,16 +135,32 @@ Full contract and rotation procedure: [docs/contracts/04-observability.md](contr
 
 ## Remote access via Tailscale
 
-Reach the webapp from outside your LAN with zero inbound ports:
+Reach the webapp from outside your LAN with zero inbound ports. Install Tailscale
+on the host **and** the client (phone/laptop), then `sudo tailscale up` on both.
+
+The dashboard binds to **`127.0.0.1` by default** (`DASHBOARD_BIND_HOST`, the
+secure default), so a *direct* `http://<host>.<tailnet>.ts.net:3001` is refused —
+the port isn't exposed on the Tailscale interface. Pick one of:
+
+**Recommended — `tailscale serve`** (clean HTTPS URL, keeps the loopback bind):
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-# Access via https://<jarvis-pc-tailnet-name>:3001, or for a clean URL:
-sudo tailscale serve --https=443 https+insecure://localhost:3001 --bg
+sudo tailscale set --operator=$(whoami)   # one-time: run `tailscale serve` without sudo
+tailscale serve --bg --https=443 http://127.0.0.1:3001
 ```
 
-Telegram works without any change — the bot polls outbound only. `tailscale serve` provisions a Let's Encrypt cert automatically; no browser warning, no port in the URL.
+Then open `https://<host>.<tailnet>.ts.net` (no port). `tailscale serve` proxies
+the tailnet to the dashboard's loopback port, so `DASHBOARD_BIND_HOST` stays
+`127.0.0.1`. Requires HTTPS enabled in the admin console (Settings → Features →
+HTTPS Certificates).
+
+**Alternative — direct port access:** set `DASHBOARD_BIND_HOST=0.0.0.0` in `.env`
+and `docker compose up -d dashboard`, then open
+`http://<host>.<tailnet>.ts.net:3001`. Simpler, but binds the port on all
+interfaces (acceptable on a private tailnet; less tight than `serve`).
+
+Telegram works without any change — the bot polls outbound only.
 
 ---
 
