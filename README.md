@@ -219,6 +219,10 @@ See **[docs/DEPLOYMENT.md → Troubleshooting](docs/DEPLOYMENT.md#troubleshootin
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to contribute.
 - [SECURITY.md](SECURITY.md) — vulnerability disclosure and threat model entry-point.
 
+## Built with AI-assisted development
+
+JARVIS RD Assistant was built with heavy AI-assisted development, kept honest by strict automated gates — `ruff`, `pyright`, `tach` module-boundary checks, the full test suite, and multi-tenant-isolation tests all run in CI on every change.
+
 ## License
 
 [MIT](LICENSE)

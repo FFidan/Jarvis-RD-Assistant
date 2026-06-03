@@ -616,7 +616,7 @@ describe('ModelSelector', () => {
     const { apiFetch } = await import('@/lib/api');
     vi.mocked(apiFetch).mockResolvedValue({
       ...defaultModels,
-      hardware: { vram_gb: 16, tier: 2, machine_id: 'host-rtx5060' },
+      hardware: { vram_gb: 16, tier: 2, machine_id: 'host-test-gpu' },
       catalog: [
         {
           ...defaultModels.catalog[0],

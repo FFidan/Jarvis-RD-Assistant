@@ -1984,13 +1984,13 @@ ON CONFLICT (user_id, key) DO NOTHING;
 -- =============================================================================
 -- SCHEMA-MIGRATIONS BOOTSTRAP
 -- =============================================================================
--- WAVE 1 MIGRATION SQUASH (2026-05-19): the 88 incremental db/migrations/*.sql
+-- MIGRATION SQUASH (2026-05-19): the 88 incremental db/migrations/*.sql
 -- files were collapsed into this single regenerated baseline. This file was
 -- machine-generated from the real fresh-install path (HEAD db/init.sql +
 -- 069_auth.sql + run_migrations() over the full 1..88 chain, then pg_dump
 -- --schema-only), so it now embodies EVERY migration 1 through 88.
 --
--- POST-PRISTINE AUDIT-REMEDIATION (2026-05-26): migrations 0089/0090/0091
+-- 2026-05-26: migrations 0089/0090/0091
 -- were folded directly into this baseline (the repo had never been publicly
 -- deployed at that point, so a clean baseline beats fold-forward-keep-as-noop).
 -- We therefore pre-mark all 91 versions applied so the runtime runner is a

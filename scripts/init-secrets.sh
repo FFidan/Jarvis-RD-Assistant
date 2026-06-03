@@ -28,88 +28,93 @@ command -v openssl >/dev/null 2>&1 \
   || { warn "openssl not found — cannot generate secrets."; exit 1; }
 
 mkdir -p secrets
+[ -f .env ] || touch .env
+
+FAILED=0
+
+# ---------------------------------------------------------------------------
+# upsert_env_var KEY VALUE — write KEY=VALUE into .env idempotently:
+# replace the first existing KEY= line IN PLACE (so an empty ``KEY=`` placeholder
+# from .env.example is filled, not duplicated), drop any further KEY= lines
+# (self-heals a .env already corrupted by an append-only writer), and append
+# KEY=VALUE if the key is absent.  awk index()==1 is a literal prefix match, so
+# there are no regex/escaping hazards from base64 values.
+# ---------------------------------------------------------------------------
+upsert_env_var() {
+  local k="$1" v="$2" tmp
+  tmp="$(mktemp)"
+  awk -v k="$k" -v v="$v" '
+    index($0, k "=") == 1 { if (!seen) { print k "=" v; seen = 1 } ; next }
+    { print }
+    END { if (!seen) print k "=" v }
+  ' .env > "$tmp"
+  mv "$tmp" .env
+}
 
 # ---------------------------------------------------------------------------
 # sync_secret KEY FILENAME [GENERATOR]
 #
-#   1. If KEY is absent from .env:
-#        - GENERATOR given  → generate value, append to .env
-#        - No generator     → warn and skip (requires manual input)
-#   2. If secrets/FILENAME does not exist → create from .env value
-#   3. If secrets/FILENAME exists but content differs from .env → sync
+#   1. Resolve a non-empty value for KEY:
+#        - KEY already set in .env → reuse it (preserve; never rotate)
+#        - empty placeholder / absent + GENERATOR → generate
+#        - empty placeholder / absent + no generator → warn, skip (manual input)
+#      The value is written into .env via upsert_env_var (idempotent; no dupes).
+#   2. Write secrets/FILENAME from the IN-MEMORY value — never a re-read of .env,
+#      which is what silently skipped core secrets when an empty placeholder
+#      shadowed the generated line.  An empty value is a loud failure (FAILED=1).
 # ---------------------------------------------------------------------------
 sync_secret() {
   local key="$1" file="secrets/$2" generator="${3:-}"
+  local value=""
 
-  # Step 1 — ensure value exists in .env
-  # Use POSIX ERE (-E) so "+" is a quantifier on both GNU and BSD/macOS grep.
-  # GNU BRE "\+" is a literal "+" on macOS and would misfire, causing duplicate
-  # KEY= entries on re-run (INST-1).
-  if ! grep -qE "^${key}=.+" .env 2>/dev/null; then
-    if [ -n "$generator" ]; then
-      # Dispatch on key name to avoid eval (SH-1).  Each branch runs the same
-      # literal openssl command that was previously held in $generator, so
-      # output is byte-identical.  The $generator parameter is retained for the
-      # "is a generator provided?" guard above and for self-documentation; it is
-      # no longer executed.
-      local value
-      case "$key" in
-        JARVIS_API_KEY)
-          value=$(openssl rand -hex 32) ;;
-        LITELLM_MASTER_KEY)
-          value=$(openssl rand -hex 32) ;;
-        POSTGRES_PASSWORD)
-          value=$(openssl rand -hex 24) ;;
-        QDRANT_API_KEY)
-          value=$(openssl rand -hex 24) ;;
-        INFRA_INGEST_KEY)
-          value=$(openssl rand -hex 32) ;;
-        VECTOR_WRITER_PASSWORD)
-          value=$(openssl rand -hex 32) ;;
-        JARVIS_CONFIG_KEY)
-          value=$(openssl rand -base64 32 | tr -d '\n') ;;
-        JARVIS_MODEL_HMAC_KEY)
-          value=$(openssl rand -hex 32) ;;
-        LANGFUSE_NEXTAUTH_SECRET)
-          value=$(openssl rand -hex 32) ;;
-        LANGFUSE_SALT)
-          value=$(openssl rand -hex 16) ;;
-        LANGFUSE_PG_PASSWORD)
-          value=$(openssl rand -hex 24) ;;
-        LANGFUSE_INIT_USER_PASSWORD)
-          value=$(openssl rand -hex 32) ;;
-        BACKUP_ENCRYPT_KEY)
-          value=$(openssl rand -base64 32 | tr -d '\n') ;;
-        *)
-          warn "${key} has a generator but is not in the dispatch table — skipping to avoid mis-generation."
-          return
-          ;;
-      esac
-      echo "${key}=${value}" >> .env
-      ok "${key} generated and appended to .env."
-    else
-      warn "${key} not in .env and cannot be auto-generated — set it manually then re-run."
-      return
-    fi
+  # Step 1 — resolve a non-empty value.  ``^KEY=.+`` (ERE) matches only a
+  # non-empty assignment, so an empty ``KEY=`` placeholder (straight from
+  # .env.example) is treated as "needs a value", not "already set".
+  if grep -qE "^${key}=.+" .env 2>/dev/null; then
+    value=$(grep -E "^${key}=.+" .env | head -n 1 | cut -d'=' -f2- | tr -d '\r\n')
+    upsert_env_var "${key}" "${value}"   # collapse any duplicate / empty lines
+    info "${key} already in .env — preserving."
+  elif [ -n "$generator" ]; then
+    # Dispatch on key name to avoid eval (SH-1); each branch is byte-identical
+    # to the openssl command documented in the call site's $generator argument.
+    case "$key" in
+      JARVIS_API_KEY)              value=$(openssl rand -hex 32) ;;
+      LITELLM_MASTER_KEY)          value=$(openssl rand -hex 32) ;;
+      POSTGRES_PASSWORD)           value=$(openssl rand -hex 24) ;;
+      QDRANT_API_KEY)              value=$(openssl rand -hex 24) ;;
+      INFRA_INGEST_KEY)            value=$(openssl rand -hex 32) ;;
+      VECTOR_WRITER_PASSWORD)      value=$(openssl rand -hex 32) ;;
+      JARVIS_CONFIG_KEY)           value=$(openssl rand -base64 32 | tr -d '\n') ;;
+      JARVIS_MODEL_HMAC_KEY)       value=$(openssl rand -hex 32) ;;
+      LANGFUSE_NEXTAUTH_SECRET)    value=$(openssl rand -hex 32) ;;
+      LANGFUSE_SALT)               value=$(openssl rand -hex 16) ;;
+      LANGFUSE_PG_PASSWORD)        value=$(openssl rand -hex 24) ;;
+      LANGFUSE_INIT_USER_PASSWORD) value=$(openssl rand -hex 32) ;;
+      BACKUP_ENCRYPT_KEY)          value=$(openssl rand -base64 32 | tr -d '\n') ;;
+      *)
+        warn "${key} has a generator but is not in the dispatch table — skipping."
+        FAILED=1; return ;;
+    esac
+    upsert_env_var "${key}" "${value}"   # fill the placeholder in place (no dupe)
+    ok "${key} generated and written to .env."
   else
-    info "${key} already in .env — skipping generation."
-  fi
-
-  # Step 2+3 — create or sync the secrets file
-  local val
-  val=$(grep "^${key}=" .env | head -n 1 | cut -d'=' -f2- | tr -d '\n')
-  if [ -z "$val" ]; then
-    warn "Could not read ${key} from .env — skipping ${file}."
+    warn "${key} not in .env and cannot be auto-generated — set it manually then re-run."
     return
   fi
 
+  # Step 2 — write the Docker-secret file from the in-memory value.
+  if [ -z "$value" ]; then
+    warn "${key} resolved to an empty value — NOT writing ${file}. Fix .env and re-run."
+    FAILED=1; return
+  fi
   if [ ! -f "$file" ]; then
-    printf '%s' "$val" > "$file"
+    printf '%s' "$value" > "$file"
     chmod 600 "$file"
     ok "${file} created."
-  elif [ "$(tr -d '\n' < "$file")" != "$val" ]; then
-    printf '%s' "$val" > "$file"
-    ok "${file} synced to match ${key} in .env."
+  elif [ "$(tr -d '\r\n' < "$file")" != "$value" ]; then
+    printf '%s' "$value" > "$file"
+    chmod 600 "$file"
+    ok "${file} synced to match ${key}."
   else
     info "${file} already in sync."
   fi
@@ -185,4 +190,13 @@ if [ ! -f "secrets/telegram_bot_token.txt" ]; then
   : > secrets/telegram_bot_token.txt
   chmod 600 secrets/telegram_bot_token.txt
   info "secrets/telegram_bot_token.txt created as empty placeholder (Telegram not configured)."
+fi
+
+# ---------------------------------------------------------------------------
+# Fail loudly if any auto-generated secret could not be written — a missing
+# secrets/*.txt for a _FILE-mounted secret breaks `docker compose up`.
+# ---------------------------------------------------------------------------
+if [ "${FAILED}" -ne 0 ]; then
+  warn "One or more secrets could not be written. Fix .env (remove empty/duplicate KEY= lines) and re-run."
+  exit 1
 fi

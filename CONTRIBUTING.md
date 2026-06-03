@@ -31,6 +31,12 @@ isolation expectation that every contributor must follow.
 
 ---
 
+## AI-Assisted Contributions
+
+This project was built with substantial AI assistance, and AI-assisted contributions are welcome — but every PR, human- or agent-authored, must pass the full gate (`make check`: ruff, ruff-format, pyright, tach, the Python + frontend test suites, and the build) before review.
+
+---
+
 ## Setting Up a Development Environment
 
 **Full single-instance install** (Docker, Python, Node, secrets, etc.):

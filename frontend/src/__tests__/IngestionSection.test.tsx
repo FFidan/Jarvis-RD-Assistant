@@ -79,7 +79,7 @@ const hardwareWith16GB = {
   vram_source: 'nvidia-smi',
   tier: 2,
   detected_at: '2026-05-07T10:00:00Z',
-  machine_id: 'host-rtx5060',
+  machine_id: 'host-test-gpu',
 };
 
 /** fit_detail for qwen3:14b at 8192 default context on a 16 GB box — fits */
@@ -187,10 +187,10 @@ describe('IngestionSection — hardware strip', () => {
     await waitFor(() => {
       expect(screen.getByTestId('hardware-strip')).toBeInTheDocument();
     });
-    // machine_id 'host-rtx5060' must never appear in the visible strip text
-    expect(screen.getByTestId('hardware-strip').textContent).not.toMatch(/host-rtx5060/);
+    // machine_id 'host-test-gpu' must never appear in the visible strip text
+    expect(screen.getByTestId('hardware-strip').textContent).not.toMatch(/host-test-gpu/);
     // The whole rendered output should not surface the hostname either
-    expect(document.body.textContent).not.toMatch(/host-rtx5060/);
+    expect(document.body.textContent).not.toMatch(/host-test-gpu/);
   });
 
   it('expands to show vram_source and detected_at on click', async () => {
@@ -269,7 +269,7 @@ describe('IngestionSection — num_ctx slider', () => {
 
     await waitFor(() => {
       expect(setConfig).toHaveBeenCalledWith(
-        'llm.host-rtx5060.smart_num_ctx',
+        'llm.host-test-gpu.smart_num_ctx',
         8192,
       );
     });
@@ -280,7 +280,7 @@ describe('IngestionSection — num_ctx slider', () => {
     // Provide a persisted value of 4096 (index 1)
     vi.mocked(fetchConfig).mockResolvedValue([
       ...baseConfig,
-      { key: 'llm.host-rtx5060.smart_num_ctx', value: 4096 },
+      { key: 'llm.host-test-gpu.smart_num_ctx', value: 4096 },
     ]);
     vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
 
@@ -377,7 +377,7 @@ describe('IngestionSection — fit badge color', () => {
     const { fetchConfig, apiFetch } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue([
       ...baseConfig,
-      { key: 'llm.host-rtx5060.smart_num_ctx', value: 16384 },
+      { key: 'llm.host-test-gpu.smart_num_ctx', value: 16384 },
     ]);
     vi.mocked(apiFetch).mockResolvedValue({
       ...systemModelsWithFitDetail,
@@ -415,7 +415,7 @@ describe('IngestionSection — fit badge color', () => {
     const { fetchConfig, apiFetch } = await import('@/lib/api');
     vi.mocked(fetchConfig).mockResolvedValue([
       ...baseConfig,
-      { key: 'llm.host-rtx5060.smart_num_ctx', value: 16384 },
+      { key: 'llm.host-test-gpu.smart_num_ctx', value: 16384 },
     ]);
     vi.mocked(apiFetch).mockResolvedValue({
       ...systemModelsWithFitDetail,
@@ -543,7 +543,7 @@ describe('IngestionSection — thinking-mode toggle', () => {
 
     await waitFor(() => {
       expect(setConfig).toHaveBeenCalledWith(
-        'llm.host-rtx5060.thinking_disabled.qwen3:14b',
+        'llm.host-test-gpu.thinking_disabled.qwen3:14b',
         expect.any(Boolean),
       );
     });

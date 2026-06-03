@@ -116,13 +116,13 @@ describe('TelegramBotTokenSection', () => {
 
     const input = screen.getByLabelText(/bot token/i);
     // Valid token format: <digits>:<20+ alphanumeric/dash/underscore>
-    await user.type(input, '123456789:ABCdefGHIjklMNOpqrSTU');
+    await user.type(input, '000000000:FAKE-TELEGRAM-TOKEN-PLACEHOLDER');
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
       expect(mockSave).toHaveBeenCalled();
-      expect(mockSave.mock.calls[0]?.[0]).toBe('123456789:ABCdefGHIjklMNOpqrSTU');
+      expect(mockSave.mock.calls[0]?.[0]).toBe('000000000:FAKE-TELEGRAM-TOKEN-PLACEHOLDER');
     });
   });
 
