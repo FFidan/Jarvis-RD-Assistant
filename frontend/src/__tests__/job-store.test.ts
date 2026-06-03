@@ -888,17 +888,27 @@ describe('JobStore', () => {
     const STALE_DELAY_MS = 2000;
     useJobStore.getState().subscribe(jobId, STALE_DELAY_MS);
 
-    // Drain microtasks so the async IIFE processes the frame + hits the catch
-    await vi.advanceTimersByTimeAsync(0);
+    // The reconnect chain has several await hops before the backoff sleep timer
+    // is armed: the for-await rejects -> outer catch -> _reconcileOrRetry
+    // (await getJob -> null) -> _reconnectAfterDrop -> sleep()->setTimeout. The
+    // old version assumed a single advanceTimersByTimeAsync(0) drained ALL of
+    // those microtask turns before advancing 1000ms; the variable turn count made
+    // that a CI flake (3d). Instead, drain microtasks until the reconnect timer
+    // actually exists, then advance — deterministic regardless of turn count.
+    for (let i = 0; i < 50 && vi.getTimerCount() === 0; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
 
-    // At this point the IIFE hit the catch block and is sleeping before reconnect.
-    // Advance by exactly the BASE delay (1000ms). If the bug is present the sleep
-    // uses stale 2000ms and the second subscribe has NOT yet been called.
-    // If fixed, sleep used 1000ms and the second subscribe fires now.
+    // The reconnect sleep is now armed. It was scheduled with the RESET base delay
+    // (1000ms, set when the progress frame arrived), NOT the stale 2000ms subscribe
+    // param. Advancing exactly the base delay fires it; a regression that kept the
+    // stale 2000ms would NOT fire here (fake timers only run timers due within the
+    // advanced window), so this assertion still catches the original bug.
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
     await vi.advanceTimersByTimeAsync(1000);
     await vi.advanceTimersByTimeAsync(0); // drain follow-on microtasks
 
-    // The second createSSEReader call proves reconnect fired after 1000ms, not 2000ms
+    // The second createSSEReader call proves reconnect fired after 1000ms, not 2000ms.
     expect(readerSpy).toHaveBeenCalledTimes(2);
   });
 
