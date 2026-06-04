@@ -315,10 +315,7 @@ async def test_source_emits_event_on_rate_limit(
 
 @respx.mock
 async def test_arxiv_emits_source_event_on_http_error():
-    """ArxivSource: fetch_new_since emits category='source'/source='arxiv' on ConnectError.
-
-    ConnectError exhausts retries → 'root is None' path fires (rate_limited or fetch_failed).
-    """
+    """ArxivSource: pure ConnectError (no prior 429) emits fetch_failed, not rate_limited."""
     respx.get(ARXIV_API_URL).mock(side_effect=httpx.ConnectError("connection refused"))
 
     pool = mock_log_event_pool()
@@ -346,10 +343,64 @@ async def test_arxiv_emits_source_event_on_http_error():
 
     assert papers == []
     source_events = [c for c in log_calls if c.get("category") == "source"]
-    # ConnectError causes _fetch_xml to exhaust retries and return None (not raise),
-    # so the "root is None" path fires — may be fetch_failed or rate_limited.
     assert source_events, "Expected at least one log_event with category='source'"
     assert all(c["source"] == "arxiv" for c in source_events)
+    # Pure connection error (no preceding 429) must not be misclassified as rate_limited.
+    assert not any(c.get("message") == "rate_limited" for c in source_events)
+
+
+@respx.mock
+async def test_arxiv_emits_rate_limited_event_on_429_then_connect_error(monkeypatch):
+    """ArxivSource: 429 on early attempts + ConnectError on final attempt → rate_limited event.
+
+    arXiv may drop the connection after repeated throttling. The self-healing
+    cooldown must fire (rate_limited event) so the source is not stuck in error state.
+    """
+    sleeps: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        sleeps.append(s)
+
+    monkeypatch.setattr("paper_ingestion.sources.arxiv_source.asyncio.sleep", fake_sleep)
+    respx.get(ARXIV_API_URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "5"}),
+            httpx.Response(429, headers={"Retry-After": "5"}),
+            httpx.ConnectError(""),
+        ]
+    )
+
+    pool = mock_log_event_pool()
+    source = _make_arxiv_source(db_pool=pool)
+    since = datetime(2026, 4, 1, 0, 0, 0, tzinfo=UTC)
+    topics = [_make_topic("ML")]
+
+    mock_limiter = AsyncMock()
+    mock_limiter.acquire = AsyncMock()
+    mock_limiter.update_last_request = AsyncMock()
+
+    log_calls: list[dict] = []
+
+    async def _capture(**kwargs):
+        log_calls.append(kwargs)
+
+    with (
+        patch(
+            "paper_ingestion.sources.base.PersistentSourceRateLimiter",
+            return_value=mock_limiter,
+        ),
+        patch("paper_ingestion.sources.arxiv_source.log_event", side_effect=_capture),
+    ):
+        papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
+
+    assert papers == []
+    source_events = [c for c in log_calls if c.get("category") == "source"]
+    assert source_events, "Expected at least one log_event with category='source'"
+    rate_events = [c for c in source_events if c.get("message") == "rate_limited"]
+    assert rate_events, "Expected a log_event with message='rate_limited' after 429+ConnectError"
+    ev = rate_events[0]
+    assert ev["source"] == "arxiv"
+    assert ev["level"] == "warning"
 
 
 _HTTP_ERROR_PARAMS = [

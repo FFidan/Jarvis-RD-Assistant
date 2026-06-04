@@ -220,6 +220,106 @@ async def test_start_scheduler_registers_classifier_and_weekly_jobs(scheduler_mo
 
 
 @pytest.mark.asyncio
+async def test_users_without_active_pulse_lock_filters_locked_users(scheduler_module):
+    """_users_without_active_pulse_lock returns only users whose lock is free.
+
+    User A (id=1): pg_try_advisory_xact_lock returns False — lock held.
+    User B (id=2): pg_try_advisory_xact_lock returns True  — lock free.
+    Expected: only [2] is returned; no explicit unlock is called (xact-lock
+    auto-releases at transaction end).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    conn = AsyncMock()
+    # First fetchval call → user 1 → lock held (False)
+    # Second fetchval call → user 2 → lock free (True)
+    conn.fetchval = AsyncMock(side_effect=[False, True])
+
+    # conn.transaction() must return an async context manager (xact-lock branch).
+    txn_cm = MagicMock()
+    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
+    txn_cm.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn_cm)
+
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+
+    result = await scheduler_module._users_without_active_pulse_lock(pool, [1, 2])
+
+    assert result == [2]
+    # xact-lock auto-releases — no explicit pg_advisory_unlock call.
+    assert conn.transaction.call_count == 2  # one transaction per user
+
+
+@pytest.mark.asyncio
+async def test_run_pulse_wrapper_skips_locked_users(scheduler_module):
+    """run_pulse_wrapper must pass only unlocked users to _defer_per_user.
+
+    Two active users; user A's lock is held → only user B gets a deferred job.
+    conn.transaction() is already wired by _make_pool_and_conn (with_transaction=True).
+    """
+    import jarvis_common.task_registry as task_registry
+    from unittest.mock import AsyncMock, patch
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord({"value": True})  # pulse enabled
+    conn.fetch.return_value = [{"id": 1}, {"id": 2}]  # two active users
+
+    # fetchval: user 1 → locked (False), user 2 → free (True)
+    conn.fetchval = AsyncMock(side_effect=[False, True])
+
+    app = __import__("types").SimpleNamespace(
+        state=__import__("types").SimpleNamespace(db_pool=pool)
+    )
+
+    mock_pulse_task = MagicMock()
+    mock_pulse_defer = AsyncMock()
+    mock_pulse_task.defer_async = mock_pulse_defer
+
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_pulse_task}):
+        await scheduler_module.run_pulse_wrapper(app)
+
+    # Only one defer — for user 2 (user 1 was locked)
+    mock_pulse_defer.assert_awaited_once()
+    call_kwargs = mock_pulse_defer.await_args.kwargs
+    assert call_kwargs["user_id"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_pulse_wrapper_all_locked_skips_entirely(scheduler_module, caplog):
+    """run_pulse_wrapper must not call _defer_per_user when all users are locked.
+
+    conn.transaction() is already wired by _make_pool_and_conn (with_transaction=True).
+    """
+    import jarvis_common.task_registry as task_registry
+    from unittest.mock import AsyncMock, patch
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord({"value": True})  # pulse enabled
+    conn.fetch.return_value = [{"id": 1}]  # one active user, locked
+
+    conn.fetchval = AsyncMock(return_value=False)  # lock held for every user
+
+    app = __import__("types").SimpleNamespace(
+        state=__import__("types").SimpleNamespace(db_pool=pool)
+    )
+
+    mock_pulse_task = MagicMock()
+    mock_pulse_defer = AsyncMock()
+    mock_pulse_task.defer_async = mock_pulse_defer
+
+    with patch.dict(task_registry._TASK_MAP, {"pulse.generate": mock_pulse_task}):
+        with caplog.at_level(logging.INFO, logger="paper_ingestion.scheduler"):
+            await scheduler_module.run_pulse_wrapper(app)
+
+    mock_pulse_defer.assert_not_awaited()
+    assert any("all active users have an in-flight run" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_apply_pulse_cron_rollback_also_fails_still_raises_http_400(caplog):
     """Outer HTTPException must fire even if the inner rollback raises.
 

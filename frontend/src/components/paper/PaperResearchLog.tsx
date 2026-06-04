@@ -8,8 +8,10 @@
  * Chunks are lazy/collapsed — hidden behind a toggle by default.
  */
 import { useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { type Paper, type Summary, type Chunk, type UserState } from '@/types';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { EvidenceTab } from './EvidenceTab';
 import { ChunksTab } from './ChunksTab';
 import { CrossReferencesTab } from './CrossReferencesTab';
@@ -17,7 +19,7 @@ import { NotesTab } from './NotesTab';
 import { RAGChatSection } from './RAGChatSection';
 import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { formatDate, formatAuthors, cn } from '@/lib/utils';
-import { ChevronDown, ChevronRight, ExternalLink, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, AlertTriangle, ShieldCheck, Wand2 } from 'lucide-react';
 import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
 
 // ---- Section wrapper ------------------------------------------------------
@@ -97,6 +99,29 @@ function LazyChunksSection({ chunks }: { chunks: Chunk[] }) {
           <ChunksTab chunks={chunks} />
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- Analyze CTA (shown in Ask section when paper has no chunks) ----------
+
+function AnalyzeCTA() {
+  const location = useLocation();
+  const analyzeHref = `${location.pathname}?action=analyze`;
+  return (
+    <div
+      data-testid="ask-analyze-cta"
+      className="rounded-md border border-hair bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground"
+    >
+      <p className="mb-4">
+        This paper hasn't been processed yet — Analyze it to enable Ask &amp; Summarize.
+      </p>
+      <Button asChild variant="default" size="sm">
+        <Link to={analyzeHref}>
+          <Wand2 className="mr-2 h-4 w-4" />
+          Analyze Paper
+        </Link>
+      </Button>
     </div>
   );
 }
@@ -334,6 +359,8 @@ export function PaperResearchLog({
             </div>
             <p>RAG chat requires an internet connection and a running model.</p>
           </div>
+        ) : chunks.length === 0 ? (
+          <AnalyzeCTA />
         ) : (
           <RAGChatSection paperId={paperId} />
         )}

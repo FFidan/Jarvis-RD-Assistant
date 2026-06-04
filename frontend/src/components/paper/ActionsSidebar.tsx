@@ -46,6 +46,8 @@ interface ActionsSidebarProps {
   hasSummary?: boolean;
   /** Briefly pulse the Process PDF button (triggered by ?action=process query param) */
   pulseProcessButton?: boolean;
+  /** Briefly pulse the Analyze Paper button (triggered by ?action=analyze query param) */
+  pulseAnalyzeButton?: boolean;
   /** discovery_origin used to gate the Recommendation Feedback section (spec §5.2). */
   discoveryOrigin?: 'user_initiated' | 'pulse' | 'recommender' | 'citation_batch';
   /** Last feedback signal (highlights the active thumb). */
@@ -72,6 +74,7 @@ export function ActionsSidebar({
   hasChunks = false,
   hasSummary = false,
   pulseProcessButton = false,
+  pulseAnalyzeButton = false,
   discoveryOrigin = 'user_initiated',
   recentFeedback = null,
   state = 'inbox',
@@ -281,8 +284,9 @@ export function ActionsSidebar({
       <h3 className="text-lg font-semibold">Actions</h3>
 
       <Button
+        id="paper-action-analyze"
         variant="default"
-        className="w-full justify-start"
+        className={`w-full justify-start${pulseAnalyzeButton ? ' animate-pulse' : ''}`}
         onClick={() => { setActionResult(null); runAnalyze(); }}
         disabled={anyPending}
       >

@@ -162,6 +162,12 @@ describe('ActionsSidebar', () => {
     expect(screen.getByRole('button', { name: /Analyze Paper/ })).toBeInTheDocument();
   });
 
+  it('Analyze Paper button has id="paper-action-analyze"', () => {
+    renderSidebar();
+    const btn = screen.getByRole('button', { name: /Analyze Paper/ });
+    expect(btn).toHaveAttribute('id', 'paper-action-analyze');
+  });
+
   it('renders manual action buttons conditionally based on stage props', async () => {
     const user = userEvent.setup();
 

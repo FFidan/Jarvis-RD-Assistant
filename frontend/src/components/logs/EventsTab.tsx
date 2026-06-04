@@ -284,7 +284,7 @@ export function EventsTab() {
           />
 
           {/* Backend full-text search */}
-          <div className="relative min-w-[160px]">
+          <div className="relative w-full sm:w-auto sm:min-w-[160px]">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               className="pl-8"
@@ -295,7 +295,7 @@ export function EventsTab() {
           </div>
 
           {/* Client-side free-text search */}
-          <div className="relative min-w-[160px]">
+          <div className="relative w-full sm:w-auto sm:min-w-[160px]">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               data-testid="search-input"

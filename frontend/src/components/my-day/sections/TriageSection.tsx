@@ -44,7 +44,7 @@ function FoundationalRow({
   isPending: boolean;
 }) {
   return (
-    <div className="grid grid-cols-[110px_1fr_auto] gap-3 items-center py-2.5 border-b border-hair last:border-0">
+    <div className="grid grid-cols-[80px_1fr_auto] sm:grid-cols-[110px_1fr_auto] gap-3 items-center py-2.5 border-b border-hair last:border-0">
       {/* Col 1 — pill */}
       <Pill label="Foundational" variant="warn" />
 
@@ -86,7 +86,7 @@ function ActionItemRow({
   const meta = [paper.source_type, paper.external_id].filter(Boolean).join(' · ');
 
   return (
-    <div className="grid grid-cols-[110px_1fr_auto] gap-3 items-center py-2.5 border-b border-hair last:border-0">
+    <div className="grid grid-cols-[80px_1fr_auto] sm:grid-cols-[110px_1fr_auto] gap-3 items-center py-2.5 border-b border-hair last:border-0">
       {/* Col 1 — pill */}
       <Pill label={pillLabel} variant={pillVariant} />
 

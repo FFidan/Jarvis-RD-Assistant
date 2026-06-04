@@ -6,6 +6,7 @@ from typing import Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.serialization import _coerce_bool
 
 from paper_ingestion.ingestion import refresh_recommendations
@@ -72,6 +73,28 @@ async def _list_active_users(db_pool: Any) -> list[int]:
     except Exception:
         logger.debug("scheduler: users table unreadable; falling back to system run", exc_info=True)
         return []
+
+
+async def _users_without_active_pulse_lock(db_pool: Any, user_ids: list[int]) -> list[int]:
+    """Return the subset of *user_ids* whose pulse advisory lock is not currently held.
+
+    Probes ``pg_try_advisory_xact_lock`` (transaction-scoped, auto-released — leak-proof)
+    for each user inside a short transaction so Postgres releases the lock automatically
+    at transaction end.  No explicit unlock is needed; if the connection dies mid-loop
+    the lock is never stranded on the pooled connection.
+    Users whose lock is already held by a running pipeline are excluded.
+    """
+    key1 = _kind_lock_key("pulse.generate")
+    free: list[int] = []
+    async with db_pool.acquire() as conn:
+        for uid in user_ids:
+            async with conn.transaction():
+                got = await conn.fetchval(
+                    "SELECT pg_try_advisory_xact_lock($1, $2)", key1, uid or 0
+                )
+            if got:
+                free.append(uid)
+    return free
 
 
 def _has_config_value(cfg: dict[str, Any], key: str) -> bool:
@@ -255,14 +278,26 @@ async def run_zotero_sync_wrapper(app: Any) -> None:
 
 
 async def run_pulse_wrapper(app: Any) -> None:
-    """APScheduler entrypoint — gated on ``pulse.enabled`` config."""
+    """APScheduler entrypoint — gated on ``pulse.enabled`` config.
+
+    Skips users whose pulse advisory lock is currently held (i.e. a
+    ``/pulse_now`` or earlier cron job is still running) to prevent stacking
+    duplicate pipeline runs.
+    """
     db_pool = app.state.db_pool
     if not await _is_pulse_enabled(db_pool):
         logger.info("pulse: disabled via user_config, skipping nightly run")
         return
     try:
-        # One Pulse deck per user.
-        await _defer_per_user(task_kind="pulse.generate", db_pool=db_pool, log_label="pulse")
+        user_ids = await _users_without_active_pulse_lock(
+            db_pool, await _list_active_users(db_pool)
+        )
+        if not user_ids:
+            logger.info("pulse: all active users have an in-flight run — skipping")
+            return
+        await _defer_per_user(
+            task_kind="pulse.generate", db_pool=db_pool, log_label="pulse", user_ids=user_ids
+        )
     except Exception:
         logger.exception("pulse: failed to defer pulse.generate job")
 

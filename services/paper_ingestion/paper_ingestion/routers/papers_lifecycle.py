@@ -47,12 +47,25 @@ async def save_paper(
     user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Save a paper to the Reading List (``state := 'to_read'``)."""
+    already_processed = False
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(
             conn, paper_id, user_id, allowed=("inbox", "done", "to_read", "reading")
         )
         await _upsert_state_and_starred(conn, paper_id, user_id, state="to_read")
+        already_processed = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM paper_chunks WHERE paper_id = $1)", paper_id
+        )
+    if not already_processed:
+        try:
+            from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
+
+            await KIND_TO_TASK["paper.analyze"].defer_async(
+                job_id=str(uuid.uuid4()), user_id=user_id, paper_id=paper_id
+            )
+        except Exception:
+            logger.exception("paper.analyze enqueue failed for paper %d", paper_id)
     return {"status": "ok", "paper_id": paper_id}
 
 

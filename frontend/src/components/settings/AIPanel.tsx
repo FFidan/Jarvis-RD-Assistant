@@ -271,7 +271,7 @@ export function AIPanel() {
       {/* Backend toggle */}
       <section className="space-y-3">
         <h3 className="text-sm font-medium">Backend</h3>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           {(['vllm', 'ollama'] as const).map((b) => {
             const isRecommended = b === data?.recommended_backend;
             const isActive = activeBackend === b;

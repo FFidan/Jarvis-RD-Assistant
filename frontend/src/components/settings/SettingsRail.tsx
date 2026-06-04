@@ -117,7 +117,7 @@ export function SettingsRail({ activeSection, activeItem, isAdmin, onSelect }: S
   return (
     <nav
       aria-label="Settings navigation"
-      className="shrink-0 border-r border-hair bg-[hsl(var(--surface-1))] lg:w-60 py-4 overflow-y-auto"
+      className="h-full w-full border-r border-hair bg-[hsl(var(--surface-1))] py-4 overflow-y-auto"
     >
       {visibleSections.map((section) => (
         <div key={section.label} className="mb-4">

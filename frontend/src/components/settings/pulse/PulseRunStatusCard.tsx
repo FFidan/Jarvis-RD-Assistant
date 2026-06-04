@@ -60,7 +60,7 @@ export function PulseRunStatusCard({
   return (
     <Card className="rounded-md border-hair shadow-none" data-testid="pulse-status-card">
       <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
+        <CardTitle className="text-base flex flex-wrap items-center gap-2">
           Last Pulse run
           {statusBadge}
         </CardTitle>

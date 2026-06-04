@@ -145,7 +145,7 @@ export function AuthorSection() {
         <div className="space-y-2">
           {authors.map((author) => (
             <Card key={author.id}>
-              <CardContent className="flex items-center gap-4 p-4">
+              <CardContent className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{author.author_name}</span>
@@ -165,7 +165,7 @@ export function AuthorSection() {
                     </p>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1">
                   <Button size="sm" variant="ghost" onClick={() => handleToggle(author)}>
                     {author.enabled ? 'Disable' : 'Enable'}
                   </Button>

@@ -64,7 +64,7 @@ function NudgeRow({
 
   return (
     <Card className="rounded-md border-hair shadow-none">
-      <CardContent className="flex items-center gap-4 p-4">
+      <CardContent className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium">
@@ -79,7 +79,7 @@ function NudgeRow({
               {nudgeDescriptions[nudge.nudge_type]}
             </p>
           )}
-          <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
+          <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
             <span>{cronToHumanReadable(nudge.cron_expression)}</span>
             <TimeSelect
               value={cronToTime(nudge.cron_expression)}
@@ -212,7 +212,7 @@ export function AutomationSection() {
                       variant="outline"
                       role="combobox"
                       aria-expanded={tzOpen}
-                      className="w-64 justify-between font-normal text-left"
+                      className="w-full sm:w-64 justify-between font-normal text-left"
                       disabled={configMut.isPending}
                     >
                       <span className="truncate">
@@ -221,7 +221,7 @@ export function AutomationSection() {
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-80 p-0" align="end">
+                  <PopoverContent className="w-72 sm:w-80 p-0" align="end">
                     <div className="flex items-center border-b px-3">
                       <Input
                         className="h-9 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"

@@ -12,6 +12,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { PaperResearchLog } from '@/components/paper/PaperResearchLog';
 import type { Paper, Summary, Chunk, UserState } from '@/types';
 
@@ -143,20 +144,22 @@ function renderLog(
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={qc}>
-      <PaperResearchLog
-        paper={PAPER}
-        summary={overrides.summary !== undefined ? overrides.summary : SUMMARY}
-        chunks={overrides.chunks ?? CHUNKS}
-        userState={overrides.userState !== undefined ? overrides.userState : USER_STATE}
-        paperId={1}
-        evidenceCount={1}
-        crossRefCount={1}
-        contradictionCount={0}
-        noteCount={0}
-        recommendationScore={overrides.recommendationScore ?? null}
-      />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <PaperResearchLog
+          paper={PAPER}
+          summary={overrides.summary !== undefined ? overrides.summary : SUMMARY}
+          chunks={overrides.chunks ?? CHUNKS}
+          userState={overrides.userState !== undefined ? overrides.userState : USER_STATE}
+          paperId={1}
+          evidenceCount={1}
+          crossRefCount={1}
+          contradictionCount={0}
+          noteCount={0}
+          recommendationScore={overrides.recommendationScore ?? null}
+        />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 

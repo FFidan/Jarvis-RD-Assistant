@@ -412,6 +412,44 @@ describe('PaperDetailPage', () => {
     expect(screen.getByText('All papers')).toBeInTheDocument();
   });
 
+  it('shows Analyze CTA in Ask section when paper has no chunks', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: null,
+      chunks: [],
+      user_state: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ask-analyze-cta')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/hasn't been processed yet/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Analyze Paper/ })).toBeInTheDocument();
+    // RAG chat inputs must not appear
+    expect(screen.queryByText('Ask about this paper')).not.toBeInTheDocument();
+    expect(screen.queryByText('This paper')).not.toBeInTheDocument();
+  });
+
+  it('shows RAG chat (not CTA) when paper has chunks', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Ask about this paper')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('ask-analyze-cta')).not.toBeInTheDocument();
+    expect(screen.getByText('This paper')).toBeInTheDocument();
+    expect(screen.getByText('All papers')).toBeInTheDocument();
+  });
+
   it('renders the Zotero panel disabled when the paper has no project links', async () => {
     mockFetchPaperDetail.mockResolvedValue({
       paper: MOCK_PAPER,

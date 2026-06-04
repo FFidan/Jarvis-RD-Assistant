@@ -64,6 +64,7 @@ export function PaperDetailPage() {
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   const [tocSheetOpen, setTocSheetOpen] = useState(false);
   const [processPulse, setProcessPulse] = useState(false);
+  const [analyzePulse, setAnalyzePulse] = useState(false);
   const paperDetailNoteDismissed = useUIStore((s) => s.paperDetailNoteDismissed);
   const setPaperDetailNoteDismissed = useUIStore((s) => s.setPaperDetailNoteDismissed);
   const { online } = useOnlineStatus();
@@ -116,6 +117,18 @@ export function PaperDetailPage() {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setProcessPulse(true);
     const t = setTimeout(() => setProcessPulse(false), 1500);
+    return () => clearTimeout(t);
+  }, [data, searchParams]);
+
+  // ?action=analyze — scroll the Analyze Paper button into view + pulse it
+  useEffect(() => {
+    if (!data) return;
+    if (searchParams.get('action') !== 'analyze') return;
+    const el = document.getElementById('paper-action-analyze');
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setAnalyzePulse(true);
+    const t = setTimeout(() => setAnalyzePulse(false), 1500);
     return () => clearTimeout(t);
   }, [data, searchParams]);
 
@@ -224,6 +237,7 @@ export function PaperDetailPage() {
           hasChunks={chunks.length > 0}
           hasSummary={summary !== null}
           pulseProcessButton={processPulse}
+          pulseAnalyzeButton={analyzePulse}
           discoveryOrigin={paper.discovery_origin ?? 'user_initiated'}
           recentFeedback={paper.recent_feedback ?? null}
           state={user_state?.state ?? 'inbox'}

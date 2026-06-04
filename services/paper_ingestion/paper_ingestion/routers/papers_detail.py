@@ -1,6 +1,7 @@
 """Paper detail and batch-save endpoints: get_paper_detail, batch_save_papers."""
 
 import logging
+import uuid
 from typing import Annotated
 from urllib.parse import urlparse
 
@@ -204,4 +205,13 @@ async def batch_save_papers(
                         added_via="batch_save",
                     )
                 results.append(row_to_paper_response(row))
+    for saved in results:
+        try:
+            from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
+
+            await KIND_TO_TASK["paper.analyze"].defer_async(
+                job_id=str(uuid.uuid4()), user_id=user_id, paper_id=saved.id
+            )
+        except Exception:
+            logger.exception("paper.analyze enqueue failed for paper %d", saved.id)
     return results

@@ -154,10 +154,10 @@ export function TopicSection() {
         <div className="space-y-2">
           {topics.map((topic) => (
             <Card key={topic.id} className="rounded-md border-hair shadow-none">
-              <CardContent className="flex items-center gap-4 p-4">
+              <CardContent className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4">
                 {editingId === topic.id ? (
-                  <div className="flex flex-1 flex-col gap-2">
-                    <div className="flex flex-wrap items-end gap-2">
+                  <div className="flex flex-1 flex-col gap-2 w-full">
+                    <div className="grid gap-2 sm:grid-cols-3">
                       <div className="flex flex-col gap-1">
                         <label className="text-xs text-muted-foreground flex items-center gap-1">
                           Name
@@ -167,7 +167,6 @@ export function TopicSection() {
                           value={editForm.name}
                           onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
                           placeholder="Name"
-                          className="w-40"
                         />
                       </div>
                       <div className="flex flex-col gap-1">
@@ -179,7 +178,6 @@ export function TopicSection() {
                           value={editForm.query_terms}
                           onChange={(e) => setEditForm({ ...editForm, query_terms: e.target.value })}
                           placeholder="Query terms (comma-separated)"
-                          className="w-60"
                         />
                       </div>
                       <div className="flex flex-col gap-1">
@@ -191,9 +189,10 @@ export function TopicSection() {
                           value={editForm.category}
                           onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
                           placeholder="Category"
-                          className="w-32"
                         />
                       </div>
+                    </div>
+                    <div className="flex gap-1">
                       <Button size="icon" variant="ghost" onClick={saveEdit} disabled={updateMut.isPending} aria-label="Save topic">
                         <Check className="h-4 w-4" />
                       </Button>
@@ -238,7 +237,7 @@ export function TopicSection() {
                         </p>
                       )}
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex shrink-0 items-center gap-3">
                       <div className="flex items-center gap-2">
                         <Switch
                           id={`sub-${topic.id}`}

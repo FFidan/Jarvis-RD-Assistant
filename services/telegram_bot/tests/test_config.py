@@ -102,3 +102,48 @@ def test_config_reads_token_from_secret_file_when_env_unset(tmp_path):
         config = BotConfig.from_env()
 
     assert config.telegram_token == "123456:secret-token-from-file"
+
+
+def test_config_reads_jarvis_api_key_from_secret_file(tmp_path):
+    """Docker-secret convention: when only JARVIS_API_KEY_FILE is set (the bare
+    JARVIS_API_KEY env is absent), the key is read from that secret file.
+
+    Guards the bug where an empty JARVIS_API_KEY caused every backend call to
+    return 403.
+    """
+    secret = tmp_path / "jarvis_api_key"
+    secret.write_text("my-secret-api-key\n")
+    env = {
+        "TELEGRAM_BOT_TOKEN": "test-token",
+        "DATABASE_URL": "postgres://localhost/test",
+        "JARVIS_API_KEY_FILE": str(secret),
+    }
+    with patch.dict(os.environ, env, clear=True):
+        config = BotConfig.from_env()
+
+    assert config.jarvis_api_key is not None
+    assert config.jarvis_api_key.get_secret_value() == "my-secret-api-key"
+
+
+def test_config_jarvis_api_key_file_oserror_falls_through_to_none(tmp_path):
+    """JARVIS_API_KEY_FILE pointing to an unreadable path must NOT raise.
+
+    read_text() on a directory raises IsADirectoryError (OSError subclass).
+    The OSError catch in BotConfig.from_env() must swallow it and leave
+    jarvis_api_key as None (unauthenticated warning path).
+
+    Verified: telegram_bot/config.py:183-190 — OSError branch sets api_key=None.
+    """
+    # A directory raises IsADirectoryError (OSError) on read_text().
+    unreadable = tmp_path  # tmp_path itself is a directory
+    env = {
+        "TELEGRAM_BOT_TOKEN": "test-token",
+        "DATABASE_URL": "postgres://localhost/test",
+        "JARVIS_API_KEY_FILE": str(unreadable),
+    }
+    # Bare JARVIS_API_KEY is absent — only the FILE path is set.
+    with patch.dict(os.environ, env, clear=True):
+        config = BotConfig.from_env()
+
+    # Must not raise; key falls through to None.
+    assert config.jarvis_api_key is None

@@ -460,3 +460,37 @@ async def test_fetch_new_since_timeout_records_sanitized_diagnostic():
     )
     assert "secret" not in str(source.last_poll_diagnostic)
     assert "export.arxiv.org" not in str(source.last_poll_diagnostic)
+
+
+@respx.mock
+async def test_fetch_new_since_429_then_connect_error_records_rate_limit(monkeypatch):
+    """429 on attempts 0+1 followed by ConnectError on attempt 2 → rate_limit diagnostic.
+
+    arXiv may drop the TCP connection after repeated throttling. The last
+    attempt raises httpx.ConnectError (response is None). Because the loop
+    already saw a 429 the diagnostic must still classify as 'rate_limit', not
+    the generic 'error' that would silence the self-healing cooldown.
+    """
+    sleeps: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        sleeps.append(s)
+
+    monkeypatch.setattr("paper_ingestion.sources.arxiv_source.asyncio.sleep", fake_sleep)
+    respx.get(ARXIV_API_URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "5"}),
+            httpx.Response(429, headers={"Retry-After": "5"}),
+            httpx.ConnectError(""),
+        ]
+    )
+
+    source = _make_source()
+    since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
+    topics = [TopicRef(id=1, name="ML", query_terms=["machine learning"])]
+
+    papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
+
+    assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] == "rate_limit"

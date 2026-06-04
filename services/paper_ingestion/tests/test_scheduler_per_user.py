@@ -19,6 +19,12 @@ def _pool_with_users(user_ids: list[int]) -> tuple[MagicMock, AsyncMock]:
     conn = AsyncMock()
     conn.fetch = AsyncMock(return_value=[{"id": uid} for uid in user_ids])
     conn.fetchrow = AsyncMock(return_value=None)
+    # pulse de-dupe probe: every user's advisory lock is free
+    conn.fetchval = AsyncMock(return_value=True)
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock(return_value=conn)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=tx)
     pool = MagicMock()
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)

@@ -177,11 +177,29 @@ class BotConfig(JarvisCommonSettings):
                 "TELEGRAM_CHAT_ID is not set — bot will use DB pairing flow for outbound messages"
             )
 
-        if not cfg.jarvis_api_key:
+        # Resolve JARVIS_API_KEY from Docker secret file when the bare env is empty.
+        api_key = cfg.jarvis_api_key
+        if not api_key:
+            api_key_file = os.environ.get("JARVIS_API_KEY_FILE", "")
+            if api_key_file:
+                try:
+                    raw_key = Path(api_key_file).read_text().strip()
+                    if raw_key:
+                        api_key = SecretStr(raw_key)
+                except OSError:
+                    logger.warning("JARVIS_API_KEY_FILE=%r could not be read", api_key_file)
+
+        if not api_key:
             logger.warning("JARVIS_API_KEY not set — all API calls will be unauthenticated")
 
-        # Return a new instance with the resolved database_url + effective token.
-        return cfg.model_copy(update={"database_url": resolved_url, "telegram_token": token})
+        # Return a new instance with the resolved database_url + effective token + api_key.
+        return cfg.model_copy(
+            update={
+                "database_url": resolved_url,
+                "telegram_token": token,
+                "jarvis_api_key": api_key,
+            }
+        )
 
 
 async def create_db_pool(database_url: str) -> asyncpg.Pool:

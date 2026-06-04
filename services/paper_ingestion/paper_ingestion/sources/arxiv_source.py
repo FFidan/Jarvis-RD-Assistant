@@ -250,6 +250,7 @@ class ArxivSource(PaperSource):
         Retries 429 / 5xx responses with bounded backoff so a transient arXiv
         throttle does not immediately erase the whole Pulse deck.
         """
+        saw_429 = False
         for attempt in range(_MAX_FETCH_ATTEMPTS):
             try:
                 async with _ARXIV_REQUEST_LOCK:
@@ -261,6 +262,8 @@ class ArxivSource(PaperSource):
                         timeout=30.0,
                     )
                 if response.status_code in (429, 500, 502, 503, 504):
+                    if response.status_code == 429:
+                        saw_429 = True
                     if attempt < _MAX_FETCH_ATTEMPTS - 1:
                         _ra = _retry_after_s(response.headers.get("Retry-After"))
                         wait_s = (
@@ -313,6 +316,14 @@ class ArxivSource(PaperSource):
                 response = getattr(exc, "response", None)
                 if response is not None:
                     self._record_transient_poll_diagnostic(response)
+                elif saw_429:
+                    self._set_poll_diagnostic(
+                        status="rate_limit",
+                        message="arXiv rate limit reached. It will retry automatically later.",
+                        status_code=429,
+                        retry_after_s=None,
+                        settings_hint=None,
+                    )
                 else:
                     self._set_poll_diagnostic(
                         status="error",
@@ -321,7 +332,9 @@ class ArxivSource(PaperSource):
                         retry_after_s=None,
                         settings_hint=None,
                     )
-                logger.warning("arxiv _safe_get %s failed: %s", ARXIV_API_URL, exc)
+                logger.warning(
+                    "arxiv _safe_get %s failed: %s: %s", ARXIV_API_URL, type(exc).__name__, exc
+                )
                 return None
         return None
 

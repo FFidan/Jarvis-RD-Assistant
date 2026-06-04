@@ -77,7 +77,7 @@ export function AdminAuditLogPage() {
         </p>
       </div>
 
-      <form onSubmit={applyFilter} className="flex items-end gap-3">
+      <form onSubmit={applyFilter} className="flex flex-col sm:flex-row items-end gap-3">
         <div className="space-y-2">
           <Label htmlFor="action-prefix">Filter by action prefix</Label>
           <Input
@@ -85,7 +85,7 @@ export function AdminAuditLogPage() {
             placeholder="auth.magic_link"
             value={filterInput}
             onChange={(e) => setFilterInput(e.target.value)}
-            className="w-72"
+            className="w-full sm:w-72"
           />
         </div>
         <Button type="submit" variant="outline">

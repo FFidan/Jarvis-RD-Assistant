@@ -238,6 +238,7 @@ async def rate_card(
     Guard: paper must be a member of the requesting user's pulse deck (404 if not).
     """
     _ = request  # required by slowapi limiter — pyright suppression idiom (plan §2 constraint 7)
+    should_analyze = False
     async with db_pool.acquire() as conn:
         in_deck = await conn.fetchval(
             """SELECT 1 FROM pulse_cards pc
@@ -256,6 +257,10 @@ async def rate_card(
                 logger.debug("pulse open: paper_id=%s user_id=%s", body.paper_id, user_id)
             elif body.rating == "save":
                 await _upsert_state_and_starred(conn, body.paper_id, user_id, state="to_read")
+                should_analyze = not await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM paper_chunks WHERE paper_id = $1)",
+                    body.paper_id,
+                )
             elif body.rating == "up":
                 await _upsert_recommendation_feedback(
                     conn, body.paper_id, user_id, "positive", "pulse_thumbs"
@@ -269,6 +274,13 @@ async def rate_card(
                 await _upsert_recommendation_feedback(
                     conn, body.paper_id, user_id, "negative", "dismiss_combined"
                 )
+    if should_analyze:
+        try:
+            await KIND_TO_TASK["paper.analyze"].defer_async(
+                job_id=str(uuid.uuid4()), user_id=user_id, paper_id=body.paper_id
+            )
+        except Exception:
+            logger.exception("paper.analyze enqueue failed for paper %d", body.paper_id)
     return PulseRateResponse(status="ok")
 
 

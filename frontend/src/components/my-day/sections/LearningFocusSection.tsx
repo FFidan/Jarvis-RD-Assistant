@@ -36,7 +36,7 @@ export function LearningFocusSection() {
     <section id="learning-focus">
       <SectionHeader marker="Learning &amp; focus" />
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* ── Learning cards card (left) ── */}
         <div className="rounded-lg border border-hair bg-card p-4">
           <h3 className="font-mono text-[10px] uppercase tracking-wide text-meta mb-2">
