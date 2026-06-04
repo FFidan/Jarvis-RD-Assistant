@@ -38,6 +38,9 @@ le_main = pytest.importorskip(
 )
 le_app = le_main.app
 
+from jarvis_common.testing_contract_apps import (  # noqa: E402
+    make_contract_client as _make_contract_client,
+)
 from paper_ingestion.main import app as pi_app  # noqa: E402
 from tests.conftest import (  # noqa: E402
     A_CARD_FRONT,
@@ -167,7 +170,10 @@ def _assert_no_leak(body_text: str, markers: tuple[str, ...]) -> None:
 #
 # LLM/RAG/qdrant/embedding endpoints are intentionally excluded (need
 # ollama/qdrant): /api/ask*, /api/summarize*, /api/search*, /api/discover,
-# /api/similar, /api/generate*, extract endpoints.
+# /api/similar, /api/generate*, /api/papers/{id}/extract (POST, enqueues LLM job).
+# Extraction READ endpoints (GET /api/papers/{id}/extractions,
+# GET /api/extractions/table) do NOT need ollama/qdrant and ARE covered by
+# dedicated isolation tests below (test_extraction_reads_scoped_to_calling_user).
 # ---------------------------------------------------------------------------
 _REGISTRY: list[tuple[str, str, str, str]] = [
     # --- papers (paper_ingestion) ---
@@ -361,3 +367,245 @@ async def _assert_a_intact(conn, template: str, tu) -> None:
     # Other mutate endpoints (feedback/priority/dismiss/fetch/subscribe) have
     # no destructive effect on A's seeded markers; the status-code + no-leak
     # assertions above are sufficient.
+
+
+# ---------------------------------------------------------------------------
+# Per-user surface isolation: paper_extractions + paper_notes(zotero)
+#
+# Migration 0094 made these tables per-user (user_id column). The parametrised
+# _REGISTRY harness cannot easily seed extraction rows (needs a template FK),
+# so the coverage lives here as dedicated contract-style tests.
+#
+# Pattern: contract_two_users + _pi_app_with_pool + _make_contract_client,
+# consistent with tests/contract/ tests.  The session-scoped contract pool is
+# reused (per-test rollback via contract_conn).
+# ---------------------------------------------------------------------------
+
+# Marker string embedded in A's extraction so a body-text leak check is easy.
+_A_EXTRACTION_MARKER = "ZZZ-ISOLATION-A-EXTRACTION-CONTENT"
+_A_ZOTERO_NOTE_MARKER = "ZZZ-ISOLATION-A-ZOTERO-NOTE"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_extraction_reads_scoped_to_calling_user(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+) -> None:
+    """User B cannot see user A's paper_extractions rows via either read endpoint.
+
+    Seed: shared paper (discovered_by NULL, in both users' libraries) + one
+    extraction template + one paper_extractions row owned by user A.
+
+    Asserts:
+      - GET /api/papers/{P}/extractions as user B → [] (empty list, not A's row)
+      - GET /api/extractions/table?template_id=T as user B → [] (empty table)
+      - Both endpoints return 200 (scoping query runs without crashing).
+
+    Verified: extractions.py:255-295 get_paper_extractions,
+              extractions.py:324-440 get_extraction_table
+    # Verified: extractions.py:268
+    """
+    # Seed: shared paper (discovered_by NULL) visible to both users.
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('iso-ext-shared-xtr', 'arxiv', 'shared-paper-extractions-isolation',
+                   ARRAY['A. Author'], 'https://example.test/shared-xtr', NULL)
+           RETURNING id"""
+    )
+    # Both users in library so assert_paper_ownership passes for A and B.
+    await contract_conn.executemany(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        [
+            (contract_two_users.user_a_id, paper_id),
+            (contract_two_users.user_b_id, paper_id),
+        ],
+    )
+
+    # Seed: extraction template.
+    template_id = await contract_conn.fetchval(
+        """INSERT INTO extraction_templates (name, description, fields, is_default)
+           VALUES ('iso-test-template', 'isolation test', '[]'::jsonb, FALSE)
+           RETURNING id"""
+    )
+
+    # Seed: extraction row owned by user A.
+    await contract_conn.execute(
+        """INSERT INTO paper_extractions (paper_id, template_id, extractions, user_id)
+           VALUES ($1, $2, $3::jsonb, $4)""",
+        paper_id,
+        template_id,
+        {"finding": {"value": _A_EXTRACTION_MARKER}},
+        contract_two_users.user_a_id,
+    )
+
+    # _pi_app_with_pool is already wired to the same contract_conn transaction;
+    # all router reads share the same connection and see the seeded rows.
+    async with _make_contract_client(_pi_app_with_pool, contract_two_users.cookie_b) as client:
+        resp_list = await client.get(f"/api/papers/{paper_id}/extractions")
+        resp_table = await client.get(
+            "/api/extractions/table",
+            params={"template_id": template_id},
+        )
+
+    # Both endpoints must succeed (scoping query runs without crashing).
+    assert resp_list.status_code == 200, (
+        f"GET /api/papers/{{paper_id}}/extractions returned {resp_list.status_code}: "
+        f"{resp_list.text[:300]}"
+    )
+    assert resp_table.status_code == 200, (
+        f"GET /api/extractions/table returned {resp_table.status_code}: {resp_table.text[:300]}"
+    )
+
+    # User B's response must not contain any of A's extraction data.
+    assert resp_list.json() == [], (
+        f"LEAK: user B saw user A's extraction row: {resp_list.text[:300]}"
+    )
+    assert _A_EXTRACTION_MARKER not in resp_list.text, (
+        f"LEAK: A's extraction marker visible to B in /extractions: {resp_list.text[:300]}"
+    )
+    table_body = resp_table.json()
+    assert table_body == [], (
+        f"LEAK: user B saw user A's row in /extractions/table: {resp_table.text[:300]}"
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_zotero_note_reads_scoped_to_calling_user(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+) -> None:
+    """User B cannot see user A's zotero paper_notes row via GET /api/papers/{P}/notes.
+
+    Seed: shared paper (discovered_by NULL, in both libraries) + one zotero
+    note owned by user A.
+
+    Asserts:
+      - GET /api/papers/{P}/notes as user B → [] (A's zotero note excluded)
+      - GET /api/papers/{P}/notes?source=zotero as user B → [] (same)
+      - Endpoint returns 200 in both cases (scoping query must not crash).
+
+    Verified: notes.py:31-74 list_notes — WHERE paper_id=$1 AND user_id=$2
+    # Verified: notes.py:57
+    """
+    # Seed: shared paper visible to both users.
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('iso-ext-shared-ztero', 'arxiv', 'shared-paper-zotero-isolation',
+                   ARRAY['B. Author'], 'https://example.test/shared-ztero', NULL)
+           RETURNING id"""
+    )
+    await contract_conn.executemany(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        [
+            (contract_two_users.user_a_id, paper_id),
+            (contract_two_users.user_b_id, paper_id),
+        ],
+    )
+
+    # Seed: zotero note owned by user A.
+    await contract_conn.execute(
+        """INSERT INTO paper_notes (paper_id, user_id, user_note, source, zotero_annotation_key)
+           VALUES ($1, $2, $3, 'zotero', 'iso-zotero-key-a')""",
+        paper_id,
+        contract_two_users.user_a_id,
+        _A_ZOTERO_NOTE_MARKER,
+    )
+
+    async with _make_contract_client(_pi_app_with_pool, contract_two_users.cookie_b) as client:
+        resp_all = await client.get(f"/api/papers/{paper_id}/notes")
+        resp_zotero = await client.get(f"/api/papers/{paper_id}/notes", params={"source": "zotero"})
+
+    assert resp_all.status_code == 200, (
+        f"GET /api/papers/{{paper_id}}/notes returned {resp_all.status_code}: {resp_all.text[:300]}"
+    )
+    assert resp_zotero.status_code == 200, (
+        f"GET /api/papers/{{paper_id}}/notes?source=zotero returned "
+        f"{resp_zotero.status_code}: {resp_zotero.text[:300]}"
+    )
+
+    assert resp_all.json() == [], (
+        f"LEAK: user B saw user A's zotero note in /notes: {resp_all.text[:300]}"
+    )
+    assert resp_zotero.json() == [], (
+        f"LEAK: user B saw user A's zotero note in /notes?source=zotero: {resp_zotero.text[:300]}"
+    )
+    assert _A_ZOTERO_NOTE_MARKER not in resp_all.text
+    assert _A_ZOTERO_NOTE_MARKER not in resp_zotero.text
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_post_0094_backfill_rows_visible_to_owning_user(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+) -> None:
+    """Rows backfilled by migration 0094 (user_id set to admin) remain visible.
+
+    Regression guard: the per-user read predicate ``AND user_id = $N`` must
+    match rows whose user_id was set during the 0094 NULL->admin backfill.
+    This test simulates that state by inserting a row with user_id explicitly
+    set to user A, then asserting user A's read returns it.
+
+    If the query predicate were inverted or used a wrong column the row would
+    vanish — this test catches that silent regression.
+
+    Verified: extractions.py:266-295 get_paper_extractions WHERE user_id=$2
+    # Verified: extractions.py:268
+    """
+    # Seed: shared paper + library membership for user A only (A is the owner).
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('iso-ext-backfill', 'arxiv', 'backfill-preservation-test',
+                   ARRAY['C. Author'], 'https://example.test/backfill', NULL)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        contract_two_users.user_a_id,
+        paper_id,
+    )
+
+    # Seed: template + extraction row with user_id = user_a_id (simulates backfill).
+    template_id = await contract_conn.fetchval(
+        """INSERT INTO extraction_templates (name, description, fields, is_default)
+           VALUES ('iso-backfill-template', 'backfill test', '[]'::jsonb, FALSE)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_extractions (paper_id, template_id, extractions, user_id)
+           VALUES ($1, $2, '{"result": {"value": "backfill-data"}}'::jsonb, $3)""",
+        paper_id,
+        template_id,
+        contract_two_users.user_a_id,
+    )
+
+    async with _make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as client:
+        resp = await client.get(f"/api/papers/{paper_id}/extractions")
+
+    assert resp.status_code == 200, (
+        f"GET /api/papers/{{paper_id}}/extractions returned {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert len(body) == 1, (
+        f"Expected 1 extraction row for user A (backfill row), got {len(body)}: {resp.text[:300]}"
+    )
+    assert body[0]["template_id"] == template_id
+    # Verify the backfilled row is actually present in the DB with the correct user_id.
+    db_row = await contract_conn.fetchrow(
+        "SELECT user_id FROM paper_extractions WHERE paper_id=$1 AND template_id=$2",
+        paper_id,
+        template_id,
+    )
+    assert db_row is not None, "Backfill extraction row was not found in DB"
+    assert db_row["user_id"] == contract_two_users.user_a_id, (
+        f"Backfill row user_id mismatch: expected {contract_two_users.user_a_id}, "
+        f"got {db_row['user_id']}"
+    )

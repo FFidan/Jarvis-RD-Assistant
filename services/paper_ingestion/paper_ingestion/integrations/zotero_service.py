@@ -362,8 +362,10 @@ async def sync_annotations_for_paper(
     """Import Zotero PDF annotations into ``paper_notes`` for a linked paper.
 
     Imported annotations are stored as read-only notes with ``source='zotero'``
-    and idempotently upserted by ``(paper_id, zotero_annotation_key)``. They are
-    not copied into verified evidence or knowledge-graph tables.
+    and idempotently upserted on the partial unique index
+    ``(paper_id, user_id, zotero_annotation_key) WHERE zotero_annotation_key IS NOT NULL``
+    — attributed to ``owner_user_id`` (the syncing user). They are not copied
+    into verified evidence or knowledge-graph tables.
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
@@ -394,12 +396,6 @@ async def sync_annotations_for_paper(
     if not paper:
         return {"paper_id": paper_id, "imported": 0, "status": "not_found"}
     zotero_item_key = paper["zotero_item_key"]
-    # Attribute imported annotations to the paper's discoverer
-    # (audit-trail column). Tolerate fixtures missing the column (NULL = system).
-    try:
-        paper_owner_user_id = paper["discovered_by"]
-    except (KeyError, IndexError):
-        paper_owner_user_id = None
     if not zotero_item_key:
         return {"paper_id": paper_id, "imported": 0, "status": "not_linked"}
 
@@ -432,7 +428,9 @@ async def sync_annotations_for_paper(
                         (paper_id, source, zotero_annotation_key, user_note, highlight_text,
                          page_number, user_id)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (paper_id, zotero_annotation_key) DO UPDATE
+                    ON CONFLICT (paper_id, user_id, zotero_annotation_key)
+                    WHERE zotero_annotation_key IS NOT NULL
+                    DO UPDATE
                         SET user_note      = EXCLUDED.user_note,
                             highlight_text = EXCLUDED.highlight_text,
                             page_number    = EXCLUDED.page_number,
@@ -471,7 +469,7 @@ async def sync_annotations_for_paper(
                     note,
                     highlight,
                     page_number,
-                    paper_owner_user_id,
+                    owner_user_id,
                 )
                 imported += 1
 
@@ -577,8 +575,8 @@ async def poll_zotero_library(
                         try:
                             await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
                                 job_id=str(uuid.uuid4()),
-                                # Attribute to paper's discoverer (audit-trail column).
-                                user_id=row["discovered_by"],
+                                # Attribute to the syncing user (who triggered this poll).
+                                user_id=polling_user_id,
                                 paper_id=row["id"],
                             )
                         except Exception:

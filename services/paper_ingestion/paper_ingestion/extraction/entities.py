@@ -250,9 +250,8 @@ async def extract_entities_for_paper(
                 """INSERT INTO paper_entities
                        (paper_id, entity_id, mention_count, first_chunk_id, user_id)
                    VALUES ($1, $2, 1, $3, $4)
-                   ON CONFLICT (paper_id, entity_id) DO UPDATE
-                   SET mention_count = paper_entities.mention_count + 1,
-                       user_id = COALESCE(paper_entities.user_id, EXCLUDED.user_id)""",
+                   ON CONFLICT (paper_id, entity_id, user_id) DO UPDATE
+                   SET mention_count = paper_entities.mention_count + 1""",
                 paper_id,
                 entity_id,
                 first_chunk_id,

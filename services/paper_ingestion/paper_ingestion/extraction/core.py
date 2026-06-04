@@ -116,6 +116,7 @@ async def extract_fields_for_paper(
     embedder: Embedder | None = None,
     verifier: QuoteVerifier | None = None,
     openai_client: openai.AsyncOpenAI | None = None,
+    user_id: int | None = None,
 ) -> ExtractionResponse:
     """Extract template fields for one paper and persist the extraction payload.
 
@@ -285,9 +286,9 @@ async def extract_fields_for_paper(
         try:
             row = await conn.fetchrow(
                 """INSERT INTO paper_extractions (paper_id, template_id, extractions,
-                       extraction_model, extraction_raw)
-                   VALUES ($1, $2, $3::jsonb, $4, $5)
-                   ON CONFLICT (paper_id, template_id)
+                       extraction_model, extraction_raw, user_id)
+                   VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+                   ON CONFLICT (paper_id, template_id, user_id)
                    DO UPDATE SET extractions = EXCLUDED.extractions,
                                  extraction_model = EXCLUDED.extraction_model,
                                  extraction_raw = EXCLUDED.extraction_raw
@@ -298,6 +299,7 @@ async def extract_fields_for_paper(
                 extraction_json,
                 smart_model,
                 llm_result.model_dump_json(),
+                user_id,
             )
         except asyncpg.exceptions.UndefinedTableError:
             raise ValueError(
@@ -329,6 +331,7 @@ async def batch_extract(
     embedder: Embedder | None = None,
     verifier: QuoteVerifier | None = None,
     ctx: ProgressContext | None = None,
+    user_id: int | None = None,
 ) -> BatchExtractionResponse:
     """Extract fields for multiple papers, skipping those already extracted.
 
@@ -350,9 +353,11 @@ async def batch_extract(
         async with db_pool.acquire() as conn:
             try:
                 existing = await conn.fetchval(
-                    "SELECT id FROM paper_extractions WHERE paper_id = $1 AND template_id = $2",
+                    "SELECT id FROM paper_extractions"
+                    " WHERE paper_id = $1 AND template_id = $2 AND user_id = $3",
                     paper_id,
                     template_id,
+                    user_id,
                 )
             except asyncpg.exceptions.UndefinedTableError:
                 existing = None
@@ -361,7 +366,7 @@ async def batch_extract(
         else:
             try:
                 await extract_fields_for_paper(
-                    http_client, db_pool, paper_id, template_id, embedder, verifier
+                    http_client, db_pool, paper_id, template_id, embedder, verifier, user_id=user_id
                 )
                 extracted += 1
             except Exception:

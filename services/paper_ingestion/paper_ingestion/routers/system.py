@@ -10,7 +10,12 @@ from typing import Any, Literal
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from jarvis_common import JobCreateResponse, current_user_id, require_admin_or_api_key
+from jarvis_common import (
+    JobCreateResponse,
+    current_user_id,
+    require_admin,
+    require_admin_or_api_key,
+)
 from jarvis_common.audit import log_audit
 from jarvis_common.hardware_fit import recommend_models
 from jarvis_common.model_catalog import Role
@@ -186,7 +191,7 @@ async def _cloud_key_presence(pool: asyncpg.Pool) -> dict[str, bool]:
     return presence
 
 
-@router.get("/setup-status", response_model=SetupStatus)
+@router.get("/setup-status", response_model=SetupStatus, dependencies=[Depends(require_admin)])
 @limiter.limit("30/minute")
 async def get_setup_status(
     request: Request,

@@ -883,3 +883,260 @@ async def test_kg_w2_extract_entities_llm_boundary_via_faux_litellm(
     assert entity_row is not None, (
         "entities table must have a 'transformer'/'method' row after LLM boundary extraction"
     )
+
+
+# ---------------------------------------------------------------------------
+# TENANT-03: per-user paper_entities rows on a shared paper
+#
+# Two sub-tests:
+#   (a) SQL-layer: directly seed two paper_entities rows for the same
+#       (paper_id, entity_id) with different user_ids — proves the
+#       UNIQUE NULLS NOT DISTINCT (paper_id, entity_id, user_id) constraint
+#       allows per-user rows and that each user's KG is independently scoped.
+#   (b) Endpoint-layer: A extracts on A's paper, B extracts on B's paper;
+#       the same canonical entity deduplicates to one entities row but each
+#       user gets their own paper_entities row (independent mention_counts).
+#
+# Verified: extraction/entities.py ON CONFLICT (paper_id, entity_id, user_id)
+# Migration 0094: UNIQUE NULLS NOT DISTINCT (paper_id, entity_id, user_id)
+# ---------------------------------------------------------------------------
+
+
+async def test_tenant03_constraint_allows_per_user_rows_on_shared_paper(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """SQL constraint: two users can both have paper_entities rows for the same
+    (paper_id, entity_id) pair — each scoped by their own user_id.
+
+    Directly seeds rows via contract_conn to isolate the constraint from the
+    endpoint ownership gate. Verifies:
+    - INSERT of (paper_id, entity_id, user_a_id) succeeds.
+    - INSERT of (paper_id, entity_id, user_b_id) also succeeds (not a conflict).
+    - A's KG shows the entity; B's KG shows it too (independent scoping).
+    - A re-INSERT triggers ON CONFLICT DO UPDATE (mention_count++) not an error.
+    """
+    # Seed a shared paper owned by user A
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('tenant03-constraint-paper', 'arxiv', 'Constraint Test Paper TENANT-03',
+                   ARRAY['Author'], 'https://tenant03-c.test/paper', $1)
+           RETURNING id""",
+        contract_two_users.user_a_id,
+    )
+
+    # Seed a shared canonical entity
+    entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('GPT-4', 'gpt-4', 'method', 1)
+           ON CONFLICT (canonical_name, entity_type)
+           DO UPDATE SET paper_count = entities.paper_count + 1
+           RETURNING id"""
+    )
+
+    # INSERT row for user A — must succeed
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, mention_count, user_id)
+           VALUES ($1, $2, 1, $3)
+           ON CONFLICT (paper_id, entity_id, user_id) DO UPDATE
+           SET mention_count = paper_entities.mention_count + 1""",
+        paper_id,
+        entity_id,
+        contract_two_users.user_a_id,
+    )
+
+    # INSERT row for user B on the SAME (paper_id, entity_id) — must NOT conflict with A's row
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, mention_count, user_id)
+           VALUES ($1, $2, 1, $3)
+           ON CONFLICT (paper_id, entity_id, user_id) DO UPDATE
+           SET mention_count = paper_entities.mention_count + 1""",
+        paper_id,
+        entity_id,
+        contract_two_users.user_b_id,
+    )
+
+    # ASSERT: both rows exist independently
+    row_a = await contract_conn.fetchrow(
+        "SELECT mention_count FROM paper_entities WHERE paper_id=$1 AND entity_id=$2 AND user_id=$3",
+        paper_id,
+        entity_id,
+        contract_two_users.user_a_id,
+    )
+    assert row_a is not None, "User A's paper_entities row must exist"
+    assert row_a["mention_count"] == 1
+
+    row_b = await contract_conn.fetchrow(
+        "SELECT mention_count FROM paper_entities WHERE paper_id=$1 AND entity_id=$2 AND user_id=$3",
+        paper_id,
+        entity_id,
+        contract_two_users.user_b_id,
+    )
+    assert row_b is not None, (
+        "User B must have her OWN paper_entities row — not blocked by user A's row"
+    )
+    assert row_b["mention_count"] == 1
+
+    # ASSERT: re-INSERT for A triggers mention_count increment (ON CONFLICT DO UPDATE)
+    await contract_conn.execute(
+        """INSERT INTO paper_entities (paper_id, entity_id, mention_count, user_id)
+           VALUES ($1, $2, 1, $3)
+           ON CONFLICT (paper_id, entity_id, user_id) DO UPDATE
+           SET mention_count = paper_entities.mention_count + 1""",
+        paper_id,
+        entity_id,
+        contract_two_users.user_a_id,
+    )
+    row_a2 = await contract_conn.fetchrow(
+        "SELECT mention_count FROM paper_entities WHERE paper_id=$1 AND entity_id=$2 AND user_id=$3",
+        paper_id,
+        entity_id,
+        contract_two_users.user_a_id,
+    )
+    assert row_a2 is not None
+    assert row_a2["mention_count"] == 2, (
+        f"Re-insert must increment A's mention_count to 2; got {row_a2['mention_count']}"
+    )
+    # B's count must remain 1 (A's re-insert did not touch B's row)
+    row_b2 = await contract_conn.fetchrow(
+        "SELECT mention_count FROM paper_entities WHERE paper_id=$1 AND entity_id=$2 AND user_id=$3",
+        paper_id,
+        entity_id,
+        contract_two_users.user_b_id,
+    )
+    assert row_b2 is not None
+    assert row_b2["mention_count"] == 1, (
+        f"A's re-insert must NOT affect B's mention_count; got {row_b2['mention_count']}"
+    )
+
+    # ASSERT: A's KG endpoint shows the entity; B's KG shows it too (separate scoping)
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        kg_a = await c.get("/api/knowledge-graph")
+    assert kg_a.status_code == 200
+    names_a = [e["name"].lower() for e in kg_a.json().get("entities", [])]
+    assert "gpt-4" in names_a, f"User A's KG must show 'GPT-4'; entities={names_a}"
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        kg_b = await c.get("/api/knowledge-graph")
+    assert kg_b.status_code == 200
+    names_b = [e["name"].lower() for e in kg_b.json().get("entities", [])]
+    assert "gpt-4" in names_b, (
+        f"User B's KG must show 'GPT-4' via her own paper_entities row; entities={names_b}"
+    )
+
+
+async def test_tenant03_endpoint_per_user_extraction_own_papers(
+    contract_two_users,
+    contract_conn,
+    pi_contract_app_with_litellm_sidecar,
+    _configure_api_key,
+):
+    """Endpoint: A extracts on A's paper, B extracts on B's paper.
+
+    Both papers reference the same canonical entity (same canonical_name/type
+    → deduplicated to one entities row). Each user gets their own paper_entities
+    row with independent mention_counts. Neither user sees the other's KG entry.
+
+    Verified: extraction/entities.py ON CONFLICT (paper_id, entity_id, user_id)
+    """
+    import httpx
+
+    from jarvis_common.testing_contract_apps import patch_app_state
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion._state import set_services
+    from paper_ingestion.extraction.kg_models import KGEntityCandidate, KGExtractionOutput
+
+    app, faux_litellm = pi_contract_app_with_litellm_sidecar
+
+    # Seed separate papers — one per user
+    paper_a_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('tenant03-ep-paper-a', 'arxiv', 'Paper A TENANT-03',
+                   ARRAY['Author'], 'https://tenant03-ep-a.test/paper', $1)
+           RETURNING id""",
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_chunks
+               (paper_id, chunk_index, content, page_number, start_char, end_char)
+           VALUES ($1, 0, 'ResNet model outperforms prior baselines on ImageNet.', 1, 0, 52)""",
+        paper_a_id,
+    )
+
+    paper_b_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('tenant03-ep-paper-b', 'arxiv', 'Paper B TENANT-03',
+                   ARRAY['Author'], 'https://tenant03-ep-b.test/paper', $1)
+           RETURNING id""",
+        contract_two_users.user_b_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_chunks
+               (paper_id, chunk_index, content, page_number, start_char, end_char)
+           VALUES ($1, 0, 'ResNet achieves top-1 accuracy improvements on ImageNet.', 1, 0, 56)""",
+        paper_b_id,
+    )
+
+    # Script the same entity name for both extractions — will dedup to one entities row
+    for _ in range(2):
+        faux_litellm.add_pydantic_response(
+            "fast",
+            KGExtractionOutput(
+                entities=[KGEntityCandidate(name="ResNet", type="method")],
+                relationships=[],
+            ),
+        )
+
+    faux_qdrant = FauxQdrantClient()
+    set_services(openai_client=app.state.openai_client)
+    try:
+        async with httpx.AsyncClient() as http_client:
+            with patch_app_state(app, {"qdrant_client": faux_qdrant, "http_client": http_client}):
+                async with _make_client(app, contract_two_users.cookie_a) as c:
+                    resp_a = await c.post(f"/api/extract-entities/{paper_a_id}")
+                assert resp_a.status_code == 200, (
+                    f"User A extract-entities failed: {resp_a.status_code} {resp_a.text[:300]}"
+                )
+
+                async with _make_client(app, contract_two_users.cookie_b) as c:
+                    resp_b = await c.post(f"/api/extract-entities/{paper_b_id}")
+                assert resp_b.status_code == 200, (
+                    f"User B extract-entities failed: {resp_b.status_code} {resp_b.text[:300]}"
+                )
+    finally:
+        set_services(openai_client=None)
+
+    # ASSERT: A has her paper_entities row (on paper_a_id, user_a_id)
+    row_a = await contract_conn.fetchrow(
+        "SELECT user_id FROM paper_entities WHERE paper_id = $1 AND user_id = $2",
+        paper_a_id,
+        contract_two_users.user_a_id,
+    )
+    assert row_a is not None, "User A must have a paper_entities row on her paper"
+
+    # ASSERT: B has her paper_entities row (on paper_b_id, user_b_id)
+    row_b = await contract_conn.fetchrow(
+        "SELECT user_id FROM paper_entities WHERE paper_id = $1 AND user_id = $2",
+        paper_b_id,
+        contract_two_users.user_b_id,
+    )
+    assert row_b is not None, "User B must have a paper_entities row on her paper"
+
+    # ASSERT: A's KG shows "ResNet"; B's KG shows it independently
+    async with _make_client(app, contract_two_users.cookie_a) as c:
+        kg_a = await c.get("/api/knowledge-graph")
+    assert kg_a.status_code == 200
+    names_a = [e["name"].lower() for e in kg_a.json().get("entities", [])]
+    assert "resnet" in names_a, (
+        f"User A's KG must show 'ResNet' after her extraction; entities={names_a}"
+    )
+
+    async with _make_client(app, contract_two_users.cookie_b) as c:
+        kg_b = await c.get("/api/knowledge-graph")
+    assert kg_b.status_code == 200
+    names_b = [e["name"].lower() for e in kg_b.json().get("entities", [])]
+    assert "resnet" in names_b, (
+        f"User B's KG must show 'ResNet' after her extraction; entities={names_b}"
+    )

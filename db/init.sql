@@ -1516,9 +1516,9 @@ ALTER TABLE ONLY public.paper_citations
 ALTER TABLE ONLY public.paper_contradictions
     ADD CONSTRAINT paper_contradictions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.paper_entities
-    ADD CONSTRAINT paper_entities_pkey PRIMARY KEY (paper_id, entity_id);
+    ADD CONSTRAINT paper_entities_paper_entity_user_key UNIQUE NULLS NOT DISTINCT (paper_id, entity_id, user_id);
 ALTER TABLE ONLY public.paper_extractions
-    ADD CONSTRAINT paper_extractions_paper_id_template_id_key UNIQUE (paper_id, template_id);
+    ADD CONSTRAINT paper_extractions_paper_template_user_key UNIQUE NULLS NOT DISTINCT (paper_id, template_id, user_id);
 ALTER TABLE ONLY public.paper_extractions
     ADD CONSTRAINT paper_extractions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.paper_notes
@@ -1738,7 +1738,7 @@ CREATE INDEX system_events_category_level_idx ON public.system_events USING btre
 CREATE INDEX system_events_correlation_idx ON public.system_events USING btree (correlation_id, created_at) WHERE (correlation_id IS NOT NULL);
 CREATE INDEX system_events_created_at_idx ON public.system_events USING btree (created_at DESC);
 CREATE INDEX telegram_pairing_expires_idx ON public.telegram_pairing USING btree (expires_at);
-CREATE UNIQUE INDEX uq_paper_notes_zotero_annotation ON public.paper_notes USING btree (paper_id, zotero_annotation_key) WHERE (zotero_annotation_key IS NOT NULL);
+CREATE UNIQUE INDEX uq_paper_notes_zotero_annotation ON public.paper_notes USING btree (paper_id, user_id, zotero_annotation_key) WHERE (zotero_annotation_key IS NOT NULL);
 CREATE UNIQUE INDEX uq_pulse_models_one_active_per_user ON public.pulse_models USING btree (COALESCE(user_id, 0)) WHERE (is_active = true);
 CREATE UNIQUE INDEX uq_review_logs_user_idempotency ON public.review_logs USING btree (user_id, idempotency_key) WHERE (idempotency_key IS NOT NULL);
 CREATE UNIQUE INDEX user_config_user_key_idx ON public.user_config USING btree (user_id, key) NULLS NOT DISTINCT;

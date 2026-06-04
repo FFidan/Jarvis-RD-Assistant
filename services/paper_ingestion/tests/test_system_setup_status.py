@@ -25,7 +25,7 @@ def _app(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama-mock:11434")
 
-    from jarvis_common import verify_api_key
+    from jarvis_common import require_admin, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -35,6 +35,9 @@ def _app(monkeypatch):
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    # AUTHZ-03 added require_admin to get_setup_status; these tests verify the
+    # response logic (the admin gate itself is covered in test_system_authz).
+    app.dependency_overrides[require_admin] = lambda: None
     yield app, conn
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True

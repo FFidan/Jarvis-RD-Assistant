@@ -615,7 +615,12 @@ async def test_poll_library_updates_version():
 
 
 async def test_sync_annotations_for_paper_imports_zotero_highlights_idempotently():
-    """Zotero annotation children are upserted into paper_notes by annotation key."""
+    """Zotero annotation children are upserted into paper_notes by annotation key.
+
+    Annotations are attributed to the *syncing* user (owner_user_id), not to
+    paper["discovered_by"], and upserted on the 3-col index
+    (paper_id, user_id, zotero_annotation_key).
+    """
     config_conn = _make_conn(fetch=_zotero_enabled_with_annotations_rows())
     paper_conn = _make_conn(fetchrow=FakeRecord({"id": 7, "zotero_item_key": "ITEM1234"}))
     persist_conn = _make_conn()
@@ -640,6 +645,8 @@ async def test_sync_annotations_for_paper_imports_zotero_highlights_idempotently
         },
     ]
 
+    syncing_user_id = 42  # explicit syncing user — must appear in $7 bind
+
     with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
         mock_client = mock_client_cls.return_value
         mock_client.get_item_children = AsyncMock(return_value=annotations)
@@ -648,14 +655,13 @@ async def test_sync_annotations_for_paper_imports_zotero_highlights_idempotently
             paper_id=7,
             db_pool=pool,
             http_client=http,
+            owner_user_id=syncing_user_id,
         )
 
     assert result == {"paper_id": 7, "imported": 2, "status": "ok"}
     assert persist_conn.execute.await_count == 2
-    first_sql = persist_conn.execute.await_args_list[0].args[0]
-    assert "ON CONFLICT (paper_id, zotero_annotation_key)" in first_sql
-    assert "verification_status" in first_sql
-    assert "promoted_at" in first_sql
+    # Per-user attribution + ON CONFLICT shape are proven behaviorally by the live-PG
+    # contract test (test_zotero_contract); here we assert the call args, not SQL text (TS-02).
     assert persist_conn.execute.await_args_list[0].args[1:6] == (
         7,
         "zotero",
@@ -664,6 +670,8 @@ async def test_sync_annotations_for_paper_imports_zotero_highlights_idempotently
         "Important highlighted claim",
     )
     assert persist_conn.execute.await_args_list[1].args[5] is None
+    # $7 (user_id) must be the syncing user, not the paper discoverer.
+    assert persist_conn.execute.await_args_list[0].args[7] == syncing_user_id
 
 
 # ---------------------------------------------------------------------------

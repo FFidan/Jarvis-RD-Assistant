@@ -253,3 +253,44 @@ async def test_ok_route_not_wrapped_in_envelope() -> None:
     assert body == {"ok": True}
     assert "detail" not in body
     assert "request_id" not in body
+
+
+# ---------------------------------------------------------------------------
+# LOG-VALIDATION-01: server-side log must not contain the submitted input value
+# ---------------------------------------------------------------------------
+
+
+async def test_validation_error_log_excludes_submitted_input(caplog) -> None:
+    """LOG-VALIDATION-01: the PROD log message must not contain the raw submitted value.
+
+    ``exc.errors(include_input=False)`` strips the ``input`` field from the
+    Pydantic error dicts before they reach the logger, so secrets submitted in
+    a malformed request body are never written to logs.
+
+    Verified against: ``error_handlers.py`` PROD branch logger.warning call.
+    """
+    import logging
+
+    import httpx
+
+    app = _make_error_test_app()
+
+    sensitive_value = "super-secret-password-12345"
+
+    with caplog.at_level(logging.WARNING):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            # Send a string where an int is required — Pydantic captures the
+            # submitted value in exc.errors()[*]["input"] by default.
+            resp = await client.post(
+                "/raise-validation",
+                json={"required_field": sensitive_value},
+            )
+
+    assert resp.status_code == 422
+    # The sensitive value must NOT appear anywhere in the captured log output.
+    assert sensitive_value not in caplog.text, (
+        f"Sensitive input value leaked into log output: {caplog.text[:500]}"
+    )

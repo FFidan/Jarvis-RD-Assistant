@@ -208,12 +208,16 @@ async def test_a133_smtp_config_reflects_persisted_rows(setup_client, contract_c
 # ---------------------------------------------------------------------------
 
 
-async def test_a134_smtp_post_persists_to_db(setup_client, contract_conn):
+async def test_a134_smtp_post_persists_to_db(setup_client, contract_conn, monkeypatch):
     """Covers map row A134: POST /api/setup/smtp persists smtp.host/port/from to user_config.
 
     Verified: setup.py:464-491 configure_smtp at HEAD.
     Survivor-of: test_setup_first_run.py smtp-post mock assertions.
     """
+    # Bypass the SSRF guard so a placeholder hostname (non-resolvable in the
+    # sandbox) doesn't block the persist path.  This test is about DB
+    # persistence, not the SSRF guard.
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
     resp = await setup_client.post(
         "/api/setup/smtp",
         json={
@@ -474,13 +478,17 @@ async def test_e1_setup_state_advances_after_admin_creation(setup_client, contra
     )
 
 
-async def test_e1_setup_smtp_idempotent_update(setup_client, contract_conn):
+async def test_e1_setup_smtp_idempotent_update(setup_client, contract_conn, monkeypatch):
     """POST /api/setup/smtp twice updates the same row (UPSERT idempotency).
 
     The second POST must overwrite smtp.host without creating a duplicate row.
     Verified: setup.py:464-491 (configure_smtp — ON CONFLICT DO UPDATE UPSERT path).
     Survivor-of: test_setup_first_run.py smtp idempotency tests.
     """
+    # Bypass the SSRF guard so placeholder hostnames (non-resolvable in the
+    # sandbox) don't block the persist path.  This test is about UPSERT
+    # idempotency, not the SSRF guard.
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
     await setup_client.post(
         "/api/setup/smtp",
         json={
@@ -529,17 +537,16 @@ async def test_e1_setup_status_contains_setup_mode(setup_client, contract_conn):
 
 
 async def test_smtp_test_send_rejects_private_host(setup_client, monkeypatch):
-    """POST /api/setup/smtp with test_send to a private/link-local host is blocked (SSRF guard).
+    """POST /api/setup/smtp with a private/link-local host is rejected at persist time (SSRF guard).
 
-    The SMTP-test endpoint is reachable pre-auth in bootstrap mode. Without a guard a
-    caller could point the test send at an internal address (e.g. the cloud metadata
-    endpoint 169.254.169.254) to probe the internal network. The guard must reject the
-    host BEFORE any aiosmtplib connection is attempted.
+    The SSRF guard runs at persist time (``configure_smtp`` calls
+    ``_reject_non_public_host`` before writing to the DB), so a private host
+    is rejected with HTTP 422 before any aiosmtplib connection is attempted.
+    This is the correct SSRF contract: a private host cannot be persisted at
+    all, let alone used for a test send.
 
-    ``configure_smtp`` catches test-send failures into the 200 body (it does NOT raise
-    4xx), so the contract is: HTTP 200, ``test_sent`` is False, ``aiosmtplib.send`` was
-    NEVER called, and ``test_error`` does not reflect the attacker-supplied host string.
-    Verified: setup.py _send_test_email (guard at top) + configure_smtp (catches into body) at HEAD.
+    Verified: setup.py configure_smtp (calls _reject_non_public_host before
+    the DB write, gated by allow_private_smtp_host) at HEAD.
     """
     import aiosmtplib
     from unittest.mock import AsyncMock
@@ -558,20 +565,14 @@ async def test_smtp_test_send_rejects_private_host(setup_client, monkeypatch):
         },
     )
 
-    # configure_smtp catches the guard failure into the 200 body — it does not raise 4xx.
-    assert resp.status_code == 200, (
-        f"Expected 200 (failure caught into body); got {resp.status_code}: {resp.text[:300]}"
+    # The SSRF guard rejects the private host at persist time — 422, not 200.
+    assert resp.status_code == 422, (
+        f"Expected 422 (SSRF guard rejects private host); got {resp.status_code}: {resp.text[:300]}"
     )
-    body = resp.json()
-    assert body["test_sent"] is False, (
-        f"test_sent must be False when the host is blocked; got: {body}"
-    )
-    # The guard must reject the host BEFORE any SMTP connection is attempted.
-    mock_send.assert_not_called()
-    # The raw host/IP must not be reflected back to the caller (no SSRF probe oracle).
-    assert "169.254.169.254" not in (body.get("test_error") or ""), (
-        f"test_error must not reflect the attacker-supplied host; got: {body['test_error']!r}"
-    )
+    detail = resp.json().get("detail", "")
+    assert "non-public" in detail, f"422 detail must mention 'non-public'; got: {detail!r}"
+    # aiosmtplib.send must never have been called (guard fires before any connection).
+    mock_send.assert_not_awaited()
 
 
 async def test_e1_setup_admin_creates_session_and_user(setup_client, contract_conn):

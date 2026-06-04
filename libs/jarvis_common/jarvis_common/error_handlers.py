@@ -69,7 +69,7 @@ async def validation_exception_handler(
     logger.warning(
         "Validation error [request_id=%s]: %s",
         request_id,
-        exc.errors(),
+        [{k: v for k, v in e.items() if k != "input"} for e in exc.errors()],
     )
     return JSONResponse(
         status_code=422,

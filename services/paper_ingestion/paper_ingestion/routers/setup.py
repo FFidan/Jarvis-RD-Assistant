@@ -42,6 +42,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.crypto import encrypt_secret
+from jarvis_common.net import _reject_non_public_host
 from jarvis_common.serialization import _coerce_bool
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
 from jarvis_common.settings import get_core_settings
@@ -320,16 +321,33 @@ async def system_check(request: Request) -> SystemCheckResponse:
     Mirrors the lifespan-style health checks in ``main._run_health_checks``
     but reports per-service detail strings so the wizard can render
     actionable error states.
+
+    INFO-01: exception detail is redacted to ``"unreachable"`` for the
+    unauthenticated bootstrap path (admin_count==0) to avoid leaking internal
+    host/port strings.  Authenticated admins receive the full detail.
     """
     await require_unconfigured_or_admin(request)
 
-    import asyncio  # noqa: PLC0415
-
     from jarvis_common.llm_client import get_litellm_config  # noqa: PLC0415
 
-    services: list[ServiceStatus] = []
     pool = request.app.state.db_pool
     http = request.app.state.http_client
+
+    # Determine whether the caller is an authenticated admin; if not, redact
+    # exception detail so internal host/port strings don't leak to unauthenticated
+    # operators in bootstrap mode (INFO-01).
+    admin_count = await _admin_count(pool)
+    is_authenticated_admin = (
+        admin_count > 0 and getattr(request.state, "user_role", None) == "admin"
+    )
+
+    def _detail(exc: Exception) -> str:
+        if is_authenticated_admin:
+            return str(exc)[:200]
+        logger.debug("system_check dependency unreachable: %s", exc, exc_info=True)
+        return "unreachable"
+
+    services: list[ServiceStatus] = []
 
     # PostgreSQL
     try:
@@ -337,7 +355,7 @@ async def system_check(request: Request) -> SystemCheckResponse:
             await asyncio.wait_for(conn.execute("SELECT 1"), timeout=5.0)
         services.append(ServiceStatus(name="postgres", ok=True))
     except Exception as exc:  # noqa: BLE001
-        services.append(ServiceStatus(name="postgres", ok=False, detail=str(exc)[:200]))
+        services.append(ServiceStatus(name="postgres", ok=False, detail=_detail(exc)))
 
     # Qdrant
     try:
@@ -348,7 +366,7 @@ async def system_check(request: Request) -> SystemCheckResponse:
             await asyncio.wait_for(qdrant.get_collections(), timeout=5.0)
             services.append(ServiceStatus(name="qdrant", ok=True))
     except Exception as exc:  # noqa: BLE001
-        services.append(ServiceStatus(name="qdrant", ok=False, detail=str(exc)[:200]))
+        services.append(ServiceStatus(name="qdrant", ok=False, detail=_detail(exc)))
 
     # Ollama
     try:
@@ -364,7 +382,7 @@ async def system_check(request: Request) -> SystemCheckResponse:
             )
         )
     except Exception as exc:  # noqa: BLE001
-        services.append(ServiceStatus(name="ollama", ok=False, detail=str(exc)[:200]))
+        services.append(ServiceStatus(name="ollama", ok=False, detail=_detail(exc)))
 
     # LiteLLM
     try:
@@ -381,7 +399,7 @@ async def system_check(request: Request) -> SystemCheckResponse:
             )
         )
     except Exception as exc:  # noqa: BLE001
-        services.append(ServiceStatus(name="litellm", ok=False, detail=str(exc)[:200]))
+        services.append(ServiceStatus(name="litellm", ok=False, detail=_detail(exc)))
 
     return SystemCheckResponse(services=services, all_ok=all(s.ok for s in services))
 
@@ -458,41 +476,14 @@ async def _read_smtp_config(pool: Any) -> SmtpConfigResponse:
     )
 
 
-async def _reject_non_public_host(host: str) -> None:
-    """Resolve host; reject private/loopback/link-local/reserved/multicast (SSRF guard).
-
-    The SMTP-test endpoint is reachable pre-auth in bootstrap mode, so without this an
-    operator-supplied host could be pointed at an internal address (e.g. the cloud
-    metadata endpoint) to probe the internal network.
-    """
-    import ipaddress  # noqa: PLC0415
-
-    loop = asyncio.get_running_loop()
-    try:
-        infos = await loop.getaddrinfo(host, None)  # non-blocking (fn is async)
-    except OSError as exc:
-        raise ValueError("Could not resolve SMTP host") from exc
-    for info in infos:
-        sockaddr = info[4]  # getaddrinfo 5-tuple: (family, type, proto, canonname, sockaddr)
-        ip = ipaddress.ip_address(sockaddr[0])  # sockaddr[0] is the address (AF_INET and AF_INET6)
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            raise ValueError("SMTP host resolves to a non-public address")
-
-
 async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
     """Best-effort SMTP test send. Returns None on success, error string on failure."""
-    try:
-        await _reject_non_public_host(body.host)
-    except ValueError as exc:
-        logger.warning("setup smtp test_send blocked: %s", exc, exc_info=True)
-        return str(exc)
+    if not get_core_settings().allow_private_smtp_host:
+        try:
+            await _reject_non_public_host(body.host)
+        except ValueError as exc:
+            logger.warning("setup smtp test_send blocked: %s", exc, exc_info=True)
+            return str(exc)
 
     try:
         import aiosmtplib  # noqa: PLC0415
@@ -554,6 +545,16 @@ async def configure_smtp(body: SmtpBody, request: Request) -> SmtpResponse:
     """Persist SMTP config and optionally fire a test email."""
     await require_unconfigured_or_admin(request)
 
+    if not get_core_settings().allow_private_smtp_host:
+        try:
+            await _reject_non_public_host(body.host)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="SMTP host resolves to a non-public address. "
+                "Set ALLOW_PRIVATE_SMTP_HOST=true for an internal relay.",
+            ) from exc
+
     pool = request.app.state.db_pool
     await _persist_config(pool, "smtp.host", body.host, encrypted=False)
     await _persist_config(pool, "smtp.port", body.port, encrypted=False)
@@ -603,6 +604,10 @@ async def create_first_admin(
 
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Serialise concurrent first-admin creation attempts at the DB level.
+            # pg_advisory_xact_lock blocks until the previous transaction commits
+            # or rolls back, so exactly one caller wins the admin-count=0 check.
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext('create_first_admin'))")
             admin_count = int(
                 await conn.fetchval(
                     "SELECT COUNT(*) FROM users WHERE role = 'admin' AND deleted_at IS NULL"

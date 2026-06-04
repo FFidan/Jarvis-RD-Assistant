@@ -266,9 +266,10 @@ async def get_paper_extractions(
         try:
             rows = await conn.fetch(
                 """SELECT id, paper_id, template_id, extractions, extraction_model, created_at
-                   FROM paper_extractions WHERE paper_id = $1
+                   FROM paper_extractions WHERE paper_id = $1 AND user_id = $2
                    ORDER BY created_at DESC""",
                 paper_id,
+                user_id,
             )
         except asyncpg.exceptions.UndefinedTableError:
             raise HTTPException(
@@ -376,10 +377,11 @@ async def get_extraction_table(
                     """SELECT pe.paper_id, p.title AS paper_title, pe.extractions
                        FROM paper_extractions pe
                        JOIN papers p ON p.id = pe.paper_id
-                       WHERE pe.template_id = $1 AND pe.paper_id = ANY($2)
+                       WHERE pe.template_id = $1 AND pe.paper_id = ANY($2) AND pe.user_id = $3
                        ORDER BY p.title""",
                     template_id,
                     ids,
+                    user_id,
                 )
             except asyncpg.exceptions.UndefinedTableError:
                 raise HTTPException(
@@ -387,26 +389,16 @@ async def get_extraction_table(
                 )
         else:
             try:
-                if user_id is None:
-                    rows = await conn.fetch(
-                        """SELECT pe.paper_id, p.title AS paper_title, pe.extractions
-                           FROM paper_extractions pe
-                           JOIN papers p ON p.id = pe.paper_id
-                           WHERE pe.template_id = $1
-                           ORDER BY p.title""",
-                        template_id,
-                    )
-                else:
-                    rows = await conn.fetch(
-                        """SELECT pe.paper_id, p.title AS paper_title, pe.extractions
-                           FROM paper_extractions pe
-                           JOIN papers p ON p.id = pe.paper_id
-                           JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
-                           WHERE pe.template_id = $1
-                           ORDER BY p.title""",
-                        template_id,
-                        user_id,
-                    )
+                rows = await conn.fetch(
+                    """SELECT pe.paper_id, p.title AS paper_title, pe.extractions
+                       FROM paper_extractions pe
+                       JOIN papers p ON p.id = pe.paper_id
+                       JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
+                       WHERE pe.template_id = $1 AND pe.user_id = $2
+                       ORDER BY p.title""",
+                    template_id,
+                    user_id,
+                )
             except asyncpg.exceptions.UndefinedTableError:
                 raise HTTPException(
                     503, "extraction_templates table not found (migration 011 not applied)"

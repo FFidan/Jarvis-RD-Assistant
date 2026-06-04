@@ -121,11 +121,34 @@ class CoreSettings(BaseSettings):
     api_key_login_enabled: bool = False
     # Written by setup.sh into .env. Drives the first-run wizard SMTP step.
     jarvis_setup_mode: Literal["single", "multi"] = "single"
+    # SSRF guard escape-hatch: set ALLOW_PRIVATE_SMTP_HOST=true only when the
+    # relay is an internal/corporate host on a known-trusted network.
+    allow_private_smtp_host: bool = False
 
     @model_validator(mode="before")
     @classmethod
     def _resolve_file_indirection(cls, values):
         return _resolve_env_file_indirection(values, cls.model_fields)
+
+    @model_validator(mode="after")
+    def _validate_proxy_trust(self) -> CoreSettings:
+        """Warn + ignore a literal ``"*"`` in ``trusted_proxy_hosts`` outside dev mode.
+
+        Trusting all proxies in production is a security risk (IP spoofing via
+        X-Forwarded-For). In dev mode it is a common convenience; outside dev
+        a warning is emitted and the value is reset to the safe default.
+        """
+        import logging as _logging  # noqa: PLC0415
+
+        _logger = _logging.getLogger(__name__)
+        if self.trusted_proxy_hosts.strip() == "*" and not self.dev_mode:
+            _logger.warning(
+                "TRUSTED_PROXY_HOSTS='*' is not allowed outside dev mode "
+                "(IP-spoofing risk); resetting to default 'dashboard'. "
+                "Set DEV_MODE=true or list specific hostnames."
+            )
+            object.__setattr__(self, "trusted_proxy_hosts", "dashboard")
+        return self
 
     @model_validator(mode="after")
     def _promote_dev_flags(self) -> CoreSettings:

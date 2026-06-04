@@ -18,6 +18,7 @@ import asyncpg
 
 from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.event_log import log_event
+from jarvis_common.net import _reject_non_public_host
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,18 @@ async def send_magic_link(
     # Port 465 → implicit TLS; everything else → STARTTLS where supported.
     use_tls = smtp.port == 465
     start_tls = not use_tls
+
+    # SSRF guard: reject non-public SMTP hosts on the live send path unless the
+    # operator has explicitly opted in (e.g. an internal corporate relay).
+    if not get_core_settings().allow_private_smtp_host:
+        try:
+            await _reject_non_public_host(smtp.host)
+        except ValueError:
+            logger.warning(
+                "SMTP host is non-public; set ALLOW_PRIVATE_SMTP_HOST=true for an internal relay. "
+                "Magic-link send skipped."
+            )
+            return
 
     await aiosmtplib.send(
         message,

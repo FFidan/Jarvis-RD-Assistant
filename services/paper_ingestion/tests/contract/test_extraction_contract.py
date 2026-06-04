@@ -447,3 +447,139 @@ async def test_extraction_w2_verifier_mandatory_blocks_unverified(
     assert accuracy_field.confidence == 0.0, (
         f"Unverified extraction must have confidence=0.0; got {accuracy_field.confidence}"
     )
+
+
+# ---------------------------------------------------------------------------
+# TENANT-01: per-user extraction isolation
+# ---------------------------------------------------------------------------
+
+
+async def test_tenant01_per_user_extraction_isolation(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """TENANT-01: user A and user B extracting the same (paper, template) produce
+    separate rows; each user's GET endpoints return only their own data.
+
+    Verified:
+      extractions.py:267-272 get_paper_extractions WHERE user_id = $2
+      extractions.py:400-408 get_extraction_table WHERE pe.user_id = $2
+    """
+    user_a_id = contract_two_users.user_a_id
+    user_b_id = contract_two_users.user_b_id
+
+    # Insert a shared paper that both users have in their library.
+    shared_paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('tenant01-shared', 'arxiv', 'Shared Paper TENANT-01',
+                   ARRAY['Author X'], 'https://tenant01.test/', $1)
+           RETURNING id""",
+        user_a_id,
+    )
+    for uid in (user_a_id, user_b_id):
+        await contract_conn.execute(
+            "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+            uid,
+            shared_paper_id,
+        )
+
+    # Create a template.
+    template_id = await contract_conn.fetchval(
+        """INSERT INTO extraction_templates (name, description, fields, is_default)
+           VALUES ('tenant01-tmpl', 'isolation test', $1::jsonb, FALSE) RETURNING id""",
+        [{"name": "finding", "label": "Finding", "type": "text", "description": "key finding"}],
+    )
+
+    # Seed one extraction row per user directly (bypasses LLM).
+    await contract_conn.execute(
+        """INSERT INTO paper_extractions (paper_id, template_id, extractions, extraction_model, user_id)
+           VALUES ($1, $2, $3::jsonb, 'test-model', $4)""",
+        shared_paper_id,
+        template_id,
+        {
+            "finding": {
+                "value": "result-A",
+                "verified": True,
+                "confidence": 0.9,
+                "quote": None,
+                "chunk_id": None,
+                "page_number": None,
+            }
+        },
+        user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_extractions (paper_id, template_id, extractions, extraction_model, user_id)
+           VALUES ($1, $2, $3::jsonb, 'test-model', $4)""",
+        shared_paper_id,
+        template_id,
+        {
+            "finding": {
+                "value": "result-B",
+                "verified": True,
+                "confidence": 0.8,
+                "quote": None,
+                "chunk_id": None,
+                "page_number": None,
+            }
+        },
+        user_b_id,
+    )
+
+    # Verify DB has two distinct rows.
+    rows = await contract_conn.fetch(
+        "SELECT user_id FROM paper_extractions WHERE paper_id = $1 AND template_id = $2",
+        shared_paper_id,
+        template_id,
+    )
+    assert len(rows) == 2, f"Expected 2 extraction rows (one per user), got {len(rows)}"
+    row_user_ids = {r["user_id"] for r in rows}
+    assert row_user_ids == {user_a_id, user_b_id}, (
+        f"Expected rows for both users; got user_ids={row_user_ids}"
+    )
+
+    # GET /api/papers/{P}/extractions as user A → only A's row.
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_a = await c.get(f"/api/papers/{shared_paper_id}/extractions")
+    assert resp_a.status_code == 200, (
+        f"User A paper extractions: {resp_a.status_code} {resp_a.text[:200]}"
+    )
+    body_a = resp_a.json()
+    assert len(body_a) == 1, f"User A must see exactly 1 extraction row; got {len(body_a)}"
+    assert body_a[0]["extractions"]["finding"]["value"] == "result-A", (
+        f"User A must see result-A; got {body_a[0]['extractions']}"
+    )
+
+    # GET /api/papers/{P}/extractions as user B → only B's row.
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp_b = await c.get(f"/api/papers/{shared_paper_id}/extractions")
+    assert resp_b.status_code == 200, (
+        f"User B paper extractions: {resp_b.status_code} {resp_b.text[:200]}"
+    )
+    body_b = resp_b.json()
+    assert len(body_b) == 1, f"User B must see exactly 1 extraction row; got {len(body_b)}"
+    assert body_b[0]["extractions"]["finding"]["value"] == "result-B", (
+        f"User B must see result-B; got {body_b[0]['extractions']}"
+    )
+
+    # GET /api/extractions/table?template_id=T as user A → only A's paper row.
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp_ta = await c.get(f"/api/extractions/table?template_id={template_id}")
+    assert resp_ta.status_code == 200, f"User A table: {resp_ta.status_code} {resp_ta.text[:200]}"
+    table_a = resp_ta.json()
+    assert len(table_a) == 1, f"User A table must have 1 row; got {len(table_a)}"
+    assert table_a[0]["extractions"]["finding"]["value"] == "result-A", (
+        f"User A table must contain result-A; got {table_a[0]['extractions']}"
+    )
+
+    # GET /api/extractions/table?template_id=T as user B → only B's paper row.
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp_tb = await c.get(f"/api/extractions/table?template_id={template_id}")
+    assert resp_tb.status_code == 200, f"User B table: {resp_tb.status_code} {resp_tb.text[:200]}"
+    table_b = resp_tb.json()
+    assert len(table_b) == 1, f"User B table must have 1 row; got {len(table_b)}"
+    assert table_b[0]["extractions"]["finding"]["value"] == "result-B", (
+        f"User B table must contain result-B; got {table_b[0]['extractions']}"
+    )

@@ -199,3 +199,34 @@ async def test_a18_logout_without_session_returns_204(
     assert resp.status_code == 204, (
         f"Expected 204 for logout without session, got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# AUTH-03: non-ASCII api_key body must return 403, not 500
+# ---------------------------------------------------------------------------
+
+
+async def test_a17_api_key_session_non_ascii_returns_403(
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """AUTH-03: POST /api/auth/api-key-session with a non-ASCII body key → 403, not 500.
+
+    Before the fix, ``hmac.compare_digest(submitted, _CACHED_API_KEY)`` raised
+    ``TypeError: non-ASCII characters in compared strings`` when either operand
+    contained bytes outside ASCII range, resulting in an unhandled 500.  The fix
+    encodes both operands with ``str.encode('utf-8', errors='replace')`` so the
+    comparison always runs and an invalid key returns 403.
+
+    Verified against: auth.py api_key_session hmac.compare_digest call.
+    """
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        # Submit a body containing non-ASCII characters in the api_key field.
+        resp = await c.post(
+            "/api/auth/api-key-session",
+            json={"api_key": "invälid-kéy-éàü"},
+        )
+
+    assert resp.status_code == 403, (
+        f"Expected 403 for non-ASCII api_key, got {resp.status_code}: {resp.text[:300]}"
+    )

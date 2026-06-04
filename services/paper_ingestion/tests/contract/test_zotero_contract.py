@@ -343,6 +343,112 @@ async def test_a172_resync_owner_gets_202(contract_conn, _zotero_app):
     mock_task.defer_async.assert_awaited_once()
 
 
+# ---------------------------------------------------------------------------
+# TENANT-02: sync_annotations_for_paper — annotations attributed to syncing user
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_sync_annotations_attributed_to_syncing_user(contract_conn):
+    """Zotero annotations are written with user_id == syncing user (not paper discoverer).
+
+    Scenario: paper P was discovered by user A; user B syncs annotations for P.
+    The resulting paper_notes row must have user_id == B, and the row must NOT
+    appear under user A.
+
+    Verifies:
+    - ON CONFLICT (paper_id, user_id, zotero_annotation_key) WHERE … targets the right index
+    - $7 bind is owner_user_id (the syncing user), NOT paper["discovered_by"]
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+    from jarvis_common.testing import SharedConnPool
+
+    from paper_ingestion.integrations.zotero_service import sync_annotations_for_paper
+
+    # Seed user A (discoverer) and the paper they discovered.
+    user_a_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        "tenant02-user-a@contract.example.com",
+    )
+    paper_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers
+            (external_id, source_type, title, authors, url, discovered_by, zotero_item_key)
+        VALUES ($1, 'arxiv', $2, ARRAY['Author Z'], 'https://example.com/z', $3, $4)
+        RETURNING id
+        """,
+        f"arxiv:tenant02-contract-{user_a_id}",
+        "ZZZ-TENANT02-ANNOTATIONS Paper",
+        user_a_id,
+        "ZITEM001",
+    )
+
+    # Seed user B (the syncing user) with a Zotero config so _get_zotero_config succeeds.
+    user_b_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        "tenant02-user-b@contract.example.com",
+    )
+    for key, value in [
+        ("zotero.api_key", "fake-api-key-b"),
+        ("zotero.user_id", "999999"),
+        ("zotero.library_type", "user"),
+    ]:
+        await contract_conn.execute(
+            "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3::jsonb)",
+            user_b_id,
+            key,
+            f'"{value}"',
+        )
+
+    shared = SharedConnPool(contract_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    one_annotation = [
+        {
+            "key": "ANNCONTRACT1",
+            "data": {
+                "annotationText": "Tenant-02 highlighted claim",
+                "annotationComment": "Contract test comment",
+                "annotationPageLabel": "3",
+            },
+        }
+    ]
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_cls:
+        mock_cls.return_value.get_item_children = AsyncMock(return_value=one_annotation)
+        result = await sync_annotations_for_paper(
+            paper_id=int(paper_id),
+            db_pool=shared,
+            http_client=http,
+            owner_user_id=user_b_id,
+        )
+
+    assert result == {"paper_id": int(paper_id), "imported": 1, "status": "ok"}, result
+
+    # The paper_notes row must be attributed to user B (the syncing user).
+    row = await contract_conn.fetchrow(
+        "SELECT user_id, zotero_annotation_key FROM paper_notes"
+        " WHERE paper_id = $1 AND zotero_annotation_key = 'ANNCONTRACT1'",
+        int(paper_id),
+    )
+    assert row is not None, "paper_notes row not found after sync"
+    assert row["user_id"] == user_b_id, (
+        f"Expected user_id={user_b_id} (syncing user B), got {row['user_id']}"
+    )
+
+    # Confirm user A's view is empty — annotation scoped to B's user_id.
+    count_a = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM paper_notes"
+        " WHERE paper_id = $1 AND user_id = $2 AND zotero_annotation_key = 'ANNCONTRACT1'",
+        int(paper_id),
+        user_a_id,
+    )
+    assert count_a == 0, f"Annotation must NOT appear under user A (discovered_by); got {count_a}"
+
+
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
 async def test_a172_resync_non_owner_gets_403(contract_conn, _zotero_app):

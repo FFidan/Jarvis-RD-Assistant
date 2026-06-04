@@ -235,6 +235,7 @@ _SECRET_KEYS: frozenset[str] = frozenset(
         "llm.openai.api_key",
         "llm.google.api_key",
         "smtp.pass",
+        "telegram.bot_token",
     }
 )
 
@@ -247,6 +248,8 @@ _ENCRYPTED_KEYS: frozenset[str] = frozenset(
         # setup.py persists smtp.pass as Fernet ciphertext in encrypted_value;
         # keep the generic /api/config surface masking it consistently.
         "smtp.pass",
+        # Telegram bot token stored via setup flow — must be encrypted at rest.
+        "telegram.bot_token",
     }
 )
 

@@ -363,7 +363,10 @@ async def api_key_session(
 
     # Guardrail 2 (failure half): validate the key with hmac.compare_digest
     # exactly as verify_api_key does. No configured key → cannot mint.
-    if not _CACHED_API_KEY or not hmac.compare_digest(submitted, _CACHED_API_KEY):
+    if not _CACHED_API_KEY or not hmac.compare_digest(
+        submitted.encode("utf-8", errors="replace"),
+        _CACHED_API_KEY.encode("utf-8", errors="replace"),
+    ):
         if _audit is not None:
             ua = request.headers.get("user-agent", "") if hasattr(request, "headers") else ""
             await log_audit(

@@ -52,6 +52,7 @@ async def _extraction_single_job(
         template_id,
         embedder=services.embedder,
         verifier=services.verifier,
+        user_id=user_id,
     )
     await ctx.update_progress(1.0, "Done")
     return result.model_dump(mode="json")
@@ -95,6 +96,7 @@ async def _extraction_batch_job(
         embedder=embedder,
         verifier=verifier,
         ctx=ctx,
+        user_id=user_id,
     )
     return {
         "extracted": result.extracted,
