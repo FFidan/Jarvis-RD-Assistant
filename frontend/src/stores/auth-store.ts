@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { QueryClient } from '@tanstack/react-query';
-import { UI_STORE_KEY } from '@/stores/ui-store';
+import { UI_STORE_KEY, useUIStore } from '@/stores/ui-store';
+import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { abortAllStreams } from '@/stores/chat-store';
 import { clearPersistedQueryCache } from '@/lib/query-persister';
 import { clearReviewOutbox } from '@/lib/review-outbox';
@@ -131,6 +132,12 @@ export const useAuthStore = create<AuthState>()(
           user,
           lastError: null,
         });
+        // Defense-in-depth (POMO-01 / UI-STORE-XUSER-LEAK): reset ephemeral
+        // per-session stores so a new user never inherits a prior session's
+        // running timer or dismissed-UI flags. These stores do not import
+        // auth-store, so static imports above are cycle-safe.
+        usePomodoroStore.getState()._reset();
+        useUIStore.getState()._reset();
       },
 
       logout() {
@@ -158,16 +165,21 @@ export const useAuthStore = create<AuthState>()(
           }
 
           // Reset in-memory zustand stores that hold user-scoped runtime data.
-          // Importing lazily avoids the circular-dependency that direct top-level
-          // imports would create (those stores don't import auth-store).
+          // chat/job/bulk/keyboard are reset via dynamic import (kept lazy to avoid
+          // eagerly pulling their module graphs into the auth-store chunk).
+          // pomodoro + ui are leaf stores already statically imported above (for the
+          // login-reset path), so they reset synchronously here — no cycle.
           // Promise.allSettled ensures a failed chunk load for one store does not
           // prevent the others from resetting.
           await Promise.allSettled([
             import('@/stores/chat-store').then(({ useChatStore }) => useChatStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] chat-store reset failed', e); }),
             import('@/stores/job-store').then(({ useJobStore }) => useJobStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] job-store reset failed', e); }),
             import('@/stores/bulk-selection-store').then(({ useBulkSelection }) => useBulkSelection.getState()._reset()).catch((e: unknown) => { console.warn('[auth] bulk-selection-store reset failed', e); }),
-            import('@/stores/pomodoro-store').then(({ usePomodoroStore }) => usePomodoroStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] pomodoro-store reset failed', e); }),
+            Promise.resolve(usePomodoroStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] pomodoro-store reset failed', e); }),
             import('@/stores/keyboard-shortcuts-store').then(({ useKeyboardShortcuts }) => useKeyboardShortcuts.getState()._reset()).catch((e: unknown) => { console.warn('[auth] keyboard-shortcuts-store reset failed', e); }),
+            // UI-STORE-XUSER-LEAK: reset in-memory ui-store state (belt-and-suspenders
+            // alongside the localStorage.removeItem above which only clears disk).
+            Promise.resolve(useUIStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] ui-store reset failed', e); }),
           ]);
         })();
 

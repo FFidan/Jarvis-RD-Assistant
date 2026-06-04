@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from 'react';
+import { useState, useMemo, useRef, useEffect, Fragment } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { listEvents, getLogsSources } from '@/lib/logs';
@@ -95,6 +95,17 @@ export function EventsTab() {
   function clearPreset() {
     setLogsPreset('');
   }
+
+  // Re-apply the persisted preset's filters on mount so that a returning user
+  // sees both the preset NAME *and* the corresponding filter state (LOGS-PRESET-RESTORE-NO-FILTERS).
+  const didApplyInitialPreset = useRef(false);
+  useEffect(() => {
+    if (didApplyInitialPreset.current) return;
+    didApplyInitialPreset.current = true;
+    if (logsPreset) applyPreset(logsPreset);
+    // Run once on mount. applyPreset/logsPreset are stable for this purpose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const { data: sources } = useQuery({
     queryKey: QUERY_KEYS.logs.sources(),

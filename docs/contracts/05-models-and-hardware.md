@@ -430,6 +430,17 @@ a different dimension requires a matching Qdrant collection and a re-embed check
 `scripts/reembed.py`, which defaults to `qwen3-embedding:4b` / `2560` and gates collection recreation
 behind explicit snapshot-confirmation flags).
 
+### Setup system-check — models-ready condition
+
+The onboarding wizard's Step 1 system check reports models as **ready** when **both** of the following hold:
+
+- At least one model whose name starts with `qwen3:` is installed (matches `qwen3:4b`, `qwen3:8b`, `qwen3:14b`; excludes `qwen3-embedding:*` which starts with a different prefix).
+- At least one model whose name starts with `_EMBEDDER_BASE` (derived from `EMBEDDING_MODEL_NAME` at startup; typically `qwen3-embedding`) is installed.
+
+The default install (`setup.sh`) pulls `qwen3:8b` and `qwen3-embedding:4b`, which satisfies this condition. There is **no hardcoded requirement for `qwen3:14b`**. The check also distinguishes "Ollama is reachable but still pulling" from "Ollama is unreachable / not yet started" — missing models are named in the system-check panel rather than showing a generic not-ready state.
+
+Implementation: `_models_match()` in `services/paper_ingestion/paper_ingestion/routers/system.py`.
+
 ---
 
 ## 9. Risks — accepted

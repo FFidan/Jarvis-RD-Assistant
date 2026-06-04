@@ -59,7 +59,7 @@ docker compose up -d
 
 **Telegram is optional.** If you enable it, two machines must **never** share a bot token — Telegram routes updates to whichever client polled last. Create a separate bot via @BotFather per machine.
 
-After the stack is healthy, open the dashboard. The setup wizard runs on first visit and guides you through timezone, Pulse schedule, and Telegram pairing.
+After the stack is healthy, open the dashboard. The onboarding wizard runs on first visit and guides you through admin-account creation, SMTP, Pulse schedule, and Telegram pairing in one continuous flow.
 
 ### Source HTTP cache
 
@@ -331,7 +331,7 @@ All ongoing configuration goes through the web wizard and Settings — no `.env`
 
 | Setting | Where | Restart? |
 |---|---|---|
-| SMTP relay | Settings → Integrations → SMTP / first-run wizard | No |
+| SMTP relay | Settings → Integrations → SMTP / onboarding wizard | No |
 | Cloud LLM keys (OpenAI, Anthropic, Gemini) | Settings → Models → Cloud Providers | No |
 | Telegram bot token | Settings → Integrations → Bot Token | Yes — `docker compose restart telegram_bot` |
 | Access mode (single ↔ multi-user) | Settings → System → Access Mode | Yes — `docker compose restart paper_ingestion learning_engine` |

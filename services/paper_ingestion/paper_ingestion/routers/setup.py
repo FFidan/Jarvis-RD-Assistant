@@ -42,6 +42,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.crypto import encrypt_secret
+from jarvis_common.serialization import _coerce_bool
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
 from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -79,6 +80,7 @@ _CLOUD_LLM_KEY_MAP = {
 
 class SetupStatusResponse(BaseModel):
     configured: bool
+    setup_completed: bool = False
     setup_mode: Literal["single", "multi"] = "single"
     hw_tier_baseline: str | None = None
     hw_tier_current: str | None = None
@@ -276,6 +278,11 @@ async def get_status(request: Request) -> SetupStatusResponse:
 
     try:
         admins = await _admin_count(pool)
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+                "setup.completed",
+            )
     except Exception as exc:
         # Fail-closed: a DB failure must NOT report configured=False, because
         # that would let the setup wizard re-open and a second admin could be
@@ -286,8 +293,10 @@ async def get_status(request: Request) -> SetupStatusResponse:
             detail="Setup status check failed",
         ) from exc
     configured = admins > 0
+    setup_completed = _coerce_bool(row["value"] if row else None, default=False)
     return SetupStatusResponse(
         configured=configured,
+        setup_completed=setup_completed,
         setup_mode=mode,
         hw_tier_baseline=baseline,
         hw_tier_current=current,

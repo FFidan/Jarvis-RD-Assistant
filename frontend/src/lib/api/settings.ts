@@ -71,6 +71,14 @@ export const getSetupStatus = () =>
 // Distinct surface from /api/system/setup-status above (post-login bootstrap).
 export interface FirstRunStatus {
   configured: boolean;
+  /**
+   * True once the onboarding wizard has been completed end-to-end (the
+   * `setup.completed` config flag). Distinct from `configured` (an admin user
+   * exists): a CLI-bootstrapped install can be `configured` yet not yet
+   * `setup_completed`. The unified onboarding gate keys on this field.
+   * Added to the pre-auth /api/setup/status payload (Task A1).
+   */
+  setup_completed?: boolean;
   setup_mode?: 'single' | 'multi';
   /** True when JARVIS_HW_TIER in .env differs from the baseline recorded at last boot. */
   hw_tier_changed?: boolean;

@@ -192,16 +192,35 @@ async def test_setup_status_telegram_paired_false_when_null(_app, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_models_match_true_when_all_prefixes_present():
+def test_models_match_true_on_default_install():
+    """Default install (qwen3:8b + embedder) must report ready — SYSCHECK-01."""
     from paper_ingestion.routers.system import _models_match
 
-    assert _models_match(["qwen3:14b", "qwen3:4b", "qwen3-embedding:0.6b"]) is True
+    # The exact set pulled by setup.sh on a default install.
+    assert _models_match(["qwen3:8b", "qwen3-embedding:4b"]) is True
 
 
-def test_models_match_false_when_missing_prefix():
+def test_models_match_true_all_variants():
+    """Any qwen3 chat tag (4b / 8b / 14b) combined with the embedder is ready."""
     from paper_ingestion.routers.system import _models_match
 
-    assert _models_match(["qwen3:4b"]) is False
+    assert _models_match(["qwen3:8b", "qwen3:4b", "qwen3-embedding:4b"]) is True
+    assert _models_match(["qwen3:14b", "qwen3-embedding:4b"]) is True
+    assert _models_match(["qwen3:4b", "qwen3-embedding:4b"]) is True
+
+
+def test_models_match_false_when_embedder_missing():
+    """Chat model present but embedder absent → not ready."""
+    from paper_ingestion.routers.system import _models_match
+
+    assert _models_match(["qwen3:8b"]) is False
+
+
+def test_models_match_false_when_chat_missing():
+    """Embedder present but no qwen3 chat model → not ready."""
+    from paper_ingestion.routers.system import _models_match
+
+    assert _models_match(["qwen3-embedding:4b"]) is False
 
 
 def test_models_match_false_on_empty():
@@ -230,3 +249,37 @@ async def test_probe_ollama_returns_false_when_unreachable(monkeypatch):
     ready, downloading = await system_module._probe_ollama()
     assert ready is False
     assert downloading == []
+
+
+@pytest.mark.asyncio
+async def test_probe_ollama_reachable_but_incomplete_populates_downloading(monkeypatch):
+    """SYSCHECK-02: reachable Ollama with only embedder returns non-empty downloading."""
+
+    from paper_ingestion.routers import system as system_module
+
+    # Flush the TTL cache so our mock is used fresh.
+    system_module._ollama_probe_cache._ts = 0.0
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self):
+            # Only the embedder is installed; chat model is missing.
+            return {"models": [{"name": "qwen3-embedding:4b"}]}
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *_a, **_k):
+            return _FakeResponse()
+
+    monkeypatch.setattr(system_module.httpx, "AsyncClient", lambda *a, **k: _FakeClient())
+
+    ready, downloading = await system_module._probe_ollama()
+    assert ready is False
+    # Only the embedder is installed, so the chat model is the missing piece.
+    assert "qwen3 chat model" in downloading

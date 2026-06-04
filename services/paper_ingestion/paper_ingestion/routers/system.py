@@ -41,13 +41,10 @@ _TAG_RE = re.compile(r"^[a-zA-Z0-9_./:@-]{1,200}$")
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
-# Ollama models expected after first-run provisioning. We match by name prefix
-# so either "qwen3:4b" or "qwen3:4b-instruct" style names count as installed.
-_EXPECTED_MODEL_PREFIXES: tuple[str, ...] = (
-    "qwen3:14b",
-    "qwen3:4b",
-    "qwen3-embedding",
-)
+# Derive the embedder family prefix from EMBEDDING_MODEL_NAME at import time
+# so setup-status always tracks whatever is actually configured.
+# e.g. "qwen3-embedding:4b" → "qwen3-embedding"
+_EMBEDDER_BASE: str = EMBEDDING_MODEL_NAME.split(":")[0]
 
 _OLLAMA_PROBE_TTL = 10  # seconds
 
@@ -94,13 +91,20 @@ def _record_get(row: Any, key: str) -> Any:
 
 
 def _models_match(installed_names: list[str]) -> bool:
-    """Return True iff every expected model prefix is present in installed."""
+    """Return True iff a qwen3 chat model AND the embedder are both installed.
+
+    Ready condition:
+      - At least one model whose name starts with ``"qwen3:"`` (this prefix
+        matches qwen3:4b / qwen3:8b / qwen3:14b and explicitly EXCLUDES the
+        embedder whose name begins with ``"qwen3-embedding:"``).
+      - At least one model whose name starts with ``_EMBEDDER_BASE`` (derived
+        from EMBEDDING_MODEL_NAME — no hardcoded tag).
+    """
     if not installed_names:
         return False
-    for expected in _EXPECTED_MODEL_PREFIXES:
-        if not any(name.startswith(expected) for name in installed_names):
-            return False
-    return True
+    has_chat = any(name.startswith("qwen3:") for name in installed_names)
+    has_embed = any(name.startswith(_EMBEDDER_BASE) for name in installed_names)
+    return has_chat and has_embed
 
 
 async def _probe_ollama() -> tuple[bool, list[str]]:
@@ -120,12 +124,29 @@ async def _probe_ollama() -> tuple[bool, list[str]]:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{ollama_url}/api/tags")
         if resp.status_code != 200:
+            # Log so a reachable-but-erroring Ollama (e.g. 503 during startup)
+            # is greppable, not silently indistinguishable from "unreachable".
+            logger.warning("setup-status: Ollama /api/tags returned %s", resp.status_code)
             result: tuple[bool, list[str]] = (False, [])
             _ollama_probe_cache.set(now, result)
             return result
         data = resp.json()
         installed = [m.get("name", "") for m in data.get("models", [])]
-        result = (_models_match(installed), [])
+        if _models_match(installed):
+            result = (True, [])
+        else:
+            # Ollama is reachable but provisioning is incomplete.  Build a
+            # short missing-pieces list so SystemCheck can show "still pulling"
+            # rather than the generic "not ready" message.
+            # Chat family uses a stable "qwen3:" prefix; the embedder name is
+            # config-derived (_EMBEDDER_BASE from EMBEDDING_MODEL_NAME) — hence
+            # the asymmetric checks.
+            missing: list[str] = []
+            if not any(n.startswith("qwen3:") for n in installed):
+                missing.append("qwen3 chat model")
+            if not any(n.startswith(_EMBEDDER_BASE) for n in installed):
+                missing.append(EMBEDDING_MODEL_NAME)
+            result = (False, missing)
     except Exception:
         logger.warning("setup-status: Ollama probe failed", exc_info=True)
         result = (False, [])

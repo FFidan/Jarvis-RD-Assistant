@@ -133,8 +133,10 @@ HTTP client.
 - **Per-user secrets** — Zotero, SMTP, and other per-user credentials are stored
   encrypted via `jarvis_common.crypto` (MultiFernet, `JARVIS_CONFIG_KEY`); user
   config lives in `user_config` with JSONB values.
-- **Admin bootstrap** — the first-run web wizard creates the admin account; the
-  admin can invite additional users via **Settings → Admin → Users**.
+- **Admin bootstrap** — the onboarding wizard creates the admin account mid-flow
+  (the admin-create step establishes the session, after which the remaining
+  post-auth steps complete); the admin can invite additional users via
+  **Settings → Admin → Users**.
 
 ### Cross-Service Auth Boundary (resolver DI)
 

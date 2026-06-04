@@ -25,7 +25,7 @@ export function ChatMessage({ message, isLoading, phase }: ChatMessageProps) {
         )}
       >
         {isUser ? (
-          <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+          <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
         ) : message.content ? (
           <>
             {message.confidence && message.confidence !== 'HIGH' && (

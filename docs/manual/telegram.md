@@ -27,7 +27,7 @@ To connect your Telegram account:
 5. In the chat, send the command `/pair <code>` — replace `<code>` with the code from step 3 (for example, `/pair AB12CD`).
 6. Return to Settings. The panel will update to show your account as **Paired**, along with your Telegram username.
 
-Pairing is also offered as an optional step during the post-login setup wizard (step 6). If you skipped it there, you can complete it here at any time.
+Pairing is also offered as an optional step during the onboarding wizard (step 8 — Pair Telegram). If you skipped it there, you can complete it here at any time.
 
 ### Unpairing
 
@@ -35,9 +35,9 @@ To remove the connection, click **Unpair** in the Integrations → Telegram pane
 
 ---
 
-## Telegram setup wizard step
+## Telegram onboarding wizard step
 
-If you did not complete the Telegram pairing step during the initial [Getting Started](getting-started.md) setup wizard, you can return to it here. The Settings panel and the setup wizard step are equivalent — completing either one marks the step as done.
+If you did not complete the Telegram pairing step during the initial [Getting Started](getting-started.md) onboarding wizard, you can complete it here. The Settings panel and the wizard step are equivalent — pairing via either one links your account to the bot.
 
 ---
 
@@ -58,5 +58,5 @@ All users on the instance share a single bot configured with this token. Each us
 ## Related pages
 
 - [Settings](settings.md) — full settings reference including the Integrations section.
-- [Getting Started](getting-started.md) — setup wizard step 6 covers Telegram pairing.
+- [Getting Started](getting-started.md) — onboarding wizard step 8 covers Telegram pairing.
 - [Pulse](pulse.md) — Pulse digests are delivered via Telegram to paired accounts.

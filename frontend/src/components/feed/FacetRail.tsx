@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import {
   Inbox,
@@ -10,7 +11,15 @@ import {
   Tag,
   Compass,
   WifiOff,
+  SlidersHorizontal,
 } from 'lucide-react';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet';
 import type { FeedCountsWithFacets, SurfaceView, LibraryFilter, InboxSourceFilter, FeedScope } from '@/types';
 
 // --------------------------------------------------------------------------
@@ -186,53 +195,34 @@ function OnlineOnlyNotice() {
 }
 
 // --------------------------------------------------------------------------
-// FacetRail
+// FacetListContent — shared between desktop rail and mobile drawer
 // --------------------------------------------------------------------------
 
-export function FacetRail({ counts, selection, onSelect, isOnline = true, feedScope = 'library' }: FacetRailProps) {
-  // Derive active status item for §Status section
-  function isStatusActive(item: StatusItem): boolean {
-    if (item.surface !== selection.surface) return false;
-    if (item.surface === 'library') return selection.filter === item.filter;
-    return true;
-  }
+interface FacetListContentProps {
+  counts: FeedCountsWithFacets | undefined;
+  selection: FacetSelection;
+  isOnline: boolean;
+  feedScope: FeedScope;
+  isStatusActive: (item: StatusItem) => boolean;
+  handleStatusClick: (item: StatusItem) => void;
+  handleDiscoverClick: () => void;
+  handleSourceClick: (sourceType: string) => void;
+  handleTopicClick: (topicId: number | 'untagged') => void;
+  handleStarClick: () => void;
+}
 
-  function handleStatusClick(item: StatusItem) {
-    onSelect({
-      surface: item.surface,
-      filter: item.filter,
-      sourceFacet: null,
-      topicFacet: null,
-      inboxSource: null,
-    });
-  }
-
-  function handleSourceClick(sourceType: string) {
-    const alreadyActive = selection.sourceFacet === sourceType;
-    onSelect({
-      surface: selection.surface === 'trash' ? 'inbox' : selection.surface,
-      sourceFacet: alreadyActive ? null : sourceType,
-      topicFacet: null,
-    });
-  }
-
-  function handleTopicClick(topicId: number | 'untagged') {
-    const alreadyActive = selection.topicFacet === topicId;
-    onSelect({
-      topicFacet: alreadyActive ? null : topicId,
-      sourceFacet: null,
-    });
-  }
-
-  function handleStarClick() {
-    const alreadyActive = selection.surface === 'library' && selection.filter === 'starred';
-    if (alreadyActive) {
-      onSelect({ surface: 'library', filter: null });
-    } else {
-      onSelect({ surface: 'library', filter: 'starred', sourceFacet: null, topicFacet: null });
-    }
-  }
-
+function FacetListContent({
+  counts,
+  selection,
+  isOnline,
+  feedScope,
+  isStatusActive,
+  handleStatusClick,
+  handleDiscoverClick,
+  handleSourceClick,
+  handleTopicClick,
+  handleStarClick,
+}: FacetListContentProps) {
   const bySource = counts?.by_source ?? {};
   const byTopic = counts?.by_topic ?? [];
   const untagged = counts?.untagged ?? 0;
@@ -249,14 +239,10 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true, feedSc
     : 'No papers in your library yet — papers you save or that match your topics appear here.';
   const topicEmptyCopy = isCorpus
     ? 'No papers in the shared corpus are tagged with a topic yet.'
-    : 'No library papers tagged with a topic yet — add a topic in Settings and turn on “Auto-add matches”.';
+    : 'No library papers tagged with a topic yet — add a topic in Settings and turn on "Auto-add matches".';
 
   return (
-    <nav
-      aria-label="Feed facets"
-      className="flex w-48 shrink-0 flex-col border-r border-hair bg-paper py-2"
-      data-testid="facet-rail"
-    >
+    <>
       {/* § Discover — visually primary block at the TOP of the rail */}
       <div
         className="mx-2 mb-2 rounded-md border border-primary/20 bg-primary/5 px-1 py-1"
@@ -266,9 +252,7 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true, feedSc
           icon={<Compass size={14} />}
           label="Discover papers"
           active={selection.surface === 'search'}
-          onClick={() =>
-            onSelect({ surface: 'search', filter: null, sourceFacet: null, topicFacet: null })
-          }
+          onClick={handleDiscoverClick}
           data-testid="facet-discover"
         />
       </div>
@@ -369,6 +353,117 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true, feedSc
           Unavailable offline
         </p>
       )}
-    </nav>
+    </>
+  );
+}
+
+// --------------------------------------------------------------------------
+// FacetRail
+// --------------------------------------------------------------------------
+
+export function FacetRail({ counts, selection, onSelect, isOnline = true, feedScope = 'library' }: FacetRailProps) {
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  // Derive active status item for §Status section
+  function isStatusActive(item: StatusItem): boolean {
+    if (item.surface !== selection.surface) return false;
+    if (item.surface === 'library') return selection.filter === item.filter;
+    return true;
+  }
+
+  function handleStatusClick(item: StatusItem) {
+    onSelect({
+      surface: item.surface,
+      filter: item.filter,
+      sourceFacet: null,
+      topicFacet: null,
+      inboxSource: null,
+    });
+    setSheetOpen(false);
+  }
+
+  function handleSourceClick(sourceType: string) {
+    const alreadyActive = selection.sourceFacet === sourceType;
+    onSelect({
+      surface: selection.surface === 'trash' ? 'inbox' : selection.surface,
+      sourceFacet: alreadyActive ? null : sourceType,
+      topicFacet: null,
+    });
+    setSheetOpen(false);
+  }
+
+  function handleTopicClick(topicId: number | 'untagged') {
+    const alreadyActive = selection.topicFacet === topicId;
+    onSelect({
+      topicFacet: alreadyActive ? null : topicId,
+      sourceFacet: null,
+    });
+    setSheetOpen(false);
+  }
+
+  function handleDiscoverClick() {
+    onSelect({ surface: 'search', filter: null, sourceFacet: null, topicFacet: null });
+    setSheetOpen(false);
+  }
+
+  function handleStarClick() {
+    const alreadyActive = selection.surface === 'library' && selection.filter === 'starred';
+    if (alreadyActive) {
+      onSelect({ surface: 'library', filter: null });
+    } else {
+      onSelect({ surface: 'library', filter: 'starred', sourceFacet: null, topicFacet: null });
+    }
+    setSheetOpen(false);
+  }
+
+  const contentProps = {
+    counts,
+    selection,
+    isOnline,
+    feedScope,
+    isStatusActive,
+    handleStatusClick,
+    handleDiscoverClick,
+    handleSourceClick,
+    handleTopicClick,
+    handleStarClick,
+  };
+
+  return (
+    <>
+      {/* Desktop rail — hidden on mobile */}
+      <nav
+        aria-label="Feed facets"
+        className="hidden md:flex w-48 shrink-0 flex-col border-r border-hair bg-paper py-2"
+        data-testid="facet-rail"
+      >
+        <FacetListContent {...contentProps} />
+      </nav>
+
+      {/* Mobile trigger + drawer — hidden on md+ */}
+      <div className="md:hidden">
+        <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+          <SheetTrigger asChild>
+            <button
+              className="flex items-center gap-1.5 rounded-md border border-hair bg-paper px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              data-testid="facet-mobile-trigger"
+            >
+              <SlidersHorizontal size={14} />
+              Filters
+            </button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-64 p-0">
+            <SheetHeader className="px-4 pt-4 pb-2">
+              <SheetTitle className="text-sm font-semibold uppercase tracking-widest text-muted-foreground">
+                Filters
+              </SheetTitle>
+            </SheetHeader>
+            <div className="flex flex-col overflow-y-auto py-1">
+              <FacetListContent {...contentProps} />
+            </div>
+          </SheetContent>
+        </Sheet>
+      </div>
+    </>
   );
 }

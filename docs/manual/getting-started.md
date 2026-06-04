@@ -1,8 +1,8 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /first-run, /auth/verify, /setup -->
+<!-- verified-against-UI: 2026-06-04 | routes: /onboarding (wizard), /auth/verify -->
 
 # Getting Started
 
-This page walks through everything needed to go from a fresh installation to a working research session: operator-level bootstrap, signing in, and the post-login setup wizard. Steps marked **operator** require administrative access to the server; steps marked **user** apply to everyone after the operator has bootstrapped the system.
+This page walks through everything needed to go from a fresh installation to a working research session: operator-level bootstrap via the onboarding wizard, signing in, and first-use setup. Steps marked **operator** require administrative access to the server; steps marked **user** apply to everyone after the operator has bootstrapped the system.
 
 ---
 
@@ -12,33 +12,68 @@ JARVIS RD Assistant runs as a set of Docker Compose services. Full installation 
 
 ---
 
-## First-run operator bootstrap — `/first-run` (operator)
+## Onboarding wizard (operator & user)
 
-On a brand-new installation, before any user account exists, the application serves the **First Run Setup** wizard at `/first-run`. This is a one-time flow; once an admin account is created the route redirects to the normal login page.
+On a fresh installation — or whenever `setup_completed` is not yet `true` — the application replaces the normal UI with the **Onboarding Wizard**. This single continuous flow spans the full bootstrap: it starts before any account exists and ends after the admin is signed in and the instance is configured. Once the wizard is complete it does not appear again.
 
-<!-- screenshot: /first-run step 1 — System Check, showing status pills for Postgres, Qdrant, Ollama, and LiteLLM -->
+<!-- screenshot: Onboarding wizard — Step 1 System Check, showing status pills for Postgres, Qdrant, Ollama, and LiteLLM -->
 
-The wizard has five steps:
+The wizard gate is driven by the pre-auth `/api/setup/status` endpoint (`setup_completed` field). Because the check does not require an existing session, the same gate covers both a fresh install (no admin yet) and a partially-completed setup where the admin exists but has not yet finished the post-auth steps.
 
-### Step 1 — System check
+The wizard has nine steps (the admin-create step is conditionally skipped when an admin already exists, e.g. when resuming after a page reload or when the admin was created via the CLI):
 
-The wizard probes four backend services: **Postgres**, **Qdrant**, **Ollama**, and **LiteLLM**. Each probe shows a status indicator. If any service is unreachable, fix it in your Docker Compose environment and click **Re-check** before proceeding.
+### Step 1 — Welcome & system check
+
+The wizard probes four backend services: **Postgres**, **Qdrant**, **Ollama**, and **LiteLLM**. Each probe shows a status indicator.
+
+The models-ready check reports green when **both** of the following are true:
+
+- The embedder is present (any model whose name starts with the configured embedding model prefix, e.g. `qwen3-embedding`).
+- At least one qwen3 chat model is present (`qwen3:4b`, `qwen3:8b`, or `qwen3:14b`).
+
+The default install (`setup.sh`) pulls `qwen3:8b` and `qwen3-embedding:4b`, which satisfies the ready condition. If models are still downloading, the check shows "still pulling" rather than a generic error.
+
+If any service is unreachable, fix it in your Docker Compose environment and click **Re-check** before proceeding.
 
 ### Step 2 — SMTP relay (skippable)
 
-Configure the outbound email relay that JARVIS uses to send magic-link sign-in emails. Fields: SMTP host, port, username, password, sender address, and a test recipient address. Use the **Send test email** button to verify delivery before continuing. This step is skippable — you can configure email later in Settings if the instance will start with only API-key login.
+Configure the outbound email relay that JARVIS uses to send magic-link sign-in emails. Fields: SMTP host, port, username, password, sender address, and a test recipient address. Use the **Send test email** button to verify delivery before continuing. This step is skippable — you can configure email later in Settings if the instance will use API-key login only.
 
-### Step 3 — Admin account
+### Step 3 — Create admin & sign in
 
-Enter the email address for the first administrator account and click **Create admin & sign in**. The system creates the account and sends a magic-link email to that address (or, if SMTP was skipped, provides an alternative sign-in method). This is the only step that cannot be skipped or revisited from this wizard.
+Enter the email address for the first administrator account and click **Create admin & sign in**. The system creates the account and establishes a session in the same step (no separate magic-link round-trip needed). This is the mid-flow auth boundary: steps 4–9 require an active session and run after this point.
+
+This step is skipped when an admin already exists (for example, when resuming a partially-completed setup after the admin was already created).
 
 ### Step 4 — Cloud LLM keys (skippable)
 
-Optionally provide API keys for **OpenAI**, **Anthropic**, and/or **Gemini**. These enable cloud-hosted language models alongside the local Ollama models. This step is skippable; keys can be added later in Settings.
+Optionally provide API keys for **OpenAI**, **Anthropic**, and/or **Gemini**. These enable cloud-hosted language models alongside the local Ollama models. This step is skippable; keys can be added later in Settings → Models → Providers.
 
-### Step 5 — Done
+### Step 5 — First research topic
 
-The wizard is complete. The page auto-redirects to `/` (the Home page).
+Enter a **name** and **description** for your first research topic. Topics drive Pulse recommendations and scoped library searches. You can add more topics later in Settings → Topics.
+
+### Step 6 — Automation schedule
+
+Configure how often JARVIS automatically generates Pulse recommendation decks.
+
+- Toggle **Pulse enabled** on or off.
+- Pick a **daily run time** using the time picker.
+- A cron expression preview shows the resulting schedule.
+
+The schedule can be changed at any time in Settings → Automation.
+
+### Step 7 — Source API keys (skippable)
+
+Enter API keys for the research data sources you want to use (for example Semantic Scholar, Zotero). Only sources with valid keys will fetch new papers. This step is skippable; keys can be configured later in Settings → Sources.
+
+### Step 8 — Pair Telegram (skippable)
+
+Pair your account with the Telegram bot to receive Pulse digests and send queries from Telegram. Follow the on-screen instructions to obtain a pairing code, then send `/pair <code>` to the bot. This step is skippable; pairing can be completed later in Settings → Integrations → Telegram.
+
+### Step 9 — Done
+
+Setup is complete. `setup_completed` is set to `true`. The wizard does not appear again. The page redirects to `/` (the Home page).
 
 ---
 
@@ -57,56 +92,6 @@ The magic-link is single-use and expires after a short window. If it has expired
 ### API-key fallback
 
 If SMTP is not configured, or if you prefer direct key-based access, click **Use API key instead** on the login page and enter your API key. This method does not require email delivery.
-
----
-
-## Post-login setup wizard — `/setup` (user)
-
-After signing in for the first time your session is in **setup mode** (`setup_completed = false`). The application redirects new accounts to the **Setup Wizard** at `/setup`. Returning users who dismissed or bypassed the wizard earlier will see a **Setup Banner** on the Home page instead (see below).
-
-<!-- screenshot: /setup step 3 — "First research topic" form with name and description fields -->
-
-The wizard has seven steps:
-
-### Step 1 — Welcome
-
-An introduction to JARVIS RD Assistant and an overview of what the wizard will configure.
-
-### Step 2 — System check
-
-A brief automated check confirming that the backend services are reachable from your session. The check polls until all services report ready.
-
-### Step 3 — First research topic
-
-Enter a **name** and **description** for your first research topic. Topics drive Pulse recommendations and scoped library searches. You can add more topics later in Settings → Topics.
-
-### Step 4 — Automation schedule
-
-Configure how often JARVIS automatically generates Pulse recommendation decks.
-
-- Toggle **Pulse enabled** on or off.
-- Pick a **daily run time** using the time picker.
-- A cron expression preview shows the resulting schedule.
-
-The schedule can be changed at any time in Settings → Automation.
-
-### Step 5 — Source API keys
-
-Enter API keys for the research data sources you want to use (for example Semantic Scholar, Zotero). Only sources with valid keys will fetch new papers. This step is operator-visible — keys entered here are stored in the server-side configuration.
-
-### Step 6 — Telegram pairing (skippable)
-
-Pair your account with a Telegram bot to receive Pulse digests and send queries from Telegram. Follow the on-screen instructions to obtain a pairing code. This step is skippable; pairing can be completed later in Settings → Integrations → Telegram.
-
-### Step 7 — Done
-
-Setup is complete. `setup_completed` is set to `true` for your account. The wizard does not appear again. The page redirects to `/` (the Home page).
-
----
-
-## Setup Banner (user)
-
-If the setup wizard was not completed, a **dismissible Setup Banner** appears at the top of the Home page. It links back to `/setup` so you can complete the remaining steps at any time. Once all wizard steps are done, or once you explicitly dismiss the banner, it no longer appears.
 
 ---
 

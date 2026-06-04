@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import type { ReactNode } from 'react';
-import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { setNavigate } from '@/lib/navigate-bridge';
@@ -19,7 +18,7 @@ const ResearchFeedPage = lazy(() =>
 );
 import { PulseDeckPage } from '@/pages/PulseDeckPage';
 import { AskPage } from '@/pages/AskPage';
-import { getFirstRunStatus, getSetupStatus } from '@/lib/api';
+import { getFirstRunStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
 import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
@@ -58,11 +57,8 @@ const AdminAuditLogPage = lazy(() =>
 const AdminSystemHealthPage = lazy(() =>
   import('@/pages/AdminSystemHealthPage').then((m) => ({ default: m.AdminSystemHealthPage })),
 );
-const SetupWizard = lazy(() =>
-  import('@/pages/SetupWizard').then((m) => ({ default: m.SetupWizard })),
-);
-const FirstRunSetupPage = lazy(() =>
-  import('@/pages/FirstRunSetupPage').then((m) => ({ default: m.FirstRunSetupPage })),
+const OnboardingWizard = lazy(() =>
+  import('@/pages/OnboardingWizard').then((m) => ({ default: m.OnboardingWizard })),
 );
 const MyDayPage = lazy(() =>
   import('@/pages/MyDayPage').then((m) => ({ default: m.MyDayPage })),
@@ -88,87 +84,29 @@ function PageFallback() {
   );
 }
 
-/**
- * Gates the main AppShell behind a setup-status check. When the server reports
- * setup_completed=false, users are redirected to /setup?step=1. Backward-compat:
- * users with setup already marked complete never see a wizard or extra network
- * hop beyond a single cached setup-status query.
- */
-function SetupGate({ children }: { children: ReactNode }) {
-  const location = useLocation();
-  const { data, isLoading, isError } = useQuery({
-    queryKey: QUERY_KEYS.setup.status(),
-    queryFn: getSetupStatus,
-    staleTime: 30_000,
-    retry: false,
-  });
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
-        Loading...
-      </div>
-    );
-  }
-
-  // If the API fails (e.g. offline), fail open so users still reach the app.
-  if (!isError && data && !data.setup_completed && location.pathname !== '/setup') {
-    return <Navigate to="/setup?step=1" replace />;
-  }
-
-  return <>{children}</>;
-}
-
 function NavigateBridgeRegistrar() {
   const navigate = useNavigate();
   useEffect(() => { setNavigate(navigate); }, [navigate]);
   return null;
 }
 
-/**
- * FirstRunGate: gates ALL routes (auth + post-auth) behind a /api/setup/status check.
- * When the install reports configured=false (no admin user exists yet), every
- * route redirects to /first-run so the operator can run the bootstrap wizard.
- *
- * Once configured=true (after the wizard's create-admin step), the gate becomes
- * a no-op and normal auth/route flow resumes.
- *
- * Failure-mode: if the status query errors (backend down), we fail OPEN so the
- * login page is still reachable — losing access to your own install because
- * the status probe blipped would be hostile.
- */
-function FirstRunGate({ children }: { children: ReactNode }) {
-  const location = useLocation();
-  const { data, isLoading, isError } = useQuery({
+export function App() {
+  const { isAuthenticated, isSessionValid, expireSession } = useAuthStore();
+
+  // Single onboarding gate (Task A2 — wizard consolidation). Keyed on the
+  // PRE-AUTH /api/setup/status (reachable with no session, HTTP 200) so the
+  // same query drives the wizard across the mid-flow auth boundary. Replaces
+  // the former FirstRunGate + SetupGate pair.
+  const {
+    data: firstRun,
+    isLoading: firstRunLoading,
+    isError: firstRunError,
+  } = useQuery({
     queryKey: QUERY_KEYS.setup.firstRun(),
     queryFn: getFirstRunStatus,
     staleTime: 30_000,
     retry: false,
   });
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
-        Loading...
-      </div>
-    );
-  }
-
-  if (!isError && data && !data.configured && location.pathname !== '/first-run') {
-    return <Navigate to="/first-run" replace />;
-  }
-
-  // Conversely, if the install IS configured but the user lands on /first-run
-  // (stale link, refresh after wizard), kick them home.
-  if (!isError && data?.configured && location.pathname === '/first-run') {
-    return <Navigate to="/" replace />;
-  }
-
-  return <>{children}</>;
-}
-
-export function App() {
-  const { isAuthenticated, isSessionValid, expireSession } = useAuthStore();
   // Offline / PWA contract — CANONICAL (shell-sidebar-admin-ia-redesign-design.md §4):
   // When the device is offline AND a prior authenticated identity exists (isAuthenticated
   // is true with a recent authTime), do NOT hard-bounce to /login. Instead allow the
@@ -199,33 +137,57 @@ export function App() {
     }
   }, [online, isAuthenticated, sessionOk, expireSession]);
 
+  // Keep the loading spinner while the gate's status query is in flight, so we
+  // don't flash the login page then bounce into the wizard.
+  if (firstRunLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+        Loading...
+      </div>
+    );
+  }
+
+  // Show the unified wizard when setup is incomplete. The `(!configured ||
+  // authed)` clause spans the mid-flow auth boundary: a fresh install (no admin
+  // yet) shows the wizard so its admin-create step can establish the session;
+  // but if an admin already exists and the user isn't authed, fall through to
+  // LOGIN first (the post-auth steps need a session) — after login, `authed`
+  // flips true and the wizard shows to RESUME. Fails OPEN on a status blip so a
+  // transient error never locks the operator out.
+  const showOnboarding =
+    !firstRunError && !!firstRun && !firstRun.setup_completed && (!firstRun.configured || authed);
+
+  if (showOnboarding) {
+    return (
+      <RouteErrorBoundary>
+        <Suspense fallback={<PageFallback />}>
+          <OnboardingWizard firstRun={firstRun} authed={authed} />
+        </Suspense>
+      </RouteErrorBoundary>
+    );
+  }
+
   if (!authed) {
     return (
-      <FirstRunGate>
-        <Routes>
-          {/* pre-auth wizard — reachable even with no session, by design. */}
-          <Route path="/first-run" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><FirstRunSetupPage /></Suspense></RouteErrorBoundary>} />
-          {/* Magic-link landing must be reachable without an existing session — */}
-          {/* it's the page that CREATES the session. */}
-          <Route path="/auth/verify" element={<RouteErrorBoundary><AuthVerifyPage /></RouteErrorBoundary>} />
-          <Route path="*" element={<RouteErrorBoundary><LoginPage /></RouteErrorBoundary>} />
-        </Routes>
-      </FirstRunGate>
+      <Routes>
+        {/* Magic-link landing must be reachable without an existing session — */}
+        {/* it's the page that CREATES the session. */}
+        <Route path="/auth/verify" element={<RouteErrorBoundary><AuthVerifyPage /></RouteErrorBoundary>} />
+        <Route path="*" element={<RouteErrorBoundary><LoginPage /></RouteErrorBoundary>} />
+      </Routes>
     );
   }
 
   return (
     <ErrorBoundary>
-      <FirstRunGate>
-      <SetupGate>
         <NavigateBridgeRegistrar />
         <PomodoroAutoLogger />
         <Routes>
-          <Route path="/setup" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><SetupWizard /></Suspense></RouteErrorBoundary>} />
-          {/* when an authed-but-stale session lingers on an unconfigured */}
-          {/* install, FirstRunGate redirects to /first-run; this route renders */}
-          {/* the wizard outside of AppShell so the user can complete setup. */}
-          <Route path="/first-run" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><FirstRunSetupPage /></Suspense></RouteErrorBoundary>} />
+          {/* Setup is complete (the gate above handles the incomplete case).
+              Resolve old deep links so stale /setup and /first-run URLs land
+              home instead of NotFound. */}
+          <Route path="/setup" element={<Navigate to="/" replace />} />
+          <Route path="/first-run" element={<Navigate to="/" replace />} />
           <Route
             path="*"
             element={
@@ -257,8 +219,6 @@ export function App() {
             }
           />
         </Routes>
-      </SetupGate>
-      </FirstRunGate>
     </ErrorBoundary>
   );
 }

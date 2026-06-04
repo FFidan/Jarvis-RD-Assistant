@@ -15,9 +15,9 @@ vi.mock('@/lib/api', async () => {
       telegram_configured: false,
       telegram_paired: false,
     }),
-    // FirstRunGate calls this on every render; mock as configured so
-    // the gate is a no-op in this test (test focuses on auth/setup gating only).
-    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true }),
+    // The onboarding gate calls this on every render; mock as configured AND
+    // setup_completed so the gate is a no-op here (test focuses on auth gating).
+    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true, setup_completed: true }),
     fetchDashboardMetrics: vi.fn().mockResolvedValue({
       total_papers: 0,
       unread_papers: 0,

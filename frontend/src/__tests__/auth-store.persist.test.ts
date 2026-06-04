@@ -14,6 +14,8 @@ vi.stubGlobal('fetch', mockFetch);
 
 // Dynamic import ensures the stub is in place when the module initialises.
 const { useAuthStore } = await import('@/stores/auth-store');
+const { useUIStore } = await import('@/stores/ui-store');
+const { usePomodoroStore } = await import('@/stores/pomodoro-store');
 
 describe('auth-store — sessionStorage persistence', () => {
   beforeEach(() => {
@@ -74,7 +76,7 @@ describe('auth-store — sessionStorage persistence', () => {
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
   });
 
-  it('logout removes jarvis-ui from localStorage', async () => {
+  it('logout clears stale ui-store state (no dismissed flags survive)', async () => {
     // Simulate pre-existing UI state from a previous session.
     localStorage.setItem('jarvis-ui', JSON.stringify({ state: { checklistDismissed: true }, version: 0 }));
 
@@ -86,8 +88,18 @@ describe('auth-store — sessionStorage persistence', () => {
     await useAuthStore.getState().login('test-api-key-32chars-xxxxxxxxxx');
 
     useAuthStore.getState().logout();
+    // Flush logout's async resets (Promise.allSettled re-persists clean ui state).
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
 
-    expect(localStorage.getItem('jarvis-ui')).toBeNull();
+    // The stale dismissed flag must not survive — the key is either cleared or
+    // holds only clean initial state (the in-memory _reset re-persists defaults).
+    const raw = localStorage.getItem('jarvis-ui');
+    if (raw !== null) {
+      const parsed = JSON.parse(raw) as { state: { checklistDismissed?: boolean } };
+      expect(parsed.state.checklistDismissed ?? false).toBe(false);
+    }
+    expect(useUIStore.getState().checklistDismissed).toBe(false);
   });
 
   // -------------------------------------------------------------------------
@@ -113,5 +125,48 @@ describe('auth-store — sessionStorage persistence', () => {
     // Non-sensitive fields are still persisted.
     expect(persisted.state.isAuthenticated).toBe(true);
     expect(persisted.state.user).toEqual({ id: 1, email: 'x@example.com', role: 'user' });
+  });
+
+  // -------------------------------------------------------------------------
+  // UI-STORE-XUSER-LEAK: logout resets ui-store in-memory (not just on disk)
+  // -------------------------------------------------------------------------
+  it('logout resets ui-store in-memory (checklistDismissed → false)', async () => {
+    // Simulate a dismissed checklist from the previous session.
+    useUIStore.setState({ checklistDismissed: true, setupBannerDismissed: true });
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 7, email: 'owner@example.com', role: 'admin' }),
+    });
+    await useAuthStore.getState().login('test-api-key-32chars-xxxxxxxxxx');
+
+    useAuthStore.getState().logout();
+
+    // Flush async tasks inside logout() (Promise.allSettled + dynamic imports)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    // In-memory reset — not just the localStorage key removal.
+    expect(useUIStore.getState().checklistDismissed).toBe(false);
+    expect(useUIStore.getState().setupBannerDismissed).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // POMO-01 / UI-STORE-XUSER-LEAK: loginWithSession resets pomodoro + ui stores
+  // -------------------------------------------------------------------------
+  it('loginWithSession resets pomodoro to idle and ui flags to initial state', () => {
+    // Seed stores with dirty state from a previous session.
+    usePomodoroStore.setState({ phase: 'work', startedAt: Date.now(), cyclesCompleted: 2 });
+    useUIStore.setState({ checklistDismissed: true, paperDetailNoteDismissed: true });
+
+    useAuthStore.getState().loginWithSession({ id: 42, email: 'new@example.com', role: 'user' });
+
+    // Synchronous reset — no async flush needed (static imports in auth-store).
+    expect(usePomodoroStore.getState().phase).toBe('idle');
+    expect(usePomodoroStore.getState().startedAt).toBeNull();
+    expect(useUIStore.getState().checklistDismissed).toBe(false);
+    expect(useUIStore.getState().paperDetailNoteDismissed).toBe(false);
   });
 });

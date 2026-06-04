@@ -27,7 +27,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
       <div className="hidden md:flex flex-1 justify-center">
         <CommandPaletteSearch />
       </div>
-      <div className="ml-auto md:ml-0 flex items-center gap-2">
+      <div className="ml-auto md:ml-0 flex items-center gap-2 sm:gap-4">
         <HeaderPill />
         <JobsIndicator />
         <HeaderPomodoro />
@@ -37,6 +37,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
           onClick={openShortcuts}
           aria-label="Keyboard shortcuts"
           title="Keyboard shortcuts (?)"
+          className="hidden sm:inline-flex"
         >
           <Keyboard className="h-5 w-5" />
         </Button>

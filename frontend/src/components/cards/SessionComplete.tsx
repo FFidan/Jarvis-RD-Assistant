@@ -39,11 +39,11 @@ export function SessionComplete({ sessionReviewed, onNavigateToLibrary }: Sessio
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-3 gap-4 w-full">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 w-full">
           {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 rounded-lg" />)}
         </div>
       ) : stats ? (
-        <div className="grid grid-cols-3 gap-4 w-full">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 w-full">
           <StatTile
             icon={Flame}
             label="Streak"

@@ -18,7 +18,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-// ------ Mock API calls so FirstRunGate + SetupGate are no-ops ------
+// ------ Mock API calls so the onboarding gate is a no-op ------
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
   return {
@@ -31,7 +31,7 @@ vi.mock('@/lib/api', async () => {
       telegram_configured: false,
       telegram_paired: false,
     }),
-    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true }),
+    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true, setup_completed: true }),
     fetchDashboardMetrics: vi.fn().mockResolvedValue({
       total_papers: 0,
       unread_papers: 0,

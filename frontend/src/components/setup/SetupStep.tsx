@@ -12,7 +12,7 @@ interface SetupStepProps {
 
 /**
  * Shared layout wrapper for first-run setup wizard steps.
- * Renders a progress indicator (e.g. "Step 2 of 6") plus a titled card.
+ * Renders a progress indicator (e.g. "Step 2 of N") plus a titled card.
  */
 export function SetupStep({
   stepNumber,
@@ -54,7 +54,7 @@ export function SetupStep({
         <CardContent className="space-y-4">{children}</CardContent>
       </Card>
 
-      {footer && <div className="flex items-center justify-between">{footer}</div>}
+      {footer && <div className="flex flex-wrap items-center justify-between gap-2">{footer}</div>}
     </div>
   );
 }

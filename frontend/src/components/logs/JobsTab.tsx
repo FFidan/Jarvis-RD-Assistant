@@ -72,7 +72,7 @@ export function JobsTab() {
         <p className="text-sm text-muted-foreground">No jobs found.</p>
       )}
       {jobs && jobs.length > 0 && (
-        <div className="rounded-md border border-border overflow-hidden">
+        <div className="rounded-md border border-border overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted text-muted-foreground text-xs">
               <tr>

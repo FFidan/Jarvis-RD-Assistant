@@ -17,17 +17,24 @@ interface UIState {
   setPaperDetailNoteDismissed: (value: boolean) => void;
   dismissSetupBanner: () => void;
   setLogsPreset: (id: string) => void;
+  /** Called on auth transitions to prevent cross-user UI state leakage. */
+  _reset: () => void;
 }
+
+/** Non-action defaults — used for initial state and _reset (DRY). */
+const UI_INITIAL_STATE = {
+  sidebarCollapsed: false,
+  selectedPaperId: null as number | null,
+  checklistDismissed: false,
+  paperDetailNoteDismissed: false,
+  setupBannerDismissed: false,
+  logsPreset: '',
+} as const;
 
 export const useUIStore = create<UIState>()(
   persist(
     (set) => ({
-      sidebarCollapsed: false,
-      selectedPaperId: null,
-      checklistDismissed: false,
-      paperDetailNoteDismissed: false,
-      setupBannerDismissed: false,
-      logsPreset: '',
+      ...UI_INITIAL_STATE,
 
       toggleSidebar() {
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed }));
@@ -46,6 +53,9 @@ export const useUIStore = create<UIState>()(
       },
       setLogsPreset(id: string) {
         set({ logsPreset: id });
+      },
+      _reset() {
+        set(UI_INITIAL_STATE);
       },
     }),
     {

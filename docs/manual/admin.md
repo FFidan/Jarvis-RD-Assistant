@@ -95,11 +95,11 @@ JARVIS RD Assistant is designed for small teams where multiple researchers share
 
 **Magic-link invites:**
 
-New users are added exclusively via the admin invite flow (`/admin/users` → Invite modal) or by the first-run wizard. There is no public self-registration. This keeps the user list under admin control.
+New users are added exclusively via the admin invite flow (`/admin/users` → Invite modal) or by the onboarding wizard (which creates the initial admin account). There is no public self-registration. This keeps the user list under admin control.
 
 ---
 
 ## Related pages
 
 - [Settings](settings.md) — per-section RBAC breakdown; admin-only sections are §II Sources, §III Models, §IV System, and §V Bot Token.
-- [Getting Started](getting-started.md) — first-run bootstrap and admin account creation.
+- [Getting Started](getting-started.md) — onboarding wizard and admin account creation.

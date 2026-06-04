@@ -5,6 +5,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Unified onboarding wizard.** The former two-wizard flow (pre-auth `/first-run` + post-login `/setup`) has been replaced by a single **Onboarding Wizard** gated by the pre-auth `/api/setup/status` endpoint. The wizard spans the auth boundary internally: it walks system check → SMTP → admin account creation & sign-in → cloud LLM keys → first topic → automation schedule → source API keys → Telegram pairing → done. Old `/first-run` and `/setup` deep links redirect to `/`. The admin-create step is skipped when an admin already exists (resuming setup).
+
+- **`/api/setup/status` now returns `setup_completed`.** The pre-auth setup status endpoint (always HTTP 200, no session required) now includes a `setup_completed: bool` field alongside the existing `configured` and hardware fields. The onboarding gate keys on this field.
+
+### Fixed
+
+- **Models-ready false negative (SYSCHECK-01).** The onboarding wizard's system check no longer requires a hardcoded `qwen3:14b` model. "Models ready" now means: the embedder is present (any model matching the configured embedding model prefix, e.g. `qwen3-embedding:*`) AND at least one `qwen3:` chat model is present (`qwen3:4b`, `qwen3:8b`, or `qwen3:14b`). The default install (`setup.sh` → `qwen3:8b` + `qwen3-embedding:4b`) correctly reports ready. The check also distinguishes "still pulling" from "Ollama unreachable".
+
+- **Pomodoro auto-start from stale persisted timer (POMO-01).** A Pomodoro session that was still running when the browser closed no longer auto-starts on the next page load. The timer state is correctly treated as stale across sessions.
+
+- **Cross-user Pomodoro / dismissed-flag state leak.** Timer and dismissed-flag state no longer leaks between users on a shared browser.
+
+- **My Day — calm empty state for the Pulse hero card (RED-ERROR-EMPTY-STATE).** When no Pulse deck exists yet, the My Day Pulse hero card shows a calm "No Pulse for today yet — generate one" call-to-action instead of a red error panel. Red error UI is reserved for genuine backend failures.
+
+- **Mobile responsive fixes.** Projects rail, admin tables, analytics KPI band, mobile facet drawer, TopBar, My Day layout, and the chat surface are now correctly laid out on narrow viewports.
+
+- **Logs preset filters restored on load.** The Logs page preset now re-applies its filter selections when the page is loaded or navigated to.
+
 ---
 
 ## v0.5.0 (2026-06-02)

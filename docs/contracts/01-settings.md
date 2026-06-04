@@ -118,7 +118,18 @@ validation and is an intentional non-regression: the omission is by design, not 
 ### 2.3 System-wide admin keys (one deployment-wide value, admin-only)
 
 These keys are `SYSTEM_KEYS` (always `user_id IS NULL`, admin role required for browser sessions).
-Some are collected by the first-run setup wizard ([routers/setup.py](../../services/paper_ingestion/paper_ingestion/routers/setup.py)) and editable afterwards via `PUT /api/config/{key}`.
+Some are collected by the onboarding wizard ([routers/setup.py](../../services/paper_ingestion/paper_ingestion/routers/setup.py)) and editable afterwards via `PUT /api/config/{key}`.
+
+**`GET /api/setup/status` response shape** (pre-auth, no session required):
+
+| Field | Type | Notes |
+|---|---|---|
+| `configured` | bool | True when ≥ 1 admin user exists. |
+| `setup_completed` | bool | True when `setup.completed` user_config key is set to true. The unified onboarding gate keys on this field. |
+| `setup_mode` | `"single" \| "multi"` | Deployment access mode. |
+| `hw_tier_baseline` / `hw_tier_current` / `hw_tier_changed` | string / string / bool | Hardware tier at first-boot vs. current detected tier. |
+| `recommended_backend` / `current_backend` / `observed_backend` | string | LLM backend tier recommendation and observation. |
+| `observed_recent_share` | float | Recent share of traffic on the observed backend. |
 
 | Key | Default | Validator | How / where consumed |
 |---|---|---|---|
@@ -303,7 +314,7 @@ The implementation MUST satisfy these. Testable.
 | Item | Why accepted |
 |---|---|
 | `llm.{smart,fast,embed}_model` Partial | LiteLLM YAML is the deliberate runtime authority. The `user_config` row exists for UI read-back display only. See [03-llm.md §1](03-llm.md). |
-| `llm.{anthropic,openai,google}.api_key` Partial | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. **Per-user encrypted BYO credentials are preferred** (not shared ops secrets): `write_config` sets `row_user_id = caller_user_id`, and reads are scoped to the caller's row with no cross-user fallback. The first-run / Settings wizard surfaces these keys for convenience but they remain per-user. `.env` provider-key variables are bootstrap/legacy only and must not become the request-time authority for user-controllable provider credentials. |
+| `llm.{anthropic,openai,google}.api_key` Partial | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. **Per-user encrypted BYO credentials are preferred** (not shared ops secrets): `write_config` sets `row_user_id = caller_user_id`, and reads are scoped to the caller's row with no cross-user fallback. The onboarding wizard and the Settings wizard surface these keys for convenience but they remain per-user. `.env` provider-key variables are bootstrap/legacy only and must not become the request-time authority for user-controllable provider credentials. |
 
 ---
 
@@ -340,7 +351,7 @@ The implementation MUST satisfy these. Testable.
 | `get_provider_api_key` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:52 | Decrypts cloud-provider key from user_config |
 | `pulse.weights` / lookback / grace load | services/paper_ingestion/paper_ingestion/pulse/profile.py:221-242 | Loads from user_config, merges with `_DEFAULT_WEIGHTS`, clamps to [0,1]; reads `pulse.lookback_days` (default 7) + `pulse.startup_grace_seconds` (default 0.0) |
 | `_build_fsrs_manager_from_db` | services/learning_engine/learning_engine/routers/review.py | Per-review fetch of `fsrs.desired_retention` + `fsrs.learning_steps`; constructs a fresh `FSRSManager` inside the review transaction |
-| `setup_completed` resolution | services/paper_ingestion/paper_ingestion/routers/system.py:144-149 | Reads `setup.completed`; gates wizard |
+| `setup_completed` resolution | services/paper_ingestion/paper_ingestion/routers/setup.py (get_status) | Reads `setup.completed` from `user_config`; returned in pre-auth `/api/setup/status`; unified `OnboardingGate` keys on this field |
 | SMTP keys persisted | services/paper_ingestion/paper_ingestion/routers/setup.py | First-run wizard writes `smtp.*` rows; `smtp.pass` as Fernet ciphertext |
 | `user_config` table schema | db/init.sql:33-48 | `(user_id, key) UNIQUE NULLS NOT DISTINCT`, nullable `value`, `encrypted_value BYTEA`, updated_at |
 | `paper_sources` table + seeds | db/init.sql:71-88 | sources seeded; arxiv enabled; others disabled |

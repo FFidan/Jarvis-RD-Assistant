@@ -97,11 +97,11 @@ export function KpiBand({ data }: KpiBandProps) {
 
   return (
     <div
-      className="grid grid-cols-3 divide-x divide-hair border-y border-hair"
+      className="grid grid-cols-1 divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0 divide-hair border-y border-hair"
       data-testid="kpi-band"
     >
       {/* PAPERS READ */}
-      <div className="px-4 first:pl-0">
+      <div className="min-w-0 px-4 first:pl-0">
         <KpiCell
           label="PAPERS READ"
           value={data.papers_read_total}
@@ -110,7 +110,7 @@ export function KpiBand({ data }: KpiBandProps) {
       </div>
 
       {/* FOCUS HOURS */}
-      <div className="px-4">
+      <div className="min-w-0 px-4">
         <KpiCell
           label="FOCUS HOURS"
           value={focusHoursDisplay}
@@ -119,7 +119,7 @@ export function KpiBand({ data }: KpiBandProps) {
       </div>
 
       {/* CARDS REVIEWED */}
-      <div className="px-4 last:pr-0">
+      <div className="min-w-0 px-4 last:pr-0">
         <KpiCell
           label="CARDS REVIEWED"
           value={data.cards_reviewed_total}

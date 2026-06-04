@@ -287,4 +287,15 @@ describe('FacetRail', () => {
     expect(sourceEmpty.textContent).toMatch(/corpus|shared/i);
     expect(topicEmpty.textContent).toMatch(/corpus|shared/i);
   });
+
+  // ── Mobile drawer ─────────────────────────────────────────────────────────
+
+  it('renders the mobile Filters trigger button', () => {
+    render(
+      <FacetRail counts={makeRich()} selection={BASE_SELECTION} onSelect={onSelect} />,
+    );
+    // Mobile trigger button should be present in the DOM (CSS hides it at md+,
+    // but JSDOM renders all content regardless of breakpoint classes)
+    expect(screen.getByTestId('facet-mobile-trigger')).toBeInTheDocument();
+  });
 });

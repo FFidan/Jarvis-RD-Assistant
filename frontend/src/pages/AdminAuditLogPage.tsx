@@ -101,7 +101,7 @@ export function AdminAuditLogPage() {
       )}
 
       {!isLoading && !isError && (
-        <div className="rounded-md border">
+        <div className="rounded-md border overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50">

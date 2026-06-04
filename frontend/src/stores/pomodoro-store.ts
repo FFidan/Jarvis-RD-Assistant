@@ -287,38 +287,34 @@ export const usePomodoroStore = create<PomodoroState>()(
     }),
     {
       name: 'jarvis-pomodoro',
+      // v1: stop persisting running-timer state; a reload always starts idle.
+      // Only settings are persisted so user preferences survive tab closes.
+      version: 1,
+      migrate: (persistedState: unknown, version: number | undefined) => {
+        // v1 stops persisting running-timer state; strip it from older blobs
+        // so an existing persisted 'work' phase never resurrects on rehydration.
+        // An unversioned blob reads back as version === undefined → treat as 0.
+        const s = (persistedState ?? {}) as Record<string, unknown>;
+        if ((version ?? 0) < 1) {
+          delete s.phase;
+          delete s.startedAt;
+          delete s.pausedAt;
+          delete s.totalPausedMs;
+          delete s.phaseDurationMs;
+          delete s.cyclesCompleted;
+          delete s.attachedItem;
+          delete s.lastWorkElapsedMs;
+        }
+        return s;
+      },
       partialize: (state) => ({
-        // Settings
+        // Settings only — timer state is ephemeral (not persisted).
+        // A reload always starts in idle; no running countdown rehydrates from disk.
         targetCycles: state.targetCycles,
         workMinutes: state.workMinutes,
         shortBreakMinutes: state.shortBreakMinutes,
         longBreakMinutes: state.longBreakMinutes,
-        // Timer state (survives refresh)
-        phase: state.phase,
-        phaseDurationMs: state.phaseDurationMs,
-        startedAt: state.startedAt,
-        pausedAt: state.pausedAt,
-        totalPausedMs: state.totalPausedMs,
-        cyclesCompleted: state.cyclesCompleted,
-        attachedItem: state.attachedItem,
-        lastWorkElapsedMs: state.lastWorkElapsedMs,
-        // NOT persisted: secondsRemaining (recomputed), completedSession (ephemeral)
       }),
-      onRehydrateStorage: () => (state) => {
-        // Recompute secondsRemaining synchronously from persisted timestamps so
-        // the header never shows 00:00 for a live session on first paint.
-        if (!state || state.phase === 'idle' || !state.startedAt) return;
-        const now = Date.now();
-        if (state.pausedAt !== null) {
-          // Still paused — use pausedAt as the reference point
-          const elapsed = state.pausedAt - state.startedAt - state.totalPausedMs;
-          state.secondsRemaining = Math.max(0, Math.ceil((state.phaseDurationMs - elapsed) / 1000));
-        } else {
-          // Running — compute live remaining
-          const elapsed = now - state.startedAt - state.totalPausedMs;
-          state.secondsRemaining = Math.max(0, Math.ceil((state.phaseDurationMs - elapsed) / 1000));
-        }
-      },
     },
   ),
 );

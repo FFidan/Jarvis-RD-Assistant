@@ -47,13 +47,13 @@ export function ProjectsPage() {
         <p className="text-muted-foreground text-sm">
           Organize papers into research projects with tasks and milestones
         </p>
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
           <div className="space-y-2">
             {[1, 2, 3].map((i) => (
               <Skeleton key={i} className="h-16 w-full" />
             ))}
           </div>
-          <div className="col-span-3">
+          <div className="sm:col-span-3">
             <Skeleton className="h-96 w-full" />
           </div>
         </div>
@@ -71,9 +71,9 @@ export function ProjectsPage() {
       </p>
 
       {/* 2-pane layout: fixed ~240px chapter rail + wider document pane */}
-      <div className="flex h-[calc(100dvh-12rem)] gap-4 overflow-hidden">
+      <div className="flex flex-col md:flex-row h-[calc(100dvh-12rem)] gap-4 overflow-hidden">
         {/* Left rail */}
-        <div className="w-60 shrink-0 rounded-md border border-hair bg-card overflow-hidden shadow-none">
+        <div className="w-full md:w-60 md:shrink-0 max-h-[40vh] overflow-y-auto md:max-h-none md:overflow-visible rounded-md border border-hair bg-card shadow-none">
           <ChapterRail
             projects={projects}
             selectedId={selectedId}

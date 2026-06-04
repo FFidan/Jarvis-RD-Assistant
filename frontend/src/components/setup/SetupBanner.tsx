@@ -34,7 +34,10 @@ export function SetupBanner() {
         </p>
       </div>
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={() => navigate('/setup?step=1')}>
+        {/* The wizard is now gate-rendered (not a /setup route) whenever setup
+            is incomplete. Navigate home with ?step=1 — the onboarding gate in
+            App.tsx renders OnboardingWizard, which reads ?step= from the URL. */}
+        <Button size="sm" onClick={() => navigate('/?step=1')}>
           Resume setup
         </Button>
         <Button size="icon" variant="ghost" onClick={dismissSetupBanner} aria-label="Dismiss">

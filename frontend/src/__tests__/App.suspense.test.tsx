@@ -1,8 +1,8 @@
 /**
  * H12 — Suspense wrapping for lazy-loaded routes.
  *
- * Verifies that the 5 previously-unwrapped lazy routes (SetupWizard,
- * FirstRunSetupPage, LogsPage, AdminUsersPage, PaperDetailPage) show the
+ * Verifies that the lazy routes (OnboardingWizard via the onboarding gate,
+ * LogsPage, AdminUsersPage, PaperDetailPage, ResearchFeedPage) show the
  * <PageFallback /> ("Loading...") while their lazy module is pending, and
  * that the ErrorBoundary fallback ("Something went wrong") is absent.
  *
@@ -29,8 +29,7 @@ function SuspendForever(): never {
 // Mock lazy page modules so they stay suspended during the test.
 // Each mock must match the named-export shape used in the lazy() call in App.tsx.
 // ---------------------------------------------------------------------------
-vi.mock('@/pages/SetupWizard', () => ({ SetupWizard: SuspendForever }));
-vi.mock('@/pages/FirstRunSetupPage', () => ({ FirstRunSetupPage: SuspendForever }));
+vi.mock('@/pages/OnboardingWizard', () => ({ OnboardingWizard: SuspendForever }));
 vi.mock('@/pages/LogsPage', () => ({ LogsPage: SuspendForever }));
 vi.mock('@/pages/AdminUsersPage', () => ({ AdminUsersPage: SuspendForever }));
 vi.mock('@/pages/PaperDetailPage', () => ({ PaperDetailPage: SuspendForever }));
@@ -51,7 +50,7 @@ vi.mock('@/lib/api', async () => {
       telegram_configured: false,
       telegram_paired: false,
     }),
-    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true }),
+    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true, setup_completed: true }),
     fetchDashboardMetrics: vi.fn().mockResolvedValue({
       total_papers: 0, unread_papers: 0, pending_papers: 0,
       due_cards: 0, active_projects: 0, topic_count: 0,
@@ -80,28 +79,29 @@ function renderApp(initialEntries: string[]) {
 }
 
 describe('H12 — lazy routes wrapped in <Suspense>', () => {
-  it('/first-run (pre-auth) shows PageFallback while FirstRunSetupPage suspends', () => {
+  it('onboarding gate (pre-auth, unconfigured) shows PageFallback while OnboardingWizard suspends', async () => {
+    // Fresh install: unconfigured + not setup_completed → the gate renders the
+    // lazy OnboardingWizard, which suspends. "Loading..." must show (gate
+    // spinner or Suspense fallback) and the ErrorBoundary must be absent.
+    vi.mocked((await import('@/lib/api')).getFirstRunStatus).mockResolvedValue({
+      configured: false,
+      setup_completed: false,
+    });
     useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null });
-    renderApp(['/first-run']);
-    // FirstRunGate renders a "Loading..." spinner while the status query is in
-    // flight.  After it resolves (configured=true mock), the route element
-    // renders — which also suspends.  Either way "Loading..." is present and
-    // "Something went wrong" is absent, which is what we assert.
-    expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
-    // At least one Loading... must be on screen (gate or Suspense fallback).
-    expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('/setup (authed) shows PageFallback while SetupWizard suspends', () => {
-    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: 'k' });
-    renderApp(['/setup']);
+    renderApp(['/']);
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
     expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('/first-run (authed) shows PageFallback while FirstRunSetupPage suspends', () => {
+  it('onboarding gate (authed, configured but not completed) shows PageFallback while OnboardingWizard suspends', async () => {
+    // Resume case: admin exists, authed, but setup not completed → gate renders
+    // the wizard to resume the post-auth steps; it suspends.
+    vi.mocked((await import('@/lib/api')).getFirstRunStatus).mockResolvedValue({
+      configured: true,
+      setup_completed: false,
+    });
     useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: 'k' });
-    renderApp(['/first-run']);
+    renderApp(['/']);
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
     expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);
   });

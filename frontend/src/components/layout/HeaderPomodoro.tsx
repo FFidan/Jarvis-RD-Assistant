@@ -97,7 +97,7 @@ export function HeaderPomodoro() {
               {formatMMSS(secondsRemaining)}
             </button>
             {attachedItem?.title && (
-              <span className="text-[10px] text-meta dark:text-zinc-400 max-w-[120px] truncate">
+              <span className="hidden sm:inline text-[10px] text-meta dark:text-zinc-400 max-w-[120px] truncate">
                 {attachedItem.title}
               </span>
             )}

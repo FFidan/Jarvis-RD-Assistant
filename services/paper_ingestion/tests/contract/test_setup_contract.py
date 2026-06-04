@@ -134,6 +134,39 @@ async def test_a131_status_configured_when_admin_exists(setup_client, contract_c
     assert body["configured"] is True, f"Expected configured=true after seeding admin; got: {body}"
 
 
+async def test_a131_status_includes_setup_completed_false_when_configured_but_not_completed(
+    setup_client, contract_conn
+):
+    """GAP-8: GET /api/setup/status includes setup_completed=False in the configured-but-not-completed state.
+
+    The App.tsx gate reads BOTH configured AND setup_completed from this response.
+    Guards that the combined shape is present — a regression where setup_completed
+    is missing from the response would break the gate and re-show the wizard to
+    authenticated users on every reload.
+
+    Verified: setup.py get_status at HEAD (includes setup_completed from user_config).
+    """
+    # Seed an admin so the install is "configured" but leave setup.completed absent (= False).
+    await contract_conn.execute(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin')",
+        "gap8-admin@example.com",
+    )
+
+    resp = await setup_client.get("/api/setup/status")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from setup/status; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["configured"] is True, f"Expected configured=True after seeding admin; got: {body}"
+    assert "setup_completed" in body, (
+        f"setup_completed must be present in response when configured=true; got keys={list(body.keys())}"
+    )
+    assert body["setup_completed"] is False, (
+        f"Expected setup_completed=False in configured-but-not-completed state; got: {body['setup_completed']!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # A133: GET /api/setup/smtp — masked SMTP config from DB
 # ---------------------------------------------------------------------------
@@ -564,3 +597,59 @@ async def test_e1_setup_admin_creates_session_and_user(setup_client, contract_co
     )
     assert user_count == 1, "users row must exist after admin creation"
     assert session_count == 1, "sessions row must be created atomically with the users row"
+
+
+# ---------------------------------------------------------------------------
+# §A1 — GET /api/setup/status: setup_completed field
+# ---------------------------------------------------------------------------
+
+
+async def test_a1_setup_status_setup_completed_false_on_fresh_db(setup_client):
+    """GET /api/setup/status returns setup_completed=False when no user_config row.
+
+    Fresh contract DB has no setup.completed row → _coerce_bool(None) → False.
+    Verified: setup.py get_status at HEAD.
+    """
+    resp = await setup_client.get("/api/setup/status")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from setup/status; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert "setup_completed" in body, (
+        f"GET /api/setup/status must include 'setup_completed' field; got keys={list(body.keys())}"
+    )
+    assert body["setup_completed"] is False, (
+        f"Expected setup_completed=False on fresh DB; got: {body['setup_completed']!r}"
+    )
+    assert body["configured"] is False, (
+        f"Expected configured=False on fresh DB; got: {body['configured']!r}"
+    )
+
+
+async def test_a1_setup_status_setup_completed_true_when_seeded(setup_client, contract_conn):
+    """GET /api/setup/status returns setup_completed=True after user_config row is seeded.
+
+    Inserts setup.completed=true directly, then verifies the endpoint reflects it.
+    Verified: setup.py get_status reads user_config WHERE key='setup.completed'.
+    """
+    await contract_conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES (NULL, 'setup.completed', $1::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE SET value = $1::jsonb""",
+        "true",
+    )
+    try:
+        resp = await setup_client.get("/api/setup/status")
+
+        assert resp.status_code == 200, (
+            f"Expected 200 from setup/status; got {resp.status_code}: {resp.text[:300]}"
+        )
+        body = resp.json()
+        assert body["setup_completed"] is True, (
+            f"Expected setup_completed=True after seeding user_config; got: {body['setup_completed']!r}"
+        )
+    finally:
+        await contract_conn.execute(
+            "DELETE FROM user_config WHERE key = 'setup.completed' AND user_id IS NULL",
+        )

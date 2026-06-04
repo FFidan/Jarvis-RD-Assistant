@@ -16,7 +16,7 @@ A row of **KPI tiles** summarising the current state of your library: total pape
 
 ### SetupBanner
 
-If your account's setup wizard has not been completed, a **SetupBanner** appears at the top of the Home page. It links back to `/setup` so you can finish the remaining wizard steps. Once setup is complete, or once you dismiss the banner, it no longer appears. See [Getting Started](getting-started.md) for the full wizard flow.
+If the onboarding wizard has not been fully completed, a **SetupBanner** may appear at the top of the Home page. Once setup is complete it no longer appears. See [Getting Started](getting-started.md) for the full onboarding wizard flow.
 
 ### Onboarding checklist
 
@@ -58,7 +58,7 @@ The primary focus section for the current moment. Shows one of four **Hero** com
 |-----------|-----------|
 | **HeroThread** | You have an active reading thread (a paper you were reading and left mid-way) |
 | **HeroTask** | You have an overdue or high-priority task in an active project |
-| **HeroPulse** | A new Pulse deck is available and you have not rated any cards today |
+| **HeroPulse** | A new Pulse deck is available and you have not rated any cards today. When no deck exists yet, this surface shows a calm "No Pulse for today yet — generate one" call-to-action rather than an error. |
 | **HeroResumeReading** | A paper is marked as **Reading** and was last opened more than one day ago |
 
 Only the highest-priority hero is shown at a time.

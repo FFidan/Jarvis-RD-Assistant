@@ -37,9 +37,9 @@ function ChartSkeleton() {
 
 function KpiBandSkeleton() {
   return (
-    <div className="grid grid-cols-3 divide-x divide-hair border-y border-hair">
+    <div className="grid grid-cols-1 divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0 divide-hair border-y border-hair">
       {[0, 1, 2].map((i) => (
-        <div key={i} className="px-4 py-4 first:pl-0 last:pr-0 space-y-2">
+        <div key={i} className="min-w-0 px-4 py-4 first:pl-0 last:pr-0 space-y-2">
           <Skeleton className="h-3 w-24" />
           <Skeleton className="h-10 w-16" />
           <Skeleton className="h-3 w-20" />

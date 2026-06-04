@@ -1,18 +1,37 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { toast } from 'sonner';
+import { Sparkles } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { ScoreStack } from './ScoreStack';
 import { WhyChips } from '@/components/my-day/primitives/WhyChips';
+import { ErrorSentinel } from '@/components/shared/ErrorSentinel';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { fetchPulseToday, ratePulseCard } from '@/lib/api';
-import { errorMessage } from '@/lib/errors';
+import { toScoreParts } from '@/lib/score-utils';
 import type { PulseDeck, PulseCardItem, PulseRating } from '@/types';
 
-import { toScoreParts } from '@/lib/score-utils';
+/**
+ * Polished "no pulse yet" call-to-action. This is the hero card the README
+ * screenshot captures, so the no-data state must read as an intentional
+ * invitation — never a broken/red error panel. `fetchPulseToday` maps the
+ * backend's no-data 404 to `null`, so `isError` only fires on genuine
+ * failures; reaching here means there is simply no deck to triage today.
+ */
+function PulseEmptyState({ message }: { message: string }) {
+  return (
+    <div className="flex flex-col items-center gap-3 py-8 text-center">
+      <Sparkles className="h-7 w-7 text-faint" aria-hidden />
+      <p className="font-serif italic text-faint max-w-[34ch]">{message}</p>
+      <Button asChild size="sm" variant="outline">
+        <Link to="/feed">Open Research Feed</Link>
+      </Button>
+    </div>
+  );
+}
 
 export function HeroPulse() {
   const navigate = useNavigate();
@@ -81,12 +100,14 @@ export function HeroPulse() {
     );
   }
 
+  // `fetchPulseToday` swallows the no-data 404 to `null`, so `isError` only
+  // fires for genuine failures (5xx / network). Reserve the calm error
+  // sentinel for those — the empty/no-deck states render their own CTA below.
   if (isError) {
     return (
-      <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-        Failed to load Pulse:{' '}
-        {errorMessage(error, 'unknown error')}
-      </div>
+      <ErrorSentinel
+        message={`Couldn't load today's Pulse — ${error?.message ?? 'please try again'}.`}
+      />
     );
   }
 
@@ -95,17 +116,13 @@ export function HeroPulse() {
   // Cleared (rated all) — only when deck exists and we've advanced past last card
   if (deck && currentIndex >= deck.cards.length) {
     return (
-      <p className="text-faint italic font-serif text-center py-8">
-        All caught up — pulse cleared. Generate a fresh one from the Research Feed.
-      </p>
+      <PulseEmptyState message="All caught up — pulse cleared. Generate a fresh one from the Research Feed." />
     );
   }
 
   if (!card) {
     return (
-      <p className="text-faint italic font-serif text-center py-8">
-        No Pulse for today yet — generate one from the Research Feed.
-      </p>
+      <PulseEmptyState message="No Pulse for today yet — generate one from the Research Feed." />
     );
   }
 

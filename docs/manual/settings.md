@@ -140,7 +140,7 @@ Configure FSRS parameters for the [Learning Cards](learning-cards.md) system: de
 
 ## Related pages
 
-- [Getting Started](getting-started.md) — the setup wizard pre-configures Sources, Topics, and Automation before you arrive here.
+- [Getting Started](getting-started.md) — the onboarding wizard pre-configures Sources, Topics, and Automation before you arrive here.
 - [Telegram](telegram.md) — step-by-step pairing guide (Integrations → Telegram).
 - [Admin & Multi-tenant](admin.md) — admin-only pages for user management, audit log, and system health.
 - [Extraction Table](extraction-table.md) — uses templates managed in §IV System → Extraction Templates.

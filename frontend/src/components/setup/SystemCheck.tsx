@@ -70,8 +70,11 @@ export function SystemCheck() {
   const modelLabel = data.models_ready
     ? 'Models ready'
     : data.models_downloading.length > 0
-      ? `Downloading models: ${data.models_downloading.join(', ')}`
+      ? `Still pulling: ${data.models_downloading.join(', ')}`
       : 'Models not ready';
+  const modelHint = !data.models_ready && data.models_downloading.length === 0
+    ? 'Ollama not reachable yet, or models still provisioning — check `docker compose logs ollama-bootstrap`.'
+    : undefined;
 
   const topicsStatus: Status = data.topics_count > 0 ? 'ok' : 'warn';
   const topicsLabel =
@@ -92,7 +95,7 @@ export function SystemCheck() {
   return (
     <div className="space-y-2">
       <Row status="ok" label="API & database" hint="Postgres reachable" />
-      <Row status={modelStatus} label={modelLabel} hint="Ollama / LiteLLM" />
+      <Row status={modelStatus} label={modelLabel} hint={modelHint ?? 'Ollama / LiteLLM'} />
       <Row status={topicsStatus} label={topicsLabel} />
       <Row status={telegramStatus} label={telegramLabel} />
     </div>

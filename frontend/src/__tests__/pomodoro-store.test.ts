@@ -1,6 +1,55 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
 
+// ---------------------------------------------------------------------------
+// POMO-01 regression: v0 blobs with running-timer state must NOT resurrect
+// ---------------------------------------------------------------------------
+describe('PomodoroStore persist migration — v0 blob never rehydrates running timer', () => {
+  it('a stale v0 blob with phase:work rehydrates as idle (migration strips timer state)', async () => {
+    // Seed localStorage with a v0-style blob (no `version` key = version 0).
+    // This matches the exact shape the operator had persisted (the reported bug).
+    const oldTimestamp = Date.now() - 3600_000; // 1 hour ago
+    const staleBlob = {
+      state: {
+        targetCycles: 4,
+        workMinutes: 25,
+        shortBreakMinutes: 5,
+        longBreakMinutes: 15,
+        // Running-timer state that MUST be stripped by the v1 migration:
+        phase: 'work',
+        startedAt: oldTimestamp,
+        pausedAt: null,
+        totalPausedMs: 0,
+        phaseDurationMs: 25 * 60 * 1000,
+        cyclesCompleted: 1,
+        attachedItem: { id: 99, title: 'Old task', type: 'task' },
+        lastWorkElapsedMs: 0,
+      },
+      // A real pre-v1 blob: zustand persisted it with version 0 (it always
+      // writes a version), so the v1 `migrate` fires and strips the timer state.
+      version: 0,
+    };
+    localStorage.setItem('jarvis-pomodoro', JSON.stringify(staleBlob));
+
+    // Force a fresh module load so the store rehydrates from the seeded blob.
+    vi.resetModules();
+    const { usePomodoroStore: freshStore } = await import('@/stores/pomodoro-store');
+
+    // Wait for the async rehydration (persist middleware schedules it as a microtask)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    const s = freshStore.getState();
+    // POMO-01: phase must be idle (no resurrected countdown)
+    expect(s.phase).toBe('idle');
+    expect(s.startedAt).toBeNull();
+    expect(s.secondsRemaining).toBe(0);
+    // Settings must survive the migration
+    expect(s.targetCycles).toBe(4);
+    expect(s.workMinutes).toBe(25);
+  });
+});
+
 describe('PomodoroStore', () => {
   beforeEach(() => {
     usePomodoroStore.getState().reset();

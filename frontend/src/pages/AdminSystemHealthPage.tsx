@@ -167,7 +167,7 @@ export function AdminSystemHealthPage() {
         )}
 
         {!stackLoading && !stackError && stackData && (
-          <div className="rounded-md border" data-testid="live-services-table">
+          <div className="rounded-md border overflow-x-auto" data-testid="live-services-table">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
@@ -233,7 +233,7 @@ export function AdminSystemHealthPage() {
               <StatusBadge status={data.status} />
             </div>
 
-            <div className="rounded-md border">
+            <div className="rounded-md border overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">

@@ -226,3 +226,35 @@ describe('HeroPulse currentIndex clamp and reset', () => {
     expect(screen.getByText(/All caught up/i)).toBeInTheDocument();
   });
 });
+
+describe('HeroPulse empty-vs-error states (RED-ERROR-EMPTY-STATE)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders a CALM empty-state CTA (not an error) when there is no deck (404 → null)', async () => {
+    // fetchPulseToday maps the backend no-data 404 to `null`.
+    vi.mocked(fetchPulseToday).mockResolvedValue(null);
+    renderHeroPulse();
+
+    // Intentional invitation, not a broken/red error panel.
+    expect(
+      await screen.findByText(/No Pulse for today yet/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: /Open Research Feed/i }),
+    ).toBeInTheDocument();
+    // The calm empty state must NOT surface the error sentinel.
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('renders the ErrorSentinel (role=status) on a GENUINE failure (5xx / network)', async () => {
+    vi.mocked(fetchPulseToday).mockRejectedValue(new Error('boom'));
+    renderHeroPulse();
+
+    const sentinel = await screen.findByRole('status');
+    expect(sentinel).toHaveTextContent(/Couldn't load today's Pulse/i);
+    // It must NOT show the no-data CTA.
+    expect(screen.queryByRole('link', { name: /Open Research Feed/i })).toBeNull();
+  });
+});

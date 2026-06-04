@@ -86,8 +86,8 @@ export function DateMasthead() {
   };
 
   return (
-    <header className="border-b border-hair pb-6 grid grid-cols-[1fr_auto] gap-8 items-end">
-      <div>
+    <header className="border-b border-hair pb-6 flex flex-col gap-4 sm:grid sm:grid-cols-[1fr_auto] sm:gap-8 sm:items-end">
+      <div className="min-w-0">
         <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-meta mb-2">
           RESEARCH LOG · {timeStr}
         </p>

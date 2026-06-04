@@ -10,7 +10,7 @@ and developers.
 
 | Document | Purpose |
 |---|---|
-| [Quickstart / README](readme-shim.md) | Clone, first-run wizard, env vars |
+| [Quickstart / README](readme-shim.md) | Clone, onboarding wizard, env vars |
 | [Deployment Guide](DEPLOYMENT.md) | Solo, LAN, Cloudflare Tunnel, TLS, backups |
 | [Requirements](REQUIREMENTS.md) | Hardware, software, and dependency requirements |
 

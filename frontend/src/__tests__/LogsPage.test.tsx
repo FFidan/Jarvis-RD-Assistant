@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -33,6 +33,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { LogsPage } from '@/pages/LogsPage';
 import { EventsTab } from '@/components/logs/EventsTab';
 import { CorrelationGroup } from '@/components/logs/CorrelationGroup';
+import { useUIStore } from '@/stores/ui-store';
 import { ErrorSparkLine, buildSparkBuckets } from '@/components/logs/ErrorSparkLine';
 import { listEvents } from '@/lib/logs';
 import type { SystemEvent } from '@/lib/logs';
@@ -477,6 +478,67 @@ describe('LiveTab — Recent Events show date in timestamp', () => {
     // formatter (asserted against that same formatter, locale-independent).
     expect(screen.getByText(formatTimestamp(ISO))).toBeInTheDocument();
     expect(screen.getByText(formatTimestamp(iso2))).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOGS-PRESET-RESTORE-NO-FILTERS: persisted preset restores filters on mount
+// ---------------------------------------------------------------------------
+
+describe('EventsTab — preset restore on mount', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListEvents.mockResolvedValue({ events: [], next_cursor: null });
+    // Reset ui-store to clean state before each test
+    useUIStore.getState()._reset();
+  });
+
+  afterEach(() => {
+    useUIStore.getState()._reset();
+  });
+
+  it('re-applies level filter from persisted preset on mount', async () => {
+    // Seed the persisted preset BEFORE rendering (simulates a returning user
+    // whose ui-store was saved with logsPreset='last-1h-errors').
+    useUIStore.getState().setLogsPreset('last-1h-errors');
+
+    renderEventsTab();
+
+    // The preset 'last-1h-errors' sets level=error.
+    // On mount the component should call applyPreset and fire a fetch with level=error.
+    await waitFor(() => {
+      const calls = mockListEvents.mock.calls;
+      const lastCall = calls[calls.length - 1]?.[0];
+      expect(lastCall).toMatchObject({ level: 'error' });
+    });
+  });
+
+  it('re-applies category+query from persisted preset on mount', async () => {
+    // 'failed-jobs-24h' has category=job, query=failed
+    useUIStore.getState().setLogsPreset('failed-jobs-24h');
+
+    renderEventsTab();
+
+    await waitFor(() => {
+      const calls = mockListEvents.mock.calls;
+      const lastCall = calls[calls.length - 1]?.[0];
+      expect(lastCall).toMatchObject({ category: 'job', q: 'failed' });
+    });
+  });
+
+  it('does NOT call applyPreset when no preset is persisted', async () => {
+    // logsPreset defaults to '' — filters should remain at defaults (no level/category)
+    renderEventsTab();
+
+    await waitFor(() => {
+      expect(mockListEvents).toHaveBeenCalled();
+    });
+
+    const calls = mockListEvents.mock.calls;
+    const firstCall = calls[0]?.[0];
+    // level and category should be undefined (default empty state → not passed)
+    expect(firstCall?.level).toBeUndefined();
+    expect(firstCall?.category).toBeUndefined();
   });
 });
 
