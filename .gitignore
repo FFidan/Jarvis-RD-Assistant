@@ -94,9 +94,6 @@ inspection/
 # Test artifacts
 **/test-results/
 
-# Knowledge graph outputs
-graphify-out/
-
 # Perf profile snapshots (reproducible via `make profile`)
 artifacts/
 
@@ -122,7 +119,6 @@ docs/archive/
 AGENTS.md
 CLAUDE.md
 .codex
-.graphifyignore
 docs/agents-shim.md
 docs/AGENTIC_WORKFLOW.md
 scripts/verify-edits.sh

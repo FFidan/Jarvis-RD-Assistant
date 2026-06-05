@@ -19,15 +19,15 @@
 - 📂 **Projects** — lightweight task + milestone tracking tied to source papers, with optional Zotero push.
 
 <details>
-<summary><b>More screenshots</b> — Dashboard · Pulse · Library · Discover · Knowledge Graph</summary>
+<summary><b>More screenshots</b> — Dashboard · Pulse · Library · Discover · Knowledge Graph · Ask</summary>
 
 | Dashboard | Pulse Deck |
 |---|---|
-| ![Dashboard](docs/screenshots/01-home.png) | ![Pulse deck](docs/screenshots/03-pulse.png) |
+| ![Dashboard — library, due cards, projects, and batch processing at a glance](docs/screenshots/01-home.png) | ![Pulse deck — daily LLM-ranked paper recommendations with verified relevance reasoning](docs/screenshots/03-pulse.png) |
 | **Library (inbox)** | **Discover (multi-source)** |
-| ![Library inbox](docs/screenshots/04-library.png) | ![Discover](docs/screenshots/05-discover.png) |
-| **Knowledge Graph** | |
-| ![Knowledge graph](docs/screenshots/06-knowledge-graph.png) | |
+| ![Library — saved and owned papers with status, priority, and summary state](docs/screenshots/04-library.png) | ![Discover — inbox of new papers from arXiv, OpenAlex, Semantic Scholar, and PubMed with match reasons](docs/screenshots/05-discover.png) |
+| **Knowledge Graph** | **Ask (cross-paper Q&A)** |
+| ![Knowledge graph — entities and relationships extracted from your corpus](docs/screenshots/06-knowledge-graph.png) | ![Ask — cross-paper RAG with inline citations, per-sentence verification, and page-numbered sources](docs/screenshots/07-ask.png) |
 
 </details>
 

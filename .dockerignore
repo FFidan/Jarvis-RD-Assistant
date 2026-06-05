@@ -8,7 +8,6 @@ secrets/
 
 # Agent runtime artifacts (untracked but defense-in-depth)
 handoff/
-graphify-out/
 tests/_artifacts/
 
 # Python caches + virtualenvs

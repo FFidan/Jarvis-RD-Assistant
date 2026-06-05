@@ -1,13 +1,14 @@
 /**
  * README screenshot generator — fully mocked, no live backend required.
  *
- * Produces 6 hero screenshots for docs/screenshots/:
+ * Produces 7 hero screenshots for docs/screenshots/:
  *   01-home.png        → HomePage         /
  *   02-my-day.png      → MyDayPage        /my-day
  *   03-pulse.png       → PulseDeckPage    /pulse
  *   04-library.png     → ResearchFeedPage /feed?surface=library (Library view)
  *   05-discover.png    → ResearchFeedPage /feed (Search/Discover tab)
  *   06-knowledge-graph.png → KnowledgeGraphPage /knowledge
+ *   07-ask.png         → AskPage          /ask (cross-paper RAG Q&A)
  *
  * Viewport: 1440×900 (above-the-fold, not fullPage).
  * All API calls intercepted via page.route().
@@ -291,6 +292,57 @@ const MY_DAY_RESPONSE = {
   ],
 };
 
+// WeeklyDigestResponse — per-topic theme clusters with verified/unverified badges.
+// Shape grounded against WeeklyDigestResponse in src/types/index.ts:1222.
+const WEEKLY_DIGEST = {
+  total_papers: 11,
+  period_start: '2026-05-29',
+  period_end: '2026-06-04',
+  topics: [
+    {
+      name: 'Efficient Inference',
+      paper_count: 5,
+      summary:
+        'Sparse routing and asynchronous attention dominate this week — the shared thread is reducing memory bandwidth without quality loss.',
+      themes: [
+        { theme: 'Top-k sparse MoE gating yields 2.4× long-context throughput at <1% quality loss.', supporting_papers: [101], notes: null, verified: true, verification_reason: null },
+        { theme: 'FlashAttention-3 exploits H100 asynchrony for a 1.5–2.0× speedup over FA2.', supporting_papers: [104], notes: null, verified: true, verification_reason: null },
+        { theme: 'Inference-aware cost modelling revisits Chinchilla-optimal scaling.', supporting_papers: [106], notes: null, verified: false, verification_reason: 'Claim paraphrases two papers; exact supporting quote not located in corpus.' },
+      ],
+      top_papers: [
+        { paper_id: 101, title: 'Sparse Mixture-of-Experts for Efficient Long-Context Inference', url: 'https://arxiv.org/abs/2501.00101', confidence: 'HIGH', relevance_score: 0.94 },
+        { paper_id: 104, title: 'FlashAttention-3: Fast and Accurate Attention with Asynchrony', url: 'https://arxiv.org/abs/2407.08608', confidence: 'HIGH', relevance_score: 0.85 },
+      ],
+    },
+    {
+      name: 'RLHF & Alignment',
+      paper_count: 3,
+      summary:
+        'Reward-model overoptimization remains the open question — empirical scaling curves are now available to bound it.',
+      themes: [
+        { theme: 'Proxy-reward overoptimization follows a predictable scaling law in RLHF.', supporting_papers: [103], notes: null, verified: true, verification_reason: null },
+        { theme: 'Reward collapse correlates with out-of-distribution prompts more than raw overfit.', supporting_papers: [103], notes: null, verified: true, verification_reason: null },
+      ],
+      top_papers: [
+        { paper_id: 103, title: 'Scaling Laws for Reward Model Overoptimization in RLHF', url: 'https://arxiv.org/abs/2210.10760', confidence: 'HIGH', relevance_score: 0.88 },
+      ],
+    },
+  ],
+};
+
+// MyDayBundle — single round-trip that primes per-section caches (MyDayPage.tsx).
+// Shape grounded against MyDayBundle in src/types/index.ts:1295.
+const MY_DAY_BUNDLE = {
+  tasks: MY_DAY_RESPONSE.tasks,
+  intent: { intent: 'Deep work: finish §3.2 sparse-routing analysis + write FlashAttention comparison table.', updated_at: '2026-06-04T07:30:00Z' },
+  threads: [
+    { id: 1, title: 'Sparse attention vs dense: when does routing overhead pay off?', anchor: 'Re-read §4 of the MoE paper before benchmarking.', progress: 0.45, last_at: '2026-06-03T09:15:00Z', status: 'open', created_at: '2026-06-02T14:00:00Z' },
+    { id: 2, title: 'RLHF reward collapse — relationship to overfit or OOD?', anchor: null, progress: 0.2, last_at: '2026-06-03T16:00:00Z', status: 'open', created_at: '2026-06-01T10:00:00Z' },
+  ],
+  yesterday: { date: '2026-06-03', focused_hours: 3.5, cards_reviewed: 18, tasks_done: 2, completed: [{ id: 10, title: 'Submit preprint revision', status: 'done' }], deferred: [] },
+  journal: null,
+};
+
 const RETENTION_STATS = {
   total_cards: 284,
   due_now: 14,
@@ -312,18 +364,127 @@ const KNOWLEDGE_GRAPH = {
     { id: 8, name: 'RAG', canonical_name: 'Retrieval-Augmented Generation', entity_type: 'method', description: 'Hybrid retrieval + generation for knowledge-intensive tasks', paper_count: 22, created_at: '2026-01-01T00:00:00Z', metadata: {} },
     { id: 9, name: 'Chain-of-Thought', canonical_name: 'Chain-of-Thought Prompting', entity_type: 'concept', description: 'Prompting technique eliciting step-by-step reasoning', paper_count: 19, created_at: '2026-01-01T00:00:00Z', metadata: {} },
   ],
+  // Hub-and-spoke topology: "Transformer" (id 1) is the sole high-degree hub,
+  // every other entity a degree-1/2 leaf. The "Concentric" layout keys on node
+  // degree, so this seats Transformer alone at the centre and fans the eight
+  // leaves into one evenly-spaced outer ring — a clean, legible README graph
+  // (a flat degree distribution instead makes concentric pile everything in the
+  // middle and the labels collide).
   relationships: [
     { id: 1, source_entity_id: 1, target_entity_id: 2, relationship_type: 'basis_for', paper_id: 201, evidence_quote: null, confidence: 0.95, created_at: '2026-01-01T00:00:00Z' },
     { id: 2, source_entity_id: 1, target_entity_id: 3, relationship_type: 'basis_for', paper_id: 201, evidence_quote: null, confidence: 0.95, created_at: '2026-01-01T00:00:00Z' },
-    { id: 3, source_entity_id: 6, target_entity_id: 1, relationship_type: 'component_of', paper_id: 201, evidence_quote: null, confidence: 0.90, created_at: '2026-01-01T00:00:00Z' },
-    { id: 4, source_entity_id: 5, target_entity_id: 3, relationship_type: 'used_to_train', paper_id: 103, evidence_quote: null, confidence: 0.88, created_at: '2026-01-01T00:00:00Z' },
-    { id: 5, source_entity_id: 7, target_entity_id: 3, relationship_type: 'applied_to', paper_id: 202, evidence_quote: null, confidence: 0.85, created_at: '2026-01-01T00:00:00Z' },
-    { id: 6, source_entity_id: 8, target_entity_id: 6, relationship_type: 'uses', paper_id: 202, evidence_quote: null, confidence: 0.82, created_at: '2026-01-01T00:00:00Z' },
-    { id: 7, source_entity_id: 9, target_entity_id: 3, relationship_type: 'improves', paper_id: 204, evidence_quote: null, confidence: 0.79, created_at: '2026-01-01T00:00:00Z' },
-    { id: 8, source_entity_id: 2, target_entity_id: 4, relationship_type: 'evaluated_on', paper_id: 201, evidence_quote: null, confidence: 0.78, created_at: '2026-01-01T00:00:00Z' },
+    { id: 3, source_entity_id: 1, target_entity_id: 6, relationship_type: 'uses', paper_id: 201, evidence_quote: null, confidence: 0.90, created_at: '2026-01-01T00:00:00Z' },
+    { id: 4, source_entity_id: 1, target_entity_id: 5, relationship_type: 'aligned_by', paper_id: 103, evidence_quote: null, confidence: 0.88, created_at: '2026-01-01T00:00:00Z' },
+    { id: 5, source_entity_id: 1, target_entity_id: 7, relationship_type: 'fine_tuned_by', paper_id: 202, evidence_quote: null, confidence: 0.85, created_at: '2026-01-01T00:00:00Z' },
+    { id: 6, source_entity_id: 1, target_entity_id: 8, relationship_type: 'extended_by', paper_id: 202, evidence_quote: null, confidence: 0.82, created_at: '2026-01-01T00:00:00Z' },
+    { id: 7, source_entity_id: 1, target_entity_id: 9, relationship_type: 'prompted_by', paper_id: 204, evidence_quote: null, confidence: 0.79, created_at: '2026-01-01T00:00:00Z' },
+    { id: 8, source_entity_id: 1, target_entity_id: 4, relationship_type: 'evaluated_on', paper_id: 201, evidence_quote: null, confidence: 0.78, created_at: '2026-01-01T00:00:00Z' },
   ],
   entity_type_counts: { method: 5, concept: 3, dataset: 1 },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ask (cross-paper RAG) — completed Q&A fixture
+//
+// The Ask answer is rendered by streaming a complete, well-formed SSE response
+// from POST /api/ask/stream. The shape is grounded against StreamEvent in
+// src/lib/sse.ts:27 (token | sources | confidence | done). The answer carries
+// inline [n] citations, a HIGH-confidence "Verified" badge, per-sentence
+// verification (one sentence intentionally unverified → yellow <mark>), and a
+// sources list with page numbers — the anti-hallucination design on display.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ASK_QUESTION =
+  'How do sparse mixture-of-experts methods compare to dense transformers for long-context inference, and what are the throughput/quality trade-offs?';
+
+// The answer text. Inline [n] markers reference the sources list below.
+const ASK_ANSWER = [
+  'For long-context inference, sparse mixture-of-experts (MoE) models route each token to only the top-k experts, so the activated parameter count — and therefore the memory bandwidth per token — stays far below a dense transformer of equivalent total size [1].',
+  ' Empirically this yields a 2.4× throughput improvement at 128k-token contexts with under 1% quality degradation on standard LLM benchmarks [1].',
+  ' Dense transformers, by contrast, activate every parameter for every token, so their long-context cost is dominated by the quadratic attention term and the full feed-forward pass [3].',
+  ' Kernel-level work narrows part of that gap: FlashAttention-3 exploits H100 asynchrony to deliver a 1.5–2.0× attention speedup over FlashAttention-2, which benefits dense and sparse models alike [2].',
+  ' The principal trade-off is that MoE routing adds load-balancing overhead and can underperform dense models on tasks where expert specialization fragments rare-token coverage.',
+  ' Inference-aware cost modelling suggests the sparse advantage widens as deployment scale grows, since the per-token compute savings compound across long sequences [3].',
+].join('');
+
+// Per-sentence verification. Five of six sentences verified against retrieved
+// source chunks; the routing-overhead caveat is left unverified to surface the
+// per-sentence highlight (yellow <mark>) without tripping the amber low-confidence
+// banner (which only shows when confidence !== 'HIGH').
+const ASK_PER_SENTENCE = [
+  { text: 'For long-context inference, sparse mixture-of-experts (MoE) models route each token to only the top-k experts, so the activated parameter count — and therefore the memory bandwidth per token — stays far below a dense transformer of equivalent total size [1].', verified: true },
+  { text: 'Empirically this yields a 2.4× throughput improvement at 128k-token contexts with under 1% quality degradation on standard LLM benchmarks [1].', verified: true },
+  { text: 'Dense transformers, by contrast, activate every parameter for every token, so their long-context cost is dominated by the quadratic attention term and the full feed-forward pass [3].', verified: true },
+  { text: 'Kernel-level work narrows part of that gap: FlashAttention-3 exploits H100 asynchrony to deliver a 1.5–2.0× attention speedup over FlashAttention-2, which benefits dense and sparse models alike [2].', verified: true },
+  { text: 'The principal trade-off is that MoE routing adds load-balancing overhead and can underperform dense models on tasks where expert specialization fragments rare-token coverage.', verified: false },
+  { text: 'Inference-aware cost modelling suggests the sparse advantage widens as deployment scale grows, since the per-token compute savings compound across long sequences [3].', verified: true },
+];
+
+const ASK_SOURCES = [
+  {
+    chunk_id: 9101,
+    paper_id: 101,
+    paper_title: '[1] Sparse Mixture-of-Experts for Efficient Long-Context Inference (Liu et al., 2026)',
+    text: 'Routing only the top-k experts per token reduces activated memory bandwidth and yields a 2.4× throughput improvement at 128k context length with <1% quality degradation across standard LLM benchmarks.',
+    page_number: 4,
+    score: 0.912,
+  },
+  {
+    chunk_id: 9104,
+    paper_id: 104,
+    paper_title: '[2] FlashAttention-3: Fast and Accurate Attention with Asynchrony (Shah et al., 2024)',
+    text: 'By overlapping computation and memory movement on H100 GPUs, FlashAttention-3 attains a 1.5–2.0× speedup over FlashAttention-2 while preserving numerical accuracy.',
+    page_number: 7,
+    score: 0.864,
+  },
+  {
+    chunk_id: 9106,
+    paper_id: 106,
+    paper_title: '[3] Beyond Chinchilla-Optimal: Accounting for Inference in LLM Cost Modelling (Sardana & Frankle, 2024)',
+    text: 'When inference cost is folded into the scaling objective, compute-per-token savings dominate at deployment scale, favouring architectures that activate fewer parameters per token.',
+    page_number: 3,
+    score: 0.831,
+  },
+];
+
+/**
+ * Build a complete SSE body: token frames (so the answer renders progressively),
+ * then a single sources frame, a confidence frame, and a terminal done frame.
+ * Frames follow the `data: {json}\n` shape parsed by readSSEFrames (sse.ts:85).
+ */
+function buildAskStreamBody(): string {
+  const frames: string[] = [];
+  // Stream the answer as fixed-width character chunks so it arrives
+  // progressively yet reassembles to the EXACT text (sentence-boundary
+  // splitting would fragment the decimal points in "2.4×"/"1.5–2.0×" and drop
+  // characters, corrupting both the answer and the per-sentence highlight match).
+  const CHUNK = 64;
+  for (let i = 0; i < ASK_ANSWER.length; i += CHUNK) {
+    frames.push(`data: ${JSON.stringify({ type: 'token', content: ASK_ANSWER.slice(i, i + CHUNK) })}\n`);
+  }
+  frames.push(`data: ${JSON.stringify({ type: 'sources', sources: ASK_SOURCES })}\n`);
+  frames.push(
+    `data: ${JSON.stringify({ type: 'confidence', confidence: 'HIGH', verified_fraction: 5 / 6, per_sentence: ASK_PER_SENTENCE })}\n`,
+  );
+  frames.push(`data: ${JSON.stringify({ type: 'done', model_used: null })}\n`);
+  frames.push('data: [DONE]\n');
+  return frames.join('');
+}
+
+async function installAskRoutes(page: Page): Promise<void> {
+  await installCommonRoutes(page);
+
+  // POST /api/ask/stream → complete mocked SSE response.
+  await page.route('**/api/ask/stream**', async (route: Route) => {
+    await route.fulfill({ status: 200, contentType: 'text/event-stream', body: buildAskStreamBody() });
+  });
+
+  // OnboardingTour eligibility check — non-empty so the tour stays hidden.
+  await page.route('**/api/papers/feed**', async (route: Route) => {
+    if (route.request().url().includes('/counts')) { await route.continue(); return; }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: INBOX_PAPERS.slice(0, 1), total: 1 }) });
+  });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Route-install helpers
@@ -335,8 +496,16 @@ async function installCommonRoutes(page: Page): Promise<void> {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SETUP_STATUS) });
   });
 
-  // Jobs SSE + listing — return empty so no job banners appear
-  await page.route('**/api/jobs**', async (route: Route) => {
+  // Jobs SSE + listing — return empty so no job banners appear.
+  //
+  // NOTE: this is a RegExp, not a `**/api/jobs**` glob, on purpose. Under
+  // `vite dev` the source module `/src/lib/api/jobs.ts` is served verbatim, and
+  // a `**/api/jobs**` glob ALSO matches that module path — intercepting the JS
+  // module and returning JSON, which blanks the whole app ("Failed to load
+  // module script: …MIME type application/json"). Anchoring to a real API path
+  // (`/api/jobs` followed by end, `?`, or `/`) avoids the dev-server collision
+  // while still matching `/api/jobs`, `/api/jobs?…`, and `/api/jobs/stream`.
+  await page.route(/\/api\/jobs(\?|\/|$)/, async (route: Route) => {
     const url = route.request().url();
     if (url.includes('/stream') || url.includes('stream')) {
       // SSE streams: return a minimal well-formed event-stream with no events
@@ -443,10 +612,7 @@ async function installMyDayRoutes(page: Page): Promise<void> {
   });
 
   await page.route('**/api/my-day/threads**', async (route: Route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([
-      { id: 1, title: 'Sparse attention vs dense: when does routing overhead pay off?', status: 'open', created_at: '2026-06-02T14:00:00Z', updated_at: '2026-06-03T09:15:00Z', paper_count: 4 },
-      { id: 2, title: 'RLHF reward collapse — relationship to overfit or OOD?', status: 'open', created_at: '2026-06-01T10:00:00Z', updated_at: '2026-06-03T16:00:00Z', paper_count: 3 },
-    ]) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MY_DAY_BUNDLE.threads) });
   });
 
   await page.route('**/api/my-day/journal**', async (route: Route) => {
@@ -457,8 +623,19 @@ async function installMyDayRoutes(page: Page): Promise<void> {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MY_DAY_RESPONSE.tasks) });
   });
 
+  // GET /api/digest/weekly → WeeklyDigestResponse. The response MUST carry a
+  // `topics` array: WeeklyDigestSection reads `data.topics.length`, so a
+  // shapeless `{summary, generated_at}` body throws "Cannot read properties of
+  // undefined (reading 'length')" and trips the ErrorBoundary.
   await page.route('**/api/digest/weekly**', async (route: Route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ summary: null, generated_at: null }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(WEEKLY_DIGEST) });
+  });
+
+  // GET /api/executive/my-day-bundle → MyDayBundle. MyDayPage primes per-section
+  // caches from this single round-trip; without it apiFetch receives the SPA
+  // index.html and throws a JSON-parse console error.
+  await page.route('**/api/executive/my-day-bundle**', async (route: Route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MY_DAY_BUNDLE) });
   });
 }
 
@@ -817,8 +994,30 @@ test('06-knowledge-graph: KnowledgeGraphPage at /knowledge', async ({ page }) =>
   await page.waitForLoadState('networkidle');
   // Wait for Knowledge Graph heading
   await page.waitForSelector('h1, h2, h3', { timeout: 10000 });
-  // Give Cytoscape canvas time to render
-  await page.waitForTimeout(2000);
+  await page.waitForSelector('[data-testid="cytoscape-container"]', { timeout: 10000 });
+
+  // The default force-directed (cose) layout clumps a small graph and lets
+  // labels collide. Switch to the deterministic "Circle" layout — it spaces all
+  // entities evenly around one ring, so the below-node labels never overlap and
+  // the hub-and-spoke relationships read clearly across the middle. Driving it
+  // through the GraphControls dropdown also remounts CytoscapeGraph with a fresh fit.
+  const layoutTrigger = page.getByRole('combobox').filter({ hasText: /Force-directed|Concentric|Circle|Breadth/ }).first();
+  if (await layoutTrigger.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await layoutTrigger.click();
+    await page.getByRole('option', { name: 'Circle' }).click();
+  }
+
+  // Let the circle layout settle.
+  await page.waitForTimeout(4000);
+
+  // Scroll the graph to the top of the viewport so the full 500px canvas is
+  // above the fold (the page chrome — title + filters + query bar — otherwise
+  // pushes the graph's lower third below the 900px clip).
+  await page.evaluate(() => {
+    // Omit `behavior` → default 'auto' (instant) scroll; no animation to wait on.
+    document.querySelector('[data-testid="cytoscape-container"]')?.scrollIntoView({ block: 'start' });
+  });
+  await page.waitForTimeout(600);
 
   await page.addStyleTag({ content: '::-webkit-scrollbar { display: none !important; }' });
 
@@ -826,6 +1025,55 @@ test('06-knowledge-graph: KnowledgeGraphPage at /knowledge', async ({ page }) =>
 
   await page.screenshot({
     path: path.join(SCREENSHOTS_DIR, '06-knowledge-graph.png'),
+    fullPage: false,
+    clip: { x: 0, y: 0, width: VIEWPORT.width, height: VIEWPORT.height },
+  });
+});
+
+test('07-ask: AskPage cross-paper RAG at /ask', async ({ page }) => {
+  await seedAuthedSession(page);
+  await installAskRoutes(page);
+
+  await page.addInitScript(() => {
+    const uiState = { state: { checklistDismissed: true, sidebarOpen: true }, version: 0 };
+    localStorage.setItem('jarvis-ui', JSON.stringify(uiState));
+    localStorage.setItem('jarvis-onboarding-dismissed', 'true');
+  });
+
+  const consoleErrors07: string[] = [];
+  page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors07.push(msg.text()); });
+  page.on('response', (resp) => { if (!resp.ok() && resp.url().includes('/api/')) console.warn(`[07-ask] non-2xx: ${resp.status()} ${resp.url()}`); });
+
+  await page.goto('/ask');
+  await page.waitForLoadState('networkidle');
+  // Ask page header is the ready-signal
+  await page.waitForSelector('[data-testid="ask-page"]', { timeout: 10000 });
+
+  // Ask a research question — this fires POST /api/ask/stream (mocked SSE) and
+  // the completed answer (inline [n] citations + Verified badge + per-sentence
+  // verification) streams into the chat workspace.
+  const input = page.getByPlaceholder('Ask a question...');
+  await input.fill(ASK_QUESTION);
+  await page.getByRole('button', { name: 'Send message' }).click();
+
+  // Wait for the streamed answer to settle (last sentence + Verified badge).
+  await page.getByText('Inference-aware cost modelling').waitFor({ timeout: 10000 });
+  await page.getByText('Verified', { exact: true }).first().waitFor({ timeout: 10000 });
+
+  // Expand the sources accordion so page-numbered citations are visible.
+  const sourcesToggle = page.getByRole('button', { name: /\d+ sources?/ });
+  if (await sourcesToggle.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await sourcesToggle.click();
+    await page.waitForTimeout(300);
+  }
+
+  await page.addStyleTag({ content: '::-webkit-scrollbar { display: none !important; }' });
+  await page.waitForTimeout(400);
+
+  if (consoleErrors07.length) console.warn('[07-ask] console errors:', consoleErrors07);
+
+  await page.screenshot({
+    path: path.join(SCREENSHOTS_DIR, '07-ask.png'),
     fullPage: false,
     clip: { x: 0, y: 0, width: VIEWPORT.width, height: VIEWPORT.height },
   });
