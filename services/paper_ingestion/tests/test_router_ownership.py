@@ -329,5 +329,169 @@ async def test_rag_batch_summarize_query_includes_user_filter(_app, monkeypatch)
         assert "p.discovered_by" not in q, f"audit column must not gate access: {q}"
 
 
+# ---------------------------------------------------------------------------
+# PI-LIB-03: process_batch and batch_extract_papers use assert_papers_ownership
+# (batch call) instead of a per-paper loop.  Tests verify:
+#   (a) a batch containing any non-owned paper is rejected with 403 before enqueue
+#   (b) a batch where ALL papers are owned (fast-grant: discovered_by=caller)
+#       is accepted and the job is queued.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_process_batch_rejects_non_owned_paper(_app, monkeypatch):
+    """POST /api/papers/process_batch: a non-owned paper in the batch → 403.
+
+    Wires conn.fetch so assert_papers_ownership sees a paper owned by user 2
+    (discovered_by=2) with no matching user_library row for the caller (user 1).
+    The endpoint must return 403 without ever calling KIND_TO_TASK.defer_async.
+
+    # Verified: papers_bulk.py:141 — assert_papers_ownership (batch) called once.
+    """
+    import jarvis_common.task_registry as task_registry
+
+    app, conn = _app
+
+    # Override get_current_user_id so process_batch sees user_id=1.
+    from jarvis_common.auth import get_current_user_id
+
+    app.dependency_overrides[get_current_user_id] = lambda: 1
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+    monkeypatch.setitem(task_registry._TASK_MAP, "papers.batch_process", mock_task)
+
+    # First fetch: papers table lookup → paper 99 discovered_by=2 (not the caller).
+    # Second fetch: user_library lookup → empty (user 1 has no library entry for 99).
+    conn.fetch.side_effect = [
+        [{"id": 99, "discovered_by": 2}],  # papers.id + discovered_by
+        [],  # user_library: empty → ownership denied
+    ]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/papers/process_batch",
+            json={"paper_ids": [99]},
+        )
+
+    assert resp.status_code == 403, (
+        f"Expected 403 for non-owned paper in process_batch; got {resp.status_code}: {resp.text}"
+    )
+    mock_task.defer_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_batch_accepts_owned_paper(_app, monkeypatch):
+    """POST /api/papers/process_batch: a paper owned by the caller (fast-grant) → 200/job queued.
+
+    discovered_by matches the caller (user 1) → assert_papers_ownership short-circuits
+    the user_library lookup and the job is enqueued.
+
+    # Verified: papers_bulk.py:141 — assert_papers_ownership fast-grants caller-owned papers.
+    """
+    import jarvis_common.task_registry as task_registry
+
+    app, conn = _app
+
+    from jarvis_common.auth import get_current_user_id
+
+    app.dependency_overrides[get_current_user_id] = lambda: 1
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+    monkeypatch.setitem(task_registry._TASK_MAP, "papers.batch_process", mock_task)
+
+    # Paper discovered_by=1 (the caller) → fast-grant; no user_library query needed.
+    conn.fetch.return_value = [{"id": 42, "discovered_by": 1}]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/papers/process_batch",
+            json={"paper_ids": [42]},
+        )
+
+    assert resp.status_code == 200, (
+        f"Expected 200 for caller-owned paper in process_batch; got {resp.status_code}: {resp.text}"
+    )
+    assert "job_id" in resp.json(), f"Response must contain job_id; got: {resp.json()}"
+    mock_task.defer_async.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_extract_papers_rejects_non_owned_paper(_app, monkeypatch):
+    """POST /extractions/batch: a non-owned paper in the batch → 403.
+
+    Mirrors the process_batch test: user 1 requests batch extraction for paper 77
+    which is discovered_by=2 and not in user 1's library.  The endpoint must return
+    403 without enqueuing the extraction job.
+
+    # Verified: extractions.py:308 — assert_papers_ownership (batch) called once.
+    """
+    import jarvis_common.task_registry as task_registry
+
+    app, conn = _app
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+    monkeypatch.setitem(task_registry._TASK_MAP, "extraction.batch", mock_task)
+
+    # current_user_id_strict is already pinned to 1 by the _app fixture.
+    # First fetch: papers lookup → paper 77 discovered_by=2.
+    # Second fetch: user_library → empty.
+    conn.fetch.side_effect = [
+        [{"id": 77, "discovered_by": 2}],
+        [],
+    ]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/extractions/batch",
+            json={"paper_ids": [77], "template_id": 1},
+        )
+
+    assert resp.status_code == 403, (
+        f"Expected 403 for non-owned paper in batch_extract; got {resp.status_code}: {resp.text}"
+    )
+    mock_task.defer_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_extract_papers_accepts_owned_paper(_app, monkeypatch):
+    """POST /extractions/batch: caller-owned paper (fast-grant) → 200/job queued.
+
+    # Verified: extractions.py:308 — assert_papers_ownership fast-grants caller-owned papers.
+    """
+    import jarvis_common.task_registry as task_registry
+
+    app, conn = _app
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+    monkeypatch.setitem(task_registry._TASK_MAP, "extraction.batch", mock_task)
+
+    # discovered_by=1 matches the caller → fast-grant.
+    conn.fetch.return_value = [{"id": 55, "discovered_by": 1}]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/extractions/batch",
+            json={"paper_ids": [55], "template_id": 1},
+        )
+
+    assert resp.status_code == 200, (
+        f"Expected 200 for caller-owned paper in batch_extract; got {resp.status_code}: {resp.text}"
+    )
+    assert "job_id" in resp.json(), f"Response must contain job_id; got: {resp.json()}"
+    mock_task.defer_async.assert_awaited_once()
+
+
 # Touch unused imports so static analysers don't complain in editor environments
 _ = datetime.now(UTC)

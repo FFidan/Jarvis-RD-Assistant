@@ -179,7 +179,7 @@ async def submit_review(
                 INSERT INTO daily_log (user_id, log_date, cards_reviewed)
                 VALUES ($1, CURRENT_DATE, 1)
                 ON CONFLICT (user_id, log_date)
-                DO UPDATE SET cards_reviewed = daily_log.cards_reviewed + 1
+                DO UPDATE SET cards_reviewed = COALESCE(daily_log.cards_reviewed, 0) + 1
                 """,
                 user_id,
             )
@@ -289,7 +289,7 @@ async def sync_reviews(
                 INSERT INTO daily_log (user_id, log_date, cards_reviewed)
                 VALUES ($1, CURRENT_DATE, $2)
                 ON CONFLICT (user_id, log_date)
-                DO UPDATE SET cards_reviewed = daily_log.cards_reviewed + $2
+                DO UPDATE SET cards_reviewed = COALESCE(daily_log.cards_reviewed, 0) + $2
                 """,
                 user_id,
                 new_today,

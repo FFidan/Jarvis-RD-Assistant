@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchConfig, setConfig, zoteroTest, zoteroPollNow } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
+import { splitCron } from '@/lib/cron-utils';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,6 +50,7 @@ export function ZoteroSection() {
   const [draftUserId, setDraftUserId] = useState<string | null>(null);
   const [draftGroupId, setDraftGroupId] = useState<string | null>(null);
   const [draftPollCron, setDraftPollCron] = useState<string | null>(null);
+  const [pollCronError, setPollCronError] = useState<string | null>(null);
 
   // Test connection state
   const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
@@ -94,10 +96,19 @@ export function ZoteroSection() {
   };
 
   const handleBlurPollCron = () => {
-    if (draftPollCron !== null && draftPollCron !== pollCron) {
-      setMut.mutate({ key: 'zotero.poll_cron', value: draftPollCron });
+    if (draftPollCron !== null) {
+      try {
+        splitCron(draftPollCron);
+        setPollCronError(null);
+        if (draftPollCron !== pollCron) {
+          setMut.mutate({ key: 'zotero.poll_cron', value: draftPollCron });
+        }
+        setDraftPollCron(null);
+      } catch {
+        setPollCronError('Must be 5 space-separated fields (e.g. 0 * * * *)');
+        // keep draft visible so the user can correct it; do NOT save
+      }
     }
-    setDraftPollCron(null);
   };
 
   const handleLibraryTypeChange = (type: 'user' | 'group') => {
@@ -347,11 +358,22 @@ export function ZoteroSection() {
                     type="text"
                     placeholder="0 * * * *"
                     value={draftPollCron ?? pollCron}
-                    onChange={(e) => setDraftPollCron(e.target.value)}
+                    onChange={(e) => {
+                      setDraftPollCron(e.target.value);
+                      if (pollCronError) setPollCronError(null);
+                    }}
                     onBlur={handleBlurPollCron}
-                    className="font-mono text-sm"
+                    className={`font-mono text-sm${pollCronError ? ' border-destructive focus-visible:ring-destructive' : ''}`}
+                    aria-invalid={pollCronError !== null}
+                    aria-describedby={pollCronError ? 'zotero-poll-cron-error' : undefined}
                   />
-                  <p className="text-xs text-muted-foreground">Default: hourly (0 * * * *)</p>
+                  {pollCronError ? (
+                    <p id="zotero-poll-cron-error" className="text-xs text-destructive" role="alert">
+                      {pollCronError}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Default: hourly (0 * * * *)</p>
+                  )}
                 </div>
               )}
 
@@ -367,7 +389,7 @@ export function ZoteroSection() {
                   variant="outline"
                   size="sm"
                   onClick={handleSyncNow}
-                  disabled={isSyncing}
+                  disabled={isSyncing || pollCronError !== null}
                 >
                   {isSyncing ? (
                     <Loader2 className="h-3 w-3 mr-1 animate-spin" />

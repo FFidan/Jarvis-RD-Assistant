@@ -81,7 +81,7 @@ jobs:
     name: osv-scanner (multi-ecosystem CVE)
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Install osv-scanner v2.0.2 (prebuilt binary; no Go toolchain)
         run: |
@@ -137,11 +137,34 @@ jobs:
         run: |
           # Source versions.env to get the upstream image build-arg.
           set -a; . ./versions.env; set +a
-          docker build \
-            --build-arg LANGFUSE_BASE_IMAGE="${LANGFUSE_IMAGE}" \
-            -t smoke-langfuse-hardened:test \
-            -f langfuse/Dockerfile.langfuse \
-            langfuse/
+          # This wrapper builds FROM the upstream langfuse base on Docker Hub.
+          # Langfuse is OPTIONAL observability (OBSERVABILITY_ENABLED defaults off);
+          # the core product never needs a fresh pull. A transient Docker Hub rate
+          # limit (HTTP 429) on this external base image is an infra condition, not a
+          # code regression — so retry with backoff and SKIP (do not fail the security
+          # workflow) if Docker Hub keeps rate-limiting. The 4 core product images
+          # above still hard-gate; a genuine (non-429) wrapper build error still fails.
+          for attempt in 1 2 3; do
+            if docker build \
+                --build-arg LANGFUSE_BASE_IMAGE="${LANGFUSE_IMAGE}" \
+                -t smoke-langfuse-hardened:test \
+                -f langfuse/Dockerfile.langfuse \
+                langfuse/ 2> /tmp/langfuse_build.err; then
+              echo "langfuse hardened wrapper built OK"
+              exit 0
+            fi
+            if grep -qiE "429 Too Many Requests|toomanyrequests|rate.?limit" /tmp/langfuse_build.err; then
+              echo "::warning::Docker Hub rate-limited the langfuse base-image pull (attempt ${attempt}/3)"
+              tail -3 /tmp/langfuse_build.err || true
+              sleep $((attempt * 30))
+              continue
+            fi
+            echo "::error::langfuse hardened wrapper build failed (not a registry rate-limit)"
+            cat /tmp/langfuse_build.err
+            exit 1
+          done
+          echo "::warning::Skipping langfuse wrapper smoke — Docker Hub kept rate-limiting the optional observability base image (infra, not a code issue). Core product images built OK."
+          exit 0
 
   # ---------------------------------------------------------------------------
   # security-gate — Terminal job; can be added to ci.yml gate.needs once a

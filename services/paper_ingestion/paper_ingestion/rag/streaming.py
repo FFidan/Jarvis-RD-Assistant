@@ -187,16 +187,35 @@ async def prepare_cross_paper_rag(
     user_id:
         Caller user ID for per-tenant Qdrant scoping.  When set, every
         ``embedder.search_chunks_global`` call receives a
-        ``Filter(should=[user_id==X, is_null(user_id)])`` that restricts
-        results to chunks owned by that user **or** canonical chunks
-        (``user_id`` payload IS NULL).  Passing ``None`` disables the
-        filter (legacy / single-tenant code paths).
+        ``Filter(should=[user_id==X, is_null(user_id), paper_id IN lib])``
+        that restricts results to chunks owned by that user, canonical chunks
+        (``user_id`` payload IS NULL), **or** chunks for any paper in the
+        caller's own ``user_library`` (PI-RAG-001 — so a secondary-library
+        owner can retrieve shared-corpus papers another user embedded).
+        Passing ``None`` disables the filter (legacy / single-tenant paths).
 
     Returns a :class:`CrossPaperRagPrep` on success, or a
     :class:`CrossPaperRagNoResults` short-circuit when no relevant chunks are
     found.
     """
     with probe_span("prepare_cross_paper_rag", decompose=body.decompose):
+        # PI-RAG-001: widen the Qdrant candidate set to chunks for ANY paper in
+        # THE CALLER'S OWN library, regardless of which user embedded them.
+        # Without this, a secondary-library owner under-fetches on shared-corpus
+        # papers that another user originally processed (those chunks carry the
+        # original processor's user_id in their Qdrant payload).  The widening is
+        # keyed strictly on the caller's own user_library membership — papers not
+        # in the caller's library (e.g. another user's private upload) are never
+        # added, and the DB visibility check below stays as the backstop.
+        library_paper_ids: list[int] | None = None
+        if user_id is not None:
+            async with db_pool.acquire() as conn:
+                lib_rows = await conn.fetch(
+                    "SELECT paper_id FROM user_library WHERE user_id = $1",
+                    user_id,
+                )
+            library_paper_ids = [row["paper_id"] for row in lib_rows]
+
         # 1. Search all chunks — optionally via query decomposition
         if body.decompose:
             fast_model = get_fast_model()
@@ -210,6 +229,7 @@ async def prepare_cross_paper_rag(
                         limit=per_query_limit,
                         score_threshold=_SEARCH_SCORE_THRESHOLD,
                         user_id=user_id,
+                        library_paper_ids=library_paper_ids,
                     )
                     for sq in sub_queries
                 )
@@ -229,6 +249,7 @@ async def prepare_cross_paper_rag(
                 limit=body.max_chunks * 2,
                 score_threshold=_SEARCH_SCORE_THRESHOLD,
                 user_id=user_id,
+                library_paper_ids=library_paper_ids,
             )
 
         if not all_chunks:

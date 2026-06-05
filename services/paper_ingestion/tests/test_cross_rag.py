@@ -45,14 +45,21 @@ async def test_dedup_max_chunks_per_paper():
     # rerank_chunks passes through unchanged (identity slice).
     mock_embedder.rerank_chunks = AsyncMock(side_effect=lambda q, c, top_k: c[:top_k])
 
-    # DB mock: return metadata for paper_ids 1 and 2 only (paper 3 would be dropped
-    # before the DB fetch anyway, but simulating the metadata shape faithfully).
+    # DB mock: route by query.  The user_library lookup (PI-RAG-001) returns the
+    # caller's library paper_ids; the metadata fetch returns paper rows.  paper 3
+    # would be dropped before the DB fetch anyway, but the metadata shape is
+    # simulated faithfully.
     db_rows = [
         {"id": 1, "title": "Paper One", "authors": "A", "url": "http://p1"},
         {"id": 2, "title": "Paper Two", "authors": "B", "url": "http://p2"},
     ]
+    library_rows = [{"paper_id": 1}, {"paper_id": 2}, {"paper_id": 3}]
+
+    async def _fetch(sql, *args):  # noqa: ARG001
+        return library_rows if "user_library WHERE user_id" in sql else db_rows
+
     conn = AsyncMock()
-    conn.fetch = AsyncMock(return_value=db_rows)
+    conn.fetch = AsyncMock(side_effect=_fetch)
     db_pool = MagicMock()
     db_pool.acquire.return_value.__aenter__.return_value = conn
 
@@ -81,6 +88,94 @@ async def test_dedup_max_chunks_per_paper():
     chunk_counts = Counter(s["paper_id"] for s in result.sources)
     for pid, count in chunk_counts.items():
         assert count <= 2, f"Paper {pid} contributed {count} chunks — dedup cap is 2"
+
+
+# ---------------------------------------------------------------------------
+# PI-RAG-001: cross-paper RAG scope widen — filter-construction proof
+#
+# A secondary-library owner (caller B) must be able to retrieve chunks for a
+# SHARED-corpus paper P that another user (A) originally embedded (P's chunks
+# carry user_id=A in their Qdrant payload), because P is in B's user_library.
+# The widening adds a third `should` branch: paper_id IN <B's library>.
+#
+# SECURITY INVARIANT (non-negotiable): the widening is keyed ONLY on the
+# caller's own library membership.  A paper Q private to A (in A's library,
+# NOT B's) must NEVER appear in the widened branch for caller B.
+# ---------------------------------------------------------------------------
+
+
+def test_user_scope_filter_widens_to_callers_library_only():
+    """`_user_scope_filter(B, library_paper_ids)` adds a paper_id IN-branch.
+
+    Revert-proof: if the widening is dropped, the third `should` branch
+    disappears and the P-membership assertion fails.  If the widening ever
+    keyed on something other than the supplied (caller's-own) library list,
+    Q (not supplied) would leak into the branch and the negative assertion
+    fails.
+    """
+    from qdrant_client.models import FieldCondition, MatchAny, MatchValue
+
+    from paper_ingestion.ingestion.embedding_config import _user_scope_filter
+
+    caller_b = 2
+    shared_paper_p = 100  # in B's library (A processed it; chunks payload user_id=A)
+    private_paper_q = 200  # in A's library ONLY — must NOT enter B's widened branch
+
+    # B's library contains only P (NOT Q).
+    flt = _user_scope_filter(caller_b, library_paper_ids=[shared_paper_p])
+    assert flt is not None
+
+    user_id_branches = [
+        c
+        for c in flt.should
+        if getattr(c, "key", None) == "user_id"
+        and isinstance(getattr(c, "match", None), MatchValue)
+    ]
+    assert any(c.match.value == caller_b for c in user_id_branches), (
+        "base scope must still match the caller's own user_id"
+    )
+
+    paper_id_branches = [
+        c
+        for c in flt.should
+        if isinstance(c, FieldCondition)
+        and c.key == "paper_id"
+        and isinstance(getattr(c, "match", None), MatchAny)
+    ]
+    assert len(paper_id_branches) == 1, (
+        "widening must add exactly one paper_id MatchAny `should` branch"
+    )
+    widened_ids = set(paper_id_branches[0].match.any)
+    assert shared_paper_p in widened_ids, (
+        "P (in B's library) MUST be in the widened branch — else B under-fetches"
+    )
+    assert private_paper_q not in widened_ids, (
+        "Q (NOT in B's library) MUST NOT be in B's widened branch — leak guard"
+    )
+
+
+def test_user_scope_filter_no_widening_without_library_ids():
+    """No paper_id `should` branch is added when library_paper_ids is absent/empty.
+
+    Preserves the legacy (user_id==X OR is_null) base scope and the
+    single-tenant `None` path.
+    """
+    from qdrant_client.models import FieldCondition, MatchAny
+
+    from paper_ingestion.ingestion.embedding_config import _user_scope_filter
+
+    # Unscoped (single-tenant) path unchanged.
+    assert _user_scope_filter(None) is None
+
+    for lib in (None, []):
+        flt = _user_scope_filter(5, library_paper_ids=lib)
+        assert flt is not None
+        assert not any(
+            isinstance(c, FieldCondition)
+            and c.key == "paper_id"
+            and isinstance(getattr(c, "match", None), MatchAny)
+            for c in flt.should
+        ), "no widening branch should exist without library_paper_ids"
 
 
 # ---------------------------------------------------------------------------

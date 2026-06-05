@@ -40,10 +40,11 @@ async def list_feed_papers(
     ),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    q: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=500),
     statuses: str | None = Query(default=None, max_length=500),
     source_types: str | None = Query(default=None, max_length=500),
     topic_names: str | None = Query(default=None, max_length=500),
+    topic_id: int | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     recommended: bool = False,
@@ -80,6 +81,8 @@ async def list_feed_papers(
         Comma-separated list of source types (e.g. ``arxiv,semantic_scholar``).
     topic_names : str, optional
         Comma-separated list of topic names.
+    topic_id : int, optional
+        Restrict to papers tagged with this topic id (via ``paper_topics``).
     date_from, date_to : date, optional
         Created-at date range boundaries.
     include_zotero_notes : bool
@@ -111,6 +114,7 @@ async def list_feed_papers(
         statuses=statuses,
         source_types=source_types,
         topic_names=topic_names,
+        topic_id=topic_id,
         date_from=date_from,
         date_to=date_to,
         recommended=recommended,

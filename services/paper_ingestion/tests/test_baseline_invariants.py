@@ -482,8 +482,10 @@ async def test_baseline_jsonb_columns_are_jsonb_and_roundtrip_object(
 # exclusion is SET NULL, not CASCADE).
 # ---------------------------------------------------------------------------
 
-# The 17 owned-data tables 080 flips to ON DELETE CASCADE — papers is NOT here.
+# The 18 owned-data tables with ON DELETE CASCADE — papers is NOT here.
+# paper_entities was SET NULL until migration 0095 (DB-01 fix); added here then.
 _INV080_CASCADE_TABLES: tuple[str, ...] = (
+    "paper_entities",
     "paper_notes",
     "paper_summaries",
     "paper_chunks",
@@ -523,11 +525,12 @@ async def _fk_delete_rule(conn: asyncpg.Connection, table: str, constraint: str)
 async def test_baseline_owned_data_cascades_on_user_delete(
     baseline_conn: asyncpg.Connection,
 ) -> None:
-    """All 16 owned-data tables FK users(id) ON DELETE CASCADE; papers'
+    """All 18 owned-data tables FK users(id) ON DELETE CASCADE; papers'
     discovered_by FK is explicitly SET NULL (shared/system papers survive a
     user deletion under the canonical-corpus model). author_alert_log was
     removed from this set when its user_id FK was flipped to SET NULL by
-    the 0091 fold-in (per-user dedupe; rows are not user-owned data)."""
+    the 0091 fold-in (per-user dedupe; rows are not user-owned data).
+    paper_entities added by migration 0095 (DB-01 fix)."""
     conn = baseline_conn
     for table in _INV080_CASCADE_TABLES:
         rule = await _fk_delete_rule(conn, table, f"{table}_user_id_fkey")
@@ -638,26 +641,28 @@ async def test_baseline_project_questions_cascades_on_user_delete(
 
 
 # ---------------------------------------------------------------------------
-# Invariant 082 — the FK-gap tables: 6 ON DELETE CASCADE, pulse_models SET NULL.
+# Invariant 082 — the FK-gap tables: 7 ON DELETE CASCADE (pulse_models flipped to CASCADE by 0095).
 # Re-homed from: test_migration_082.py:120-281 (live).
 # Re-home form: schema-introspection (FK delete_rule).
 # ---------------------------------------------------------------------------
 
 _INV082_CASCADE_TABLES: tuple[str, ...] = (
     "pulse_decks",
+    "pulse_models",
     "recommendation_feedback",
     "source_health",
     "source_run_history",
     "daily_intent",
     "journal_entries",
 )
-_INV082_SET_NULL_TABLES: tuple[str, ...] = ("pulse_models",)
+# pulse_models was SET NULL until migration 0095 (DB-02 fix); moved to CASCADE above.
+_INV082_SET_NULL_TABLES: tuple[str, ...] = ()
 
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_baseline_fk_gap_tables_delete_rules(baseline_conn: asyncpg.Connection) -> None:
-    """The 7 FK-gap tables migration 082 closed: 6 CASCADE, pulse_models
-    SET NULL (pulse_models NULL user = shared/system model)."""
+    """The FK-gap tables migration 082 closed: all 7 CASCADE.
+    pulse_models was SET NULL pre-0095; migration 0095 flips it to CASCADE (DB-02)."""
     conn = baseline_conn
     for table in _INV082_CASCADE_TABLES:
         rule = await _fk_delete_rule(conn, table, f"{table}_user_id_fkey")
@@ -665,6 +670,141 @@ async def test_baseline_fk_gap_tables_delete_rules(baseline_conn: asyncpg.Connec
     for table in _INV082_SET_NULL_TABLES:
         rule = await _fk_delete_rule(conn, table, f"{table}_user_id_fkey")
         assert rule == "SET NULL", f"{table}: expected ON DELETE SET NULL, got {rule!r}"
+
+
+# ---------------------------------------------------------------------------
+# Invariant 0095 — GDPR purge cascade: multi-row DELETE FROM users must not
+# collide on UNIQUE NULLS NOT DISTINCT / COALESCE constraints in paper_entities
+# and pulse_models (DB-01 + DB-02).
+# Pre-fix: SET NULL FK collapsed two user rows to (paper_id, entity_id, NULL)
+# violating the UNIQUE NULLS NOT DISTINCT constraint → whole batch aborted.
+# Post-fix (CASCADE): user rows are deleted outright, no NULL collision.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_0095_paper_entities_multi_user_purge_no_collision(
+    baseline_conn: asyncpg.Connection,
+) -> None:
+    """Multi-row DELETE FROM users must cascade-remove paper_entities rows
+    without raising UniqueViolationError.
+
+    Pre-0095 (SET NULL): both rows collapse to (paper_id, entity_id, NULL),
+    violating paper_entities_paper_entity_user_key UNIQUE NULLS NOT DISTINCT.
+    Post-0095 (CASCADE): the rows are deleted, not nullified — no collision.
+    The NULL-owner row (shared/legacy) must survive the purge.
+
+    Mutations are wrapped in a savepoint rolled back at the end so the
+    baseline_conn shared fixture is left clean.
+    """
+    conn = baseline_conn
+    tr = conn.transaction()
+    await tr.start()
+    try:
+        paper_id = await conn.fetchval(
+            "INSERT INTO papers (external_id, source_type, title, authors, url) "
+            "VALUES ('0095-pe-purge', 'arxiv', 'Purge Test', ARRAY['T'], "
+            "'https://example.test') RETURNING id"
+        )
+        entity_id = await conn.fetchval(
+            "INSERT INTO entities (name, canonical_name, entity_type) "
+            "VALUES ('PurgeEnt', 'purgeent', 'concept') RETURNING id"
+        )
+        uid_a = await conn.fetchval(
+            "INSERT INTO users (email, role) VALUES ('0095-pe-a@example.com', 'user') RETURNING id"
+        )
+        uid_b = await conn.fetchval(
+            "INSERT INTO users (email, role) VALUES ('0095-pe-b@example.com', 'user') RETURNING id"
+        )
+        # Two per-user rows sharing the same (paper_id, entity_id)
+        await conn.execute(
+            "INSERT INTO paper_entities (paper_id, entity_id, user_id) VALUES ($1, $2, $3)",
+            paper_id,
+            entity_id,
+            uid_a,
+        )
+        await conn.execute(
+            "INSERT INTO paper_entities (paper_id, entity_id, user_id) VALUES ($1, $2, $3)",
+            paper_id,
+            entity_id,
+            uid_b,
+        )
+        # A NULL-owner row (shared/legacy) — must survive the purge
+        await conn.execute(
+            "INSERT INTO paper_entities (paper_id, entity_id, user_id) VALUES ($1, $2, NULL)",
+            paper_id,
+            entity_id,
+        )
+
+        # Pre-fix: this DELETE raised UniqueViolationError (SET NULL collision).
+        # Post-fix: CASCADE removes the two per-user rows silently.
+        await conn.execute("DELETE FROM users WHERE id = ANY($1)", [uid_a, uid_b])
+
+        per_user_count = await conn.fetchval(
+            "SELECT count(*) FROM paper_entities WHERE user_id = ANY($1)", [uid_a, uid_b]
+        )
+        assert per_user_count == 0, (
+            f"CASCADE must remove per-user paper_entities rows; {per_user_count} remain"
+        )
+        null_count = await conn.fetchval(
+            "SELECT count(*) FROM paper_entities "
+            "WHERE paper_id = $1 AND entity_id = $2 AND user_id IS NULL",
+            paper_id,
+            entity_id,
+        )
+        assert null_count == 1, (
+            f"NULL-owner paper_entities row must survive user deletion; got {null_count}"
+        )
+    finally:
+        await tr.rollback()
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_0095_pulse_models_multi_user_purge_no_collision(
+    baseline_conn: asyncpg.Connection,
+) -> None:
+    """Multi-row DELETE FROM users must cascade-remove pulse_models rows
+    without raising a unique constraint error on COALESCE(user_id, 0).
+
+    Pre-0095 (SET NULL): two active-model rows both collapse to user_id=NULL,
+    colliding on uq_pulse_models_one_active_per_user (COALESCE(user_id,0)
+    WHERE is_active=true).
+    Post-0095 (CASCADE): both rows are deleted outright — no collision.
+
+    Mutations are wrapped in a savepoint rolled back at the end.
+    """
+    conn = baseline_conn
+    tr = conn.transaction()
+    await tr.start()
+    try:
+        uid_a = await conn.fetchval(
+            "INSERT INTO users (email, role) VALUES ('0095-pm-a@example.com', 'user') RETURNING id"
+        )
+        uid_b = await conn.fetchval(
+            "INSERT INTO users (email, role) VALUES ('0095-pm-b@example.com', 'user') RETURNING id"
+        )
+        # One active model per user — pre-fix these would both collapse to user_id=NULL
+        await conn.execute(
+            "INSERT INTO pulse_models (user_id, model_blob, is_active) "
+            "VALUES ($1, '\\x01'::bytea, true)",
+            uid_a,
+        )
+        await conn.execute(
+            "INSERT INTO pulse_models (user_id, model_blob, is_active) "
+            "VALUES ($1, '\\x02'::bytea, true)",
+            uid_b,
+        )
+
+        # Pre-fix: this DELETE raised a unique violation on the COALESCE index.
+        # Post-fix: CASCADE removes both rows silently.
+        await conn.execute("DELETE FROM users WHERE id = ANY($1)", [uid_a, uid_b])
+
+        remaining = await conn.fetchval(
+            "SELECT count(*) FROM pulse_models WHERE user_id = ANY($1)", [uid_a, uid_b]
+        )
+        assert remaining == 0, f"CASCADE must remove per-user pulse_models rows; {remaining} remain"
+    finally:
+        await tr.rollback()
 
 
 # ---------------------------------------------------------------------------

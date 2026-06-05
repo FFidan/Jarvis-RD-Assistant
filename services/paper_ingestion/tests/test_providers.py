@@ -15,6 +15,7 @@ import respx
 from cryptography.fernet import Fernet
 from httpx import ASGITransport
 from jarvis_common.crypto import refresh_fernet_cache
+from jarvis_common.testing import RoleMiddleware
 
 from tests.conftest import _make_pool_and_conn
 
@@ -69,9 +70,15 @@ def _app():
 # ---------------------------------------------------------------------------
 
 
-async def _put_config(app, key: str, value):
+async def _put_config(app, key: str, value, *, role: str | None = None):
+    """PUT /api/config/{key}.
+
+    Pass *role* (e.g. ``"admin"``) to simulate a browser session with that role —
+    required for SYSTEM_KEYS (e.g. cloud LLM api_key) that enforce the admin gate.
+    """
+    transport_app = RoleMiddleware(app, role) if role is not None else app
     async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=transport_app), base_url="http://test"
     ) as client:
         return await client.put(f"/api/config/{key}", json={"key": key, "value": value})
 
@@ -98,10 +105,16 @@ async def _post_provider_test(app, provider: str):
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fernet_key")
 async def test_set_encrypted_key_writes_bytea(_app):
-    """PUT /api/config/llm.anthropic.api_key writes encrypted_value BYTEA, not plaintext."""
+    """PUT /api/config/llm.anthropic.api_key writes encrypted_value BYTEA, not plaintext.
+
+    llm.anthropic.api_key is a SYSTEM_KEY (deployment-wide, admin-only write).
+    The route enforces require_admin; this test simulates an admin browser session
+    via RoleMiddleware and asserts the DB row is written with user_id=NULL (system scope).
+    """
     app, conn = _app
 
-    resp = await _put_config(app, "llm.anthropic.api_key", "sk-ant-test123")
+    # SYSTEM_KEY: requires admin session — simulate via RoleMiddleware.
+    resp = await _put_config(app, "llm.anthropic.api_key", "sk-ant-test123", role="admin")
 
     assert resp.status_code == 200
     body = resp.json()
@@ -118,25 +131,39 @@ async def test_set_encrypted_key_writes_bytea(_app):
     call_args = conn.execute.call_args_list[0]
     sql = call_args.args[0]
     assert "encrypted_value" in sql
-    # The ciphertext passed to the driver should be bytes
+    # SYSTEM_KEY: user_id ($1) must be NULL — write is system-scoped, not user-scoped.
+    assert call_args.args[1] is None, (
+        "llm.anthropic.api_key is a SYSTEM_KEY: DB row must be written with user_id=NULL"
+    )
+    # The key passed as $2 must be the config key
+    assert call_args.args[2] == "llm.anthropic.api_key"
+    # The ciphertext passed as $3 must be bytes
     ciphertext_arg = call_args.args[3]
     assert isinstance(ciphertext_arg, bytes)
-    # Sanity-check: value column is cleared (NULL passed as None)
-    assert call_args.args[2] == "llm.anthropic.api_key"
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fernet_key")
 async def test_set_encrypted_key_does_not_store_plaintext(_app):
-    """PUT /api/config/llm.openai.api_key does not pass the raw key to asyncpg."""
+    """PUT /api/config/llm.openai.api_key does not pass the raw key to asyncpg.
+
+    llm.openai.api_key is a SYSTEM_KEY: requires admin session via RoleMiddleware.
+    Asserts plaintext is never forwarded to the DB driver and the write is system-scoped
+    (user_id=NULL).
+    """
     app, conn = _app
 
     plaintext = "sk-openai-secret"
-    await _put_config(app, "llm.openai.api_key", plaintext)
+    # SYSTEM_KEY: requires admin session — simulate via RoleMiddleware.
+    await _put_config(app, "llm.openai.api_key", plaintext, role="admin")
 
     conn.execute.assert_awaited()
     # Use call_args_list[0]: the first call is always the UPSERT (not the log_event INSERT).
     call_args = conn.execute.call_args_list[0]
+    # SYSTEM_KEY: user_id ($1) must be NULL — write is system-scoped, not user-scoped.
+    assert call_args.args[1] is None, (
+        "llm.openai.api_key is a SYSTEM_KEY: DB row must be written with user_id=NULL"
+    )
     # The plaintext should not appear in any argument
     for arg in call_args.args:
         if isinstance(arg, str | bytes):

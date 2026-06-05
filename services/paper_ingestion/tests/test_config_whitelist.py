@@ -3,6 +3,7 @@
 import pytest
 from paper_ingestion.services.config_metadata import (
     _ALLOWED_CONFIG_KEYS,
+    PERSONAL_KEYS,
     SYSTEM_KEYS,
     _classify_config_key,
 )
@@ -216,3 +217,32 @@ def test_fsrs_learning_steps_zero_element_rejected():
     """Zero is not a valid step duration — must be rejected."""
     with pytest.raises(ValueError):
         _validate_fsrs_learning_steps([0])
+
+
+# --- PI-CFG-01: cloud LLM api keys must be system-scoped (admin-only write) ---
+
+_CLOUD_LLM_API_KEYS = {
+    "llm.anthropic.api_key",
+    "llm.openai.api_key",
+    "llm.google.api_key",
+}
+
+
+@pytest.mark.parametrize("key", sorted(_CLOUD_LLM_API_KEYS))
+def test_cloud_llm_api_key_in_system_keys(key: str):
+    """Cloud LLM API keys must be in SYSTEM_KEYS (deployment-wide, admin-only write)."""
+    assert key in SYSTEM_KEYS, f"{key!r} must be in SYSTEM_KEYS"
+
+
+@pytest.mark.parametrize("key", sorted(_CLOUD_LLM_API_KEYS))
+def test_cloud_llm_api_key_not_in_personal_keys(key: str):
+    """Cloud LLM API keys must NOT be in PERSONAL_KEYS — they are read WHERE user_id IS NULL."""
+    assert key not in PERSONAL_KEYS, f"{key!r} must NOT be in PERSONAL_KEYS"
+
+
+@pytest.mark.parametrize("key", sorted(_CLOUD_LLM_API_KEYS))
+def test_cloud_llm_api_key_classify_returns_system(key: str):
+    """_classify_config_key must return 'system' for all cloud LLM API keys."""
+    assert _classify_config_key(key) == "system", (
+        f"_classify_config_key({key!r}) returned {_classify_config_key(key)!r}, expected 'system'"
+    )

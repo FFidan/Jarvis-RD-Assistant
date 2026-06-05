@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from jarvis_common.jobs import JobError
+from jarvis_common.library import add_to_library
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.pdf_processor import MAX_PDF_SIZE, PDF_STORAGE_PATH
@@ -16,8 +17,23 @@ from paper_ingestion.pdf_processor import MAX_PDF_SIZE, PDF_STORAGE_PATH
 LOCAL_PDF_SCAN_DIR = get_paper_ingestion_settings().local_pdf_scan_dir
 
 
-async def scan_local_pdf_directory(db_pool: Any, *, scan_dir: str | None = None) -> dict[str, int]:
+async def scan_local_pdf_directory(
+    db_pool: Any,
+    *,
+    user_id: int | None = None,
+    scan_dir: str | None = None,
+) -> dict[str, int]:
     """Scan the local PDF drop directory and import new valid PDFs.
+
+    Parameters
+    ----------
+    db_pool:
+        asyncpg Pool used for all DB operations.
+    user_id:
+        When provided, newly imported papers are attributed to this user
+        (``discovered_by``) and added to their library (``user_library``).
+    scan_dir:
+        Override the configured scan directory (used in tests).
 
     Returns a summary dict with ``scanned``, ``imported``, and ``skipped``.
     Raises ``JobError`` when the configured directory does not exist so the
@@ -82,8 +98,8 @@ async def scan_local_pdf_directory(db_pool: Any, *, scan_dir: str | None = None)
                     row = await file_conn.fetchrow(
                         """
                         INSERT INTO papers (external_id, source_type, title, authors, abstract,
-                                            url, metadata, discovery_origin)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, 'user_initiated')
+                                            url, metadata, discovered_by, discovery_origin)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'user_initiated')
                         RETURNING *
                         """,
                         external_id,
@@ -93,8 +109,16 @@ async def scan_local_pdf_directory(db_pool: Any, *, scan_dir: str | None = None)
                         None,
                         f"local://{file_hash}",
                         {},
+                        user_id,
                     )
                     paper_id = row["id"]
+                    if user_id is not None:
+                        await add_to_library(
+                            file_conn,
+                            user_id=user_id,
+                            paper_id=paper_id,
+                            added_via="manual_save",
+                        )
                     final_path = storage_path / f"{paper_id}.pdf"
                     dest_path.rename(final_path)
                     dest_path = final_path

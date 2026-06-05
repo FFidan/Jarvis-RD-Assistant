@@ -370,8 +370,13 @@ async def _papers_scan_local_job(
     """Scan the local PDF drop directory and import new PDFs."""
     from paper_ingestion.services.local_pdfs import scan_local_pdf_directory
 
+    user_id: int | None = payload.get("user_id")
     await ctx.update_progress(0.05, "Scanning local PDF directory")
-    result = await scan_local_pdf_directory(pool, scan_dir=payload.get("scan_dir"))
+    result = await scan_local_pdf_directory(
+        pool,
+        user_id=user_id,
+        scan_dir=payload.get("scan_dir"),
+    )
     await ctx.update_progress(1.0, "Done")
     return result
 

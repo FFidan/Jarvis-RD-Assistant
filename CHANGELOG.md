@@ -5,6 +5,43 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Upgrade Notes
+
+- **Cloud LLM API keys must be re-entered.** API keys for cloud LLM providers
+  (e.g. OpenAI, Anthropic) that were set via the Settings UI before this release
+  must be re-entered by an admin — they are now stored deployment-wide
+  (system-scoped) rather than per-user.
+
+### Security
+
+- **Per-user tenant isolation** (migration 0094): all source API keys, LLM
+  provider keys, and Zotero credentials are now strictly scoped per user.
+  Extractions, entity records, and Zotero sync are stamped and filtered by
+  `user_id`. Cross-user visibility of these records is no longer possible.
+- **Cloud LLM provider keys are now system-scoped and admin-gated.** Keys for
+  cloud providers (OpenAI, Anthropic, etc.) are stored at the deployment level
+  and may only be configured by an admin.
+- **SMTP-SSRF hardening.** The SMTP host is validated against a blocklist of
+  non-public address ranges at both save and send time. An
+  `ALLOW_PRIVATE_SMTP_HOST` escape-hatch env var is available for on-premises
+  mail servers.
+- **Credential/auth hardening.** Telegram `bot_token` is now Fernet-encrypted
+  at rest. Advisory locks guard concurrent authentication flows. Admin and setup
+  log entries hash email addresses before writing to the log.
+- **Source API keys (S2/OpenAlex/PubMed) encrypted at rest.** All per-user
+  source credentials are stored encrypted via the existing MultiFernet scheme.
+- **PubMed/OpenAlex author-parameter injection hardened.** Author search
+  parameters are validated and sanitised before reaching the upstream API.
+- **PDF-download SSRF filter blocks CGNAT.** The URL pre-flight check now
+  rejects CGNAT and other non-routable ranges in addition to RFC-1918 space.
+- **Rate-limiter ignores malformed X-Forwarded-For hops.** Invalid IP tokens in
+  the XFF header are silently skipped instead of causing a 500.
+- **`/infra-events` rejects oversize request bodies.** A hard body-size limit is
+  enforced on the infrastructure-event endpoint.
+- **Telegram base-URL scheme validation.** The configured Telegram API base URL
+  must use an `http(s)://` scheme; other schemes (e.g. `javascript:`) are
+  rejected at config load to prevent XSS / open-redirect via digest links.
+
 ### Changed
 
 - **Unified onboarding wizard.** The former two-wizard flow (pre-auth `/first-run` + post-login `/setup`) has been replaced by a single **Onboarding Wizard** gated by the pre-auth `/api/setup/status` endpoint. The wizard spans the auth boundary internally: it walks system check → SMTP → admin account creation & sign-in → cloud LLM keys → first topic → automation schedule → source API keys → Telegram pairing → done. Old `/first-run` and `/setup` deep links redirect to `/`. The admin-create step is skipped when an admin already exists (resuming setup).
@@ -13,21 +50,40 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **GDPR purge succeeds in multi-user deployments** (migration 0095):
+  `paper_entities` and `pulse_models` now cascade on user delete, so a
+  user-deletion request can no longer fail permanently due to a foreign-key
+  constraint.
+- **Topic facet filters the research feed.** Clicking a topic facet in the
+  Research view now correctly narrows the paper feed; previously it highlighted
+  but did not filter.
+- **GDPR export includes per-user extractions and entities.** The data-export
+  package now contains the logged-in user's paper extractions and entity rows.
+- **`daily_log` analytics no longer NULL-breaks.** Aggregate queries over the
+  daily log table are guarded against NULL entries that previously caused 500
+  errors in analytics.
+- **Batch-save skips re-analysis of already-processed papers.** Saving a paper
+  that already has a completed analysis no longer enqueues a redundant
+  `paper.analyze` job.
+- **Local-PDF scan attributes papers to the scanning user.** Papers discovered
+  via local-PDF scan are now owned by the user who initiated the scan rather
+  than being left NULL-owned.
+- **Cross-paper RAG retrieves the caller's full library.** The retrieval step in
+  multi-paper Q&A now correctly searches the requesting user's entire saved
+  library rather than a subset.
+- Assorted frontend validation hardening and dead-code cleanup.
+- Source-layer `Retry-After` handling and fetch-recording de-duplicated across
+  arXiv, Semantic Scholar, OpenAlex, and PubMed source adapters.
 - **Models-ready false negative (SYSCHECK-01).** The onboarding wizard's system check no longer requires a hardcoded `qwen3:14b` model. "Models ready" now means: the embedder is present (any model matching the configured embedding model prefix, e.g. `qwen3-embedding:*`) AND at least one `qwen3:` chat model is present (`qwen3:4b`, `qwen3:8b`, or `qwen3:14b`). The default install (`setup.sh` → `qwen3:8b` + `qwen3-embedding:4b`) correctly reports ready. The check also distinguishes "still pulling" from "Ollama unreachable".
-
 - **Pomodoro auto-start from stale persisted timer (POMO-01).** A Pomodoro session that was still running when the browser closed no longer auto-starts on the next page load. The timer state is correctly treated as stale across sessions.
-
 - **Cross-user Pomodoro / dismissed-flag state leak.** Timer and dismissed-flag state no longer leaks between users on a shared browser.
-
 - **My Day — calm empty state for the Pulse hero card (RED-ERROR-EMPTY-STATE).** When no Pulse deck exists yet, the My Day Pulse hero card shows a calm "No Pulse for today yet — generate one" call-to-action instead of a red error panel. Red error UI is reserved for genuine backend failures.
-
 - **Mobile responsive fixes.** Projects rail, admin tables, analytics KPI band, mobile facet drawer, TopBar, My Day layout, and the chat surface are now correctly laid out on narrow viewports.
-
 - **Logs preset filters restored on load.** The Logs page preset now re-applies its filter selections when the page is loaded or navigated to.
 
 ---
 
-## v0.5.0 (2026-06-02)
+## v0.5.1 (2026-06-02)
 
 ### Changed / Breaking
 

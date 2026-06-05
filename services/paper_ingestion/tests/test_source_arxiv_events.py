@@ -169,7 +169,7 @@ async def test_source_emits_event_on_success(source_name, make_source, module, s
         patch(
             "paper_ingestion.sources.base.PersistentSourceRateLimiter", return_value=mock_limiter
         ),
-        patch(f"{module}.log_event", side_effect=_capture),
+        patch("paper_ingestion.sources.base.log_event", side_effect=_capture),
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
 
@@ -226,7 +226,7 @@ async def test_arxiv_emits_source_event_on_rate_limit(monkeypatch):
             "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
-        patch("paper_ingestion.sources.arxiv_source.log_event", side_effect=_capture),
+        patch("paper_ingestion.sources.base.log_event", side_effect=_capture),
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
 
@@ -292,7 +292,7 @@ async def test_source_emits_event_on_rate_limit(
         patch(
             "paper_ingestion.sources.base.PersistentSourceRateLimiter", return_value=mock_limiter
         ),
-        patch(f"{module}.log_event", side_effect=_capture),
+        patch("paper_ingestion.sources.base.log_event", side_effect=_capture),
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
 
@@ -337,7 +337,7 @@ async def test_arxiv_emits_source_event_on_http_error():
             "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
-        patch("paper_ingestion.sources.arxiv_source.log_event", side_effect=_capture),
+        patch("paper_ingestion.sources.base.log_event", side_effect=_capture),
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
 
@@ -389,7 +389,7 @@ async def test_arxiv_emits_rate_limited_event_on_429_then_connect_error(monkeypa
             "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
-        patch("paper_ingestion.sources.arxiv_source.log_event", side_effect=_capture),
+        patch("paper_ingestion.sources.base.log_event", side_effect=_capture),
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
 
@@ -449,7 +449,7 @@ async def test_source_emits_event_on_http_error(source_name, make_source, module
         patch(
             "paper_ingestion.sources.base.PersistentSourceRateLimiter", return_value=mock_limiter
         ),
-        patch(f"{module}.log_event", side_effect=_capture),
+        patch("paper_ingestion.sources.base.log_event", side_effect=_capture),
     ):
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
 
@@ -506,7 +506,7 @@ async def test_source_no_log_event_without_pool(make_source, module, setup_mock)
     since = datetime(2026, 4, 1, 0, 0, 0, tzinfo=UTC)
     topics = [_make_topic("neural ODE")]
 
-    with patch(f"{module}.log_event", new_callable=AsyncMock) as mock_log:
+    with patch("paper_ingestion.sources.base.log_event", new_callable=AsyncMock) as mock_log:
         papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
 
     mock_log.assert_not_called()

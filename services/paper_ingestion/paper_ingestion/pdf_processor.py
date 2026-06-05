@@ -43,6 +43,10 @@ SNAPSHOT_DPI = 150
 MAX_PDF_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_PDF_PAGES = 500  # Reject PDFs with excessive page counts (anti-bomb)
 
+# CGNAT shared address space (RFC 6598) — not reachable from the public internet
+# but not flagged by ip.is_private/is_reserved on all Python versions.
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
 # Sentinel: resolve the live module-level PDF_STORAGE_PATH at call time rather
 # than freezing it as a default-arg value (keeps monkeypatch.setattr working).
 _STORAGE_DEFAULT = object()
@@ -196,7 +200,7 @@ async def _validate_pdf_url(url: str) -> None:
 
     for family, _type, _proto, _canonname, sockaddr in addr_info:
         ip = ipaddress.ip_address(sockaddr[0])
-        if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
+        if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local or ip in _CGNAT:
             raise ValueError(f"URL resolves to private/reserved IP: {ip}")
 
     # NOTE: DNS rebinding is mitigated by the narrow ALLOWED_PDF_DOMAINS allowlist
@@ -297,6 +301,10 @@ class PDFProcessor:
                 await asyncio.to_thread(_write_pdf_chunk, pdf_path, data)
 
         bytes_written = total_size
+
+        if bytes_written == 0:
+            pdf_path.unlink(missing_ok=True)
+            raise ValueError("PDF download resulted in 0 bytes")
 
         logger.info(
             "Downloaded PDF for paper %d (%d bytes) to %s", paper_id, bytes_written, pdf_path

@@ -194,6 +194,9 @@ _REGISTRY: list[tuple[str, str, str, str]] = [
     (_PI, "DELETE", "/api/papers/{paper_id}/feedback", "mutate"),
     (_PI, "DELETE", "/api/papers/{paper_id}", "mutate"),
     (_PI, "GET", "/api/papers/feed/counts", "list"),
+    # FE-UIA-01: topic-facet filter must NOT widen visibility past the caller's
+    # library — topic_id is an extra AND on top of the user_library scope JOIN.
+    (_PI, "GET", "/api/papers/feed?topic_id={topic_id}", "list"),
     # --- notes (paper_ingestion) ---
     (_PI, "GET", "/api/papers/{paper_id}/notes", "byid"),
     (_PI, "POST", "/api/papers/{paper_id}/notes", "mutate"),

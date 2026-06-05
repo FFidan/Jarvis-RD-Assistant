@@ -649,3 +649,81 @@ def test_check_pdf_path_safe_default_uses_live_module_storage(
     monkeypatch.setattr(pdf_processor, "PDF_STORAGE_PATH", str(storage))
     assert check_pdf_path_safe(storage / "3.pdf") is True
     assert check_pdf_path_safe(tmp_path / "outside.pdf") is False
+
+
+# ---------------------------------------------------------------------------
+# PI-DISC-001: download_pdf zero-byte guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_zero_bytes_raises_and_unlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """download_pdf must raise ValueError and unlink the file when the stream yields zero bytes."""
+
+    async def fake_stream_bytes(chunk_size: int = 65536):  # type: ignore[override]
+        return
+        yield  # make it an async generator that yields nothing
+
+    head_response = MagicMock()
+    head_response.status_code = 200
+    head_response.raise_for_status = MagicMock()
+
+    stream_response = MagicMock()
+    stream_response.raise_for_status = MagicMock()
+    stream_response.aiter_bytes = fake_stream_bytes
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=stream_response)
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    http_client = MagicMock()
+    http_client.request = AsyncMock(return_value=head_response)
+    http_client.stream = MagicMock(return_value=stream_cm)
+
+    processor = PDFProcessor(http_client=http_client, embedder=MagicMock())
+    monkeypatch.setattr(pdf_processor, "PDF_STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(socket, "getaddrinfo", lambda h, p: _fake_getaddrinfo("151.101.1.1"))
+
+    with pytest.raises(ValueError, match="0 bytes"):
+        await processor.download_pdf("https://arxiv.org/pdf/test.pdf", paper_id=99)
+
+    # File must have been cleaned up
+    assert not (tmp_path / "99.pdf").exists()
+
+
+# ---------------------------------------------------------------------------
+# PI-DISC-005: SSRF guard — CGNAT range (100.64.0.0/10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ip",
+    [
+        "100.64.0.1",  # first usable in CGNAT range
+        "100.127.255.254",  # last usable in CGNAT range
+        "100.100.100.100",  # middle of CGNAT range
+    ],
+)
+async def test_cgnat_ip_rejected(ip: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """DNS resolving to a CGNAT IP (100.64.0.0/10) must raise ValueError."""
+
+    def fake_gai(hostname: str, port: Any) -> list[tuple[Any, ...]]:
+        return _fake_getaddrinfo(ip)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
+    with pytest.raises(ValueError, match="private/reserved|CGNAT"):
+        await _validate_pdf_url("https://arxiv.org/pdf/test.pdf")
+
+
+@pytest.mark.asyncio
+async def test_public_ip_passes_ssrf_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A regular public IP (e.g. 1.1.1.1) must pass the SSRF guard without raising."""
+
+    def fake_gai(hostname: str, port: Any) -> list[tuple[Any, ...]]:
+        return _fake_getaddrinfo("1.1.1.1")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
+    # Should not raise
+    await _validate_pdf_url("https://arxiv.org/pdf/test.pdf")

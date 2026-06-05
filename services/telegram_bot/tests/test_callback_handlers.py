@@ -1040,6 +1040,29 @@ async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
     assert headers.get("X-API-Key") == "test-key"
 
 
+@pytest.mark.asyncio
+async def test_paper_feedback_callback_uses_paired_user_identity_in_request():
+    """TG-02: paper_feedback_callback forwards the authenticated user's identity.
+
+    The assert jarvis_user_id is not None guard (post-auth-check) ensures the
+    paired user ID — not None — is threaded into _owner_headers and onward to
+    the backend.  Asserts X-Owner-User-Id equals the paired user's id.
+    """
+    update, context, _, _ = _make_paired_callback("paper:feedback_neg:55:feed_thumbs")
+    mock_http = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_resp
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    mock_http.post.assert_awaited_once()
+    headers = mock_http.post.await_args[1]["headers"]
+    # Must carry the exact paired user ID — not None, not the env chat_id.
+    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+
+
 # ---------------------------------------------------------------------------
 # TG-N2: project_detail user-scoping defense-in-depth
 #

@@ -353,12 +353,18 @@ function SmtpStep({
   // Continue stays disabled until these hold so a half-filled form can't be
   // advanced — Skip is the intentional optional-out.
   const emailValid = /^\S+@\S+\.\S+$/.test(fromEmail);
-  const canSave = !!host && emailValid;
+  // Empty port → use default 587. Non-empty port must be an integer in 1–65535.
+  const portNum = port === '' ? null : parseInt(port, 10);
+  const portError =
+    port !== '' && (Number.isNaN(portNum) || (portNum as number) < 1 || (portNum as number) > 65535)
+      ? 'Port must be a number between 1 and 65535'
+      : null;
+  const portValid = portError === null;
+  const canSave = !!host && emailValid && portValid;
   const buildBody = (testSend: boolean) => {
-    const portNum = parseInt(port, 10);
     return {
       host,
-      port: Number.isNaN(portNum) ? 587 : portNum,
+      port: portNum ?? 587,
       user: user || null,
       pass: password || null,
       from_email: fromEmail,
@@ -431,7 +437,22 @@ function SmtpStep({
         </div>
         <div>
           <Label htmlFor="smtp-port">Port</Label>
-          <Input id="smtp-port" value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" />
+          <Input
+            id="smtp-port"
+            value={port}
+            onChange={(e) => {
+              setPort(e.target.value);
+              setSavedOk(false);
+            }}
+            inputMode="numeric"
+            aria-invalid={portError !== null}
+            aria-describedby={portError ? 'smtp-port-error' : undefined}
+          />
+          {portError && (
+            <p id="smtp-port-error" className="mt-1 text-xs text-destructive">
+              {portError}
+            </p>
+          )}
         </div>
         <div>
           <Label htmlFor="smtp-user">Username</Label>

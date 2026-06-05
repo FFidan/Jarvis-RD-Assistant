@@ -298,8 +298,9 @@ export async function fetchFeed(params: {
   limit?: number;
   offset?: number;
   sourceTypes?: string | null;
+  topicId?: number | null;
 }): Promise<FeedResponse> {
-  const { view, filter, scope, limit = 30, offset = 0, sourceTypes } = params;
+  const { view, filter, scope, limit = 30, offset = 0, sourceTypes, topicId } = params;
 
   // Map (surface=library, filter=X) → backend view name. Otherwise the surface
   // value itself is already a valid backend view (inbox/library/trash overlap).
@@ -324,6 +325,9 @@ export async function fetchFeed(params: {
   searchParams.set('include_zotero_notes', 'true');
   if (sourceTypes) {
     searchParams.set('source_types', sourceTypes);
+  }
+  if (topicId != null) {
+    searchParams.set('topic_id', String(topicId));
   }
   return apiFetch<FeedResponse>(`/api/papers/feed?${searchParams.toString()}`);
 }

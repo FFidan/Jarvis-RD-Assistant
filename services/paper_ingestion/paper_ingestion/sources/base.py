@@ -16,37 +16,34 @@ if TYPE_CHECKING:
     import asyncpg
 
 import httpx
+from jarvis_common.event_log import log_event
+
+# _MAX_RETRY_AFTER_S is re-exported (canonical value lives in jarvis_common.net);
+# the redundant alias marks it as an intentional re-export so call sites can keep
+# doing `from paper_ingestion.sources.base import _MAX_RETRY_AFTER_S`.
+from jarvis_common.net import _MAX_RETRY_AFTER_S as _MAX_RETRY_AFTER_S
+from jarvis_common.net import parse_retry_after as _parse_retry_after_value
 from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, TopicRef
 
 logger = logging.getLogger(__name__)
 
-# HTTP status codes that indicate transient server/rate-limit errors.
-# Plugins return [] / None on these codes rather than raising.
-_TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
-
-# Maximum value returned by _retry_after_seconds.  Caps absurdly large
-# Retry-After header values (e.g. 99999999999) so the poller never blocks
-# for more than one hour due to a misbehaving upstream.
-_MAX_RETRY_AFTER_S: int = 3600
-
 # Module-level timestamp set at import time; used by _enforce_startup_grace.
 _STARTUP_AT: float = _time.monotonic()
 
 
 def parse_retry_after(exc: BaseException) -> int | None:
-    """Extract an integer Retry-After header from an exception's response."""
+    """Extract a whole-second Retry-After delay from an exception's response.
+
+    Delegates to :func:`jarvis_common.net.parse_retry_after`, which handles
+    both RFC 7231 forms (delta-seconds and HTTP-date) and caps the result at
+    :data:`_MAX_RETRY_AFTER_S`.
+    """
     response = getattr(exc, "response", None)
     if response is None:
         return None
-    retry_after = response.headers.get("Retry-After")
-    if retry_after is None:
-        return None
-    try:
-        return int(float(retry_after))
-    except (TypeError, ValueError):
-        return None
+    return _parse_retry_after_value(response.headers.get("Retry-After"))
 
 
 async def _enforce_startup_grace(grace_seconds: float) -> None:
@@ -154,15 +151,15 @@ class PaperSource(ABC):
 
     @staticmethod
     def _retry_after_seconds(response: httpx.Response | None) -> int | None:
+        """Whole-second Retry-After delay from a response, capped at the cap.
+
+        Delegates to :func:`jarvis_common.net.parse_retry_after`, which handles
+        both RFC 7231 forms (delta-seconds and HTTP-date) and caps at
+        :data:`_MAX_RETRY_AFTER_S`.
+        """
         if response is None:
             return None
-        retry_after = response.headers.get("Retry-After")
-        if retry_after is None:
-            return None
-        try:
-            return min(int(float(retry_after)), _MAX_RETRY_AFTER_S)
-        except (TypeError, ValueError):
-            return None
+        return _parse_retry_after_value(response.headers.get("Retry-After"))
 
     def _record_transient_poll_diagnostic(self, response: httpx.Response) -> None:
         status = "rate_limit" if response.status_code == 429 else "api_error"
@@ -177,79 +174,6 @@ class PaperSource(ABC):
             retry_after_s=self._retry_after_seconds(response),
             settings_hint=None,
         )
-
-    async def _safe_get(
-        self,
-        url: str,
-        *,
-        params: dict[str, Any] | None = None,
-        headers: dict[str, str] | None = None,
-        timeout: float = 30.0,
-    ) -> httpx.Response | None:
-        """Rate-limit-safe GET that handles transient HTTP errors gracefully.
-
-        Performs a GET request and returns the :class:`httpx.Response` on success
-        (2xx after ``raise_for_status``).  Returns ``None`` -- rather than raising
-        -- for the following error classes:
-
-        * HTTP status in ``_TRANSIENT_STATUS_CODES`` (429, 500, 502, 503, 504):
-          logged at WARNING level; indicates rate-limiting or upstream outage.
-        * :class:`httpx.HTTPError` (connection errors, timeouts, etc.):
-          logged at WARNING level.
-
-        Any other non-2xx status still raises :class:`httpx.HTTPStatusError`
-        so callers see unexpected errors (e.g. 403 Forbidden) rather than
-        silently getting ``None``.
-
-        Parameters
-        ----------
-        url : str
-            Full URL to request.
-        params : dict | None
-            Query parameters forwarded to ``httpx.AsyncClient.get``.
-        headers : dict | None
-            Extra request headers.
-        timeout : float
-            Request timeout in seconds (default 30 s).
-
-        Returns
-        -------
-        httpx.Response | None
-            Parsed response, or ``None`` on transient / network error.
-        """
-        try:
-            response = await self.http_client.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=timeout,
-            )
-            if response.status_code in _TRANSIENT_STATUS_CODES:
-                logger.warning(
-                    "%s _safe_get %s returned %d; returning None",
-                    self.source_type,
-                    url,
-                    response.status_code,
-                )
-                self._record_transient_poll_diagnostic(response)
-                return None
-            response.raise_for_status()
-            self._clear_poll_diagnostic()
-            return response
-        except httpx.HTTPError as exc:
-            logger.warning("%s _safe_get %s failed: %s", self.source_type, url, exc)
-            response = getattr(exc, "response", None)
-            if response is not None:
-                self._record_transient_poll_diagnostic(response)
-            else:
-                self._set_poll_diagnostic(
-                    status="error",
-                    message=str(exc),
-                    status_code=None,
-                    retry_after_s=None,
-                    settings_hint=None,
-                )
-            return None
 
     @abstractmethod
     async def search(
@@ -343,6 +267,94 @@ class PaperSource(ABC):
                 exc,
                 exc_info=True,
             )
+
+    async def _record_fetch_outcome(
+        self,
+        *,
+        started_at: float,
+        candidate_count: int,
+        user_id: int | None,
+        status: str,
+        p_limiter: "PersistentSourceRateLimiter | None",
+        log_level: str,
+        log_message: str,
+        log_context: dict[str, Any],
+        retry_after_s: int | None = None,
+    ) -> None:
+        """Record the terminal outcome of one ``fetch_new_since`` attempt.
+
+        Consolidates the three side effects every ``fetch_new_since``
+        implementation performs on each of its success / rate-limit / error
+        paths, in this exact order:
+
+        1. ``p_limiter.update_last_request(status[, retry_after_s])`` — advances
+           the persistent rate-limiter slot (skipped when ``p_limiter`` is
+           ``None``).  ``retry_after_s`` is forwarded only when provided.
+        2. :meth:`_insert_run_history` — writes the ``source_run_history`` audit
+           row (a no-op when ``db_pool`` is ``None``).  ``duration_ms`` is
+           computed here from ``started_at`` so call sites no longer repeat it.
+        3. :func:`jarvis_common.event_log.log_event` — emits the
+           ``category='source'`` structured log row (only when ``db_pool`` is
+           set).  ``log_level`` / ``log_message`` / ``log_context`` carry the
+           per-path payload that differs across sources and outcomes.
+
+        Parameters
+        ----------
+        started_at:
+            ``time.monotonic()`` captured before the request; used to derive
+            ``duration_ms``.
+        candidate_count:
+            Number of new papers accepted on this attempt (0 on rate-limit /
+            error paths).
+        user_id:
+            Forwarded to the rate-limit slot and the audit row.
+        status:
+            Persistent-limiter / run-history status: ``"ok"`` | ``"rate_limit"``
+            | ``"error"``.
+        p_limiter:
+            The per-(source, user) persistent limiter, or ``None`` when the
+            in-process fallback is in use.
+        log_level, log_message, log_context:
+            Forwarded verbatim to ``log_event`` (``source`` is taken from
+            ``self.source_type``).
+        retry_after_s:
+            Optional Retry-After hint forwarded to ``update_last_request`` on
+            rate-limit paths.
+        """
+        # Capture duration before the limiter update so the audit row reflects
+        # the fetch latency only (matches the pre-consolidation call-site timing).
+        duration_ms = int((_time.monotonic() - started_at) * 1000)
+        if p_limiter is not None:
+            if retry_after_s is not None:
+                await p_limiter.update_last_request(status, retry_after_s=retry_after_s)
+            else:
+                await p_limiter.update_last_request(status)
+
+        await self._insert_run_history(
+            started_at=started_at,
+            status=status,
+            candidate_count=candidate_count,
+            duration_ms=duration_ms,
+            user_id=user_id,
+        )
+
+        if self.db_pool is not None:
+            try:
+                await log_event(
+                    pool=self.db_pool,
+                    level=log_level,  # type: ignore[arg-type]
+                    category="source",
+                    source=self.source_type,
+                    message=log_message,
+                    context=log_context,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "%s: log_event write failed for %s",
+                    self.source_type,
+                    log_message,
+                    exc_info=exc,
+                )
 
     async def apply_startup_grace(self) -> None:
         """Sleep until the configured startup grace period has elapsed.

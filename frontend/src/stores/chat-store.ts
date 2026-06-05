@@ -76,9 +76,12 @@ export interface ConfidencePayload {
 
 const CHAT_INITIAL_STATE = { chats: {} as Record<string, ChatMessage[]> };
 
+/** Callers may omit `id`; the store stamps one via crypto.randomUUID(). */
+type IncomingMessage = Omit<ChatMessage, 'id'> & { id?: string };
+
 interface ChatState {
   chats: Record<string, ChatMessage[]>;
-  addMessage: (chatId: string, message: ChatMessage) => void;
+  addMessage: (chatId: string, message: IncomingMessage) => void;
   appendToLastMessage: (chatId: string, token: string) => void;
   setLastMessageSources: (chatId: string, sources: Source[]) => void;
   setLastMessageConfidence: (chatId: string, payload: ConfidencePayload) => void;
@@ -91,11 +94,12 @@ interface ChatState {
 export const useChatStore = create<ChatState>()((set) => ({
   ...CHAT_INITIAL_STATE,
 
-  addMessage(chatId: string, message: ChatMessage) {
+  addMessage(chatId: string, message: IncomingMessage) {
+    const stamped: ChatMessage = message.id ? (message as ChatMessage) : { ...message, id: crypto.randomUUID() };
     set((state) => ({
       chats: {
         ...state.chats,
-        [chatId]: [...(state.chats[chatId] || []), message],
+        [chatId]: [...(state.chats[chatId] || []), stamped],
       },
     }));
   },
@@ -162,6 +166,7 @@ export const useChatStore = create<ChatState>()((set) => ({
       const target = updated[lastAssistantIdx];
       if (!target) return state;
       updated[lastAssistantIdx] = {
+        id: target.id,
         role: target.role,
         content: target.content,
         sources: target.sources,

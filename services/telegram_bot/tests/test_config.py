@@ -125,6 +125,31 @@ def test_config_reads_jarvis_api_key_from_secret_file(tmp_path):
     assert config.jarvis_api_key.get_secret_value() == "my-secret-api-key"
 
 
+def test_config_jarvis_base_url_javascript_scheme_rejected():
+    """TG-03: a javascript: JARVIS_BASE_URL must be rejected at config-parse time.
+
+    Prevents XSS / open-redirect via crafted deep-links in Telegram digests.
+    ValidationError (pydantic) wraps the ValueError raised by _validate_base_url.
+    """
+    from pydantic import ValidationError
+
+    env = _minimal_env(chat_id="12345")
+    env["JARVIS_BASE_URL"] = "javascript:alert(1)"
+    with patch.dict(os.environ, env, clear=True):
+        with pytest.raises(ValidationError):
+            BotConfig.from_env()
+
+
+def test_config_jarvis_base_url_https_accepted():
+    """TG-03: a well-formed https:// JARVIS_BASE_URL passes validation unchanged."""
+    env = _minimal_env(chat_id="12345")
+    env["JARVIS_BASE_URL"] = "https://jarvis.example.com"
+    with patch.dict(os.environ, env, clear=True):
+        config = BotConfig.from_env()
+
+    assert config.jarvis_base_url == "https://jarvis.example.com"
+
+
 def test_config_jarvis_api_key_file_oserror_falls_through_to_none(tmp_path):
     """JARVIS_API_KEY_FILE pointing to an unreadable path must NOT raise.
 

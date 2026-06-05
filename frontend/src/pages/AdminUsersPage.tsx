@@ -334,7 +334,7 @@ export function AdminUsersPage() {
                       onValueChange={(v) =>
                         roleMutation.mutate({ userId: user.id, role: v as 'user' | 'admin' })
                       }
-                      disabled={pendingRoleUserId === user.id}
+                      disabled={isSelf || pendingRoleUserId === user.id}
                     >
                       <SelectTrigger className="w-28 h-8 text-xs" aria-label={`Role for ${user.email}`}>
                         <SelectValue />

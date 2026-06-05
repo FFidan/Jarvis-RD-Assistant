@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { useNavigate, Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -10,9 +10,10 @@ import { ScoreStack } from './ScoreStack';
 import { WhyChips } from '@/components/my-day/primitives/WhyChips';
 import { ErrorSentinel } from '@/components/shared/ErrorSentinel';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
-import { fetchPulseToday, ratePulseCard } from '@/lib/api';
+import { fetchPulseToday } from '@/lib/api';
 import { toScoreParts } from '@/lib/score-utils';
-import type { PulseDeck, PulseCardItem, PulseRating } from '@/types';
+import { usePulseRating } from '@/hooks/usePulseRating';
+import type { PulseDeck } from '@/types';
 
 /**
  * Polished "no pulse yet" call-to-action. This is the hero card the README
@@ -35,7 +36,6 @@ function PulseEmptyState({ message }: { message: string }) {
 
 export function HeroPulse() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [currentIndex, setCurrentIndex] = useState(0);
   const lastDeckIdRef = useRef<number | null>(null);
 
@@ -58,34 +58,8 @@ export function HeroPulse() {
     }
   }, [deck?.deck_id, deck?.cards.length, currentIndex]);
 
-  const rateMutation = useMutation({
-    mutationFn: ({ paperId, rating }: { paperId: number; rating: PulseRating }) =>
-      ratePulseCard(paperId, rating),
-    onSuccess: () => {
-      setCurrentIndex((prev) => prev + 1);
-    },
-    onMutate: async ({ paperId, rating }) => {
-      if (rating !== 'save') return undefined;
-      const prev = queryClient.getQueryData<PulseDeck>(QUERY_KEYS.pulse.today());
-      if (prev) {
-        queryClient.setQueryData<PulseDeck>(QUERY_KEYS.pulse.today(), {
-          ...prev,
-          cards: prev.cards.map((c: PulseCardItem) =>
-            c.paper_id === paperId ? { ...c, user_state: 'to_read' } : c,
-          ),
-        });
-      }
-      return { prev };
-    },
-    onError: (err: Error, _vars, context) => {
-      if (context?.prev !== undefined) {
-        queryClient.setQueryData(QUERY_KEYS.pulse.today(), context.prev);
-      }
-      toast.error(`Failed to rate card: ${err.message ?? 'unknown error'}`);
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pulse.today() });
-    },
+  const rateMutation = usePulseRating({
+    onSuccess: () => setCurrentIndex((prev) => prev + 1),
   });
 
   if (isLoading) {

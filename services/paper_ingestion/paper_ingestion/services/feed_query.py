@@ -115,6 +115,7 @@ def build_feed_queries(
     statuses: str | None,
     source_types: str | None,
     topic_names: str | None,
+    topic_id: int | None = None,
     date_from: date | None,
     date_to: date | None,
     recommended: bool = False,
@@ -225,6 +226,13 @@ def build_feed_queries(
             f" WHERE t.name = ANY(${param_idx}::text[]))"
         )
         params.append(topic_list)
+        param_idx += 1
+
+    if topic_id is not None:
+        conditions.append(
+            f"p.id IN (SELECT pt.paper_id FROM paper_topics pt WHERE pt.topic_id = ${param_idx})"
+        )
+        params.append(topic_id)
         param_idx += 1
 
     if date_from:

@@ -92,7 +92,7 @@ function DigestTopicBlock({ topic }: DigestTopicBlockProps) {
         {topic.themes.length > 0 && (
           <ul className="space-y-1.5" aria-label={`Themes for ${topic.name}`}>
             {topic.themes.map((theme, idx) => (
-              <DigestThemeRow key={idx} theme={theme} />
+              <DigestThemeRow key={`${theme.theme}:${idx}`} theme={theme} />
             ))}
           </ul>
         )}

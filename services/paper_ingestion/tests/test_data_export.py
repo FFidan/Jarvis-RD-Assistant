@@ -188,6 +188,38 @@ async def test_export_all_expected_tables_present() -> None:
 
 
 @pytest.mark.asyncio
+async def test_export_includes_paper_extractions_and_entities() -> None:
+    """PI-CFG-02: paper_extractions and paper_entities (per-user since mig 0094)
+    must appear in the GDPR export and be scoped to $1 (user_id).
+    """
+    # Assert both names are present in _EXPORT_QUERIES with user_id scoping.
+    names_and_sql = {name: sql for name, sql in _EXPORT_QUERIES}
+
+    for table in ("paper_extractions", "paper_entities"):
+        assert table in names_and_sql, (
+            f"{table} is missing from _EXPORT_QUERIES — it has user_id since migration 0094"
+        )
+        sql = names_and_sql[table]
+        assert "user_id = $1" in sql, (
+            f"{table} export query must scope by user_id = $1; got: {sql!r}"
+        )
+
+    # Behavioural: the ZIP produced by build_export_zip contains both .jsonl files.
+    pool = _build_pool({1: ['{"id": 1, "paper_id": 99}']})
+    zip_bytes = await build_export_zip(pool, user_id=1)
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        zip_names = zf.namelist()
+
+    assert "paper_extractions.jsonl" in zip_names, (
+        f"paper_extractions.jsonl missing from GDPR export ZIP; got: {zip_names}"
+    )
+    assert "paper_entities.jsonl" in zip_names, (
+        f"paper_entities.jsonl missing from GDPR export ZIP; got: {zip_names}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_export_includes_library_paper_not_discovered_by_user() -> None:
     """CFG-GDPR-1 behavioral: user B receives papers in their library even when
     discovered_by=A (i.e., user A first found the paper). Papers discovered by

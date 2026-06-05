@@ -476,3 +476,138 @@ async def test_http_review_increments_cards_reviewed_total(
         f"Expected cards_review_streak_days >= 2 (prior day + today); "
         f"got {body['cards_review_streak_days']} (B4-01 fix not applied?)"
     )
+
+
+# ---------------------------------------------------------------------------
+# §LE-001 — NULL arithmetic guard: COALESCE in daily_log DO UPDATE
+# ---------------------------------------------------------------------------
+
+
+async def test_focus_log_null_coalesce_yields_integer(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """LE-001: a daily_log row with NULL focus_hours + focus/log upsert yields a number.
+
+    Seeds today's daily_log row with focus_hours=NULL.  A subsequent
+    POST /api/executive/focus/log must produce a non-NULL, positive focus_hours
+    (COALESCE guard: NULL+delta→delta, not NULL).
+    # Verified: services/learning_engine/learning_engine/routers/executive.py (log_focus_session)
+    """
+    user_id_a = contract_two_users.user_a_id
+    await contract_conn.execute(
+        "INSERT INTO daily_log (user_id, log_date, focus_hours) "
+        "VALUES ($1, CURRENT_DATE, NULL) "
+        "ON CONFLICT (user_id, log_date) DO UPDATE SET focus_hours = NULL",
+        user_id_a,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/executive/focus/log", json={"duration_hours": 0.25})
+
+    assert resp.status_code == 200, f"POST focus/log failed: {resp.status_code}: {resp.text[:300]}"
+    focus_hours = await contract_conn.fetchval(
+        "SELECT focus_hours FROM daily_log WHERE user_id = $1 AND log_date = CURRENT_DATE",
+        user_id_a,
+    )
+    assert focus_hours is not None, (
+        "LE-001: daily_log.focus_hours is NULL after upsert (COALESCE guard missing)"
+    )
+    assert focus_hours > 0, (
+        f"LE-001: daily_log.focus_hours expected > 0 after COALESCE upsert; got {focus_hours}"
+    )
+
+
+async def test_cards_reviewed_null_coalesce_yields_integer(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """LE-001: a daily_log row with NULL cards_reviewed + submit_review yields an integer.
+
+    Seeds today's daily_log row with cards_reviewed=NULL.  A subsequent HTTP review
+    must produce cards_reviewed=1, not NULL (COALESCE guard in submit_review).
+    # Verified: services/learning_engine/learning_engine/routers/review.py (submit_review)
+    """
+    user_id_a = contract_two_users.user_a_id
+    card_id_a = contract_two_users.card_id_a
+
+    await contract_conn.execute(
+        "INSERT INTO daily_log (user_id, log_date, cards_reviewed) "
+        "VALUES ($1, CURRENT_DATE, NULL) "
+        "ON CONFLICT (user_id, log_date) DO UPDATE SET cards_reviewed = NULL",
+        user_id_a,
+    )
+    await contract_conn.execute(
+        "UPDATE cards SET due_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
+        card_id_a,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            f"/api/review/{card_id_a}", json={"rating": 3, "review_duration_ms": 1500}
+        )
+
+    assert resp.status_code == 200, (
+        f"POST /api/review/{card_id_a} failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    cards_reviewed = await contract_conn.fetchval(
+        "SELECT cards_reviewed FROM daily_log WHERE user_id = $1 AND log_date = CURRENT_DATE",
+        user_id_a,
+    )
+    assert cards_reviewed is not None, (
+        "LE-001: daily_log.cards_reviewed is NULL after submit_review (COALESCE guard missing)"
+    )
+    assert cards_reviewed == 1, (
+        f"LE-001: expected cards_reviewed=1 from NULL+1 (COALESCE path); got {cards_reviewed}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §LE-003 — GET /api/analytics/activity always returns integers (no NULL)
+# ---------------------------------------------------------------------------
+
+
+async def test_activity_coalesces_null_columns_to_zero(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """LE-003: /api/analytics/activity returns int/float fields even when daily_log NULLs exist.
+
+    Seeds a past-date daily_log row with all nullable counters set to NULL.
+    The /api/analytics/activity response must coerce them to 0 so that Pydantic
+    ActivityItem validation passes (no nullable int/float in the model).
+    # Verified: services/learning_engine/learning_engine/routers/analytics.py (get_activity)
+    """
+    from datetime import UTC, datetime, timedelta
+
+    user_id_a = contract_two_users.user_a_id
+    past_date = datetime.now(UTC).date() - timedelta(days=1)
+
+    await contract_conn.execute(
+        "INSERT INTO daily_log (user_id, log_date, tasks_completed, cards_reviewed, "
+        "                        papers_read, focus_hours) "
+        "VALUES ($1, $2, NULL, NULL, NULL, NULL) "
+        "ON CONFLICT (user_id, log_date) DO UPDATE "
+        "    SET tasks_completed=NULL, cards_reviewed=NULL, "
+        "        papers_read=NULL, focus_hours=NULL",
+        user_id_a,
+        past_date,
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/analytics/activity", params={"days": 7})
+
+    assert resp.status_code == 200, (
+        f"LE-003: GET /api/analytics/activity failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    items = resp.json()
+    matching = [row for row in items if row["log_date"] == past_date.isoformat()]
+    assert matching, (
+        f"LE-003: seeded daily_log row for {past_date} not found in /activity response; "
+        f"got dates: {[r['log_date'] for r in items]}"
+    )
+    row = matching[0]
+    for field in ("tasks_completed", "cards_reviewed", "papers_read"):
+        assert row[field] == 0 and isinstance(row[field], int), (
+            f"LE-003: {field} expected int 0 (COALESCE); got {row[field]!r}"
+        )
+    assert row["focus_hours"] == 0.0 and isinstance(row["focus_hours"], float), (
+        f"LE-003: focus_hours expected float 0.0 (COALESCE); got {row['focus_hours']!r}"
+    )

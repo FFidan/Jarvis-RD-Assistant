@@ -215,4 +215,35 @@ describe('ZoteroSection', () => {
     expect(await screen.findByRole('button', { name: /test connection/i })).toBeDisabled();
     expect(vi.mocked(zoteroTest)).not.toHaveBeenCalled();
   });
+
+  it('shows an inline error and does NOT call setConfig when poll cron is invalid on blur', async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    const cronInput = await screen.findByLabelText('Sync schedule (cron)');
+    await user.clear(cronInput);
+    await user.type(cronInput, 'not-a-cron');
+    await user.tab(); // trigger blur
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(/5 space-separated fields/i);
+    // setConfig must NOT have been called for poll_cron
+    expect(vi.mocked(setConfig)).not.toHaveBeenCalledWith('zotero.poll_cron', expect.anything());
+  });
+
+  it('disables Sync now button while poll cron is invalid', async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    const cronInput = await screen.findByLabelText('Sync schedule (cron)');
+    await user.clear(cronInput);
+    await user.type(cronInput, 'bad value');
+    await user.tab(); // trigger blur
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /sync now/i })).toBeDisabled();
+    });
+  });
 });

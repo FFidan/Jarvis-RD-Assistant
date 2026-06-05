@@ -245,6 +245,60 @@ describe('apiFetch', () => {
       }),
     );
   });
+
+  it('sends topic_id when topicId is provided', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ papers: [], total: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await fetchFeed({ view: 'library', limit: 10, offset: 0, topicId: 5 });
+
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      expect.stringContaining('topic_id=5'),
+      expect.anything(),
+    );
+  });
+
+  it('omits topic_id when topicId is null', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ papers: [], total: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await fetchFeed({ view: 'library', limit: 10, offset: 0, topicId: null });
+
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      expect.not.stringContaining('topic_id'),
+      expect.anything(),
+    );
+  });
+
+  it('sends both source_types and topic_id when both are provided', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ papers: [], total: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await fetchFeed({
+      view: 'inbox',
+      limit: 10,
+      offset: 0,
+      sourceTypes: 'arxiv',
+      topicId: 7,
+    });
+
+    const _calls = vi.mocked(globalThis.fetch).mock.calls;
+    const url = _calls[_calls.length - 1]?.[0];
+    expect(url).toEqual(expect.stringContaining('source_types=arxiv'));
+    expect(url).toEqual(expect.stringContaining('topic_id=7'));
+  });
 });
 
 describe('apiFetchRaw', () => {

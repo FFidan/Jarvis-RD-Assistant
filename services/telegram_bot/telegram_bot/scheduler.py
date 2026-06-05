@@ -72,6 +72,16 @@ class JarvisScheduler:
         removes every job whose id starts with ``nudge_``, then re-adds jobs
         using ``CronTrigger`` with the resolved timezone.
 
+        **Timezone is deployment-global by design.**  The query uses
+        ``WHERE user_id IS NULL``, which reads the operator-level timezone
+        rather than any per-user row.  This is intentional: JARVIS uses a
+        single-owner / single-pairing model where cron nudges fire on the
+        *operator's* local clock.  The ``user.timezone`` column name is shared
+        between the operator-level ``user_config`` row and per-user rows; the
+        ``IS NULL`` predicate selects only the deployment-global setting.
+        Changing this query to a per-user lookup would require a nudge-ownership
+        model that does not currently exist.
+
         The reload is atomic: all DB rows are parsed into trigger objects first.
         Rows that fail (bad timezone or invalid cron expression) are WARN-logged
         and skipped. Only after the prepare pass succeeds are existing jobs

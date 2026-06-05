@@ -169,10 +169,6 @@ PERSONAL_KEYS: frozenset[str] = frozenset(
         "zotero.poll_enabled",
         "zotero.poll_cron",
         "zotero.auto_push_on_star",
-        # Cloud LLM provider keys (per-user API credentials)
-        "llm.anthropic.api_key",
-        "llm.openai.api_key",
-        "llm.google.api_key",
     }
 )
 
@@ -205,6 +201,12 @@ SYSTEM_KEYS: frozenset[str] = frozenset(
         "observability.langfuse_dashboard_url",
         # Automation — pipeline interval; system-wide, admin-only.
         "automation.fetch_interval_hours",
+        # Cloud LLM provider API keys — deployment-wide admin-only credentials;
+        # read by get_provider_api_key / cloud_provider_key_present with
+        # WHERE user_id IS NULL, so write-scope must match read-scope.
+        "llm.anthropic.api_key",
+        "llm.openai.api_key",
+        "llm.google.api_key",
     }
 )
 # Note: dynamic llm.<hostname>.* patterns are SYSTEM_KEYS (hardware-wide).

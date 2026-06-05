@@ -205,7 +205,18 @@ async def batch_save_papers(
                         added_via="batch_save",
                     )
                 results.append(row_to_paper_response(row))
+    if not results:
+        return results
+    saved_ids = [saved.id for saved in results]
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT DISTINCT paper_id FROM paper_chunks WHERE paper_id = ANY($1)",
+            saved_ids,
+        )
+    chunked_ids: set[int] = {r["paper_id"] for r in rows}
     for saved in results:
+        if saved.id in chunked_ids:
+            continue
         try:
             from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 

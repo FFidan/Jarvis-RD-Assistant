@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 from urllib.parse import urlparse
 
 import httpx
-from jarvis_common.event_log import log_event
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 
 from paper_ingestion.config import ALLOWED_PDF_DOMAINS
@@ -350,7 +349,11 @@ class OpenAlexSource(PaperSource):
         if year_to:
             filters.append(f"to_publication_date:{year_to}-12-31")
         if author:
-            filters.append(f"author.display_name.search:{author}")
+            # Strip characters that act as OpenAlex filter separators or that
+            # could terminate the current filter value and inject new clauses.
+            # Commas separate filter pairs; pipe and plus are OR/AND operators.
+            safe_author = author.replace(",", "").replace("|", "").replace("+", "")
+            filters.append(f"author.display_name.search:{safe_author}")
         if filters:
             extra["filter"] = ",".join(filters)
 
@@ -536,46 +539,36 @@ class OpenAlexSource(PaperSource):
                         "OpenAlex fetch_new_since returned %d; skipping query",
                         response.status_code,
                     )
-                    if p_limiter is not None:
-                        await p_limiter.update_last_request(p_status, retry_after_s=retry_after)
-                    await self._insert_run_history(
-                        started_at=started_at,
-                        status=p_status,
-                        candidate_count=0,
-                        duration_ms=int((_time.monotonic() - started_at) * 1000),
-                        user_id=user_id,
-                    )
-                    if self.db_pool is not None:
-                        try:
-                            if p_status == "rate_limit":
-                                await log_event(
-                                    pool=self.db_pool,
-                                    level="warning",
-                                    category="source",
-                                    source="openalex",
-                                    message="rate_limited",
-                                    context={
-                                        "http_status": response.status_code,
-                                        "retry_after_s": retry_after,
-                                    },
-                                )
-                            else:
-                                await log_event(
-                                    pool=self.db_pool,
-                                    level="error",
-                                    category="source",
-                                    source="openalex",
-                                    message="fetch_failed",
-                                    context={
-                                        "http_status": response.status_code,
-                                        "exception": None,
-                                    },
-                                )
-                        except Exception as exc:
-                            logger.warning(
-                                "openalex: log_event write failed for rate_limit/fetch_failed",
-                                exc_info=exc,
-                            )
+                    if p_status == "rate_limit":
+                        await self._record_fetch_outcome(
+                            started_at=started_at,
+                            candidate_count=0,
+                            user_id=user_id,
+                            status="rate_limit",
+                            p_limiter=p_limiter,
+                            retry_after_s=retry_after,
+                            log_level="warning",
+                            log_message="rate_limited",
+                            log_context={
+                                "http_status": response.status_code,
+                                "retry_after_s": retry_after,
+                            },
+                        )
+                    else:
+                        await self._record_fetch_outcome(
+                            started_at=started_at,
+                            candidate_count=0,
+                            user_id=user_id,
+                            status="error",
+                            p_limiter=p_limiter,
+                            retry_after_s=retry_after,
+                            log_level="error",
+                            log_message="fetch_failed",
+                            log_context={
+                                "http_status": response.status_code,
+                                "exception": None,
+                            },
+                        )
                     continue
                 response.raise_for_status()
                 data = response.json()
@@ -593,30 +586,17 @@ class OpenAlexSource(PaperSource):
                         settings_hint=None,
                     )
                 logger.warning("OpenAlex fetch_new_since failed: %s", exc)
-                if p_limiter is not None:
-                    await p_limiter.update_last_request("error")
-                await self._insert_run_history(
+                _exc_status = getattr(getattr(exc, "response", None), "status_code", None)
+                await self._record_fetch_outcome(
                     started_at=started_at,
-                    status="error",
                     candidate_count=0,
-                    duration_ms=int((_time.monotonic() - started_at) * 1000),
                     user_id=user_id,
+                    status="error",
+                    p_limiter=p_limiter,
+                    log_level="error",
+                    log_message="fetch_failed",
+                    log_context={"http_status": _exc_status, "exception": repr(exc)[:300]},
                 )
-                if self.db_pool is not None:
-                    try:
-                        _exc_status = getattr(getattr(exc, "response", None), "status_code", None)
-                        await log_event(
-                            pool=self.db_pool,
-                            level="error",
-                            category="source",
-                            source="openalex",
-                            message="fetch_failed",
-                            context={"http_status": _exc_status, "exception": repr(exc)[:300]},
-                        )
-                    except Exception as log_exc:
-                        logger.warning(
-                            "openalex: log_event write failed for fetch_failed", exc_info=log_exc
-                        )
                 continue
 
             candidate_count = 0
@@ -634,33 +614,19 @@ class OpenAlexSource(PaperSource):
                 if len(papers) >= limit:
                     break
 
-            duration_ms = int((_time.monotonic() - started_at) * 1000)
-            if p_limiter is not None:
-                await p_limiter.update_last_request("ok")
-            await self._insert_run_history(
+            await self._record_fetch_outcome(
                 started_at=started_at,
-                status="ok",
                 candidate_count=candidate_count,
-                duration_ms=duration_ms,
                 user_id=user_id,
+                status="ok",
+                p_limiter=p_limiter,
+                log_level="info",
+                log_message="fetch_succeeded",
+                log_context={
+                    "http_status": 200,
+                    "papers_fetched": candidate_count,
+                    "query_count": len(consolidated),
+                },
             )
-            if self.db_pool is not None:
-                try:
-                    await log_event(
-                        pool=self.db_pool,
-                        level="info",
-                        category="source",
-                        source="openalex",
-                        message="fetch_succeeded",
-                        context={
-                            "http_status": 200,
-                            "papers_fetched": candidate_count,
-                            "query_count": len(consolidated),
-                        },
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "openalex: log_event write failed for fetch_succeeded", exc_info=exc
-                    )
 
         return papers

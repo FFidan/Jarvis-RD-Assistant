@@ -27,6 +27,7 @@ vi.mock('@/stores/auth-store', () => ({
   useAuthStore: {
     getState: vi.fn(() => ({
       getApiKey: vi.fn(() => 'test-key'),
+      isAuthenticated: true,
       logout: vi.fn(),
     })),
   },
@@ -910,6 +911,120 @@ describe('JobStore', () => {
 
     // The second createSSEReader call proves reconnect fired after 1000ms, not 2000ms.
     expect(readerSpy).toHaveBeenCalledTimes(2);
+  });
+
+  // ----- logout during backoff window (FE-DATA-01) -----
+
+  it('subscribe: logout during backoff sleep prevents resubscribe (_reconnectAfterDrop path)', async () => {
+    // Scenario: stream drops without a terminal event; _reconnectAfterDrop sleeps
+    // and then checks auth. isAuthenticated is false by the time sleep resolves →
+    // subscribe must NOT be called again (createSSEReader stays at 1 call).
+    vi.useFakeTimers();
+    const { useAuthStore } = await import('@/stores/auth-store');
+
+    // Authenticated at subscribe time, logged out by the time the sleep resolves.
+    let authenticated = true;
+    vi.mocked(useAuthStore.getState).mockImplementation(() => ({
+      getApiKey: vi.fn(() => (authenticated ? 'test-key' : null)),
+      isAuthenticated: authenticated,
+      getUser: vi.fn(() => null),
+      logout: vi.fn(),
+      authTime: null,
+      apiKey: authenticated ? 'test-key' : null,
+      user: null,
+      lastError: null,
+      login: vi.fn(),
+      loginWithSession: vi.fn(),
+      isSessionValid: vi.fn(() => authenticated),
+      expireSession: vi.fn(),
+    }));
+
+    const readerSpy = vi.spyOn(sseReader, 'createSSEReader').mockImplementationOnce(
+      // Stream closes immediately without a terminal event → triggers _reconcileOrRetry
+      // → getJob returns null → _reconnectAfterDrop → sleep → guard check
+      async function* () {
+        // Yield nothing; stream ends with terminalReceived=false
+      },
+    );
+
+    const { getJob } = await import('@/lib/api');
+    vi.mocked(getJob).mockResolvedValue(null as unknown as ReturnType<typeof getJob> extends Promise<infer T> ? T : never);
+
+    const jobId = 'job-logout-backoff';
+    useJobStore.setState({
+      jobs: { [jobId]: makeJob({ id: jobId, status: 'running' }) },
+      activeAborts: {},
+    });
+
+    useJobStore.getState().subscribe(jobId);
+
+    // Drain microtasks until the reconnect sleep timer is armed
+    for (let i = 0; i < 50 && vi.getTimerCount() === 0; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    // Simulate logout during the backoff sleep
+    authenticated = false;
+
+    // Fire the sleep timer — the guard should check isAuthenticated and bail
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // createSSEReader was called exactly once (the original subscribe); no resubscribe
+    expect(readerSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('subscribe: logout during streaming_timeout backoff sleep prevents resubscribe', async () => {
+    // Scenario: a streaming_timeout sentinel arrives; the store sleeps before
+    // resubscribing. isAuthenticated becomes false during the sleep → no resubscribe.
+    vi.useFakeTimers();
+    const { useAuthStore } = await import('@/stores/auth-store');
+
+    let authenticated = true;
+    vi.mocked(useAuthStore.getState).mockImplementation(() => ({
+      getApiKey: vi.fn(() => (authenticated ? 'test-key' : null)),
+      isAuthenticated: authenticated,
+      getUser: vi.fn(() => null),
+      logout: vi.fn(),
+      authTime: null,
+      apiKey: authenticated ? 'test-key' : null,
+      user: null,
+      lastError: null,
+      login: vi.fn(),
+      loginWithSession: vi.fn(),
+      isSessionValid: vi.fn(() => authenticated),
+      expireSession: vi.fn(),
+    }));
+
+    const readerSpy = vi.spyOn(sseReader, 'createSSEReader').mockImplementationOnce(
+      async function* () {
+        yield JSON.stringify({ status: 'streaming_timeout' });
+      },
+    );
+
+    const jobId = 'job-timeout-backoff';
+    useJobStore.setState({
+      jobs: { [jobId]: makeJob({ id: jobId, status: 'running' }) },
+      activeAborts: {},
+    });
+
+    useJobStore.getState().subscribe(jobId);
+
+    // Drain microtasks until the backoff sleep timer is armed
+    for (let i = 0; i < 50 && vi.getTimerCount() === 0; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    // Simulate logout during the sleep
+    authenticated = false;
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Only the initial subscribe call; no resubscribe after the logout guard fires
+    expect(readerSpy).toHaveBeenCalledTimes(1);
   });
 
   // ----- createSSEReader integration (DRY-F1) -----

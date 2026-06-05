@@ -137,7 +137,10 @@ export function EventsTab() {
       lastPage.next_cursor ?? undefined,
   });
 
-  const allEvents = data?.pages.flatMap((p) => p.events) ?? [];
+  const allEvents = useMemo(
+    () => data?.pages.flatMap((p) => p.events) ?? [],
+    [data?.pages],
+  );
 
   // Client-side free-text filter applied on top of backend results
   const filteredEvents = useMemo(() => {

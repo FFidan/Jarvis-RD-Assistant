@@ -114,21 +114,43 @@ def _point_payload(hit) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _user_scope_filter(user_id: int | None):
-    """Return a Qdrant Filter (user_id==X OR is_null) or None when unscoped."""
+def _user_scope_filter(
+    user_id: int | None,
+    library_paper_ids: list[int] | None = None,
+):
+    """Return a Qdrant Filter scoping search to the caller, or None when unscoped.
+
+    The ``should`` branches are OR-combined.  Base scope: chunks the caller
+    embedded (``user_id == X``) OR canonical chunks (``user_id`` payload IS NULL).
+
+    ``library_paper_ids`` (PI-RAG-001) widens the scope so the caller can also
+    retrieve chunks for ANY paper in **their own** library, regardless of which
+    user originally embedded them.  This fixes secondary-library under-fetch on
+    shared-corpus papers (e.g. paper P processed by user A, where A's chunks
+    carry ``user_id == A``, but P is legitimately in caller B's library).
+
+    Security: the widening is keyed strictly on the CALLER'S own
+    ``user_library`` membership — the caller must supply only their own
+    library's paper_ids.  A paper that is NOT in the caller's library (e.g. a
+    private upload owned solely by another user) is never added to this branch
+    and therefore stays out of the candidate set.  The defense-in-depth DB
+    visibility check in ``rag/streaming.py`` remains the backstop.
+    """
     if user_id is None:
         return None
     from qdrant_client.models import (
         FieldCondition,
         Filter,
         IsNullCondition,
+        MatchAny,
         MatchValue,
         PayloadField,
     )
 
-    return Filter(
-        should=[
-            FieldCondition(key="user_id", match=MatchValue(value=user_id)),
-            IsNullCondition(is_null=PayloadField(key="user_id")),
-        ]
-    )
+    should: list = [
+        FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+        IsNullCondition(is_null=PayloadField(key="user_id")),
+    ]
+    if library_paper_ids:
+        should.append(FieldCondition(key="paper_id", match=MatchAny(any=library_paper_ids)))
+    return Filter(should=should)

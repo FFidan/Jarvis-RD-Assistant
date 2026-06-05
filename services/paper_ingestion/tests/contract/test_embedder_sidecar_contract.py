@@ -86,6 +86,135 @@ async def test_embedder_sidecars_store_and_search_user_scoped_vectors(monkeypatc
 
 
 # ---------------------------------------------------------------------------
+# PI-RAG-001 — cross-paper RAG scope widen + leak guard (end-to-end)
+#
+# Proves through the REAL prepare_cross_paper_rag path (real Embedder + faux
+# Qdrant + real DB visibility check) that:
+#   POSITIVE: caller B retrieves a SHARED paper P that user A embedded
+#             (chunks payload user_id=A) because P is in B's user_library.
+#   NEGATIVE: a paper Q PRIVATE to A (in A's library only, NOT B's) is NOT
+#             retrievable by B — neither via the widened Qdrant branch (Q not
+#             in B's library) nor past the defense-in-depth DB visibility check.
+#
+# Verified: services/paper_ingestion/paper_ingestion/ingestion/embedding_config.py:117
+#   (_user_scope_filter adds paper_id MatchAny branch from caller's library)
+# Verified: services/paper_ingestion/paper_ingestion/rag/streaming.py:199
+#   (prepare_cross_paper_rag queries user_library for caller, threads list down)
+# Verified: services/paper_ingestion/paper_ingestion/rag/streaming.py:287
+#   (defense-in-depth DB visibility predicate — the backstop)
+# ---------------------------------------------------------------------------
+
+
+async def test_cross_paper_rag_widens_to_callers_library_but_not_others_private(
+    contract_conn, monkeypatch
+):
+    """Caller B retrieves shared paper P (embedded by A) but never A-private Q."""
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
+    from paper_ingestion.models import ChunkForEmbedding, CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
+
+    user_a = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('rag-a@test', 'user') RETURNING id"
+    )
+    user_b = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('rag-b@test', 'user') RETURNING id"
+    )
+
+    # Paper P — shared corpus, processed by A; Paper Q — private upload owned by A.
+    paper_p = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('rag-shared-P', 'arxiv', 'Shared Reproducibility Paper', '{}',
+                   'https://rag.test/p') RETURNING id"""
+    )
+    paper_q = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('rag-private-Q', 'upload', 'A Private Reproducibility Upload', '{}',
+                   'https://rag.test/q') RETURNING id"""
+    )
+
+    # Library membership: A has BOTH P and Q; B has ONLY P.
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES "
+        "($1, $2, 'manual_save'), ($1, $3, 'manual_save'), ($4, $2, 'manual_save')",
+        user_a,
+        paper_p,
+        paper_q,
+        user_b,
+    )
+
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+        async with httpx.AsyncClient() as http_client:
+            qdrant = FauxQdrantClient()
+            embedder = Embedder(http_client, qdrant)
+            await embedder.ensure_collection()
+
+            # Both P's and Q's chunks were embedded BY A (payload user_id=A) — the
+            # secondary-owner under-fetch scenario the fix targets.
+            await embedder.embed_and_store(
+                paper_p,
+                [
+                    ChunkForEmbedding(
+                        chunk_index=0,
+                        content="reproducibility methods shared across the corpus",
+                        page_number=1,
+                        start_char=0,
+                        end_char=48,
+                    )
+                ],
+                user_id=user_a,
+            )
+            await embedder.embed_and_store(
+                paper_q,
+                [
+                    ChunkForEmbedding(
+                        chunk_index=0,
+                        content="reproducibility notes private to user A only",
+                        page_number=1,
+                        start_char=0,
+                        end_char=45,
+                    )
+                ],
+                user_id=user_a,
+            )
+
+            # Isolate filter behaviour: identity rerank (no reranker config / network).
+            embedder.rerank_chunks = _identity_rerank  # type: ignore[method-assign]
+
+            pool = SharedConnPool(contract_conn)
+            body = CrossPaperAskRequest(
+                question="reproducibility",
+                max_chunks=10,
+                max_papers=5,
+                decompose=False,
+            )
+            result = await prepare_cross_paper_rag(
+                embedder, pool, body, http_client, user_id=user_b
+            )
+
+    assert isinstance(result, CrossPaperRagPrep), f"expected results, got {result!r}"
+    retrieved_paper_ids = {s["paper_id"] for s in result.sources}
+
+    # POSITIVE — B retrieves shared paper P even though A embedded its chunks.
+    assert paper_p in retrieved_paper_ids, (
+        "caller B must retrieve shared paper P (in B's library) despite A embedding it — "
+        "this is the PI-RAG-001 under-fetch the widening fixes"
+    )
+    # NEGATIVE / no-leak — Q is private to A; B must never see it.
+    assert paper_q not in retrieved_paper_ids, (
+        "caller B must NOT retrieve paper Q (private to A, not in B's library) — "
+        "leak guard: widening is keyed on the caller's OWN library only"
+    )
+
+
+async def _identity_rerank(query, chunks, top_k):  # noqa: ARG001
+    """Async identity rerank stub: preserve input order, truncate to top_k."""
+    return chunks[:top_k]
+
+
+# ---------------------------------------------------------------------------
 # §W1A.4-REEMBED-01 — reembed_paper Qdrant failure rolls back DB
 #
 # Verified: scripts/reembed.py:622-667 (reembed_paper: Qdrant upsert first,

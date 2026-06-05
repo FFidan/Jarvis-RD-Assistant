@@ -5,7 +5,7 @@ import uuid
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
-from jarvis_common import ErrorResponse, JobCreateResponse
+from jarvis_common import ErrorResponse, JobCreateResponse, assert_papers_ownership
 from jarvis_common.auth import get_current_user_id
 
 from paper_ingestion import papers_service
@@ -138,8 +138,7 @@ async def process_batch(
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     async with db_pool.acquire() as conn:
-        for paper_id in body.paper_ids:
-            await papers_service.assert_paper_ownership(conn, paper_id, user_id)
+        await assert_papers_ownership(conn, list(body.paper_ids), user_id)
 
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["papers.batch_process"].defer_async(

@@ -636,7 +636,7 @@ async def test_fetch_new_since_calls_log_event_on_success():
             "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
-        patch("paper_ingestion.sources.pubmed_source.log_event", log_event_mock),
+        patch("paper_ingestion.sources.base.log_event", log_event_mock),
     ):
         await source.fetch_new_since(
             since=datetime(2026, 4, 1, tzinfo=UTC),
@@ -670,7 +670,7 @@ async def test_fetch_new_since_records_run_history_status_error_on_exception():
             "paper_ingestion.sources.base.PersistentSourceRateLimiter",
             return_value=mock_limiter,
         ),
-        patch("paper_ingestion.sources.pubmed_source.log_event", log_event_mock),
+        patch("paper_ingestion.sources.base.log_event", log_event_mock),
     ):
         result = await source.fetch_new_since(
             since=datetime(2026, 4, 1, tzinfo=UTC),

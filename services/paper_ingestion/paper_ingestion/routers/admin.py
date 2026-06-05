@@ -32,7 +32,7 @@ from jarvis_common.auth import require_admin
 from jarvis_common.email import send_magic_link
 from pydantic import BaseModel, EmailStr, Field
 
-from paper_ingestion.routers.auth import MAGIC_LINK_TTL, _hash_token
+from paper_ingestion.routers.auth import MAGIC_LINK_TTL, _hash_email, _hash_token
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +173,9 @@ async def invite_user(body: InviteUserBody, request: Request) -> UserRecord:
     try:
         await send_magic_link(email_norm, link, pool=pool)
     except Exception:  # noqa: BLE001 — never expose SMTP errors
-        logger.exception("send_magic_link (invite) failed for email=%s", email_norm)
+        logger.exception(
+            "send_magic_link (invite) failed for email_hash=%s", _hash_email(email_norm)
+        )
 
     caller_id = getattr(request.state, "user_id", None)
     await log_audit(

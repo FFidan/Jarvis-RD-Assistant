@@ -2,7 +2,9 @@
 
 import asyncpg
 import httpx
+from cryptography.fernet import InvalidToken
 from fastapi import HTTPException, Request
+from jarvis_common.crypto import decrypt_secret
 from pydantic import ValidationError
 
 from paper_ingestion.models import PaperSourceConfig, SourceType
@@ -10,6 +12,25 @@ from paper_ingestion.sources.base import PaperSource
 from paper_ingestion.sources.registry import get_source_class
 
 _SOURCE_BOOTSTRAP_EXCEPTIONS = (TypeError, ValueError, ValidationError)
+
+
+def _decrypt_config_api_key(config: dict) -> dict:
+    """Return *config* with api_key decrypted (Fernet ciphertext → plaintext).
+
+    Handles legacy plaintext values transparently: if decrypt_secret raises
+    InvalidToken the raw value is kept as-is so pre-migration rows continue to
+    work without a data migration.
+    """
+    raw = config.get("api_key")
+    if not raw:
+        return config
+    try:
+        plaintext = decrypt_secret(raw)
+    except (InvalidToken, RuntimeError):
+        # Legacy plaintext row (InvalidToken) or JARVIS_CONFIG_KEY not configured
+        # (RuntimeError) — keep the raw value so pre-migration rows keep working.
+        return config
+    return {**config, "api_key": plaintext}
 
 
 async def get_source_for_type(
@@ -65,7 +86,7 @@ async def get_source_for_type(
         id=row["id"],
         source_type=row["source_type"],
         enabled=row["enabled"],
-        config=row["config"] or {},
+        config=_decrypt_config_api_key(row["config"] or {}),
     )
     return source_cls(config, http_client)
 
@@ -126,7 +147,7 @@ async def get_sources_for_types(
                 id=row["id"],
                 source_type=row["source_type"],
                 enabled=row["enabled"],
-                config=row["config"] or {},
+                config=_decrypt_config_api_key(row["config"] or {}),
             )
             plugins[source_type] = source_cls(config, http_client)
         except _SOURCE_BOOTSTRAP_EXCEPTIONS as exc:

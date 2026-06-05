@@ -322,6 +322,49 @@ describe('OnboardingWizard', () => {
     expect(continueBtn).toBeEnabled();
   });
 
+  // FE-UIB-05: invalid port → inline error + Continue disabled; valid port clears error.
+  it('(FE-UIB-05) SMTP port: non-empty invalid value shows inline error and disables Continue', async () => {
+    const user = userEvent.setup();
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=2');
+    expect(await screen.findByText('SMTP relay')).toBeInTheDocument();
+
+    // Fill host + from-address so canSave would be true if port were valid.
+    await user.type(screen.getByLabelText(/host/i), 'smtp.example.com');
+    await user.type(screen.getByLabelText(/from address/i), 'jarvis@example.com');
+
+    const portInput = screen.getByLabelText(/^port$/i);
+    const continueBtn = screen.getByRole('button', { name: /continue/i });
+
+    // Non-numeric input → error message + Continue disabled.
+    await user.clear(portInput);
+    await user.type(portInput, 'abc');
+    expect(await screen.findByText(/port must be a number between 1 and 65535/i)).toBeInTheDocument();
+    expect(continueBtn).toBeDisabled();
+
+    // Out-of-range (0) → error + disabled.
+    await user.clear(portInput);
+    await user.type(portInput, '0');
+    expect(screen.getByText(/port must be a number between 1 and 65535/i)).toBeInTheDocument();
+    expect(continueBtn).toBeDisabled();
+
+    // Out-of-range (65536) → error + disabled.
+    await user.clear(portInput);
+    await user.type(portInput, '65536');
+    expect(screen.getByText(/port must be a number between 1 and 65535/i)).toBeInTheDocument();
+    expect(continueBtn).toBeDisabled();
+
+    // Valid port (465) → no error + Continue enabled.
+    await user.clear(portInput);
+    await user.type(portInput, '465');
+    expect(screen.queryByText(/port must be a number between 1 and 65535/i)).not.toBeInTheDocument();
+    expect(continueBtn).toBeEnabled();
+
+    // Empty port (reset to default) → no error + Continue still enabled.
+    await user.clear(portInput);
+    expect(screen.queryByText(/port must be a number between 1 and 65535/i)).not.toBeInTheDocument();
+    expect(continueBtn).toBeEnabled();
+  });
+
   // GAP-5: Welcome step "Skip setup" while !authed + showAdminStep=true → navigates to admin step,
   // does NOT call markSetupCompleted.
   it('(GAP-5) Welcome step Skip setup while unauthed navigates to admin step without calling markSetupCompleted', async () => {

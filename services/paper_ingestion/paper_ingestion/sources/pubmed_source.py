@@ -35,7 +35,6 @@ if TYPE_CHECKING:
     import asyncpg
 
 import httpx
-from jarvis_common.event_log import log_event
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 from lxml import (
     etree,  # type: ignore[reportAttributeAccessIssue]  # lxml stubs lack etree export typing
@@ -411,7 +410,11 @@ class PubMedSource(PaperSource):
         """
         term = query
         if author:
-            term = f"{term} AND {author}[Author]"
+            # Wrap in double-quotes so NCBI treats the value as a phrase literal.
+            # Strip embedded double-quotes first to prevent escaping out of the
+            # quoted phrase and injecting additional query syntax.
+            safe_author = author.replace('"', "")
+            term = f'{term} AND "{safe_author}"[Author]'
 
         extra: dict = {}
         if year_from or year_to:
@@ -517,54 +520,35 @@ class PubMedSource(PaperSource):
                     break
         except Exception as _exc:
             logger.warning("pubmed: fetch_new_since failed", exc_info=True)
-            if p_limiter is not None:
-                await p_limiter.update_last_request("error")
-            await self._insert_run_history(
+            # PubMed has only two terminal paths: _esearch/_efetch swallow
+            # transient HTTP errors internally (returning []), so a no-data run
+            # falls through to the success path with candidate_count=0.  Only an
+            # *unexpected* exception escaping the loop reaches this error branch.
+            await self._record_fetch_outcome(
                 started_at=started_at,
-                status="error",
                 candidate_count=0,
-                duration_ms=int((_time.monotonic() - started_at) * 1000),
                 user_id=user_id,
+                status="error",
+                p_limiter=p_limiter,
+                log_level="error",
+                log_message="fetch_failed",
+                log_context={"http_status": None, "exception": repr(_exc)[:300]},
             )
-            if self.db_pool is not None:
-                try:
-                    await log_event(
-                        pool=self.db_pool,
-                        level="error",
-                        category="source",
-                        source="pubmed",
-                        message="fetch_failed",
-                        context={"http_status": None, "exception": repr(_exc)[:300]},
-                    )
-                except Exception as exc:
-                    logger.warning("pubmed: log_event write failed for fetch_failed", exc_info=exc)
             return papers[:limit]
 
-        duration_ms = int((_time.monotonic() - started_at) * 1000)
-        if p_limiter is not None:
-            await p_limiter.update_last_request("ok")
-        await self._insert_run_history(
+        await self._record_fetch_outcome(
             started_at=started_at,
-            status="ok",
             candidate_count=candidate_count,
-            duration_ms=duration_ms,
             user_id=user_id,
+            status="ok",
+            p_limiter=p_limiter,
+            log_level="info",
+            log_message="fetch_succeeded",
+            log_context={
+                "http_status": 200,
+                "papers_fetched": candidate_count,
+                "query_count": len(term_queries),
+            },
         )
-        if self.db_pool is not None:
-            try:
-                await log_event(
-                    pool=self.db_pool,
-                    level="info",
-                    category="source",
-                    source="pubmed",
-                    message="fetch_succeeded",
-                    context={
-                        "http_status": 200,
-                        "papers_fetched": candidate_count,
-                        "query_count": len(term_queries),
-                    },
-                )
-            except Exception as exc:
-                logger.warning("pubmed: log_event write failed for fetch_succeeded", exc_info=exc)
 
         return papers[:limit]

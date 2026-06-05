@@ -30,6 +30,7 @@ from typing import Annotated, Any
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jarvis_common.auth import require_admin, verify_api_key
+from jarvis_common.crypto import encrypt_secret
 from pydantic import BaseModel, Field
 
 from paper_ingestion.deps import get_db_pool
@@ -96,7 +97,7 @@ async def update_source_config(
 
     updates: dict[str, Any] = {}
     if body.api_key is not None:
-        updates["api_key"] = body.api_key
+        updates["api_key"] = encrypt_secret(body.api_key)
     if body.email is not None:
         updates["email"] = body.email
 

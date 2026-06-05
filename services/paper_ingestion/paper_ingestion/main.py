@@ -58,6 +58,7 @@ from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
 from paper_ingestion.migrations_runner import run_migrations
 from paper_ingestion.models import PaperSourceConfig, SourceType
 from paper_ingestion.pdf_processor import PDFProcessor
+from paper_ingestion.services.source_helper import _decrypt_config_api_key
 from paper_ingestion.services.telegram_bootstrap import refresh_telegram_bot_username
 from paper_ingestion.sources.registry import get_source_class
 
@@ -189,7 +190,7 @@ async def _init_source_singletons(app: FastAPI) -> None:
                     id=row["id"],
                     source_type=row["source_type"],
                     enabled=row["enabled"],
-                    config=row["config"] or {},
+                    config=_decrypt_config_api_key(row["config"] or {}),
                 )
                 app.state.sources[source_type_val] = source_cls(
                     config, app.state.http_client, db_pool=app.state.db_pool

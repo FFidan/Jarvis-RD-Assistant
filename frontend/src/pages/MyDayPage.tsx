@@ -13,7 +13,6 @@ import { TriageSection } from '@/components/my-day/sections/TriageSection';
 import { LearningFocusSection } from '@/components/my-day/sections/LearningFocusSection';
 import { WeeklyDigestSection } from '@/components/my-day/sections/WeeklyDigestSection';
 import { EndOfDaySection } from '@/components/my-day/sections/EndOfDaySection';
-import { MyDayFooter } from '@/components/my-day/sections/MyDayFooter';
 import { getMyDayBundle } from '@/lib/api';
 import type { MyDayBundle } from '@/types';
 
@@ -27,7 +26,6 @@ function todayIso(): string {
 }
 
 export function MyDayPage() {
-  const entryNum = Math.floor((Date.now() - new Date('2026-01-01').getTime()) / 86400000);
   const { hash } = useLocation();
   const queryClient = useQueryClient();
 
@@ -111,7 +109,6 @@ export function MyDayPage() {
         <LearningFocusSection />
         <WeeklyDigestSection />
         <EndOfDaySection />
-        <MyDayFooter entryNum={entryNum} />
       </main>
     </div>
   );

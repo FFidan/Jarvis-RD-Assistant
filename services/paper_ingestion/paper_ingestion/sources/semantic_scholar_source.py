@@ -16,7 +16,6 @@ from urllib.parse import quote as _url_quote
 from urllib.parse import urlparse as _urlparse
 
 import httpx
-from jarvis_common.event_log import log_event
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.text_utils import author_matches
 
@@ -374,78 +373,53 @@ class SemanticScholarSource(PaperSource):
                 data = await self._fetch_json("/paper/search", params=params)
             except Exception as _exc:
                 logger.warning("S2 fetch_new_since failed for query %r", query, exc_info=True)
-                if p_limiter is not None:
-                    await p_limiter.update_last_request("error")
-                await self._insert_run_history(
+                await self._record_fetch_outcome(
                     started_at=started_at,
-                    status="error",
                     candidate_count=0,
-                    duration_ms=int((_time.monotonic() - started_at) * 1000),
                     user_id=user_id,
+                    status="error",
+                    p_limiter=p_limiter,
+                    log_level="error",
+                    log_message="fetch_failed",
+                    log_context={"http_status": None, "exception": repr(_exc)[:300]},
                 )
-                if self.db_pool is not None:
-                    try:
-                        await log_event(
-                            pool=self.db_pool,
-                            level="error",
-                            category="source",
-                            source="semantic_scholar",
-                            message="fetch_failed",
-                            context={"http_status": None, "exception": repr(_exc)[:300]},
-                        )
-                    except Exception as log_exc:
-                        logger.warning(
-                            "semantic_scholar: log_event write failed for fetch_failed",
-                            exc_info=log_exc,
-                        )
                 continue
 
             if not data:
                 logger.warning("S2 search returned no data for query %r; skipping", query)
                 diag = self.last_poll_diagnostic or {}
-                p_status = "rate_limit" if diag.get("status") == "rate_limit" else "error"
                 retry_after = diag.get("retry_after_s")
-                if p_limiter is not None:
-                    await p_limiter.update_last_request(p_status, retry_after_s=retry_after)
-                await self._insert_run_history(
-                    started_at=started_at,
-                    status=p_status,
-                    candidate_count=0,
-                    duration_ms=int((_time.monotonic() - started_at) * 1000),
-                    user_id=user_id,
-                )
-                if self.db_pool is not None:
-                    try:
-                        _diag_code = diag.get("status_code")
-                        if p_status == "rate_limit":
-                            await log_event(
-                                pool=self.db_pool,
-                                level="warning",
-                                category="source",
-                                source="semantic_scholar",
-                                message="rate_limited",
-                                context={
-                                    "http_status": _diag_code or 429,
-                                    "retry_after_s": retry_after,
-                                },
-                            )
-                        else:
-                            await log_event(
-                                pool=self.db_pool,
-                                level="error",
-                                category="source",
-                                source="semantic_scholar",
-                                message="fetch_failed",
-                                context={
-                                    "http_status": _diag_code,
-                                    "exception": diag.get("message", "")[:300],
-                                },
-                            )
-                    except Exception as log_exc:
-                        logger.warning(
-                            "semantic_scholar: log_event write failed for rate_limit/fetch_failed",
-                            exc_info=log_exc,
-                        )
+                _diag_code = diag.get("status_code")
+                if diag.get("status") == "rate_limit":
+                    await self._record_fetch_outcome(
+                        started_at=started_at,
+                        candidate_count=0,
+                        user_id=user_id,
+                        status="rate_limit",
+                        p_limiter=p_limiter,
+                        retry_after_s=retry_after,
+                        log_level="warning",
+                        log_message="rate_limited",
+                        log_context={
+                            "http_status": _diag_code or 429,
+                            "retry_after_s": retry_after,
+                        },
+                    )
+                else:
+                    await self._record_fetch_outcome(
+                        started_at=started_at,
+                        candidate_count=0,
+                        user_id=user_id,
+                        status="error",
+                        p_limiter=p_limiter,
+                        retry_after_s=retry_after,
+                        log_level="error",
+                        log_message="fetch_failed",
+                        log_context={
+                            "http_status": _diag_code,
+                            "exception": diag.get("message", "")[:300],
+                        },
+                    )
                 continue
 
             candidate_count = 0
@@ -486,35 +460,20 @@ class SemanticScholarSource(PaperSource):
                 if len(papers) >= limit:
                     break
 
-            duration_ms = int((_time.monotonic() - started_at) * 1000)
-            if p_limiter is not None:
-                await p_limiter.update_last_request("ok")
-            await self._insert_run_history(
+            await self._record_fetch_outcome(
                 started_at=started_at,
-                status="ok",
                 candidate_count=candidate_count,
-                duration_ms=duration_ms,
                 user_id=user_id,
+                status="ok",
+                p_limiter=p_limiter,
+                log_level="info",
+                log_message="fetch_succeeded",
+                log_context={
+                    "http_status": 200,
+                    "papers_fetched": candidate_count,
+                    "query_count": len(queries),
+                },
             )
-            if self.db_pool is not None:
-                try:
-                    await log_event(
-                        pool=self.db_pool,
-                        level="info",
-                        category="source",
-                        source="semantic_scholar",
-                        message="fetch_succeeded",
-                        context={
-                            "http_status": 200,
-                            "papers_fetched": candidate_count,
-                            "query_count": len(queries),
-                        },
-                    )
-                except Exception as log_exc:
-                    logger.warning(
-                        "semantic_scholar: log_event write failed for fetch_succeeded",
-                        exc_info=log_exc,
-                    )
 
         return papers[:limit]
 

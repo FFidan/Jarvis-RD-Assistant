@@ -258,3 +258,53 @@ async def test_non_admin_cannot_send_link() -> None:
     with pytest.raises(HTTPException) as exc:
         await admin_router.require_admin(request)
     assert exc.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PI-AUTH-01: invite SMTP failure log must not contain raw email
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invite_smtp_failure_logs_hash_not_raw_email(monkeypatch, caplog) -> None:
+    """On SMTP failure, logger.exception must record email_hash, never the raw address."""
+    import hashlib
+    import logging
+
+    monkeypatch.setenv("DEV_MODE", "true")
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            None,  # conflict check: no existing user
+            {
+                "id": 7,
+                "email": "bob@example.com",
+                "role": "user",
+                "created_at": _NOW,
+                "last_login_at": None,
+            },
+        ]
+    )
+    conn.execute = AsyncMock()
+
+    async def _failing_send(email, link, *, pool=None):
+        raise OSError("SMTP connect refused")
+
+    monkeypatch.setattr(admin_router, "send_magic_link", _failing_send)
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+    body = admin_router.InviteUserBody(email="bob@example.com", role="user")
+
+    expected_hash = hashlib.sha256(b"bob@example.com").hexdigest()
+
+    with caplog.at_level(logging.ERROR, logger="paper_ingestion.routers.admin"):
+        await admin_router.invite_user(body, request)
+
+    assert any(expected_hash in r.message for r in caplog.records), (
+        "Expected email hash in log record"
+    )
+    assert not any("bob@example.com" in r.message for r in caplog.records), (
+        "Raw email must not appear in any log record"
+    )

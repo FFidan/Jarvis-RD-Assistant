@@ -99,6 +99,7 @@ describe('ConfidenceBadge', () => {
 describe('ChatMessage confidence badge integration', () => {
   it('shows "Verified" badge when message has HIGH confidence', () => {
     const message: ChatMessageType = {
+      id: 'msg-1',
       role: 'assistant',
       content: 'The answer is 42.',
       confidence: 'HIGH',
@@ -111,6 +112,7 @@ describe('ChatMessage confidence badge integration', () => {
 
   it('shows "Mostly verified" badge when message has MEDIUM confidence', () => {
     const message: ChatMessageType = {
+      id: 'msg-2',
       role: 'assistant',
       content: 'Some content here.',
       confidence: 'MEDIUM',
@@ -126,6 +128,7 @@ describe('ChatMessage confidence badge integration', () => {
 
   it('does NOT render badge when message has no confidence field', () => {
     const message: ChatMessageType = {
+      id: 'msg-3',
       role: 'assistant',
       content: 'A plain response.',
     };
@@ -139,6 +142,7 @@ describe('ChatMessage confidence badge integration', () => {
   it('does NOT render badge for user messages even if confidence is set', () => {
     // ChatMessage only shows badge for assistant content block
     const message: ChatMessageType = {
+      id: 'msg-4',
       role: 'user',
       content: 'A user question.',
       confidence: 'HIGH',
@@ -155,6 +159,7 @@ describe('ChatMessage confidence badge integration', () => {
 describe('ChatMessage inline sentence highlighting', () => {
   it('test_chat_message_highlights_unverified_sentences: <mark> wraps unverified sentence only', () => {
     const message: ChatMessageType = {
+      id: 'msg-5',
       role: 'assistant',
       content: 'First. Second.',
       confidence: 'MEDIUM',
@@ -177,6 +182,7 @@ describe('ChatMessage inline sentence highlighting', () => {
 
   it('test_chat_message_no_mark_when_all_verified: no <mark> elements when every sentence is verified', () => {
     const message: ChatMessageType = {
+      id: 'msg-6',
       role: 'assistant',
       content: 'Everything checks out.',
       confidence: 'HIGH',
@@ -189,6 +195,7 @@ describe('ChatMessage inline sentence highlighting', () => {
 
   it('test_chat_message_no_mark_when_no_per_sentence: no <mark> elements when per_sentence is absent', () => {
     const message: ChatMessageType = {
+      id: 'msg-7',
       role: 'assistant',
       content: 'A plain response with no verification data.',
     };

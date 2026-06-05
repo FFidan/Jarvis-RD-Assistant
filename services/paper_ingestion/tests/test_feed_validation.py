@@ -108,6 +108,24 @@ class TestFeedStringParamCaps:
             f"Valid topic_names should not be rejected, got {resp.status_code}: {resp.text}"
         )
 
+    def test_feed_rejects_q_too_long(self, api_client):
+        """GET /api/papers/feed: q > 500 chars → 422 Unprocessable Entity."""
+        client, _ = api_client
+        long_q = "a" * 501
+        resp = client.get(f"/api/papers/feed?q={long_q}")
+        assert resp.status_code == 422, (
+            f"Expected 422 for overlong q on /api/papers/feed, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_papers_rejects_q_too_long(self, api_client):
+        """GET /api/papers: q > 500 chars → 422 Unprocessable Entity."""
+        client, _ = api_client
+        long_q = "a" * 501
+        resp = client.get(f"/api/papers?q={long_q}")
+        assert resp.status_code == 422, (
+            f"Expected 422 for overlong q on /api/papers, got {resp.status_code}: {resp.text}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # M12 — discover paper_ids list cap

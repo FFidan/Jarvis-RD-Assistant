@@ -360,6 +360,44 @@ def test_over_limit_batch_is_capped_not_413(app_and_pool):
     )
 
 
+def test_oversize_content_length_returns_413(app_and_pool):
+    """SEC-NG-01: a Content-Length header exceeding _MAX_BODY_BYTES must yield 413
+    before the body is read — prevents unbounded memory consumption via DoS.
+    """
+    from paper_ingestion.routers import infra_events as m
+
+    app, _pool, _conn = app_and_pool
+    client = TestClient(app)
+
+    oversize = m._MAX_BODY_BYTES + 1
+    resp = client.post(
+        "/infra-events",
+        content=b"[]",  # tiny actual body — only the header matters
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": str(oversize),
+            "X-Infra-Key": "test-infra-secret",
+        },
+    )
+    assert resp.status_code == 413, (
+        f"expected 413 for oversize Content-Length; got {resp.status_code}"
+    )
+
+
+def test_normal_batch_not_rejected_by_size_check(app_and_pool):
+    """SEC-NG-01: a normal-sized batch must still be accepted (regression guard)."""
+    app, _pool, conn = app_and_pool
+    client = TestClient(app)
+
+    resp = client.post(
+        "/infra-events",
+        json=[{"source": "nginx", "message": "ok"}],
+        headers={"X-Infra-Key": "test-infra-secret"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] == 1
+
+
 def test_ingest_infra_events_counts_skipped_malformed_lines(app_and_pool, caplog):
     app, _pool, _conn = app_and_pool
     client = TestClient(app)

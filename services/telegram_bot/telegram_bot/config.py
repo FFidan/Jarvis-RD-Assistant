@@ -115,6 +115,14 @@ class BotConfig(JarvisCommonSettings):
         ),
     )
 
+    @field_validator("jarvis_base_url", mode="after")
+    @classmethod
+    def _validate_base_url(cls, v: str | None) -> str | None:
+        """Require an http(s):// scheme to block XSS / open-redirect via javascript: URLs."""
+        if v is not None and not v.startswith(("http://", "https://")):
+            raise ValueError(f"JARVIS_BASE_URL must start with http:// or https://; got {v!r}")
+        return v
+
     @field_validator("telegram_chat_id", mode="before")
     @classmethod
     def _coerce_chat_id(cls, v: object) -> int | None:

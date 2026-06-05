@@ -49,6 +49,7 @@ from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from paper_ingestion.deps import limiter
+from paper_ingestion.routers.auth import _hash_email
 
 logger = logging.getLogger(__name__)
 
@@ -662,7 +663,7 @@ async def create_first_admin(
         path="/",
     )
 
-    logger.info("setup: first admin created id=%s email=%s", user_id, email_norm)
+    logger.info("setup: first admin created id=%s email_hash=%s", user_id, _hash_email(email_norm))
     return AdminResponse(id=user_id, email=user_row["email"], role=user_row["role"])
 
 

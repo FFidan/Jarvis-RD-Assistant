@@ -1,5 +1,5 @@
 /**
- * Unit tests for chat-store actions — D.2 removeLastMessageIfEmpty
+ * Unit tests for chat-store actions — D.2 removeLastMessageIfEmpty + W4.3 stable message ids
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useChatStore } from '@/stores/chat-store';
@@ -83,5 +83,46 @@ describe('chat-store — removeLastMessageIfEmpty (D.2)', () => {
     if (!otherMessages) return;
     expect(otherMessages).toHaveLength(1);
     expect(otherMessages[0]?.content).toBe('has content');
+  });
+});
+
+describe('chat-store — stable message ids (W4.3)', () => {
+  beforeEach(resetStore);
+
+  it('auto-assigns a non-empty id when message is added without one', () => {
+    useChatStore.getState().addMessage(CHAT_ID, { role: 'user', content: 'hi' });
+    const messages = useChatStore.getState().chats[CHAT_ID];
+    expect(messages).toHaveLength(1);
+    expect(typeof messages?.[0]?.id).toBe('string');
+    expect(messages?.[0]?.id.length).toBeGreaterThan(0);
+  });
+
+  it('preserves an explicitly provided id', () => {
+    useChatStore.getState().addMessage(CHAT_ID, { id: 'my-stable-id', role: 'user', content: 'hi' });
+    const messages = useChatStore.getState().chats[CHAT_ID];
+    expect(messages?.[0]?.id).toBe('my-stable-id');
+  });
+
+  it('each message gets a unique id', () => {
+    useChatStore.getState().addMessage(CHAT_ID, { role: 'user', content: 'first' });
+    useChatStore.getState().addMessage(CHAT_ID, { role: 'assistant', content: 'second' });
+    const messages = useChatStore.getState().chats[CHAT_ID];
+    expect(messages).toHaveLength(2);
+    const id0 = messages?.[0]?.id;
+    const id1 = messages?.[1]?.id;
+    expect(id0).toBeTruthy();
+    expect(id1).toBeTruthy();
+    expect(id0).not.toBe(id1);
+  });
+
+  it('id survives appendToLastMessage (content-update preserves identity)', () => {
+    useChatStore.getState().addMessage(CHAT_ID, { role: 'assistant', content: 'Hel' });
+    const idBefore = useChatStore.getState().chats[CHAT_ID]?.[0]?.id;
+
+    useChatStore.getState().appendToLastMessage(CHAT_ID, 'lo');
+
+    const idAfter = useChatStore.getState().chats[CHAT_ID]?.[0]?.id;
+    expect(idAfter).toBe(idBefore);
+    expect(useChatStore.getState().chats[CHAT_ID]?.[0]?.content).toBe('Hello');
   });
 });

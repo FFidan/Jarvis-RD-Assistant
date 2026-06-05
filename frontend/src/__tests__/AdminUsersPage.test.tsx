@@ -276,6 +276,20 @@ describe('per-row role select isolation (DOM-F-07)', () => {
     _roleSelectCallbacks.clear();
   });
 
+  it('role Select is always disabled for the current-user (self) row', async () => {
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+    renderPage();
+    await waitFor(() => screen.getByText('admin@example.com'));
+
+    // admin@example.com has id=1, which matches _mockUserId=1 (isSelf=true).
+    const adminTrigger = screen.getByRole('combobox', { name: /role for admin@example\.com/i });
+    const aliceTrigger = screen.getByRole('combobox', { name: /role for alice@example\.com/i });
+
+    // Self row must be disabled; peer row must be enabled (no pending mutation).
+    expect(adminTrigger).toBeDisabled();
+    expect(aliceTrigger).not.toBeDisabled();
+  });
+
   it('only disables the mutating row select; other rows remain enabled', async () => {
     // Mutation never resolves — stays pending so we can inspect disabled state.
     updateUserRoleMock.mockReturnValue(new Promise(() => {}));
@@ -287,9 +301,9 @@ describe('per-row role select isolation (DOM-F-07)', () => {
     const aliceTrigger = screen.getByRole('combobox', { name: /role for alice@example\.com/i });
     const adminTrigger = screen.getByRole('combobox', { name: /role for admin@example\.com/i });
 
-    // Both selects are enabled before any mutation.
+    // Before any mutation: alice (non-self) enabled; admin (self) always disabled.
     expect(aliceTrigger).not.toBeDisabled();
-    expect(adminTrigger).not.toBeDisabled();
+    expect(adminTrigger).toBeDisabled();
 
     // Directly invoke the onValueChange callback stored for alice's row.
     const aliceCb = _roleSelectCallbacks.get('Role for alice@example.com');
@@ -300,9 +314,9 @@ describe('per-row role select isolation (DOM-F-07)', () => {
       expect(updateUserRoleMock).toHaveBeenCalledWith(2, 'admin');
     });
 
-    // alice's trigger must now be disabled; admin's trigger must still be enabled.
+    // alice's trigger must now be disabled (pending mutation); admin's remains disabled (isSelf).
     expect(aliceTrigger).toBeDisabled();
-    expect(adminTrigger).not.toBeDisabled();
+    expect(adminTrigger).toBeDisabled();
   });
 });
 

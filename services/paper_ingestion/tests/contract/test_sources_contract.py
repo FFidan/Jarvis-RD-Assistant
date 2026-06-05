@@ -17,6 +17,8 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
+from jarvis_common.crypto import decrypt_secret
+
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
@@ -30,6 +32,20 @@ async def _sources_pool(contract_conn):
     from jarvis_common.testing import SharedConnPool
 
     return SharedConnPool(contract_conn)
+
+
+@pytest.fixture()
+def _configure_config_key(monkeypatch):
+    """Wire a fresh Fernet key into JARVIS_CONFIG_KEY (source api_keys are encrypted at rest)."""
+    from cryptography.fernet import Fernet
+
+    from jarvis_common.crypto import refresh_fernet_cache
+
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", Fernet.generate_key().decode())
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
+    refresh_fernet_cache()
+    yield
+    refresh_fernet_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +68,9 @@ def _build_admin_request(user_id: int = 1):
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_source_config_update_inserts_new_row(contract_conn, _sources_pool):
+async def test_source_config_update_inserts_new_row(
+    contract_conn, _sources_pool, _configure_config_key
+):
     """update_source_config inserts a new paper_sources row when none exists.
 
     Collapses: test_update_source_config_upserts_when_row_absent (mock SQL
@@ -74,12 +92,15 @@ async def test_source_config_update_inserts_new_row(contract_conn, _sources_pool
         "arxiv_contract_test_001",
     )
     assert row is not None, "Row must be inserted when UPDATE affects 0 rows"
-    assert row["config"]["api_key"] == "contract-key-001"
+    assert row["config"]["api_key"] != "contract-key-001", "api_key must be encrypted at rest"
+    assert decrypt_secret(row["config"]["api_key"]) == "contract-key-001"
 
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_source_config_update_merges_existing_row(contract_conn, _sources_pool):
+async def test_source_config_update_merges_existing_row(
+    contract_conn, _sources_pool, _configure_config_key
+):
     """update_source_config merges into an existing paper_sources row.
 
     The JSONB || operator must preserve pre-existing keys not mentioned in
@@ -116,8 +137,9 @@ async def test_source_config_update_merges_existing_row(contract_conn, _sources_
     )
     assert row is not None
     cfg = row["config"]
-    # New key was added
-    assert cfg["api_key"] == "new-s2-key"
+    # New key was added — stored encrypted at rest
+    assert cfg["api_key"] != "new-s2-key", "api_key must be encrypted at rest"
+    assert decrypt_secret(cfg["api_key"]) == "new-s2-key"
     # Pre-existing key NOT in request body must be preserved (JSONB merge)
     assert cfg["email"] == "pre@example.com"
     assert cfg["extra_key"] == "preserved"
@@ -125,7 +147,9 @@ async def test_source_config_update_merges_existing_row(contract_conn, _sources_
 
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
-async def test_source_config_jsonb_is_stored_as_object_not_string(contract_conn, _sources_pool):
+async def test_source_config_jsonb_is_stored_as_object_not_string(
+    contract_conn, _sources_pool, _configure_config_key
+):
     """B-1b regression: JSONB arg must be a native dict to prevent double-encoding.
 
     Passes a real UPDATE through asyncpg. If the router were passing a
@@ -160,7 +184,7 @@ async def test_source_config_jsonb_is_stored_as_object_not_string(contract_conn,
         f"config must decode as dict (not {type(cfg).__name__!r}); "
         "a pre-serialised string arg would double-encode and return a string scalar"
     )
-    assert cfg["api_key"] == "double-encode-check"
+    assert decrypt_secret(cfg["api_key"]) == "double-encode-check"
     assert cfg["email"] == "b@example.com"
 
 

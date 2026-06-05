@@ -288,6 +288,7 @@ class EmbeddingSearchMixin:
         limit: int = 30,
         score_threshold: float = 0.2,
         user_id: int | None = None,
+        library_paper_ids: list[int] | None = None,
     ) -> list[dict]:
         """Search ALL chunks in Qdrant without a paper_id filter.
 
@@ -295,6 +296,13 @@ class EmbeddingSearchMixin:
         user OR marked canonical (``user_id`` payload IS NULL). When unset,
         no scope filter is applied (preserves single-tenant + procrastinate
         task code paths).
+
+        ``library_paper_ids`` (PI-RAG-001): when supplied, widens the scope to
+        also include chunks for any paper in this list, regardless of which user
+        embedded them.  Callers MUST pass only the requesting user's own
+        ``user_library`` paper_ids so secondary-library owners can retrieve
+        shared-corpus papers that another user originally processed, without
+        ever exposing papers outside the caller's library.
 
         Returns
         -------
@@ -313,7 +321,7 @@ class EmbeddingSearchMixin:
                 collection_name=COLLECTION_NAME,
                 query=query_embedding,
                 limit=limit,
-                query_filter=_user_scope_filter(user_id),
+                query_filter=_user_scope_filter(user_id, library_paper_ids),
                 score_threshold=score_threshold,
                 with_payload=True,
             )

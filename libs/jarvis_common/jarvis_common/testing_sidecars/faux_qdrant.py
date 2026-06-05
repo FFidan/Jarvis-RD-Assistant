@@ -222,6 +222,11 @@ def _matches_condition(payload: dict[str, Any], condition: Any) -> bool:
     field = getattr(condition, "key", None)
     match = getattr(condition, "match", None)
     if field is not None and match is not None:
+        # MatchAny(any=[...]) — payload value must be one of the listed values.
+        any_values = getattr(match, "any", None)
+        if any_values is not None:
+            return payload.get(field) in any_values
+        # MatchValue(value=...) — exact match.
         return payload.get(field) == getattr(match, "value", None)
 
     is_null = getattr(condition, "is_null", None)

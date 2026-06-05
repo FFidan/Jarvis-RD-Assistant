@@ -27,7 +27,7 @@ site_name: JARVIS RD Assistant — Operator & Developer Docs
 site_description: >-
   Deployment, architecture, engineering standards, security, and API contracts
   for JARVIS RD Assistant operators and developers.
-site_url: "https://FFidan.github.io/Jarvis-RD-Assistant/"
+site_url: "https://ffidan.github.io/Jarvis-RD-Assistant/"
 
 # Repo link shown in the Material theme header
 repo_url: https://github.com/FFidan/Jarvis-RD-Assistant

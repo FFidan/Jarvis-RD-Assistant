@@ -268,6 +268,26 @@ describe('MyDayPage', () => {
       expect(api.getMyDayBundle).toHaveBeenCalledTimes(1);
     });
   });
+
+  it('FE-UIA-03: "all projects →" link uses React Router (no full-page reload)', async () => {
+    renderWithProviders();
+    // Wait for project section to render
+    expect(await screen.findAllByText('JARVIS')).not.toHaveLength(0);
+    // The link must be a <a> element pointing to /projects but rendered via
+    // React Router's <Link>, which means no href-only navigation.
+    const link = screen.getByRole('link', { name: /all projects/i });
+    expect(link).toBeInTheDocument();
+    // React Router Link renders <a> with href="/projects"
+    expect(link).toHaveAttribute('href', '/projects');
+  });
+
+  it('FE-UIA-04: does not render the hardcoded epoch entry-number footer', async () => {
+    renderWithProviders();
+    await screen.findByText(/RESEARCH LOG/);
+    // The "end of entry N" footer should no longer appear since the epoch-based
+    // calculation was removed and MyDayFooter is no longer rendered.
+    expect(screen.queryByText(/end of entry/i)).not.toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

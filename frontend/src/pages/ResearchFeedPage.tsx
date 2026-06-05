@@ -356,10 +356,11 @@ export function ResearchFeedPage() {
   }
 
   // ── Compute effective FeedView filter from facet state ───────────────────
-  // §Source and §Topic facets are passed as extra query params to FeedView
-  // via sourceTypes/topicId props if the FeedView API supports them.
-  // For now, §Source drives the `sourceTypes` param (existing API).
+  // §Source drives the `sourceTypes` param; the §Topic facet drives `topicId`.
+  // The 'untagged' sentinel is a count-only facet (no backend topic id), so it
+  // does not map to a topic_id filter here.
   const effectiveSourceTypes: string | null = sourceFacet ?? inboxSource ?? null;
+  const effectiveTopicId: number | null = typeof topicFacet === 'number' ? topicFacet : null;
 
   // ─── render ───────────────────────────────────────────────────────────────
 
@@ -473,6 +474,7 @@ export function ResearchFeedPage() {
                 surface="inbox"
                 filter={filter}
                 sourceTypes={effectiveSourceTypes}
+                topicId={effectiveTopicId}
                 listFilter={listFilter || undefined}
               />
             </div>
@@ -555,6 +557,7 @@ export function ResearchFeedPage() {
                   surface="library"
                   filter={filter}
                   scope={feedScope}
+                  topicId={effectiveTopicId}
                   listFilter={listFilter || undefined}
                 />
               )}
@@ -578,7 +581,7 @@ export function ResearchFeedPage() {
               >
                 Papers in Trash will be kept until you delete them forever. Restore returns them to their previous location.
               </div>
-              <FeedView surface="trash" filter={filter} listFilter={listFilter || undefined} />
+              <FeedView surface="trash" filter={filter} topicId={effectiveTopicId} listFilter={listFilter || undefined} />
             </div>
           )}
 

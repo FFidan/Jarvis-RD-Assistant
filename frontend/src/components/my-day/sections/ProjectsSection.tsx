@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchMyDay } from '@/lib/api';
@@ -47,7 +47,7 @@ export function ProjectsSection() {
       <SectionHeader
         marker="Projects"
         meta={`${data.project_pulse.length} active`}
-        right={<a href="/projects" className="text-meta uppercase tracking-[0.18em] text-soft hover:text-strong">all projects →</a>}
+        right={<Link to="/projects" className="text-meta uppercase tracking-[0.18em] text-soft hover:text-strong">all projects →</Link>}
       />
 
       <div className="space-y-4">

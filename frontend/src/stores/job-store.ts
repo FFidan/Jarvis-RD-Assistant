@@ -262,6 +262,7 @@ export const useJobStore = create<JobStore>()(
         const _reconnectAfterDrop = async (delayMs: number) => {
           get()._cleanupSubscription(jobId);
           await sleep(delayMs);
+          if (!useAuthStore.getState().isAuthenticated) return;
           const nextDelay = Math.min(delayMs * 2, RECONNECT_MAX_DELAY_MS);
           get().subscribe(jobId, nextDelay);
         };
@@ -304,6 +305,7 @@ export const useJobStore = create<JobStore>()(
                   // controller is already aborted by _cleanupSubscription, so do NOT
                   // pass its signal to sleep — it would throw AbortError immediately (G-01)
                   await sleep(currentReconnectDelay);
+                  if (!useAuthStore.getState().isAuthenticated) return;
                   const nextDelay = Math.min(currentReconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
                   get().subscribe(jobId, nextDelay);
                   return;

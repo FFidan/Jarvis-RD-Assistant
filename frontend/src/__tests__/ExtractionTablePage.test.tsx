@@ -1,8 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ExtractionTablePage } from '@/pages/ExtractionTablePage';
+
+// Expose paper selection in tests without fighting the real combobox
+vi.mock('@/components/shared/PaperSearchSelect', () => ({
+  PaperSearchSelect: ({
+    onChangeMulti,
+  }: {
+    values: number[];
+    onChangeMulti: (ids: number[]) => void;
+    placeholder?: string;
+  }) => (
+    <button data-testid="select-papers" onClick={() => onChangeMulti([1])}>
+      Select papers
+    </button>
+  ),
+}));
 
 // Mock the API module
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -115,5 +130,80 @@ describe('ExtractionTablePage', () => {
 
     consoleError.mockRestore();
     consoleWarn.mockRestore();
+  });
+
+  it('shows "Run extraction first" prompt when papers are selected but no extraction has run', async () => {
+    renderPage();
+
+    // Wait for template to load so the template ID is set
+    await waitFor(() => {
+      expect(screen.getByText(/Method, Dataset/)).toBeInTheDocument();
+    });
+
+    // Select papers via the mock button
+    fireEvent.click(screen.getByTestId('select-papers'));
+
+    // tableQuery is now enabled but fetchExtractionTable returns [] — no prior extraction
+    await waitFor(() => {
+      expect(screen.getByText('Run extraction first')).toBeInTheDocument();
+      expect(
+        screen.getByText('Run extraction first to generate data.'),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('shows "Extraction complete — no data found." after a successful but empty extraction', async () => {
+    const { fetchExtractionTable } = await import('@/lib/api');
+    (fetchExtractionTable as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    renderPage();
+
+    // Wait for template to load
+    await waitFor(() => {
+      expect(screen.getByText(/Method, Dataset/)).toBeInTheDocument();
+    });
+
+    // Select papers
+    fireEvent.click(screen.getByTestId('select-papers'));
+
+    // Wait until the "run extraction first" prompt is shown (pre-run state)
+    await waitFor(() => {
+      expect(screen.getByText('Run extraction first')).toBeInTheDocument();
+    });
+
+    // Click Extract Selected to trigger the mutation
+    const extractButton = screen.getByText('Extract Selected');
+    fireEvent.click(extractButton);
+
+    // After mutation succeeds, empty result should show the post-run message
+    await waitFor(() => {
+      expect(screen.getByText('Extraction complete — no data found.')).toBeInTheDocument();
+    });
+  });
+
+  it('shows an error message in the table card when the table query fails — not an empty state', async () => {
+    const { fetchExtractionTable } = await import('@/lib/api');
+    (fetchExtractionTable as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('Network failure'),
+    );
+
+    renderPage();
+
+    // Wait for template to load
+    await waitFor(() => {
+      expect(screen.getByText(/Method, Dataset/)).toBeInTheDocument();
+    });
+
+    // Select papers to enable the table query
+    fireEvent.click(screen.getByTestId('select-papers'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to load extraction data/)).toBeInTheDocument();
+    });
+
+    // Must NOT show any empty-state copy when there's a real error
+    expect(screen.queryByText('Run extraction first')).not.toBeInTheDocument();
+    expect(screen.queryByText('Extraction complete — no data found.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pick papers above and click Extract Selected to fill this table.')).not.toBeInTheDocument();
   });
 });

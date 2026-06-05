@@ -1817,7 +1817,7 @@ ALTER TABLE ONLY public.paper_entities
 ALTER TABLE ONLY public.paper_entities
     ADD CONSTRAINT paper_entities_paper_id_fkey FOREIGN KEY (paper_id) REFERENCES public.papers(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.paper_entities
-    ADD CONSTRAINT paper_entities_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT paper_entities_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.paper_extractions
     ADD CONSTRAINT paper_extractions_paper_id_fkey FOREIGN KEY (paper_id) REFERENCES public.papers(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.paper_extractions
@@ -1873,7 +1873,7 @@ ALTER TABLE ONLY public.pulse_decks
 ALTER TABLE ONLY public.pulse_decks
     ADD CONSTRAINT pulse_decks_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.pulse_models
-    ADD CONSTRAINT pulse_models_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT pulse_models_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.recommendation_feedback
     ADD CONSTRAINT recommendation_feedback_paper_id_fkey FOREIGN KEY (paper_id) REFERENCES public.papers(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.recommendation_feedback

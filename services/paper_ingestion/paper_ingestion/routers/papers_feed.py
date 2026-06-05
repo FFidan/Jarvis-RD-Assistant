@@ -80,7 +80,7 @@ async def list_papers(
     view: str | None = Query(default=None, max_length=64),
     source_type: SourceType | None = None,
     topic_id: int | None = None,
-    q: str | None = None,
+    q: str | None = Query(default=None, max_length=500),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db_pool: asyncpg.Pool = Depends(get_db_pool),

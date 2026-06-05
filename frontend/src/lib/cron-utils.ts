@@ -12,7 +12,7 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
  * Throws if the expression does not have exactly 5 whitespace-separated fields.
  * After the length check the fields are provably present, so the cast is safe.
  */
-function splitCron(expression: string): [string, string, string, string, string] {
+export function splitCron(expression: string): [string, string, string, string, string] {
   const parts = expression.trim().split(/\s+/);
   if (parts.length !== 5) {
     throw new Error(

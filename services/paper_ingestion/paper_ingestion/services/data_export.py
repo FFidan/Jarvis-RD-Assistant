@@ -44,6 +44,10 @@ _EXPORT_QUERIES: tuple[tuple[str, str], ...] = (
         "SELECT row_to_json(t) FROM (SELECT key, value, user_id, created_at, updated_at "
         "FROM user_config WHERE user_id = $1) t",
     ),
+    # paper_extractions and paper_entities gained user_id in migration 0094 (per-user
+    # tenant isolation).  Include them so a GDPR export is complete.
+    ("paper_extractions", "SELECT row_to_json(t) FROM paper_extractions t WHERE t.user_id = $1"),
+    ("paper_entities", "SELECT row_to_json(t) FROM paper_entities t WHERE t.user_id = $1"),
 )
 
 

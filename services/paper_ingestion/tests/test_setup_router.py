@@ -91,3 +91,51 @@ async def test_setup_status_returns_503_on_db_failure() -> None:
 
     assert exc_info.value.status_code == 503
     assert "Setup status check failed" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# PI-AUTH-02: first-admin creation log must not contain raw email
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_first_admin_logs_hash_not_raw_email(monkeypatch, caplog) -> None:
+    """logger.info on first-admin creation must record email_hash, never the raw address."""
+    import hashlib
+    import logging
+
+    from fastapi import Response
+
+    raw_email = "admin@example.com"
+    expected_hash = hashlib.sha256(raw_email.encode("utf-8")).hexdigest()
+
+    user_row = {"id": 42, "email": raw_email, "role": "admin"}
+    conn = AsyncMock()
+    # pool.acquire() is called twice: once by require_unconfigured_or_admin (_admin_count),
+    # once by the handler body.  Both share the same conn mock.
+    # require_unconfigured_or_admin: conn.fetchval → admin_count=0 (bootstrap mode)
+    # handler body (inside transaction):
+    #   conn.execute  → advisory lock (returns None)
+    #   conn.fetchval → admin_count=0 (inner guard)
+    #   conn.fetchrow → existing check → None
+    #   conn.fetchrow → INSERT RETURNING → user_row
+    #   conn.fetchval → session INSERT RETURNING id → 99
+    conn.execute = AsyncMock(return_value=None)
+    conn.fetchval = AsyncMock(side_effect=[0, 0, 99])  # outer count, inner count, session_id
+    conn.fetchrow = AsyncMock(side_effect=[None, user_row])  # no existing, INSERT row
+
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+    response = Response()
+
+    body = setup_router.AdminBody(email=raw_email)
+
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.routers.setup"):
+        await setup_router.create_first_admin(body, request, response)
+
+    assert any(expected_hash in r.message for r in caplog.records), (
+        "Expected email hash in log record"
+    )
+    assert not any(raw_email in r.message for r in caplog.records), (
+        "Raw email must not appear in any log record"
+    )

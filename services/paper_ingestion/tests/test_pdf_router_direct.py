@@ -193,6 +193,82 @@ async def test_scan_local_pdfs_skips_symlinks_and_non_pdfs(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_scan_local_pdfs_attributes_to_user(tmp_path, monkeypatch):
+    """scan_local_pdf_directory sets discovered_by and calls add_to_library for a known user."""
+    from unittest.mock import patch as mock_patch
+
+    scan_dir = tmp_path / "scan"
+    scan_dir.mkdir()
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+
+    valid_pdf = scan_dir / "myarticle.pdf"
+    valid_pdf.write_bytes(b"%PDF-1.7\ncontent")
+
+    inserted_row = FakeRecord(id=42)
+    conn = AsyncMock()
+    # First fetchrow: duplicate-check returns None (not a duplicate).
+    # Second fetchrow: INSERT RETURNING row.
+    conn.fetchrow = AsyncMock(side_effect=[None, inserted_row])
+    conn.execute = AsyncMock()
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    monkeypatch.setattr(local_pdfs, "LOCAL_PDF_SCAN_DIR", str(scan_dir))
+    monkeypatch.setattr(local_pdfs, "PDF_STORAGE_PATH", str(storage_dir))
+
+    mock_add_to_library = AsyncMock()
+    with mock_patch("paper_ingestion.services.local_pdfs.add_to_library", mock_add_to_library):
+        result = await local_pdfs.scan_local_pdf_directory(pool, user_id=99)
+
+    assert result["imported"] == 1
+
+    # INSERT must have passed user_id=99 as the discovered_by argument ($8).
+    insert_call = conn.fetchrow.await_args_list[1]
+    insert_args = insert_call.args
+    assert insert_args[-1] == 99  # last positional arg = discovered_by
+
+    # add_to_library must have been called once with the paper's id and user attribution.
+    mock_add_to_library.assert_awaited_once()
+    _, kwargs = mock_add_to_library.call_args
+    assert kwargs == {"user_id": 99, "paper_id": 42, "added_via": "manual_save"}
+
+
+@pytest.mark.asyncio
+async def test_scan_local_pdfs_no_user_skips_library(tmp_path, monkeypatch):
+    """scan_local_pdf_directory with user_id=None does not call add_to_library."""
+    from unittest.mock import patch as mock_patch
+
+    scan_dir = tmp_path / "scan"
+    scan_dir.mkdir()
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+
+    valid_pdf = scan_dir / "paper2.pdf"
+    valid_pdf.write_bytes(b"%PDF-1.7\ncontent")
+
+    inserted_row = FakeRecord(id=11)
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(side_effect=[None, inserted_row])
+    conn.execute = AsyncMock()
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    monkeypatch.setattr(local_pdfs, "LOCAL_PDF_SCAN_DIR", str(scan_dir))
+    monkeypatch.setattr(local_pdfs, "PDF_STORAGE_PATH", str(storage_dir))
+
+    mock_add_to_library = AsyncMock()
+    with mock_patch("paper_ingestion.services.local_pdfs.add_to_library", mock_add_to_library):
+        result = await local_pdfs.scan_local_pdf_directory(pool, user_id=None)
+
+    assert result["imported"] == 1
+    mock_add_to_library.assert_not_awaited()
+
+    # INSERT must have passed NULL (None) as discovered_by.
+    insert_call = conn.fetchrow.await_args_list[1]
+    insert_args = insert_call.args
+    assert insert_args[-1] is None
+
+
+@pytest.mark.asyncio
 async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, monkeypatch):
     """batch_process_papers should enqueue a single job for valid papers only."""
     storage_dir = tmp_path / "storage"

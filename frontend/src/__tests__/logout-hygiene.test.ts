@@ -41,7 +41,7 @@ Object.defineProperty(navigator, 'serviceWorker', {
 // --- Dynamic imports (after stubs are in place) ---
 
 const { useAuthStore, registerQueryClient } = await import('@/stores/auth-store');
-const { useChatStore } = await import('@/stores/chat-store');
+const { useChatStore, registerStream, useStreamRegistry } = await import('@/stores/chat-store');
 const { useJobStore } = await import('@/stores/job-store');
 const { useBulkSelection } = await import('@/stores/bulk-selection-store');
 const { usePomodoroStore } = await import('@/stores/pomodoro-store');
@@ -61,7 +61,7 @@ const fakeQueryClient = {
 
 /** Seed stores with non-default data to verify they get reset. */
 function seedStores() {
-  useChatStore.setState({ chats: { 'chat-1': [{ role: 'user', content: 'hello' }] } });
+  useChatStore.setState({ chats: { 'chat-1': [{ id: 'msg-1', role: 'user', content: 'hello' }] } });
   useJobStore.setState({
     jobs: {
       'job-1': {
@@ -179,6 +179,38 @@ describe('logout-hygiene', () => {
     expect(mockQueryClientClear).toHaveBeenCalledOnce();
     // cancelQueries must appear before clear in the call order.
     expect(cancelOrder).toEqual(['cancelQueries', 'clear']);
+  });
+
+  it('aborts all registered in-flight SSE streams on logout', async () => {
+    // Arrange: register two active streams using the real chat-store API.
+    // registerStream() sets the controller in the module-level activeStreams Map
+    // and marks the chatId in useStreamRegistry. abortAllStreams() (called during
+    // logout) iterates that map, calling abort() on each controller then clearing
+    // the map. Removing the abortAllStreams() call from auth-store logout() leaves
+    // controller.abort() uncalled and useStreamRegistry populated — both checks
+    // below would then fail.
+    const ctrl1 = new AbortController();
+    const ctrl2 = new AbortController();
+    const abortSpy1 = vi.spyOn(ctrl1, 'abort');
+    const abortSpy2 = vi.spyOn(ctrl2, 'abort');
+
+    registerStream('chat-stream-1', ctrl1);
+    registerStream('chat-stream-2', ctrl2);
+
+    // Precondition: both streams are tracked before logout
+    expect(useStreamRegistry.getState().activeStreamingChats.has('chat-stream-1')).toBe(true);
+    expect(useStreamRegistry.getState().activeStreamingChats.has('chat-stream-2')).toBe(true);
+
+    // Act
+    useAuthStore.getState().logout();
+    await flushPromises();
+
+    // Assert 1: each AbortController.abort() was called
+    expect(abortSpy1).toHaveBeenCalledOnce();
+    expect(abortSpy2).toHaveBeenCalledOnce();
+
+    // Assert 2: the stream registry is cleared
+    expect(useStreamRegistry.getState().activeStreamingChats.size).toBe(0);
   });
 
   it('one store _reset failure does not prevent other stores from resetting', async () => {

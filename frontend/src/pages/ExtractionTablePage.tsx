@@ -198,21 +198,31 @@ export function ExtractionTablePage() {
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
             </div>
+          ) : tableQuery.isError ? (
+            <p className="py-8 text-center text-sm text-destructive">
+              Failed to load extraction data: {errorMessage(tableQuery.error)}
+            </p>
           ) : tableQuery.data && tableQuery.data.length > 0 && selectedTemplate ? (
             <ExtractionDataTable
               rows={tableQuery.data}
               fields={selectedTemplate.fields}
             />
-          ) : selectedPaperIds.length > 0 ? (
+          ) : selectedPaperIds.length === 0 ? (
             <EmptyState
-              title="No extractions match your filters"
-              description="Try selecting different papers or run extraction to generate data."
+              title="No papers selected"
+              description="Pick papers above and click Extract Selected to fill this table."
+              icon={TableProperties}
+            />
+          ) : extractMutation.isSuccess ? (
+            <EmptyState
+              title="Extraction complete — no data found."
+              description="The extraction ran but returned no results for the selected papers."
               icon={TableProperties}
             />
           ) : (
             <EmptyState
-              title="No papers selected"
-              description="Pick papers above and click Extract Selected to fill this table."
+              title="Run extraction first"
+              description="Run extraction first to generate data."
               icon={TableProperties}
             />
           )}

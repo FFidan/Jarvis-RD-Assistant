@@ -8,8 +8,7 @@ import asyncio
 import logging
 import re
 import time as _time
-from datetime import UTC, date, datetime
-from email.utils import parsedate_to_datetime
+from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any
@@ -19,7 +18,7 @@ if TYPE_CHECKING:
 from urllib.parse import urlparse
 
 import httpx
-from jarvis_common.event_log import log_event
+from jarvis_common.net import parse_retry_after
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 
 from paper_ingestion.config import ALLOWED_PDF_DOMAINS
@@ -67,34 +66,16 @@ _ARXIV_USER_AGENT = (
 
 
 def _retry_after_s(value: str | None) -> float | None:
-    """Parse an HTTP ``Retry-After`` header value into seconds.
+    """Parse an HTTP ``Retry-After`` header value into seconds (uncapped).
 
-    Accepts the two RFC 7231 forms:
-    * delta-seconds — a non-negative integer/float number of seconds.
-    * HTTP-date — an absolute date; converted to the remaining delay relative
-      to ``now`` (clamped to ``>= 0``).
-
-    Returns ``None`` when the header is absent or unparseable.
+    Delegates to :func:`jarvis_common.net.parse_retry_after` with
+    ``max_seconds=None`` — the arXiv call site applies its own
+    :data:`_MAX_RETRY_AFTER_SECONDS` (60 s) ceiling downstream, so this parser
+    stays uncapped.  Handles both RFC 7231 forms (delta-seconds and HTTP-date);
+    returns ``None`` when the header is absent or unparseable.
     """
-    if value is None:
-        return None
-    value = value.strip()
-    if not value:
-        return None
-    try:
-        return max(0.0, float(value))
-    except (TypeError, ValueError):
-        pass
-    # Fall back to HTTP-date form (e.g. "Wed, 21 Oct 2026 07:28:00 GMT").
-    try:
-        retry_dt = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        return None
-    if retry_dt is None:
-        return None
-    if retry_dt.tzinfo is None:
-        retry_dt = retry_dt.replace(tzinfo=UTC)
-    return max(0.0, (retry_dt - datetime.now(tz=UTC)).total_seconds())
+    parsed = parse_retry_after(value, max_seconds=None)
+    return None if parsed is None else float(parsed)
 
 
 @register_source
@@ -591,29 +572,16 @@ class ArxivSource(PaperSource):
                 logger.warning(
                     "arXiv fetch_new_since failed for query: %s", search_query, exc_info=True
                 )
-                if p_limiter is not None:
-                    await p_limiter.update_last_request("error")
-                await self._insert_run_history(
+                await self._record_fetch_outcome(
                     started_at=started_at,
-                    status="error",
                     candidate_count=0,
-                    duration_ms=int((_time.monotonic() - started_at) * 1000),
                     user_id=user_id,
+                    status="error",
+                    p_limiter=p_limiter,
+                    log_level="error",
+                    log_message="fetch_failed",
+                    log_context={"http_status": None, "exception": repr(_exc)[:300]},
                 )
-                if self.db_pool is not None:
-                    try:
-                        await log_event(
-                            pool=self.db_pool,
-                            level="error",
-                            category="source",
-                            source="arxiv",
-                            message="fetch_failed",
-                            context={"http_status": None, "exception": repr(_exc)[:300]},
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "arxiv: log_event write failed for fetch_failed", exc_info=exc
-                        )
                 continue
 
             if root is None:
@@ -621,48 +589,37 @@ class ArxivSource(PaperSource):
                 diag = self.last_poll_diagnostic or {}
                 http_status = diag.get("status", "error")
                 retry_after = diag.get("retry_after_s")
-                p_status: str = "rate_limit" if http_status == "rate_limit" else "error"
-                if p_limiter is not None:
-                    await p_limiter.update_last_request(p_status, retry_after_s=retry_after)
-                await self._insert_run_history(
-                    started_at=started_at,
-                    status=p_status,
-                    candidate_count=0,
-                    duration_ms=int((_time.monotonic() - started_at) * 1000),
-                    user_id=user_id,
-                )
-                if self.db_pool is not None:
-                    try:
-                        _diag_code = diag.get("status_code")
-                        if p_status == "rate_limit":
-                            await log_event(
-                                pool=self.db_pool,
-                                level="warning",
-                                category="source",
-                                source="arxiv",
-                                message="rate_limited",
-                                context={
-                                    "http_status": _diag_code or 429,
-                                    "retry_after_s": retry_after,
-                                },
-                            )
-                        else:
-                            await log_event(
-                                pool=self.db_pool,
-                                level="error",
-                                category="source",
-                                source="arxiv",
-                                message="fetch_failed",
-                                context={
-                                    "http_status": _diag_code,
-                                    "exception": diag.get("message", "")[:300],
-                                },
-                            )
-                    except Exception as exc:
-                        logger.warning(
-                            "arxiv: log_event write failed for rate_limit/fetch_failed",
-                            exc_info=exc,
-                        )
+                _diag_code = diag.get("status_code")
+                if http_status == "rate_limit":
+                    await self._record_fetch_outcome(
+                        started_at=started_at,
+                        candidate_count=0,
+                        user_id=user_id,
+                        status="rate_limit",
+                        p_limiter=p_limiter,
+                        retry_after_s=retry_after,
+                        log_level="warning",
+                        log_message="rate_limited",
+                        log_context={
+                            "http_status": _diag_code or 429,
+                            "retry_after_s": retry_after,
+                        },
+                    )
+                else:
+                    await self._record_fetch_outcome(
+                        started_at=started_at,
+                        candidate_count=0,
+                        user_id=user_id,
+                        status="error",
+                        p_limiter=p_limiter,
+                        retry_after_s=retry_after,
+                        log_level="error",
+                        log_message="fetch_failed",
+                        log_context={
+                            "http_status": _diag_code,
+                            "exception": diag.get("message", "")[:300],
+                        },
+                    )
                 continue
 
             entries = root.findall(f"{{{ATOM_NS}}}entry")
@@ -682,34 +639,20 @@ class ArxivSource(PaperSource):
                 if len(papers) >= limit:
                     break
 
-            duration_ms = int((_time.monotonic() - started_at) * 1000)
-            if p_limiter is not None:
-                await p_limiter.update_last_request("ok")
-            await self._insert_run_history(
+            await self._record_fetch_outcome(
                 started_at=started_at,
-                status="ok",
                 candidate_count=candidate_count,
-                duration_ms=duration_ms,
                 user_id=user_id,
+                status="ok",
+                p_limiter=p_limiter,
+                log_level="info",
+                log_message="fetch_succeeded",
+                log_context={
+                    "http_status": 200,
+                    "papers_fetched": candidate_count,
+                    "query_count": len(consolidated),
+                },
             )
-            if self.db_pool is not None:
-                try:
-                    await log_event(
-                        pool=self.db_pool,
-                        level="info",
-                        category="source",
-                        source="arxiv",
-                        message="fetch_succeeded",
-                        context={
-                            "http_status": 200,
-                            "papers_fetched": candidate_count,
-                            "query_count": len(consolidated),
-                        },
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "arxiv: log_event write failed for fetch_succeeded", exc_info=exc
-                    )
 
         return papers
 

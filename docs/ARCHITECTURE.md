@@ -41,7 +41,7 @@ requests through nginx to `paper_ingestion` and `learning_engine`.
   formatting uses the shared `jarvis_common.sse` helpers (`sse_event()`,
   `SSE_DONE`); do not inline SSE formatting in router handlers.
 - `queries/` - reusable SQL fragments and predicates. predicates.py owns
-  canonical SQL predicates: VIEW_PREDICATES (10 named surfaces per spec §6), RECOMMENDER_EXCLUDE_SQL, and PULSE_CANDIDATE_EXCLUDE_SQL. Use these constants; never duplicate the SQL condition inline.
+  canonical SQL predicates: VIEW_PREDICATES (10 named surfaces per spec §6) and EXCLUDED_STATE_SQL (recommender + Pulse exclusion). Use these constants; never duplicate the SQL condition inline.
 - `models/` - Pydantic models, split by domain.
 - `ingestion/` - embedding, retrieval, reranking, recommendations, PDF
   processing ownership where applicable.
@@ -123,10 +123,11 @@ HTTP client.
   `paper_recommendations`, `projects`, `tasks`, `milestones`,
   `pulse_source_health`, `system_events`, and others) carries a non-NULL
   `user_id`. Single-tenant deployments are multi-tenant with exactly one user;
-  there is no NULL-owned product data. Migration 0092 re-owns any legacy
-  NULL-valued rows to the single admin on upgrade (runs only when exactly one
-  admin exists). All read/write paths in routers thread `user_id` from
-  `get_current_user`.
+  there is no NULL-owned product data. Migration 0092 re-owns legacy NULL
+  `user_id` rows for most tables; migration 0094 extends the same backfill and
+  per-user uniqueness constraints to `paper_extractions`, `paper_entities`, and
+  Zotero `paper_notes` (both run only when exactly one admin exists). All
+  read/write paths in routers thread `user_id` from `get_current_user`.
 - **IDOR guards** — router endpoints that read by PK assert ownership before
   returning data. The defensive `_resolve_request_user_id` helper tolerates
   mocked requests for test harnesses.

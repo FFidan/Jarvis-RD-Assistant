@@ -35,6 +35,12 @@ _INFRA_CACHED_ALLOWED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Netwo
 # under this bound; only a misconfigured/abusive client hits the cap.
 _MAX_INFRA_BATCH = 1000
 
+# SEC-NG-01: reject bodies whose declared Content-Length exceeds this bound
+# before reading them, preventing unbounded memory growth from a single request.
+# 10 MB is generous: 1000 events × ~1 KB each is ~1 MB; this gives 10× headroom
+# while still rejecting obviously abusive payloads.
+_MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+
 
 def _parse_infra_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
     raw = get_core_settings().infra_ingest_allowed_cidrs
@@ -124,6 +130,15 @@ async def ingest_infra_events(
     produces NDJSON. Returns ``{"accepted": N, "skipped": M}``.
     """
     _check_auth(request, x_infra_key)
+
+    cl_header = request.headers.get("content-length")
+    if cl_header is not None:
+        try:
+            declared_length = int(cl_header)
+        except ValueError:
+            declared_length = 0
+        if declared_length > _MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body too large")
 
     body = await request.body()
     if not body.strip():

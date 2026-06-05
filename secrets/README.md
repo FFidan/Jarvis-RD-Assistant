@@ -14,6 +14,10 @@ printf "%s" "your-postgres-password" > secrets/postgres_password.txt && chmod 60
 printf "%s" "your-litellm-master-key" > secrets/litellm_master_key.txt && chmod 600 secrets/litellm_master_key.txt
 printf "%s" "your-jarvis-api-key"    > secrets/jarvis_api_key.txt && chmod 600 secrets/jarvis_api_key.txt
 printf "%s" "your-telegram-token"    > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
+printf "%s" "your-qdrant-api-key"    > secrets/qdrant_api_key.txt && chmod 600 secrets/qdrant_api_key.txt
+# jarvis_config_key.txt must be a Fernet key — generate one with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+printf "%s" "your-fernet-key-base64url=" > secrets/jarvis_config_key.txt && chmod 600 secrets/jarvis_config_key.txt
 ```
 
 Alternatively, batch chmod after creation:

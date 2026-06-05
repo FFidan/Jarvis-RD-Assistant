@@ -305,8 +305,7 @@ async def batch_extract_papers(
 ) -> dict[str, object]:
     """Enqueue a background job to batch-extract fields for multiple papers."""
     async with db_pool.acquire() as conn:
-        for paper_id in body.paper_ids:
-            await assert_paper_ownership(conn, paper_id, user_id)
+        await assert_papers_ownership(conn, list(body.paper_ids), user_id)
     import uuid  # noqa: PLC0415
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415

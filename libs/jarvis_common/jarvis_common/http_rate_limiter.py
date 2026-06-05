@@ -103,8 +103,10 @@ def _real_ip(request: Request) -> str:
         try:
             ip = ipaddress.ip_address(hop)
         except ValueError:
-            # Malformed hop — treat as untrusted, return it as the client.
-            return hop
+            # Malformed hop — attacker-controlled string; do NOT use it as a
+            # rate-limit key (distinct forged strings would let one source bypass
+            # per-IP limits).  Fall back to the socket peer instead.
+            return request.client.host if request.client else "unknown"
         if not _is_trusted(ip):
             return hop
 

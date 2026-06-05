@@ -39,7 +39,11 @@ async def get_activity(
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT log_date, tasks_completed, cards_reviewed, papers_read, focus_hours
+            SELECT log_date,
+                   COALESCE(tasks_completed, 0)   AS tasks_completed,
+                   COALESCE(cards_reviewed,  0)   AS cards_reviewed,
+                   COALESCE(papers_read,     0)   AS papers_read,
+                   COALESCE(focus_hours,     0.0) AS focus_hours
             FROM daily_log
             WHERE user_id = $1
               AND log_date >= CURRENT_DATE - $2::int

@@ -83,6 +83,55 @@ def test_malformed_cf_connecting_ip_falls_through_to_xff(
     )
 
 
+def test_malformed_xff_hop_falls_back_to_socket_peer() -> None:
+    """COM-SEC-001: a malformed XFF hop must yield the socket peer, not the forged string.
+
+    An attacker can inject a hop like "not-an-ip" into X-Forwarded-For to create
+    distinct rate-limit keys for each request (bypassing per-IP limits).  The fix
+    must return ``request.client.host`` instead of the malformed string.
+    """
+    import jarvis_common.http_rate_limiter as _m
+
+    # Disable CF trust so only the XFF path is exercised.
+    m_settings = _Settings(trust_cf_connecting_ip=False)
+
+    original = _m.get_jarvis_common_settings
+    _m.get_jarvis_common_settings = lambda: m_settings
+    try:
+        req = _FakeRequest(
+            headers={"X-Forwarded-For": "not-an-ip, 10.0.0.1"},
+            client=_FakeClient(host="203.0.113.55"),
+        )
+        result = _m._real_ip(req)
+    finally:
+        _m.get_jarvis_common_settings = original
+
+    assert result == "203.0.113.55", (
+        f"Malformed XFF hop must yield the socket peer '203.0.113.55', got {result!r}"
+    )
+
+
+def test_malformed_xff_hop_with_no_client_returns_unknown() -> None:
+    """COM-SEC-001: malformed XFF hop with no socket peer returns 'unknown'."""
+    import jarvis_common.http_rate_limiter as _m
+
+    m_settings = _Settings(trust_cf_connecting_ip=False)
+    original = _m.get_jarvis_common_settings
+    _m.get_jarvis_common_settings = lambda: m_settings
+    try:
+        req = _FakeRequest(
+            headers={"X-Forwarded-For": "definitely-not-an-ip"},
+            client=None,
+        )
+        result = _m._real_ip(req)
+    finally:
+        _m.get_jarvis_common_settings = original
+
+    assert result == "unknown", (
+        f"Malformed XFF hop with no client must return 'unknown', got {result!r}"
+    )
+
+
 def test_garbage_cf_connecting_ip_falls_through_to_socket_peer(
     cf_trust_enabled, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -40,6 +40,8 @@ interface FeedViewProps {
   scope?: FeedScope;
   /** Inbox source-type chip filter — null/undefined means all sources. */
   sourceTypes?: string | null;
+  /** §Topic facet — restrict the feed to papers tagged with this topic id. */
+  topicId?: number | null;
   /**
    * Scoped list-filter (spec §3.4): client-side title/author text filter
    * applied to the currently loaded page. Not sent to the backend.
@@ -86,7 +88,7 @@ function getEmptyState(surface: SurfaceView): EmptyStateCopy {
 
 const DEFAULT_LIMIT: PageSize = 30;
 
-export function FeedView({ surface, filter, scope = 'library', sourceTypes, listFilter }: FeedViewProps) {
+export function FeedView({ surface, filter, scope = 'library', sourceTypes, topicId, listFilter }: FeedViewProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -113,14 +115,14 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, list
     [setSearchParams],
   );
 
-  const lastSurfaceFilterRef = useRef<string>(`${surface}|${filter ?? ''}|${scope}`);
+  const lastSurfaceFilterRef = useRef<string>(`${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}`);
   useEffect(() => {
-    const key = `${surface}|${filter ?? ''}|${scope}`;
+    const key = `${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}`;
     if (lastSurfaceFilterRef.current !== key) {
       lastSurfaceFilterRef.current = key;
       if (offset !== 0) setPagination(0, limit);
     }
-  }, [surface, filter, scope, offset, limit, setPagination]);
+  }, [surface, filter, scope, topicId, offset, limit, setPagination]);
 
   // Keyboard-navigation focused row index (j/k)
   const [focusedIdx, setFocusedIdx] = useState<number>(0);
@@ -132,9 +134,9 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, list
   const selectedIds = useBulkSelection((s) => s.selectedIds);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: QUERY_KEYS.papers.feed(surface, filter ?? '', scope, limit, offset, sourceTypes ? [sourceTypes] : null),
+    queryKey: QUERY_KEYS.papers.feed(surface, filter ?? '', scope, limit, offset, sourceTypes ? [sourceTypes] : null, topicId ?? null),
     // fetchFeed accepts SurfaceView string
-    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes }),
+    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes, topicId }),
   });
 
   // Spec §3.4: client-side scoped list-filter (title/author, within active facets)

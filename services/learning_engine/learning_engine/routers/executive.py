@@ -433,7 +433,7 @@ async def log_focus_session(
                 """INSERT INTO daily_log (user_id, log_date, focus_hours)
                 VALUES ($1, CURRENT_DATE, $2)
                 ON CONFLICT (user_id, log_date)
-                DO UPDATE SET focus_hours = daily_log.focus_hours + $2""",
+                DO UPDATE SET focus_hours = COALESCE(daily_log.focus_hours, 0) + $2""",
                 user_id,
                 payload.duration_hours,
             )

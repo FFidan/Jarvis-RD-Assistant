@@ -3,7 +3,6 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import type { QueryClient } from '@tanstack/react-query';
 import { UI_STORE_KEY, useUIStore } from '@/stores/ui-store';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
-import { abortAllStreams } from '@/stores/chat-store';
 import { clearPersistedQueryCache } from '@/lib/query-persister';
 import { clearReviewOutbox } from '@/lib/review-outbox';
 
@@ -141,9 +140,6 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout() {
-        // Abort any in-flight SSE streams before clearing session state.
-        abortAllStreams();
-
         // Clear the UI store's persisted localStorage entry so a fresh login
         // doesn't inherit stale UI state from a previous session.
         localStorage.removeItem(UI_STORE_KEY);
@@ -172,7 +168,8 @@ export const useAuthStore = create<AuthState>()(
           // Promise.allSettled ensures a failed chunk load for one store does not
           // prevent the others from resetting.
           await Promise.allSettled([
-            import('@/stores/chat-store').then(({ useChatStore }) => useChatStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] chat-store reset failed', e); }),
+            // Abort any in-flight SSE streams then reset chat state.
+            import('@/stores/chat-store').then(({ abortAllStreams: abort, useChatStore }) => { abort(); useChatStore.getState()._reset(); }).catch((e: unknown) => { console.warn('[auth] chat-store reset failed', e); }),
             import('@/stores/job-store').then(({ useJobStore }) => useJobStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] job-store reset failed', e); }),
             import('@/stores/bulk-selection-store').then(({ useBulkSelection }) => useBulkSelection.getState()._reset()).catch((e: unknown) => { console.warn('[auth] bulk-selection-store reset failed', e); }),
             Promise.resolve(usePomodoroStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] pomodoro-store reset failed', e); }),

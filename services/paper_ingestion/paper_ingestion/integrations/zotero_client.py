@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import email.utils
 import ipaddress
 import logging
 import urllib.parse
-from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
+from jarvis_common.net import parse_retry_after
 
 from paper_ingestion.config import get_paper_ingestion_settings
 
@@ -44,33 +43,17 @@ _MAX_ZOTERO_PAGES_ITEMS = 10_000
 def _parse_retry_after(value: str | None) -> float | None:
     """Parse a Retry-After header value (delta-seconds OR HTTP-date).
 
-    Returns the delay in seconds, clamped to ``_MAX_RETRY_AFTER_SECONDS``,
-    or ``None`` when the header is absent / unparseable.
+    Delegates to :func:`jarvis_common.net.parse_retry_after`, capping at the
+    Zotero-specific ``_MAX_RETRY_AFTER_SECONDS`` (60 s) and rejecting negative
+    delta values (``negative_as_none=True``).  Returns the delay in seconds, or
+    ``None`` when the header is absent / unparseable / negative.
     """
-    if not value:
-        return None
-    value = value.strip()
-    # Try delta-seconds first (RFC 7231 §7.1.3 form 1).
-    try:
-        seconds = float(value)
-        if seconds < 0:
-            return None
-        return min(seconds, _MAX_RETRY_AFTER_SECONDS)
-    except ValueError:
-        pass
-    # Fall back to HTTP-date (form 2).
-    try:
-        retry_dt = email.utils.parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        return None
-    if retry_dt is None:
-        return None
-    if retry_dt.tzinfo is None:
-        retry_dt = retry_dt.replace(tzinfo=UTC)
-    delta = (retry_dt - datetime.now(UTC)).total_seconds()
-    if delta <= 0:
-        return 0.0
-    return min(delta, _MAX_RETRY_AFTER_SECONDS)
+    parsed = parse_retry_after(
+        value,
+        max_seconds=int(_MAX_RETRY_AFTER_SECONDS),
+        negative_as_none=True,
+    )
+    return None if parsed is None else float(parsed)
 
 
 async def _zotero_request_with_retry(
@@ -83,9 +66,9 @@ async def _zotero_request_with_retry(
 
     On HTTP 429 the server's ``Retry-After`` header (delta-seconds or
     HTTP-date) is parsed via :func:`_parse_retry_after` and the request is
-    retried exactly once. The single retry mirrors the existing source-plugin
-    posture (see ``paper_ingestion.sources.base._safe_get``) and bounds tail
-    latency under sustained throttling.
+    retried exactly once. The single retry mirrors the conservative
+    source-plugin retry posture and bounds tail latency under sustained
+    throttling.
 
     The caller still owns ``raise_for_status()`` — this helper only retries;
     it does not promote 429 into an exception.

@@ -6,13 +6,14 @@ Covers three entry points exercised via the ASGI app:
   - POST /api/papers/batch-save          (papers_detail.py::batch_save_papers)
 
 Each path defers ``paper.analyze`` guarded by a ``paper_chunks`` existence check
-so already-processed papers are skipped.  The batch path relies on in-job
-idempotency and does NOT add a per-paper pre-check query.
+so already-processed papers are skipped.  The batch path issues ONE batch query
+(SELECT DISTINCT paper_id FROM paper_chunks WHERE paper_id = ANY($1)) and skips
+enqueue for ids that already have chunks.
 
 Verified:
   papers_lifecycle.py:41-69  — save_paper chunk-exists guard + defer
   pulse.py:220-284           — rate_card "save" branch + defer
-  papers_detail.py:163-217   — batch_save_papers per-paper defer (no pre-check)
+  papers_detail.py:163-228   — batch_save_papers batch chunk-exists guard + per-paper defer
 """
 
 from __future__ import annotations
@@ -321,26 +322,27 @@ async def test_pulse_rate_save_enqueues_analyze(
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — POST /api/papers/batch-save: enqueues analyze per saved paper
+# Test 4 — POST /api/papers/batch-save: enqueues analyze only for unchunked papers
 #
-# batch_save_papers defers paper.analyze for every paper it upserts — no
-# pre-check (relies on in-job idempotency).
-# Verified: papers_detail.py:208-216 — per-item defer_async loop
+# batch_save_papers issues one batch query to find already-chunked paper ids,
+# then defers paper.analyze only for ids with zero chunks.
+# Verified: papers_detail.py:208-228 — batch chunk-exists guard + per-item defer loop
 # ---------------------------------------------------------------------------
 
 
-async def test_batch_save_enqueues_analyze_per_paper(
+async def test_batch_save_enqueues_analyze_for_unchunked_papers(
     contract_two_users,
     _autoenqueue_app,
     _configure_api_key,
     contract_conn,
 ):
-    """POST /api/papers/batch-save: defers paper.analyze once per saved paper.
+    """POST /api/papers/batch-save: defers paper.analyze only for papers without chunks.
 
-    Verified: papers_detail.py:208-216 — per-item defer_async in post-transaction loop.
-    Request body shape: list of PaperCreate objects.
+    Two papers are saved; one is pre-seeded with a paper_chunks row.
+    Asserts: unchunked paper IS enqueued, already-chunked paper is NOT.
+
+    Verified: papers_detail.py:208-228 — batch chunk-exists guard skips chunked ids.
     Verified: papers_detail.py:163-167 — list[PaperCreate] Body() parameter.
-    Verified: test_papers_contract.py:598-611 — existing batch-save contract test shape.
     """
     payload = [
         {
@@ -359,6 +361,32 @@ async def test_batch_save_enqueues_analyze_per_paper(
         },
     ]
 
+    # First save both papers to get their ids (no mock — we need real ids).
+    mock_task_first, _ = _mock_analyze_task()
+    with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_task_first}):
+        async with _make_client(_autoenqueue_app, contract_two_users.cookie_a) as c:
+            setup_resp = await c.post("/api/papers/batch-save", json=payload)
+    assert setup_resp.status_code == 200
+    body_setup = setup_resp.json()
+    assert len(body_setup) == 2
+    paper_id_by_ext = {p["external_id"]: p["id"] for p in body_setup}
+    chunked_id = paper_id_by_ext["autoenqueue-contract-test-ext-001"]
+    unchunked_id = paper_id_by_ext["autoenqueue-contract-test-ext-002"]
+
+    # Pre-seed a chunk for ext-001 so its id appears in paper_chunks.
+    await contract_conn.execute(
+        """INSERT INTO paper_chunks (paper_id, chunk_index, content)
+           VALUES ($1, 0, 'contract-test-chunk-batch')
+           ON CONFLICT (paper_id, chunk_index) DO NOTHING""",
+        chunked_id,
+    )
+    # Ensure ext-002 has no chunks.
+    await contract_conn.execute(
+        "DELETE FROM paper_chunks WHERE paper_id = $1",
+        unchunked_id,
+    )
+
+    # Re-save the same two papers; the batch check should skip chunked_id.
     mock_task, mock_defer = _mock_analyze_task()
     with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_task}):
         async with _make_client(_autoenqueue_app, contract_two_users.cookie_a) as c:
@@ -372,14 +400,16 @@ async def test_batch_save_enqueues_analyze_per_paper(
         f"Expected list of 2 PaperResponse; got: {body!r}"
     )
 
-    # One defer per saved paper — Verified: papers_detail.py:208-216
-    assert mock_defer.await_count == 2, (
-        f"Expected defer_async called twice (once per paper); got {mock_defer.await_count} calls"
+    # Only the unchunked paper must be enqueued — Verified: papers_detail.py:217-219
+    assert mock_defer.await_count == 1, (
+        f"Expected defer_async called once (only for unchunked paper); got {mock_defer.await_count} calls"
     )
-    saved_ids = {p["id"] for p in body}
     deferred_paper_ids = {call.kwargs.get("paper_id") for call in mock_defer.await_args_list}
-    assert deferred_paper_ids == saved_ids, (
-        f"defer_async paper_ids {deferred_paper_ids} must match saved paper ids {saved_ids}"
+    assert deferred_paper_ids == {unchunked_id}, (
+        f"Only unchunked paper {unchunked_id} should be enqueued; got {deferred_paper_ids}"
+    )
+    assert chunked_id not in deferred_paper_ids, (
+        f"Already-chunked paper {chunked_id} must NOT be re-enqueued"
     )
     user_a_id = contract_two_users.user_a_id
     for call in mock_defer.await_args_list:
