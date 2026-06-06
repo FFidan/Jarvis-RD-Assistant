@@ -3,7 +3,12 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## v0.6.0 (2026-06-06) — first public release
+
+First public release of JARVIS RD Assistant. Highlights since v0.5.0: **per-user
+multi-tenant isolation**, **GDPR-purge correctness**, **SMTP-SSRF + credential
+encryption**, **token-only Telegram pairing** and the Telegram→REST decoupling,
+**GPU/setup foolproofing**, **whole-app mobile**, and a **unified onboarding wizard**.
 
 ### Upgrade Notes
 
@@ -48,6 +53,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`/api/setup/status` now returns `setup_completed`.** The pre-auth setup status endpoint (always HTTP 200, no session required) now includes a `setup_completed: bool` field alongside the existing `configured` and hardware fields. The onboarding gate keys on this field.
 
+- **Telegram bot pairing is token-only.** The bot authenticates chats via the `/pair <token>` flow (token from Settings → Integrations → Telegram); the legacy `TELEGRAM_CHAT_ID` env var and the dashboard-code pairing path are removed. The bot no longer writes to the database directly — all product data flows through the service REST API.
+
 ### Fixed
 
 - **GDPR purge succeeds in multi-user deployments** (migration 0095):
@@ -80,30 +87,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **My Day — calm empty state for the Pulse hero card (RED-ERROR-EMPTY-STATE).** When no Pulse deck exists yet, the My Day Pulse hero card shows a calm "No Pulse for today yet — generate one" call-to-action instead of a red error panel. Red error UI is reserved for genuine backend failures.
 - **Mobile responsive fixes.** Projects rail, admin tables, analytics KPI band, mobile facet drawer, TopBar, My Day layout, and the chat surface are now correctly laid out on narrow viewports.
 - **Logs preset filters restored on load.** The Logs page preset now re-applies its filter selections when the page is loaded or navigated to.
-
----
-
-## v0.5.1 (2026-06-02)
-
-### Changed / Breaking
-
-- **Telegram bot pairing is now token-only.** The bot authenticates chats
-  exclusively via the `/pair <token>` flow (token generated in Settings →
-  Integrations → Telegram). The legacy `TELEGRAM_CHAT_ID` environment variable
-  and the dashboard-code pairing path are removed. Unpaired chats are prompted
-  to `/pair`. Existing `TELEGRAM_CHAT_ID` values can be removed from `.env`.
-
-### Fixed
-
-- Task-completion and paper-summary background jobs now correctly attribute
-  activity to the owner's account in single-tenant deployments (previously
-  recorded as NULL).
+- **Single-tenant background-job attribution.** Task-completion and paper-summary jobs attribute activity to the owner's account (previously recorded as NULL in single-tenant deployments).
 
 ### Migrations
 
-- **0092** — Re-owns any legacy NULL-owned product rows (projects, tasks,
-  milestones, daily_log, etc.) to the single admin account. Runs automatically
-  on upgrade; only activates when exactly one admin user exists.
+- **0092** — Re-owns legacy NULL-owned product rows (projects, tasks, milestones, daily_log) to the single admin account (single-admin deployments only).
+- **0093** — Adds `papers.zotero_citation_key` for Zotero citation-key push.
+- **0094** — Per-user scoping of extractions, entity records, Zotero sync, and notes.
+- **0095** — Cascades `paper_entities` + `pulse_models` on user delete (GDPR purge correctness).
 
 ---
 

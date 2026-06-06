@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-rd-assistant"
-version = "0.5.0"
+version = "0.6.0"
 description = "Self-hosted AI-powered research assistant"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
 requires-python = ">=3.12"
