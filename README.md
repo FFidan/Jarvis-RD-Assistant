@@ -156,7 +156,7 @@ See [`.env.example`](.env.example) for the full annotated list. For production d
 ├── libs/jarvis_common/    # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql           # PostgreSQL bedrock schema
-│   └── migrations/        # Versioned schema changes (starting 0089)
+│   └── migrations/        # Versioned schema changes (0092+; 0089–0091 folded into init.sql)
 ├── litellm/config.yaml    # LLM gateway routing (smart/fast/embed aliases)
 ├── docker-compose.yml     # All services
 ├── .env.example           # Configuration template

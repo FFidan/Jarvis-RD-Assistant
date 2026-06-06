@@ -123,7 +123,7 @@ Observability variables (Langfuse): [docs/contracts/04-observability.md](contrac
 Secrets use Docker Secrets. Initialise locally with `bash scripts/init-secrets.sh`
 (or `scripts/jarvis-setup.sh`). Full table: [docs/DEPLOYMENT.md](DEPLOYMENT.md).
 
-Fresh installs: `db/init.sql`. Migration history: [`db/migrations/README.md`](../db/migrations/README.md).
+Fresh installs: `db/init.sql`. Migration history: [`db/migrations/README.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/migrations/README.md).
 
 ## Optional Reranker
 

@@ -122,8 +122,7 @@ parent or child.
 - Migration files must not contain bare DDL outside a transaction. Run
   `bash scripts/check-migrations-no-tx.sh` to verify before adding a migration.
 - State-based predicate logic is centralised in
-  `paper_ingestion/queries/predicates.py` — `VIEW_PREDICATES` (10 named
-  surfaces), `RECOMMENDER_EXCLUDE_SQL`, and `PULSE_CANDIDATE_EXCLUDE_SQL`.
+  `paper_ingestion/queries/predicates.py` — `VIEW_PREDICATES` (named view surfaces) and `EXCLUDED_STATE_SQL`.
   Use these constants; never duplicate the SQL condition inline.
 
 ## Anti-Hallucination Invariants
@@ -181,7 +180,7 @@ deliberately thin; the contract carries the load-bearing rules.
   unit / contract / boundary-adapter / E2E) per the testing contract; the four
   anti-patterns documented there (handler-bypass, mock-the-mock, SQL-substring,
   deep orchestration mock) are prohibited and enforced by
-  [scripts/check-test-shape.py](../scripts/check-test-shape.py) on every commit.
+  [scripts/check-test-shape.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/scripts/check-test-shape.py) on every commit.
 
 ## LLM Prompt Shape
 

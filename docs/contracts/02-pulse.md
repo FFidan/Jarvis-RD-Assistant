@@ -1,8 +1,8 @@
 # 02 — Pulse Pipeline Contract
 **Status:** LIVING
 **Reviewers must update this contract in the same patch as any change to:**
-- The 8 numbered steps in [pulse/job.py:run_pulse](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L100)
-- `_DEFAULT_WEIGHTS` in [pulse/profile.py:19-30](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L19-L30)
+- The 8 numbered steps in [pulse/job.py:run_pulse](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L100)
+- `_DEFAULT_WEIGHTS` in [pulse/profile.py:19-30](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L19-L30)
 - `_llm_concurrency()` / `_stage2_timeout()` lazy getters / `PULSE_STAGE2_*` scoring knobs / per-call timeouts
 - The `signals` dict shape on `ScoredCandidate`
 - The `stats` dict keys produced by `run_pulse` (drives the Settings → Pulse Diagnostics panel)
@@ -35,17 +35,17 @@ wrapped in `try/except` so any one stage can degrade without crashing the run.
 
 | # | Stage | File:line | Output | Failure handling |
 |---|---|---|---|---|
-| 1 | Profile load | [job.py:114-129](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L114-L129) | `UserProfile` | **Fatal.** Sets `last_error`; returns immediately with `duration_s` populated. |
-| 2 | Discovery (source fan-out) | [job.py:137-151](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L137-L151) | `list[PaperCreate]` + per-source counts + `source_diagnostics` | Degraded. Empty candidate list; pipeline continues. If every enabled source is empty, rate-limited, unsupported, or unconfigured, `degraded_reason` is set even when the job itself did not fail. |
-| 3 | Stage 1 — embedding filter | [job.py:158-170](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L158-L170); [scoring.py:94-217](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L94-L217) | top-`stage2_top_k` `ScoredCandidate`s | Degraded. Empty `stage1_out`; Stage 2 short-circuits. |
-| 4 | Stage 2 — LLM rerank | [job.py:331-354](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L331-L354); [scoring.py:252-334](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L252-L334) | `ScoredCandidate`s with LLM signals filled | **Degraded.** On `TimeoutError` (outer wall-clock cap, default 900 s) OR any exception, `_fallback_stage2` clears LLM signals. `degraded_reason` set. |
-| 5 | Optional citation + classifier signals | [job.py:231-294](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L231-L294) | `signals` dict augmented with `citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier` | Degraded. Failures preserve LLM signals; `degraded_reason` set if no prior reason. |
-| 6 | Stage 3 — weighted combine | [job.py:301-307](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L301-L307); [scoring.py:342-380](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L342-L380) | `ScoredCandidate`s with `final_score` | Degraded. Fall back to `stage2_out`; sets `last_error`. |
-| 7 | Assemble deck | [job.py:314-320](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L314-L320); [deck.py:18-40](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L18-L40) | top-`deck_size` cards | Degraded. Empty deck; sets `last_error`. |
-| 8 | Persist deck | [job.py:327-367](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L327-L367); [deck.py:43-220](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L43-L220) | `pulse_decks` row + N `pulse_cards` rows | Degraded. Outer txn failure → `card_count=0`; per-card savepoint isolates upsert failures so one bad card doesn't poison the deck. L3 60-day negative-feedback exclusion is applied UNLESS it would leave fewer than 20 candidates (then bypassed). |
+| 1 | Profile load | [job.py:114-129](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L114-L129) | `UserProfile` | **Fatal.** Sets `last_error`; returns immediately with `duration_s` populated. |
+| 2 | Discovery (source fan-out) | [job.py:137-151](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L137-L151) | `list[PaperCreate]` + per-source counts + `source_diagnostics` | Degraded. Empty candidate list; pipeline continues. If every enabled source is empty, rate-limited, unsupported, or unconfigured, `degraded_reason` is set even when the job itself did not fail. |
+| 3 | Stage 1 — embedding filter | [job.py:158-170](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L158-L170); [scoring.py:94-217](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L94-L217) | top-`stage2_top_k` `ScoredCandidate`s | Degraded. Empty `stage1_out`; Stage 2 short-circuits. |
+| 4 | Stage 2 — LLM rerank | [job.py:331-354](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L331-L354); [scoring.py:252-334](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L252-L334) | `ScoredCandidate`s with LLM signals filled | **Degraded.** On `TimeoutError` (outer wall-clock cap, default 900 s) OR any exception, `_fallback_stage2` clears LLM signals. `degraded_reason` set. |
+| 5 | Optional citation + classifier signals | [job.py:231-294](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L231-L294) | `signals` dict augmented with `citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier` | Degraded. Failures preserve LLM signals; `degraded_reason` set if no prior reason. |
+| 6 | Stage 3 — weighted combine | [job.py:301-307](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L301-L307); [scoring.py:342-380](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L342-L380) | `ScoredCandidate`s with `final_score` | Degraded. Fall back to `stage2_out`; sets `last_error`. |
+| 7 | Assemble deck | [job.py:314-320](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L314-L320); [deck.py:18-40](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L18-L40) | top-`deck_size` cards | Degraded. Empty deck; sets `last_error`. |
+| 8 | Persist deck | [job.py:327-367](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L327-L367); [deck.py:43-220](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L43-L220) | `pulse_decks` row + N `pulse_cards` rows | Degraded. Outer txn failure → `card_count=0`; per-card savepoint isolates upsert failures so one bad card doesn't poison the deck. L3 60-day negative-feedback exclusion is applied UNLESS it would leave fewer than 20 candidates (then bypassed). |
 
 A scheduled run is invoked via APScheduler under job id `pulse_overnight`
-([scheduler.py](../../services/paper_ingestion/paper_ingestion/scheduler.py)); on-demand via the jobs subsystem under handler `"pulse.generate"` (`_pulse_generate_job` at [job.py:555](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L555)).
+([scheduler.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/scheduler.py)); on-demand via the jobs subsystem under handler `"pulse.generate"` (`_pulse_generate_job` at [job.py:555](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L555)).
 
 ---
 
@@ -53,7 +53,7 @@ A scheduled run is invoked via APScheduler under job id `pulse_overnight`
 
 ### 2.1 `ScoredCandidate` (the cross-stage envelope)
 
-Defined at [scoring.py:69](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L69). Mutated cumulatively by stages 3 → 4 → 5 → 6.
+Defined at [scoring.py:69](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L69). Mutated cumulatively by stages 3 → 4 → 5 → 6.
 
 | Field | Set by | Type |
 |---|---|---|
@@ -69,7 +69,7 @@ new signals can be added without schema migration.
 
 ### 2.2 `UserProfile` (the per-user context)
 
-Defined at [profile.py:35-60](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L35-L60). Loaded once per run by `load_profile` ([profile.py:63](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L63)).
+Defined at [profile.py:35-60](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L35-L60). Loaded once per run by `load_profile` ([profile.py:63](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L63)).
 
 | Field | Source |
 |---|---|
@@ -92,19 +92,19 @@ embedding round-trips happen between acquisitions.
 
 Every entry in `_DEFAULT_WEIGHTS` MUST have a populating stage, OR be
 explicitly marked **CONDITIONAL** with the gate documented below. `stage3_combine`
-([scoring.py:342-380](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L342-L380)) treats missing signals as 0.0 — invariant 4.3.
+([scoring.py:342-380](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L342-L380)) treats missing signals as 0.0 — invariant 4.3.
 
 ### 3.1 Always-populated signals (LIVE)
 
 | Signal | Default weight | Populated by | Range |
 |---|---|---|---|
-| `embedding` | 0.20 | Stage 1 [scoring.py:168-174, 195](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L168-L174) — cosine(candidate, library_centroid) − l2_lambda·cosine(candidate, negative_centroid) | typically [-1, 1]; clamped per use |
-| `topic` | 0.20 | Stage 1 [scoring.py:177-179](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L177-L179) — max cosine over topic embeddings | [0, 1] |
-| `recency` | 0.05 | Stage 1 [scoring.py:182](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L182) — `exp(-age_days/30)` clamped to [0, 1] | [0, 1] |
-| `author_bonus` | 0.15 | Stage 1 [scoring.py:184-192](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L184-L192) — 1.0 iff candidate authors intersect tracked_authors (by name OR S2 id) | {0.0, 1.0} |
-| `llm_relevance` | 0.30 | Stage 4 [scoring.py:296](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L296) — LLM-scored 1–10, normalized to [0, 1] | [0.1, 1.0] (None on Stage 4 fallback) |
-| `llm_novelty` | 0.10 | Stage 4 [scoring.py:297](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L297) — same | same |
-| `l2_penalty` | (informational; not a weight) | Stage 1 [scoring.py:199](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L199) — `l2_lambda * cosine(candidate, negative_centroid)` | [0, l2_lambda] |
+| `embedding` | 0.20 | Stage 1 [scoring.py:168-174, 195](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L168-L174) — cosine(candidate, library_centroid) − l2_lambda·cosine(candidate, negative_centroid) | typically [-1, 1]; clamped per use |
+| `topic` | 0.20 | Stage 1 [scoring.py:177-179](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L177-L179) — max cosine over topic embeddings | [0, 1] |
+| `recency` | 0.05 | Stage 1 [scoring.py:182](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L182) — `exp(-age_days/30)` clamped to [0, 1] | [0, 1] |
+| `author_bonus` | 0.15 | Stage 1 [scoring.py:184-192](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L184-L192) — 1.0 iff candidate authors intersect tracked_authors (by name OR S2 id) | {0.0, 1.0} |
+| `llm_relevance` | 0.30 | Stage 4 [scoring.py:296](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L296) — LLM-scored 1–10, normalized to [0, 1] | [0.1, 1.0] (None on Stage 4 fallback) |
+| `llm_novelty` | 0.10 | Stage 4 [scoring.py:297](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L297) — same | same |
+| `l2_penalty` | (informational; not a weight) | Stage 1 [scoring.py:199](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L199) — `l2_lambda * cosine(candidate, negative_centroid)` | [0, l2_lambda] |
 
 `l2_penalty` is stored in `signals` for diagnostics but is NOT consumed by
 `stage3_combine` — its effect is already baked into `embedding` per the
@@ -114,17 +114,17 @@ multiplier separately; see [01-settings.md §2.1](01-settings.md#21-active-keys-
 ### 3.2 Conditional signals (LIVE-CONDITIONAL)
 
 These four signals default to weight 0.0 in `_DEFAULT_WEIGHTS` and `_PULSE_REQUIRED_WEIGHT_KEYS`
-(absent from `_PULSE_REQUIRED_WEIGHT_KEYS` at [config_validators.py:45-47](../../services/paper_ingestion/paper_ingestion/services/config_validators.py#L45-L47), so they are OPTIONAL on PUT). They are **populated only when the user assigns a non-zero weight** AND the gating dependency is available.
+(absent from `_PULSE_REQUIRED_WEIGHT_KEYS` at [config_validators.py:45-47](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L45-L47), so they are OPTIONAL on PUT). They are **populated only when the user assigns a non-zero weight** AND the gating dependency is available.
 
 | Signal | Computed by | Activation gate | Dependency | Failure mode |
 |---|---|---|---|---|
-| `citation_pagerank` | [citation_signals.py:compute_citation_signals](../../services/paper_ingestion/paper_ingestion/pulse/citation_signals.py#L11-L107) | `any(profile.weights[name] > 0 for name in ("citation_pagerank", "citation_count", "citation_adamic_adar"))` ([job.py:233-236](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L233-L236)) | `networkx` Python package + populated `paper_citations` table | If `networkx` missing → empty signals dict → all three citation signals stay 0.0; if no edges in the graph → PageRank = 0.0 for all; degrades silently |
+| `citation_pagerank` | [citation_signals.py:compute_citation_signals](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/citation_signals.py#L11-L107) | `any(profile.weights[name] > 0 for name in ("citation_pagerank", "citation_count", "citation_adamic_adar"))` ([job.py:233-236](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L233-L236)) | `networkx` Python package + populated `paper_citations` table | If `networkx` missing → empty signals dict → all three citation signals stay 0.0; if no edges in the graph → PageRank = 0.0 for all; degrades silently |
 | `citation_count` | Same | Same | `papers.citation_count` column populated by S2 ingestion | Normalized as `min(1.0, count / max_count_in_batch)` |
 | `citation_adamic_adar` | Same | Same | `paper_citations` edges + at least one liked paper in `recommendation_feedback` | Returns 0.0 if no liked papers or no edges |
-| `classifier` | [training.py:classifier_scores](../../services/paper_ingestion/paper_ingestion/pulse/training.py) | `profile.weights["classifier"] > 0` ([job.py:258](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L258)) | `scikit-learn` + ≥30 rows in `recommendation_feedback` with both positive and negative labels | If sklearn missing → `available=False`, all candidates score 0.0; if not enough ratings → same; trained model persisted via `pulse.train_classifier` job after each Pulse run ([job.py:373](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L373)) |
+| `classifier` | [training.py:classifier_scores](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/training.py) | `profile.weights["classifier"] > 0` ([job.py:258](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L258)) | `scikit-learn` + ≥30 rows in `recommendation_feedback` with both positive and negative labels | If sklearn missing → `available=False`, all candidates score 0.0; if not enough ratings → same; trained model persisted via `pulse.train_classifier` job after each Pulse run ([job.py:373](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L373)) |
 
 **Important contract:** these signals are NOT ghost UI. The Settings sliders
-defaulting to 0.0 (per [SettingsPage Pulse tab](../../frontend/src/components/settings/PulseSection.tsx)) is intentional. The user opts in by raising
+defaulting to 0.0 (per [SettingsPage Pulse tab](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/frontend/src/components/settings/PulseSection.tsx)) is intentional. The user opts in by raising
 the weight; the pipeline respects the opt-in but degrades gracefully when
 the optional dependency is missing.
 
@@ -132,13 +132,13 @@ The Pulse diagnostics surface (Settings → Pulse → Diagnostics panel; backed
 by `pulse_decks.stats`) MUST report:
 - `classifier.available` (bool) — sklearn installed
 - `classifier.degradation_reason` (str | null) — why classifier scored zero
-([job.py:266-294](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L266-L294))
+([job.py:266-294](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L266-L294))
 
 ### 3.3 The signal-catalog completeness invariant
 
 Every key in `_DEFAULT_WEIGHTS` is present in §3.1 or §3.2 above. Adding a
 new weight key MUST add the corresponding row to one of those tables AND to
-`_PULSE_WEIGHT_KEYS` in [config_validators.py:31-44](../../services/paper_ingestion/paper_ingestion/services/config_validators.py#L31-L44). The validator and contract are
+`_PULSE_WEIGHT_KEYS` in [config_validators.py:31-44](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L31-L44). The validator and contract are
 the two halves of the same allow-list.
 
 ---
@@ -146,7 +146,7 @@ the two halves of the same allow-list.
 ## 4. Weight schema
 
 `user_config['pulse.weights']` is a JSONB object whose keys are a subset of
-`_PULSE_WEIGHT_KEYS` ([config_validators.py:31-44](../../services/paper_ingestion/paper_ingestion/services/config_validators.py#L31-L44)). Validation:
+`_PULSE_WEIGHT_KEYS` ([config_validators.py:31-44](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L31-L44)). Validation:
 
 - Required keys: `embedding`, `topic`, `llm_relevance`, `llm_novelty`,
   `author_bonus`, `recency` (the always-populated set, §3.1)
@@ -154,15 +154,15 @@ the two halves of the same allow-list.
   `citation_adamic_adar`, `classifier` (the conditional set, §3.2)
 - Each value: `float ∈ [0.0, 1.0]` (per `_validate_pulse_weights`)
 - Sum is **NOT** required to equal 1.0 — the UI offers a "Normalize to 1.0"
-  button ([PulseSection.tsx:738-746](../../frontend/src/components/settings/PulseSection.tsx#L738-L746)) but the contract permits any combination
+  button ([PulseSection.tsx:738-746](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/frontend/src/components/settings/PulseSection.tsx#L738-L746)) but the contract permits any combination
 
-Load path ([profile.py:221-231](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L221-L231)):
+Load path ([profile.py:221-231](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L221-L231)):
 
 1. Read JSONB; if absent, fall back to `_DEFAULT_WEIGHTS`
 2. Merge user values over defaults (so missing optional keys default to 0.0)
 3. Clamp every value to `[0, 1]`; log a warning if any was out of range
 
-`pulse.l2_lambda` is stored as a dedicated `UserProfile` field outside the `weights` dict ([profile.py:60](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L60), loaded at [profile.py:236-237](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L236-L237)); `stage3_combine` never iterates it as a scoring signal.
+`pulse.l2_lambda` is stored as a dedicated `UserProfile` field outside the `weights` dict ([profile.py:60](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L60), loaded at [profile.py:236-237](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L236-L237)); `stage3_combine` never iterates it as a scoring signal.
 
 ---
 
@@ -171,19 +171,19 @@ Load path ([profile.py:221-231](../../services/paper_ingestion/paper_ingestion/p
 Two of these knobs are **environment variables** (deployment-level, not
 user-controllable settings keys): `PULSE_LLM_CONCURRENCY` and
 `PULSE_STAGE2_TIMEOUT_SECONDS`, both defined as pydantic-settings fields on
-`PaperIngestionSettings` ([config.py:190-208](../../services/paper_ingestion/paper_ingestion/config.py#L190-L208)).
+`PaperIngestionSettings` ([config.py:190-208](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/config.py#L190-L208)).
 The lookback/grace knobs ARE user_config keys (see [01-settings.md §2.1](01-settings.md#21-active-keys-written-and-read-by-code-that-affects-user-visible-behavior)).
 
 | Knob | Value | Source | Purpose |
 |---|---|---|---|
-| Per-LLM-call timeout | 120 s | `LLM_TIMEOUT_DEFAULT` at [llm_client.py:70](../../libs/jarvis_common/jarvis_common/llm_client.py#L70) | Single chat completion request (or single retry) cannot exceed this |
-| Stage-2 concurrency | default 4 (env var `PULSE_LLM_CONCURRENCY`) | `_llm_concurrency()` lazy getter at [scoring.py:45](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L45) → `_get_cfg().pulse_llm_concurrency` | Semaphore-bounded parallel scorers |
-| Stage-2 model alias | `fast` | `_llm_model()` at [scoring.py:49](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L49) reads `PULSE_STAGE2_MODEL` | Uses the smaller local model for Pulse scoring by default; operators can override to `smart` or another LiteLLM alias |
-| Stage-2 retry budget | 1 | `_stage2_max_retries()` at [scoring.py:59](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L59) reads `PULSE_STAGE2_MAX_RETRIES` | Caps structured-output retries so one bad candidate does not expand into a long manual Pulse run |
-| Stage-2 orchestrator call | 1 call over all Stage-1 survivors | inner concurrency at [scoring.py:289](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L289) | `run_pulse` no longer slices candidates into outer batches; `stage2_llm_rerank` owns per-candidate concurrency |
-| Stage-2 wall-clock cap | default 900 s (env var `PULSE_STAGE2_TIMEOUT_SECONDS`) | `_stage2_timeout()` lazy getter at [job.py:55](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L55) → `_get_cfg().pulse_stage2_timeout_seconds`; applied at [job.py:333](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L333) | Outer `asyncio.wait_for` around all Stage-2 work; on timeout → `_fallback_stage2` |
-| Discovery lookback window | default 7 days (user_config key `pulse.lookback_days`; int, validated [1, 90]) | `_validate_lookback_days` at [config_validators.py:153](../../services/paper_ingestion/paper_ingestion/services/config_validators.py#L153); default from [profile.py:55](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L55) | Controls how far back Stage 1 looks for candidate papers |
-| Startup grace | default 0 s (user_config key `pulse.startup_grace_seconds`; float, validated [0, 300]) | `_validate_startup_grace_seconds` at [config_validators.py:158](../../services/paper_ingestion/paper_ingestion/services/config_validators.py#L158); default from [profile.py:57](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L57) | Warmup pause before first outbound HTTP burst |
+| Per-LLM-call timeout | 120 s | `LLM_TIMEOUT_DEFAULT` at [llm_client.py:70](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/llm_client.py#L70) | Single chat completion request (or single retry) cannot exceed this |
+| Stage-2 concurrency | default 4 (env var `PULSE_LLM_CONCURRENCY`) | `_llm_concurrency()` lazy getter at [scoring.py:45](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L45) → `_get_cfg().pulse_llm_concurrency` | Semaphore-bounded parallel scorers |
+| Stage-2 model alias | `fast` | `_llm_model()` at [scoring.py:49](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L49) reads `PULSE_STAGE2_MODEL` | Uses the smaller local model for Pulse scoring by default; operators can override to `smart` or another LiteLLM alias |
+| Stage-2 retry budget | 1 | `_stage2_max_retries()` at [scoring.py:59](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L59) reads `PULSE_STAGE2_MAX_RETRIES` | Caps structured-output retries so one bad candidate does not expand into a long manual Pulse run |
+| Stage-2 orchestrator call | 1 call over all Stage-1 survivors | inner concurrency at [scoring.py:289](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L289) | `run_pulse` no longer slices candidates into outer batches; `stage2_llm_rerank` owns per-candidate concurrency |
+| Stage-2 wall-clock cap | default 900 s (env var `PULSE_STAGE2_TIMEOUT_SECONDS`) | `_stage2_timeout()` lazy getter at [job.py:55](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L55) → `_get_cfg().pulse_stage2_timeout_seconds`; applied at [job.py:333](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L333) | Outer `asyncio.wait_for` around all Stage-2 work; on timeout → `_fallback_stage2` |
+| Discovery lookback window | default 7 days (user_config key `pulse.lookback_days`; int, validated [1, 90]) | `_validate_lookback_days` at [config_validators.py:153](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L153); default from [profile.py:55](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L55) | Controls how far back Stage 1 looks for candidate papers |
+| Startup grace | default 0 s (user_config key `pulse.startup_grace_seconds`; float, validated [0, 300]) | `_validate_startup_grace_seconds` at [config_validators.py:158](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L158); default from [profile.py:57](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L57) | Warmup pause before first outbound HTTP burst |
 
 ### 5.1 Worst-case math
 
@@ -226,7 +226,7 @@ the longer wall-clock risk.
 ### 6.1 Degraded vs fatal — the difference that matters
 
 The frontend `Last Pulse run: Failed` badge fires on **`stats.last_error`**
-([frontend/src/components/settings/PulseSection.tsx](../../frontend/src/components/settings/PulseSection.tsx)).
+([frontend/src/components/settings/PulseSection.tsx](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/frontend/src/components/settings/PulseSection.tsx)).
 The backend has TWO
 distinct fields:
 
@@ -249,14 +249,14 @@ correct but still needs an explanation instead of looking healthy.
 ## 7. Diagnostics shape
 
 `run_pulse` returns a `stats: dict[str, Any]`. It is persisted into
-`pulse_decks.stats` JSONB ([deck.py:73-89](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L73-L89)) and read by the Settings → Pulse Diagnostics panel.
+`pulse_decks.stats` JSONB ([deck.py:73-89](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L73-L89)) and read by the Settings → Pulse Diagnostics panel.
 
 | Key | Type | Meaning | Set by |
 |---|---|---|---|
 | `candidate_count` | int | Raw fan-out from `discover_candidates` | Stage 2 |
 | `stage1_survivors` | int | Output of `stage1_embedding_filter` | Stage 3 |
 | `stage2_scored` | int | Output of `stage2_llm_rerank` (or `_fallback_stage2`) | Stage 4 |
-| `llm_calls` | int | Number of candidates that received non-None `llm_relevance` | Stage 4 ([job.py:209](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L209)) |
+| `llm_calls` | int | Number of candidates that received non-None `llm_relevance` | Stage 4 ([job.py:209](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L209)) |
 | `duration_s` | float | Wall-clock seconds for the full pipeline | Stage 7 (before persist) |
 | `last_error` | str \| null | Terminal failure description | Various |
 | `degraded_reason` | str \| null | Non-terminal degradation, including all-source exhaustion | Stage 2 / Stage 4 / Stage 5 |
@@ -266,7 +266,7 @@ correct but still needs an explanation instead of looking healthy.
 | `source_diagnostics` | `dict[str, {status, message, status_code, retry_after_s, settings_hint}>` | Per-source operational state for rate limits, unconfigured sources, unsupported sources, and empty results | Stage 2 |
 | `classifier` | dict | Classifier metadata (`available`, `degradation_reason`, `sample_count`) | Stage 5 |
 | `classifier_training_enqueued` | bool | Whether the post-run training job was enqueued | End of pipeline |
-| `verification_stats` | `dict[str, int \| float]` | Per-run verification outcomes; keys: `pass_rate` (float 0-1), `total` (int), `passed` (int), `failed` (int) | End of pipeline ([job.py:524-529](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L524-L529)) |
+| `verification_stats` | `dict[str, int \| float]` | Per-run verification outcomes; keys: `pass_rate` (float 0-1), `total` (int), `passed` (int), `failed` (int) | End of pipeline ([job.py:524-529](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L524-L529)) |
 
 The `stats` dict is the primary structured surface for Pulse
 observability. When the optional Langfuse profile is enabled
@@ -291,8 +291,8 @@ invariants beyond mere row insertion.
 - **Idempotent replace.** A second `persist_deck` for the same `(date, user_id)`
   pair updates the existing row's `card_count`, `generated_at`, `stats`,
   `degraded_reason`, then DELETEs and re-inserts cards.
-- **L3 60-day exclusion** ([deck.py:104-129](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L104-L129)). Before inserting cards, the persist code counts how many candidates would survive the "no negative feedback in last 60 days for this user" filter. If fewer than 20 survive, the L3 filter is BYPASSED for this run (logged) — never produce a stub deck. Spec §7.3.1.
-- **Per-card savepoint.** [job.py:332-345](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L332-L345) wraps each card upsert in a SAVEPOINT so a single failing card doesn't poison the whole transaction.
+- **L3 60-day exclusion** ([deck.py:104-129](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L104-L129)). Before inserting cards, the persist code counts how many candidates would survive the "no negative feedback in last 60 days for this user" filter. If fewer than 20 survive, the L3 filter is BYPASSED for this run (logged) — never produce a stub deck. Spec §7.3.1.
+- **Per-card savepoint.** [job.py:332-345](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L332-L345) wraps each card upsert in a SAVEPOINT so a single failing card doesn't poison the whole transaction.
 
 ---
 
@@ -308,8 +308,8 @@ The implementation MUST satisfy these. Testable.
    exception and return a `ScoredCandidate` for every input — failures degrade,
    they do not propagate.
 3. **Missing signals = 0.0.** `stage3_combine` MUST treat any signal name in
-   `weights` but missing from a candidate's `signals` as 0.0 ([scoring.py:362](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L362) `signals.get(k, 0.0)`).
-4. **Weights clamped.** `pulse.weights` values MUST be clamped to `[0, 1]` before any signal multiplication ([profile.py:182-186](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L182-L186)).
+   `weights` but missing from a candidate's `signals` as 0.0 ([scoring.py:362](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L362) `signals.get(k, 0.0)`).
+4. **Weights clamped.** `pulse.weights` values MUST be clamped to `[0, 1]` before any signal multiplication ([profile.py:182-186](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L182-L186)).
 5. **Run is non-crashing.** `run_pulse` MUST never raise an unhandled
    exception. Every `try/except` may set `last_error` and continue;
    unrecoverable failures (Stage 1) MUST return early with `stats` populated.
@@ -317,7 +317,7 @@ The implementation MUST satisfy these. Testable.
    so a single bad card does not roll back the deck.
 7. **L3 minimum-candidate guarantee.** The 60-day negative-feedback filter
    MUST be bypassed if it would leave fewer than `_min_l3_candidates = 20`
-   candidates ([deck.py:122-128](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L122-L128)).
+   candidates ([deck.py:122-128](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L122-L128)).
 8. **Diagnostics completeness.** Every key listed in §7 MUST be present in
    the `stats` dict at run-end (with `null` rather than absent for keys with
    no value). The Settings UI assumes shape stability.
@@ -336,7 +336,7 @@ Documenting; not prescribing.
 |---|---|
 | `last_error` vs `degraded_reason` UI conflation | Adjust the frontend "Failed" badge to distinguish "Degraded" from "Failed" |
 | The 4 conditional signals UX | (a) Hide them in the UI until a data threshold is met (e.g., S2 citation data populated); (b) Show them with a tooltip "0.0 default — requires citation data / classifier ratings"; (c) Keep as-is |
-| `classifier` activation threshold | Documented at 30 in `MIN_RATINGS` ([training.py:21](../../services/paper_ingestion/paper_ingestion/pulse/training.py#L21)). Could surface to Settings UI; today users have no way to know how close they are to threshold |
+| `classifier` activation threshold | Documented at 30 in `MIN_RATINGS` ([training.py:21](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/training.py#L21)). Could surface to Settings UI; today users have no way to know how close they are to threshold |
 
 These dispositions are the implementation plan's call. The contract's job
 is to surface the choices.

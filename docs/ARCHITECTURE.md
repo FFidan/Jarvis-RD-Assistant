@@ -195,7 +195,7 @@ isolation.
 Fresh schema is defined in `db/init.sql`; existing installs advance through
 `db/migrations/`. The migration runner applies migrations on
 `paper_ingestion` startup. The current migration count and range are documented in
-[`db/migrations/README.md`](../db/migrations/README.md) — that file is the authoritative source; do not hand-stamp a literal count here.
+[`db/migrations/README.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/migrations/README.md) — that file is the authoritative source; do not hand-stamp a literal count here.
 Fresh-install validation must replay `db/init.sql` and migrations against live
 Docker Postgres when schema duplication risk is in scope.
 

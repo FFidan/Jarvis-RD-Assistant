@@ -23,7 +23,7 @@ This manual is for **end users** — researchers and readers who use the web app
 **Operators** (people who install and maintain the system) should also read:
 
 - [`DEPLOYMENT.md`](../DEPLOYMENT.md) — installation, Docker Compose configuration, environment variables, and TLS setup.
-- [`SECURITY.md`](../SECURITY.md) — hardening checklist, secret management, and known residual risks.
+- [`SECURITY.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/SECURITY.md) — hardening checklist, secret management, and known residual risks.
 
 These documents are part of the repository and are available in the **Get Started** and **Operate** sections of this site.
 

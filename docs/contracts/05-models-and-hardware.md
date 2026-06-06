@@ -2,8 +2,8 @@
 **Status:** LIVING
 **Reviewers must update this contract in the same patch as any change to:**
 - The curated catalog `libs/jarvis_common/jarvis_common/data/model_catalog.json`
-- `recommend_models()` in [hardware_fit.py](../../libs/jarvis_common/jarvis_common/hardware_fit.py) or
-  `recommendations_for_role()` / `build_model_statuses()` in [model_lifecycle.py](../../services/paper_ingestion/paper_ingestion/services/model_lifecycle.py)
+- `recommend_models()` in [hardware_fit.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/hardware_fit.py) or
+  `recommendations_for_role()` / `build_model_statuses()` in [model_lifecycle.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py)
 - The `GET /api/system/models`, `GET /api/system/hardware`, or pull/delete endpoints
 - The per-machine `num_ctx` / thinking-mode key handling
 
@@ -123,7 +123,7 @@ At startup (and once per hour TTL), the backend probes VRAM in this order:
 not via shell string expansion — no subprocess-injection risk.
 
 The probe populates the `HardwareInfo` dataclass
-([model_lifecycle.py:123-147](../../services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L123-L147)):
+([model_lifecycle.py:123-147](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L123-L147)):
 `vram_gb`, `vram_source` (`"nvidia-smi" | "macos-approx" | "cpu"`), `tier`, `detected_at`, and
 an internal `machine_id` (the hostname; see §3). It is cached on `app.state.hw_info` with a
 1-hour TTL by `get_cached_hardware()`.
@@ -147,7 +147,7 @@ Returns `HardwareInfo.to_dict()` — `vram_gb`, `vram_source`, `tier`, `detected
 
 ### 3.1 Tier table
 
-`hardware_tier(vram_gb)` ([model_lifecycle.py:172-192](../../services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L172-L192))
+`hardware_tier(vram_gb)` ([model_lifecycle.py:172-192](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L172-L192))
 maps VRAM GB → ordinal 0..4:
 
 | Tier | VRAM GB | Label |
@@ -162,14 +162,14 @@ maps VRAM GB → ordinal 0..4:
 
 There are two complementary recommendation entry points:
 
-- **`recommend_models(vram_mb)`** ([hardware_fit.py:207-243](../../libs/jarvis_common/jarvis_common/hardware_fit.py#L207-L243))
+- **`recommend_models(vram_mb)`** ([hardware_fit.py:207-243](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/hardware_fit.py#L207-L243))
   — advisory, data-only. Given total VRAM in MiB (or `None` when the GPU probe failed entirely),
   it classifies VRAM into a `VramBucket` and returns a `HardwareRecommendation` with the suggested
   `smart`/`fast`/`embed` alias assignments for that bucket. It never mutates config, env, or DB; it
   never raises. A per-alias `confirm_on_target` flag signals candidates whose live bench is still
   outstanding. Callers surface the result (e.g. the system/models API, `setup.sh --check`).
 
-- **`recommendations_for_role(role, ...)`** ([model_lifecycle.py:586-645](../../services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L586-L645))
+- **`recommendations_for_role(role, ...)`** ([model_lifecycle.py:586-645](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L586-L645))
   — per-role ranking. It calls `build_model_statuses(...)`, filters to entries supporting the role,
   and sorts by status priority, then tier, then name. This is what `GET /api/system/models` and the
   recommendations endpoint return.
@@ -184,7 +184,7 @@ benchmark score, no "auto-select and pull best model". The user selects; the bac
 Every catalog entry, when returned by the API, carries a `status` computed at request time by
 crossing catalog state against Ollama's `/api/tags` response and the current LiteLLM config
 (`build_model_statuses()` at
-[model_lifecycle.py:480-585](../../services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L480-L585)).
+[model_lifecycle.py:480-585](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L480-L585)).
 
 | Status | Meaning |
 |---|---|
@@ -266,7 +266,7 @@ and lifecycle above; an absent backend field never breaks the UI.
 ### 6.1 Per-machine identity
 
 `machine_id = socket.gethostname()`, populated by `detect_hardware()`
-([model_lifecycle.py:248-267](../../services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L248-L267)).
+([model_lifecycle.py:248-267](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L248-L267)).
 It namespaces per-machine `user_config` keys but is **never displayed in the UI** — the user
 knows which machine they are on. If multi-user concerns ever emerge, swap `socket.gethostname()`
 for a hash-anonymized signature in the key-derivation helper (single-line change).
@@ -283,7 +283,7 @@ llm.{machine_id}.thinking_disabled.{model_id}
 Per-machine (not machine-agnostic) keys are used because machines differ significantly in VRAM —
 a single shared key would force one tier to be wrong. The allow-list classifier
 (`_classify_litellm_runtime_key` at
-[config_metadata.py:103-127](../../services/paper_ingestion/paper_ingestion/services/config_metadata.py#L103-L127))
+[config_metadata.py:103-127](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_metadata.py#L103-L127))
 accepts the prefix patterns `llm.*.{smart,fast,embed}_num_ctx` and
 `llm.*.thinking_disabled.{model_id}`. Runtime LiteLLM writes are applied *before* the `user_config`
 row is persisted; if the LiteLLM update or reload fails, the write aborts and the DB value is not
@@ -307,7 +307,7 @@ decision. We never remove `tier`.
 ### 6.3 Fit math
 
 A pure function on the backend (`compute_vram_fit()` at
-[model_lifecycle.py:393-479](../../services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L393-L479)),
+[model_lifecycle.py:393-479](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L393-L479)),
 mirrored verbatim on the frontend for live what-if previews:
 
 ```python
@@ -333,7 +333,7 @@ Special cases:
 ### 6.4 API shape (additive)
 
 Each catalog entry returned from `GET /api/system/models`
-([SystemModelsResponse at models/papers.py:404-413](../../services/paper_ingestion/paper_ingestion/models/papers.py#L404-L413))
+([SystemModelsResponse at models/papers.py:404-413](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/models/papers.py#L404-L413))
 gains an optional `fit_detail` object:
 
 ```jsonc

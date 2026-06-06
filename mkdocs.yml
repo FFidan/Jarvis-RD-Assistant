@@ -48,7 +48,7 @@ docs_dir: docs
 # nav.not_found stays at 'warn' (the default) so broken NAV entries still fail.
 validation:
   links:
-    not_found: ignore
+    not_found: warn
     absolute_links: ignore
     unrecognized_links: ignore
 

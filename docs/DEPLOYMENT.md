@@ -2,7 +2,7 @@
 
 JARVIS is a self-hosted research assistant. This document covers running it — from the localhost happy path to LAN exposure, Cloudflare Tunnel, TLS, backups, and common failure modes.
 
-For first-time setup, start with [README.md](../README.md) Quickstart. If the two conflict, this file is canonical.
+For first-time setup, start with [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md) Quickstart. If the two conflict, this file is canonical.
 
 ---
 
@@ -226,7 +226,7 @@ Telegram needs no change for any of this — the bot only makes outbound calls.
 
 ## Mode 1 — Localhost
 
-See [README.md](../README.md) Quickstart for the full walkthrough. The short version:
+See [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md) Quickstart for the full walkthrough. The short version:
 
 ```bash
 cp .env.example .env
@@ -577,7 +577,7 @@ JARVIS exposes a REST API on `paper_ingestion` (:8010) and `learning_engine` (:8
 
 ## See also
 
-- [README.md](../README.md) — quick start and high-level orientation.
+- [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md) — quick start and high-level orientation.
 - [docs/SECURITY.md](SECURITY.md) — threat model, auth boundaries, multi-tenant hardening checklist.
 - [docs/known-residual-risks.md](known-residual-risks.md) — acknowledged-but-deferred risks and their reopen criteria.
 - [docs/contracts/04-observability.md](contracts/04-observability.md) — Langfuse env-var table, trust boundary, rotation procedure.

@@ -35,7 +35,7 @@ Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host pu
 
 **Context:** the roadmap targets a conversational agent layer (Hermes).
 
-**Current state:** not started. The build-vs-adopt decision — adopt an existing open agent framework vs. build natively on LiteLLM tool-calling plus the existing prompt harness — requires explicit sign-off before the spike is worth running. It is sequenced behind the cross-service auth work, the first performance phase, and an evaluation harness; see the [ROADMAP](../ROADMAP.md).
+**Current state:** not started. The build-vs-adopt decision — adopt an existing open agent framework vs. build natively on LiteLLM tool-calling plus the existing prompt harness — requires explicit sign-off before the spike is worth running. It is sequenced behind the cross-service auth work, the first performance phase, and an evaluation harness; see the [ROADMAP](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/ROADMAP.md).
 
 **Reopen criteria:** when the roadmap prerequisites land and the build-vs-adopt path is selected.
 
