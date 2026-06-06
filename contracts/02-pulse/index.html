@@ -1,0 +1,3189 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+      
+      
+      
+        <link rel="canonical" href="https://ffidan.github.io/Jarvis-RD-Assistant/contracts/02-pulse/">
+      
+      
+        <link rel="prev" href="../01-settings/">
+      
+      
+        <link rel="next" href="../03-llm/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Pulse - JARVIS RD Assistant — Operator & Developer Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#02-pulse-pipeline-contract" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-header__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JARVIS RD Assistant — Operator & Developer Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Pulse
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../readme-shim/" class="md-tabs__link">
+          
+  
+  
+  Get Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../SECURITY/" class="md-tabs__link">
+          
+  
+  
+  Operate
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ARCHITECTURE/" class="md-tabs__link">
+          
+  
+  
+  Develop
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  System Contracts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../manual/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-nav__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JARVIS RD Assistant — Operator & Developer Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../readme-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../DEPLOYMENT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../REQUIREMENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../SECURITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../RELEASE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../known-residual-risks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known Residual Risks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Develop
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Develop
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Product Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ENGINEERING_STANDARDS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Engineering Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migrations-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Contracts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    System Contracts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-what-this-contract-covers-and-what-it-does-not" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. What this contract covers (and what it does NOT)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-pipeline-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Pipeline shape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-stage-io-contracts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Stage I/O contracts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Stage I/O contracts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-scoredcandidate-the-cross-stage-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 ScoredCandidate (the cross-stage envelope)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-userprofile-the-per-user-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 UserProfile (the per-user context)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-signal-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Signal catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Signal catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-always-populated-signals-live" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Always-populated signals (LIVE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-conditional-signals-live-conditional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Conditional signals (LIVE-CONDITIONAL)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-the-signal-catalog-completeness-invariant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 The signal-catalog completeness invariant
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-weight-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Weight schema
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-timeout-concurrency-and-budget-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Timeout, concurrency, and budget policy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Timeout, concurrency, and budget policy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-worst-case-math" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Worst-case math
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Failure modes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Failure modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-degraded-vs-fatal-the-difference-that-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 Degraded vs fatal — the difference that matters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-diagnostics-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Diagnostics shape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-deck-persist-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Deck persist semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-cleanup-decisions-deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Cleanup decisions deferred
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-cross-contract-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Cross-contract references
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-verified-identifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Verified Identifiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-llm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LLM Client
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../04-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../05-models-and-hardware/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models & Hardware
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../07-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/navigation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Navigation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/research-feed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Research Feed & Library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/paper-detail/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Paper Detail
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/ask/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ask (Cross-paper RAG)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/learning-cards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning Cards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/projects/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/knowledge-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Knowledge Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/citation-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citation Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/extraction-table/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extraction Table
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/analytics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/home-my-day/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    My Day & Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/telegram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telegram
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/admin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin & Multi-tenant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-what-this-contract-covers-and-what-it-does-not" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. What this contract covers (and what it does NOT)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-pipeline-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Pipeline shape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-stage-io-contracts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Stage I/O contracts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Stage I/O contracts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-scoredcandidate-the-cross-stage-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 ScoredCandidate (the cross-stage envelope)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-userprofile-the-per-user-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 UserProfile (the per-user context)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-signal-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Signal catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Signal catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-always-populated-signals-live" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Always-populated signals (LIVE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-conditional-signals-live-conditional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Conditional signals (LIVE-CONDITIONAL)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-the-signal-catalog-completeness-invariant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 The signal-catalog completeness invariant
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-weight-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Weight schema
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-timeout-concurrency-and-budget-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Timeout, concurrency, and budget policy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Timeout, concurrency, and budget policy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-worst-case-math" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Worst-case math
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Failure modes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Failure modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-degraded-vs-fatal-the-difference-that-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 Degraded vs fatal — the difference that matters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-diagnostics-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Diagnostics shape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-deck-persist-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Deck persist semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-cleanup-decisions-deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Cleanup decisions deferred
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-cross-contract-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Cross-contract references
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-verified-identifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Verified Identifiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="02-pulse-pipeline-contract">02 — Pulse Pipeline Contract<a class="headerlink" href="#02-pulse-pipeline-contract" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> LIVING
+<strong>Reviewers must update this contract in the same patch as any change to:</strong>
+- The 8 numbered steps in <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L100">pulse/job.py:run_pulse</a>
+- <code>_DEFAULT_WEIGHTS</code> in <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L19-L30">pulse/profile.py:19-30</a>
+- <code>_llm_concurrency()</code> / <code>_stage2_timeout()</code> lazy getters / <code>PULSE_STAGE2_*</code> scoring knobs / per-call timeouts
+- The <code>signals</code> dict shape on <code>ScoredCandidate</code>
+- The <code>stats</code> dict keys produced by <code>run_pulse</code> (drives the Settings → Pulse Diagnostics panel)</p>
+<hr />
+<h2 id="0-what-this-contract-covers-and-what-it-does-not">0. What this contract covers (and what it does NOT)<a class="headerlink" href="#0-what-this-contract-covers-and-what-it-does-not" title="Permanent link">&para;</a></h2>
+<p><strong>In scope.</strong> The overnight Pulse pipeline that produces a daily card deck —
+8 stages from cron-trigger to deck persist. Stage I/O contracts, signal
+definitions, weight schema, timeout/concurrency policy, fallback semantics,
+and the diagnostics surface the Settings UI reads.</p>
+<p><strong>Out of scope.</strong>
+- Source plugin implementations (arXiv / OpenAlex / S2 / PubMed / Local) —
+  each plugin owns its own contract for query shape, rate limits, and
+  metadata translation.
+- Pulse card UI (frontend rendering of <code>pulse_cards</code> rows).
+- Telegram-side digest delivery — separate code path that reads the same
+  <code>pulse_decks</code> / <code>pulse_cards</code> tables.
+- The recommender (<code>refresh_recommendations</code>) — a sibling system; documented
+  briefly in <a href="../01-settings/#21-active-keys-written-and-read-by-code-that-affects-user-visible-behavior">01-settings.md §2.1</a> under the <code>recommendation.*</code> keys.</p>
+<hr />
+<h2 id="1-pipeline-shape">1. Pipeline shape<a class="headerlink" href="#1-pipeline-shape" title="Permanent link">&para;</a></h2>
+<p><code>run_pulse</code> is the single entry point. Eight numbered stages, each individually
+wrapped in <code>try/except</code> so any one stage can degrade without crashing the run.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Stage</th>
+<th>File:line</th>
+<th>Output</th>
+<th>Failure handling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Profile load</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L114-L129">job.py:114-129</a></td>
+<td><code>UserProfile</code></td>
+<td><strong>Fatal.</strong> Sets <code>last_error</code>; returns immediately with <code>duration_s</code> populated.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Discovery (source fan-out)</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L137-L151">job.py:137-151</a></td>
+<td><code>list[PaperCreate]</code> + per-source counts + <code>source_diagnostics</code></td>
+<td>Degraded. Empty candidate list; pipeline continues. If every enabled source is empty, rate-limited, unsupported, or unconfigured, <code>degraded_reason</code> is set even when the job itself did not fail.</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Stage 1 — embedding filter</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L158-L170">job.py:158-170</a>; <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L94-L217">scoring.py:94-217</a></td>
+<td>top-<code>stage2_top_k</code> <code>ScoredCandidate</code>s</td>
+<td>Degraded. Empty <code>stage1_out</code>; Stage 2 short-circuits.</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Stage 2 — LLM rerank</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L331-L354">job.py:331-354</a>; <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L252-L334">scoring.py:252-334</a></td>
+<td><code>ScoredCandidate</code>s with LLM signals filled</td>
+<td><strong>Degraded.</strong> On <code>TimeoutError</code> (outer wall-clock cap, default 900 s) OR any exception, <code>_fallback_stage2</code> clears LLM signals. <code>degraded_reason</code> set.</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Optional citation + classifier signals</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L231-L294">job.py:231-294</a></td>
+<td><code>signals</code> dict augmented with <code>citation_pagerank</code>, <code>citation_count</code>, <code>citation_adamic_adar</code>, <code>classifier</code></td>
+<td>Degraded. Failures preserve LLM signals; <code>degraded_reason</code> set if no prior reason.</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Stage 3 — weighted combine</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L301-L307">job.py:301-307</a>; <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L342-L380">scoring.py:342-380</a></td>
+<td><code>ScoredCandidate</code>s with <code>final_score</code></td>
+<td>Degraded. Fall back to <code>stage2_out</code>; sets <code>last_error</code>.</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Assemble deck</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L314-L320">job.py:314-320</a>; <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L18-L40">deck.py:18-40</a></td>
+<td>top-<code>deck_size</code> cards</td>
+<td>Degraded. Empty deck; sets <code>last_error</code>.</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Persist deck</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L327-L367">job.py:327-367</a>; <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L43-L220">deck.py:43-220</a></td>
+<td><code>pulse_decks</code> row + N <code>pulse_cards</code> rows</td>
+<td>Degraded. Outer txn failure → <code>card_count=0</code>; per-card savepoint isolates upsert failures so one bad card doesn't poison the deck. L3 60-day negative-feedback exclusion is applied UNLESS it would leave fewer than 20 candidates (then bypassed).</td>
+</tr>
+</tbody>
+</table>
+<p>A scheduled run is invoked via APScheduler under job id <code>pulse_overnight</code>
+(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/scheduler.py">scheduler.py</a>); on-demand via the jobs subsystem under handler <code>"pulse.generate"</code> (<code>_pulse_generate_job</code> at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L555">job.py:555</a>).</p>
+<hr />
+<h2 id="2-stage-io-contracts">2. Stage I/O contracts<a class="headerlink" href="#2-stage-io-contracts" title="Permanent link">&para;</a></h2>
+<h3 id="21-scoredcandidate-the-cross-stage-envelope">2.1 <code>ScoredCandidate</code> (the cross-stage envelope)<a class="headerlink" href="#21-scoredcandidate-the-cross-stage-envelope" title="Permanent link">&para;</a></h3>
+<p>Defined at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L69">scoring.py:69</a>. Mutated cumulatively by stages 3 → 4 → 5 → 6.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Set by</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>paper</code></td>
+<td>Stage 1</td>
+<td><code>PaperCreate</code> (carrier from sources)</td>
+</tr>
+<tr>
+<td><code>signals</code></td>
+<td>Stages 1, 4, 5</td>
+<td><code>dict[str, float]</code></td>
+</tr>
+<tr>
+<td><code>llm_relevance</code>, <code>llm_novelty</code>, <code>reasoning</code></td>
+<td>Stage 4</td>
+<td><code>int 1-10</code>, <code>int 1-10</code>, <code>str</code> (or <code>None</code> on fallback)</td>
+</tr>
+<tr>
+<td><code>final_score</code></td>
+<td>Stage 6</td>
+<td><code>float</code> (preliminary in Stage 1, overwritten in Stage 6)</td>
+</tr>
+<tr>
+<td><code>reasoning_verified</code>, <code>reasoning_confidence</code></td>
+<td>Stage 4</td>
+<td><code>bool | None</code>, <code>RagConfidence | None</code></td>
+</tr>
+</tbody>
+</table>
+<p>Stages MUST NOT mutate <code>ScoredCandidate</code> in place across stages — they
+return new instances. The <code>signals</code> dict is intentionally string-keyed so
+new signals can be added without schema migration.</p>
+<h3 id="22-userprofile-the-per-user-context">2.2 <code>UserProfile</code> (the per-user context)<a class="headerlink" href="#22-userprofile-the-per-user-context" title="Permanent link">&para;</a></h3>
+<p>Defined at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L35-L60">profile.py:35-60</a>. Loaded once per run by <code>load_profile</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L63">profile.py:63</a>).</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>topics</code></td>
+<td><code>topics</code> table</td>
+</tr>
+<tr>
+<td><code>tracked_author_names</code>, <code>tracked_author_s2_ids</code></td>
+<td><code>tracked_authors WHERE enabled = TRUE</code></td>
+</tr>
+<tr>
+<td><code>library_centroid</code></td>
+<td>mean embedding of abstracts where <code>paper_user_state.starred OR state ∈ ('to_read','reading','done')</code></td>
+</tr>
+<tr>
+<td><code>weights</code>, <code>deck_size</code>, <code>stage2_top_k</code></td>
+<td><code>user_config</code> (<code>pulse.weights</code>, <code>pulse.deck_size</code>, <code>pulse.stage2_top_k</code>)</td>
+</tr>
+<tr>
+<td><code>recent_positive_titles</code>, <code>recent_negative_titles</code></td>
+<td><code>recommendation_feedback</code> 90-day window</td>
+</tr>
+<tr>
+<td><code>negative_centroid</code></td>
+<td>mean embedding of papers with negative <code>recommendation_feedback</code></td>
+</tr>
+<tr>
+<td><code>negative_topics</code>, <code>negative_authors</code>, <code>dampened_topics</code></td>
+<td>L3 dampening signals</td>
+</tr>
+<tr>
+<td><code>liked_paper_ids</code></td>
+<td>starred papers</td>
+</tr>
+</tbody>
+</table>
+<p>The HTTP call to embed library abstracts is intentionally outside any DB
+connection scope (PI-006) — the connection is acquired twice in <code>load_profile</code>,
+embedding round-trips happen between acquisitions.</p>
+<hr />
+<h2 id="3-signal-catalog">3. Signal catalog<a class="headerlink" href="#3-signal-catalog" title="Permanent link">&para;</a></h2>
+<p>Every entry in <code>_DEFAULT_WEIGHTS</code> MUST have a populating stage, OR be
+explicitly marked <strong>CONDITIONAL</strong> with the gate documented below. <code>stage3_combine</code>
+(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L342-L380">scoring.py:342-380</a>) treats missing signals as 0.0 — invariant 4.3.</p>
+<h3 id="31-always-populated-signals-live">3.1 Always-populated signals (LIVE)<a class="headerlink" href="#31-always-populated-signals-live" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Default weight</th>
+<th>Populated by</th>
+<th>Range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>embedding</code></td>
+<td>0.20</td>
+<td>Stage 1 <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L168-L174">scoring.py:168-174, 195</a> — cosine(candidate, library_centroid) − l2_lambda·cosine(candidate, negative_centroid)</td>
+<td>typically [-1, 1]; clamped per use</td>
+</tr>
+<tr>
+<td><code>topic</code></td>
+<td>0.20</td>
+<td>Stage 1 <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L177-L179">scoring.py:177-179</a> — max cosine over topic embeddings</td>
+<td>[0, 1]</td>
+</tr>
+<tr>
+<td><code>recency</code></td>
+<td>0.05</td>
+<td>Stage 1 <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L182">scoring.py:182</a> — <code>exp(-age_days/30)</code> clamped to [0, 1]</td>
+<td>[0, 1]</td>
+</tr>
+<tr>
+<td><code>author_bonus</code></td>
+<td>0.15</td>
+<td>Stage 1 <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L184-L192">scoring.py:184-192</a> — 1.0 iff candidate authors intersect tracked_authors (by name OR S2 id)</td>
+<td>{0.0, 1.0}</td>
+</tr>
+<tr>
+<td><code>llm_relevance</code></td>
+<td>0.30</td>
+<td>Stage 4 <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L296">scoring.py:296</a> — LLM-scored 1–10, normalized to [0, 1]</td>
+<td>[0.1, 1.0] (None on Stage 4 fallback)</td>
+</tr>
+<tr>
+<td><code>llm_novelty</code></td>
+<td>0.10</td>
+<td>Stage 4 <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L297">scoring.py:297</a> — same</td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>l2_penalty</code></td>
+<td>(informational; not a weight)</td>
+<td>Stage 1 <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L199">scoring.py:199</a> — <code>l2_lambda * cosine(candidate, negative_centroid)</code></td>
+<td>[0, l2_lambda]</td>
+</tr>
+</tbody>
+</table>
+<p><code>l2_penalty</code> is stored in <code>signals</code> for diagnostics but is NOT consumed by
+<code>stage3_combine</code> — its effect is already baked into <code>embedding</code> per the
+subtraction at scoring.py:174. The Settings UI exposes the <code>l2_lambda</code>
+multiplier separately; see <a href="../01-settings/#21-active-keys-written-and-read-by-code-that-affects-user-visible-behavior">01-settings.md §2.1</a> row <code>pulse.l2_lambda</code>.</p>
+<h3 id="32-conditional-signals-live-conditional">3.2 Conditional signals (LIVE-CONDITIONAL)<a class="headerlink" href="#32-conditional-signals-live-conditional" title="Permanent link">&para;</a></h3>
+<p>These four signals default to weight 0.0 in <code>_DEFAULT_WEIGHTS</code> and <code>_PULSE_REQUIRED_WEIGHT_KEYS</code>
+(absent from <code>_PULSE_REQUIRED_WEIGHT_KEYS</code> at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L45-L47">config_validators.py:45-47</a>, so they are OPTIONAL on PUT). They are <strong>populated only when the user assigns a non-zero weight</strong> AND the gating dependency is available.</p>
+<table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Computed by</th>
+<th>Activation gate</th>
+<th>Dependency</th>
+<th>Failure mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>citation_pagerank</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/citation_signals.py#L11-L107">citation_signals.py:compute_citation_signals</a></td>
+<td><code>any(profile.weights[name] &gt; 0 for name in ("citation_pagerank", "citation_count", "citation_adamic_adar"))</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L233-L236">job.py:233-236</a>)</td>
+<td><code>networkx</code> Python package + populated <code>paper_citations</code> table</td>
+<td>If <code>networkx</code> missing → empty signals dict → all three citation signals stay 0.0; if no edges in the graph → PageRank = 0.0 for all; degrades silently</td>
+</tr>
+<tr>
+<td><code>citation_count</code></td>
+<td>Same</td>
+<td>Same</td>
+<td><code>papers.citation_count</code> column populated by S2 ingestion</td>
+<td>Normalized as <code>min(1.0, count / max_count_in_batch)</code></td>
+</tr>
+<tr>
+<td><code>citation_adamic_adar</code></td>
+<td>Same</td>
+<td>Same</td>
+<td><code>paper_citations</code> edges + at least one liked paper in <code>recommendation_feedback</code></td>
+<td>Returns 0.0 if no liked papers or no edges</td>
+</tr>
+<tr>
+<td><code>classifier</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/training.py">training.py:classifier_scores</a></td>
+<td><code>profile.weights["classifier"] &gt; 0</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L258">job.py:258</a>)</td>
+<td><code>scikit-learn</code> + ≥30 rows in <code>recommendation_feedback</code> with both positive and negative labels</td>
+<td>If sklearn missing → <code>available=False</code>, all candidates score 0.0; if not enough ratings → same; trained model persisted via <code>pulse.train_classifier</code> job after each Pulse run (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L373">job.py:373</a>)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Important contract:</strong> these signals are NOT ghost UI. The Settings sliders
+defaulting to 0.0 (per <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/frontend/src/components/settings/PulseSection.tsx">SettingsPage Pulse tab</a>) is intentional. The user opts in by raising
+the weight; the pipeline respects the opt-in but degrades gracefully when
+the optional dependency is missing.</p>
+<p>The Pulse diagnostics surface (Settings → Pulse → Diagnostics panel; backed
+by <code>pulse_decks.stats</code>) MUST report:
+- <code>classifier.available</code> (bool) — sklearn installed
+- <code>classifier.degradation_reason</code> (str | null) — why classifier scored zero
+(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L266-L294">job.py:266-294</a>)</p>
+<h3 id="33-the-signal-catalog-completeness-invariant">3.3 The signal-catalog completeness invariant<a class="headerlink" href="#33-the-signal-catalog-completeness-invariant" title="Permanent link">&para;</a></h3>
+<p>Every key in <code>_DEFAULT_WEIGHTS</code> is present in §3.1 or §3.2 above. Adding a
+new weight key MUST add the corresponding row to one of those tables AND to
+<code>_PULSE_WEIGHT_KEYS</code> in <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L31-L44">config_validators.py:31-44</a>. The validator and contract are
+the two halves of the same allow-list.</p>
+<hr />
+<h2 id="4-weight-schema">4. Weight schema<a class="headerlink" href="#4-weight-schema" title="Permanent link">&para;</a></h2>
+<p><code>user_config['pulse.weights']</code> is a JSONB object whose keys are a subset of
+<code>_PULSE_WEIGHT_KEYS</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L31-L44">config_validators.py:31-44</a>). Validation:</p>
+<ul>
+<li>Required keys: <code>embedding</code>, <code>topic</code>, <code>llm_relevance</code>, <code>llm_novelty</code>,
+  <code>author_bonus</code>, <code>recency</code> (the always-populated set, §3.1)</li>
+<li>Optional keys: <code>citation_pagerank</code>, <code>citation_count</code>,
+  <code>citation_adamic_adar</code>, <code>classifier</code> (the conditional set, §3.2)</li>
+<li>Each value: <code>float ∈ [0.0, 1.0]</code> (per <code>_validate_pulse_weights</code>)</li>
+<li>Sum is <strong>NOT</strong> required to equal 1.0 — the UI offers a "Normalize to 1.0"
+  button (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/frontend/src/components/settings/PulseSection.tsx#L738-L746">PulseSection.tsx:738-746</a>) but the contract permits any combination</li>
+</ul>
+<p>Load path (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L221-L231">profile.py:221-231</a>):</p>
+<ol>
+<li>Read JSONB; if absent, fall back to <code>_DEFAULT_WEIGHTS</code></li>
+<li>Merge user values over defaults (so missing optional keys default to 0.0)</li>
+<li>Clamp every value to <code>[0, 1]</code>; log a warning if any was out of range</li>
+</ol>
+<p><code>pulse.l2_lambda</code> is stored as a dedicated <code>UserProfile</code> field outside the <code>weights</code> dict (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L60">profile.py:60</a>, loaded at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L236-L237">profile.py:236-237</a>); <code>stage3_combine</code> never iterates it as a scoring signal.</p>
+<hr />
+<h2 id="5-timeout-concurrency-and-budget-policy">5. Timeout, concurrency, and budget policy<a class="headerlink" href="#5-timeout-concurrency-and-budget-policy" title="Permanent link">&para;</a></h2>
+<p>Two of these knobs are <strong>environment variables</strong> (deployment-level, not
+user-controllable settings keys): <code>PULSE_LLM_CONCURRENCY</code> and
+<code>PULSE_STAGE2_TIMEOUT_SECONDS</code>, both defined as pydantic-settings fields on
+<code>PaperIngestionSettings</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/config.py#L190-L208">config.py:190-208</a>).
+The lookback/grace knobs ARE user_config keys (see <a href="../01-settings/#21-active-keys-written-and-read-by-code-that-affects-user-visible-behavior">01-settings.md §2.1</a>).</p>
+<table>
+<thead>
+<tr>
+<th>Knob</th>
+<th>Value</th>
+<th>Source</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Per-LLM-call timeout</td>
+<td>120 s</td>
+<td><code>LLM_TIMEOUT_DEFAULT</code> at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/llm_client.py#L70">llm_client.py:70</a></td>
+<td>Single chat completion request (or single retry) cannot exceed this</td>
+</tr>
+<tr>
+<td>Stage-2 concurrency</td>
+<td>default 4 (env var <code>PULSE_LLM_CONCURRENCY</code>)</td>
+<td><code>_llm_concurrency()</code> lazy getter at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L45">scoring.py:45</a> → <code>_get_cfg().pulse_llm_concurrency</code></td>
+<td>Semaphore-bounded parallel scorers</td>
+</tr>
+<tr>
+<td>Stage-2 model alias</td>
+<td><code>fast</code></td>
+<td><code>_llm_model()</code> at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L49">scoring.py:49</a> reads <code>PULSE_STAGE2_MODEL</code></td>
+<td>Uses the smaller local model for Pulse scoring by default; operators can override to <code>smart</code> or another LiteLLM alias</td>
+</tr>
+<tr>
+<td>Stage-2 retry budget</td>
+<td>1</td>
+<td><code>_stage2_max_retries()</code> at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L59">scoring.py:59</a> reads <code>PULSE_STAGE2_MAX_RETRIES</code></td>
+<td>Caps structured-output retries so one bad candidate does not expand into a long manual Pulse run</td>
+</tr>
+<tr>
+<td>Stage-2 orchestrator call</td>
+<td>1 call over all Stage-1 survivors</td>
+<td>inner concurrency at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L289">scoring.py:289</a></td>
+<td><code>run_pulse</code> no longer slices candidates into outer batches; <code>stage2_llm_rerank</code> owns per-candidate concurrency</td>
+</tr>
+<tr>
+<td>Stage-2 wall-clock cap</td>
+<td>default 900 s (env var <code>PULSE_STAGE2_TIMEOUT_SECONDS</code>)</td>
+<td><code>_stage2_timeout()</code> lazy getter at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L55">job.py:55</a> → <code>_get_cfg().pulse_stage2_timeout_seconds</code>; applied at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L333">job.py:333</a></td>
+<td>Outer <code>asyncio.wait_for</code> around all Stage-2 work; on timeout → <code>_fallback_stage2</code></td>
+</tr>
+<tr>
+<td>Discovery lookback window</td>
+<td>default 7 days (user_config key <code>pulse.lookback_days</code>; int, validated [1, 90])</td>
+<td><code>_validate_lookback_days</code> at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L153">config_validators.py:153</a>; default from <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L55">profile.py:55</a></td>
+<td>Controls how far back Stage 1 looks for candidate papers</td>
+</tr>
+<tr>
+<td>Startup grace</td>
+<td>default 0 s (user_config key <code>pulse.startup_grace_seconds</code>; float, validated [0, 300])</td>
+<td><code>_validate_startup_grace_seconds</code> at <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L158">config_validators.py:158</a>; default from <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L57">profile.py:57</a></td>
+<td>Warmup pause before first outbound HTTP burst</td>
+</tr>
+</tbody>
+</table>
+<h3 id="51-worst-case-math">5.1 Worst-case math<a class="headerlink" href="#51-worst-case-math" title="Permanent link">&para;</a></h3>
+<p>With <code>pulse.stage2_top_k = 40</code> (default), <code>PULSE_LLM_CONCURRENCY = 4</code> (default),
+<code>PULSE_STAGE2_MODEL=fast</code>, <code>PULSE_STAGE2_MAX_RETRIES=1</code>, and per-call timeout
+120 s, the theoretical worst-case Stage-2 wall-clock is</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>  ceil(40 / 4) waves × 120 s/wave × up to 2 attempts = 2400 s
+</code></pre></div>
+<p>The outer 900 s cap still wins. In practice the fast alias is expected to score
+well below the per-call timeout; if structured-output validation repeatedly
+fails, the pipeline degrades to embedding-only fallback instead of blocking the
+job indefinitely. <code>run_pulse</code> makes one Stage-2 call and lets the scorer's
+semaphore control parallelism (no outer batch loop).</p>
+<p>Instructor retry count (<code>PULSE_STAGE2_MAX_RETRIES</code>) is part of this latency
+budget — keep it low unless you have measured validation failures and accepted
+the longer wall-clock risk.</p>
+<hr />
+<h2 id="6-failure-modes">6. Failure modes<a class="headerlink" href="#6-failure-modes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Stage</th>
+<th>Effect</th>
+<th>UI surface</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Profile load throws</td>
+<td>1</td>
+<td><strong>Fatal.</strong> <code>last_error</code> set; pipeline returns immediately. Pulse run does NOT produce a deck.</td>
+<td>Settings → Pulse "Last run: Failed" badge</td>
+</tr>
+<tr>
+<td>Discovery throws</td>
+<td>2</td>
+<td>Empty candidate list. <code>last_error</code> set; pipeline continues; Stage 1 will get nothing → empty Stage 2 → empty deck.</td>
+<td>Last-run badge "Failed" iff this set <code>last_error</code>; otherwise just zero candidates</td>
+</tr>
+<tr>
+<td>Discovery exhausts all sources without throwing</td>
+<td>2</td>
+<td>Empty candidate list. <code>last_error</code> remains null; <code>source_diagnostics</code> records each source status and <code>degraded_reason</code> explains the zero-card deck.</td>
+<td>Settings → Pulse shows "Degraded"; Pulse deck shows the reason and top source messages.</td>
+</tr>
+<tr>
+<td>Embedder throws</td>
+<td>3</td>
+<td>All Stage 1 candidates get zero signals (<code>embedding=0</code>, <code>topic=0</code>, etc.) but all candidates are RETURNED. They will rank purely on weights of zeros (i.e., their <code>final_score</code> will be ~0).</td>
+<td>Diagnostics shows <code>stage1_survivors</code> ≠ 0 with all-zero scores</td>
+</tr>
+<tr>
+<td>Stage 2 LLM <code>TimeoutError</code> (outer wall-clock cap, default 900 s)</td>
+<td>4</td>
+<td><code>_fallback_stage2</code> clones every Stage 1 survivor with <code>llm_relevance=None</code>, <code>llm_novelty=None</code>, <code>reasoning=None</code>. <code>degraded_reason = f"LLM scoring timed out at {timeout}s; deck used embedding-only fallback."</code> Deck is still produced from Stage 1 scores only.</td>
+<td>Last-run badge: "Failed" (because <code>last_error</code> is sometimes also set on tail exceptions). Diagnostics shows <code>degraded_reason</code>.</td>
+</tr>
+<tr>
+<td>Stage 2 LLM other exception</td>
+<td>4</td>
+<td>Same as TimeoutError but <code>degraded_reason = f"stage2 error (embedding-only fallback used): {exc}"</code></td>
+<td>Same</td>
+</tr>
+<tr>
+<td>Citation/classifier exception</td>
+<td>5</td>
+<td><code>degraded_reason</code> set if not already; LLM signals preserved; affected signals stay 0.0</td>
+<td>Diagnostics: <code>classifier.available</code> may be False</td>
+</tr>
+<tr>
+<td>Stage 3 throws</td>
+<td>6</td>
+<td>Falls back to <code>stage2_out</code> order; <code>last_error</code> set</td>
+<td>Last-run badge "Failed"</td>
+</tr>
+<tr>
+<td>Assemble throws</td>
+<td>7</td>
+<td>Empty deck; <code>last_error</code> set</td>
+<td>Last-run badge "Failed"</td>
+</tr>
+<tr>
+<td>Per-card upsert throws</td>
+<td>8</td>
+<td>Savepoint rollback isolates the bad card; <code>last_error</code> set; remaining cards still persist; if ALL fail, 0-card deck is persisted with <code>last_error</code> set</td>
+<td>Last-run badge "Failed" with a 0-card deck</td>
+</tr>
+<tr>
+<td>Outer-transaction failure (DB unreachable)</td>
+<td>8</td>
+<td><code>last_error = f"persist: {exc}"</code>; <code>card_count=0</code>; whole pipeline result returned but no deck row exists</td>
+<td>Last-run badge "Failed"; Diagnostics may be missing entirely</td>
+</tr>
+</tbody>
+</table>
+<h3 id="61-degraded-vs-fatal-the-difference-that-matters">6.1 Degraded vs fatal — the difference that matters<a class="headerlink" href="#61-degraded-vs-fatal-the-difference-that-matters" title="Permanent link">&para;</a></h3>
+<p>The frontend <code>Last Pulse run: Failed</code> badge fires on <strong><code>stats.last_error</code></strong>
+(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/frontend/src/components/settings/PulseSection.tsx">frontend/src/components/settings/PulseSection.tsx</a>).
+The backend has TWO
+distinct fields:</p>
+<ul>
+<li><strong><code>last_error</code></strong> — terminal failure. Pipeline did not complete normally.
+  Typically set when Stage 1, 3, 6, 7, or 8 throws.</li>
+<li><strong><code>degraded_reason</code></strong> — Pulse completed and produced a deck, but with
+  reduced fidelity or explicit source exhaustion. Set for all-source-empty
+  discovery runs, Stage 4 LLM fallback, and Stage 5 citation/classifier
+  degradation.</li>
+</ul>
+<p>A run can show "Failed" in the UI while being technically
+<strong>degraded, not fatal</strong> — e.g. a deck of cards produced purely from Stage 1
+scores. The Settings UI distinguishes the two fields: <code>last_error</code> is
+Failed; <code>degraded_reason</code> without <code>last_error</code> is Degraded. That distinction is
+intentional for source exhaustion, where a zero-card deck can be operationally
+correct but still needs an explanation instead of looking healthy.</p>
+<hr />
+<h2 id="7-diagnostics-shape">7. Diagnostics shape<a class="headerlink" href="#7-diagnostics-shape" title="Permanent link">&para;</a></h2>
+<p><code>run_pulse</code> returns a <code>stats: dict[str, Any]</code>. It is persisted into
+<code>pulse_decks.stats</code> JSONB (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L73-L89">deck.py:73-89</a>) and read by the Settings → Pulse Diagnostics panel.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Meaning</th>
+<th>Set by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>candidate_count</code></td>
+<td>int</td>
+<td>Raw fan-out from <code>discover_candidates</code></td>
+<td>Stage 2</td>
+</tr>
+<tr>
+<td><code>stage1_survivors</code></td>
+<td>int</td>
+<td>Output of <code>stage1_embedding_filter</code></td>
+<td>Stage 3</td>
+</tr>
+<tr>
+<td><code>stage2_scored</code></td>
+<td>int</td>
+<td>Output of <code>stage2_llm_rerank</code> (or <code>_fallback_stage2</code>)</td>
+<td>Stage 4</td>
+</tr>
+<tr>
+<td><code>llm_calls</code></td>
+<td>int</td>
+<td>Number of candidates that received non-None <code>llm_relevance</code></td>
+<td>Stage 4 (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L209">job.py:209</a>)</td>
+</tr>
+<tr>
+<td><code>duration_s</code></td>
+<td>float</td>
+<td>Wall-clock seconds for the full pipeline</td>
+<td>Stage 7 (before persist)</td>
+</tr>
+<tr>
+<td><code>last_error</code></td>
+<td>str | null</td>
+<td>Terminal failure description</td>
+<td>Various</td>
+</tr>
+<tr>
+<td><code>degraded_reason</code></td>
+<td>str | null</td>
+<td>Non-terminal degradation, including all-source exhaustion</td>
+<td>Stage 2 / Stage 4 / Stage 5</td>
+</tr>
+<tr>
+<td><code>deck_date</code></td>
+<td>str (ISO date)</td>
+<td>Date of the deck just produced</td>
+<td>Stage 7</td>
+</tr>
+<tr>
+<td><code>card_count</code></td>
+<td>int</td>
+<td><code>pulse_cards</code> rows actually persisted</td>
+<td>Stage 8</td>
+</tr>
+<tr>
+<td><code>source_counts</code></td>
+<td><code>dict[str, int]</code></td>
+<td>Per-source candidate count</td>
+<td>Stage 2</td>
+</tr>
+<tr>
+<td><code>source_diagnostics</code></td>
+<td><code>dict[str, {status, message, status_code, retry_after_s, settings_hint}&gt;</code></td>
+<td>Per-source operational state for rate limits, unconfigured sources, unsupported sources, and empty results</td>
+<td>Stage 2</td>
+</tr>
+<tr>
+<td><code>classifier</code></td>
+<td>dict</td>
+<td>Classifier metadata (<code>available</code>, <code>degradation_reason</code>, <code>sample_count</code>)</td>
+<td>Stage 5</td>
+</tr>
+<tr>
+<td><code>classifier_training_enqueued</code></td>
+<td>bool</td>
+<td>Whether the post-run training job was enqueued</td>
+<td>End of pipeline</td>
+</tr>
+<tr>
+<td><code>verification_stats</code></td>
+<td><code>dict[str, int \| float]</code></td>
+<td>Per-run verification outcomes; keys: <code>pass_rate</code> (float 0-1), <code>total</code> (int), <code>passed</code> (int), <code>failed</code> (int)</td>
+<td>End of pipeline (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L524-L529">job.py:524-529</a>)</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>stats</code> dict is the primary structured surface for Pulse
+observability. When the optional Langfuse profile is enabled
+(<a href="../04-observability/">04-observability.md</a>), traces add a parallel surface for
+per-call latency and per-stage timing.</p>
+<p>Provider diagnostics in <code>source_diagnostics</code> are user-visible and MUST be
+sanitized. They may include provider names, status classes, HTTP status codes,
+and retry hints; they must not include raw exception strings, full request URLs,
+tokens, or provider response bodies. Raw exception detail belongs in service
+logs only.</p>
+<hr />
+<h2 id="8-deck-persist-semantics">8. Deck persist semantics<a class="headerlink" href="#8-deck-persist-semantics" title="Permanent link">&para;</a></h2>
+<p>Documented separately because the persist step has its own correctness
+invariants beyond mere row insertion.</p>
+<ul>
+<li><strong>Deck identity</strong> is <code>(deck_date, user_id)</code> — composite UNIQUE constraint with <code>NULLS NOT DISTINCT</code>
+  semantics (added by migration 043). One deck per user per day.</li>
+<li><strong>Idempotent replace.</strong> A second <code>persist_deck</code> for the same <code>(date, user_id)</code>
+  pair updates the existing row's <code>card_count</code>, <code>generated_at</code>, <code>stats</code>,
+  <code>degraded_reason</code>, then DELETEs and re-inserts cards.</li>
+<li><strong>L3 60-day exclusion</strong> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L104-L129">deck.py:104-129</a>). Before inserting cards, the persist code counts how many candidates would survive the "no negative feedback in last 60 days for this user" filter. If fewer than 20 survive, the L3 filter is BYPASSED for this run (logged) — never produce a stub deck. Spec §7.3.1.</li>
+<li><strong>Per-card savepoint.</strong> <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L332-L345">job.py:332-345</a> wraps each card upsert in a SAVEPOINT so a single failing card doesn't poison the whole transaction.</li>
+</ul>
+<hr />
+<h2 id="9-invariants">9. Invariants<a class="headerlink" href="#9-invariants" title="Permanent link">&para;</a></h2>
+<p>The implementation MUST satisfy these. Testable.</p>
+<ol>
+<li><strong>Signal coverage.</strong> Every key in <code>_DEFAULT_WEIGHTS</code> MUST be either:
+   (a) populated by some always-running stage (§3.1), OR
+   (b) explicitly gated as conditional with a documented activation gate (§3.2).
+   No silent omissions.</li>
+<li><strong>Stage-2 never raises.</strong> <code>stage2_llm_rerank</code> MUST handle every per-candidate
+   exception and return a <code>ScoredCandidate</code> for every input — failures degrade,
+   they do not propagate.</li>
+<li><strong>Missing signals = 0.0.</strong> <code>stage3_combine</code> MUST treat any signal name in
+   <code>weights</code> but missing from a candidate's <code>signals</code> as 0.0 (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L362">scoring.py:362</a> <code>signals.get(k, 0.0)</code>).</li>
+<li><strong>Weights clamped.</strong> <code>pulse.weights</code> values MUST be clamped to <code>[0, 1]</code> before any signal multiplication (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L182-L186">profile.py:182-186</a>).</li>
+<li><strong>Run is non-crashing.</strong> <code>run_pulse</code> MUST never raise an unhandled
+   exception. Every <code>try/except</code> may set <code>last_error</code> and continue;
+   unrecoverable failures (Stage 1) MUST return early with <code>stats</code> populated.</li>
+<li><strong>Per-card isolation.</strong> Stage 8 MUST use SAVEPOINTs for per-card upserts
+   so a single bad card does not roll back the deck.</li>
+<li><strong>L3 minimum-candidate guarantee.</strong> The 60-day negative-feedback filter
+   MUST be bypassed if it would leave fewer than <code>_min_l3_candidates = 20</code>
+   candidates (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/deck.py#L122-L128">deck.py:122-128</a>).</li>
+<li><strong>Diagnostics completeness.</strong> Every key listed in §7 MUST be present in
+   the <code>stats</code> dict at run-end (with <code>null</code> rather than absent for keys with
+   no value). The Settings UI assumes shape stability.</li>
+<li><strong>Zero-card decks are explicit.</strong> A completed run with zero cards and no
+   <code>last_error</code> MUST carry a <code>degraded_reason</code> when source diagnostics show
+   rate limits, unconfigured enabled sources, unsupported source modes, or no
+   source candidates. The UI MUST NOT render this state as a plain empty deck.</li>
+</ol>
+<hr />
+<h2 id="10-cleanup-decisions-deferred">10. Cleanup decisions deferred<a class="headerlink" href="#10-cleanup-decisions-deferred" title="Permanent link">&para;</a></h2>
+<p>Documenting; not prescribing.</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Candidate dispositions</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>last_error</code> vs <code>degraded_reason</code> UI conflation</td>
+<td>Adjust the frontend "Failed" badge to distinguish "Degraded" from "Failed"</td>
+</tr>
+<tr>
+<td>The 4 conditional signals UX</td>
+<td>(a) Hide them in the UI until a data threshold is met (e.g., S2 citation data populated); (b) Show them with a tooltip "0.0 default — requires citation data / classifier ratings"; (c) Keep as-is</td>
+</tr>
+<tr>
+<td><code>classifier</code> activation threshold</td>
+<td>Documented at 30 in <code>MIN_RATINGS</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/training.py#L21">training.py:21</a>). Could surface to Settings UI; today users have no way to know how close they are to threshold</td>
+</tr>
+</tbody>
+</table>
+<p>These dispositions are the implementation plan's call. The contract's job
+is to surface the choices.</p>
+<hr />
+<h2 id="11-cross-contract-references">11. Cross-contract references<a class="headerlink" href="#11-cross-contract-references" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><a href="../01-settings/#21-active-keys-written-and-read-by-code-that-affects-user-visible-behavior">01-settings.md §2.1</a></strong> — <code>pulse.*</code> and <code>recommendation.*</code> user_config keys; runtime read sites.</li>
+<li><strong><a href="../03-llm/">03-llm.md §2 / §4</a></strong> — Stage-2 LLM rerank is one of the LLM call sites; the per-site contract there governs the <code>PulseScoringOutput</code> Pydantic shape, retry policy, and timeout.</li>
+<li><strong><a href="../04-observability/">04-observability.md §3</a></strong> — <code>run_pulse</code> is the canonical "one trace per Pulse run" boundary.</li>
+</ul>
+<hr />
+<h2 id="12-verified-identifiers">12. Verified Identifiers<a class="headerlink" href="#12-verified-identifiers" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Citation</th>
+<th>File:line</th>
+<th>One-line behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_pulse</code> orchestrator</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/job.py:100</td>
+<td>8-stage pipeline with degraded/fatal handling</td>
+</tr>
+<tr>
+<td><code>_stage2_timeout()</code> lazy getter</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/job.py:55</td>
+<td>Stage-2 wall-clock cap; default 900 s via env <code>PULSE_STAGE2_TIMEOUT_SECONDS</code></td>
+</tr>
+<tr>
+<td><code>_fallback_stage2</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/job.py:64</td>
+<td>Clears LLM signals, preserves Stage 1 final_score</td>
+</tr>
+<tr>
+<td><code>asyncio.wait_for(..., timeout=_stage2_timeout())</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/job.py:331-346</td>
+<td>Outer Stage-2 timeout enforcement</td>
+</tr>
+<tr>
+<td><code>_pulse_generate_job</code> job handler</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/job.py:555</td>
+<td>On-demand entry point via jobs subsystem</td>
+</tr>
+<tr>
+<td><code>ScoredCandidate</code> dataclass</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/scoring.py:69</td>
+<td>Cross-stage envelope</td>
+</tr>
+<tr>
+<td><code>_llm_concurrency()</code> lazy getter</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/scoring.py:45</td>
+<td>Stage-2 semaphore; default 4 via env <code>PULSE_LLM_CONCURRENCY</code></td>
+</tr>
+<tr>
+<td><code>_llm_model()</code> reads <code>PULSE_STAGE2_MODEL</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/scoring.py:49</td>
+<td>Stage-2 model alias defaults to <code>fast</code></td>
+</tr>
+<tr>
+<td><code>_stage2_max_retries()</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/scoring.py:59</td>
+<td>Stage-2 structured-output retry budget defaults to 1 (env <code>PULSE_STAGE2_MAX_RETRIES</code>)</td>
+</tr>
+<tr>
+<td><code>_LLM_MAX_TOKENS = 512</code>, <code>_LLM_TEMPERATURE = 0.0</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/scoring.py:53-54</td>
+<td>Stage-2 LLM options</td>
+</tr>
+<tr>
+<td><code>stage1_embedding_filter</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/scoring.py:121</td>
+<td>Stage 1: embed + cosine + recency + author bonus + L2</td>
+</tr>
+<tr>
+<td><code>stage2_llm_rerank</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/scoring.py:252</td>
+<td>Stage 2 with bounded concurrency (semaphore at scoring.py:289)</td>
+</tr>
+<tr>
+<td><code>_score_one</code> LLM call</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/scoring.py:291</td>
+<td>Per-candidate <code>call_llm_structured</code> call inside the semaphore</td>
+</tr>
+<tr>
+<td><code>stage3_combine</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/scoring.py:387</td>
+<td>Weighted-sum final_score; missing signals → 0.0</td>
+</tr>
+<tr>
+<td><code>_DEFAULT_STAGE2_TOP_K = 40</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/profile.py:19</td>
+<td>Top-K default for Stage 2</td>
+</tr>
+<tr>
+<td><code>_DEFAULT_WEIGHTS</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/profile.py:20-31</td>
+<td>10 weight keys; 4 default to 0.0</td>
+</tr>
+<tr>
+<td><code>_RATING_HISTORY_LIMIT = 10</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/profile.py:32</td>
+<td>Recent positive/negative title cap</td>
+</tr>
+<tr>
+<td><code>UserProfile</code> BaseModel (incl. <code>lookback_days</code>, <code>startup_grace_seconds</code>, <code>l2_lambda</code> fields)</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/profile.py:35-60</td>
+<td>Per-user context envelope; <code>l2_lambda</code> default 0.5, <code>lookback_days</code> default 7, <code>startup_grace_seconds</code> default 0.0</td>
+</tr>
+<tr>
+<td><code>load_profile</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/profile.py:63</td>
+<td>Two-phase DB+HTTP centroid load</td>
+</tr>
+<tr>
+<td>Weights/lookback/grace load + clamp</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/profile.py:221-242</td>
+<td>Merge with <code>_DEFAULT_WEIGHTS</code>; clamp to [0,1]; read <code>pulse.lookback_days</code> / <code>pulse.startup_grace_seconds</code></td>
+</tr>
+<tr>
+<td><code>compute_citation_signals</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/citation_signals.py:11-107</td>
+<td>networkx-backed PageRank + count + Adamic-Adar</td>
+</tr>
+<tr>
+<td>Citation signals graceful degrade on missing networkx</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/citation_signals.py:22-25</td>
+<td><code>ImportError</code> → <code>{}</code></td>
+</tr>
+<tr>
+<td><code>FEATURE_NAMES</code> (classifier)</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/training.py:10-20</td>
+<td>9-element feature vector</td>
+</tr>
+<tr>
+<td><code>MIN_RATINGS = 30</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/training.py:21</td>
+<td>Activation threshold for classifier</td>
+</tr>
+<tr>
+<td>Classifier sklearn-missing degrade</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/training.py:31-39</td>
+<td>Returns <code>available=False</code> with reason</td>
+</tr>
+<tr>
+<td><code>assemble_deck</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/deck.py:18-40</td>
+<td>Top-N by final_score</td>
+</tr>
+<tr>
+<td><code>_persist_deck_inner</code> upsert + L3 filter</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/deck.py:43-220</td>
+<td>Composite <code>(deck_date, user_id)</code> UPSERT; L3 60-day exclusion with min-20 fallback</td>
+</tr>
+<tr>
+<td><code>_min_l3_candidates = 20</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/deck.py:122</td>
+<td>Minimum-candidate guard for L3 filter</td>
+</tr>
+<tr>
+<td><code>LLM_TIMEOUT_DEFAULT = 120.0</code></td>
+<td>libs/jarvis_common/jarvis_common/llm_client.py:70</td>
+<td>Per-call timeout default</td>
+</tr>
+<tr>
+<td><code>build_scoring_prompt</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/prompts.py:36-136</td>
+<td>Two-message chat list; system + user</td>
+</tr>
+<tr>
+<td><code>PULSE_SCORING_SYSTEM_PROMPT</code></td>
+<td>services/paper_ingestion/paper_ingestion/pulse/prompts.py:18-33</td>
+<td>Strict-JSON instruction</td>
+</tr>
+<tr>
+<td><code>_PULSE_REQUIRED_WEIGHT_KEYS</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:45-47</td>
+<td>6 always-required weights</td>
+</tr>
+<tr>
+<td><code>_validate_pulse_weights</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:83</td>
+<td>Required + optional + range check</td>
+</tr>
+<tr>
+<td><code>pulse_overnight</code> scheduler job id</td>
+<td>services/paper_ingestion/paper_ingestion/scheduler.py (registration site)</td>
+<td>Cron-triggered Pulse run</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

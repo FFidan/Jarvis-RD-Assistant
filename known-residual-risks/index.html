@@ -1,0 +1,2598 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+      
+      
+      
+        <link rel="canonical" href="https://ffidan.github.io/Jarvis-RD-Assistant/known-residual-risks/">
+      
+      
+        <link rel="prev" href="../RELEASE/">
+      
+      
+        <link rel="next" href="../ARCHITECTURE/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Known Residual Risks - JARVIS RD Assistant — Operator & Developer Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#known-residual-risks" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-header__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JARVIS RD Assistant — Operator & Developer Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Known Residual Risks
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../readme-shim/" class="md-tabs__link">
+          
+  
+  
+  Get Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../SECURITY/" class="md-tabs__link">
+          
+  
+  
+  Operate
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../ARCHITECTURE/" class="md-tabs__link">
+          
+  
+  
+  Develop
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../contracts/" class="md-tabs__link">
+          
+  
+  
+  System Contracts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../manual/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-nav__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JARVIS RD Assistant — Operator & Developer Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../readme-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOYMENT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../REQUIREMENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SECURITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RELEASE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known Residual Risks
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known Residual Risks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OLLAMA-CVE-2026-7482 — Ollama daemon exposure posture — MONITOR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pi-edge-010-per-tick-notify-listener-creation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PI-EDGE-010 — Per-tick NOTIFY listener creation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conversational-agent-spike-build-vs-adopt-unresolved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversational-agent spike — build-vs-adopt unresolved
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#paper_summariesthemes_verified-descoped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        paper_summaries.themes_verified — descoped
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pi-edge-005-contradiction-scan-wall-clock-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PI-EDGE-005 — contradiction-scan wall-clock budget
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auth-hardening-deferrals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth hardening deferrals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Auth hardening deferrals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#h5-migration-live-fixture-test-deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        H5 — Migration live-fixture test deferred
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#telegram-security-hardening-deferrals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telegram / security hardening deferrals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Telegram / security hardening deferrals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tg-004-in-memory-bot-rate-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TG-004 — In-memory bot rate limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sec-106-csp-style-src-unsafe-inline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SEC-106 — CSP style-src 'unsafe-inline'
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sec-dep-001-requirements-pinning-discipline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SEC-DEP-001 — Requirements pinning discipline
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search-upsert-user_id-stamping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Search upsert user_id stamping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tg-bloat-01-botconfigfrom_env-syncasync-split-deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TG-BLOAT-01 — BotConfig.from_env() sync/async split deferred
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#smtp-empty-string-1-empty-string-smtp-env-vars-silently-accepted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SMTP-EMPTY-STRING-1 — empty-string SMTP env vars silently accepted
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#builder-stage-build-unhashed-1-builder-stage-installs-build-without-require-hashes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BUILDER-STAGE-BUILD-UNHASHED-1 — builder stage installs build without --require-hashes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#container-hardening-exceptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Container Hardening Exceptions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#further-known-residual-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Further known residual risks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Further known residual risks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#c5-3-cross-user-isolation-gate-excludes-ragsearch-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        C5-3 — Cross-user isolation gate excludes RAG/search paths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b3-006-apipapersprocess_batch-uses-an-underscore-in-the-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B3-006 — /api/papers/process_batch uses an underscore in the path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b3-009-loosely-typed-dictstr-any-fields-in-two-response-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B3-009 — Loosely-typed dict[str, Any] fields in two response models
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#eval-harness-1-retrievalquality-eval-harness-removed-reproducible-replacement-owed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EVAL-HARNESS-1 — Retrieval/quality eval harness removed; reproducible replacement owed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#low-dry-001-minor-un-hoisted-duplications-low-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LOW-DRY-001 — Minor un-hoisted duplications (low priority)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jobs-registry-globals-1-job-task-registry-uses-module-level-globals-as-test-injection-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JOBS-REGISTRY-GLOBALS-1 — Job task-registry uses module-level globals as test injection points
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#settings-barrel-1-paper_ingestion-settings-re-export-barrel-retained-for-call-site-stability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SETTINGS-BARREL-1 — paper_ingestion settings re-export barrel retained for call-site stability
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deferred-from-the-2026-06-02-public-readiness-fix-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deferred from the 2026-06-02 public-readiness fix plan
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deferred-from-the-2026-06-03-public-readiness-fix-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deferred from the 2026-06-03 public-readiness fix plan
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#from-the-2026-06-04-security-remediation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From the 2026-06-04 security remediation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Develop
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Develop
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Product Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ENGINEERING_STANDARDS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Engineering Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migrations-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Contracts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    System Contracts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/01-settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/02-pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/03-llm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LLM Client
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/04-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/05-models-and-hardware/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models & Hardware
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/07-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/navigation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Navigation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/research-feed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Research Feed & Library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/paper-detail/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Paper Detail
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/ask/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ask (Cross-paper RAG)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/learning-cards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning Cards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/projects/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/knowledge-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Knowledge Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/citation-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citation Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/extraction-table/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extraction Table
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/analytics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/home-my-day/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    My Day & Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/telegram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telegram
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/admin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin & Multi-tenant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OLLAMA-CVE-2026-7482 — Ollama daemon exposure posture — MONITOR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pi-edge-010-per-tick-notify-listener-creation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PI-EDGE-010 — Per-tick NOTIFY listener creation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conversational-agent-spike-build-vs-adopt-unresolved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversational-agent spike — build-vs-adopt unresolved
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#paper_summariesthemes_verified-descoped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        paper_summaries.themes_verified — descoped
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pi-edge-005-contradiction-scan-wall-clock-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PI-EDGE-005 — contradiction-scan wall-clock budget
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auth-hardening-deferrals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth hardening deferrals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Auth hardening deferrals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#h5-migration-live-fixture-test-deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        H5 — Migration live-fixture test deferred
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#telegram-security-hardening-deferrals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telegram / security hardening deferrals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Telegram / security hardening deferrals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tg-004-in-memory-bot-rate-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TG-004 — In-memory bot rate limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sec-106-csp-style-src-unsafe-inline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SEC-106 — CSP style-src 'unsafe-inline'
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sec-dep-001-requirements-pinning-discipline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SEC-DEP-001 — Requirements pinning discipline
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search-upsert-user_id-stamping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Search upsert user_id stamping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tg-bloat-01-botconfigfrom_env-syncasync-split-deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TG-BLOAT-01 — BotConfig.from_env() sync/async split deferred
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#smtp-empty-string-1-empty-string-smtp-env-vars-silently-accepted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SMTP-EMPTY-STRING-1 — empty-string SMTP env vars silently accepted
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#builder-stage-build-unhashed-1-builder-stage-installs-build-without-require-hashes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BUILDER-STAGE-BUILD-UNHASHED-1 — builder stage installs build without --require-hashes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#container-hardening-exceptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Container Hardening Exceptions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#further-known-residual-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Further known residual risks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Further known residual risks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#c5-3-cross-user-isolation-gate-excludes-ragsearch-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        C5-3 — Cross-user isolation gate excludes RAG/search paths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b3-006-apipapersprocess_batch-uses-an-underscore-in-the-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B3-006 — /api/papers/process_batch uses an underscore in the path
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#b3-009-loosely-typed-dictstr-any-fields-in-two-response-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        B3-009 — Loosely-typed dict[str, Any] fields in two response models
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#eval-harness-1-retrievalquality-eval-harness-removed-reproducible-replacement-owed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EVAL-HARNESS-1 — Retrieval/quality eval harness removed; reproducible replacement owed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#low-dry-001-minor-un-hoisted-duplications-low-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LOW-DRY-001 — Minor un-hoisted duplications (low priority)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jobs-registry-globals-1-job-task-registry-uses-module-level-globals-as-test-injection-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JOBS-REGISTRY-GLOBALS-1 — Job task-registry uses module-level globals as test injection points
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#settings-barrel-1-paper_ingestion-settings-re-export-barrel-retained-for-call-site-stability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SETTINGS-BARREL-1 — paper_ingestion settings re-export barrel retained for call-site stability
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deferred-from-the-2026-06-02-public-readiness-fix-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deferred from the 2026-06-02 public-readiness fix plan
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deferred-from-the-2026-06-03-public-readiness-fix-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deferred from the 2026-06-03 public-readiness fix plan
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#from-the-2026-06-04-security-remediation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From the 2026-06-04 security remediation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="known-residual-risks">Known Residual Risks<a class="headerlink" href="#known-residual-risks" title="Permanent link">&para;</a></h1>
+<p><em>Last updated: 2026-06-02</em></p>
+<p>This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Closed and falsified findings, plus internal CI/test-infra tracking, are archived separately and are not part of the published site.</p>
+<p>Related docs:</p>
+<ul>
+<li><a href="../ARCHITECTURE/">ARCHITECTURE.md</a> — runtime boundaries affected by residual risks.</li>
+<li><a href="../SECURITY/">SECURITY.md</a> — threat model and hardening checklist.</li>
+</ul>
+<hr />
+<h2 id="ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor">OLLAMA-CVE-2026-7482 — Ollama daemon exposure posture — MONITOR<a class="headerlink" href="#ollama-cve-2026-7482-ollama-daemon-exposure-posture-monitor" title="Permanent link">&para;</a></h2>
+<p>Current posture is documented in <code>docs/REQUIREMENTS.md</code>: the tested image pin is <code>ollama/ollama:0.23.1</code> via <code>versions.env</code>, the Compose fallback matches that pin, and the host port is loopback-only. Residual risk remains at the Docker-network boundary: containers attached to the <code>jarvis</code> network can reach <code>http://ollama:11434</code>, so untrusted peers must not join that network.</p>
+<p>Reopen if <code>OLLAMA_IMAGE</code> is downgraded below the patched tested pin, the host publish changes away from <code>127.0.0.1</code>, an external shared-Ollama override lacks equivalent patch/bind controls, untrusted Docker-network peers are introduced, or a later Ollama advisory supersedes CVE-2026-7482 guidance.</p>
+<hr />
+<h2 id="pi-edge-010-per-tick-notify-listener-creation">PI-EDGE-010 — Per-tick NOTIFY listener creation<a class="headerlink" href="#pi-edge-010-per-tick-notify-listener-creation" title="Permanent link">&para;</a></h2>
+<p><strong>Finding:</strong> <code>_wait_for_job_notification</code> creates a new <code>asyncpg-listen</code> listener per SSE poll tick.</p>
+<p><strong>Current state:</strong> a 60-second job with 2-second polls generates 30 connection cycles per stream. No correctness impact; only a connection-churn smell.</p>
+<p><strong>Why deferred:</strong> no observed connection exhaustion at current job volumes (single-user). Fix requires refactoring the SSE stream to hold a single long-lived listener per job stream — moderate blast radius.</p>
+<p><strong>Reopen criteria:</strong> when job volume exceeds ~50 concurrent streams, or when connection pool exhaustion is observed in logs.</p>
+<hr />
+<h2 id="conversational-agent-spike-build-vs-adopt-unresolved">Conversational-agent spike — build-vs-adopt unresolved<a class="headerlink" href="#conversational-agent-spike-build-vs-adopt-unresolved" title="Permanent link">&para;</a></h2>
+<p><strong>Context:</strong> the roadmap targets a conversational agent layer (Hermes).</p>
+<p><strong>Current state:</strong> not started. The build-vs-adopt decision — adopt an existing open agent framework vs. build natively on LiteLLM tool-calling plus the existing prompt harness — requires explicit sign-off before the spike is worth running. It is sequenced behind the cross-service auth work, the first performance phase, and an evaluation harness; see the <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/ROADMAP.md">ROADMAP</a>.</p>
+<p><strong>Reopen criteria:</strong> when the roadmap prerequisites land and the build-vs-adopt path is selected.</p>
+<hr />
+<h2 id="paper_summariesthemes_verified-descoped"><code>paper_summaries.themes_verified</code> — descoped<a class="headerlink" href="#paper_summariesthemes_verified-descoped" title="Permanent link">&para;</a></h2>
+<p><strong>Context:</strong> an earlier plan proposed a <code>themes_verified BOOL</code> column on <code>paper_summaries</code>.</p>
+<p><strong>Current state:</strong> the weekly response already carries <code>verified_themes</code> and <code>unverified_themes</code> in-memory. The persisted column adds storage without any UI consumer querying it.</p>
+<p><strong>Why descoped:</strong> no consumer demand identified. Migration would add schema complexity without enabling any new feature.</p>
+<p><strong>Reopen criteria:</strong> if a UI widget or API endpoint needs to filter summaries by <code>themes_verified</code> status — at which point design dedicated <code>weekly_digest_runs</code> / <code>weekly_digest_topics</code> tables rather than a bare boolean column.</p>
+<hr />
+<h2 id="pi-edge-005-contradiction-scan-wall-clock-budget">PI-EDGE-005 — contradiction-scan wall-clock budget<a class="headerlink" href="#pi-edge-005-contradiction-scan-wall-clock-budget" title="Permanent link">&para;</a></h2>
+<p><strong>Finding:</strong> the cross-ref pre-filter for contradiction candidate pairs shipped; the remaining sub-item is an outer wall-clock timeout + <code>asyncio.gather</code> concurrency for the <code>_classify_candidate</code> LLM calls.</p>
+<p><strong>Current state:</strong> with the cross-ref pre-filter, the O(n²) pair space is reduced significantly (~95%) for typical library sizes. LLM calls still run sequentially.</p>
+<p><strong>Why deferred:</strong> wall-clock budgeting adds complexity (cancellation, partial-result semantics); sequential LLM calls are predictable. No observed timeout on current library sizes.</p>
+<p><strong>Reopen criteria:</strong> when a contradiction scan exceeds 60 seconds on real data, measured by adding a timer log in <code>scan_contradictions</code>.</p>
+<hr />
+<h2 id="auth-hardening-deferrals">Auth hardening deferrals<a class="headerlink" href="#auth-hardening-deferrals" title="Permanent link">&para;</a></h2>
+<h3 id="h5-migration-live-fixture-test-deferred">H5 — Migration live-fixture test deferred<a class="headerlink" href="#h5-migration-live-fixture-test-deferred" title="Permanent link">&para;</a></h3>
+<p>One schema migration uses a defensive PL/pgSQL constraint-name lookup. The
+live-fixture migration test covering this path is deferred to a future hardening
+pass with proper ephemeral-Postgres test infra.</p>
+<p><strong>Reopen criteria:</strong> when a migration test harness with a real ephemeral Postgres instance is available.</p>
+<hr />
+<h2 id="telegram-security-hardening-deferrals">Telegram / security hardening deferrals<a class="headerlink" href="#telegram-security-hardening-deferrals" title="Permanent link">&para;</a></h2>
+<h3 id="tg-004-in-memory-bot-rate-limits">TG-004 — In-memory bot rate limits<a class="headerlink" href="#tg-004-in-memory-bot-rate-limits" title="Permanent link">&para;</a></h3>
+<p>Accepted for single-user, single-bot LAN deployment. Distributed rate limiting (Redis-backed) is deferred until multi-bot or LAN-exposed scenarios materialize.</p>
+<h3 id="sec-106-csp-style-src-unsafe-inline">SEC-106 — CSP <code>style-src 'unsafe-inline'</code><a class="headerlink" href="#sec-106-csp-style-src-unsafe-inline" title="Permanent link">&para;</a></h3>
+<p>Nonce-based CSP requires a multi-day Vite plugin refactor (each style-injecting component must accept a nonce; some third-party libraries don't). Deferred.</p>
+<h3 id="sec-dep-001-requirements-pinning-discipline">SEC-DEP-001 — Requirements pinning discipline<a class="headerlink" href="#sec-dep-001-requirements-pinning-discipline" title="Permanent link">&para;</a></h3>
+<p>Service <code>requirements.txt</code> files use <code>&gt;=</code> floors (some with ceilings); the hashed pins enforced at install live in the per-service <code>constraints.txt</code> (<code>pip install --require-hashes</code>). A future pass could add explicit floor+ceiling ranges in <code>requirements.txt</code> itself to reduce drift further.</p>
+<h3 id="search-upsert-user_id-stamping">Search upsert <code>user_id</code> stamping<a class="headerlink" href="#search-upsert-user_id-stamping" title="Permanent link">&para;</a></h3>
+<p><code>POST /api/search</code> performs external-source fetch + DB upsert via <code>pdf_workflow.upsert_paper</code>, which doesn't currently stamp <code>user_id</code> on the new row. Full multi-user end-to-end isolation requires this. Recommended follow-up.</p>
+<h3 id="tg-bloat-01-botconfigfrom_env-syncasync-split-deferred">TG-BLOAT-01 — <code>BotConfig.from_env()</code> sync/async split deferred<a class="headerlink" href="#tg-bloat-01-botconfigfrom_env-syncasync-split-deferred" title="Permanent link">&para;</a></h3>
+<p><code>from_env()</code> runs its one-shot DB bot-token read via <code>asyncio.run(...)</code>. This is correct today — <code>from_env()</code> is only called from the synchronous <code>main()</code> before <code>run_polling()</code> starts the event loop, so there is no running loop to conflict with. Splitting it into a sync <code>from_env()</code> + an <code>async_from_env()</code> was scoped as a bloat-reduction but carries no current bug; deferred out of the bugs/security pass to keep its regression surface zero.</p>
+<hr />
+<h2 id="smtp-empty-string-1-empty-string-smtp-env-vars-silently-accepted">SMTP-EMPTY-STRING-1 — empty-string SMTP env vars silently accepted<a class="headerlink" href="#smtp-empty-string-1-empty-string-smtp-env-vars-silently-accepted" title="Permanent link">&para;</a></h2>
+<p><strong>Symptom:</strong> Setting any of <code>SMTP_HOST</code>, <code>SMTP_FROM</code>, <code>SMTP_USER</code>, or <code>SMTP_PASS</code> to an empty string is silently accepted by <code>SecretsSettings</code> (no Pydantic validator rejects <code>""</code>). <code>_EffectiveSmtp.deliverable</code> evaluates <code>bool("") == False</code>, so the magic-link sender falls through to the dev-mode logging path. <strong>The operator sees nothing at startup; users do not receive magic-link emails; the failure is silent.</strong></p>
+<p><strong>Impact:</strong> HIGH (operator-facing silent failure, not data loss). Affects any deployment where SMTP env vars are mis-set to <code>""</code> rather than left unset — <code>""</code> and unset have different semantics, and only unset is correctly handled.</p>
+<p><strong>Mitigation:</strong> Add a <code>@field_validator</code> to <code>SecretsSettings.smtp_host/from/user/pass</code> rejecting empty-string values, OR add a startup-time health check that asserts the SMTP configuration is internally consistent. Four <code>xfail(strict=False)</code> tests in <code>libs/jarvis_common/tests/test_secrets_settings.py</code> document the gap and will auto-green when validators are added.</p>
+<hr />
+<h2 id="builder-stage-build-unhashed-1-builder-stage-installs-build-without-require-hashes">BUILDER-STAGE-BUILD-UNHASHED-1 — builder stage installs <code>build</code> without <code>--require-hashes</code><a class="headerlink" href="#builder-stage-build-unhashed-1-builder-stage-installs-build-without-require-hashes" title="Permanent link">&para;</a></h2>
+<p>The Stage 1 <code>jarvis-common-builder</code> installs <code>build==1.2.2.post1</code> (and its
+transitives) without <code>--require-hashes</code>. Stage 1 is ephemeral — only the
+produced wheel is copied into Stage 2. Stage 2's <code>pip install --require-hashes
+-r constraints.txt</code> covers every runtime dependency; the wheel enters via
+<code>--no-deps</code>, so its transitives never trigger a fresh unverified resolution.</p>
+<p><strong>Residual surface:</strong> the wheel-build toolchain only, not the runtime image.</p>
+<p><strong>Why deferred:</strong> Stage 1 is not user-reachable; the runtime hash gate provides
+the security boundary. Harden by generating a <code>constraints-builder.txt</code> with
+<code>uv pip compile --generate-hashes</code> and switching the builder <code>RUN</code> to use it.</p>
+<p><strong>Reopen criteria:</strong> if Stage 1 gains user-reachable content or the build
+toolchain is updated to a version with a known CVE.</p>
+<hr />
+<h2 id="container-hardening-exceptions">Container Hardening Exceptions<a class="headerlink" href="#container-hardening-exceptions" title="Permanent link">&para;</a></h2>
+<p>These document intentional deviations from the container-hardening sweep, each with an accepted-risk rationale.</p>
+<ul>
+<li><strong>C-09 — <code>ollama/ollama</code> runs as root</strong> (<code>docker-compose.yml</code> → <code>ollama</code> service). The upstream image requires uid 0 for GPU device-node access: <code>/dev/nvidia*</code> device nodes are owned by root and require either a privileged container or root to open. Switching to a non-root user breaks the NVIDIA device mount. No non-root upstream variant exists (confirmed 2026-05-26). <code>security_opt: ["no-new-privileges:true"]</code> is already set as a partial mitigation. Reopen when the upstream image ships a non-root GPU-capable variant.</li>
+<li><strong>C-05 — vLLM user <code>1000:1000</code> write access to the HF cache</strong> (<code>docker-compose.vllm.yml</code>). The vLLM service runs as <code>user: "1000:1000"</code> with <code>HF_HOME</code> on a named volume. If that volume was previously populated as root, the first non-root startup may fail with a permissions error; remove the volume before the first non-root run so Docker re-creates it owned by uid 1000. One-time operator action; document in the setup runbook if vLLM is promoted to production.</li>
+<li><strong>SC-09 — <code>requirements-optional.txt</code> floor-pins are informational only.</strong> The hashed security boundary lives in <code>constraints-optional.txt</code>, pinned with sha256 hashes verified at install (<code>pip install --require-hashes</code>). <code>requirements-optional.txt</code> is auto-generated from <code>pyproject.toml</code> and may not be hand-edited (the <code>check-python-deps</code> pre-commit hook enforces parity).</li>
+<li><strong>C-06 — vector <code>docker.sock</code> access; <code>cap_drop: [ALL]</code> is defense-in-depth only.</strong> The vector log shipper mounts <code>/var/run/docker.sock:ro</code>; <code>cap_drop: [ALL]</code> removes Linux capabilities but socket access is governed by uid/gid, so vector can still <code>docker inspect</code> other containers. The proper fix is structural (swap <code>docker.sock</code> for a syslog/fluent-bit forwarder, or run vector outside the docker network) — deferred as it would touch the logging architecture. Reopen when a log-routing redesign is in scope.</li>
+</ul>
+<hr />
+<h2 id="further-known-residual-risks">Further known residual risks<a class="headerlink" href="#further-known-residual-risks" title="Permanent link">&para;</a></h2>
+<h3 id="c5-3-cross-user-isolation-gate-excludes-ragsearch-paths">C5-3 — Cross-user isolation gate excludes RAG/search paths<a class="headerlink" href="#c5-3-cross-user-isolation-gate-excludes-ragsearch-paths" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> the 52-scenario cross-user isolation release gate covers the core task/project/paper/user data paths but excludes the RAG and search endpoints (<code>/api/ask*</code>, <code>/api/search*</code>, <code>/api/similar</code>, and the generation pipeline) because those require a live Ollama and Qdrant instance.</p>
+<p><strong>Current coverage:</strong> <code>test_rag_contract.py</code> exercises these paths at unit/contract granularity with mocked backends. Ownership isolation at the HTTP boundary (auth headers, user-scoped Qdrant collections) is enforced by the same middleware that the gate exercises on the covered paths, giving reasonable indirect assurance.</p>
+<p><strong>Why deferred:</strong> a full live two-user RAG-path isolation test needs both inference and vector services healthy in CI, which adds significant environment complexity.</p>
+<p><strong>Reopen criteria:</strong> when a multi-user deployment scenario is targeted, or when the Qdrant collection-isolation logic changes.</p>
+<hr />
+<h3 id="b3-006-apipapersprocess_batch-uses-an-underscore-in-the-path">B3-006 — <code>/api/papers/process_batch</code> uses an underscore in the path<a class="headerlink" href="#b3-006-apipapersprocess_batch-uses-an-underscore-in-the-path" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> <code>/api/papers/process_batch</code> uses an underscore separator while peer routes use hyphens.</p>
+<p><strong>Why deferred:</strong> renaming would be a breaking change for existing clients. The frontend API client (<code>api.ts</code>) is deliberately frozen, so no functional benefit justifies the churn.</p>
+<p><strong>Reopen criteria:</strong> if the frontend client is regenerated or a breaking-change API version is introduced.</p>
+<hr />
+<h3 id="b3-009-loosely-typed-dictstr-any-fields-in-two-response-models">B3-009 — Loosely-typed <code>dict[str, Any]</code> fields in two response models<a class="headerlink" href="#b3-009-loosely-typed-dictstr-any-fields-in-two-response-models" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> <code>SystemModelsResponse</code> and <code>WeeklyDigestResponse.topics</code> use <code>dict[str, Any]</code> fields, which reduces OpenAPI schema fidelity and weakens static analysis on callers.</p>
+<p><strong>Why deferred:</strong> the shapes are stable and internally consistent; tightening requires adding new typed models with no user-visible change.</p>
+<p><strong>Reopen criteria:</strong> when the response shapes are consumed by a typed client or documentation that benefits from a precise schema.</p>
+<hr />
+<h3 id="eval-harness-1-retrievalquality-eval-harness-removed-reproducible-replacement-owed">EVAL-HARNESS-1 — Retrieval/quality eval harness removed; reproducible replacement owed<a class="headerlink" href="#eval-harness-1-retrievalquality-eval-harness-removed-reproducible-replacement-owed" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> the retrieval and pulse eval scripts and their fixtures were removed for the public release. They were not called by CI, were not user-facing, and referenced database-local paper IDs that an external contributor could not reproduce.</p>
+<p><strong>Why deferred:</strong> the scripts would have been non-runnable by anyone other than the original developer.</p>
+<p><strong>Reopen criteria:</strong> introduce a reproducible eval harness keyed on stable arXiv IDs with an accompanying seed-fetch script so a contributor can run the eval against a fresh database. Scope this as a standalone developer-tooling task.</p>
+<hr />
+<h3 id="low-dry-001-minor-un-hoisted-duplications-low-priority">LOW-DRY-001 — Minor un-hoisted duplications (low priority)<a class="headerlink" href="#low-dry-001-minor-un-hoisted-duplications-low-priority" title="Permanent link">&para;</a></h3>
+<p>Two small consolidation items accepted as low-priority code-quality debt:</p>
+<ul>
+<li><code>build_jobs_router(service_name=…)</code> accepts a <code>service_name</code> parameter that no code path currently uses. Retained to avoid touching every call-site; remove when the router is next refactored.</li>
+<li>One inline copy of the paper-visibility SQL predicate remains at <code>paper_ingestion/services/summarization.py</code>; the other copies were hoisted to a shared <code>paper_visible_sql()</code> helper. Hoist this last copy when that file is next edited.</li>
+</ul>
+<p><strong>Reopen criteria:</strong> any of the above files are touched in a refactor — opportunistic cleanup at that point.</p>
+<hr />
+<h3 id="jobs-registry-globals-1-job-task-registry-uses-module-level-globals-as-test-injection-points">JOBS-REGISTRY-GLOBALS-1 — Job task-registry uses module-level globals as test injection points<a class="headerlink" href="#jobs-registry-globals-1-job-task-registry-uses-module-level-globals-as-test-injection-points" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> <code>jarvis_common</code>'s job task registry exposes <code>_pool</code> and <code>_http_client</code> as module-level globals. Tests rely on these globals as injection points to substitute test doubles.</p>
+<p><strong>Why deferred:</strong> converting to a proper dependency-injection seam would require updating every test that directly mutates the globals, with no change in production behavior.</p>
+<p><strong>Reopen criteria:</strong> when the test suite for the job task registry is refactored, or when the globals cause a real isolation problem in CI.</p>
+<hr />
+<h3 id="settings-barrel-1-paper_ingestion-settings-re-export-barrel-retained-for-call-site-stability">SETTINGS-BARREL-1 — <code>paper_ingestion</code> settings re-export barrel retained for call-site stability<a class="headerlink" href="#settings-barrel-1-paper_ingestion-settings-re-export-barrel-retained-for-call-site-stability" title="Permanent link">&para;</a></h3>
+<p><strong>Finding:</strong> the <code>paper_ingestion.services.config</code> module acts as a re-export barrel for <code>get_paper_ingestion_settings</code>, rather than callers importing from the canonical <code>paper_ingestion.config</code> directly.</p>
+<p><strong>Why retained:</strong> removing the barrel would require updating every call site that currently patches <code>paper_ingestion.services.config.get_paper_ingestion_settings</code> in tests, and the production consumer that imports from that path. The marginal leanness gain does not justify the regression surface. An export-snapshot test guards the barrel's interface.</p>
+<p><strong>Reopen criteria:</strong> if a refactor already touches the majority of call sites, remove the barrel in the same pass.</p>
+<hr />
+<h2 id="deferred-from-the-2026-06-02-public-readiness-fix-plan">Deferred from the 2026-06-02 public-readiness fix plan<a class="headerlink" href="#deferred-from-the-2026-06-02-public-readiness-fix-plan" title="Permanent link">&para;</a></h2>
+<p>Low-value-or-high-churn items deliberately deferred during the public-readiness fix plan (PR-5). Each is behavior-neutral debt, not a correctness or security risk.</p>
+<ul>
+<li><strong><code>services_client</code> full migration (Telegram bot).</strong> The bot routes most product-data calls through the typed <code>services_client</code>, but some call sites still query the shared Postgres directly. PR-5 corrected the module docstring ("most", not "all") rather than migrating every site — the remaining migration is a larger, separate effort.</li>
+<li><strong><code>_owner_headers</code> promotion.</strong> The Telegram <code>_owner_headers</code> helper stays at its current call-site location (pinned by tests); promoting it to a shared module is not worth the churn.</li>
+<li><strong>Service-layer <code>HTTPException</code> coupling.</strong> A few service functions raise FastAPI <code>HTTPException</code> directly rather than a domain error the router translates. Left as-is; decoupling is a broad refactor.</li>
+<li><strong><code>db_helpers</code> split.</strong> <code>paper_ingestion</code>'s <code>db_helpers</code> mixes a few concerns; splitting it touches many importers for marginal gain.</li>
+<li><strong><code>JOB_HANDLER_OWNER</code> / <code>noop.test</code> queue.</strong> The job-handler-owner <code>Literal</code> typing and the <code>noop.test</code> queue entry are retained as-is; tightening them is cosmetic.</li>
+<li><strong>Redundant My-Day journal fetch.</strong> <code>GET /api/my-day/journal</code> overlaps the nullable <code>journal</code> field already returned by the my-day-bundle; the separate fetch is kept to avoid a frontend refactor.</li>
+<li><strong><code>jarvis_common</code> test-code wheel exclusion.</strong> The <code>jarvis_common</code> wheel ships its <code>testing_*.py</code> modules (~25 KB). A <code>packages.find</code> exclude is ineffective for top-level modules (only a <code>testing_sidecars/</code> subpackage would drop); a correct fix means relocating six modules into a <code>jarvis_common/testing/</code> subpackage plus updating 100+ test imports — not worth the gain. Runtime-safe regardless (zero non-test runtime imports of <code>jarvis_common.testing*</code>).</li>
+<li><strong><code>jobs.py</code> 503-vs-404 caller mapping.</strong> The broad job-row-lookup failure now logs a WARNING (observability fix shipped in PR-2); mapping transient DB errors to HTTP 503 at the callers is a separate enhancement — re-raising today would surface as an unhandled 500, so the status-code mapping is deferred.</li>
+</ul>
+<p><strong>Intended behavior note — auth-first ordering (PR-5 auth-idiom migration).</strong> <code>paper_ingestion</code> route handlers now resolve identity via <code>Depends(current_user_id_strict)</code> (previously an imperative in-body call). Consequence: an <em>unauthenticated</em> request to a migrated endpoint now fails authentication (401) <em>before</em> request-body validation runs, whereas the old imperative order could surface a 422/400 body-validation error first. This is intended and more consistent/secure (uniform auth-first across all endpoints); behavior for authenticated callers is unchanged. The non-route <code>analyze._analyze_stream</code> generator retains an imperative resolve (it is not a route and has no rate-limiter).</p>
+<hr />
+<h2 id="deferred-from-the-2026-06-03-public-readiness-fix-plan">Deferred from the 2026-06-03 public-readiness fix plan<a class="headerlink" href="#deferred-from-the-2026-06-03-public-readiness-fix-plan" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>TEST-01 — Pytest non-fatal warnings (2026-06-03).</strong> Pytest emits 123 non-fatal warnings (unawaited-coroutine in async mocks, <code>@pytest.mark.asyncio</code> on sync tests, <code>ORJSONResponse</code> deprecation). Cosmetic test-hygiene; full suite passes. Deferred.</li>
+<li><strong>UI-01 (contrast portion) — Dark-mode destructive text contrast (2026-06-03).</strong> Dark-mode contrast of destructive error text (<code>text-destructive</code>) is below WCAG AA per Lighthouse. Proper fix is a theme-token adjustment affecting all destructive text; deferred to a theming pass.</li>
+</ul>
+<h2 id="from-the-2026-06-04-security-remediation">From the 2026-06-04 security remediation<a class="headerlink" href="#from-the-2026-06-04-security-remediation" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>SCA-GATE-01 — make the SCA Security workflow a required merge check (operator-only).</strong> The <code>Security</code> workflow (pip-audit / npm-audit / osv-scanner, terminal <code>security-gate</code> job) runs on every PR and is green on master, but it is NOT yet a required status check. <code>ci.yml</code>'s required <code>gate</code> job uses <code>needs:</code> which can only reference jobs in the <em>same</em> workflow, so <code>security-gate</code> (a separate workflow) cannot be wired there. <strong>Operator action:</strong> add <code>Security / Security gate</code> as a required status check in branch protection (Settings → Branches → master), alongside the existing <code>CI gate (required status check)</code>.</li>
+<li><strong>Multi-admin legacy-data attribution (single-admin deployments unaffected).</strong> Migration 0094 re-owns NULL-<code>user_id</code> rows on <code>paper_extractions</code>/<code>paper_entities</code>/zotero <code>paper_notes</code> to the single admin ONLY on single-tenant boxes (mirrors 0092). On a multi-admin box with pre-existing data: (a) historical Zotero notes keep their original <code>discovered_by</code> attribution (only forward syncs are attributed to the syncing user); (b) the entity batch-backfill (<code>knowledge_graph.py</code>) attributes to <code>papers.discovered_by</code>, which for system papers (<code>discovered_by IS NULL</code>) writes read-invisible NULL-user entity rows — the user-triggered single-paper extract correctly stamps the requesting user. Acceptable for the single-operator deployment norm; revisit if a true multi-admin instance with legacy data is targeted.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

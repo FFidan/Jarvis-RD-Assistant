@@ -1,0 +1,2582 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+      
+      
+      
+        <link rel="canonical" href="https://ffidan.github.io/Jarvis-RD-Assistant/SECURITY/">
+      
+      
+        <link rel="prev" href="../REQUIREMENTS/">
+      
+      
+        <link rel="next" href="../RELEASE/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Security - JARVIS RD Assistant — Operator & Developer Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#security-notes" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-header__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JARVIS RD Assistant — Operator & Developer Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Security
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../readme-shim/" class="md-tabs__link">
+          
+  
+  
+  Get Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  Operate
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../ARCHITECTURE/" class="md-tabs__link">
+          
+  
+  
+  Develop
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../contracts/" class="md-tabs__link">
+          
+  
+  
+  System Contracts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../manual/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-nav__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JARVIS RD Assistant — Operator & Developer Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../readme-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOYMENT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../REQUIREMENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#threat-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threat Model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Threat Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#three-identities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Three Identities
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#in-scope-attackers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In-Scope Attackers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#out-of-scope-acknowledged-residual-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Out of Scope (acknowledged residual risks)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-sharing-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Sharing Boundary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Data Sharing Boundary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-shared-corpus-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is shared (corpus layer)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-strictly-per-user-activityoutput-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is strictly per-user (activity/output layer)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dev-flags-and-production-refusal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dev Flags and Production Refusal
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secret-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secret Environment Variables
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Secret Environment Variables">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#x-owner-user-id-mechanism" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        X-Owner-User-Id Mechanism
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-key-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config Key Rotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proxy-trust-and-source-ip-allowlisting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proxy-Trust and Source-IP Allowlisting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit Log
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vulnerability-disclosure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Vulnerability Disclosure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pulse-model-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pulse Model Signing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Pulse Model Signing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Rotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ollama-security-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ollama Security Posture
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RELEASE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../known-residual-risks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known Residual Risks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Develop
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Develop
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Product Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ENGINEERING_STANDARDS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Engineering Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migrations-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Contracts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    System Contracts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/01-settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/02-pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/03-llm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LLM Client
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/04-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/05-models-and-hardware/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models & Hardware
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/07-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/navigation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Navigation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/research-feed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Research Feed & Library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/paper-detail/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Paper Detail
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/ask/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ask (Cross-paper RAG)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/learning-cards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning Cards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/projects/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/knowledge-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Knowledge Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/citation-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citation Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/extraction-table/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extraction Table
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/analytics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/home-my-day/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    My Day & Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/telegram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telegram
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/admin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin & Multi-tenant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#threat-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threat Model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Threat Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#three-identities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Three Identities
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#in-scope-attackers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In-Scope Attackers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#out-of-scope-acknowledged-residual-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Out of Scope (acknowledged residual risks)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-sharing-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data Sharing Boundary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Data Sharing Boundary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-shared-corpus-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is shared (corpus layer)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-strictly-per-user-activityoutput-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is strictly per-user (activity/output layer)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dev-flags-and-production-refusal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dev Flags and Production Refusal
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secret-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secret Environment Variables
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Secret Environment Variables">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#x-owner-user-id-mechanism" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        X-Owner-User-Id Mechanism
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-key-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config Key Rotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proxy-trust-and-source-ip-allowlisting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proxy-Trust and Source-IP Allowlisting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit Log
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vulnerability-disclosure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Vulnerability Disclosure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pulse-model-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pulse Model Signing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Pulse Model Signing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Rotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ollama-security-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ollama Security Posture
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="security-notes">Security Notes<a class="headerlink" href="#security-notes" title="Permanent link">&para;</a></h1>
+<p>Operational security guidance for JARVIS RD Assistant deployments.</p>
+<hr />
+<h2 id="threat-model">Threat Model<a class="headerlink" href="#threat-model" title="Permanent link">&para;</a></h2>
+<h3 id="three-identities">Three Identities<a class="headerlink" href="#three-identities" title="Permanent link">&para;</a></h3>
+<p>JARVIS uses three distinct credential types with strictly bounded authority:</p>
+<table>
+<thead>
+<tr>
+<th>Identity</th>
+<th>Credential</th>
+<th>Scope</th>
+<th>Accesses user research data?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Ops</strong></td>
+<td><code>JARVIS_API_KEY</code> (X-API-Key header)</td>
+<td>Service-to-service calls (Telegram bot, cron jobs, health checks)</td>
+<td>No — ops callers get no <code>user_id</code> from the session layer; user-data routes reject them with 401</td>
+</tr>
+<tr>
+<td><strong>User</strong></td>
+<td>Magic-link session cookie (<code>jarvis_session</code>)</td>
+<td>Own data only — the session layer injects <code>user_id</code> into every request; <code>current_user_id_strict</code> enforces it</td>
+<td>Yes — own rows only</td>
+</tr>
+<tr>
+<td><strong>Admin</strong></td>
+<td>Session cookie with <code>role = admin</code></td>
+<td>Manages users via <code>/admin/users</code>, views the audit log at <code>/api/admin/audit-log</code>; <strong>no access to other users' research data</strong></td>
+<td>No cross-user data access — admin role controls ops, not data</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>JARVIS_API_KEY</code> is an ops secret, not a user password. Anyone who holds it can call service endpoints but cannot read or write another user's papers, cards, or settings — the user-data layer requires a valid session identity.</p>
+<p>The session layer includes a deliberate 24-hour <code>SESSION_GRACE</code> window (in <code>session_middleware.py</code>): a session expired by no more than 24 hours still resolves the user's identity (without renewing <code>expires_at</code>) so that reviews captured offline can reconcile after a realistic offline gap. This is an intentional offline-tolerance design choice, not a misconfiguration. <code>revoked_at</code> and <code>deleted_at</code> still hard-fail immediately regardless of the grace window — explicit revocation is never relaxed.</p>
+<h3 id="in-scope-attackers">In-Scope Attackers<a class="headerlink" href="#in-scope-attackers" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Unauthenticated network-level attacker (open dashboard port, no session or key).</li>
+<li>Authenticated user attempting to access another user's data (IDOR, horizontal escalation).</li>
+<li>Admin attempting to read or mutate another user's research data.</li>
+<li>Attacker with write access to the <code>pulse_models</code> table attempting RCE via pickle deserialization.</li>
+</ul>
+<h3 id="out-of-scope-acknowledged-residual-risks">Out of Scope (acknowledged residual risks)<a class="headerlink" href="#out-of-scope-acknowledged-residual-risks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Attacker with host-level OS access (Docker socket, filesystem, or env).</li>
+<li>Attacker with direct PostgreSQL superuser access.</li>
+<li>Physical access to the host.</li>
+<li>Supply-chain compromise of upstream images or Python packages.</li>
+</ul>
+<p>See <code>docs/known-residual-risks.md</code> for the full residual-risk register.</p>
+<hr />
+<h2 id="data-sharing-boundary">Data Sharing Boundary<a class="headerlink" href="#data-sharing-boundary" title="Permanent link">&para;</a></h2>
+<p>This section states the committed data-sharing model for a JARVIS instance.
+The enforcement point is <code>assert_paper_ownership</code> / <code>assert_papers_ownership</code>
+in <code>libs/jarvis_common/jarvis_common/db_helpers.py</code>.</p>
+<h3 id="what-is-shared-corpus-layer">What is shared (corpus layer)<a class="headerlink" href="#what-is-shared-corpus-layer" title="Permanent link">&para;</a></h3>
+<p>The following data is <strong>shared across all authenticated users on an instance</strong>:</p>
+<ul>
+<li>Paper metadata (title, authors, abstract, publication date, DOI, source).</li>
+<li>Full-text chunks and embeddings stored in Qdrant.</li>
+<li>Citation graph edges and knowledge-graph entities derived from those papers.</li>
+<li>Papers discovered by instance-level feeds: Pulse recommender, background
+  scheduler, and Zotero group syncs.  These have <code>papers.discovered_by IS NULL</code>
+  (audit column only; no functional role).</li>
+</ul>
+<p>A paper with <code>discovered_by IS NULL</code> is a system/instance paper and is
+accessible to every authenticated user without requiring a <code>user_library</code>
+membership row.  This reflects instance configuration (feed settings, Pulse
+model), not any individual user's behavior.</p>
+<h3 id="what-is-strictly-per-user-activityoutput-layer">What is strictly per-user (activity/output layer)<a class="headerlink" href="#what-is-strictly-per-user-activityoutput-layer" title="Permanent link">&para;</a></h3>
+<p>The following is <strong>never cross-visible</strong> — every query is scoped to
+<code>user_id</code> and no cross-user join is permitted:</p>
+<ul>
+<li>Library membership (<code>user_library</code> rows).</li>
+<li>Paper read-state and ratings.</li>
+<li>Notes and annotations.</li>
+<li>Flashcards and card decks.</li>
+<li>Projects, tasks, and project–paper associations.</li>
+<li>Daily intent and Pulse preference signals.</li>
+<li>Structured extractions-of-record.</li>
+<li>Magic-link identity, session cookies, and user config values.</li>
+</ul>
+<p>Every product row in the database carries a non-NULL <code>user_id</code> — there is no
+NULL-owned product data. Single-tenant deployments are treated as multi-tenant
+with one user; ownership is enforced by the same server-side scoping that
+applies in the multi-user case.</p>
+<p>The corpus is a shared resource; the intellectual work on top of it is private
+(comparable to a shared scholarly library with per-user workspaces).
+Regression coverage lives in
+<code>libs/jarvis_common/tests/test_ownership_canonical_invariant.py</code>.</p>
+<hr />
+<h2 id="dev-flags-and-production-refusal">Dev Flags and Production Refusal<a class="headerlink" href="#dev-flags-and-production-refusal" title="Permanent link">&para;</a></h2>
+<p>JARVIS has five granular development flags. When <code>DEV_MODE=true</code>, all five are
+promoted to <code>true</code> unless overridden individually (see <code>settings.py</code>
+<code>_promote_dev_flags</code>). <strong>None are permitted in <code>ENVIRONMENT=production</code></strong> — the
+service refuses to start if any is <code>true</code> at boot (<code>validate_production_config</code>
+in <code>auth.py</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Effect when <code>true</code> (the protection it removes)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DEV_AUTH_BYPASS</code></td>
+<td>All authentication is bypassed when no <code>JARVIS_API_KEY</code> is configured (no key and no session required).</td>
+</tr>
+<tr>
+<td><code>DEV_ERROR_DETAIL</code></td>
+<td>Raw exception detail is included in API error responses (information leakage).</td>
+</tr>
+<tr>
+<td><code>DEV_CORS_OPEN</code></td>
+<td><code>Access-Control-Allow-Origin</code> is opened to <code>*</code> instead of the <code>CORS_ORIGINS</code> allowlist.</td>
+</tr>
+<tr>
+<td><code>DEV_SMTP_LOG_ONLY</code></td>
+<td>Magic-link emails are written to stdout/logs instead of being delivered via SMTP.</td>
+</tr>
+<tr>
+<td><code>DEV_CRYPTO_RELAXED</code></td>
+<td>Fernet key validation and HMAC key entropy requirements are relaxed.</td>
+</tr>
+</tbody>
+</table>
+<p><code>DEV_MODE=true</code> is a meta-flag: it promotes any of the five that were not
+explicitly set in the environment. An explicit env var always wins.</p>
+<hr />
+<h2 id="secret-environment-variables">Secret Environment Variables<a class="headerlink" href="#secret-environment-variables" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+<th>Required in production</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JARVIS_API_KEY</code></td>
+<td>Ops API key — gates all non-auth, non-health backend endpoints. Min 32 chars; enforced at startup.</td>
+<td>Yes (startup refuses if absent or &lt; 32 chars)</td>
+</tr>
+<tr>
+<td><code>JARVIS_CONFIG_KEY</code></td>
+<td>Fernet key for <code>user_config.encrypted_value</code> at-rest encryption.</td>
+<td>Yes (startup refuses if absent)</td>
+</tr>
+<tr>
+<td><code>JARVIS_CONFIG_KEY_OLD</code></td>
+<td>Previous Fernet key — enables zero-downtime rotation via MultiFernet. Set during key rotation; remove after.</td>
+<td>No (rotation only)</td>
+</tr>
+<tr>
+<td><code>JARVIS_MODEL_HMAC_KEY</code></td>
+<td>Dedicated HMAC-SHA256 key for Pulse classifier pickle signing (see below). Min 32 chars.</td>
+<td>Yes (startup refuses if absent; derivation from <code>JARVIS_API_KEY</code> is refused in production)</td>
+</tr>
+<tr>
+<td><code>SMTP_HOST</code> / <code>SMTP_USER</code> / <code>SMTP_PASS</code></td>
+<td>SMTP relay credentials for magic-link delivery. Without these (or when set to empty strings, which are silently ignored — see the SMTP entry in <a href="../known-residual-risks/">known-residual-risks.md</a>), links fall back to container stdout.</td>
+<td>Strongly recommended</td>
+</tr>
+<tr>
+<td><code>OWNER_OVERRIDE_ALLOWED_CIDRS</code></td>
+<td>Comma-separated CIDR allowlist for the <code>X-Owner-User-Id</code> header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the jarvis bridge subnet (tracks <code>JARVIS_NET_SUBNET</code>, default <code>10.137.241.0/24</code>) so the bot is trusted. The bare code default (<code>127.0.0.0/8</code>) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly.</td>
+<td>No (compose default is correct)</td>
+</tr>
+<tr>
+<td><code>ALLOW_PRIVATE_SMTP_HOST</code></td>
+<td>Default <code>false</code>. When <code>false</code>, the SMTP host is validated at config-save AND at magic-link send time and rejected if it resolves to a private/loopback/link-local/reserved address (SSRF guard). Set <code>true</code> ONLY if you run a legitimate <strong>internal SMTP relay</strong> on a private address/hostname — otherwise magic-link delivery to that relay is refused.</td>
+<td>No (set only for an internal relay)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="x-owner-user-id-mechanism">X-Owner-User-Id Mechanism<a class="headerlink" href="#x-owner-user-id-mechanism" title="Permanent link">&para;</a></h3>
+<p>The Telegram bot sends <code>X-Owner-User-Id: &lt;user_id&gt;</code> to route per-user API
+calls. This header is only honored when all three guards pass:</p>
+<ol>
+<li>A valid <code>JARVIS_API_KEY</code> is present on the request.</li>
+<li>The source IP falls within <code>OWNER_OVERRIDE_ALLOWED_CIDRS</code>.</li>
+<li>The supplied <code>user_id</code> exists in the <code>users</code> table and is not deleted.</li>
+</ol>
+<p>Any guard failure returns 403. The mechanism is implemented in
+<code>current_user_id_strict_with_owner_override</code> in <code>libs/jarvis_common/jarvis_common/auth.py</code>.</p>
+<p>The bot resolves the <code>user_id</code> it injects from <code>telegram_user_pairings</code> — the
+durable record written when a user runs <code>/pair &lt;token&gt;</code> in the bot. This is
+the bot's sole identity mechanism; it does not rely on a fixed chat-id
+environment variable. The <code>telegram.owner_chat_id</code> config key and the
+<code>TELEGRAM_CHAT_ID</code> environment variable are retained as inert tombstones (not
+read at runtime) and may be removed in a future cleanup.</p>
+<p>The bot's product-data tenant isolation (projects, tasks, milestones, papers,
+author alerts) is enforced entirely server-side by the service endpoints it
+calls — the same routes the web app uses. The bot is a REST caller, not a
+second writer implementing its own scoping.</p>
+<h3 id="config-key-rotation">Config Key Rotation<a class="headerlink" href="#config-key-rotation" title="Permanent link">&para;</a></h3>
+<p>To rotate <code>JARVIS_CONFIG_KEY</code> without downtime:</p>
+<ol>
+<li>Set <code>JARVIS_CONFIG_KEY_OLD=&lt;old key&gt;</code> and <code>JARVIS_CONFIG_KEY=&lt;new key&gt;</code>.</li>
+<li>Run <code>scripts/rotate_config_key.py --apply</code> (dry-run first without <code>--apply</code>).</li>
+<li>Restart services.</li>
+<li>Remove <code>JARVIS_CONFIG_KEY_OLD</code> from the environment.</li>
+</ol>
+<hr />
+<h2 id="proxy-trust-and-source-ip-allowlisting">Proxy-Trust and Source-IP Allowlisting<a class="headerlink" href="#proxy-trust-and-source-ip-allowlisting" title="Permanent link">&para;</a></h2>
+<p>Two auth surfaces use <code>request.client.host</code> to determine source IP for
+allowlist checks. The reported IP is rewritten by <code>ProxyHeadersMiddleware</code>
+when the request originates from a host in <code>trusted_proxy_hosts</code> (see
+<code>configure_middleware_and_errors</code> in
+<code>libs/jarvis_common/jarvis_common/app_factory.py</code>). If <code>trusted_proxy_hosts</code>
+is broader than the actual reverse-proxy fleet, an attacker behind any
+included host could spoof <code>X-Forwarded-For</code> to forge the source IP.</p>
+<p>The IP-allowlist call sites are:</p>
+<ul>
+<li><code>_ip_in_allowlist</code> (<code>libs/jarvis_common/jarvis_common/auth.py</code>) — backs
+  <code>OWNER_OVERRIDE_ALLOWED_CIDRS</code> for the <code>X-Owner-User-Id</code> header bypass;
+  mis-trusted XFF forges the operator's IP guard.</li>
+<li><code>_infra_ip_in_allowlist</code>
+  (<code>services/paper_ingestion/paper_ingestion/routers/infra_events.py</code>) —
+  backs <code>INFRA_INGEST_ALLOWED_CIDRS</code> for the Vector sidecar ingest
+  endpoint; mis-trusted XFF forges the sidecar's IP and reduces the
+  defense-in-depth to the static shared key (<code>INFRA_INGEST_KEY</code>) alone.
+  Note: <code>/infra-events</code> authenticates with a static shared key (constant-time
+  <code>hmac.compare_digest</code>) plus the CIDR allowlist — it is NOT a challenge-response
+  scheme and has no replay/nonce protection; the internal-network + default-deny
+  CIDR posture is the boundary.</li>
+</ul>
+<p><strong>Deployment requirement:</strong> keep <code>trusted_proxy_hosts</code> scoped to the
+actual reverse-proxy host(s) — in this stack that is the Caddy container's
+bridge IP only. Do NOT set <code>trusted_proxy_hosts="*"</code> in any production
+deployment. The setting is exposed via <code>TRUSTED_PROXY_HOSTS</code> in
+<code>CoreSettings</code>; the default value is <code>dashboard</code> (the Caddy reverse-proxy
+service), which is correct for the standard single-host stack. Override only
+when deploying behind a different proxy fleet.</p>
+<hr />
+<h2 id="audit-log">Audit Log<a class="headerlink" href="#audit-log" title="Permanent link">&para;</a></h2>
+<p>Security-relevant events are written to the <code>audit_log</code> table by
+<code>libs/jarvis_common/jarvis_common/audit.py</code>. The audit log is best-effort
+(failures are logged but do not abort the request) and caps metadata payloads at
+4 KB to prevent log inflation.</p>
+<p>Events currently audited include: invalid API key attempts, missing session on
+user-data routes, magic-link request and verify, user creation and deletion,
+admin actions.</p>
+<p>The audit log is readable by admins at <code>GET /api/admin/audit-log</code>
+(cursor-paginated, admin session required).</p>
+<hr />
+<h2 id="vulnerability-disclosure">Vulnerability Disclosure<a class="headerlink" href="#vulnerability-disclosure" title="Permanent link">&para;</a></h2>
+<p>If you discover a security vulnerability in JARVIS RD Assistant, please report
+it responsibly:</p>
+<p><strong>Contact:</strong> Use <a href="https://github.com/FFidan/Jarvis-RD-Assistant/security/advisories/new">GitHub Security Advisories</a> (private vulnerability reporting).</p>
+<p><strong>Process:</strong>
+1. Open a private security advisory on GitHub with a description of the
+   vulnerability, steps to reproduce, and any proof-of-concept.
+2. Allow up to <strong>90 days</strong> for a fix to be developed and released before public
+   disclosure (coordinated disclosure).
+3. Acknowledgement will be sent within 5 business days of receipt.</p>
+<p>Please do not open public GitHub issues for security vulnerabilities.</p>
+<hr />
+<h2 id="pulse-model-signing">Pulse Model Signing<a class="headerlink" href="#pulse-model-signing" title="Permanent link">&para;</a></h2>
+<p>The Pulse classifier persists a serialized scikit-learn <code>LogisticRegression</code>
+model into the <code>pulse_models</code> table as an HMAC-signed pickle blob. Verification
+happens in <code>services/paper_ingestion/paper_ingestion/pulse/training.py::_verify_and_unpickle</code>
+before <code>pickle.loads</code> is called — without the HMAC gate, anyone with DB write
+access could forge a blob and trigger RCE.</p>
+<h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
+<p>The HMAC key is resolved at call time, in this order:</p>
+<ol>
+<li><strong><code>JARVIS_MODEL_HMAC_KEY</code></strong> (preferred) — a dedicated secret used solely for
+   signing model blobs. Generate with <code>openssl rand -hex 32</code>. Keeping this
+   separate from <code>JARVIS_API_KEY</code> means a compromise of the HTTP bearer does
+   not also let an attacker forge model blobs, and vice versa.</li>
+<li><strong>Derived from <code>JARVIS_API_KEY</code></strong> — when <code>JARVIS_MODEL_HMAC_KEY</code> is unset,
+   the signing key is <code>sha256(b"model-signing:" + JARVIS_API_KEY)</code>. The
+   <code>model-signing:</code> prefix domain-separates this key from any direct use of
+   the bearer.</li>
+</ol>
+<p>If neither is set, <code>_hmac_key()</code> raises <code>RuntimeError</code>. In production
+(<code>ENVIRONMENT=production</code>), <code>validate_production_config()</code> — called at lifespan
+startup — refuses to start unless at least one of the two paths above is
+configured.</p>
+<h3 id="key-rotation">Key Rotation<a class="headerlink" href="#key-rotation" title="Permanent link">&para;</a></h3>
+<p>There is no in-place rotation framework. To rotate the HMAC key:</p>
+<ol>
+<li>Update <code>JARVIS_MODEL_HMAC_KEY</code> and restart the affected services.</li>
+<li>Existing <code>pulse_models</code> rows will fail HMAC verification and the scoring path
+   falls back to zeros until a new model is trained.</li>
+<li>The nightly <code>pulse.train_classifier</code> cron job re-trains automatically. To
+   force an immediate re-train, enqueue <code>pulse.train_classifier</code> via the jobs API.</li>
+</ol>
+<hr />
+<h2 id="ollama-security-posture">Ollama Security Posture<a class="headerlink" href="#ollama-security-posture" title="Permanent link">&para;</a></h2>
+<p>The Ollama daemon handles local LLM inference. Key constraints:</p>
+<ul>
+<li><strong>Image pin:</strong> keep <code>OLLAMA_IMAGE</code> in <code>versions.env</code> at the tested pin
+  (<code>ollama/ollama:0.23.1</code>) or a newer validated pin. Downgrading below the
+  patched line reintroduces known vulnerabilities (see
+  <a href="../known-residual-risks/">known-residual-risks.md</a> for the current CVE
+  posture entry).</li>
+<li><strong>Host binding:</strong> the default Compose configuration binds the Ollama host
+  port to loopback only (<code>127.0.0.1</code>), preventing browser and LAN clients from
+  calling the daemon directly.</li>
+<li><strong>Docker network boundary:</strong> every container on the <code>jarvis</code> Docker network
+  can reach <code>http://ollama:11434</code>. Do not attach untrusted sidecars to that
+  network.</li>
+<li><strong>Shared daemon override:</strong> if the operator configures an external shared
+  Ollama daemon instead of the bundled one, that daemon must be patched to an
+  equivalent or newer pin and bound to loopback or an equivalently trusted
+  private network.</li>
+</ul>
+<p>Review this posture whenever <code>OLLAMA_IMAGE</code> is updated or the Compose network
+topology changes.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

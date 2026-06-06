@@ -1,0 +1,3377 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+      
+      
+      
+        <link rel="canonical" href="https://ffidan.github.io/Jarvis-RD-Assistant/contracts/01-settings/">
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../02-pulse/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Settings - JARVIS RD Assistant — Operator & Developer Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#01-settings-contract" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-header__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JARVIS RD Assistant — Operator & Developer Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Settings
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../readme-shim/" class="md-tabs__link">
+          
+  
+  
+  Get Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../SECURITY/" class="md-tabs__link">
+          
+  
+  
+  Operate
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ARCHITECTURE/" class="md-tabs__link">
+          
+  
+  
+  Develop
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  System Contracts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../manual/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-nav__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JARVIS RD Assistant — Operator & Developer Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../readme-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../DEPLOYMENT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../REQUIREMENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../SECURITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../RELEASE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../known-residual-risks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known Residual Risks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Develop
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Develop
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Product Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ENGINEERING_STANDARDS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Engineering Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migrations-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Contracts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    System Contracts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-what-this-contract-covers-and-what-it-does-not" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. What this contract covers (and what it does NOT)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-storage-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Storage tables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-user_config-key-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. user_config key catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. user_config key catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-active-keys-written-and-read-by-code-that-affects-user-visible-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 Active keys (written and read by code that affects user-visible behavior)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Partial keys (consulted only at startup, only on a non-core endpoint, or pushed elsewhere on write)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-system-wide-admin-keys-one-deployment-wide-value-admin-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 System-wide admin keys (one deployment-wide value, admin-only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-unwired-keys-allowed-by-api-no-consumer-reads-them" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Unwired keys (allowed by API; no consumer reads them)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-per-table-settings-typed-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Per-table settings (typed tables)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Per-table settings (typed tables)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-topics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 topics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-tracked_authors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 tracked_authors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-paper_sources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 paper_sources
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-scheduled_nudges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 scheduled_nudges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-extraction_templates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 extraction_templates
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-validators-and-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Validators and constraints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-side-effects-on-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Side-effects on update
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-status-table-canonical-roll-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Status table (canonical roll-up)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-accepted-partial-keys-status-quo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Accepted Partial keys (status quo)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-cross-contract-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Cross-contract references
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-verified-identifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Verified Identifiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../02-pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-llm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LLM Client
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../04-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../05-models-and-hardware/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models & Hardware
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../07-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/navigation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Navigation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/research-feed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Research Feed & Library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/paper-detail/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Paper Detail
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/ask/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ask (Cross-paper RAG)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/learning-cards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning Cards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/projects/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/knowledge-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Knowledge Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/citation-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citation Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/extraction-table/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extraction Table
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/analytics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/home-my-day/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    My Day & Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/telegram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telegram
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/admin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin & Multi-tenant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-what-this-contract-covers-and-what-it-does-not" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. What this contract covers (and what it does NOT)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-storage-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Storage tables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-user_config-key-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. user_config key catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. user_config key catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-active-keys-written-and-read-by-code-that-affects-user-visible-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 Active keys (written and read by code that affects user-visible behavior)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Partial keys (consulted only at startup, only on a non-core endpoint, or pushed elsewhere on write)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-system-wide-admin-keys-one-deployment-wide-value-admin-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 System-wide admin keys (one deployment-wide value, admin-only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-unwired-keys-allowed-by-api-no-consumer-reads-them" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Unwired keys (allowed by API; no consumer reads them)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-per-table-settings-typed-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Per-table settings (typed tables)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Per-table settings (typed tables)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-topics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 topics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-tracked_authors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 tracked_authors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-paper_sources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 paper_sources
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-scheduled_nudges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 scheduled_nudges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-extraction_templates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 extraction_templates
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-validators-and-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Validators and constraints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-side-effects-on-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Side-effects on update
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-status-table-canonical-roll-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Status table (canonical roll-up)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-accepted-partial-keys-status-quo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Accepted Partial keys (status quo)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-cross-contract-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Cross-contract references
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-verified-identifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Verified Identifiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="01-settings-contract">01 — Settings Contract<a class="headerlink" href="#01-settings-contract" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> LIVING
+<strong>Reviewers must update this contract in the same patch as any change to:</strong>
+- <code>_ALLOWED_CONFIG_KEYS</code> in <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_metadata.py">config_metadata.py</a> or <code>_CONFIG_VALIDATORS</code> in <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py">config_validators.py</a>
+- DDL on <code>user_config</code>, <code>topics</code>, <code>tracked_authors</code>, <code>paper_sources</code>, <code>scheduled_nudges</code>
+- Any new code reading <code>user_config.value</code> in any service</p>
+<p>The <code>settings_service</code> package is split into submodules
+(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/settings_service.py">settings_service.py</a>
+re-exports them): <code>config_metadata</code> (allow-list + key classification),
+<code>config_validators</code> (validators), <code>config_db</code> (row I/O), <code>config_write</code>
+(write orchestration), <code>model_assignment</code>, <code>scheduler_effects</code>, <code>provider_test</code>,
+<code>analytics_queries</code>, <code>data_export</code>.</p>
+<hr />
+<h2 id="0-what-this-contract-covers-and-what-it-does-not">0. What this contract covers (and what it does NOT)<a class="headerlink" href="#0-what-this-contract-covers-and-what-it-does-not" title="Permanent link">&para;</a></h2>
+<p><strong>In scope.</strong> Every user-controllable setting that backs a control in the
+frontend Settings UI or shapes runtime behavior. Storage shape, validation,
+who writes it, who reads it, and current wiring status (Active / Partial / Unwired).</p>
+<p><strong>Out of scope.</strong>
+- Per-paper user state (<code>paper_user_state</code> columns) — covered by the
+  paper-lifecycle redesign spec.
+- Pomodoro timer settings (<code>usePomodoroStore</code> Zustand) — UI-local only,
+  never persisted server-side.
+- Authentication (<code>JARVIS_API_KEY</code> from Docker Secret / env fallback /
+  <code>auth-store</code>) — bootstrap, not user-controllable.
+- HTTP request/response Pydantic shapes — covered by service-local models,
+  not this contract.</p>
+<hr />
+<h2 id="1-storage-tables">1. Storage tables<a class="headerlink" href="#1-storage-tables" title="Permanent link">&para;</a></h2>
+<p>The Settings UI writes to <strong>two physical surfaces</strong>: <code>user_config</code> (key/value
+JSONB store) and a small set of typed tables for entities that have their
+own row-level state.</p>
+<table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Source-of-truth migration</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>user_config</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/init.sql#L33-L48">db/init.sql:33-48</a>; <code>user_id</code> scope added by migration 073</td>
+<td>Key/value store for system defaults (<code>user_id IS NULL</code>) and per-user overrides (<code>user_id=&lt;users.id&gt;</code>). JSON values for plain settings; ciphertext bytes for encrypted secrets. Browser callers read/write personal keys in their own scope with fallback to system rows; system keys stay admin-only and system-scoped.</td>
+</tr>
+<tr>
+<td><code>topics</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/init.sql#L90-L97">db/init.sql:90-97</a>; <code>description TEXT</code> added by migration 018</td>
+<td>User-defined research topics. <code>enabled</code> filters which topics feed Pulse + recommendation.</td>
+</tr>
+<tr>
+<td><code>tracked_authors</code></td>
+<td><code>db/init.sql</code> (post-merger schema); <code>source</code> column tracks <code>manual / auto_starred / auto_rated</code></td>
+<td>Authors the user wants alerts for. <code>enabled</code> filters which feed Stage-1 <code>author_bonus</code>.</td>
+</tr>
+<tr>
+<td><code>paper_sources</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/init.sql#L71-L88">db/init.sql:71-88</a>; <code>display_order</code> added by migration 023</td>
+<td>Pluggable source registry (arXiv, Semantic Scholar, OpenAlex, PubMed, Local). <code>enabled</code> toggles ingestion. <code>config</code> JSONB holds per-source settings (e.g. <code>requires_key</code>).</td>
+</tr>
+<tr>
+<td><code>scheduled_nudges</code></td>
+<td><code>db/init.sql</code> + migration 016</td>
+<td>Telegram notification cron schedules (6 nudge types). <code>enabled</code> and <code>cron_expression</code> are the user-controllable columns.</td>
+</tr>
+<tr>
+<td><code>extraction_templates</code></td>
+<td><code>db/init.sql</code> + migration 011</td>
+<td>User-defined LLM extraction schemas. <code>is_default</code> flags the system default.</td>
+</tr>
+<tr>
+<td><code>recommendation_feedback</code></td>
+<td>Migration 049</td>
+<td>👍/👎 signals per paper/topic. Drives the recommender L1+L2+L3 dampening. Not exposed as a Settings tab; included here because it shapes Pulse behavior the user can see.</td>
+</tr>
+<tr>
+<td><code>pulse_decks</code> / <code>pulse_cards</code></td>
+<td>Migrations 018 / 043 / 049</td>
+<td>Nightly Pulse deck state + diagnostics; <code>pulse_decks.stats</code> JSONB drives the Settings → Pulse "Last Pulse run" panel.</td>
+</tr>
+</tbody>
+</table>
+<p><code>user_config</code> is the dominant storage for settings; the typed tables exist
+because their entities have richer state than a JSON value can carry
+(per-row enable toggles, ordering, per-source secrets).</p>
+<hr />
+<h2 id="2-user_config-key-catalog">2. <code>user_config</code> key catalog<a class="headerlink" href="#2-user_config-key-catalog" title="Permanent link">&para;</a></h2>
+<p>The headline table. Every key the API may write through <code>PUT /api/config/{key}</code>
+must appear in <code>_ALLOWED_CONFIG_KEYS</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_metadata.py#L34-L85">config_metadata.py:34-85</a>). Status reflects whether the value is consulted by runtime
+behavior somewhere.</p>
+<p>Scope is part of the contract:</p>
+<ul>
+<li><code>PERSONAL_KEYS</code> are stored as <code>(user_id, key)</code> when a browser session has a
+  real <code>user_id</code>; API-key-only callers use the legacy system/default row.</li>
+<li><code>SYSTEM_KEYS</code> and dynamic hardware keys always use <code>user_id IS NULL</code> and
+  require admin role for browser sessions.</li>
+<li><code>GET /api/config</code> hides system rows from non-admin browser users; <code>GET
+  /api/config/{key}</code> applies the same server-side role check.</li>
+</ul>
+<p><strong><code>telegram.bot_token</code> is intentionally absent from <code>_ALLOWED_CONFIG_KEYS</code>.</strong> It is written
+Fernet-encrypted via the dedicated <code>POST /api/setup/telegram-bot-token</code> endpoint, which applies
+additional validation (token format check, Telegram API reachability test) before persisting.
+Routing a bot token through the general <code>PUT /api/config/{key}</code> surface would bypass that
+validation and is an intentional non-regression: the omission is by design, not a gap.</p>
+<h3 id="21-active-keys-written-and-read-by-code-that-affects-user-visible-behavior">2.1 Active keys (written and read by code that affects user-visible behavior)<a class="headerlink" href="#21-active-keys-written-and-read-by-code-that-affects-user-visible-behavior" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>Validator</th>
+<th>Read sites</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pulse.enabled</code></td>
+<td>(none)</td>
+<td><code>_validate_bool</code></td>
+<td>scheduler.py — gates whether the <code>pulse_overnight</code> job runs</td>
+<td>Master switch for Pulse subsystem</td>
+</tr>
+<tr>
+<td><code>pulse.cron</code></td>
+<td><code>"0 4 * * *"</code></td>
+<td><code>_validate_cron</code> (rejects sub-hourly)</td>
+<td>scheduler.py</td>
+<td>On write, <code>apply_pulse_cron</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L53">scheduler_effects.py:53</a>) reschedules the live job AND validates <code>next_run_time ∈ [now, now+366d]</code>; rolls back on failure</td>
+</tr>
+<tr>
+<td><code>pulse.deck_size</code></td>
+<td><code>_DEFAULT_DECK_SIZE</code> (10)</td>
+<td><code>_validate_positive_int</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L230">profile.py:230</a></td>
+<td>Final card count</td>
+</tr>
+<tr>
+<td><code>pulse.stage2_top_k</code></td>
+<td><code>_DEFAULT_STAGE2_TOP_K</code> (40)</td>
+<td><code>_validate_positive_int</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L231">profile.py:231</a></td>
+<td>Stage-1 cut feeding Stage-2 LLM rerank</td>
+</tr>
+<tr>
+<td><code>pulse.weights</code></td>
+<td><code>_DEFAULT_WEIGHTS</code> (in profile.py)</td>
+<td><code>_validate_pulse_weights</code> (requires 6 core keys; permits 4 optional; values ∈ [0,1])</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L221-L231">profile.py:221-231</a> merge-with-defaults; clamped to <code>[0,1]</code> (out-of-range logged)</td>
+<td>Carries the 10 weight sliders. <strong>4 are CONDITIONAL</strong> (default 0.0; require user opt-in AND optional dep) — see <a href="../02-pulse/#32-conditional-signals-live-conditional">02-pulse.md §3.2</a></td>
+</tr>
+<tr>
+<td><code>pulse.l2_lambda</code></td>
+<td>0.5</td>
+<td><code>_validate_l2_lambda</code> (range <code>[0.0, 2.0]</code>)</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L236-L237">profile.py:236-237</a></td>
+<td>Negative-centroid cosine penalty multiplier</td>
+</tr>
+<tr>
+<td><code>pulse.lookback_days</code></td>
+<td>7</td>
+<td><code>_validate_lookback_days</code> (int in <code>[1, 90]</code>)</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L239-L240">profile.py:239-240</a></td>
+<td>Discovery window: how far back Stage 1 looks for candidate papers</td>
+</tr>
+<tr>
+<td><code>pulse.startup_grace_seconds</code></td>
+<td>0.0</td>
+<td><code>_validate_startup_grace_seconds</code> (float in <code>[0, 300]</code>)</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/profile.py#L241-L242">profile.py:241-242</a></td>
+<td>Warmup pause before the first outbound HTTP burst</td>
+</tr>
+<tr>
+<td><code>recommendation.enabled</code></td>
+<td><code>True</code> (implicit)</td>
+<td>(none — bool coerced)</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/ingestion/recommender.py#L141-L142">recommender.py:141-142</a></td>
+<td>Gates <code>refresh_recommendations()</code></td>
+</tr>
+<tr>
+<td><code>recommendation.liked_weight</code></td>
+<td>(default in recommender)</td>
+<td>(none)</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/ingestion/recommender.py#L135-L136">recommender.py:135-136</a></td>
+<td>Weighted score: <code>liked_s * weight</code></td>
+</tr>
+<tr>
+<td><code>recommendation.project_weight</code></td>
+<td>(default in recommender)</td>
+<td>(none)</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/ingestion/recommender.py#L138-L139">recommender.py:138-139</a></td>
+<td>Weighted score: <code>proj_s * weight</code></td>
+</tr>
+<tr>
+<td><code>user.timezone</code></td>
+<td><code>"UTC"</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/init.sql#L48">init.sql:48</a>)</td>
+<td>(none)</td>
+<td>telegram_bot scheduler (cron timezone)</td>
+<td>On write, calls <code>reload_telegram_nudges()</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_assignment.py#L21">model_assignment.py:21</a>) — best-effort POST</td>
+</tr>
+<tr>
+<td><code>setup.completed</code></td>
+<td>(absent → false)</td>
+<td><code>_validate_bool</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/system.py#L144-L149">routers/system.py:144-149</a></td>
+<td>Drives setup-wizard gate</td>
+</tr>
+<tr>
+<td><code>telegram.owner_chat_id</code></td>
+<td>(none)</td>
+<td><code>_validate_optional_int</code></td>
+<td>telegram_bot/owner.py:48-51, helpers.py:65, system_commands.py:73 + 95-110</td>
+<td>Pairing flow writes; bot resolves owner via this row</td>
+</tr>
+<tr>
+<td><code>zotero.api_key</code></td>
+<td>(none)</td>
+<td><code>_validate_nonempty_str</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L38">zotero_service.py:38, 87</a> (encrypted; decrypted on read)</td>
+<td>Encrypted: stored in <code>encrypted_value</code> BYTEA, plaintext NULL'd</td>
+</tr>
+<tr>
+<td><code>zotero.user_id</code></td>
+<td>(none)</td>
+<td><code>_validate_nonempty_str</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L88">zotero_service.py:88</a></td>
+<td></td>
+</tr>
+<tr>
+<td><code>zotero.library_type</code></td>
+<td><code>"user"</code> (implicit on push)</td>
+<td><code>_validate_library_type</code> (<code>"user"</code> / <code>"group"</code>)</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L89">zotero_service.py:89</a></td>
+<td></td>
+</tr>
+<tr>
+<td><code>zotero.group_id</code></td>
+<td>(none)</td>
+<td><code>_validate_group_id</code> (positive int or null)</td>
+<td><code>zotero_service.py</code> (consumed when <code>library_type="group"</code>)</td>
+<td><code>null</code> clears the field. <code>ZoteroClient</code> requires a non-null id at construction time when <code>library_type="group"</code>.</td>
+</tr>
+<tr>
+<td><code>zotero.poll_enabled</code></td>
+<td><code>False</code></td>
+<td><code>_validate_bool</code></td>
+<td><code>scheduler.py</code> per-user polling readiness</td>
+<td>Per-user gate for scheduled Zotero polling. The scheduler job itself always runs; per-run fan-out only includes users with <code>poll_enabled=true</code> and usable Zotero credentials.</td>
+</tr>
+<tr>
+<td><code>zotero.poll_cron</code></td>
+<td>(no default; cron string when set)</td>
+<td><code>_validate_zotero_cron</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/scheduler.py#L103">scheduler.py:103</a></td>
+<td>On write, <code>apply_zotero_cron</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L113">scheduler_effects.py:113</a>) reschedules the <code>zotero_library_sync</code> job</td>
+</tr>
+<tr>
+<td><code>zotero.auto_push_on_star</code></td>
+<td><code>False</code> (key absent → off)</td>
+<td><code>_validate_bool</code></td>
+<td>star handler in <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/papers.py">routers/papers.py</a> — on <code>starred=False→True</code> transition AND key truthy AND project link present, enqueues existing <code>zotero.push</code> job</td>
+<td>Default-off; idempotent on already-starred state.</td>
+</tr>
+<tr>
+<td><code>fsrs.desired_retention</code></td>
+<td><code>0.9</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/init.sql#L49">init.sql:49</a>)</td>
+<td><code>_validate_fsrs_retention</code> (range <code>(0, 1)</code>)</td>
+<td>Per-review fetch in <code>_build_fsrs_manager_from_db</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/learning_engine/learning_engine/routers/review.py">learning_engine/routers/review.py</a>) — fresh <code>FSRSManager</code> built inside the review transaction</td>
+<td>Live-edit reactive</td>
+</tr>
+<tr>
+<td><code>fsrs.learning_steps</code></td>
+<td><code>[1, 10]</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/init.sql#L50">init.sql:50</a>)</td>
+<td><code>_validate_fsrs_learning_steps</code> (<code>list[int]</code>, length 1–10, all positive)</td>
+<td>Per-review fetch in <code>_build_fsrs_manager_from_db</code>; passed to py-fsrs <code>Scheduler(learning_steps=[timedelta(minutes=m) for m in steps])</code></td>
+<td>Default <code>[1, 10]</code> matches the py-fsrs library default</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write">2.2 Partial keys (consulted only at startup, only on a non-core endpoint, or pushed elsewhere on write)<a class="headerlink" href="#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>How / where consumed</th>
+<th>Why it is Partial</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>llm.smart_model</code></td>
+<td><code>"smart"</code> (init.sql seed)</td>
+<td>On write: calls <code>update_litellm_model</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/litellm_config.py#L178">litellm_config.py:178</a>) which rewrites <code>litellm/config.yaml</code> (or POSTs <code>/config/update</code> for cloud)</td>
+<td>Runtime authority is LiteLLM's config file, not <code>user_config</code>. The <code>user_config</code> row exists for the UI's read-back display. If the YAML mount is <code>:ro</code> (SEC-002) the write raises <code>RuntimeError</code> and 400 propagates. See §9.</td>
+</tr>
+<tr>
+<td><code>llm.fast_model</code></td>
+<td><code>"fast"</code></td>
+<td>Same as above</td>
+<td>Same</td>
+</tr>
+<tr>
+<td><code>llm.embed_model</code></td>
+<td><code>"embed"</code></td>
+<td>Same as above</td>
+<td>Same</td>
+</tr>
+<tr>
+<td><code>llm.anthropic.api_key</code></td>
+<td>(none)</td>
+<td>Encrypted per-user credential. Read by <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/litellm_config.py#L52-L83">litellm_config.py:get_provider_api_key</a> when a cloud model alias is selected; also read by <code>POST /api/providers/anthropic/test</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L429">routers/settings.py:429</a>)</td>
+<td>Preferred BYO-provider path. Only consumed if the model alias is set to <code>anthropic/...</code> AND a cloud-provider POST is in flight; otherwise dormant. <code>.env</code> provider keys are bootstrap/legacy only, not the request-time Settings authority.</td>
+</tr>
+<tr>
+<td><code>llm.openai.api_key</code></td>
+<td>(none)</td>
+<td>Same encrypted per-user pattern</td>
+<td>Same preferred BYO-provider path; <code>.env</code> <code>OPENAI_API_KEY</code> is bootstrap/legacy only</td>
+</tr>
+<tr>
+<td><code>llm.google.api_key</code></td>
+<td>(none)</td>
+<td>Same encrypted per-user pattern</td>
+<td>Same preferred BYO-provider path; <code>.env</code> Google provider keys are bootstrap/legacy only</td>
+</tr>
+</tbody>
+</table>
+<h3 id="23-system-wide-admin-keys-one-deployment-wide-value-admin-only">2.3 System-wide admin keys (one deployment-wide value, admin-only)<a class="headerlink" href="#23-system-wide-admin-keys-one-deployment-wide-value-admin-only" title="Permanent link">&para;</a></h3>
+<p>These keys are <code>SYSTEM_KEYS</code> (always <code>user_id IS NULL</code>, admin role required for browser sessions).
+Some are collected by the onboarding wizard (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/setup.py">routers/setup.py</a>) and editable afterwards via <code>PUT /api/config/{key}</code>.</p>
+<p><strong><code>GET /api/setup/status</code> response shape</strong> (pre-auth, no session required):</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>configured</code></td>
+<td>bool</td>
+<td>True when ≥ 1 admin user exists.</td>
+</tr>
+<tr>
+<td><code>setup_completed</code></td>
+<td>bool</td>
+<td>True when <code>setup.completed</code> user_config key is set to true. The unified onboarding gate keys on this field.</td>
+</tr>
+<tr>
+<td><code>setup_mode</code></td>
+<td><code>"single" \| "multi"</code></td>
+<td>Deployment access mode.</td>
+</tr>
+<tr>
+<td><code>hw_tier_baseline</code> / <code>hw_tier_current</code> / <code>hw_tier_changed</code></td>
+<td>string / string / bool</td>
+<td>Hardware tier at first-boot vs. current detected tier.</td>
+</tr>
+<tr>
+<td><code>recommended_backend</code> / <code>current_backend</code> / <code>observed_backend</code></td>
+<td>string</td>
+<td>LLM backend tier recommendation and observation.</td>
+</tr>
+<tr>
+<td><code>observed_recent_share</code></td>
+<td>float</td>
+<td>Recent share of traffic on the observed backend.</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>Validator</th>
+<th>How / where consumed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>smtp.host</code></td>
+<td>(none)</td>
+<td><code>_validate_nonempty_str</code></td>
+<td>Outbound mail relay host. Written by the setup wizard; key names match <code>_SMTP_PLAINTEXT_KEYS</code> / <code>_SMTP_ENCRYPTED_KEYS</code> in <code>routers/setup.py</code>.</td>
+</tr>
+<tr>
+<td><code>smtp.port</code></td>
+<td>(none)</td>
+<td><code>_validate_positive_int</code></td>
+<td>Relay port.</td>
+</tr>
+<tr>
+<td><code>smtp.user</code></td>
+<td>(none)</td>
+<td><code>_validate_nonempty_str</code></td>
+<td>Relay auth user.</td>
+</tr>
+<tr>
+<td><code>smtp.from</code></td>
+<td>(none)</td>
+<td><code>_validate_nonempty_str</code></td>
+<td>Default From address.</td>
+</tr>
+<tr>
+<td><code>smtp.pass</code></td>
+<td>(none)</td>
+<td><code>_validate_nonempty_str</code></td>
+<td>Relay auth password. <strong>Encrypted</strong> (<code>_ENCRYPTED_KEYS</code>): stored as Fernet ciphertext in <code>encrypted_value</code>, masked on GET.</td>
+</tr>
+<tr>
+<td><code>automation.fetch_interval_hours</code></td>
+<td>(none)</td>
+<td><code>_validate_positive_int</code></td>
+<td>Interval for the system-wide auto-fetch pipeline scheduler.</td>
+</tr>
+<tr>
+<td><code>observability.langfuse_dashboard_url</code></td>
+<td>(none)</td>
+<td><code>_validate_langfuse_dashboard_url</code> (empty / <code>https://</code> / <code>http://localhost</code> / <code>http://127.0.0.1</code>)</td>
+<td>The "Open Langfuse dashboard" link target in Settings → Observability. See <a href="../04-observability/#8-settings-ui-integration">04-observability.md §8</a>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="24-unwired-keys-allowed-by-api-no-consumer-reads-them">2.4 Unwired keys (allowed by API; no consumer reads them)<a class="headerlink" href="#24-unwired-keys-allowed-by-api-no-consumer-reads-them" title="Permanent link">&para;</a></h3>
+<p><strong>None currently.</strong> No allow-listed key lacks a consumer. Any future Unwired→Active
+promotion MUST add a validator at the same time, and SHOULD be backed by a
+focused test that live-edits the value and asserts the new behavior appears
+without a service restart.</p>
+<hr />
+<h2 id="3-per-table-settings-typed-tables">3. Per-table settings (typed tables)<a class="headerlink" href="#3-per-table-settings-typed-tables" title="Permanent link">&para;</a></h2>
+<p>These are not key/value rows but column-level settings the UI writes through
+typed REST endpoints.</p>
+<h3 id="31-topics">3.1 <code>topics</code><a class="headerlink" href="#31-topics" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>UI write endpoint</th>
+<th>Consumer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td><code>POST/PUT /api/topics</code></td>
+<td>Topic seeding for Pulse search; <code>pulse/profile.py</code> topic centroids</td>
+</tr>
+<tr>
+<td><code>query_terms</code> (TEXT[])</td>
+<td>Same</td>
+<td>Source plugin queries</td>
+</tr>
+<tr>
+<td><code>category</code></td>
+<td>Same</td>
+<td>Display only</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>Same</td>
+<td>Pulse Stage-2 prompt context (<code>build_scoring_prompt</code>)</td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>PUT /api/topics/{id}</code></td>
+<td><code>pulse/profile.py</code> filters disabled topics from the active set</td>
+</tr>
+</tbody>
+</table>
+<h3 id="32-tracked_authors">3.2 <code>tracked_authors</code><a class="headerlink" href="#32-tracked_authors" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>UI write endpoint</th>
+<th>Consumer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>author_name</code></td>
+<td><code>POST/PUT /api/authors</code></td>
+<td>Stage-1 <code>author_bonus</code> lookup (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L184-L192">scoring.py:184-192</a> — <code>tracked_author_names</code> set)</td>
+</tr>
+<tr>
+<td><code>s2_author_id</code></td>
+<td>Same</td>
+<td>Stage-1 alternate lookup via Semantic Scholar ID set</td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>PUT /api/authors/{id}</code></td>
+<td>Filter applied in profile.py author-set construction</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>(set by code: <code>manual</code> / <code>auto_starred</code> / <code>auto_rated</code>)</td>
+<td>Display only; auto-detect endpoints set it</td>
+</tr>
+</tbody>
+</table>
+<h3 id="33-paper_sources">3.3 <code>paper_sources</code><a class="headerlink" href="#33-paper_sources" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>UI write endpoint</th>
+<th>Consumer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>PUT /api/sources/{id}</code></td>
+<td><code>pulse/discovery.py</code> skips disabled sources during candidate fetch</td>
+</tr>
+<tr>
+<td><code>priority</code></td>
+<td>Same</td>
+<td>Sort key for source dispatch</td>
+</tr>
+<tr>
+<td><code>config</code> (JSONB)</td>
+<td>Same</td>
+<td>Per-source plugin configuration (e.g., <code>requires_key</code>, <code>mailto</code>)</td>
+</tr>
+<tr>
+<td><code>display_order</code></td>
+<td><code>PATCH /api/sources/reorder</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L336-L361">routers/settings.py:336-361</a>)</td>
+<td>Source list UI ordering</td>
+</tr>
+</tbody>
+</table>
+<h3 id="34-scheduled_nudges">3.4 <code>scheduled_nudges</code><a class="headerlink" href="#34-scheduled_nudges" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>UI write endpoint</th>
+<th>Consumer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>PUT /api/nudges/{id}</code></td>
+<td>telegram_bot scheduler</td>
+</tr>
+<tr>
+<td><code>cron_expression</code></td>
+<td>Same</td>
+<td>telegram_bot APScheduler trigger; on write, <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L315">routers/settings.py:315</a> calls <code>reload_telegram_nudges()</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="35-extraction_templates">3.5 <code>extraction_templates</code><a class="headerlink" href="#35-extraction_templates" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>UI write endpoint</th>
+<th>Consumer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code>, <code>description</code>, <code>fields</code> (JSONB)</td>
+<td><code>POST/PUT /api/extraction-templates</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/core.py#L97-L110">extraction/core.py:97-110</a> loads template by id and feeds <code>fields</code> into the LLM prompt</td>
+</tr>
+<tr>
+<td><code>is_default</code></td>
+<td>Same</td>
+<td>Default-template selection logic</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-validators-and-constraints">4. Validators and constraints<a class="headerlink" href="#4-validators-and-constraints" title="Permanent link">&para;</a></h2>
+<p>Defined in <code>_CONFIG_VALIDATORS</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_validators.py#L231-L271">config_validators.py:231-271</a>). A <code>PUT /api/config/{key}</code> with no entry in this dict accepts any JSONB value once the key passes the <code>_ALLOWED_CONFIG_KEYS</code> allowlist.</p>
+<table>
+<thead>
+<tr>
+<th>Validator</th>
+<th>Applied to</th>
+<th>Rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_validate_cron</code></td>
+<td><code>pulse.cron</code></td>
+<td>Must parse via <code>CronTrigger.from_crontab</code>. Sub-hourly schedules rejected (Pulse runs are expensive)</td>
+</tr>
+<tr>
+<td><code>_validate_pulse_weights</code></td>
+<td><code>pulse.weights</code></td>
+<td>Dict; required keys: <code>embedding</code>, <code>topic</code>, <code>llm_relevance</code>, <code>llm_novelty</code>, <code>author_bonus</code>, <code>recency</code>. Optional: <code>citation_pagerank</code>, <code>citation_count</code>, <code>citation_adamic_adar</code>, <code>classifier</code>. Each value ∈ [0,1]</td>
+</tr>
+<tr>
+<td><code>_validate_positive_int</code></td>
+<td><code>pulse.deck_size</code>, <code>pulse.stage2_top_k</code>, <code>automation.fetch_interval_hours</code>, <code>smtp.port</code></td>
+<td>Strict positive int</td>
+</tr>
+<tr>
+<td><code>_validate_l2_lambda</code></td>
+<td><code>pulse.l2_lambda</code></td>
+<td>Number in <code>[0.0, 2.0]</code>. Excludes bool.</td>
+</tr>
+<tr>
+<td><code>_validate_lookback_days</code></td>
+<td><code>pulse.lookback_days</code></td>
+<td>Int in <code>[1, 90]</code></td>
+</tr>
+<tr>
+<td><code>_validate_startup_grace_seconds</code></td>
+<td><code>pulse.startup_grace_seconds</code></td>
+<td>Number in <code>[0, 300]</code></td>
+</tr>
+<tr>
+<td><code>_validate_bool</code></td>
+<td><code>pulse.enabled</code>, <code>setup.completed</code>, <code>zotero.poll_enabled</code>, <code>zotero.auto_push_on_star</code></td>
+<td>Strict bool</td>
+</tr>
+<tr>
+<td><code>_validate_optional_int</code></td>
+<td><code>telegram.owner_chat_id</code></td>
+<td>int or null</td>
+</tr>
+<tr>
+<td><code>_validate_nonempty_str</code></td>
+<td><code>llm.{smart,fast,embed}_model</code>, <code>zotero.{api_key,user_id}</code>, <code>llm.{anthropic,openai,google}.api_key</code>, <code>smtp.{host,user,from,pass}</code></td>
+<td>Non-empty trimmed string</td>
+</tr>
+<tr>
+<td><code>_validate_library_type</code></td>
+<td><code>zotero.library_type</code></td>
+<td><code>"user"</code> or <code>"group"</code></td>
+</tr>
+<tr>
+<td><code>_validate_group_id</code></td>
+<td><code>zotero.group_id</code></td>
+<td>Positive int or null</td>
+</tr>
+<tr>
+<td><code>_validate_zotero_cron</code></td>
+<td><code>zotero.poll_cron</code></td>
+<td>Must parse via <code>CronTrigger.from_crontab</code> (no sub-hourly limit, unlike Pulse)</td>
+</tr>
+<tr>
+<td><code>_validate_langfuse_dashboard_url</code></td>
+<td><code>observability.langfuse_dashboard_url</code></td>
+<td>Empty / <code>https://</code> / loopback <code>http://</code> URL; rejects other schemes</td>
+</tr>
+<tr>
+<td><code>_validate_fsrs_retention</code></td>
+<td><code>fsrs.desired_retention</code></td>
+<td>Number in open range <code>(0, 1)</code>; rejects bool, 0, 1, and out-of-range floats</td>
+</tr>
+<tr>
+<td><code>_validate_fsrs_learning_steps</code></td>
+<td><code>fsrs.learning_steps</code></td>
+<td><code>list[int]</code>, length 1–10, all strictly positive (minutes). Default <code>[1, 10]</code> matches the py-fsrs library default</td>
+</tr>
+</tbody>
+</table>
+<p>Keys without a custom validator (per <code>_CONFIG_VALIDATORS</code>):
+<code>recommendation.{liked_weight,project_weight,enabled}</code>, <code>user.timezone</code>. Any
+future Unwired→Active promotion MUST add a validator at the same time — that's the
+contract.</p>
+<hr />
+<h2 id="5-side-effects-on-update">5. Side-effects on update<a class="headerlink" href="#5-side-effects-on-update" title="Permanent link">&para;</a></h2>
+<p>Some keys trigger work beyond the row write:</p>
+<table>
+<thead>
+<tr>
+<th>Key(s)</th>
+<th>Side effect on PUT</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>llm.{smart,fast,embed}_model</code></td>
+<td><code>update_litellm_model</code> rewrites <code>litellm/config.yaml</code> or POSTs <code>/config/update</code>; then <code>reload_litellm()</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/litellm_config.py#L178">litellm_config.py:178</a>, <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/litellm_config.py#L483">litellm_config.py:483</a>). Fails 400 if mount is read-only (SEC-002)</td>
+</tr>
+<tr>
+<td><code>pulse.cron</code></td>
+<td><code>scheduler.reschedule_job("pulse_overnight", trigger=...)</code> + bounds check + DB rollback if <code>next_run_time</code> is invalid (<code>apply_pulse_cron</code>, <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L53">scheduler_effects.py:53</a>)</td>
+</tr>
+<tr>
+<td><code>zotero.poll_cron</code></td>
+<td><code>scheduler.reschedule_job("zotero_library_sync", trigger=...)</code> (best-effort; if job not yet registered, warning only) (<code>apply_zotero_cron</code>, <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L113">scheduler_effects.py:113</a>)</td>
+</tr>
+<tr>
+<td><code>user.timezone</code></td>
+<td>Best-effort <code>POST /internal/reload-nudges</code> to telegram_bot (<code>reload_telegram_nudges</code>, <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_assignment.py#L21">model_assignment.py:21</a>)</td>
+</tr>
+<tr>
+<td>Any <code>_ENCRYPTED_KEYS</code> member</td>
+<td><code>value</code> column NULL'd; ciphertext written to <code>encrypted_value</code> BYTEA via <code>encrypt_secret</code>, in <code>write_config</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_write.py#L132">config_write.py:132</a>)</td>
+</tr>
+<tr>
+<td><code>_SOURCE_JSONB_COLUMNS</code> <code>"config"</code></td>
+<td><code>dynamic_update</code> JSON-encodes the value before write</td>
+</tr>
+</tbody>
+</table>
+<p>GET responses for <code>_ENCRYPTED_KEYS</code> return <code>mask_secret(plaintext)</code>; GET for <code>_SECRET_KEYS \ _ENCRYPTED_KEYS</code> returns <code>"****"</code> if non-null. Plaintext <strong>never</strong> leaves the API.</p>
+<hr />
+<h2 id="6-failure-modes">6. Failure modes<a class="headerlink" href="#6-failure-modes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>What happens</th>
+<th>Where the error reaches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unknown key on PUT</td>
+<td>HTTP 400, <code>"Unknown config key: '&lt;key&gt;'"</code></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L210">routers/settings.py:210</a></td>
+</tr>
+<tr>
+<td>Validator raises <code>ValueError</code></td>
+<td>HTTP 400 with message</td>
+<td><code>write_config</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_write.py#L132">config_write.py:132</a>)</td>
+</tr>
+<tr>
+<td>LiteLLM YAML read-only (SEC-002)</td>
+<td>HTTP 400 — write rejected; user_config row NOT updated</td>
+<td><code>update_litellm_model</code> → <code>RuntimeError</code> → caught in <code>write_config</code></td>
+</tr>
+<tr>
+<td>Pulse cron produces invalid <code>next_run_time</code></td>
+<td>HTTP 400; DB row rolled back to old value; live trigger reverted</td>
+<td><code>apply_pulse_cron</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L53">scheduler_effects.py:53</a>)</td>
+</tr>
+<tr>
+<td>Encrypted-secret decrypt fails on GET</td>
+<td>NULL returned (read fails closed)</td>
+<td><code>_resolve_config_value</code></td>
+</tr>
+<tr>
+<td>Unknown nudge id / source id</td>
+<td>HTTP 404</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L293">routers/settings.py:293</a>, <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L376">routers/settings.py:376</a></td>
+</tr>
+<tr>
+<td>Zotero <code>LIKE 'zotero.%'</code> row decrypt fails</td>
+<td>Whole config treated as missing → caller skips operation gracefully</td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L46-L53">zotero_service.py:46-53</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="7-invariants">7. Invariants<a class="headerlink" href="#7-invariants" title="Permanent link">&para;</a></h2>
+<p>The implementation MUST satisfy these. Testable.</p>
+<ol>
+<li><strong>Allow-list closure.</strong> Every key in <code>_CONFIG_VALIDATORS</code> MUST also be in <code>_ALLOWED_CONFIG_KEYS</code>. (Reverse not required — a key may be in the allow-list without a custom validator.)</li>
+<li><strong>Encrypted closure.</strong> Every key in <code>_ENCRYPTED_KEYS</code> MUST also be in <code>_SECRET_KEYS</code> (encryption implies secret handling on GET).</li>
+<li><strong>GET masking.</strong> No GET endpoint may return plaintext for any key in <code>_SECRET_KEYS</code>. Verifier: <code>mask_secret</code> or <code>"****"</code> is the only path returning a non-None value for a secret key.</li>
+<li><strong>JSONB no double-encode.</strong> Plain (non-encrypted) keys MUST be written via the <code>$2::jsonb</code> parametric cast WITHOUT <code>json.dumps()</code>. The asyncpg JSONB codec handles serialization. (See <a href="../../ENGINEERING_STANDARDS/#database">ENGINEERING_STANDARDS.md "Database"</a>.)</li>
+<li><strong>Live cron reschedule preconditions.</strong> A successful <code>PUT pulse.cron</code> MUST result in <code>next_run_time ∈ [now, now + 366 days]</code> or the write is rolled back.</li>
+<li><strong>No raw env reads at request time</strong> for keys that are user-controllable. Bootstrap-only env reads — <code>JARVIS_API_KEY</code>, <code>LITELLM_BASE_URL</code>, and legacy provider-key env vars used before a user stores encrypted Settings credentials — are exempt.</li>
+</ol>
+<hr />
+<h2 id="8-status-table-canonical-roll-up">8. Status table (canonical roll-up)<a class="headerlink" href="#8-status-table-canonical-roll-up" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pulse.enabled</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>pulse.cron</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>pulse.deck_size</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>pulse.stage2_top_k</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>pulse.weights</code></td>
+<td>Active (4 of 10 weights are CONDITIONAL — see <a href="../02-pulse/#32-conditional-signals-live-conditional">02-pulse.md §3.2</a>)</td>
+</tr>
+<tr>
+<td><code>pulse.l2_lambda</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>recommendation.enabled</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>recommendation.liked_weight</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>recommendation.project_weight</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>user.timezone</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>setup.completed</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>telegram.owner_chat_id</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>zotero.api_key</code></td>
+<td>Active (encrypted)</td>
+</tr>
+<tr>
+<td><code>zotero.user_id</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>zotero.library_type</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>zotero.poll_enabled</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>zotero.poll_cron</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>llm.smart_model</code></td>
+<td>Partial (LiteLLM YAML is the runtime authority)</td>
+</tr>
+<tr>
+<td><code>llm.fast_model</code></td>
+<td>Partial (same)</td>
+</tr>
+<tr>
+<td><code>llm.embed_model</code></td>
+<td>Partial (same)</td>
+</tr>
+<tr>
+<td><code>zotero.group_id</code></td>
+<td>Active (consumed when <code>library_type="group"</code>)</td>
+</tr>
+<tr>
+<td><code>zotero.auto_push_on_star</code></td>
+<td>Active</td>
+</tr>
+<tr>
+<td><code>fsrs.desired_retention</code></td>
+<td>Active (per-review DB read)</td>
+</tr>
+<tr>
+<td><code>fsrs.learning_steps</code></td>
+<td>Active (wired into the py-fsrs Scheduler)</td>
+</tr>
+<tr>
+<td><code>smtp.{host,port,user,from,pass}</code></td>
+<td>Active (system-wide outbound-mail relay; <code>smtp.pass</code> encrypted)</td>
+</tr>
+<tr>
+<td><code>automation.fetch_interval_hours</code></td>
+<td>Active (system-wide auto-fetch scheduler)</td>
+</tr>
+<tr>
+<td><code>observability.langfuse_dashboard_url</code></td>
+<td>Active (Settings → Observability link target)</td>
+</tr>
+<tr>
+<td><code>llm.anthropic.api_key</code></td>
+<td>Partial (used only when model alias is <code>anthropic/*</code> or for <code>/test</code> endpoint)</td>
+</tr>
+<tr>
+<td><code>llm.openai.api_key</code></td>
+<td>Partial</td>
+</tr>
+<tr>
+<td><code>llm.google.api_key</code></td>
+<td>Partial</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="9-accepted-partial-keys-status-quo">9. Accepted Partial keys (status quo)<a class="headerlink" href="#9-accepted-partial-keys-status-quo" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Why accepted</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>llm.{smart,fast,embed}_model</code> Partial</td>
+<td>LiteLLM YAML is the deliberate runtime authority. The <code>user_config</code> row exists for UI read-back display only. See <a href="../03-llm/">03-llm.md §1</a>.</td>
+</tr>
+<tr>
+<td><code>llm.{anthropic,openai,google}.api_key</code> Partial</td>
+<td>Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a <code>/test</code> endpoint is invoked. No contract violation. <strong>Per-user encrypted BYO credentials are preferred</strong> (not shared ops secrets): <code>write_config</code> sets <code>row_user_id = caller_user_id</code>, and reads are scoped to the caller's row with no cross-user fallback. The onboarding wizard and the Settings wizard surface these keys for convenience but they remain per-user. <code>.env</code> provider-key variables are bootstrap/legacy only and must not become the request-time authority for user-controllable provider credentials.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="10-cross-contract-references">10. Cross-contract references<a class="headerlink" href="#10-cross-contract-references" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><a href="../02-pulse/#32-conditional-signals-live-conditional">02-pulse.md §3.2</a></strong> — the four conditional weights inside <code>pulse.weights</code> (<code>citation_pagerank</code>, <code>citation_count</code>, <code>citation_adamic_adar</code>, <code>classifier</code>) — UI-exposed and validator-accepted; populated only when the user opts in by raising the weight AND the optional dependency is present.</li>
+<li><strong><a href="../03-llm/">03-llm.md</a> §1</strong> — <code>llm.{smart,fast,embed}_model</code> and the cloud-provider keys behave at the LiteLLM layer; this contract documents only the <code>user_config</code> storage plane.</li>
+<li><strong><a href="../04-observability/">04-observability.md</a></strong> — privacy rules forbid logging raw <code>user_config.value</code> for any key in <code>_SECRET_KEYS</code> / <code>_ENCRYPTED_KEYS</code>.</li>
+<li><strong>Note:</strong> <code>paper_user_state</code> columns (state, starred, state_before_trash) are NOT in this contract; they are per-paper user state, not user-controllable settings.</li>
+</ul>
+<hr />
+<h2 id="11-verified-identifiers">11. Verified Identifiers<a class="headerlink" href="#11-verified-identifiers" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Citation</th>
+<th>File:line</th>
+<th>One-line behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_ALLOWED_CONFIG_KEYS</code> frozenset</td>
+<td>services/paper_ingestion/paper_ingestion/services/config_metadata.py:34-85</td>
+<td>Allow-list of writeable user_config keys (static keys; dynamic <code>llm.*</code> patterns accepted via <code>_classify_litellm_runtime_key</code>)</td>
+</tr>
+<tr>
+<td><code>PERSONAL_KEYS</code> / <code>SYSTEM_KEYS</code> / <code>_classify_config_key</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_metadata.py:149-224</td>
+<td>Per-key scope: personal (per-user row) vs system (admin-only, <code>user_id IS NULL</code>)</td>
+</tr>
+<tr>
+<td><code>_SECRET_KEYS</code> / <code>_ENCRYPTED_KEYS</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_metadata.py:227-247</td>
+<td>Keys masked on GET; subset gets ciphertext on PUT (incl. <code>smtp.pass</code>)</td>
+</tr>
+<tr>
+<td><code>_CONFIG_VALIDATORS</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:231-271</td>
+<td>Per-key validator dispatch; missing entry = no custom validation</td>
+</tr>
+<tr>
+<td><code>_PULSE_WEIGHT_KEYS</code> / <code>_PULSE_REQUIRED_WEIGHT_KEYS</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:31-47</td>
+<td>The 10 allowed weight keys; 6 are required</td>
+</tr>
+<tr>
+<td><code>_validate_pulse_weights</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:83</td>
+<td>Enforces shape + value range on <code>pulse.weights</code></td>
+</tr>
+<tr>
+<td><code>_validate_cron</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:65</td>
+<td>Parses cron; rejects sub-hourly</td>
+</tr>
+<tr>
+<td><code>_validate_l2_lambda</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:144</td>
+<td>Range [0.0, 2.0]; rejects bool</td>
+</tr>
+<tr>
+<td><code>_validate_lookback_days</code> / <code>_validate_startup_grace_seconds</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:153-160</td>
+<td>Pulse discovery window [1,90] int; startup grace [0,300]</td>
+</tr>
+<tr>
+<td><code>_validate_group_id</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:173</td>
+<td><code>zotero.group_id</code>: positive int or null</td>
+</tr>
+<tr>
+<td><code>_validate_langfuse_dashboard_url</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:188</td>
+<td>Empty / <code>https://</code> / loopback <code>http://</code>; rejects other schemes</td>
+</tr>
+<tr>
+<td><code>_validate_fsrs_retention</code> / <code>_validate_fsrs_learning_steps</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_validators.py:213-228</td>
+<td>Range <code>(0,1)</code> for retention; <code>list[int]</code> length 1–10 positive for learning_steps</td>
+</tr>
+<tr>
+<td><code>write_config</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_write.py:132</td>
+<td>Allow-list + validator + encrypted-vs-plain write + side-effect dispatch</td>
+</tr>
+<tr>
+<td><code>apply_pulse_cron</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/scheduler_effects.py:53</td>
+<td>Reschedules live <code>pulse_overnight</code> job; bounds-checks; DB+scheduler rollback on invalid next_run_time</td>
+</tr>
+<tr>
+<td><code>apply_zotero_cron</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/scheduler_effects.py:113</td>
+<td>Best-effort <code>zotero_library_sync</code> reschedule on poll_cron PUT</td>
+</tr>
+<tr>
+<td><code>reload_telegram_nudges</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/model_assignment.py:21</td>
+<td>POST <code>/internal/reload-nudges</code> to telegram_bot</td>
+</tr>
+<tr>
+<td><code>update_litellm_model</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/litellm_config.py:178</td>
+<td>Rewrites litellm/config.yaml OR POSTs /config/update; raises RuntimeError if mount :ro</td>
+</tr>
+<tr>
+<td><code>get_provider_api_key</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/litellm_config.py:52</td>
+<td>Decrypts cloud-provider key from user_config</td>
+</tr>
+<tr>
+<td><code>pulse.weights</code> / lookback / grace load</td>
+<td>services/paper_ingestion/paper_ingestion/pulse/profile.py:221-242</td>
+<td>Loads from user_config, merges with <code>_DEFAULT_WEIGHTS</code>, clamps to [0,1]; reads <code>pulse.lookback_days</code> (default 7) + <code>pulse.startup_grace_seconds</code> (default 0.0)</td>
+</tr>
+<tr>
+<td><code>_build_fsrs_manager_from_db</code></td>
+<td>services/learning_engine/learning_engine/routers/review.py</td>
+<td>Per-review fetch of <code>fsrs.desired_retention</code> + <code>fsrs.learning_steps</code>; constructs a fresh <code>FSRSManager</code> inside the review transaction</td>
+</tr>
+<tr>
+<td><code>setup_completed</code> resolution</td>
+<td>services/paper_ingestion/paper_ingestion/routers/setup.py (get_status)</td>
+<td>Reads <code>setup.completed</code> from <code>user_config</code>; returned in pre-auth <code>/api/setup/status</code>; unified <code>OnboardingGate</code> keys on this field</td>
+</tr>
+<tr>
+<td>SMTP keys persisted</td>
+<td>services/paper_ingestion/paper_ingestion/routers/setup.py</td>
+<td>First-run wizard writes <code>smtp.*</code> rows; <code>smtp.pass</code> as Fernet ciphertext</td>
+</tr>
+<tr>
+<td><code>user_config</code> table schema</td>
+<td>db/init.sql:33-48</td>
+<td><code>(user_id, key) UNIQUE NULLS NOT DISTINCT</code>, nullable <code>value</code>, <code>encrypted_value BYTEA</code>, updated_at</td>
+</tr>
+<tr>
+<td><code>paper_sources</code> table + seeds</td>
+<td>db/init.sql:71-88</td>
+<td>sources seeded; arxiv enabled; others disabled</td>
+</tr>
+<tr>
+<td><code>topics</code> table</td>
+<td>db/init.sql:90-97</td>
+<td>name, query_terms, category, enabled</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

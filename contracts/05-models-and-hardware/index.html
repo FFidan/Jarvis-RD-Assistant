@@ -1,0 +1,3366 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+      
+      
+      
+        <link rel="canonical" href="https://ffidan.github.io/Jarvis-RD-Assistant/contracts/05-models-and-hardware/">
+      
+      
+        <link rel="prev" href="../04-observability/">
+      
+      
+        <link rel="next" href="../07-testing/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Models & Hardware - JARVIS RD Assistant — Operator & Developer Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#05-models-and-hardware-contract" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-header__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JARVIS RD Assistant — Operator & Developer Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Models & Hardware
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../readme-shim/" class="md-tabs__link">
+          
+  
+  
+  Get Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../SECURITY/" class="md-tabs__link">
+          
+  
+  
+  Operate
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ARCHITECTURE/" class="md-tabs__link">
+          
+  
+  
+  Develop
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  System Contracts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../manual/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-nav__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JARVIS RD Assistant — Operator & Developer Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../readme-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../DEPLOYMENT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../REQUIREMENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../SECURITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../RELEASE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../known-residual-risks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known Residual Risks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Develop
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Develop
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Product Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ENGINEERING_STANDARDS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Engineering Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migrations-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Contracts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    System Contracts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../02-pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-llm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LLM Client
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../04-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models & Hardware
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models & Hardware
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-scope-and-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. Scope and non-goals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0. Scope and non-goals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#non-goals-hard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-goals (hard)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-model-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Model catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Model catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-location" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1 Location
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-entry-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.2 Entry schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-curated-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.3 Curated entries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-catalog-staleness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.4 Catalog staleness
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-hardware-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Hardware detection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Hardware detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-vram-probe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 VRAM probe
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-api-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 API surface
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-hardware-tiers-and-recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Hardware tiers and recommendations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Hardware tiers and recommendations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-tier-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Tier table
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-recommendation-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Recommendation functions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-status-enum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Status enum
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-pull-delete-assign-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Pull / delete / assign lifecycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Pull / delete / assign lifecycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-pull-download-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Pull (download model)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-delete-remove-local-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Delete (remove local model)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-assign-change-role-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Assign (change role mapping)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-cloud-model-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 Cloud model assignment
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-hardware-aware-settings-ux" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Hardware-aware Settings UX
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Hardware-aware Settings UX">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-per-machine-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 Per-machine identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-catalog-fit-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2 Catalog fit fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-fit-math" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.3 Fit math
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#64-api-shape-additive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.4 API shape (additive)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#65-ui-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.5 UI surface
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#66-thinking-mode-toggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.6 Thinking-mode toggle
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-api-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. API summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-active-runtime-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Active runtime defaults
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Active runtime defaults">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#setup-system-check-models-ready-condition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup system-check — models-ready condition
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-risks-accepted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Risks — accepted
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-cross-contract-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Cross-contract references
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-verified-identifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Verified Identifiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../07-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/navigation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Navigation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/research-feed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Research Feed & Library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/paper-detail/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Paper Detail
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/ask/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ask (Cross-paper RAG)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/learning-cards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning Cards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/projects/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/knowledge-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Knowledge Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/citation-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citation Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/extraction-table/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extraction Table
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/analytics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/home-my-day/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    My Day & Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/telegram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telegram
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../manual/admin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin & Multi-tenant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-scope-and-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. Scope and non-goals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="0. Scope and non-goals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#non-goals-hard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-goals (hard)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-model-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Model catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Model catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-location" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1 Location
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-entry-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.2 Entry schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-curated-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.3 Curated entries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-catalog-staleness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.4 Catalog staleness
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-hardware-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Hardware detection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Hardware detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-vram-probe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 VRAM probe
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-api-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 API surface
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-hardware-tiers-and-recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Hardware tiers and recommendations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Hardware tiers and recommendations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-tier-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Tier table
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-recommendation-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Recommendation functions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-status-enum" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Status enum
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-pull-delete-assign-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Pull / delete / assign lifecycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Pull / delete / assign lifecycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-pull-download-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Pull (download model)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-delete-remove-local-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 Delete (remove local model)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-assign-change-role-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Assign (change role mapping)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-cloud-model-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 Cloud model assignment
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-hardware-aware-settings-ux" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Hardware-aware Settings UX
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Hardware-aware Settings UX">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-per-machine-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 Per-machine identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-catalog-fit-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2 Catalog fit fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-fit-math" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.3 Fit math
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#64-api-shape-additive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.4 API shape (additive)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#65-ui-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.5 UI surface
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#66-thinking-mode-toggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.6 Thinking-mode toggle
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-api-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. API summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-active-runtime-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Active runtime defaults
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Active runtime defaults">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#setup-system-check-models-ready-condition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup system-check — models-ready condition
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-risks-accepted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Risks — accepted
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-cross-contract-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Cross-contract references
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-verified-identifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Verified Identifiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="05-models-and-hardware-contract">05 — Models and Hardware Contract<a class="headerlink" href="#05-models-and-hardware-contract" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> LIVING
+<strong>Reviewers must update this contract in the same patch as any change to:</strong>
+- The curated catalog <code>libs/jarvis_common/jarvis_common/data/model_catalog.json</code>
+- <code>recommend_models()</code> in <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/hardware_fit.py">hardware_fit.py</a> or
+  <code>recommendations_for_role()</code> / <code>build_model_statuses()</code> in <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py">model_lifecycle.py</a>
+- The <code>GET /api/system/models</code>, <code>GET /api/system/hardware</code>, or pull/delete endpoints
+- The per-machine <code>num_ctx</code> / thinking-mode key handling</p>
+<p>This contract covers two adjacent concerns that share the same data model and
+API surface: the <strong>model lifecycle</strong> (curated catalog, hardware-aware
+recommendations, pull/delete, active defaults) and the <strong>hardware-aware Settings
+UX</strong> (per-machine VRAM fit, context-size controls, thinking-mode toggle).</p>
+<hr />
+<h2 id="0-scope-and-non-goals">0. Scope and non-goals<a class="headerlink" href="#0-scope-and-non-goals" title="Permanent link">&para;</a></h2>
+<h3 id="in-scope">In scope<a class="headerlink" href="#in-scope" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Curated catalog</strong> — local Ollama + cloud models, role-tagged, VRAM-annotated.</li>
+<li><strong>Hardware detection</strong> — VRAM probe at startup, TTL-cached, drives recommendations.</li>
+<li><strong>Recommendation functions</strong> — map detected VRAM to tiers and rank candidates per role.</li>
+<li><strong>Status enum</strong> — pull/assignment state per catalog entry.</li>
+<li><strong>Pull / delete lifecycle</strong> — explicit user action; pull is a background job; delete fails loudly if assigned.</li>
+<li><strong>Cloud model integration</strong> — catalog entries for Anthropic / OpenAI cloud aliases.</li>
+<li><strong>Per-machine VRAM fit</strong> — fit indicators, <code>num_ctx</code> slider per role, thinking-mode toggle.</li>
+</ol>
+<h3 id="non-goals-hard">Non-goals (hard)<a class="headerlink" href="#non-goals-hard" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Benchmark theater</strong> — no per-discipline benchmark claims, no ranking by generic STEM scores.
+  The curated catalog is the authority for model identity, roles, assignability, and Ollama lifecycle.
+  An operator-only settings plane (<code>GET/POST /api/settings/ai</code>) may consume
+  <code>config/llm-tier-candidates.yaml</code> as an empirical overlay for backend/model candidates that were
+  actually bench-run on target hardware; those rows are allow-list inputs, not marketing claims.</li>
+<li><strong>Work-style onboarding wizard</strong> — tier-based recommendation is sufficient.</li>
+<li><strong>Per-task fallback chains</strong> — the <code>smart</code> / <code>fast</code> / <code>embed</code> alias system already decouples
+  tasks from concrete models at the LiteLLM layer.</li>
+<li><strong>Multi-machine aggregation</strong> — Settings show hardware for the machine the backend runs on.</li>
+<li><strong>Disk-budget enforcement</strong> — no auto-eviction. The user decides what to pull and delete.</li>
+<li><strong>Model pinning per paper</strong> — global alias assignment only.</li>
+<li><strong>Automatic pull on config change</strong> — changing the assigned model does NOT trigger a pull;
+  an <code>unfit</code> status and a "Pull" CTA handle the gap.</li>
+<li><strong>Auto-switching mid-session</strong> — the slider/picker is informational; a change to a <code>num_ctx</code>
+  key takes effect on the next chat completion only.</li>
+<li><strong>No cloud VRAM accounting</strong>, <strong>no hostname display in UI</strong>, <strong>no per-task <code>num_ctx</code> override</strong>.</li>
+<li><strong>No <code>temperature</code> / <code>top_p</code> UI</strong> — orthogonal to VRAM safety; out of scope.</li>
+</ul>
+<hr />
+<h2 id="1-model-catalog">1. Model catalog<a class="headerlink" href="#1-model-catalog" title="Permanent link">&para;</a></h2>
+<h3 id="11-location">1.1 Location<a class="headerlink" href="#11-location" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>libs/jarvis_common/jarvis_common/data/model_catalog.json
+</code></pre></div>
+<p>Bundled inside the Python package, loaded via <code>importlib.resources</code> so it works in Docker,
+installed wheel, and editable installs identically. No runtime fetch; no auto-update. <strong>The
+catalog is NOT a live registry</strong> — we do not fetch the Ollama search API at runtime.</p>
+<h3 id="12-entry-schema">1.2 Entry schema<a class="headerlink" href="#12-entry-schema" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>string</td>
+<td>Unique key. Ollama: <code>name:tag</code>. Cloud: <code>provider/model-id</code>.</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>string</td>
+<td>Human display name.</td>
+</tr>
+<tr>
+<td><code>provider</code></td>
+<td><code>"ollama" \| "anthropic" \| "openai"</code></td>
+<td>Drives status computation.</td>
+</tr>
+<tr>
+<td><code>ollama_tag</code></td>
+<td>string | null</td>
+<td>Null for cloud entries. Must match <code>ollama list</code> NAME exactly.</td>
+</tr>
+<tr>
+<td><code>roles</code></td>
+<td><code>("smart" \| "fast" \| "embed")[]</code></td>
+<td>Which LiteLLM aliases this entry can serve.</td>
+</tr>
+<tr>
+<td><code>vram_gb</code></td>
+<td>number</td>
+<td>Peak active VRAM (FP16 weights + KV cache at 4k context). 0 for cloud.</td>
+</tr>
+<tr>
+<td><code>disk_gb</code></td>
+<td>number</td>
+<td>Compressed model file on disk. 0 for cloud.</td>
+</tr>
+<tr>
+<td><code>context_tokens</code></td>
+<td>number</td>
+<td>Published context window.</td>
+</tr>
+<tr>
+<td><code>license</code></td>
+<td>string</td>
+<td>SPDX or name. Apache 2.0 = commercial OK; CC BY-NC = flag in UI.</td>
+</tr>
+<tr>
+<td><code>tier</code></td>
+<td>0–4</td>
+<td>Minimum hardware tier required (see §3).</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>string</td>
+<td>1 sentence. No benchmark theater.</td>
+</tr>
+<tr>
+<td><code>embedding_dimension</code></td>
+<td>integer | null</td>
+<td>Embedding output dimension when known.</td>
+</tr>
+<tr>
+<td><code>last_reviewed</code></td>
+<td>ISO date</td>
+<td>When this entry was last verified against the Ollama registry.</td>
+</tr>
+</tbody>
+</table>
+<p>Cloud entries omit <code>ollama_tag</code>, set <code>vram_gb=0</code>, <code>disk_gb=0</code>, <code>tier=0</code>.</p>
+<p>The catalog also carries the optional hardware-fit fields documented in §6 used to compute
+fit at a chosen <code>num_ctx</code> (<code>min_vram_gb_at_default_ctx</code>, <code>kv_cache_bytes_per_token</code>,
+<code>default_num_ctx</code>, <code>max_num_ctx</code>, <code>supports_thinking</code>). Entries without these degrade to the
+coarse tier-only fit decision.</p>
+<h3 id="13-curated-entries">1.3 Curated entries<a class="headerlink" href="#13-curated-entries" title="Permanent link">&para;</a></h3>
+<p>The catalog ships a small curated set of local and cloud models. Local entries are Qwen3
+family (smart/fast at 4B–72B, embedding at 0.6B/4B) plus <code>gemma3:12b</code>, <code>llama4:scout</code>, and
+<code>mxbai-embed-large</code> as an embed fallback; cloud entries cover Anthropic Claude, OpenAI GPT-4o,
+and OpenAI text-embedding.</p>
+<p>Notes on selection:
+- <code>qwen3-embedding:4b</code> (2560-dimensional) is the local default for notation-heavy scientific
+  retrieval on Tier-1+ hardware. Upgrading an existing 1024d collection requires a matching
+  Qdrant collection and a re-embed checkpoint.
+- <code>qwen3-embedding:0.6b</code> (1024d) remains catalogued as an explicit smaller-machine fallback.
+- <code>mxbai-embed-large</code> is kept as a future embed fallback but is not assignable by default
+  because its dimension differs from Qwen3 and requires matching runtime/Qdrant config.
+- <code>llama4:scout</code> is included for its long context window (long paper chains).
+- Cloud embed (<code>openai/text-embedding-3-small</code>) is a future option only — not assignable
+  without an explicit dimension and rebuild policy.</p>
+<h3 id="14-catalog-staleness">1.4 Catalog staleness<a class="headerlink" href="#14-catalog-staleness" title="Permanent link">&para;</a></h3>
+<p><code>last_reviewed</code> on each entry is the protection mechanism. If it is &gt; 90 days old, the backend
+logs a WARNING on startup (not an error — staleness ≠ broken).</p>
+<hr />
+<h2 id="2-hardware-detection">2. Hardware detection<a class="headerlink" href="#2-hardware-detection" title="Permanent link">&para;</a></h2>
+<h3 id="21-vram-probe">2.1 VRAM probe<a class="headerlink" href="#21-vram-probe" title="Permanent link">&para;</a></h3>
+<p>At startup (and once per hour TTL), the backend probes VRAM in this order:</p>
+<ol>
+<li><strong><code>nvidia-smi</code></strong> (Linux + Windows) — <code>--query-gpu=memory.total --format=csv,noheader,nounits</code>
+   returns MiB; divided to GB.</li>
+<li><strong>macOS Metal</strong> (<code>system_profiler SPDisplaysDataType</code>) — imprecise; source marked <code>macos-approx</code>.</li>
+<li><strong>No GPU</strong> — <code>vram_gb=0</code>, source <code>cpu</code>.</li>
+</ol>
+<p><code>nvidia-smi</code> is called with a fixed argument list via <code>subprocess.run([...], timeout=2.0)</code>,
+not via shell string expansion — no subprocess-injection risk.</p>
+<p>The probe populates the <code>HardwareInfo</code> dataclass
+(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L123-L147">model_lifecycle.py:123-147</a>):
+<code>vram_gb</code>, <code>vram_source</code> (<code>"nvidia-smi" | "macos-approx" | "cpu"</code>), <code>tier</code>, <code>detected_at</code>, and
+an internal <code>machine_id</code> (the hostname; see §3). It is cached on <code>app.state.hw_info</code> with a
+1-hour TTL by <code>get_cached_hardware()</code>.</p>
+<p><strong>Failure mode:</strong> <code>nvidia-smi</code> not installed → <code>vram_source="cpu"</code>, <code>vram_gb=0</code>. The
+recommendation logic degrades gracefully to cloud-only / unknown-fit.</p>
+<h3 id="22-api-surface">2.2 API surface<a class="headerlink" href="#22-api-surface" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GET /api/system/hardware
+</code></pre></div>
+<p>Returns <code>HardwareInfo.to_dict()</code> — <code>vram_gb</code>, <code>vram_source</code>, <code>tier</code>, <code>detected_at</code>, and
+<code>machine_id</code>. The frontend calls this once on Settings page load (no polling) and uses
+<code>machine_id</code> to compose per-machine config keys. <strong>The frontend MUST NOT render <code>machine_id</code>.</strong></p>
+<hr />
+<h2 id="3-hardware-tiers-and-recommendations">3. Hardware tiers and recommendations<a class="headerlink" href="#3-hardware-tiers-and-recommendations" title="Permanent link">&para;</a></h2>
+<h3 id="31-tier-table">3.1 Tier table<a class="headerlink" href="#31-tier-table" title="Permanent link">&para;</a></h3>
+<p><code>hardware_tier(vram_gb)</code> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L172-L192">model_lifecycle.py:172-192</a>)
+maps VRAM GB → ordinal 0..4:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>VRAM GB</th>
+<th>Label</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>&lt; 4</td>
+<td>CPU / low-VRAM — cloud recommended</td>
+</tr>
+<tr>
+<td>1</td>
+<td>4–10</td>
+<td>Small GPU (e.g. 8 GB)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>10–20</td>
+<td>Mid GPU (e.g. 16 GB)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>20–40</td>
+<td>High GPU (e.g. 24 GB)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>≥ 40</td>
+<td>Large GPU (e.g. 48 GB)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="32-recommendation-functions">3.2 Recommendation functions<a class="headerlink" href="#32-recommendation-functions" title="Permanent link">&para;</a></h3>
+<p>There are two complementary recommendation entry points:</p>
+<ul>
+<li>
+<p><strong><code>recommend_models(vram_mb)</code></strong> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/hardware_fit.py#L207-L243">hardware_fit.py:207-243</a>)
+  — advisory, data-only. Given total VRAM in MiB (or <code>None</code> when the GPU probe failed entirely),
+  it classifies VRAM into a <code>VramBucket</code> and returns a <code>HardwareRecommendation</code> with the suggested
+  <code>smart</code>/<code>fast</code>/<code>embed</code> alias assignments for that bucket. It never mutates config, env, or DB; it
+  never raises. A per-alias <code>confirm_on_target</code> flag signals candidates whose live bench is still
+  outstanding. Callers surface the result (e.g. the system/models API, <code>setup.sh --check</code>).</p>
+</li>
+<li>
+<p><strong><code>recommendations_for_role(role, ...)</code></strong> (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L586-L645">model_lifecycle.py:586-645</a>)
+  — per-role ranking. It calls <code>build_model_statuses(...)</code>, filters to entries supporting the role,
+  and sorts by status priority, then tier, then name. This is what <code>GET /api/system/models</code> and the
+  recommendations endpoint return.</p>
+</li>
+</ul>
+<p><strong>What recommendations deliberately do NOT do:</strong> no per-discipline scoring, no weighting by
+benchmark score, no "auto-select and pull best model". The user selects; the backend recommends.</p>
+<hr />
+<h2 id="4-status-enum">4. Status enum<a class="headerlink" href="#4-status-enum" title="Permanent link">&para;</a></h2>
+<p>Every catalog entry, when returned by the API, carries a <code>status</code> computed at request time by
+crossing catalog state against Ollama's <code>/api/tags</code> response and the current LiteLLM config
+(<code>build_model_statuses()</code> at
+<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L480-L585">model_lifecycle.py:480-585</a>).</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>active</code></td>
+<td>Assigned to at least one role alias in LiteLLM config; running in Ollama.</td>
+</tr>
+<tr>
+<td><code>pulled</code></td>
+<td>Downloaded in Ollama but not currently assigned to any role alias.</td>
+</tr>
+<tr>
+<td><code>downloadable</code></td>
+<td>In catalog, not yet pulled; hardware tier is sufficient.</td>
+</tr>
+<tr>
+<td><code>unfit</code></td>
+<td>In catalog, not yet pulled; hardware tier is insufficient.</td>
+</tr>
+<tr>
+<td><code>cloud_active</code></td>
+<td>Cloud entry; API key present; assigned to at least one role alias.</td>
+</tr>
+<tr>
+<td><code>cloud_required</code></td>
+<td>Cloud entry; not active. A <code>provider_key_present</code> boolean tells the UI whether it can be selected immediately or must send the user to Providers first.</td>
+</tr>
+</tbody>
+</table>
+<p><code>unfit</code> is not shown as an error if the model is merely recommended but not downloaded — it is the
+status so the user understands why the "Pull" button is styled differently. Cloud entries without a
+key appear in the available-models table with a Providers CTA but are not selectable in role
+dropdowns until the key exists; cloud entries with a key are selectable even when <code>cloud_required</code>.</p>
+<p><strong>Computation order:</strong> fetch Ollama <code>/api/tags</code> → <code>pulled_tags</code>; read current LiteLLM config →
+<code>active_tags</code>; read <code>hw.tier</code>; compute status per entry.</p>
+<hr />
+<h2 id="5-pull-delete-assign-lifecycle">5. Pull / delete / assign lifecycle<a class="headerlink" href="#5-pull-delete-assign-lifecycle" title="Permanent link">&para;</a></h2>
+<h3 id="51-pull-download-model">5.1 Pull (download model)<a class="headerlink" href="#51-pull-download-model" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>POST /api/system/models/{ollama_tag}/pull
+</code></pre></div>
+<ul>
+<li>Returns immediately with <code>{ "job_id": "&lt;uuid&gt;", "status": "queued" }</code>.</li>
+<li>Dispatches the <code>model.pull</code> task (registry-driven; the paper-ingestion service owns pull jobs).</li>
+<li>The task calls Ollama <code>POST /api/pull</code> with <code>{"name": ollama_tag, "stream": true}</code>, parses
+  streamed JSON lines, reports per-layer progress, and on failure raises (the job is marked
+  failed and the SSE bridge emits an error event).</li>
+<li>Progress is streamed via the existing <code>GET /api/jobs/{job_id}/stream</code> SSE bridge — no new
+  machinery.</li>
+</ul>
+<p>A frontend confirm dialog shows model name + version, disk GB, required VRAM vs detected VRAM,
+and (when unfit) a CPU-offload warning before the POST.</p>
+<p>No automatic pull on Settings change. Docker bootstrap MAY still preload the configured default
+Ollama models during stack startup — that is install bootstrap behavior, not a Settings side effect.</p>
+<h3 id="52-delete-remove-local-model">5.2 Delete (remove local model)<a class="headerlink" href="#52-delete-remove-local-model" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>DELETE /api/system/models/{ollama_tag}
+</code></pre></div>
+<ul>
+<li><strong>Guard:</strong> fails with 409 if the tag is currently assigned to an active role alias
+  (<code>"Cannot delete model currently assigned to role '&lt;role&gt;'. Reassign first."</code>).</li>
+<li>If unassigned: calls Ollama <code>DELETE /api/delete</code>. Synchronous (file removal). Returns 204.</li>
+</ul>
+<h3 id="53-assign-change-role-mapping">5.3 Assign (change role mapping)<a class="headerlink" href="#53-assign-change-role-mapping" title="Permanent link">&para;</a></h3>
+<p>Assignment goes through the existing <code>PUT /api/config/{key}</code> path for <code>llm.smart_model</code> /
+<code>llm.fast_model</code> / <code>llm.embed_model</code>, which runs <code>update_litellm_model()</code> + <code>reload_litellm()</code>.
+The Settings dropdown sends the catalog entry <code>id</code>; the backend maps it to the Ollama tag →
+LiteLLM <code>ollama/&lt;tag&gt;</code> or to a cloud alias <code>anthropic/&lt;model&gt;</code> / <code>openai/&lt;model&gt;</code>.</p>
+<p>If the selected model is <code>downloadable</code> (not yet pulled), the write is rejected and the frontend
+guides the user to the Pull CTA.</p>
+<h3 id="54-cloud-model-assignment">5.4 Cloud model assignment<a class="headerlink" href="#54-cloud-model-assignment" title="Permanent link">&para;</a></h3>
+<p><code>llm.anthropic.api_key</code>, <code>llm.openai.api_key</code>, and <code>llm.google.api_key</code> are stored encrypted in
+<code>user_config</code> (see <a href="../01-settings/#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write">01-settings.md §2.2</a>).
+<code>POST /api/providers/{provider}/test</code> validates connectivity. When the user picks a cloud entry in
+a role dropdown, <code>update_litellm_model</code> runs the cloud path (<code>get_provider_api_key</code> decrypt + key
+injection into LiteLLM). The supported providers are <code>{"anthropic", "openai", "google"}</code>.</p>
+<hr />
+<h2 id="6-hardware-aware-settings-ux">6. Hardware-aware Settings UX<a class="headerlink" href="#6-hardware-aware-settings-ux" title="Permanent link">&para;</a></h2>
+<p>The Models tab in Settings adds a per-machine VRAM readout, a per-model fit indicator, a
+<code>num_ctx</code> slider per role, and a thinking-mode toggle. These are additive on top of the catalog
+and lifecycle above; an absent backend field never breaks the UI.</p>
+<h3 id="61-per-machine-identity">6.1 Per-machine identity<a class="headerlink" href="#61-per-machine-identity" title="Permanent link">&para;</a></h3>
+<p><code>machine_id = socket.gethostname()</code>, populated by <code>detect_hardware()</code>
+(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L248-L267">model_lifecycle.py:248-267</a>).
+It namespaces per-machine <code>user_config</code> keys but is <strong>never displayed in the UI</strong> — the user
+knows which machine they are on. If multi-user concerns ever emerge, swap <code>socket.gethostname()</code>
+for a hash-anonymized signature in the key-derivation helper (single-line change).</p>
+<p>Per-machine override keys (namespaced under the existing <code>llm.*</code> convention):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>llm.{machine_id}.smart_num_ctx          e.g. llm.my-workstation.smart_num_ctx = 8192
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>llm.{machine_id}.fast_num_ctx
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>llm.{machine_id}.embed_num_ctx
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>llm.{machine_id}.thinking_disabled.{model_id}
+</code></pre></div>
+<p>Per-machine (not machine-agnostic) keys are used because machines differ significantly in VRAM —
+a single shared key would force one tier to be wrong. The allow-list classifier
+(<code>_classify_litellm_runtime_key</code> at
+<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_metadata.py#L103-L127">config_metadata.py:103-127</a>)
+accepts the prefix patterns <code>llm.*.{smart,fast,embed}_num_ctx</code> and
+<code>llm.*.thinking_disabled.{model_id}</code>. Runtime LiteLLM writes are applied <em>before</em> the <code>user_config</code>
+row is persisted; if the LiteLLM update or reload fails, the write aborts and the DB value is not
+advanced.</p>
+<h3 id="62-catalog-fit-fields">6.2 Catalog fit fields<a class="headerlink" href="#62-catalog-fit-fields" title="Permanent link">&para;</a></h3>
+<p>Three optional fields per catalog entry let the backend compute "fit at chosen <code>num_ctx</code>":</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default if missing</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>min_vram_gb_at_default_ctx</code></td>
+<td>number</td>
+<td>falls back to <code>vram_gb</code></td>
+<td>VRAM to load the model at <code>default_num_ctx</code>.</td>
+</tr>
+<tr>
+<td><code>kv_cache_bytes_per_token</code></td>
+<td>number</td>
+<td><code>1024</code> (~1 KB/token)</td>
+<td>KV-cache marginal cost per extra token.</td>
+</tr>
+<tr>
+<td><code>default_num_ctx</code></td>
+<td>number</td>
+<td><code>min(8192, context_tokens)</code></td>
+<td>Slider initial position.</td>
+</tr>
+<tr>
+<td><code>max_num_ctx</code></td>
+<td>number</td>
+<td><code>context_tokens</code></td>
+<td>Slider upper bound.</td>
+</tr>
+</tbody>
+</table>
+<p><code>supports_thinking: bool</code> marks thinking-capable entries (Qwen3 family) for the toggle in §6.5.
+<code>tier</code> is kept as the coarse fallback — entries without the new fields still get a tier-only fit
+decision. We never remove <code>tier</code>.</p>
+<h3 id="63-fit-math">6.3 Fit math<a class="headerlink" href="#63-fit-math" title="Permanent link">&para;</a></h3>
+<p>A pure function on the backend (<code>compute_vram_fit()</code> at
+<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L393-L479">model_lifecycle.py:393-479</a>),
+mirrored verbatim on the frontend for live what-if previews:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">required_vram_gb</span> <span class="o">=</span> <span class="p">(</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">entry</span><span class="o">.</span><span class="n">min_vram_gb_at_default_ctx</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">chosen_num_ctx</span> <span class="o">-</span> <span class="n">entry</span><span class="o">.</span><span class="n">default_num_ctx</span><span class="p">)</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>      <span class="o">*</span> <span class="n">entry</span><span class="o">.</span><span class="n">kv_cache_bytes_per_token</span> <span class="o">/</span> <span class="mf">1e9</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">)</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Predicate</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fits</code></td>
+<td><code>required_vram_gb &lt;= hw.vram_gb * 0.85</code></td>
+<td>15% headroom for OS, browser, dashboard, Ollama runtime.</td>
+</tr>
+<tr>
+<td><code>partial</code></td>
+<td><code>required_vram_gb &lt;= hw.vram_gb * 1.20</code></td>
+<td>Ollama CPU offload; up to ~20% over actual VRAM is "slow but works".</td>
+</tr>
+<tr>
+<td><code>unfit</code></td>
+<td>otherwise</td>
+<td>Hard-blocked in UI: option disabled in picker; slider clamps to highest fitting value.</td>
+</tr>
+</tbody>
+</table>
+<p>Special cases:
+- <strong><code>vram_gb == 0.0</code></strong> (probe failure or CPU-only): fit is <code>unknown</code> for every local model.
+- <strong>Cloud models</strong> (<code>provider != "ollama"</code>): skip the math; render a "Cloud" badge. Selectability
+  still requires <code>provider_key_present</code>.
+- <strong>macOS approximate VRAM</strong>: math runs as normal; the badge tooltip surfaces "approximate".</p>
+<h3 id="64-api-shape-additive">6.4 API shape (additive)<a class="headerlink" href="#64-api-shape-additive" title="Permanent link">&para;</a></h3>
+<p>Each catalog entry returned from <code>GET /api/system/models</code>
+(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/models/papers.py#L404-L413">SystemModelsResponse at models/papers.py:404-413</a>)
+gains an optional <code>fit_detail</code> object:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>{
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>  &quot;id&quot;: &quot;qwen3:14b&quot;,
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>  // ... existing fields (provider, vram_gb, tier, status, can_assign, fit, ...)
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>  &quot;fit_detail&quot;: {
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    &quot;default&quot;: &quot;fits&quot; | &quot;partial&quot; | &quot;unfit&quot; | &quot;cloud&quot; | &quot;unknown&quot;,
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    &quot;at_num_ctx&quot;: 8192,
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    &quot;required_vram_gb&quot;: 12.0,
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    &quot;base_vram_gb&quot;: 9.5,
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    &quot;base_num_ctx&quot;: 8192,
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    &quot;default_num_ctx&quot;: 8192,
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>    &quot;max_num_ctx&quot;: 32768,
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    &quot;kv_cache_bytes_per_token&quot;: 1024
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>  }
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>}
+</code></pre></div>
+<p><code>fit</code> (the existing string) is unchanged for backward compatibility; <code>fit_detail</code> is the new
+structured extension. The frontend tolerates an absent <code>fit_detail</code> via TypeScript optional typing
+— a partially-rolled-out backend never breaks the UI. <code>GET /api/system/hardware</code> carries <code>machine_id</code>.</p>
+<p>Per-machine <code>num_ctx</code> writes go through the existing <code>PUT /api/config/{key}</code> path; the frontend
+constructs the key as <code>llm.{machineId}.{role}_num_ctx</code> from the <code>machine_id</code> in the hardware response.</p>
+<h3 id="65-ui-surface">6.5 UI surface<a class="headerlink" href="#65-ui-surface" title="Permanent link">&para;</a></h3>
+<p>The fit indicator lives in an in-card "Configure" expander inside each role card in
+<code>IngestionSection.tsx</code>. The <code>num_ctx</code> slider snaps to powers of two
+(<code>{2048, 4096, 8192, 16384, 32768, 65536}</code>); the fit badge re-renders live as the slider moves.</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Color</th>
+<th>Copy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fits</code></td>
+<td>green</td>
+<td>"Fits — {required_vram} GB / {available_vram} GB"</td>
+</tr>
+<tr>
+<td><code>partial</code></td>
+<td>yellow</td>
+<td>"Partial offload — {required_vram} GB / {available_vram} GB · slower"</td>
+</tr>
+<tr>
+<td><code>unfit</code></td>
+<td>red</td>
+<td>"Won't fit · try {largest_fitting_num_ctx}" — option disabled in dropdown; slider clamps</td>
+</tr>
+<tr>
+<td><code>cloud</code></td>
+<td>gray</td>
+<td>"Cloud"</td>
+</tr>
+<tr>
+<td><code>unknown</code></td>
+<td>gray</td>
+<td>"Unknown VRAM"</td>
+</tr>
+</tbody>
+</table>
+<p>A "Won't fit" model is a <strong>hard block</strong>: the option renders disabled in the picker and the slider
+clamps at the highest fitting snap-step. The user should not be able to silently pick a config that
+forces heavy CPU offload — make the failure mode visible at config-time, not at request-latency-time.</p>
+<p>The Models tab top shows a single-line readout <code>{vram_gb} GB VRAM · Tier {tier}</code> (hostname NOT
+displayed); hover/click expands to <code>vram_source</code> + <code>detected_at</code>. The readout reuses the data
+fetched by <code>IngestionSection</code> — no new endpoint.</p>
+<h3 id="66-thinking-mode-toggle">6.6 Thinking-mode toggle<a class="headerlink" href="#66-thinking-mode-toggle" title="Permanent link">&para;</a></h3>
+<p>Rendered only for catalog entries with <code>supports_thinking: true</code>, inside the same expander as the
+slider. When checked, the backend includes <code>extra_body: {think: false}</code> in the LiteLLM
+<code>/config/update</code> payload through <code>update_litellm_model</code>. This generalizes the hand-tuned default in
+<code>litellm/config.yaml</code>, which still ships <code>think: false</code> for the Qwen3 smart/fast aliases as the
+first-boot fallback. Persisted as <code>llm.{machine_id}.thinking_disabled.{model_id}</code> (boolean);
+first-boot default is <code>true</code> for thinking-capable entries, <code>false</code> for everything else.</p>
+<hr />
+<h2 id="7-api-summary">7. API summary<a class="headerlink" href="#7-api-summary" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/system/hardware</code></td>
+<td>Detected VRAM, tier, source, <code>machine_id</code>.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/system/models</code></td>
+<td>All catalog entries with computed <code>status</code> + <code>fit_detail</code>.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/system/models/recommendations?role=smart</code></td>
+<td>Per-role ranked recommendations.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/system/models/{tag}/pull</code></td>
+<td>Enqueue the <code>model.pull</code> job.</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/system/models/{tag}</code></td>
+<td>Delete if unassigned (409 otherwise).</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/settings/ai</code></td>
+<td>Operator plane: resolved tier candidates, configured + observed model, candidate issues.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/settings/ai</code></td>
+<td>Apply one resolved tier candidate; rejects arbitrary backend/model strings and rolls back on apply failure.</td>
+</tr>
+</tbody>
+</table>
+<p>Existing endpoints unchanged:
+- <code>PUT /api/config/{key}</code> — handles <code>llm.{smart,fast,embed}_model</code> and the per-machine <code>num_ctx</code> /
+  thinking-mode keys.
+- <code>POST /api/providers/{provider}/test</code> — provider connectivity probe.
+- <code>GET /api/jobs/{id}/stream</code> — pull progress.</p>
+<hr />
+<h2 id="8-active-runtime-defaults">8. Active runtime defaults<a class="headerlink" href="#8-active-runtime-defaults" title="Permanent link">&para;</a></h2>
+<p>The runtime authority for model assignment is the LiteLLM config (<code>litellm/config.yaml</code>); the
+<code>user_config</code> rows exist for UI read-back (see <a href="../01-settings/#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write">01-settings.md §2.2</a>
+and <a href="../03-llm/">03-llm.md §1</a>). Current active aliases:</p>
+<table>
+<thead>
+<tr>
+<th>Alias</th>
+<th>Default model</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>smart</code></td>
+<td><code>ollama/qwen3:8b</code></td>
+<td><code>num_ctx: 8192</code>, <code>extra_body.think: false</code>. 8b (not 14b) is the default because 14b starved the GPU-resident embedder on 16 GB cards; admins restore 14b via Settings → <code>llm.smart_model</code>.</td>
+</tr>
+<tr>
+<td><code>fast</code></td>
+<td><code>ollama/qwen3:4b</code></td>
+<td><code>num_ctx: 4096</code>, <code>extra_body.think: false</code>.</td>
+</tr>
+<tr>
+<td><code>embed</code></td>
+<td><code>ollama/qwen3-embedding:4b</code></td>
+<td><code>EMBEDDING_DIMENSION=2560</code>; <code>qwen3-embedding:0.6b</code> (1024d) is the documented smaller-machine fallback.</td>
+</tr>
+</tbody>
+</table>
+<p>Cloud aliases ship commented-out in <code>litellm/config.yaml</code> as templates. Changing the embed model to
+a different dimension requires a matching Qdrant collection and a re-embed checkpoint (see
+<code>scripts/reembed.py</code>, which defaults to <code>qwen3-embedding:4b</code> / <code>2560</code> and gates collection recreation
+behind explicit snapshot-confirmation flags).</p>
+<h3 id="setup-system-check-models-ready-condition">Setup system-check — models-ready condition<a class="headerlink" href="#setup-system-check-models-ready-condition" title="Permanent link">&para;</a></h3>
+<p>The onboarding wizard's Step 1 system check reports models as <strong>ready</strong> when <strong>both</strong> of the following hold:</p>
+<ul>
+<li>At least one model whose name starts with <code>qwen3:</code> is installed (matches <code>qwen3:4b</code>, <code>qwen3:8b</code>, <code>qwen3:14b</code>; excludes <code>qwen3-embedding:*</code> which starts with a different prefix).</li>
+<li>At least one model whose name starts with <code>_EMBEDDER_BASE</code> (derived from <code>EMBEDDING_MODEL_NAME</code> at startup; typically <code>qwen3-embedding</code>) is installed.</li>
+</ul>
+<p>The default install (<code>setup.sh</code>) pulls <code>qwen3:8b</code> and <code>qwen3-embedding:4b</code>, which satisfies this condition. There is <strong>no hardcoded requirement for <code>qwen3:14b</code></strong>. The check also distinguishes "Ollama is reachable but still pulling" from "Ollama is unreachable / not yet started" — missing models are named in the system-check panel rather than showing a generic not-ready state.</p>
+<p>Implementation: <code>_models_match()</code> in <code>services/paper_ingestion/paper_ingestion/routers/system.py</code>.</p>
+<hr />
+<h2 id="9-risks-accepted">9. Risks — accepted<a class="headerlink" href="#9-risks-accepted" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Disk sprawl.</strong> Users can pull many models and forget to delete them; no auto-eviction. The
+  "Storage: X.X GB used" readout is the only nudge. Acceptable — disk is cheap.</li>
+<li><strong>Multi-machine label confusion.</strong> A user running JARVIS on two machines sees different Settings
+  pages; a shared config file may reference a model not pulled on the other machine. The
+  409-on-assigned-delete guard, the <code>unfit</code> status, and per-machine <code>num_ctx</code> keys are the mitigations.</li>
+<li><strong>Catalog staleness between releases.</strong> The catalog is static in the package; if Ollama renames or
+  removes a tag, pulls fail until a new release ships an updated catalog. <code>last_reviewed</code> + the
+  startup warning for entries &gt; 90 days old reduce the blast radius. Pull failures surface the
+  Ollama error verbatim in the UI.</li>
+<li><strong>macOS / probe imprecision.</strong> <code>vram_source</code> is surfaced; recommendations are still computed but
+  flagged. A probe failure yields <code>unknown</code> fit, not a false <code>unfit</code>.</li>
+</ul>
+<hr />
+<h2 id="10-cross-contract-references">10. Cross-contract references<a class="headerlink" href="#10-cross-contract-references" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><a href="../01-settings/#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write">01-settings.md §2.2</a></strong>
+  — <code>llm.{smart,fast,embed}_model</code> and cloud-provider keys at the <code>user_config</code> storage plane;
+  per-machine <code>num_ctx</code> keys.</li>
+<li><strong><a href="../03-llm/#1-the-choke-point">03-llm.md §1</a></strong> — the LiteLLM call surface that consumes these aliases.</li>
+</ul>
+<hr />
+<h2 id="11-verified-identifiers">11. Verified Identifiers<a class="headerlink" href="#11-verified-identifiers" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Citation</th>
+<th>File:line</th>
+<th>One-line behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>recommend_models(vram_mb)</code></td>
+<td>libs/jarvis_common/jarvis_common/hardware_fit.py:207-243</td>
+<td>Advisory VRAM-bucket → alias recommendation; returns <code>HardwareRecommendation</code>; never mutates state.</td>
+</tr>
+<tr>
+<td><code>recommendations_for_role(role, ...)</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:586-645</td>
+<td>Per-role ranking via <code>build_model_statuses</code>; sorts by status priority, tier, name.</td>
+</tr>
+<tr>
+<td><code>build_model_statuses(...)</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:480-585</td>
+<td>Computes <code>status</code>, <code>fit</code>, <code>can_assign</code>, <code>assign_blocker</code>, <code>fit_detail</code> per entry.</td>
+</tr>
+<tr>
+<td><code>compute_vram_fit(...)</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:393-479</td>
+<td>Computes <code>fit_detail</code> including <code>base_vram_gb</code> / <code>base_num_ctx</code>.</td>
+</tr>
+<tr>
+<td><code>HardwareInfo</code> dataclass</td>
+<td>services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:123-147</td>
+<td><code>vram_gb</code>, <code>vram_source</code>, <code>tier</code>, <code>detected_at</code>, internal <code>machine_id</code>.</td>
+</tr>
+<tr>
+<td><code>hardware_tier(vram_gb)</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:172-192</td>
+<td>Maps VRAM GB → tier ordinal 0..4.</td>
+</tr>
+<tr>
+<td><code>detect_hardware()</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:248-267</td>
+<td>nvidia-smi → macOS → CPU fallback; returns hostname as internal <code>machine_id</code>.</td>
+</tr>
+<tr>
+<td><code>get_cached_hardware(state)</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:268-283</td>
+<td>1-hour TTL on <code>app.state.hw_info</code>.</td>
+</tr>
+<tr>
+<td><code>_probe_nvidia_smi()</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:196-220</td>
+<td>Fixed-arg <code>subprocess.run</code>; no shell expansion.</td>
+</tr>
+<tr>
+<td><code>_classify_litellm_runtime_key</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_metadata.py:103-127</td>
+<td>Classifies model-role + per-machine <code>num_ctx</code> / <code>thinking_disabled</code> keys.</td>
+</tr>
+<tr>
+<td><code>_NUM_CTX_PATTERN</code> / <code>_THINKING_DISABLED_PATTERN</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/config_metadata.py:96-100</td>
+<td>Regex for the dynamic per-machine key patterns.</td>
+</tr>
+<tr>
+<td><code>update_litellm_model(alias, model, db_pool)</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/litellm_config.py</td>
+<td>Rewrites LiteLLM config / POSTs <code>/config/update</code>; injects cloud key; applies <code>num_ctx</code> + thinking flags.</td>
+</tr>
+<tr>
+<td><code>get_provider_api_key(provider, db_pool)</code></td>
+<td>services/paper_ingestion/paper_ingestion/services/litellm_config.py</td>
+<td>Decrypts a cloud-provider key from <code>user_config</code>.</td>
+</tr>
+<tr>
+<td><code>model_catalog.json</code> (14 entries)</td>
+<td>libs/jarvis_common/jarvis_common/data/model_catalog.json</td>
+<td>Curated local + cloud catalog; no <code>mistral-nemo</code> / <code>nomic-embed-text</code>.</td>
+</tr>
+<tr>
+<td><code>GET /api/system/models</code></td>
+<td>services/paper_ingestion/paper_ingestion/routers/system.py</td>
+<td>Returns installed, hardware, current, issues, catalog, recommendations.</td>
+</tr>
+<tr>
+<td><code>GET /api/system/hardware</code></td>
+<td>services/paper_ingestion/paper_ingestion/routers/system.py</td>
+<td>Returns <code>HardwareInfo.to_dict()</code> incl. <code>machine_id</code>.</td>
+</tr>
+<tr>
+<td><code>SystemModelsResponse</code></td>
+<td>services/paper_ingestion/paper_ingestion/models/papers.py:404-413</td>
+<td>Loose Pydantic response; additive <code>fit_detail</code> does not break clients.</td>
+</tr>
+<tr>
+<td>Active runtime defaults</td>
+<td>litellm/config.yaml</td>
+<td>smart=<code>ollama/qwen3:8b</code>, fast=<code>ollama/qwen3:4b</code>, embed=<code>ollama/qwen3-embedding:4b</code>; cloud examples commented out.</td>
+</tr>
+<tr>
+<td><code>PaperIngestionSettings.embedding_model_name</code> / <code>embedding_dimension</code></td>
+<td>services/paper_ingestion/paper_ingestion/config.py</td>
+<td>Defaults <code>qwen3-embedding:4b</code> / <code>2560</code>.</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

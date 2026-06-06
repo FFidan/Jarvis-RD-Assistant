@@ -1,0 +1,3448 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+      
+      
+      
+        <link rel="canonical" href="https://ffidan.github.io/Jarvis-RD-Assistant/DEPLOYMENT/">
+      
+      
+        <link rel="prev" href="../readme-shim/">
+      
+      
+        <link rel="next" href="../REQUIREMENTS/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Deployment - JARVIS RD Assistant — Operator & Developer Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#deployment-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-header__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JARVIS RD Assistant — Operator & Developer Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Deployment
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../readme-shim/" class="md-tabs__link">
+          
+  
+  
+  Get Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../SECURITY/" class="md-tabs__link">
+          
+  
+  
+  Operate
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../ARCHITECTURE/" class="md-tabs__link">
+          
+  
+  
+  Develop
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../contracts/" class="md-tabs__link">
+          
+  
+  
+  System Contracts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../manual/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="JARVIS RD Assistant — Operator &amp; Developer Docs" class="md-nav__button md-logo" aria-label="JARVIS RD Assistant — Operator & Developer Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JARVIS RD Assistant — Operator & Developer Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FFidan/Jarvis-RD-Assistant" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    FFidan/Jarvis-RD-Assistant
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../readme-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#solo-deployment-recommended-for-single-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Solo deployment (recommended for single-user)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fresh-install-on-a-second-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fresh install on a second machine
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fresh install on a second machine">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#source-http-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source HTTP cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pulse-source-caveats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pulse source caveats
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gpu-acceleration-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GPU acceleration (optional)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GPU acceleration (optional)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#standard-gpu-overlay-auto-engaged-by-setupsh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard GPU overlay (auto-engaged by setup.sh)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vllm-overlay-optional-manual" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vLLM overlay (optional, manual)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability-optional-off-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability (optional, off by default)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remote-access-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote access (optional)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Remote access (optional)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-tailscale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: Tailscale
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deployment-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment Modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mode-1-localhost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 1 — Localhost
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Mode 1 — Localhost">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#self-signed-cert-browser-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-signed cert — browser acceptance
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mode-2-lan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 2 — LAN
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Mode 2 — LAN">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-your-lan-ip-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When your LAN IP changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardening-checklist-before-lan-exposure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardening checklist before LAN exposure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rate-limit-client-ip-trust-automatic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate-limit client-IP trust (automatic)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#encrypted-config-key-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Encrypted config key rotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docker-secrets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docker Secrets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#web-ui-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Web UI configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mode-3-cloudflare-tunnel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 3 — Cloudflare Tunnel
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mode-4-tailscale-funnel-vpn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 4 — Tailscale Funnel / VPN
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tls-certificates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS / Certificates
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TLS / Certificates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#self-signed-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-signed (default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lets-encrypt-caddy-profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Let's Encrypt (Caddy profile)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#importing-an-existing-certificate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Importing an existing certificate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-interactive-automated-installer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-interactive / Automated Installer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Non-interactive / Automated Installer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pre-flight-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-flight check
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#single-user-vs-multi-user-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-user vs multi-user mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#copy-paste-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Copy-paste examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#update-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Update Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Update Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#upgrade-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrade notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backup-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backup + Restore
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Backup + Restore">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restore
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#production-readiness-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Production Readiness Check
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-access-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other access options
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../REQUIREMENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SECURITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RELEASE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Process
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../known-residual-risks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known Residual Risks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Develop
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Develop
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PRD/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Product Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ENGINEERING_STANDARDS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Engineering Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migrations-shim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System Contracts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    System Contracts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/01-settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/02-pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/03-llm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LLM Client
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/04-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/05-models-and-hardware/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models & Hardware
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/07-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/navigation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Navigation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/research-feed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Research Feed & Library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/paper-detail/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Paper Detail
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/ask/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ask (Cross-paper RAG)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/pulse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pulse
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/learning-cards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning Cards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/projects/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/knowledge-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Knowledge Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/citation-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citation Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/extraction-table/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extraction Table
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/analytics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/home-my-day/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    My Day & Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/telegram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telegram
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/admin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin & Multi-tenant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#solo-deployment-recommended-for-single-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Solo deployment (recommended for single-user)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fresh-install-on-a-second-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fresh install on a second machine
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fresh install on a second machine">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#source-http-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source HTTP cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pulse-source-caveats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pulse source caveats
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gpu-acceleration-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GPU acceleration (optional)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GPU acceleration (optional)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#standard-gpu-overlay-auto-engaged-by-setupsh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard GPU overlay (auto-engaged by setup.sh)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vllm-overlay-optional-manual" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vLLM overlay (optional, manual)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability-optional-off-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability (optional, off by default)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remote-access-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote access (optional)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Remote access (optional)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-tailscale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: Tailscale
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deployment-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment Modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mode-1-localhost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 1 — Localhost
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Mode 1 — Localhost">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#self-signed-cert-browser-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-signed cert — browser acceptance
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mode-2-lan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 2 — LAN
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Mode 2 — LAN">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-your-lan-ip-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When your LAN IP changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardening-checklist-before-lan-exposure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardening checklist before LAN exposure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rate-limit-client-ip-trust-automatic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate-limit client-IP trust (automatic)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#encrypted-config-key-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Encrypted config key rotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docker-secrets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docker Secrets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#web-ui-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Web UI configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mode-3-cloudflare-tunnel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 3 — Cloudflare Tunnel
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mode-4-tailscale-funnel-vpn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode 4 — Tailscale Funnel / VPN
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tls-certificates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS / Certificates
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TLS / Certificates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#self-signed-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-signed (default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lets-encrypt-caddy-profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Let's Encrypt (Caddy profile)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#importing-an-existing-certificate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Importing an existing certificate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-interactive-automated-installer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-interactive / Automated Installer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Non-interactive / Automated Installer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pre-flight-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-flight check
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#single-user-vs-multi-user-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-user vs multi-user mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#copy-paste-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Copy-paste examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#update-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Update Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Update Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#upgrade-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrade notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backup-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backup + Restore
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Backup + Restore">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restore
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#production-readiness-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Production Readiness Check
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-access-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other access options
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="deployment-guide">Deployment Guide<a class="headerlink" href="#deployment-guide" title="Permanent link">&para;</a></h1>
+<p>JARVIS is a self-hosted research assistant. This document covers running it — from the localhost happy path to LAN exposure, Cloudflare Tunnel, TLS, backups, and common failure modes.</p>
+<p>For first-time setup, start with <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md">README.md</a> Quickstart. If the two conflict, this file is canonical.</p>
+<hr />
+<h2 id="solo-deployment-recommended-for-single-user">Solo deployment (recommended for single-user)<a class="headerlink" href="#solo-deployment-recommended-for-single-user" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>bash<span class="w"> </span>scripts/init-secrets.sh<span class="w">   </span><span class="c1"># idempotent; generates API key, config key, HMAC key if absent</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">           </span><span class="c1"># waits for postgres → init-migrations → all services</span>
+</code></pre></div>
+<blockquote>
+<p><strong>GPU users:</strong> run <code>bash setup.sh</code> instead of the bare <code>docker compose up -d</code> above.
+<code>setup.sh</code> detects the NVIDIA container runtime, merges <code>docker-compose.gpu.yml</code>, and
+persists <code>COMPOSE_FILE</code> to <code>.env</code> so that every subsequent <code>docker compose up -d</code> keeps
+the GPU overlay. A plain <code>docker compose up -d</code> only uses the GPU <strong>after</strong> <code>setup.sh</code>
+has written <code>COMPOSE_FILE</code> to <code>.env</code>; run it bare before that and the overlay is silently
+dropped and Ollama runs on CPU.</p>
+</blockquote>
+<p>Required <code>.env</code> vars (<code>init-secrets.sh</code> generates any that are blank):</p>
+<table>
+<thead>
+<tr>
+<th>Var</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JARVIS_API_KEY</code></td>
+<td>32-byte hex; gates the REST API + dashboard login</td>
+</tr>
+<tr>
+<td><code>JARVIS_CONFIG_KEY</code></td>
+<td>Fernet key; encrypts user_config secrets at rest</td>
+</tr>
+<tr>
+<td><code>LITELLM_MASTER_KEY</code></td>
+<td>32-byte hex; gates LiteLLM admin endpoints</td>
+</tr>
+<tr>
+<td><code>JARVIS_MODEL_HMAC_KEY</code></td>
+<td>64-hex; HMAC-signs Pulse classifier pickle blobs; <strong>auto-generated</strong> — do not hand-edit</td>
+</tr>
+</tbody>
+</table>
+<p>Optional: <code>JARVIS_CONFIG_KEY_OLD</code> — enables zero-downtime crypto rotation via MultiFernet.</p>
+<p>Health checks:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>curl<span class="w"> </span>http://127.0.0.1:8010/health<span class="w">   </span><span class="c1"># paper_ingestion</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>curl<span class="w"> </span>http://127.0.0.1:8011/health<span class="w">   </span><span class="c1"># learning_engine</span>
+</code></pre></div>
+<hr />
+<h2 id="fresh-install-on-a-second-machine">Fresh install on a second machine<a class="headerlink" href="#fresh-install-on-a-second-machine" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>git<span class="w"> </span>clone<span class="w"> </span>&lt;your-remote&gt;/JARVIS_RD_Assistant.git
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">cd</span><span class="w"> </span>JARVIS_RD_Assistant
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>bash<span class="w"> </span>scripts/init-secrets.sh
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nv">$EDITOR</span><span class="w"> </span>.env<span class="w">     </span><span class="c1"># optional: set TELEGRAM_BOT_TOKEN for Telegram</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<blockquote>
+<p><strong>GPU users:</strong> run <code>bash setup.sh</code> in place of the bare <code>docker compose up -d</code> above.
+<code>setup.sh</code> detects the NVIDIA container runtime, merges <code>docker-compose.gpu.yml</code>, and
+persists <code>COMPOSE_FILE</code> to <code>.env</code>. Subsequent <code>docker compose up -d</code> calls keep the GPU
+because they read <code>COMPOSE_FILE</code> from <code>.env</code>. Without this step the overlay is dropped and
+the stack silently runs on CPU.</p>
+</blockquote>
+<p><strong>Telegram is optional.</strong> If you enable it, two machines must <strong>never</strong> share a bot token — Telegram routes updates to whichever client polled last. Create a separate bot via @BotFather per machine.</p>
+<p>After the stack is healthy, open the dashboard. The onboarding wizard runs on first visit and guides you through admin-account creation, SMTP, Pulse schedule, and Telegram pairing in one continuous flow.</p>
+<h3 id="source-http-cache">Source HTTP cache<a class="headerlink" href="#source-http-cache" title="Permanent link">&para;</a></h3>
+<p>JARVIS caches successful <code>GET</code> responses from external metadata sources (Semantic Scholar, arXiv, OpenAlex, Crossref, PubMed) to reduce duplicate outbound requests and 429 failures. Cache is on by default; only <code>GET</code>+<code>200</code> responses for those hosts are stored.</p>
+<table>
+<thead>
+<tr>
+<th>Env var</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SOURCE_HTTP_CACHE_ENABLED</code></td>
+<td><code>true</code></td>
+<td>Set <code>false</code> to disable entirely.</td>
+</tr>
+<tr>
+<td><code>SOURCE_HTTP_CACHE_TTL_SECONDS</code></td>
+<td><code>900</code></td>
+<td>Seconds a cached response is considered fresh.</td>
+</tr>
+</tbody>
+</table>
+<p>A service restart is required when changing these.</p>
+<h3 id="pulse-source-caveats">Pulse source caveats<a class="headerlink" href="#pulse-source-caveats" title="Permanent link">&para;</a></h3>
+<p>arXiv rate-limits to ~1 req/3 s; repeated manual Pulse runs can return HTTP 429. A zero-card run with <code>degraded_reason</code> means the job completed but every source was empty, rate-limited, or misconfigured. If arXiv returns 429, wait the <code>Retry-After</code> window (≥30 s) before retrying. Use Settings → Pulse → Diagnostics for production troubleshooting; <code>/api/pulse/debug</code> is dev-mode only (<code>DEV_MODE=true</code>).</p>
+<p>OpenAlex requires <code>OPENALEX_EMAIL</code> or <code>OPENALEX_API_KEY</code>. PubMed works without a key but an NCBI key raises the rate limit.</p>
+<hr />
+<h2 id="gpu-acceleration-optional">GPU acceleration (optional)<a class="headerlink" href="#gpu-acceleration-optional" title="Permanent link">&para;</a></h2>
+<p>The default stack is CPU-safe. Ollama runs on CPU out of the box — slower for large models, but fully functional.</p>
+<h3 id="standard-gpu-overlay-auto-engaged-by-setupsh">Standard GPU overlay (auto-engaged by <code>setup.sh</code>)<a class="headerlink" href="#standard-gpu-overlay-auto-engaged-by-setupsh" title="Permanent link">&para;</a></h3>
+<p><code>setup.sh</code> automatically enables GPU support when it detects the Docker NVIDIA runtime (<code>docker info</code> probe). On a CUDA-capable host with the NVIDIA Container Toolkit installed, run <code>setup.sh</code> once — it merges <code>docker-compose.gpu.yml</code> into the active compose file list and <strong>persists <code>COMPOSE_FILE</code> to <code>.env</code></strong>, so every subsequent <code>docker compose up -d</code> call continues to use the GPU overlay without any extra flags.</p>
+<p>To start with the GPU overlay manually (without running <code>setup.sh</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose.yml<span class="w"> </span>-f<span class="w"> </span>docker-compose.gpu.yml<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<p>Note: this one-off command does <strong>not</strong> persist <code>COMPOSE_FILE</code>. To make it permanent, add to <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+</code></pre></div>
+<p><strong>Makefile targets (<code>make up</code>, <code>make profile-stack-up</code>) always run CPU-only.</strong> They do not include the GPU overlay, regardless of hardware. Use the explicit <code>-f</code> form or the <code>.env</code> <code>COMPOSE_FILE</code> setting for GPU acceleration outside of <code>setup.sh</code>.</p>
+<p>The <code>./setup.sh --check</code> command reports GPU toolkit availability as an informational item.</p>
+<h3 id="vllm-overlay-optional-manual">vLLM overlay (optional, manual)<a class="headerlink" href="#vllm-overlay-optional-manual" title="Permanent link">&para;</a></h3>
+<p>vLLM is a <strong>separate, optional overlay</strong> — it is not auto-started by <code>setup.sh</code>. Use it to serve large models locally at higher throughput than Ollama.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose.yml<span class="w"> </span>-f<span class="w"> </span>docker-compose.gpu.yml<span class="w"> </span>-f<span class="w"> </span>docker-compose.vllm.yml<span class="w"> </span>--profile<span class="w"> </span>vllm<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<p>After the vLLM container is healthy, point the LiteLLM <code>smart</code> alias at it: open <strong>Settings → Models</strong> and update the <code>smart</code> model alias to your vLLM endpoint (e.g. <code>openai/meta-llama/Meta-Llama-3-8B-Instruct</code> with <code>api_base</code> set to your vLLM URL).</p>
+<hr />
+<h2 id="observability-optional-off-by-default">Observability (optional, off by default)<a class="headerlink" href="#observability-optional-off-by-default" title="Permanent link">&para;</a></h2>
+<p>LLM-call tracing via Langfuse is opt-in. <code>OBSERVABILITY_ENABLED</code> defaults to <code>false</code> and the Langfuse SDK is never constructed — zero overhead.</p>
+<p>To enable (provisions a loopback-only Langfuse instance, no signup needed):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Set LANGFUSE_INIT_USER_PASSWORD in .env first</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>make<span class="w"> </span>observability-up
+</code></pre></div>
+<p>Open <code>http://localhost:3002</code> and sign in with <code>LANGFUSE_INIT_USER_EMAIL</code> (default <code>operator@jarvis.local</code>). Langfuse is a single operator tool, loopback-bound, decoupled from JARVIS user accounts.</p>
+<p>Full contract and rotation procedure: <a href="../contracts/04-observability/">docs/contracts/04-observability.md</a> §9.</p>
+<hr />
+<h2 id="remote-access-optional">Remote access (optional)<a class="headerlink" href="#remote-access-optional" title="Permanent link">&para;</a></h2>
+<p>By default the dashboard is reachable only on the machine it runs on
+(<code>http://localhost:3001</code>): it binds to loopback (<code>DASHBOARD_BIND_HOST</code>) and nginx
+answers only to a <code>Host</code> allowlist (<code>DASHBOARD_SERVER_NAME</code>, below). <strong>If you only
+use JARVIS on that one machine, skip this section</strong> — nothing needs to be exposed.</p>
+<p>To reach it from another device — your phone, or a laptop away from home —
+without putting it on the open internet, common options are:</p>
+<ul>
+<li><strong>A reverse proxy with TLS</strong> on your own domain — the Caddy <code>local-https</code> /
+  <code>letsencrypt</code> profiles (see <em>Deployment Modes</em> below).</li>
+<li><strong>A Cloudflare Tunnel</strong> — outbound-only, no open ports.</li>
+<li><strong>A mesh VPN</strong> — your devices share one private encrypted network.</li>
+</ul>
+<p>These are alternatives; pick whichever suits you. The walkthrough below is <strong>one
+example</strong> (Tailscale, a mesh VPN), not a requirement.</p>
+<h3 id="example-tailscale">Example: Tailscale<a class="headerlink" href="#example-tailscale" title="Permanent link">&para;</a></h3>
+<p><strong>What it is.</strong> Tailscale is a zero-config mesh VPN built on WireGuard. You
+install it on each device and sign in; they join a private, end-to-end-encrypted
+network (a "tailnet") and can reach one another by a stable name (MagicDNS, e.g.
+<code>my-host.my-tailnet.ts.net</code>) straight through NAT and firewalls — nothing is
+published to the public internet. Free for personal use (<a href="https://tailscale.com">https://tailscale.com</a>).</p>
+<p><strong>Why it helps here.</strong> Install it on the JARVIS host and on your phone, and the
+dashboard becomes reachable from the phone over the private tailnet with <strong>zero
+open inbound ports</strong> on your router.</p>
+<blockquote>
+<p><strong>Scope of the steps below:</strong> they assume the <strong>default single-host setup</strong> —
+dashboard on plain-HTTP loopback <code>:3001</code>, Tailscale running on the <strong>same host</strong>
+(on WSL2: inside the same distro as Docker, not the Windows host). If you front
+the app with Caddy (<code>local-https</code>/<code>letsencrypt</code>), use Caddy's domain for remote
+access instead. Adjust the port if you changed <code>DASHBOARD_HOST_PORT</code>.</p>
+</blockquote>
+<p><strong>1. Install Tailscale and join the tailnet</strong> on both the host and the client:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://tailscale.com/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>sh<span class="w">   </span><span class="c1"># on the host (Linux/WSL2)</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>sudo<span class="w"> </span>tailscale<span class="w"> </span>up
+</code></pre></div>
+<p>Install the Tailscale app on the phone and sign in to the same account.</p>
+<p><strong>2. Allow the host's tailnet name.</strong> The dashboard nginx rejects (<code>444</code>) any
+<code>Host</code> it doesn't recognise (<code>localhost</code>/<code>127.0.0.1</code> by default; the Caddy
+profiles rewrite <code>Host</code>→<code>localhost</code>). Add your MagicDNS name so access isn't
+refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;DASHBOARD_SERVER_NAME=&lt;host&gt;.&lt;tailnet&gt;.ts.net&#39;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>.env
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard
+</code></pre></div>
+<p><strong>3. Expose the dashboard on the tailnet</strong> — two ways:</p>
+<ul>
+<li><strong><code>tailscale serve</code></strong> (clean HTTPS URL, keeps the loopback bind):</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>sudo<span class="w"> </span>tailscale<span class="w"> </span><span class="nb">set</span><span class="w"> </span>--operator<span class="o">=</span><span class="k">$(</span>whoami<span class="k">)</span><span class="w">   </span><span class="c1"># one-time: run `serve` without sudo</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>tailscale<span class="w"> </span>serve<span class="w"> </span>--bg<span class="w"> </span>--https<span class="o">=</span><span class="m">443</span><span class="w"> </span>http://127.0.0.1:3001
+</code></pre></div>
+<p>Then open <code>https://&lt;host&gt;.&lt;tailnet&gt;.ts.net</code> (no port). Requires HTTPS enabled
+  in the Tailscale admin console (Settings → Features → HTTPS Certificates).</p>
+<ul>
+<li><strong>Direct port</strong> (simpler): also set <code>DASHBOARD_BIND_HOST=0.0.0.0</code>, run
+  <code>docker compose up -d dashboard</code>, and open
+  <code>http://&lt;host&gt;.&lt;tailnet&gt;.ts.net:3001</code>. Binds the port on all interfaces —
+  fine on a private tailnet, looser than <code>serve</code>.</li>
+</ul>
+<p>Telegram needs no change for any of this — the bot only makes outbound calls.</p>
+<hr />
+<h2 id="deployment-modes">Deployment Modes<a class="headerlink" href="#deployment-modes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Setup time</th>
+<th>Inbound ports</th>
+<th>TLS story</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Localhost</strong></td>
+<td>~5 min</td>
+<td>none</td>
+<td>Self-signed (localhost SAN)</td>
+</tr>
+<tr>
+<td><strong>LAN</strong></td>
+<td>~10 min</td>
+<td><code>3001/tcp</code> on LAN iface</td>
+<td>Self-signed with LAN IP SAN</td>
+</tr>
+<tr>
+<td><strong>Cloudflare Tunnel</strong></td>
+<td>~30 min</td>
+<td><em>none</em> (outbound-only)</td>
+<td>Self-signed origin + Cloudflare edge TLS</td>
+</tr>
+<tr>
+<td><strong>Let's Encrypt / Caddy</strong></td>
+<td>~15 min after DNS</td>
+<td><code>80/tcp</code>, <code>443/tcp</code></td>
+<td>Caddy ACME edge TLS</td>
+</tr>
+<tr>
+<td><strong>Tailscale Funnel</strong></td>
+<td>~20 min</td>
+<td><em>none</em> on your host</td>
+<td>Tailscale-provisioned TLS</td>
+</tr>
+<tr>
+<td><strong>VPN (Tailscale/WireGuard)</strong></td>
+<td>~15 min</td>
+<td>VPN ports only</td>
+<td>Self-signed</td>
+</tr>
+</tbody>
+</table>
+<p><code>./setup.sh</code> runs localhost mode by default. LAN and Cloudflare Tunnel are prompts in the same script.</p>
+<hr />
+<h2 id="mode-1-localhost">Mode 1 — Localhost<a class="headerlink" href="#mode-1-localhost" title="Permanent link">&para;</a></h2>
+<p>See <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md">README.md</a> Quickstart for the full walkthrough. The short version:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>./setup.sh<span class="w">   </span><span class="c1"># pick option 1 at the access-mode prompt</span>
+</code></pre></div>
+<p>The dashboard is at <code>http://localhost:3001</code> (default <code>DASHBOARD_HOST_PORT=3001</code>). Enable the <code>caddy-local</code> profile only when you want local HTTPS.</p>
+<h3 id="self-signed-cert-browser-acceptance">Self-signed cert — browser acceptance<a class="headerlink" href="#self-signed-cert-browser-acceptance" title="Permanent link">&para;</a></h3>
+<p>On first start JARVIS generates a self-signed certificate. Accept the browser warning once: Chrome/Edge — type <code>thisisunsafe</code> (no input field); Firefox — <em>Advanced → Accept the Risk</em>; Safari — <em>Show Details → visit this website</em> (macOS prompts for your admin password).</p>
+<hr />
+<h2 id="mode-2-lan">Mode 2 — LAN<a class="headerlink" href="#mode-2-lan" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>./setup.sh<span class="w">   </span><span class="c1"># pick option 2</span>
+</code></pre></div>
+<p><code>setup.sh</code> sets <code>DASHBOARD_BIND_HOST=0.0.0.0</code>, detects your LAN IP, adds it to <code>CORS_ORIGINS</code> and <code>JARVIS_CERT_SAN</code>, and removes stale override files.</p>
+<h3 id="when-your-lan-ip-changes">When your LAN IP changes<a class="headerlink" href="#when-your-lan-ip-changes" title="Permanent link">&para;</a></h3>
+<p>DHCP can re-lease a different IP after a reboot (symptom: dashboard works on <code>localhost</code> but other devices get a cert or CORS error).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Option A — re-run setup.sh (re-detects IP, prompts to regenerate cert):</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>./setup.sh
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># Option B — update .env manually, then regenerate:</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="c1"># JARVIS_CERT_SAN=DNS:localhost,IP:127.0.0.1,IP:&lt;new-LAN-IP&gt;</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="c1"># CORS_ORIGINS=https://localhost:3001,https://&lt;new-LAN-IP&gt;:3001</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>rm<span class="w"> </span>./certs/cert.pem<span class="w"> </span>./certs/key.pem<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard
+</code></pre></div>
+<h3 id="hardening-checklist-before-lan-exposure">Hardening checklist before LAN exposure<a class="headerlink" href="#hardening-checklist-before-lan-exposure" title="Permanent link">&para;</a></h3>
+<p>Set in <code>.env</code> (<code>setup.sh</code> enforces the first two for option 2; verify the rest):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>ENVIRONMENT=production
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>DEV_MODE=false
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>JARVIS_API_KEY=&lt;at least 32 chars: openssl rand -hex 32&gt;
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>JARVIS_CONFIG_KEY=&lt;Fernet key: python -c &quot;from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())&quot;&gt;
+</code></pre></div>
+<p><code>DEV_MODE=true</code> is a meta-flag that promotes granular dev flags (<code>DEV_AUTH_BYPASS</code>, <code>DEV_ERROR_DETAIL</code>, <code>DEV_CORS_OPEN</code>, <code>DEV_SMTP_LOG_ONLY</code>, <code>DEV_CRYPTO_RELAXED</code>) to <code>true</code> unless explicitly overridden. None are permitted when <code>ENVIRONMENT=production</code> — startup will crash if any is <code>true</code>.</p>
+<h3 id="rate-limit-client-ip-trust-automatic">Rate-limit client-IP trust (automatic)<a class="headerlink" href="#rate-limit-client-ip-trust-automatic" title="Permanent link">&para;</a></h3>
+<p>JARVIS pins the internal Docker network to <code>10.137.241.0/24</code> and assigns Caddy fixed IPs within it. nginx trusts only those IPs plus <code>127.0.0.1</code> — no operator step required.</p>
+<p><strong>Subnet collision:</strong> if <code>10.137.241.0/24</code> conflicts with your LAN, <code>setup.sh --check</code> warns. Set <code>JARVIS_NET_SUBNET=&lt;a free /24&gt;</code> and update <code>frontend/nginx.conf</code>'s two <code>set_real_ip_from</code> literals.</p>
+<p><strong><code>TRUSTED_PROXY_CIDRS</code></strong> — Python-layer variable for the XFF walk. Add load-balancer CIDRs only if you place an additional external proxy in front of the stack. RFC-1918 and <code>127.0.0.0/8</code> are always trusted.</p>
+<h3 id="encrypted-config-key-rotation">Encrypted config key rotation<a class="headerlink" href="#encrypted-config-key-rotation" title="Permanent link">&para;</a></h3>
+<p>Provider keys stored through Settings are encrypted with <code>JARVIS_CONFIG_KEY</code>. Dry-run first:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nv">DATABASE_URL</span><span class="o">=</span>postgresql://jarvis:&lt;password&gt;@localhost:5432/jarvis<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nv">OLD_JARVIS_CONFIG_KEY</span><span class="o">=</span>&lt;old-fernet-key&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="nv">NEW_JARVIS_CONFIG_KEY</span><span class="o">=</span>&lt;new-fernet-key&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>python<span class="w"> </span>scripts/rotate_config_key.py
+</code></pre></div>
+<p>Add <code>--apply</code> after the dry run validates every row. The script runs in a transaction and never logs plaintext or ciphertext.</p>
+<h3 id="docker-secrets">Docker Secrets<a class="headerlink" href="#docker-secrets" title="Permanent link">&para;</a></h3>
+<p>JARVIS supports Docker Secrets for sensitive credentials. Each is read from a file at runtime via a <code>_FILE</code>-suffixed env var, keeping plaintext out of the compose environment and shell history. Secrets live in <code>secrets/</code> at the repo root (gitignored); <code>setup.sh</code> creates and populates them on first run.</p>
+<p><strong>Operator-provisioned secrets</strong> (create manually if not using <code>setup.sh</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Secret name</th>
+<th><code>_FILE</code> env var</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>postgres_password</code></td>
+<td><code>POSTGRES_PASSWORD_FILE</code></td>
+<td>PostgreSQL password for the <code>jarvis</code> user</td>
+</tr>
+<tr>
+<td><code>litellm_master_key</code></td>
+<td><code>LITELLM_MASTER_KEY_FILE</code></td>
+<td>LiteLLM master key (gateway auth)</td>
+</tr>
+<tr>
+<td><code>jarvis_api_key</code></td>
+<td><code>JARVIS_API_KEY_FILE</code></td>
+<td>JARVIS REST API key (frontend + Telegram)</td>
+</tr>
+<tr>
+<td><code>jarvis_model_hmac_key</code></td>
+<td><code>JARVIS_MODEL_HMAC_KEY_FILE</code></td>
+<td>HMAC-signs Pulse classifier pickle blobs (auto-generated; mandatory in production)</td>
+</tr>
+<tr>
+<td><code>jarvis_config_key</code></td>
+<td><code>JARVIS_CONFIG_KEY_FILE</code></td>
+<td>Fernet key for encrypted config values</td>
+</tr>
+<tr>
+<td><code>telegram_bot_token</code></td>
+<td><code>TELEGRAM_BOT_TOKEN_FILE</code></td>
+<td>Telegram bot token (<code>telegram</code> profile only)</td>
+</tr>
+<tr>
+<td><code>qdrant_api_key</code></td>
+<td><code>QDRANT_API_KEY_FILE</code></td>
+<td>Qdrant service API key</td>
+</tr>
+<tr>
+<td><code>infra_ingest_key</code></td>
+<td><code>INFRA_INGEST_KEY_FILE</code></td>
+<td>Shared key for the infrastructure ingestion endpoint</td>
+</tr>
+<tr>
+<td><code>backup_encrypt_key</code></td>
+<td><code>BACKUP_ENCRYPT_KEY_FILE</code></td>
+<td>Encrypts backup archives at rest</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Observability profile secrets</strong> (auto-provisioned by <code>make observability-up</code>; only present when the <code>observability</code> profile is active):
+<code>langfuse_init_pk</code>, <code>langfuse_init_sk</code> — Langfuse SDK keys injected into app services. <code>langfuse_pg_password</code>, <code>langfuse_nextauth_secret</code>, <code>langfuse_salt</code> — internal Langfuse service credentials.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># To rotate a secret manually:</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nb">echo</span><span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;&lt;new-value&gt;&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>secrets/jarvis_api_key.txt
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>secrets/jarvis_api_key.txt
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+</code></pre></div>
+<h3 id="web-ui-configuration">Web UI configuration<a class="headerlink" href="#web-ui-configuration" title="Permanent link">&para;</a></h3>
+<p>All ongoing configuration goes through the web wizard and Settings — no <code>.env</code> editing needed beyond what <code>setup.sh</code> writes:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Where</th>
+<th>Restart?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SMTP relay</td>
+<td>Settings → Integrations → SMTP / onboarding wizard</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Cloud LLM keys (OpenAI, Anthropic, Gemini)</td>
+<td>Settings → Models → Cloud Providers</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Telegram bot token</td>
+<td>Settings → Integrations → Bot Token</td>
+<td>Yes — <code>docker compose restart telegram_bot</code></td>
+</tr>
+<tr>
+<td>Access mode (single ↔ multi-user)</td>
+<td>Settings → System → Access Mode</td>
+<td>Yes — <code>docker compose restart paper_ingestion learning_engine</code></td>
+</tr>
+<tr>
+<td>Auto-fetch interval</td>
+<td>Settings → Automation</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<p>For multi-user (team) deployment and the full trust boundary, see <a href="../SECURITY/">docs/SECURITY.md</a>.</p>
+<hr />
+<h2 id="mode-3-cloudflare-tunnel">Mode 3 — Cloudflare Tunnel<a class="headerlink" href="#mode-3-cloudflare-tunnel" title="Permanent link">&para;</a></h2>
+<p>Exposes JARVIS over an outbound tunnel — no inbound port needed. Edge TLS is terminated by Cloudflare.</p>
+<p><strong>Prerequisites:</strong> A Cloudflare account with a configured tunnel (<a href="https://one.dash.cloudflare.com/">Zero Trust dashboard</a>).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nb">echo</span><span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;&lt;your-tunnel-token&gt;&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>secrets/cloudflare_tunnel_token.txt
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>secrets/cloudflare_tunnel_token.txt
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>tunnel<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<p><code>setup.sh</code> option 3 writes the token and brings the tunnel profile up automatically. The <code>cloudflared</code> container reads the token from <code>/run/secrets/cloudflare_tunnel_token</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>ps<span class="w"> </span>cloudflared<span class="w">          </span><span class="c1"># should be &quot;healthy&quot; or &quot;running&quot;</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">20</span><span class="w"> </span>cloudflared<span class="w">   </span><span class="c1"># look for &quot;Connection established&quot;</span>
+</code></pre></div>
+<p>Tunnel routing is configured in the Cloudflare Zero Trust dashboard: set the public hostname to route to <code>http://dashboard:3000</code>. Set <code>JARVIS_TRUST_CF_CONNECTING_IP=true</code> in <code>.env</code> only if you lock access to Cloudflare IPs.</p>
+<hr />
+<h2 id="mode-4-tailscale-funnel-vpn">Mode 4 — Tailscale Funnel / VPN<a class="headerlink" href="#mode-4-tailscale-funnel-vpn" title="Permanent link">&para;</a></h2>
+<p><strong>Tailscale Funnel</strong> — outbound-only, edge TLS terminated by Tailscale. Not wired into <code>setup.sh</code>. See <a href="https://tailscale.com/kb/1223/funnel/">Tailscale Funnel docs</a>.</p>
+<p><strong>VPN (Tailscale / WireGuard)</strong> — mesh your devices onto one network and keep JARVIS in localhost mode. Simplest and most secure option for a small set of trusted devices.</p>
+<hr />
+<h2 id="tls-certificates">TLS / Certificates<a class="headerlink" href="#tls-certificates" title="Permanent link">&para;</a></h2>
+<h3 id="self-signed-default">Self-signed (default)<a class="headerlink" href="#self-signed-default" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Generated inside the <code>dashboard</code> container on first start.</li>
+<li>SAN is controlled by <code>JARVIS_CERT_SAN</code> in <code>.env</code>; <code>setup.sh</code> sets this based on access mode.</li>
+<li>Key + cert live in <code>./certs/</code> (bind-mount at the repo root).</li>
+<li><code>JARVIS_SKIP_SELFSIGNED_GEN</code> defaults to <code>true</code> — generation is skipped if cert files already exist.</li>
+</ul>
+<p>To force regeneration:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>rm<span class="w"> </span>./certs/cert.pem<span class="w"> </span>./certs/key.pem
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard
+</code></pre></div>
+<h3 id="lets-encrypt-caddy-profile">Let's Encrypt (Caddy profile)<a class="headerlink" href="#lets-encrypt-caddy-profile" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># .env</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="nv">LETSENCRYPT_DOMAIN</span><span class="o">=</span>jarvis.example.com
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="nv">LETSENCRYPT_EMAIL</span><span class="o">=</span>you@example.com
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="nv">CORS_ORIGINS</span><span class="o">=</span>https://jarvis.example.com,https://localhost:3001
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>letsencrypt<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>caddy
+</code></pre></div>
+<p>Point DNS at the host and ensure ports 80/443 are reachable. Caddy terminates public TLS and reverse-proxies to the dashboard on the internal Docker network. <strong>Option B — host nginx + certbot:</strong> run certbot on the host, copy the cert into <code>./certs/</code>, and set <code>JARVIS_SKIP_SELFSIGNED_GEN=true</code>.</p>
+<h3 id="importing-an-existing-certificate">Importing an existing certificate<a class="headerlink" href="#importing-an-existing-certificate" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>dashboard
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>cp<span class="w"> </span>fullchain.pem<span class="w"> </span>./certs/cert.pem
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>cp<span class="w"> </span>privkey.pem<span class="w"> </span>./certs/key.pem
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>./certs/key.pem
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>chmod<span class="w"> </span><span class="m">644</span><span class="w"> </span>./certs/cert.pem
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>dashboard
+</code></pre></div>
+<hr />
+<h2 id="non-interactive-automated-installer">Non-interactive / Automated Installer<a class="headerlink" href="#non-interactive-automated-installer" title="Permanent link">&para;</a></h2>
+<p><code>setup.sh</code> supports <code>--non-interactive</code> for CI pipelines and cloud-init scripts. Run <code>./setup.sh --help</code> for the full flag reference.</p>
+<h3 id="pre-flight-check">Pre-flight check<a class="headerlink" href="#pre-flight-check" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>./setup.sh<span class="w"> </span>--check
+</code></pre></div>
+<p>Read-only and idempotent. Verifies Docker Engine, Docker Compose v2, <code>openssl</code>, GPU toolkit (informational), and <code>.env</code> presence. Exit 0 = PASS, exit 1 = FAIL.</p>
+<p>Key flags: <code>--mode &lt;single|multi&gt;</code>, <code>--domain &lt;host&gt;</code>, <code>--admin-email &lt;email&gt;</code>, <code>--profile &lt;dev|local-https|letsencrypt&gt;</code> (default <code>dev</code>; <code>letsencrypt</code> requires <code>--domain</code> + <code>--admin-email</code>), <code>--smtp-host/--smtp-user/--smtp-pass-file</code>. Run <code>./setup.sh --help</code> for the full reference. <code>TELEGRAM_BOT_TOKEN</code> in the environment enables Telegram automatically.</p>
+<h3 id="single-user-vs-multi-user-mode">Single-user vs multi-user mode<a class="headerlink" href="#single-user-vs-multi-user-mode" title="Permanent link">&para;</a></h3>
+<p><code>single</code> (default) — API-key login, no SMTP required. <code>multi</code> — email magic-link, SMTP relay required. Single-user is not an auth downgrade — <code>JARVIS_API_KEY</code> still gates all REST calls.</p>
+<h3 id="copy-paste-examples">Copy-paste examples<a class="headerlink" href="#copy-paste-examples" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Local development / CI smoke test:</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="c1"># Self-hosted with self-signed HTTPS (home lab):</span>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--domain<span class="o">=</span>jarvis.local<span class="w"> </span>--admin-email<span class="o">=</span>admin@example.com<span class="w"> </span>--profile<span class="o">=</span>local-https
+<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
+<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1"># Production with Let&#39;s Encrypt:</span>
+<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;%s&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MY_SMTP_PASS</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>/run/secrets/smtp_pass<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/run/secrets/smtp_pass
+<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="w">  </span>--domain<span class="o">=</span>jarvis.example.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="w">  </span>--admin-email<span class="o">=</span>ops@example.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a><span class="w">  </span>--profile<span class="o">=</span>letsencrypt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="w">  </span>--smtp-host<span class="o">=</span>smtp.resend.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a><span class="w">  </span>--smtp-user<span class="o">=</span>resend<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a><span class="w">  </span>--smtp-pass-file<span class="o">=</span>/run/secrets/smtp_pass
+</code></pre></div>
+<p>After setup, invite the first admin: <code>https://jarvis.example.com/admin/users</code></p>
+<hr />
+<h2 id="update-workflow">Update Workflow<a class="headerlink" href="#update-workflow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>git<span class="w"> </span>pull
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>./update.sh
+</code></pre></div>
+<p><code>update.sh</code> loads pinned versions from <code>versions.env</code>, diffs running vs pinned images, prompts to pull stale services and rebuild local containers, and waits up to 180 s per service. On failure it prints: <code>git checkout HEAD~1 -- versions.env &amp;&amp; ./update.sh</code>.</p>
+<h3 id="upgrade-notes">Upgrade notes<a class="headerlink" href="#upgrade-notes" title="Permanent link">&para;</a></h3>
+<p><strong>Telegram pairing (breaking change).</strong> The Telegram bot now identifies chats
+exclusively via the <code>/pair</code> token flow. To pair: open the dashboard → Settings
+→ Integrations → Telegram, copy the one-time token, and send <code>/pair &lt;token&gt;</code>
+to the bot. The legacy <code>TELEGRAM_CHAT_ID</code> environment variable and the
+dashboard-code pairing path (<code>/start PAIR_&lt;code&gt;</code>) no longer work — any
+existing <code>TELEGRAM_CHAT_ID</code> value can be removed from <code>.env</code> after pairing.</p>
+<p><strong>Telegram owner-override network.</strong> The bot calls service endpoints with
+<code>X-Owner-User-Id</code> to make per-user requests, trusted only from
+<code>OWNER_OVERRIDE_ALLOWED_CIDRS</code>. The bundled compose stack sets this
+automatically to cover the jarvis bridge subnet (it tracks <code>JARVIS_NET_SUBNET</code>,
+default <code>10.137.241.0/24</code>), so no change is needed for the default stack. <strong>If
+you override <code>JARVIS_NET_SUBNET</code>, the allowlist follows it</strong> — only set
+<code>OWNER_OVERRIDE_ALLOWED_CIDRS</code> explicitly if the bot reaches the services from
+some other network. (The bare code default <code>127.0.0.0/8</code> is loopback-only and
+does <em>not</em> cover the jarvis bridge — the compose stack overrides it.)</p>
+<p><strong>Ownership migration (0092).</strong> On first startup after upgrade, migration 0092
+re-assigns any pre-existing product rows with a NULL owner to the single admin
+account. This is automatic and non-destructive; it only runs when exactly one
+admin user exists (the normal single-tenant state).</p>
+<p>Makefile shortcuts for development:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>make<span class="w"> </span>rebuild-dashboard<span class="w">   </span><span class="c1"># frontend-only changes</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>make<span class="w"> </span>rebuild-backend<span class="w">     </span><span class="c1"># paper_ingestion + learning_engine</span>
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>make<span class="w"> </span>rebuild-local<span class="w">       </span><span class="c1"># core app containers</span>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>make<span class="w"> </span>rebuild-telegram<span class="w">    </span><span class="c1"># optional bot</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>make<span class="w"> </span>up-build<span class="w">            </span><span class="c1"># full docker compose up -d --build</span>
+</code></pre></div>
+<hr />
+<h2 id="backup-restore">Backup + Restore<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h2>
+<h3 id="backup">Backup<a class="headerlink" href="#backup" title="Permanent link">&para;</a></h3>
+<p><code>scripts/backup.sh</code> is scheduled by the <code>backup</code> compose profile (<code>docker compose --profile backup up -d</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Env var</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BACKUP_DIR</code></td>
+<td><code>/backups</code></td>
+<td>Where <code>.sql.gz</code> files are written inside the container</td>
+</tr>
+<tr>
+<td><code>BACKUP_RETENTION_DAYS</code></td>
+<td><code>7</code></td>
+<td>Prune interval</td>
+</tr>
+<tr>
+<td><code>BACKUP_S3_BUCKET</code></td>
+<td>empty</td>
+<td>Optional S3 destination (skipped if unset)</td>
+</tr>
+<tr>
+<td><code>BACKUP_INTERVAL_SECONDS</code></td>
+<td><code>86400</code></td>
+<td>Sleep between backup runs</td>
+</tr>
+</tbody>
+</table>
+<p>Runs <code>pg_dump --no-owner --no-acl | gzip</code>, uploads to S3 if configured, prunes old files. S3 credentials: <code>AWS_ACCESS_KEY_ID</code> + <code>AWS_SECRET_ACCESS_KEY</code> (or IAM instance role) scoped to <code>s3:PutObject</code>.</p>
+<h3 id="restore">Restore<a class="headerlink" href="#restore" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE jarvis;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE jarvis OWNER jarvis;&#39;</span>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>jarvis
+<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+</code></pre></div>
+<p>Qdrant is <strong>not</strong> backed up by <code>backup.sh</code>. For durable vector backups, use Qdrant's snapshot API at <code>:6333/collections/&lt;name&gt;/snapshots</code>.</p>
+<hr />
+<h2 id="production-readiness-check">Production Readiness Check<a class="headerlink" href="#production-readiness-check" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
+</code></pre></div>
+<p><code>setup.sh</code> runs this at install end. It checks <code>DEV_*</code> flags, <code>JARVIS_API_KEY</code> length, SMTP presence, and HTTPS config. Exit non-zero on any HIGH finding; <code>--profile=letsencrypt</code> treats that as fatal.</p>
+<hr />
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NET::ERR_CERT_AUTHORITY_INVALID</code> even after accepting once</td>
+<td>Cert SAN doesn't match hostname/IP</td>
+<td>Regenerate: update <code>JARVIS_CERT_SAN</code>, <code>rm ./certs/cert.pem ./certs/key.pem</code>, restart dashboard.</td>
+</tr>
+<tr>
+<td>API calls work from host but CORS-blocked from other devices</td>
+<td><code>CORS_ORIGINS</code> missing the calling origin</td>
+<td>Add origin to <code>CORS_ORIGINS</code> in <code>.env</code>, then <code>docker compose up -d paper_ingestion learning_engine</code>.</td>
+</tr>
+<tr>
+<td>Tunnel works but dashboard 404s at <code>/</code></td>
+<td>Tunnel routes to wrong port</td>
+<td>In Cloudflare Zero Trust, confirm the public hostname routes to <code>http://dashboard:3000</code>.</td>
+</tr>
+<tr>
+<td>Rate limiter 429s every request as "Cloudflare"</td>
+<td>Behind CF but <code>JARVIS_TRUST_CF_CONNECTING_IP</code> not enabled</td>
+<td>Set <code>JARVIS_TRUST_CF_CONNECTING_IP=true</code> and restart <code>paper_ingestion</code>/<code>learning_engine</code>.</td>
+</tr>
+<tr>
+<td>Rate limiter buckets by proxy IP instead of client</td>
+<td>Upstream proxy not in <code>TRUSTED_PROXY_CIDRS</code></td>
+<td>Add the proxy CIDR to <code>TRUSTED_PROXY_CIDRS</code>.</td>
+</tr>
+<tr>
+<td>Pinned subnet <code>10.137.241.0/24</code> collides with LAN</td>
+<td><code>setup.sh --check</code> warns</td>
+<td>Set <code>JARVIS_NET_SUBNET=&lt;free /24&gt;</code> and update <code>frontend/nginx.conf</code> <code>set_real_ip_from</code> literals.</td>
+</tr>
+<tr>
+<td>LAN device pings host but <code>curl -k https://&lt;IP&gt;:3001</code> hangs</td>
+<td><code>DASHBOARD_BIND_HOST=127.0.0.1</code></td>
+<td>Run <code>setup.sh</code> mode 2, or set <code>DASHBOARD_BIND_HOST=0.0.0.0</code> and restart dashboard.</td>
+</tr>
+<tr>
+<td><code>setup.sh</code> option 3 exits with a ZT warning</td>
+<td><code>JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1</code> not set</td>
+<td>Configure your Zero-Trust access policy first, then add the var to <code>.env</code>.</td>
+</tr>
+<tr>
+<td>Settings → "Models &amp; Preferences" shows "No config entries"</td>
+<td>DB initialized before default config rows were seeded</td>
+<td><code>docker compose restart paper_ingestion</code>, then verify: <code>docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"</code> — expect 3 rows.</td>
+</tr>
+<tr>
+<td>Selecting a model returns HTTP 400 "LiteLLM config is read-only"</td>
+<td>Model not pulled or config read-only</td>
+<td>Pull the model from Settings → Models first. The default smart model is <code>qwen3:8b</code> (16 GB VRAM tier).</td>
+</tr>
+<tr>
+<td>Pulse generates 0 cards but job shows "done"</td>
+<td>All enabled sources returned zero candidates, were rate-limited, or are unconfigured</td>
+<td>Open Settings → Pulse → Diagnostics. For OpenAlex set <code>OPENALEX_EMAIL</code>; for arXiv wait <code>Retry-After</code> (≥30 s).</td>
+</tr>
+<tr>
+<td>Embedding dimension mismatch on startup</td>
+<td>Qdrant collection dimension doesn't match the active embedding model</td>
+<td>Set <code>EMBEDDING_MODEL_NAME=qwen3-embedding:4b</code> and <code>EMBEDDING_DIMENSION=2560</code>, pull the model, then run <code>REEMBED_RECREATE_COLLECTION=true REEMBED_SNAPSHOT_CONFIRMED=true python -m scripts.reembed</code> if the collection dimension is still wrong.</td>
+</tr>
+<tr>
+<td>Re-embedding too slow</td>
+<td><code>scripts/reembed.py</code> defaults to the HTTP-bound LiteLLM path</td>
+<td>Switch to local backend: <code>REEMBED_BACKEND=local python -m scripts.reembed</code> (requires sentence-transformers). Benchmark first with <code>REEMBED_BENCHMARK=true</code>.</td>
+</tr>
+<tr>
+<td><code>password authentication failed for user "jarvis"</code> after changing <code>POSTGRES_PASSWORD</code></td>
+<td>Postgres bakes the password into its data volume on first init; a later <code>.env</code> change is not applied to an existing volume</td>
+<td>Reset the volume: <code>docker compose down &amp;&amp; docker volume rm &lt;project&gt;_postgres_data &amp;&amp; docker compose up -d</code> — this destroys local DB data. The <code>&lt;project&gt;</code> prefix is your compose project name (the repo directory name by default; visible in <code>docker compose ps</code>). Run <code>setup.sh</code> afterwards if you need the GPU overlay re-engaged.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="api-reference">API reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h2>
+<p>JARVIS exposes a REST API on <code>paper_ingestion</code> (:8010) and <code>learning_engine</code> (:8011). All routes (except <code>/health</code> and <code>/health/live</code>) require an <code>X-API-Key</code> header. Full interactive documentation is at <code>/docs</code> on each service.</p>
+<hr />
+<h2 id="other-access-options">Other access options<a class="headerlink" href="#other-access-options" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>ngrok</strong> — set <code>CORS_ORIGINS=https://&lt;subdomain&gt;.ngrok.io</code> and <code>JARVIS_CERT_SAN</code> accordingly.</li>
+<li><strong>Traefik</strong> — add a label-based override next to <code>docker-compose.yml</code>. Refer to Traefik's documentation.</li>
+</ul>
+<hr />
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md">README.md</a> — quick start and high-level orientation.</li>
+<li><a href="../SECURITY/">docs/SECURITY.md</a> — threat model, auth boundaries, multi-tenant hardening checklist.</li>
+<li><a href="../known-residual-risks/">docs/known-residual-risks.md</a> — acknowledged-but-deferred risks and their reopen criteria.</li>
+<li><a href="../contracts/04-observability/">docs/contracts/04-observability.md</a> — Langfuse env-var table, trust boundary, rotation procedure.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
