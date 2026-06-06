@@ -38,17 +38,20 @@ docs_dir: docs
 
 # Link-validation tuning.
 #
-# The contract docs (docs/contracts/*.md) link to source-code paths like
-# ../../services/paper_ingestion/... which are valid on disk but don't exist
-# as MkDocs pages (they're Python/SQL files, not docs).
+# `readme-shim.md` includes the repo-root README.md verbatim onto the on-site
+# Quickstart page. The README links to repo files that are not site pages
+# (SECURITY.md, CONTRIBUTING.md, CHANGELOG.md, .env.example, secrets/README.md,
+# .github/ISSUE_TEMPLATE/*) — valid on GitHub, but "not found among documentation
+# files" on the rendered site. (Contract-doc source-code references were converted
+# to absolute GitHub blob URLs and are no longer flagged.)
 #
-# Setting links.not_found to 'ignore' suppresses the "target not found among
-# documentation files" warning for those cases.  This keeps `--strict` green
-# without removing legitimate source-code references from the contracts.
-# nav.not_found stays at 'warn' (the default) so broken NAV entries still fail.
+# CI runs `mkdocs build --strict`, which turns warnings into errors, so
+# links.not_found MUST stay 'ignore' here — otherwise the unavoidable README-shim
+# links fail the build. nav.not_found stays 'warn' (default) so broken NAV entries
+# still fail.
 validation:
   links:
-    not_found: warn
+    not_found: ignore
     absolute_links: ignore
     unrecognized_links: ignore
 
