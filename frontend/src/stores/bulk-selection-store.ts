@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { registerSessionReset } from '@/stores/session-reset';
 
 const BULK_INITIAL_STATE = { selectedIds: new Set<number>() };
 
@@ -42,3 +43,6 @@ export const useBulkSelection = create<BulkSelectionState>((set) => ({
     set({ selectedIds: new Set<number>() });
   },
 }));
+
+// Reset bulk-selection on logout (see stores/session-reset).
+registerSessionReset(() => useBulkSelection.getState()._reset());

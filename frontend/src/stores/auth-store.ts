@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import type { QueryClient } from '@tanstack/react-query';
 import { UI_STORE_KEY, useUIStore } from '@/stores/ui-store';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
+import { runSessionResets } from '@/stores/session-reset';
 import { clearPersistedQueryCache } from '@/lib/query-persister';
 import { clearReviewOutbox } from '@/lib/review-outbox';
 
@@ -160,24 +161,19 @@ export const useAuthStore = create<AuthState>()(
             // ignore — cache flush is best-effort
           }
 
-          // Reset in-memory zustand stores that hold user-scoped runtime data.
-          // chat/job/bulk/keyboard are reset via dynamic import (kept lazy to avoid
-          // eagerly pulling their module graphs into the auth-store chunk).
-          // pomodoro + ui are leaf stores already statically imported above (for the
-          // login-reset path), so they reset synchronously here — no cycle.
-          // Promise.allSettled ensures a failed chunk load for one store does not
-          // prevent the others from resetting.
-          await Promise.allSettled([
-            // Abort any in-flight SSE streams then reset chat state.
-            import('@/stores/chat-store').then(({ abortAllStreams: abort, useChatStore }) => { abort(); useChatStore.getState()._reset(); }).catch((e: unknown) => { console.warn('[auth] chat-store reset failed', e); }),
-            import('@/stores/job-store').then(({ useJobStore }) => useJobStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] job-store reset failed', e); }),
-            import('@/stores/bulk-selection-store').then(({ useBulkSelection }) => useBulkSelection.getState()._reset()).catch((e: unknown) => { console.warn('[auth] bulk-selection-store reset failed', e); }),
-            Promise.resolve(usePomodoroStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] pomodoro-store reset failed', e); }),
-            import('@/stores/keyboard-shortcuts-store').then(({ useKeyboardShortcuts }) => useKeyboardShortcuts.getState()._reset()).catch((e: unknown) => { console.warn('[auth] keyboard-shortcuts-store reset failed', e); }),
-            // UI-STORE-XUSER-LEAK: reset in-memory ui-store state (belt-and-suspenders
-            // alongside the localStorage.removeItem above which only clears disk).
-            Promise.resolve(useUIStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] ui-store reset failed', e); }),
-          ]);
+          // Reset in-memory user-scoped stores so the next user starts clean.
+          // Each store registers its own reset via stores/session-reset, so
+          // logout neither imports nor forms an import cycle with the store
+          // modules (job-store reads auth state, so a static import here would
+          // cycle). chat-store's registration aborts its in-flight SSE streams
+          // before clearing. pomodoro + ui are leaf stores also reset on
+          // loginWithSession, so they are reset directly. Each reset is
+          // best-effort (registry catches per-store failures; UI-STORE-XUSER-LEAK
+          // ui reset is belt-and-suspenders alongside the localStorage.removeItem
+          // above which only clears disk).
+          runSessionResets();
+          usePomodoroStore.getState()._reset();
+          useUIStore.getState()._reset();
         })();
 
         // Purge the IndexedDB-persisted TanStack Query cache (cross-user hygiene —

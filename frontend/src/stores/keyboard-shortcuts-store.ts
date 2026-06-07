@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { registerSessionReset } from '@/stores/session-reset';
 
 /**
  * Tiny global store for the KeyboardCheatSheet dialog visibility.
@@ -26,3 +27,6 @@ export const useKeyboardShortcuts = create<KeyboardShortcutsState>((set) => ({
   toggle: () => set((state) => ({ isOpen: !state.isOpen })),
   _reset: () => set(KEYBOARD_INITIAL_STATE),
 }));
+
+// Reset cheat-sheet visibility on logout (see stores/session-reset).
+registerSessionReset(() => useKeyboardShortcuts.getState()._reset());

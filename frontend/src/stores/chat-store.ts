@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ChatMessage, Source } from '@/types';
 import type { ConfidenceLevel } from '@/lib/sse';
+import { registerSessionReset } from '@/stores/session-reset';
 
 // ---------------------------------------------------------------------------
 // Module-level abort stream registry. Controllers live in a plain Map
@@ -189,3 +190,10 @@ export const useChatStore = create<ChatState>()((set) => ({
     set(CHAT_INITIAL_STATE);
   },
 }));
+
+// Reset chat state on logout (see stores/session-reset): abort any in-flight
+// SSE streams first, then clear messages.
+registerSessionReset(() => {
+  abortAllStreams();
+  useChatStore.getState()._reset();
+});

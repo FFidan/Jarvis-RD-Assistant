@@ -11,6 +11,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth-store';
+import { registerSessionReset } from '@/stores/session-reset';
 import { createJob as apiCreateJob, listJobs as apiListJobs, cancelJob as apiCancelJob, getJob as apiGetJob } from '@/lib/api';
 import { createSSEReader, SSEGetError } from '@/lib/sse-reader';
 import { handleAuthFailure } from '@/lib/api/core';
@@ -453,3 +454,8 @@ export function registerVisibilityHydrate(): () => void {
     document.removeEventListener('visibilitychange', handler);
   };
 }
+
+// Reset job state on logout (see stores/session-reset). Registered here — not
+// imported by auth-store — to avoid an auth-store <-> job-store import cycle
+// (job-store reads auth state at call time above).
+registerSessionReset(() => useJobStore.getState()._reset());
