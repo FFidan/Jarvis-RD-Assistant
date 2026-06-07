@@ -104,12 +104,14 @@ Changes require rebuilding affected Docker containers.
 | `OPENALEX_API_KEY` | — | Optional; improves OpenAlex rate limits, not required |
 | `PUBMED_API_KEY` | — | Optional NCBI key; upgrades PubMed rate limit |
 | `UNPAYWALL_EMAIL` | — | Any email; required by Unpaywall ToS |
-| `ZOTERO_API_KEY` | — | Zotero Web API key |
-| `ZOTERO_USER_ID` | — | Zotero user/library ID |
-| `ZOTERO_LIBRARY_TYPE` | `user` | `"user"` or `"group"` |
+| `OPENALEX_EMAIL` | — | Optional; included in OpenAlex requests for the polite pool (blank = anonymous tier) |
+
+Zotero integration (API key, user/library ID, library type) is configured per-user
+and stored encrypted at rest via **Settings → Integrations → Zotero**, not as
+environment variables.
 
 Full `.env` reference: `.env.example`. Secrets runbook: [docs/DEPLOYMENT.md](DEPLOYMENT.md).
-Observability variables (Langfuse): [docs/contracts/04-observability.md](contracts/04-observability.md).
+Observability variables (Langfuse): [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md).
 
 ## Key Dependency Floors
 

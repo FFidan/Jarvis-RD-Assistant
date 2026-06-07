@@ -13,12 +13,7 @@ bash scripts/init-secrets.sh   # idempotent; generates API key, config key, HMAC
 docker compose up -d           # waits for postgres → init-migrations → all services
 ```
 
-> **GPU users:** run `bash setup.sh` instead of the bare `docker compose up -d` above.
-> `setup.sh` detects the NVIDIA container runtime, merges `docker-compose.gpu.yml`, and
-> persists `COMPOSE_FILE` to `.env` so that every subsequent `docker compose up -d` keeps
-> the GPU overlay. A plain `docker compose up -d` only uses the GPU **after** `setup.sh`
-> has written `COMPOSE_FILE` to `.env`; run it bare before that and the overlay is silently
-> dropped and Ollama runs on CPU.
+> **GPU users:** run `bash setup.sh` instead of the bare `docker compose up -d` above — it engages the GPU overlay. See [GPU acceleration](#gpu-acceleration-optional) for details.
 
 Required `.env` vars (`init-secrets.sh` generates any that are blank):
 
@@ -51,11 +46,7 @@ $EDITOR .env     # optional: set TELEGRAM_BOT_TOKEN for Telegram
 docker compose up -d
 ```
 
-> **GPU users:** run `bash setup.sh` in place of the bare `docker compose up -d` above.
-> `setup.sh` detects the NVIDIA container runtime, merges `docker-compose.gpu.yml`, and
-> persists `COMPOSE_FILE` to `.env`. Subsequent `docker compose up -d` calls keep the GPU
-> because they read `COMPOSE_FILE` from `.env`. Without this step the overlay is dropped and
-> the stack silently runs on CPU.
+> **GPU users:** run `bash setup.sh` in place of the bare `docker compose up -d` above — it engages the GPU overlay. See [GPU acceleration](#gpu-acceleration-optional) for details.
 
 **Telegram is optional.** If you enable it, two machines must **never** share a bot token — Telegram routes updates to whichever client polled last. Create a separate bot via @BotFather per machine.
 
@@ -129,7 +120,7 @@ make observability-up
 
 Open `http://localhost:3002` and sign in with `LANGFUSE_INIT_USER_EMAIL` (default `operator@jarvis.local`). Langfuse is a single operator tool, loopback-bound, decoupled from JARVIS user accounts.
 
-Full contract and rotation procedure: [docs/contracts/04-observability.md](contracts/04-observability.md) §9.
+Full contract and rotation procedure: [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md) §9.
 
 ---
 
@@ -153,15 +144,7 @@ example** (Tailscale, a mesh VPN), not a requirement.
 
 ### Example: Tailscale
 
-**What it is.** Tailscale is a zero-config mesh VPN built on WireGuard. You
-install it on each device and sign in; they join a private, end-to-end-encrypted
-network (a "tailnet") and can reach one another by a stable name (MagicDNS, e.g.
-`my-host.my-tailnet.ts.net`) straight through NAT and firewalls — nothing is
-published to the public internet. Free for personal use (<https://tailscale.com>).
-
-**Why it helps here.** Install it on the JARVIS host and on your phone, and the
-dashboard becomes reachable from the phone over the private tailnet with **zero
-open inbound ports** on your router.
+Tailscale is a zero-config mesh VPN (WireGuard) that is free for personal use. Install it on the JARVIS host and on your phone, sign both into the same account, and the dashboard becomes reachable over the private tailnet with **zero open inbound ports** — reached by a stable MagicDNS name (e.g. `my-host.my-tailnet.ts.net`). See <https://tailscale.com>.
 
 > **Scope of the steps below:** they assume the **default single-host setup** —
 > dashboard on plain-HTTP loopback `:3001`, Tailscale running on the **same host**
@@ -226,12 +209,7 @@ Telegram needs no change for any of this — the bot only makes outbound calls.
 
 ## Mode 1 — Localhost
 
-See [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md) Quickstart for the full walkthrough. The short version:
-
-```bash
-cp .env.example .env
-./setup.sh   # pick option 1 at the access-mode prompt
-```
+The default mode — see [Solo deployment](#solo-deployment-recommended-for-single-user) above for the commands, or run `./setup.sh` and pick option 1 at the access-mode prompt.
 
 The dashboard is at `http://localhost:3001` (default `DASHBOARD_HOST_PORT=3001`). Enable the `caddy-local` profile only when you want local HTTPS.
 
@@ -313,7 +291,7 @@ JARVIS supports Docker Secrets for sensitive credentials. Each is read from a fi
 | `telegram_bot_token` | `TELEGRAM_BOT_TOKEN_FILE` | Telegram bot token (`telegram` profile only) |
 | `qdrant_api_key` | `QDRANT_API_KEY_FILE` | Qdrant service API key |
 | `infra_ingest_key` | `INFRA_INGEST_KEY_FILE` | Shared key for the infrastructure ingestion endpoint |
-| `backup_encrypt_key` | `BACKUP_ENCRYPT_KEY_FILE` | Encrypts backup archives at rest |
+| `backup_encrypt_key` | `BACKUP_ENCRYPT_KEYFILE` | Encrypts backup archives at rest |
 
 **Observability profile secrets** (auto-provisioned by `make observability-up`; only present when the `observability` profile is active):
 `langfuse_init_pk`, `langfuse_init_sk` — Langfuse SDK keys injected into app services. `langfuse_pg_password`, `langfuse_nextauth_secret`, `langfuse_salt` — internal Langfuse service credentials.
@@ -580,4 +558,4 @@ JARVIS exposes a REST API on `paper_ingestion` (:8010) and `learning_engine` (:8
 - [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md) — quick start and high-level orientation.
 - [docs/SECURITY.md](SECURITY.md) — threat model, auth boundaries, multi-tenant hardening checklist.
 - [docs/known-residual-risks.md](known-residual-risks.md) — acknowledged-but-deferred risks and their reopen criteria.
-- [docs/contracts/04-observability.md](contracts/04-observability.md) — Langfuse env-var table, trust boundary, rotation procedure.
+- [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md) — Langfuse env-var table, trust boundary, rotation procedure.

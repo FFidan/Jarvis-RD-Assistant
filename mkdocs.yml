@@ -13,9 +13,15 @@
 #   db/migrations/README.md
 #
 # For those two, thin shim files live in docs/ and use the
-# mkdocs-include-markdown-plugin directive:
+# mkdocs-include-markdown-plugin directive. The rewrite-relative-urls flag
+# differs per shim, on purpose:
 #
-#   {% include-markdown "../<path>" rewrite-relative-urls=false %}
+#   readme-shim.md     uses rewrite-relative-urls=true   (README's relative links
+#                      are rewritten so on-site links resolve)
+#   migrations-shim.md uses rewrite-relative-urls=false  (its links point at repo
+#                      paths that are not site pages; leave them as GitHub links)
+#
+#   {% include-markdown "../<path>" rewrite-relative-urls=<true|false> %}
 #
 # The shims are committed; `site/` (build output) is gitignored.
 # No file is moved. No canonical content is duplicated.
@@ -23,7 +29,7 @@
 #
 # SCOPE: operator/developer docs + the end-user manual (see the User Guide nav).
 
-site_name: JARVIS RD Assistant — Operator & Developer Docs
+site_name: JARVIS RD Assistant
 site_description: >-
   Deployment, architecture, engineering standards, security, and API contracts
   for JARVIS RD Assistant operators and developers.
@@ -74,40 +80,31 @@ exclude_docs: |
   audit/
   personal/
   manual/_meta.md
+  PRD.md
+  # System Contracts: demoted from the public site (internal full-fidelity
+  # spec docs). These files MUST STAY ON DISK — docs/contracts/07-testing.md is
+  # parsed by scripts/check-test-shape.py (TS-08) and required by
+  # scripts/check_agent_docs.py (PUBLIC_DOC_PATHS); deleting it breaks CI.
+  # Excluding from the rendered site is safe; do not delete the directory.
+  contracts/
 
-# Curated allowlist — operator/developer docs + user manual scaffold.
-# archive/, plans/, specs/, perf/,
-# audit/ remain excluded (see exclude_docs above).
+# Curated public site — three audience tabs:
+#   1. User Guide        the end-user product manual (manual/)
+#   2. Install & Operate readme-shim + deployment/requirements/security
+#   3. Contribute & Internals architecture/standards/migrations/release
+# PRD.md and contracts/ are tracked on disk but excluded from the site
+# (see exclude_docs above). archive/, plans/, specs/, perf/, audit/, personal/
+# also remain excluded.
 nav:
   - Home: index.md
-  - Get Started:
-      - Quickstart: readme-shim.md
-      - Deployment: DEPLOYMENT.md
-      - Requirements: REQUIREMENTS.md
-  - Operate:
-      - Security: SECURITY.md
-      - Release Process: RELEASE.md
-      - Known Residual Risks: known-residual-risks.md
-  - Develop:
-      - Architecture: ARCHITECTURE.md
-      - Product Requirements: PRD.md
-      - Engineering Standards: ENGINEERING_STANDARDS.md
-      - Migrations: migrations-shim.md
-  - System Contracts:
-      - Overview: contracts/README.md
-      - Settings: contracts/01-settings.md
-      - Pulse: contracts/02-pulse.md
-      - LLM Client: contracts/03-llm.md
-      - Observability: contracts/04-observability.md
-      - Models & Hardware: contracts/05-models-and-hardware.md
-      - Testing Contract: contracts/07-testing.md
   - User Guide:
       - Overview: manual/index.md
       - Getting Started: manual/getting-started.md
+      - My Day & Home: manual/home-my-day.md
       - Navigation: manual/navigation.md
       - Research Feed & Library: manual/research-feed.md
       - Paper Detail: manual/paper-detail.md
-      - Ask (Cross-paper RAG): manual/ask.md
+      - Ask — Cross-paper RAG: manual/ask.md
       - Pulse: manual/pulse.md
       - Learning Cards: manual/learning-cards.md
       - Projects: manual/projects.md
@@ -115,10 +112,20 @@ nav:
       - Citation Graph: manual/citation-graph.md
       - Extraction Table: manual/extraction-table.md
       - Analytics: manual/analytics.md
-      - My Day & Home: manual/home-my-day.md
       - Settings: manual/settings.md
       - Telegram: manual/telegram.md
       - Admin & Multi-tenant: manual/admin.md
+  - Install & Operate:
+      - Quickstart: readme-shim.md
+      - Deployment: DEPLOYMENT.md
+      - Requirements: REQUIREMENTS.md
+      - Security: SECURITY.md
+      - Known Residual Risks: known-residual-risks.md
+  - Contribute & Internals:
+      - Architecture: ARCHITECTURE.md
+      - Engineering Standards: ENGINEERING_STANDARDS.md
+      - Migrations: migrations-shim.md
+      - Release Process: RELEASE.md
 
 theme:
   name: material
@@ -151,6 +158,7 @@ plugins:
   - include-markdown
 
 markdown_extensions:
+  - md_in_html
   - admonition
   - pymdownx.details
   - pymdownx.superfences:

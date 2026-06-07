@@ -8,7 +8,7 @@ Related docs:
 
 - [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) - coding, API, DB, anti-hallucination, and testing
   standards.
-- [PRD.md](PRD.md) - product requirements and durable Pulse design.
+- [PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/PRD.md) - product requirements and durable Pulse design.
 - [known-residual-risks.md](known-residual-risks.md) - accepted risks and reopen criteria.
 
 ## Runtime Topology
@@ -67,7 +67,7 @@ that enforces an equal-length init/teardown hook contract across services.
 ## Pulse
 
 Pulse is proactive overnight paper discovery. Durable product design lives in
-[PRD.md](PRD.md) sections 3.1.1 and 8.5.
+[PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/PRD.md) sections 3.1.1 and 8.5.
 
 Rules:
 
@@ -123,7 +123,9 @@ HTTP client.
   `paper_recommendations`, `projects`, `tasks`, `milestones`,
   `pulse_source_health`, `system_events`, and others) carries a non-NULL
   `user_id`. Single-tenant deployments are multi-tenant with exactly one user;
-  there is no NULL-owned product data. Migration 0092 re-owns legacy NULL
+  there is no NULL-owned *product* data — though system-scoped configuration
+  rows (e.g. `user_config` keys such as `telegram.bot_token`) are deliberately
+  NULL-owned by design. Migration 0092 re-owns legacy NULL
   `user_id` rows for most tables; migration 0094 extends the same backfill and
   per-user uniqueness constraints to `paper_extractions`, `paper_entities`, and
   Zotero `paper_notes` (both run only when exactly one admin exists). All
@@ -141,14 +143,19 @@ HTTP client.
 
 ### Cross-Service Auth Boundary (resolver DI)
 
-`jarvis_common.auth` exposes two production user-id resolvers:
+`jarvis_common.auth` exposes three production user-id resolvers:
 
 - **`current_user_id_strict`** — session-only. Hard 401 without a valid session
   cookie. No `X-Owner-User-Id` path.
+- **`current_user_id_with_owner_override`** — session-first, honors a verified
+  `X-Owner-User-Id` header when a valid `X-API-Key` is present, but returns
+  `None` (does not raise) when no identity can be resolved. Used by endpoints
+  that may be reached unauthenticated.
 - **`current_user_id_strict_with_owner_override`** (and its `Depends()` wrapper
-  `get_current_user_id`) — session-first, but also honors a verified
-  `X-Owner-User-Id` header when a valid `X-API-Key` is present. Required for
-  cross-service callers (the Telegram bot) making per-user requests.
+  `get_current_user_id`) — the raising variant of the above: same
+  `X-Owner-User-Id` override path but a hard 401 when no identity resolves.
+  Required for cross-service callers (the Telegram bot) making per-user
+  requests.
 
 The override-capable resolver is applied **selectively, by reachability** — only
 on endpoints that a header-authenticated caller actually reaches per-user.
@@ -165,8 +172,10 @@ the bot stores durable chat ownership in `telegram_user_pairings` (see
 flow — the token is generated in Settings → Integrations → Telegram and
 submitted once. Telegram orchestrators iterate paired users where the workflow
 has a per-user delivery surface. Unpaired chats receive a prompt to run
-`/pair`. The `TELEGRAM_CHAT_ID` env var and the legacy dashboard-code pairing
-path are no longer active.
+`/pair`. The legacy dashboard-code pairing path is no longer active.
+The `TELEGRAM_CHAT_ID` env var remains a supported optional outbound override
+(used when set; the DB pairing flow is the fallback) — see
+`telegram_bot/config.py`.
 
 ### Canonical Corpus And user_library
 

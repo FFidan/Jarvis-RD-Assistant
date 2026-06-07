@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /knowledge -->
+<!-- verified-against-UI: 2026-06-06 | routes: /knowledge -->
 
 # Knowledge Graph
 
@@ -61,7 +61,7 @@ A text input that filters the graph to nodes whose label contains the query stri
 
 If your library contains papers that have not yet had entities extracted, a **batch-extract prompt** appears on an otherwise empty graph. Clicking it triggers the entity extraction pipeline for all unprocessed papers. The graph populates as extraction jobs complete.
 
-You can also trigger extraction for individual papers from the [Paper Detail](paper-detail.md) page (ActionsSidebar → Extract Entities).
+You can also trigger extraction for individual papers from the [Paper Detail](paper-detail.md) page (the Actions rail → Extract Entities).
 
 ---
 

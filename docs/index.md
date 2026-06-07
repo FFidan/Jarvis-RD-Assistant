@@ -1,55 +1,37 @@
-# JARVIS RD Assistant — Operator & Developer Docs
+# JARVIS RD Assistant
 
-Self-hosted multi-tenant research assistant. This site covers deployment,
-architecture, engineering standards, security, and API contracts for operators
-and developers.
+A self-hosted research assistant that turns a stream of papers into a working
+body of knowledge: discover and triage papers, ask questions across your whole
+library, extract structured findings, build knowledge and citation graphs, and
+turn what you read into spaced-repetition cards and project tasks — all on your
+own hardware, with your data never leaving your machine.
 
----
-
-## Get Started
-
-| Document | Purpose |
-|---|---|
-| [Quickstart / README](readme-shim.md) | Clone, onboarding wizard, env vars |
-| [Deployment Guide](DEPLOYMENT.md) | Solo, LAN, Cloudflare Tunnel, TLS, backups |
-| [Requirements](REQUIREMENTS.md) | Hardware, software, and dependency requirements |
-
-## Operate
-
-| Document | Purpose |
-|---|---|
-| [Security](SECURITY.md) | Threat model, auth, secrets rotation, hardening |
-| [Release Process](RELEASE.md) | Versioning, changelog, release checklist |
-| [Known Residual Risks](known-residual-risks.md) | Accepted risks, mitigations, deferred items |
-
-## Develop
-
-| Document | Purpose |
-|---|---|
-| [Architecture](ARCHITECTURE.md) | Service topology, runtime boundaries, data flows |
-| [Product Requirements](PRD.md) | Feature scope, personas, acceptance criteria |
-| [Engineering Standards](ENGINEERING_STANDARDS.md) | Coding conventions, API rules, DB rules, testing |
-| [Migrations](migrations-shim.md) | Migration convention, runner, multi-tenant history |
-
-## System Contracts
-
-| Document | Purpose |
-|---|---|
-| [Overview](contracts/README.md) | Evergreen subsystem invariants |
-| [Settings](contracts/01-settings.md) | Settings schema and validation |
-| [Pulse](contracts/02-pulse.md) | Pulse generation pipeline |
-| [LLM Client](contracts/03-llm.md) | LLM call pattern, models, structured output |
-| [Observability](contracts/04-observability.md) | Langfuse tracing, health endpoints |
-| [Models & Hardware](contracts/05-models-and-hardware.md) | Model adoption gates, VRAM tiers, GPU detection |
-| [Testing](contracts/07-testing.md) | Contract testing framework and patterns |
-
-## User Guide
-
-| Document | Purpose |
-|---|---|
-| [User Guide](manual/index.md) | End-user manual — sign-in, features, Telegram integration |
+**Self-hosted. Multi-tenant. Yours.** Run it for yourself or a small team; every
+user's library, notes, and progress stay private to them.
 
 ---
 
-> Canonical edit targets are the Markdown files in the repository.
-> This site is a generated read-only view — always edit the source, not the HTML.
+## Get started
+
+- **[Read the User Guide](manual/index.md)** — what JARVIS does and how to use
+  every feature, from your first sign-in to Telegram check-ins.
+- **[Install & operate it](readme-shim.md)** — clone, run the onboarding
+  wizard, and deploy solo, on a LAN, or behind a tunnel.
+
+## Explore
+
+- **[Research Feed & Library](manual/research-feed.md)** — discover, save, and
+  triage papers.
+- **[Ask — Cross-paper RAG](manual/ask.md)** — question your whole library at
+  once.
+- **[Pulse](manual/pulse.md)** and **[Learning Cards](manual/learning-cards.md)**
+  — a personalised feed and spaced-repetition review.
+- **[Deployment](DEPLOYMENT.md)**, **[Requirements](REQUIREMENTS.md)**, and
+  **[Security](SECURITY.md)** — everything an operator needs.
+- **[Architecture](ARCHITECTURE.md)** and **[Engineering Standards](ENGINEERING_STANDARDS.md)**
+  — for contributors.
+
+---
+
+> This site is a generated read-only view. Canonical edit targets are the
+> Markdown files in the repository — always edit the source, not the HTML.

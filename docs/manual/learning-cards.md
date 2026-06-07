@@ -1,8 +1,8 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /cards, /cards?mode=review, /cards?mode=library -->
+<!-- verified-against-UI: 2026-06-06 | routes: /cards, /cards?mode=review, /cards?mode=library -->
 
 # Learning Cards
 
-_This area is evolving; verified 2026-05-18._
+_This area is evolving; verified 2026-06-06._
 
 The **Learning Cards** page at `/cards` is a spaced-repetition study system built on the FSRS (Free Spaced Repetition Scheduler) algorithm. It keeps key facts from your research papers fresh with scientifically-spaced review intervals.
 
@@ -83,6 +83,6 @@ Card ratings made while offline are stored in an **IndexedDB outbox**. When your
 
 ## Related pages
 
-- [Paper Detail](paper-detail.md) — trigger card generation for a specific paper from the ActionsSidebar.
+- [Paper Detail](paper-detail.md) — trigger card generation for a specific paper from the right-hand actions sidebar.
 - [Analytics](analytics.md) — review activity and FSRS retention charts.
 - [My Day & Home](home-my-day.md) — LearningFocusSection shows today's due-card count with a link here.

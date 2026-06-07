@@ -53,7 +53,7 @@ encryption**, **token-only Telegram pairing** and the Telegram→REST decoupling
 
 - **`/api/setup/status` now returns `setup_completed`.** The pre-auth setup status endpoint (always HTTP 200, no session required) now includes a `setup_completed: bool` field alongside the existing `configured` and hardware fields. The onboarding gate keys on this field.
 
-- **Telegram bot pairing is token-only.** The bot authenticates chats via the `/pair <token>` flow (token from Settings → Integrations → Telegram); the legacy `TELEGRAM_CHAT_ID` env var and the dashboard-code pairing path are removed. The bot no longer writes to the database directly — all product data flows through the service REST API.
+- **Telegram bot pairing is token-only.** The bot authenticates chats via the `/pair <token>` flow (token from Settings → Integrations → Telegram). The legacy `/start PAIR_<code>` dashboard-code pairing path is removed, and the `TELEGRAM_CHAT_ID` env var is superseded by `/pair` for identity — it no longer authorises a chat on its own and is retained only as an optional override for the outbound message target. The bot no longer writes to the database directly — all product data flows through the service REST API.
 
 ### Fixed
 
@@ -81,10 +81,10 @@ encryption**, **token-only Telegram pairing** and the Telegram→REST decoupling
 - Assorted frontend validation hardening and dead-code cleanup.
 - Source-layer `Retry-After` handling and fetch-recording de-duplicated across
   arXiv, Semantic Scholar, OpenAlex, and PubMed source adapters.
-- **Models-ready false negative (SYSCHECK-01).** The onboarding wizard's system check no longer requires a hardcoded `qwen3:14b` model. "Models ready" now means: the embedder is present (any model matching the configured embedding model prefix, e.g. `qwen3-embedding:*`) AND at least one `qwen3:` chat model is present (`qwen3:4b`, `qwen3:8b`, or `qwen3:14b`). The default install (`setup.sh` → `qwen3:8b` + `qwen3-embedding:4b`) correctly reports ready. The check also distinguishes "still pulling" from "Ollama unreachable".
-- **Pomodoro auto-start from stale persisted timer (POMO-01).** A Pomodoro session that was still running when the browser closed no longer auto-starts on the next page load. The timer state is correctly treated as stale across sessions.
+- **Models-ready false negative.** The onboarding wizard's system check no longer requires a hardcoded `qwen3:14b` model. "Models ready" now means: the embedder is present (any model matching the configured embedding model prefix, e.g. `qwen3-embedding:*`) AND at least one `qwen3:` chat model is present (`qwen3:4b`, `qwen3:8b`, or `qwen3:14b`). The default install (`setup.sh` → `qwen3:8b` + `qwen3-embedding:4b`) correctly reports ready. The check also distinguishes "still pulling" from "Ollama unreachable".
+- **Pomodoro auto-start from stale persisted timer.** A Pomodoro session that was still running when the browser closed no longer auto-starts on the next page load. The timer state is correctly treated as stale across sessions.
 - **Cross-user Pomodoro / dismissed-flag state leak.** Timer and dismissed-flag state no longer leaks between users on a shared browser.
-- **My Day — calm empty state for the Pulse hero card (RED-ERROR-EMPTY-STATE).** When no Pulse deck exists yet, the My Day Pulse hero card shows a calm "No Pulse for today yet — generate one" call-to-action instead of a red error panel. Red error UI is reserved for genuine backend failures.
+- **My Day — calm empty state for the Pulse hero card.** When no Pulse deck exists yet, the My Day Pulse hero card shows a calm "No Pulse for today yet — generate one" call-to-action instead of a red error panel. Red error UI is reserved for genuine backend failures.
 - **Mobile responsive fixes.** Projects rail, admin tables, analytics KPI band, mobile facet drawer, TopBar, My Day layout, and the chat surface are now correctly laid out on narrow viewports.
 - **Logs preset filters restored on load.** The Logs page preset now re-applies its filter selections when the page is loaded or navigated to.
 - **Single-tenant background-job attribution.** Task-completion and paper-summary jobs attribute activity to the owner's account (previously recorded as NULL in single-tenant deployments).
@@ -152,19 +152,9 @@ A six-week internal audit-and-remediation pass closed roughly 120 findings ahead
 
 
 ### Documentation
-- MkDocs-Material operator/developer docs site → GitHub Pages
-- Refresh deferred backlog post CI-green program (Hermes, Performance&hardware-fit, 046/047-residual, installer/docs-site, Qdrant-re-embed-conditional)
-- Correct stale mig-046 test comment
-- Mark shipped --no-deps / discovery-reliability items DONE
-- Fix 10 verified drift items (migration count, deprecated env, broken/stale refs, CHANGELOG regen) + archive superseded audits
-- Add end-user guide (surfaces + plain-English sign-in/recovery), index in docs/README
-- Canonical post-UI_v3 follow-ups execution plan
-- De-link removed PomodoroTimer.tsx in 2026-05-02 decisions doc (UI_v3 deleted it; fixes check_agent_docs)
-- Land 8 IA redesign specs + INDEX + parallelized execution plan
-- Add companion docs site + complete user guide (Planned; UI-guide gated on redesign)
-- Setup.sh --check + single/multi mode + source HTTP cache env vars
-- Add public ROADMAP.md (shipped v0.4.1 / in-progress / planned Hermes+offline)
-- Correct stale carried follow-ups (resolve_owner_chat_id NOT dead; py-spy/feed-500 closed in v0.4.1) + log v0.4.1-surfaced opens
+- Published an MkDocs-Material operator and developer documentation site to GitHub Pages, including a complete end-user guide covering every surface plus plain-English sign-in and account-recovery steps.
+- Added a public `ROADMAP.md` and corrected a batch of documentation drift (migration counts, deprecated environment variables, and stale internal links).
+- Documented the `setup.sh --check` pre-flight, single/multi-user modes, and the source HTTP-cache environment variables.
 
 
 

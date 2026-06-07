@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-06-04 | routes: /onboarding (wizard), /auth/verify -->
+<!-- verified-against-UI: 2026-06-06 | routes: /onboarding (wizard), /auth/verify -->
 
 # Getting Started
 
@@ -37,7 +37,7 @@ If any service is unreachable, fix it in your Docker Compose environment and cli
 
 ### Step 2 — SMTP relay (skippable)
 
-Configure the outbound email relay that JARVIS uses to send magic-link sign-in emails. Fields: SMTP host, port, username, password, sender address, and a test recipient address. Use the **Send test email** button to verify delivery before continuing. This step is skippable — you can configure email later in Settings if the instance will use API-key login only.
+Configure the outbound email relay that JARVIS uses to send magic-link sign-in emails. Fields: SMTP host, port, username, password, sender address, and a test recipient address. Use the **Save & test send** button to save the settings and verify delivery in one step before continuing. This step is skippable — you can configure email later in Settings if the instance will use API-key login only.
 
 ### Step 3 — Create admin & sign in
 
@@ -65,13 +65,13 @@ The schedule can be changed at any time in Settings → Automation.
 
 ### Step 7 — Source API keys (skippable)
 
-Enter API keys for the research data sources you want to use (for example Semantic Scholar, Zotero). Only sources with valid keys will fetch new papers. This step is skippable; keys can be configured later in Settings → Sources.
+Enter API keys for the research data sources that support them — **Semantic Scholar**, **OpenAlex**, and **PubMed**. (arXiv needs no key, and Zotero is connected separately later under Settings → Integrations → Zotero.) Adding keys raises rate limits for paper discovery; sources still work without them. This step is skippable; keys can be configured later in Settings → Sources.
 
 ### Step 8 — Pair Telegram (skippable)
 
 Pair your account with the Telegram bot to receive Pulse digests and send queries from Telegram. Follow the on-screen instructions to obtain a pairing code, then send `/pair <code>` to the bot. This step is skippable; pairing can be completed later in Settings → Integrations → Telegram.
 
-### Step 9 — Done
+### Step 9 — You’re all set
 
 Setup is complete. `setup_completed` is set to `true`. The wizard does not appear again. The page redirects to `/` (the Home page).
 

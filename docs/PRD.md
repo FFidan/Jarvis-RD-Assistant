@@ -1,6 +1,6 @@
 # JARVIS RD Assistant - Product Requirements Document (PRD)
 
-**Version:** 0.5.0 (Living document — see git tags for release versions.)
+**Version:** 0.6.0 (Living document — see git tags for release versions.)
 **Status:** Active
 
 > This PRD describes the product vision, user stories, feature scope, and forward roadmap.
@@ -93,7 +93,7 @@ Out of scope: full-text PDF annotation, manuscript drafting.
 ### 3.2 Learning Engine
 
 Auto-generates flashcards from starred/saved papers; each card carries source citation,
-evidence quote, and PDF snapshot. FSRS scheduling (`py-fsrs`); Telegram review sessions;
+evidence quote, and PDF snapshot. FSRS scheduling (`fsrs`); Telegram review sessions;
 dashboard card browser, retention stats, Anki export. v2+: cloze, streaks, adaptive limits.
 
 Out of scope: general-purpose flashcard app, collaborative decks, audio/video.
@@ -190,7 +190,7 @@ Per-user classifier on `recommendation_feedback` (≥30 ratings). Citation graph
 (PageRank + Adamic/Adar). BERTopic topic-trend modeling. "Missing Foundational Papers" widget.
 
 ### 6.2 Zotero Phase 2 (planned)
-Group library support, annotations import, Mendeley integration, API key encryption.
+Group library support, annotations import, Mendeley integration.
 
 ### 6.3 Advanced Retrieval (aspirational)
 "Ask the Literature" synthesis path; multi-round RAG; metadata-aware embeddings;

@@ -102,7 +102,7 @@ validation and is an intentional non-regression: the omission is by design, not 
 | `zotero.poll_cron` | (no default; cron string when set) | `_validate_zotero_cron` | [scheduler.py:103](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/scheduler.py#L103) | On write, `apply_zotero_cron` ([scheduler_effects.py:113](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L113)) reschedules the `zotero_library_sync` job |
 | `zotero.auto_push_on_star` | `False` (key absent → off) | `_validate_bool` | star handler in [routers/papers.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/papers.py) — on `starred=False→True` transition AND key truthy AND project link present, enqueues existing `zotero.push` job | Default-off; idempotent on already-starred state. |
 | `fsrs.desired_retention` | `0.9` ([init.sql:49](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/init.sql#L49)) | `_validate_fsrs_retention` (range `(0, 1)`) | Per-review fetch in `_build_fsrs_manager_from_db` ([learning_engine/routers/review.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/learning_engine/learning_engine/routers/review.py)) — fresh `FSRSManager` built inside the review transaction | Live-edit reactive |
-| `fsrs.learning_steps` | `[1, 10]` ([init.sql:50](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/init.sql#L50)) | `_validate_fsrs_learning_steps` (`list[int]`, length 1–10, all positive) | Per-review fetch in `_build_fsrs_manager_from_db`; passed to py-fsrs `Scheduler(learning_steps=[timedelta(minutes=m) for m in steps])` | Default `[1, 10]` matches the py-fsrs library default |
+| `fsrs.learning_steps` | `[1, 10]` ([init.sql:50](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/init.sql#L50)) | `_validate_fsrs_learning_steps` (`list[int]`, length 1–10, all positive) | Per-review fetch in `_build_fsrs_manager_from_db`; passed to fsrs `Scheduler(learning_steps=[timedelta(minutes=m) for m in steps])` | Default `[1, 10]` matches the fsrs library default |
 
 ### 2.2 Partial keys (consulted only at startup, only on a non-core endpoint, or pushed elsewhere on write)
 
@@ -219,7 +219,7 @@ Defined in `_CONFIG_VALIDATORS` ([config_validators.py:231-271](https://github.c
 | `_validate_zotero_cron` | `zotero.poll_cron` | Must parse via `CronTrigger.from_crontab` (no sub-hourly limit, unlike Pulse) |
 | `_validate_langfuse_dashboard_url` | `observability.langfuse_dashboard_url` | Empty / `https://` / loopback `http://` URL; rejects other schemes |
 | `_validate_fsrs_retention` | `fsrs.desired_retention` | Number in open range `(0, 1)`; rejects bool, 0, 1, and out-of-range floats |
-| `_validate_fsrs_learning_steps` | `fsrs.learning_steps` | `list[int]`, length 1–10, all strictly positive (minutes). Default `[1, 10]` matches the py-fsrs library default |
+| `_validate_fsrs_learning_steps` | `fsrs.learning_steps` | `list[int]`, length 1–10, all strictly positive (minutes). Default `[1, 10]` matches the fsrs library default |
 
 Keys without a custom validator (per `_CONFIG_VALIDATORS`):
 `recommendation.{liked_weight,project_weight,enabled}`, `user.timezone`. Any
@@ -299,7 +299,7 @@ The implementation MUST satisfy these. Testable.
 | `zotero.group_id` | Active (consumed when `library_type="group"`) |
 | `zotero.auto_push_on_star` | Active |
 | `fsrs.desired_retention` | Active (per-review DB read) |
-| `fsrs.learning_steps` | Active (wired into the py-fsrs Scheduler) |
+| `fsrs.learning_steps` | Active (wired into the fsrs Scheduler) |
 | `smtp.{host,port,user,from,pass}` | Active (system-wide outbound-mail relay; `smtp.pass` encrypted) |
 | `automation.fetch_interval_hours` | Active (system-wide auto-fetch scheduler) |
 | `observability.langfuse_dashboard_url` | Active (Settings → Observability link target) |

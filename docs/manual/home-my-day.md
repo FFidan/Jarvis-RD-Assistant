@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /, /my-day -->
+<!-- verified-against-UI: 2026-06-06 | routes: /, /my-day -->
 
 # My Day & Home
 
@@ -6,7 +6,7 @@
 
 ## Home — `/`
 
-The Home page is the first screen you see after signing in. It provides a quick-start dashboard for your research session and a system health overview.
+The Home page (titled **Dashboard**) is the first screen you see after signing in. It provides a quick-start dashboard for your research session and a system health overview.
 
 <!-- screenshot: / — Home page showing MetricTileGrid, SetupBanner, and onboarding checklist -->
 
@@ -20,7 +20,7 @@ If the onboarding wizard has not been fully completed, a **SetupBanner** may app
 
 ### Onboarding checklist
 
-Alongside the SetupBanner, an **onboarding checklist** tracks first-use milestones: adding a research topic, saving your first paper, running your first Pulse deck, and reviewing your first card. Items are checked off automatically as you complete them.
+Alongside the SetupBanner, an **onboarding checklist** ("Get started in 3 steps") tracks three first-use milestones: **Add a research topic**, **Fetch your first papers**, and **Analyze a paper**. Each step has a shortcut button (Go to Settings, Go to Feed) and is checked off automatically as you complete it. The checklist disappears once all three are done, or you can dismiss it with the × button.
 
 ### Batch Operations
 

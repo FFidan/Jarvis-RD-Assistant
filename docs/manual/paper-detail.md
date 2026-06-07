@@ -6,11 +6,11 @@ Clicking any paper in the [Research Feed](research-feed.md), [Library](research-
 
 The view is divided into **three panes**: a collapsible left table-of-contents rail, a scrollable centre content area with all paper sections, and a right-hand actions rail.
 
-<!-- screenshot: /paper/:paperId — three-pane layout showing PaperTOC on left, content sections in centre, ActionsSidebar on right -->
+<!-- screenshot: /paper/:paperId — three-pane layout showing the table of contents on the left, content sections in the centre, and the actions rail on the right -->
 
 ---
 
-## Left pane — PaperTOC
+## Left pane — Table of contents
 
 The left pane shows a **table of contents** that lists every section available for this paper. Clicking a section entry scrolls the centre pane to that section. A **scroll-spy** indicator highlights the currently visible section as you scroll.
 
@@ -23,7 +23,7 @@ The TOC also shows the **pipeline status** for this paper:
 | Summary | The AI summary has been generated |
 | Failed | One or more pipeline steps encountered an error |
 
-If a step is pending or failed, the corresponding ActionsSidebar button (see right pane) will be active to let you re-trigger that step.
+If a step is pending or failed, the corresponding action button in the right pane will be active to let you re-trigger that step.
 
 ---
 
@@ -55,9 +55,9 @@ A focused section on the paper's methods, extracted during the processing pipeli
 
 Limitations and caveats noted by the paper or inferred by the analysis pipeline.
 
-### Key findings — EvidenceTab / EvidenceSnapshot
+### Key findings
 
-A list of key findings and evidence items extracted from the paper. The **EvidenceSnapshot** shows the most important findings inline; the **EvidenceTab** provides a full structured list with source-chunk references.
+A list of key findings and evidence items extracted from the paper. A snapshot shows the most important findings inline; a full structured list provides every finding with source-chunk references.
 
 ### Cross-references
 
@@ -65,11 +65,11 @@ Papers that this paper references or is referenced by, drawn from citation data.
 
 ### In-paper contradictions
 
-A list of claims within this paper that the contradiction-detection pipeline has flagged as potentially inconsistent with each other or with other papers in your library. See also the ContradictionsPanel in the right rail.
+A list of claims within this paper that the contradiction-detection pipeline has flagged as potentially inconsistent with each other or with other papers in your library. See also the Contradictions card in the right rail.
 
 ### Notes
 
-Your personal notes for this paper. Notes are displayed read-only in the centre pane; to edit them use the **UserStateForm** in the right rail.
+Your personal notes for this paper. Notes are displayed read-only in the centre pane; to edit them use the **Quick Rating** form in the right rail.
 
 > **Offline:** Notes are displayed from the local cache. Editing requires an active connection and is disabled offline.
 
@@ -85,7 +85,7 @@ An inline chat interface scoped to this paper. Enter a question; the system retr
 
 ---
 
-## Right pane — ActionsSidebar
+## Right pane — Actions
 
 The right pane contains a set of action cards for managing and extending the paper.
 
@@ -112,7 +112,7 @@ A visual step tracker shows which steps are complete, running, or queued. You ca
 
 > **Offline:** All pipeline action buttons are disabled offline.
 
-### LifecycleActionsCard
+### Library actions
 
 Controls for managing this paper within your library:
 
@@ -130,7 +130,7 @@ The five lifecycle states are:
 | **Done** | Finished |
 | **Trash** | Removed; restorable or permanently deletable |
 
-### UserStateForm
+### Quick Rating
 
 A form titled **Quick Rating** with three fields persisted per user:
 
@@ -138,11 +138,11 @@ A form titled **Quick Rating** with three fields persisted per user:
 - **Comment** — a short free-text note about the paper.
 - **Flagged** — a checkbox to mark this paper for follow-up.
 
-### ZoteroPanel
+### Zotero sync
 
 Shows the sync status with Zotero (not synced / synced / error). Provides a **Push to Zotero** shortcut; also accessible via the individual pipeline action button above.
 
-### ContradictionsPanel
+### Contradictions
 
 Lists contradictions detected between this paper and other papers in your library. Each item shows the conflicting claim and the other paper involved. A **Scan contradictions** button queues a new contradiction-detection scan for this paper.
 

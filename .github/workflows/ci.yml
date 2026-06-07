@@ -32,6 +32,7 @@ env:
 jobs:
   lint-test:
     name: Lint + fast test suite
+    timeout-minutes: 20
     # optional self-hosted-runner repo variable; unset → GitHub-hosted ubuntu-latest
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     steps:
@@ -92,6 +93,7 @@ jobs:
 
   cross-user-isolation:
     name: Cross-user isolation (release gate)
+    timeout-minutes: 20
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     # A runner-managed PostgreSQL 16 (postgres:16.8) is provided via the
     # `services:` block below, on tmpfs.  The live-PG fixtures clone a fresh
@@ -188,6 +190,7 @@ jobs:
 
   contract-tests:
     name: Contract layer (DB-backed)
+    timeout-minutes: 20
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     # A runner-managed PostgreSQL 16 (postgres:16.8) is provided via `services:`
     # below, on tmpfs.  The contract_pg_dsn fixture clones ONE fresh empty
@@ -258,6 +261,7 @@ jobs:
 
   frontend:
     name: Frontend lint + test + build
+    timeout-minutes: 20
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -286,6 +290,7 @@ jobs:
 
   gate:
     name: CI gate (required status check)
+    timeout-minutes: 5
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     needs: [lint-test, cross-user-isolation, contract-tests, frontend]
     steps:

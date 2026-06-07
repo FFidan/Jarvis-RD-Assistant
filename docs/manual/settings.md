@@ -1,8 +1,8 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /settings, /settings?section=&item= -->
+<!-- verified-against-UI: 2026-06-06 | routes: /settings, /settings?section=&item= -->
 
 # Settings
 
-_This area is evolving; verified 2026-05-18._
+_This area is evolving; verified 2026-06-06._
 
 The **Settings** page at `/settings` is a two-pane interface: a **SettingsRail** on the left lists the sections and items, and the right panel shows the detail form for the currently selected item. The active section and item are reflected in the URL query parameters (`?section=&item=`).
 
@@ -16,7 +16,7 @@ Settings are organised into six sections. Access to each section or item depends
 
 Available to **all users**.
 
-### Profile
+### Profile & Email
 
 Edit your display name and email address. Changing your email triggers a verification flow to confirm the new address before it takes effect.
 
@@ -44,7 +44,7 @@ Enable and configure the paper data sources the system uses to discover new pape
 
 Configure which model aliases (**smart**, **fast**, **embed**) are mapped to which local or cloud models. The smart model is used for summarisation and reasoning; the fast model is used for lower-latency tasks; the embed model is used for generating embeddings.
 
-### Providers
+### Cloud Providers
 
 Configure API keys and endpoints for cloud LLM providers (OpenAI, Anthropic, Gemini) and LiteLLM routing. Changes here affect which models are available for the LLM configuration item above.
 
@@ -54,7 +54,7 @@ Select the inference backend and model used for LLM calls. The panel shows:
 
 - **Hardware Tier** — the automatically detected GPU/CPU tier for this machine, with a **Re-detect** button to refresh. If a GPU was present at install but the stack is running on CPU (overlay not engaged), an amber banner here tells you to re-run `setup.sh`.
 - **Current Status** — the configured backend/model, the recently observed backend, and the recommended model for the detected hardware tier.
-- **Backend selector** — toggle between **ollama** (local, the recommended default on every tier) and **vllm** (advanced, high-throughput GPU). vLLM is a manual overlay that is not auto-started — see "GPU acceleration" in the deployment guide; the recommended **model** still scales with the detected tier.
+- **Backend selector** — toggle between **ollama** (local, the recommended default) and **vllm** (advanced, high-throughput GPU). The recommended **model** scales with the detected hardware tier.
 - **Model dropdown** — choose from evaluated candidates for the selected backend and tier. A score and brief reasoning is shown for each candidate. Applying a not-yet-pulled Ollama model pulls it first, so the backend never routes to a missing model.
 - **Apply / Reset** — save the selection or revert to the last saved state.
 
@@ -81,7 +81,7 @@ Configure the outbound email relay for magic-link sign-in emails. Fields: SMTP h
 Configure Pulse-specific settings. The panel is divided into two cards:
 
 - **Schedule card** — toggle Pulse on/off, set the daily run time, and adjust the **deck size** (5–30 papers; slider), ranking candidates, lookback window, and startup grace period.
-- **Advanced tuning card** (collapsible) — **signal-weight sliders** for each scoring signal (topic relevance, recency, citation count, etc.), discovery seed balance (liked-papers weight and project-context weight), and L2 negative-feedback penalty. Weight presets are available for common configurations.
+- **Advanced tuning card** (collapsible) — fine-tune how candidates are ranked: signal-weight sliders for relevance, recency, and citation count, plus discovery balance and negative-feedback controls. Weight presets cover common configurations.
 
 ### Timer
 
@@ -91,7 +91,7 @@ Configure the Pomodoro-style session timer available in the TopBar: work interva
 
 Configure the Langfuse observability integration for tracing LLM calls. This setting is **hardware- and opt-in gated** — it requires a running Langfuse instance and is only active when explicitly enabled.
 
-_This area is evolving; verified 2026-05-18._
+_This area is evolving; verified 2026-06-06._
 
 ### Access Mode
 

@@ -1,6 +1,6 @@
 # Migrations
 
-This directory is the ledger for post-public-launch schema migrations.
+This directory is the ledger for incremental schema migrations applied on top of `db/init.sql`.
 
 The repo's pre-launch schema is fully captured in `db/init.sql`. There are
 no pre-launch migrations on disk: 0089 / 0090 / 0091 were folded into

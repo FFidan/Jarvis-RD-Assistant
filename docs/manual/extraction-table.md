@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /extractions -->
+<!-- verified-against-UI: 2026-06-06 | routes: /extractions -->
 
 # Extraction Table
 
@@ -47,5 +47,5 @@ Click **Export CSV** to download the current table as a comma-separated values f
 ## Related pages
 
 - [Settings](settings.md) — manage extraction templates (§IV System → Extraction Templates; admin required).
-- [Paper Detail](paper-detail.md) — run entity extraction for a single paper from the ActionsSidebar.
+- [Paper Detail](paper-detail.md) — run entity extraction for a single paper from the right-hand actions sidebar.
 - [Knowledge Graph](knowledge-graph.md) — visualise entities extracted from papers.

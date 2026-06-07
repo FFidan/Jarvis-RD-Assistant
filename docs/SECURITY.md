@@ -207,19 +207,10 @@ The audit log is readable by admins at `GET /api/admin/audit-log`
 
 ## Vulnerability Disclosure
 
-If you discover a security vulnerability in JARVIS RD Assistant, please report
-it responsibly:
-
-**Contact:** Use [GitHub Security Advisories](https://github.com/FFidan/Jarvis-RD-Assistant/security/advisories/new) (private vulnerability reporting).
-
-**Process:**
-1. Open a private security advisory on GitHub with a description of the
-   vulnerability, steps to reproduce, and any proof-of-concept.
-2. Allow up to **90 days** for a fix to be developed and released before public
-   disclosure (coordinated disclosure).
-3. Acknowledgement will be sent within 5 business days of receipt.
-
-Please do not open public GitHub issues for security vulnerabilities.
+Reporting a vulnerability is documented in the repository's top-level
+[`SECURITY.md`](../SECURITY.md) policy (private GitHub Security Advisories;
+acknowledgement within 5 business days). Do not open public GitHub issues for
+security reports.
 
 ---
 

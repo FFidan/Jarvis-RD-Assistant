@@ -5,7 +5,7 @@ This document is the durable engineering standard for JARVIS RD Assistant.
 Related docs:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - where these standards apply across services.
-- [PRD.md](PRD.md) - product requirements behind user-facing behavior.
+- [PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/PRD.md) - product requirements behind user-facing behavior.
 
 ## Python
 
@@ -33,63 +33,7 @@ Related docs:
 
 ### Typography
 
-Frontend headings follow a 4-level contract with a "one caption per visual
-block" rule. Section markers (`MarkerCaption`) and inline small-caps labels
-(`MarkerLabel`) live in `frontend/src/components/typography/`. There is no
-ESLint enforcement; reviewers run the hand-checklist below against
-headline-touching diffs.
-
-**The 4-level hierarchy:**
-
-```
-PAGE LEVEL (max 1 per route)
-  H1 — text-[28-32px] leading-tight tracking-tight text-strong
-  Subtitle — text-sm text-muted-foreground (one line, one paragraph)
-
-NAVIGATION LEVEL (tabs, surface chips)
-  Tab labels — owned by TabsTrigger / role=tab. Treat them as captions.
-  Rule — ban any heading inside TabsContent whose text equals or is a
-  word-stem subset of the active tab label.
-
-SECTION LEVEL (group of >=2 sibling sub-blocks, no other caption available)
-  SectionHeader / MarkerCaption — the existing § small-caps span,
-  used ONLY when:
-    a) the section contains >=2 sibling sub-blocks each with their own
-       CardTitle / heading, AND
-    b) no parent (page H1, tab label, Card containing this section) has
-       already named the same concept.
-  Forbidden uses — directly above a single Card, directly above a single
-  Cytoscape canvas, directly above a Tabs strip, inside a TabsContent,
-  inside a Card whose CardTitle would repeat it.
-
-CARD LEVEL (owns its visual border)
-  CardTitle — required if the card is more than a thin row of inputs.
-  CardDescription — optional, single short paragraph.
-  Rule — no SectionHeader above; no <h2>/<h3> directly below CardHeader
-  before the first <CardContent> child.
-
-INLINE LEVEL (form labels, field captions, micro-block titles)
-  Label component — for form inputs.
-  MarkerLabel — components/typography/MarkerLabel.tsx.
-
-DIALOG / SHEET LEVEL
-  DialogTitle / SheetTitle — required, owns the modal caption.
-  Rule — body must not open with another heading whose text equals the title.
-```
-
-**One caption per visual block:** each visual block (Card, TabsContent,
-Sheet, Section) is allowed at most one caption. Sub-blocks can each have their
-own caption, but the block-level caption must not be repeated by an immediate
-parent or child.
-
-**Hand-review checklist** (run against any PR touching frontend headings):
-
-- [ ] No `<SectionHeader>` rendered inside a `<TabsContent>` whose marker text matches the active tab label.
-- [ ] No `<SectionHeader>` immediately above a `<Card>` whose `<CardTitle>` shares the same word stem.
-- [ ] No `<h2>` or `<h3>` is a sibling of a `<CardHeader>` repeating the card label.
-- [ ] At most one caption per visual block (Card / TabsContent / Sheet / Section).
-- [ ] Page H1 is set exactly once per route, in the page component.
-- [ ] Sidebar item label, browser tab title, and page H1 use the same canonical name.
+Frontend headings follow a 4-level caption hierarchy (Page → Navigation → Section → Card → Inline) with a "one caption per visual block" rule: each Card, TabsContent, Sheet, or Section carries at most one caption, never repeated by an immediate parent or child. Section markers (`MarkerCaption`) and inline small-caps labels (`MarkerLabel`) live in `frontend/src/components/typography/`. There is no ESLint enforcement; reviewers hand-check the rule against headline-touching diffs.
 
 ## API
 
@@ -160,7 +104,7 @@ LLM-generated scientific content must remain evidence-backed:
 ## Testing
 
 Python test shape, mock policy, the carve-out registry, and the four prohibited
-anti-patterns are governed by [docs/contracts/07-testing.md](contracts/07-testing.md)
+anti-patterns are governed by [docs/contracts/07-testing.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/07-testing.md)
 — treat that contract as the single source of truth. The mechanics below are
 deliberately thin; the contract carries the load-bearing rules.
 
@@ -184,7 +128,7 @@ deliberately thin; the contract carries the load-bearing rules.
 
 ## LLM Prompt Shape
 
-Every `call_llm_structured(...)` callsite under `services/` or `libs/` (excluding tests) must satisfy one of two shapes. The convention is enforced by `scripts/check-llm-prompt-shape.py` on every commit and in CI.
+Every `call_llm_structured(...)` callsite under `services/` or `libs/` (excluding tests) must satisfy one of two shapes. The convention is enforced by `scripts/check-llm-prompt-shape.py`, which runs as a pre-commit hook (see `.pre-commit-config.yaml`).
 
 ### Shape A — split-role (default)
 

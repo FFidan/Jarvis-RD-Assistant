@@ -1,6 +1,6 @@
 # Known Residual Risks
 
-_Last updated: 2026-06-02_
+_Last updated: 2026-06-06_
 
 This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Closed and falsified findings, plus internal CI/test-infra tracking, are archived separately and are not part of the published site.
 
@@ -16,28 +16,6 @@ Related docs:
 Current posture is documented in `docs/REQUIREMENTS.md`: the tested image pin is `ollama/ollama:0.23.1` via `versions.env`, the Compose fallback matches that pin, and the host port is loopback-only. Residual risk remains at the Docker-network boundary: containers attached to the `jarvis` network can reach `http://ollama:11434`, so untrusted peers must not join that network.
 
 Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host publish changes away from `127.0.0.1`, an external shared-Ollama override lacks equivalent patch/bind controls, untrusted Docker-network peers are introduced, or a later Ollama advisory supersedes CVE-2026-7482 guidance.
-
----
-
-## PI-EDGE-010 — Per-tick NOTIFY listener creation
-
-**Finding:** `_wait_for_job_notification` creates a new `asyncpg-listen` listener per SSE poll tick.
-
-**Current state:** a 60-second job with 2-second polls generates 30 connection cycles per stream. No correctness impact; only a connection-churn smell.
-
-**Why deferred:** no observed connection exhaustion at current job volumes (single-user). Fix requires refactoring the SSE stream to hold a single long-lived listener per job stream — moderate blast radius.
-
-**Reopen criteria:** when job volume exceeds ~50 concurrent streams, or when connection pool exhaustion is observed in logs.
-
----
-
-## Conversational-agent spike — build-vs-adopt unresolved
-
-**Context:** the roadmap targets a conversational agent layer (Hermes).
-
-**Current state:** not started. The build-vs-adopt decision — adopt an existing open agent framework vs. build natively on LiteLLM tool-calling plus the existing prompt harness — requires explicit sign-off before the spike is worth running. It is sequenced behind the cross-service auth work, the first performance phase, and an evaluation harness; see the [ROADMAP](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/ROADMAP.md).
-
-**Reopen criteria:** when the roadmap prerequisites land and the build-vs-adopt path is selected.
 
 ---
 
@@ -175,16 +153,6 @@ These document intentional deviations from the container-hardening sweep, each w
 
 ---
 
-### EVAL-HARNESS-1 — Retrieval/quality eval harness removed; reproducible replacement owed
-
-**Finding:** the retrieval and pulse eval scripts and their fixtures were removed for the public release. They were not called by CI, were not user-facing, and referenced database-local paper IDs that an external contributor could not reproduce.
-
-**Why deferred:** the scripts would have been non-runnable by anyone other than the original developer.
-
-**Reopen criteria:** introduce a reproducible eval harness keyed on stable arXiv IDs with an accompanying seed-fetch script so a contributor can run the eval against a fresh database. Scope this as a standalone developer-tooling task.
-
----
-
 ### LOW-DRY-001 — Minor un-hoisted duplications (low priority)
 
 Two small consolidation items accepted as low-priority code-quality debt:
@@ -216,29 +184,28 @@ Two small consolidation items accepted as low-priority code-quality debt:
 
 ---
 
-## Deferred from the 2026-06-02 public-readiness fix plan
+## Deferred low-value / high-churn cleanups
 
-Low-value-or-high-churn items deliberately deferred during the public-readiness fix plan (PR-5). Each is behavior-neutral debt, not a correctness or security risk.
+The following items were deliberately deferred as low-value or high-churn. Each is behavior-neutral debt, not a correctness or security risk.
 
-- **`services_client` full migration (Telegram bot).** The bot routes most product-data calls through the typed `services_client`, but some call sites still query the shared Postgres directly. PR-5 corrected the module docstring ("most", not "all") rather than migrating every site — the remaining migration is a larger, separate effort.
+- **`services_client` full migration (Telegram bot).** The bot routes most product-data calls through the typed `services_client`, but some call sites still query the shared Postgres directly. The module docstring was corrected ("most", not "all") rather than migrating every site — the remaining migration is a larger, separate effort.
 - **`_owner_headers` promotion.** The Telegram `_owner_headers` helper stays at its current call-site location (pinned by tests); promoting it to a shared module is not worth the churn.
 - **Service-layer `HTTPException` coupling.** A few service functions raise FastAPI `HTTPException` directly rather than a domain error the router translates. Left as-is; decoupling is a broad refactor.
 - **`db_helpers` split.** `paper_ingestion`'s `db_helpers` mixes a few concerns; splitting it touches many importers for marginal gain.
 - **`JOB_HANDLER_OWNER` / `noop.test` queue.** The job-handler-owner `Literal` typing and the `noop.test` queue entry are retained as-is; tightening them is cosmetic.
 - **Redundant My-Day journal fetch.** `GET /api/my-day/journal` overlaps the nullable `journal` field already returned by the my-day-bundle; the separate fetch is kept to avoid a frontend refactor.
 - **`jarvis_common` test-code wheel exclusion.** The `jarvis_common` wheel ships its `testing_*.py` modules (~25 KB). A `packages.find` exclude is ineffective for top-level modules (only a `testing_sidecars/` subpackage would drop); a correct fix means relocating six modules into a `jarvis_common/testing/` subpackage plus updating 100+ test imports — not worth the gain. Runtime-safe regardless (zero non-test runtime imports of `jarvis_common.testing*`).
-- **`jobs.py` 503-vs-404 caller mapping.** The broad job-row-lookup failure now logs a WARNING (observability fix shipped in PR-2); mapping transient DB errors to HTTP 503 at the callers is a separate enhancement — re-raising today would surface as an unhandled 500, so the status-code mapping is deferred.
+- **`jobs.py` 503-vs-404 caller mapping.** The broad job-row-lookup failure now logs a WARNING; mapping transient DB errors to HTTP 503 at the callers is a separate enhancement — re-raising today would surface as an unhandled 500, so the status-code mapping is deferred.
 
-**Intended behavior note — auth-first ordering (PR-5 auth-idiom migration).** `paper_ingestion` route handlers now resolve identity via `Depends(current_user_id_strict)` (previously an imperative in-body call). Consequence: an *unauthenticated* request to a migrated endpoint now fails authentication (401) *before* request-body validation runs, whereas the old imperative order could surface a 422/400 body-validation error first. This is intended and more consistent/secure (uniform auth-first across all endpoints); behavior for authenticated callers is unchanged. The non-route `analyze._analyze_stream` generator retains an imperative resolve (it is not a route and has no rate-limiter).
+**Intended behavior note — auth-first ordering (auth-idiom migration).** `paper_ingestion` route handlers now resolve identity via `Depends(current_user_id_strict)` (previously an imperative in-body call). Consequence: an *unauthenticated* request to a migrated endpoint now fails authentication (401) *before* request-body validation runs, whereas the old imperative order could surface a 422/400 body-validation error first. This is intended and more consistent/secure (uniform auth-first across all endpoints); behavior for authenticated callers is unchanged. The non-route `analyze._analyze_stream` generator retains an imperative resolve (it is not a route and has no rate-limiter).
 
 ---
 
-## Deferred from the 2026-06-03 public-readiness fix plan
+## Deferred theming / test-hygiene items
 
-- **TEST-01 — Pytest non-fatal warnings (2026-06-03).** Pytest emits 123 non-fatal warnings (unawaited-coroutine in async mocks, `@pytest.mark.asyncio` on sync tests, `ORJSONResponse` deprecation). Cosmetic test-hygiene; full suite passes. Deferred.
-- **UI-01 (contrast portion) — Dark-mode destructive text contrast (2026-06-03).** Dark-mode contrast of destructive error text (`text-destructive`) is below WCAG AA per Lighthouse. Proper fix is a theme-token adjustment affecting all destructive text; deferred to a theming pass.
+- **TEST-01 — Pytest non-fatal warnings.** Pytest emits non-fatal warnings (unawaited-coroutine in async mocks, `@pytest.mark.asyncio` on sync tests, `ORJSONResponse` deprecation). Cosmetic test-hygiene; full suite passes. Deferred.
+- **UI-01 (contrast portion) — Dark-mode destructive text contrast.** Dark-mode contrast of destructive error text (`text-destructive`) is below WCAG AA per Lighthouse. Proper fix is a theme-token adjustment affecting all destructive text; deferred to a theming pass.
 
-## From the 2026-06-04 security remediation
+## Deferred multi-admin attribution item
 
-- **SCA-GATE-01 — make the SCA Security workflow a required merge check (operator-only).** The `Security` workflow (pip-audit / npm-audit / osv-scanner, terminal `security-gate` job) runs on every PR and is green on master, but it is NOT yet a required status check. `ci.yml`'s required `gate` job uses `needs:` which can only reference jobs in the *same* workflow, so `security-gate` (a separate workflow) cannot be wired there. **Operator action:** add `Security / Security gate` as a required status check in branch protection (Settings → Branches → master), alongside the existing `CI gate (required status check)`.
 - **Multi-admin legacy-data attribution (single-admin deployments unaffected).** Migration 0094 re-owns NULL-`user_id` rows on `paper_extractions`/`paper_entities`/zotero `paper_notes` to the single admin ONLY on single-tenant boxes (mirrors 0092). On a multi-admin box with pre-existing data: (a) historical Zotero notes keep their original `discovered_by` attribution (only forward syncs are attributed to the syncing user); (b) the entity batch-backfill (`knowledge_graph.py`) attributes to `papers.discovered_by`, which for system papers (`discovered_by IS NULL`) writes read-invisible NULL-user entity rows — the user-triggered single-paper extract correctly stamps the requesting user. Acceptable for the single-operator deployment norm; revisit if a true multi-admin instance with legacy data is targeted.

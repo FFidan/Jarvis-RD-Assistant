@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /, /my-day, /pulse, /feed, /feed?surface=search, /projects, /knowledge, /citations, /extractions, /cards, /analytics, /ask, /admin/users, /admin/system-health, /admin/audit-log, /logs, /settings -->
+<!-- verified-against-UI: 2026-06-06 | routes: /, /my-day, /pulse, /feed, /feed?surface=search, /projects, /knowledge, /citations, /extractions, /cards, /analytics, /ask, /admin/users, /admin/system-health, /admin/audit-log, /logs, /settings -->
 
 # Navigation
 
@@ -16,7 +16,7 @@ The application is divided into three regions:
 - **TopBar** (top) — global controls: quick search, jobs indicator, Pomodoro timer, and theme toggle.
 - **Main content area** — the active page.
 
-On narrow viewports the sidebar collapses to an icon rail; clicking the chevron button expands it to show labels.
+On narrow viewports (below the `md` breakpoint) the sidebar is hidden and replaced by a **hamburger menu button** (☰) on the left of the TopBar; tapping it slides the full sidebar in from the left as a drawer (a Sheet overlay). Tapping outside the drawer or selecting a destination closes it.
 
 ---
 
@@ -48,11 +48,12 @@ Below a separator, the sidebar footer is visible to **all users**:
 |---------|----------|
 | **BrandMark** | Application logo / home anchor |
 | **⌘K / Ctrl+K** | Open the command-palette search — search papers, navigate to pages, or run actions |
+| **Error pill** | Appears only when the application has logged errors in the last 24 hours; shows the count of error/critical events and, when clicked, opens the System Logs error view. Hidden when there are no recent errors. |
 | **Jobs indicator** | Shows the count of running background jobs; click to expand the jobs panel |
 | **Pomodoro timer** | A focus timer with configurable work and break intervals (configure in [Settings](settings.md) §IV System → Timer) |
 | **Keyboard shortcuts** | Opens the keyboard-shortcuts reference panel |
 | **Theme toggle** | Switch between light and dark mode |
-| **User avatar menu** | Account options: profile, sign out |
+| **User avatar menu** | A round avatar button; opens a menu with two items — **Settings** (goes to `/settings`) and **Logout** (ends the session and returns to the sign-in page). |
 
 ---
 
