@@ -441,7 +441,8 @@ class ArxivSource(PaperSource):
         search_query = self._build_search_query(query)
 
         if author:
-            search_query = f"au:{author} AND {search_query}"
+            safe_author = author.replace('"', "").strip()
+            search_query = f'au:"{safe_author}" AND {search_query}'
 
         if year_from or year_to:
             date_from = f"{year_from or 1900}0101"

@@ -316,6 +316,34 @@ async def current_user_id_strict(request: Request) -> int:
 
 _OWNER_OVERRIDE_HEADER = "X-Owner-User-Id"
 
+# ASGI scope key under which app_factory.RawClientStashMiddleware snapshots the
+# ORIGINAL ``scope["client"]`` (the real transport peer) BEFORE uvicorn's
+# ProxyHeadersMiddleware rewrites ``scope["client"]`` in place from
+# X-Forwarded-For. By the time a route dependency runs, ``request.client``
+# already reflects the (caller-controllable) XFF chain — only this stash still
+# holds the actual socket peer (audit M5).
+RAW_CLIENT_SCOPE_KEY = "jarvis.raw_client"
+
+
+def _raw_socket_ip(request: Request) -> tuple[str | None, bool]:
+    """Return ``(raw_peer_ip, stashed)`` from the RawClientStashMiddleware snapshot.
+
+    ``stashed`` is True when the middleware ran for this request — i.e. the
+    scope KEY is present, even if the transport reported no client (then
+    ``raw_peer_ip`` is None and the allowlist check fails safe). When the key
+    is absent, the app was built without
+    :func:`jarvis_common.app_factory.configure_middleware_and_errors`
+    (e.g. a bare test app); such apps install no ProxyHeadersMiddleware either,
+    so the caller may safely fall back to ``request.client``.
+    """
+    scope = getattr(request, "scope", None)
+    if not isinstance(scope, dict) or RAW_CLIENT_SCOPE_KEY not in scope:
+        return None, False
+    raw = scope[RAW_CLIENT_SCOPE_KEY]
+    if isinstance(raw, tuple | list) and raw and isinstance(raw[0], str):
+        return raw[0], True
+    return None, True
+
 
 def _parse_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
     """Parse ``OWNER_OVERRIDE_ALLOWED_CIDRS`` env var into network objects.
@@ -402,8 +430,12 @@ async def current_user_id_with_owner_override(
     2. ``X-Owner-User-Id`` header — trusted **only** when ALL three guards pass:
        a. The request bears a valid ``JARVIS_API_KEY`` (same check as
           :func:`verify_api_key`).
-       b. The source IP is within the allowlist (loopback + docker-bridge by
-          default; configurable via ``OWNER_OVERRIDE_ALLOWED_CIDRS``).
+       b. BOTH the raw transport peer (stashed by
+          ``app_factory.RawClientStashMiddleware`` before ProxyHeadersMiddleware
+          rewrites ``scope["client"]`` from X-Forwarded-For) AND
+          ``request.client`` are within the allowlist (loopback +
+          docker-bridge by default; configurable via
+          ``OWNER_OVERRIDE_ALLOWED_CIDRS``).
        c. The supplied ``user_id`` value is an integer that exists in the
           ``users`` table.
 
@@ -436,12 +468,31 @@ async def current_user_id_with_owner_override(
             detail="X-Owner-User-Id requires a valid X-API-Key",
         )
 
-    # Guard (b): source IP must be in the allowlist.
+    # Guard (b): source IP must be in the allowlist — required for BOTH:
+    #   * request.client, which uvicorn's ProxyHeadersMiddleware has ALREADY
+    #     rewritten in place from X-Forwarded-For by the time this dependency
+    #     runs (on its own it can reflect a caller-forged header), AND
+    #   * the raw transport peer stashed by RawClientStashMiddleware BEFORE
+    #     that rewrite (the real socket address — unforgeable).
+    # Requiring BOTH keeps the bridge bot working (no XFF → both values are the
+    # bridge IP → allowed) while rejecting a forged X-Forwarded-For from a
+    # non-allowlisted peer (raw peer = attacker IP) AND the nginx-relayed
+    # browser path (rewritten client = public browser IP). Strictly tighter
+    # than either check alone (audit M5).
     client_ip = request.client.host if request.client else None
-    if not _ip_in_allowlist(client_ip):
+    raw_ip, raw_stashed = _raw_socket_ip(request)
+    if not raw_stashed:
+        # Stash absent ⇒ app built without configure_middleware_and_errors
+        # (no RawClientStashMiddleware — e.g. minimal test apps). Those apps
+        # install no ProxyHeadersMiddleware either, so request.client IS the
+        # raw socket peer: fall back to the single pre-M5 check on it.
+        raw_ip = client_ip
+    if not (_ip_in_allowlist(client_ip) and _ip_in_allowlist(raw_ip)):
         logger.warning(
-            "X-Owner-User-Id header rejected: IP %s not in allowlist",
+            "X-Owner-User-Id header rejected: client IP %s / raw socket peer %s "
+            "not both in allowlist",
             client_ip,
+            raw_ip,
         )
         raise HTTPException(
             status_code=403,
@@ -500,7 +551,13 @@ async def current_user_id_with_owner_override(
                 action="auth.owner_override.used",
                 resource=request.url.path,
                 user_id=str(override_uid),
-                metadata={"client_ip": client_ip or "unknown"},
+                metadata={
+                    "client_ip": client_ip or "unknown",
+                    # M5: also record the raw socket peer so the audit trail
+                    # distinguishes the real transport source from the
+                    # (XFF-rewritable) client address.
+                    "raw_client_ip": raw_ip or "unknown",
+                },
             )
     except Exception:  # noqa: BLE001
         logger.debug("auth.owner_override audit log failed (non-fatal)", exc_info=True)

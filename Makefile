@@ -109,6 +109,7 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	uv run tach check
 	$(MAKE) typecheck
 	uv run python3 scripts/check-test-shape.py
+	uv run python3 scripts/check_agent_docs.py
 	bash scripts/check-burned-secrets.sh
 	uv run pytest
 	$(MAKE) frontend-check

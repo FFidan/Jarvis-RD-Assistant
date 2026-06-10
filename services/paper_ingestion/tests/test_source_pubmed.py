@@ -748,6 +748,59 @@ async def test_fetch_new_since_partial_results_on_per_term_failure():
 
 
 # ---------------------------------------------------------------------------
+# M10a: error path forwards retry_after_s from last_poll_diagnostic
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_new_since_error_path_forwards_retry_after_s():
+    """M10a: when last_poll_diagnostic carries retry_after_s, the error branch
+    forwards it to _record_fetch_outcome → update_last_request."""
+    from unittest.mock import AsyncMock, patch
+
+    # esearch returns 429 (sets last_poll_diagnostic with retry_after_s=42),
+    # then the second call raises to trigger the outer exception branch.
+    call_count = {"n": 0}
+
+    def esearch_side_effect(request):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "42"})
+        raise RuntimeError("unexpected failure after rate-limit")
+
+    respx.get(ESEARCH_URL).mock(side_effect=esearch_side_effect)
+
+    mock_pool, mock_conn = _make_mock_pool()
+    source = _make_source_with_pool(mock_pool)
+
+    mock_limiter = AsyncMock()
+    mock_limiter.acquire = AsyncMock()
+    mock_limiter.update_last_request = AsyncMock()
+
+    with patch(
+        "paper_ingestion.sources.base.PersistentSourceRateLimiter",
+        return_value=mock_limiter,
+    ):
+        await source.fetch_new_since(
+            since=datetime(2026, 4, 1, tzinfo=UTC),
+            topics=[
+                TopicRef(id=1, name="A", query_terms=["alpha"]),
+                TopicRef(id=2, name="B", query_terms=["beta"]),
+            ],
+            limit=10,
+            user_id=3,
+        )
+
+    # update_last_request must have been called; the retry_after_s from the
+    # 429 diagnostic (42 s) must be forwarded as a keyword argument.
+    mock_limiter.update_last_request.assert_called_once()
+    _call = mock_limiter.update_last_request.call_args
+    assert _call.kwargs.get("retry_after_s") == 42, (
+        f"Expected retry_after_s=42 forwarded to update_last_request, got: {_call}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # HIGH-PI-10: rate limiter acquire called once per term in the loop
 # ---------------------------------------------------------------------------
 

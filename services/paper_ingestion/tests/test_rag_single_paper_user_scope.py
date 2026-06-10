@@ -5,6 +5,13 @@ hits the ``/api/papers/{id}/ask`` route via the in-process ASGI transport.  The
 test asserts only that ``user_id`` is forwarded as a kwarg; the broader RAG
 behaviour is covered by the existing ``test_rag_authorization`` /
 ``test_rag_contract`` suites.
+
+Also covers the M7 defense-in-depth Qdrant filter composition of
+``search_chunks_in_paper``: the user scope must be NESTED as one element of
+the outer ``must`` list (a sub-Filter).  Flat-merging its ``should`` branches
+beside the ``must`` list would make them advisory (scoring-only) in real
+Qdrant — the M6 trap — so the composition shape is asserted directly at the
+Qdrant boundary.
 """
 
 from __future__ import annotations
@@ -91,3 +98,143 @@ async def test_ask_paper_forwards_user_id_to_prepare_single_paper_rag() -> None:
     assert forwarded_user_id is not None, (
         "ask_paper must forward user_id to prepare_single_paper_rag"
     )
+
+
+# ---------------------------------------------------------------------------
+# M7: search_chunks_in_paper — Qdrant filter composition at the boundary
+# ---------------------------------------------------------------------------
+
+
+def _make_embedder_with_captured_qdrant():
+    """Real Embedder with a mocked Qdrant boundary returning zero points."""
+    from types import SimpleNamespace
+
+    from paper_ingestion.ingestion.embedder import Embedder
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_qdrant = AsyncMock()
+    mock_qdrant.query_points = AsyncMock(return_value=SimpleNamespace(points=[]))
+    embedder = Embedder(mock_http, mock_qdrant)
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 8])  # type: ignore[method-assign]
+    return embedder, mock_qdrant
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_in_paper_nests_user_scope_as_must_subfilter() -> None:
+    """User scope must be ONE nested sub-Filter inside the outer ``must`` list.
+
+    Revert-proof for the M6 trap: if a refactor flat-merges the scope's
+    ``should`` branches beside the outer ``must`` list, the outer ``should``
+    assertion fails (advisory-only in real Qdrant = silent cross-tenant leak).
+    """
+    from qdrant_client.models import FieldCondition, Filter, IsNullCondition, MatchAny, MatchValue
+
+    embedder, mock_qdrant = _make_embedder_with_captured_qdrant()
+
+    await embedder.search_chunks_in_paper(
+        query_text="q",
+        paper_id=42,
+        user_id=7,
+        library_paper_ids=[42, 99],
+    )
+
+    assert mock_qdrant.query_points.await_count == 1
+    query_filter = mock_qdrant.query_points.await_args.kwargs["query_filter"]
+
+    # M6 guard: nothing may sit in the outer `should` slot.
+    assert query_filter.should is None, (
+        "user-scope branches must NOT be flat-merged as outer `should` — beside a "
+        "`must` list they are advisory (scoring-only) in Qdrant, not restrictive"
+    )
+
+    assert query_filter.must is not None and len(query_filter.must) == 2, (
+        f"outer must = [paper_id cond, nested scope Filter]; got {query_filter.must!r}"
+    )
+    paper_cond, nested = query_filter.must
+    assert isinstance(paper_cond, FieldCondition) and paper_cond.key == "paper_id"
+    assert paper_cond.match == MatchValue(value=42)
+
+    assert isinstance(nested, Filter), "user scope must be a nested sub-Filter"
+    branches = nested.should or []
+    assert any(
+        isinstance(c, FieldCondition)
+        and c.key == "user_id"
+        and getattr(c.match, "value", None) == 7
+        for c in branches
+    ), "nested scope must keep the caller's user_id branch"
+    assert any(isinstance(c, IsNullCondition) for c in branches), (
+        "nested scope must keep the canonical (user_id IS NULL) branch"
+    )
+    widened = [
+        c
+        for c in branches
+        if isinstance(c, FieldCondition)
+        and c.key == "paper_id"
+        and isinstance(getattr(c, "match", None), MatchAny)
+    ]
+    assert len(widened) == 1 and set(widened[0].match.any) == {42, 99}, (
+        "nested scope must keep the PI-RAG-001 library widening branch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_in_paper_default_none_filter_unchanged() -> None:
+    """Without user params the filter stays paper-id-only (extraction/system path).
+
+    Guards the RAG-DB-1 regression class for system-context callers
+    (``extraction/core.py`` calls without user scope): default-None must
+    produce the exact pre-M7 filter shape.
+    """
+    from qdrant_client.models import FieldCondition, MatchValue
+
+    embedder, mock_qdrant = _make_embedder_with_captured_qdrant()
+
+    await embedder.search_chunks_in_paper(query_text="q", paper_id=42)
+
+    assert mock_qdrant.query_points.await_count == 1
+    query_filter = mock_qdrant.query_points.await_args.kwargs["query_filter"]
+    assert query_filter.should is None
+    assert query_filter.must_not is None
+    assert query_filter.must is not None and len(query_filter.must) == 1
+    (paper_cond,) = query_filter.must
+    assert isinstance(paper_cond, FieldCondition) and paper_cond.key == "paper_id"
+    assert paper_cond.match == MatchValue(value=42)
+
+
+@pytest.mark.asyncio
+async def test_prepare_single_paper_rag_threads_user_scope_to_search() -> None:
+    """prepare_single_paper_rag fetches the caller's library and threads scope down."""
+    from unittest.mock import MagicMock
+
+    from paper_ingestion.models import AskRequest
+
+    chunks = [{"content": "text", "page_number": 1, "score": 0.9, "chunk_index": 0}]
+    embedder = AsyncMock()
+    embedder.search_chunks_in_paper = AsyncMock(return_value=chunks)
+    embedder.rerank_chunks = AsyncMock(return_value=chunks)
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"id": 42, "title": "T"})
+    conn.fetch = AsyncMock(return_value=[{"paper_id": 42}, {"paper_id": 99}])
+    pool = MagicMock()
+    pool.acquire = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    await prepare_single_paper_rag(
+        embedder,
+        pool,
+        paper_id=42,
+        body=AskRequest(question="q?", max_chunks=3),
+        http_client=AsyncMock(spec=httpx.AsyncClient),
+        user_id=7,
+    )
+
+    kwargs = embedder.search_chunks_in_paper.await_args.kwargs
+    assert kwargs.get("user_id") == 7, "user_id must be threaded into the Qdrant search"
+    assert kwargs.get("library_paper_ids") == [42, 99], (
+        "the caller's own user_library paper ids must be threaded down (PI-RAG-001)"
+    )
+    # The library lookup must be keyed on the CALLER's id (real-SQL coverage of
+    # the user_library query lives in the sidecar contract test).
+    assert conn.fetch.await_args.args[-1] == 7

@@ -138,8 +138,8 @@ HTTP client.
   config lives in `user_config` with JSONB values.
 - **Admin bootstrap** — the onboarding wizard creates the admin account mid-flow
   (the admin-create step establishes the session, after which the remaining
-  post-auth steps complete); the admin can invite additional users via
-  **Settings → Admin → Users**.
+  post-auth steps complete); the admin can invite additional users via the
+  **Admin → User Management** sidebar section (`/admin/users`).
 
 ### Cross-Service Auth Boundary (resolver DI)
 

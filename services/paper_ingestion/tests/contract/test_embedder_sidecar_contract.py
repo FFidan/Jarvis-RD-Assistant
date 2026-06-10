@@ -215,6 +215,225 @@ async def _identity_rerank(query, chunks, top_k):  # noqa: ARG001
 
 
 # ---------------------------------------------------------------------------
+# M7 — search_chunks_in_paper defense-in-depth user scope
+#
+# Same shared-corpus topology as the PI-RAG-001 cross-paper test above, but at
+# the paper-scoped search boundary:
+#   POSITIVE: caller B retrieves chunks of shared paper P that user A embedded
+#             (payload user_id=A) because P is in B's library — guards the
+#             RAG-DB-1 regression class (a scoping "fix" must never break
+#             legitimate shared-corpus retrieval).
+#   EXCLUSION: paper Q (embedded by A, NOT in B's library) yields NOTHING for
+#             B when scope params are passed.
+#   DEFAULT:  no user params → identical unscoped behaviour (extraction/core.py
+#             system-context path stays default-None).
+#
+# Verified: services/paper_ingestion/paper_ingestion/ingestion/search.py:117
+#   (search_chunks_in_paper nests _user_scope_filter as a `must` sub-Filter)
+# Verified: services/paper_ingestion/paper_ingestion/extraction/core.py:167
+#   (extraction calls search_chunks_in_paper without user scope — default-None)
+# ---------------------------------------------------------------------------
+
+
+async def test_search_chunks_in_paper_user_scope_shared_corpus_exclusion_and_default(
+    monkeypatch,
+):
+    """Paper-scoped search: shared-corpus positive, cross-user exclusion, default-None."""
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
+    from paper_ingestion.models import ChunkForEmbedding
+
+    user_a, user_b = 7, 8
+    paper_p, paper_q = 10, 11  # P: shared, in B's library; Q: private to A
+
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+        async with httpx.AsyncClient() as http_client:
+            qdrant = FauxQdrantClient()
+            embedder = Embedder(http_client, qdrant)
+            await embedder.ensure_collection()
+
+            # Both papers' chunks embedded BY A — payload user_id=A.
+            await embedder.embed_and_store(
+                paper_p,
+                [
+                    ChunkForEmbedding(
+                        chunk_index=0,
+                        content="reproducibility methods shared across the corpus",
+                        page_number=1,
+                        start_char=0,
+                        end_char=48,
+                    )
+                ],
+                user_id=user_a,
+            )
+            await embedder.embed_and_store(
+                paper_q,
+                [
+                    ChunkForEmbedding(
+                        chunk_index=0,
+                        content="reproducibility notes private to user A only",
+                        page_number=1,
+                        start_char=0,
+                        end_char=45,
+                    )
+                ],
+                user_id=user_a,
+            )
+
+            # POSITIVE — B + library widening retrieves A-embedded shared P.
+            shared = await embedder.search_chunks_in_paper(
+                "reproducibility",
+                paper_id=paper_p,
+                limit=5,
+                score_threshold=0.0,
+                user_id=user_b,
+                library_paper_ids=[paper_p],
+            )
+            # EXCLUSION — Q not in B's library, chunks owned by A: nothing for B.
+            excluded = await embedder.search_chunks_in_paper(
+                "reproducibility",
+                paper_id=paper_q,
+                limit=5,
+                score_threshold=0.0,
+                user_id=user_b,
+                library_paper_ids=[paper_p],
+            )
+            # DEFAULT-None — positional call shape of extraction/core.py:167.
+            unscoped = await embedder.search_chunks_in_paper(
+                "reproducibility", paper_q, limit=3, score_threshold=0.0
+            )
+
+    assert {row["chunk_index"] for row in shared} == {0}, (
+        "caller B must retrieve shared paper P's chunks despite A embedding them — "
+        "RAG-DB-1 class guard: user scoping must not break legitimate retrieval"
+    )
+    assert excluded == [], (
+        "caller B must get NOTHING from paper Q (embedded by A, not in B's library) — "
+        "M7 defense-in-depth even when route-level ownership checks were bypassed"
+    )
+    assert {row["chunk_index"] for row in unscoped} == {0}, (
+        "default-None (system-context extraction path) must behave exactly as before"
+    )
+
+
+# ---------------------------------------------------------------------------
+# M7 — prepare_single_paper_rag end-to-end: caller fetches library + threads scope
+#
+# Verified: services/paper_ingestion/paper_ingestion/rag/streaming.py:124-137
+#   (prepare_single_paper_rag queries user_library for the caller, threads
+#    user_id + library_paper_ids into search_chunks_in_paper)
+# ---------------------------------------------------------------------------
+
+
+async def test_single_paper_rag_scoped_to_callers_library_not_others_private(
+    contract_conn, monkeypatch
+):
+    """B asks about shared P (A embedded) → sources; B asks about A-private Q → no chunks."""
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_sidecars import FauxOllamaServer, FauxQdrantClient
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION, Embedder
+    from paper_ingestion.models import AskRequest, ChunkForEmbedding
+    from paper_ingestion.rag.exceptions import NoRelevantChunksError
+    from paper_ingestion.rag.streaming import prepare_single_paper_rag
+
+    user_a = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('rag-single-a@test', 'user') RETURNING id"
+    )
+    user_b = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('rag-single-b@test', 'user') RETURNING id"
+    )
+    paper_p = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('rag-single-shared-P', 'arxiv', 'Shared Single-Paper RAG Paper', '{}',
+                   'https://rag.test/sp') RETURNING id"""
+    )
+    paper_q = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url)
+           VALUES ('rag-single-private-Q', 'upload', 'A Private Single-Paper Upload', '{}',
+                   'https://rag.test/sq') RETURNING id"""
+    )
+    # Library membership: A has BOTH P and Q; B has ONLY P.
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES "
+        "($1, $2, 'manual_save'), ($1, $3, 'manual_save'), ($4, $2, 'manual_save')",
+        user_a,
+        paper_p,
+        paper_q,
+        user_b,
+    )
+
+    async with FauxOllamaServer(dimension=EMBEDDING_DIMENSION) as llm:
+        monkeypatch.setenv("LITELLM_BASE_URL", llm.url)
+        async with httpx.AsyncClient() as http_client:
+            qdrant = FauxQdrantClient()
+            embedder = Embedder(http_client, qdrant)
+            await embedder.ensure_collection()
+
+            # Both papers' chunks embedded BY A (payload user_id=A).
+            await embedder.embed_and_store(
+                paper_p,
+                [
+                    ChunkForEmbedding(
+                        chunk_index=0,
+                        content="reproducibility methods shared across the corpus",
+                        page_number=1,
+                        start_char=0,
+                        end_char=48,
+                    )
+                ],
+                user_id=user_a,
+            )
+            await embedder.embed_and_store(
+                paper_q,
+                [
+                    ChunkForEmbedding(
+                        chunk_index=0,
+                        content="reproducibility notes private to user A only",
+                        page_number=1,
+                        start_char=0,
+                        end_char=45,
+                    )
+                ],
+                user_id=user_a,
+            )
+
+            embedder.rerank_chunks = _identity_rerank  # type: ignore[method-assign]
+            pool = SharedConnPool(contract_conn)
+            body = AskRequest(question="reproducibility", max_chunks=5)
+
+            # POSITIVE — B retrieves shared P even though A embedded its chunks.
+            messages, sources = await prepare_single_paper_rag(
+                embedder,
+                pool,
+                paper_id=paper_p,
+                body=body,
+                http_client=http_client,
+                user_id=user_b,
+            )
+            # EXCLUSION — Q is private to A; defense-in-depth fails closed for B
+            # even though this call bypassed the route-level ownership check.
+            with pytest.raises(NoRelevantChunksError):
+                await prepare_single_paper_rag(
+                    embedder,
+                    pool,
+                    paper_id=paper_q,
+                    body=body,
+                    http_client=http_client,
+                    user_id=user_b,
+                )
+
+    assert len(sources) >= 1, (
+        "caller B must get sources for shared paper P (in B's library) — "
+        "RAG-DB-1 class guard: scope threading must not break legitimate asks"
+    )
+    assert all("private to user A" not in s["content"] for s in sources), (
+        "no chunk content from A-private paper Q may surface in B's sources"
+    )
+    assert len(messages) == 2
+
+
+# ---------------------------------------------------------------------------
 # §W1A.4-REEMBED-01 — reembed_paper Qdrant failure rolls back DB
 #
 # Verified: scripts/reembed.py:622-667 (reembed_paper: Qdrant upsert first,

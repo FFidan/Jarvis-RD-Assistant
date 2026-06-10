@@ -4,6 +4,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { Plus, Library, Download, Play } from 'lucide-react';
 import type { Deck } from '@/types';
 import { fetchDecks, createDeck, exportAnki } from '@/lib/api';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -47,6 +48,7 @@ export function DeckBrowser({ selectedDeckId, onSelectDeck, onStartReview }: Dec
       setName('');
       setDescription('');
     },
+    onError: () => toast.error('Failed to create deck. Please try again.'),
   });
 
   const handleExport = async (deck: Deck) => {

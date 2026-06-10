@@ -1,9 +1,9 @@
 /**
  * Unit tests for use-streaming-chat — D.2 finally-branch empty placeholder removal,
  * D.3 unmount does NOT abort (streams survive navigation); logout DOES abort,
- * and FE-SSE-1 streamError surface.
+ * FE-SSE-1 streamError surface, and U1-fe elapsed-seconds timer.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useChatStore, abortAllStreams } from '@/stores/chat-store';
 
@@ -376,5 +376,84 @@ describe('use-streaming-chat — D.3 unmount does not abort stream', () => {
       resultB.current.stopStreaming();
     });
     expect(capturedSignal!.aborted).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U1-fe — elapsedSeconds timer
+// ---------------------------------------------------------------------------
+
+describe('use-streaming-chat — U1-fe elapsedSeconds timer', () => {
+  beforeEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+    // shouldAdvanceTime=true: fake timers auto-advance wall-clock so that
+    // waitFor polling (which uses setTimeout internally) still resolves.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('increments each second while streaming then resets to 0 on stop', async () => {
+    mockStreamSSE.mockImplementation((_url, _body, signal: AbortSignal) => hangingStream(signal));
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'timer1', scope: 'cross-paper' }),
+    );
+
+    expect(result.current.elapsedSeconds).toBe(0);
+
+    act(() => { void result.current.sendMessage('time me'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(true));
+
+    expect(result.current.elapsedSeconds).toBe(0);
+
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(result.current.elapsedSeconds).toBe(1);
+
+    act(() => { vi.advanceTimersByTime(4000); });
+    expect(result.current.elapsedSeconds).toBe(5);
+
+    // Stop stream — elapsed should reset to 0
+    act(() => { result.current.stopStreaming(); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+    expect(result.current.elapsedSeconds).toBe(0);
+  });
+
+  it('resets elapsedSeconds to 0 when stream ends normally', async () => {
+    mockStreamSSE.mockImplementation(async function* () {
+      yield { type: 'token', content: 'hello' };
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'timer2', scope: 'cross-paper' }),
+    );
+
+    act(() => { void result.current.sendMessage('quick question'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+    expect(result.current.elapsedSeconds).toBe(0);
+  });
+
+  it('does not leak the interval after unmount mid-stream', async () => {
+    mockStreamSSE.mockImplementation((_url, _body, signal: AbortSignal) => hangingStream(signal));
+
+    const { result, unmount } = renderHook(() =>
+      useStreamingChat({ chatId: 'timer3', scope: 'cross-paper' }),
+    );
+
+    act(() => { void result.current.sendMessage('leak test'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(true));
+
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(result.current.elapsedSeconds).toBe(2);
+
+    // Unmount — React cleanup should clear the interval
+    unmount();
+
+    // Advancing time after unmount must not throw (stray setElapsedSeconds calls on
+    // an unmounted hook would produce a React act() warning / error).
+    act(() => { vi.advanceTimersByTime(5000); });
   });
 });

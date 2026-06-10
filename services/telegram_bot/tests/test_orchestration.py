@@ -375,30 +375,38 @@ async def test_review_reminder_skips_when_no_owner():
 def test_owner_headers_all_orchestrators_use_canonical():
     """All orchestrators must emit the canonical owner headers — never a private copy.
 
+    The canonical ``_owner_headers`` lives in ``telegram_bot.config`` (the leaf
+    module — transport callers must not drag in the handler chain).
     Orchestrators that still issue HTTP calls inline (paper_digest,
-    research_pulse, review_reminder) re-export the canonical ``_owner_headers``
-    from helpers.  daily_briefing / deadline_warning / author_alerts now route
-    every backend call through ``services_client``, which builds the same
-    canonical headers internally — so for those the contract is verified at the
-    services_client layer (and per-call in the daily_briefing / author_alerts /
-    deadline_warning header tests above).
+    research_pulse, review_reminder) import it from config.  daily_briefing /
+    deadline_warning / author_alerts now route every backend call through
+    ``services_client``, which builds the same canonical headers internally —
+    so for those the contract is verified at the services_client layer (and
+    per-call in the daily_briefing / author_alerts / deadline_warning header
+    tests above).
     """
 
+    from telegram_bot import config as config_mod
     from telegram_bot import services_client
-    from telegram_bot.handlers import helpers as helpers_mod
-    from telegram_bot.handlers.helpers import _owner_headers
+    from telegram_bot.config import _owner_headers
     from telegram_bot.orchestration import paper_digest as pd_mod
     from telegram_bot.orchestration import research_pulse as rp_mod
     from telegram_bot.orchestration import review_reminder as rr_mod
 
-    # Inline-HTTP orchestrators must re-export the canonical function (not a copy).
-    assert pd_mod._owner_headers is _owner_headers, "paper_digest has its own _owner_headers"
-    assert rp_mod._owner_headers is _owner_headers, "research_pulse has its own _owner_headers"
-    assert rr_mod._owner_headers is _owner_headers, "review_reminder has its own _owner_headers"
+    # Inline-HTTP orchestrators must use the canonical function (not a copy).
+    assert pd_mod._owner_headers is config_mod._owner_headers, (
+        "paper_digest has its own _owner_headers"
+    )
+    assert rp_mod._owner_headers is config_mod._owner_headers, (
+        "research_pulse has its own _owner_headers"
+    )
+    assert rr_mod._owner_headers is config_mod._owner_headers, (
+        "review_reminder has its own _owner_headers"
+    )
 
     # services_client (used by daily_briefing / deadline_warning / author_alerts)
     # uses the same canonical helper — no private copy.
-    assert services_client._owner_headers is helpers_mod._owner_headers, (
+    assert services_client._owner_headers is config_mod._owner_headers, (
         "services_client has its own _owner_headers"
     )
 

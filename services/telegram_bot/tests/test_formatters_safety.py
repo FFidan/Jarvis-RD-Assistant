@@ -1,6 +1,6 @@
-"""Tests for telegram_bot hardening fixes (H-3, M-5, M-6)."""
+"""Tests for telegram_bot hardening fixes (H-3, M-5, M-6, M12b)."""
 
-from telegram_bot.formatters import confidence_badge, safe_url, sanitize_user_input
+from telegram_bot.formatters import confidence_badge, safe_url, sanitize_user_input, truncate
 
 _BIDI = "‮"  # RIGHT-TO-LEFT OVERRIDE
 
@@ -65,3 +65,44 @@ class TestConfidenceBadge:
         result = confidence_badge("<script>xss</script>")
         assert "<script>" not in result
         assert "&lt;script&gt;" in result
+
+
+class TestTruncateTagAware:
+    """M12b: truncate must never cut inside an HTML tag or entity.
+
+    Telegram's HTML parse mode rejects a message containing a partially-cut
+    tag (``<a hre``) or entity (``&amp``) with a 400 'can't parse entities'.
+    ``truncate`` backs the cut up to just before the split tag/entity.  Note
+    the contract is *no mid-tag/mid-entity cut* — re-balancing tags left open
+    by the cut is the caller's job (see paper_digest._send_chunked).
+
+    All tests use ``max_length=120`` → effective cut at 20 chars
+    (``limit = max_length - TRUNCATION_HEADROOM``).
+    """
+
+    def test_backs_up_before_partially_cut_opening_tag(self) -> None:
+        # Cut at 20 lands two chars into '<a href="...">'.
+        text = "x" * 18 + '<a href="http://e.com">y</a>'
+        result = truncate(text, max_length=120)
+        assert result == "x" * 18 + "\n\n<i>... (truncated)</i>"
+
+    def test_backs_up_before_partially_cut_closing_tag(self) -> None:
+        # Cut at 20 lands inside '</b>' → back up to before '<'.
+        text = "<b>" + "x" * 15 + "</b>" + "y" * 10
+        result = truncate(text, max_length=120)
+        assert result == "<b>" + "x" * 15 + "\n\n<i>... (truncated)</i>"
+
+    def test_keeps_complete_tag_just_before_cut(self) -> None:
+        # A fully-formed tag before the cut must NOT be backed out.
+        text = "x" * 10 + "<b>" + "y" * 20
+        result = truncate(text, max_length=120)
+        assert result == "x" * 10 + "<b>" + "y" * 7 + "\n\n<i>... (truncated)</i>"
+
+    def test_backs_up_before_partially_cut_entity(self) -> None:
+        # Cut at 20 lands inside '&amp;' → back up to before '&'.
+        text = "x" * 17 + "&amp;" + "y" * 10
+        result = truncate(text, max_length=120)
+        assert result == "x" * 17 + "\n\n<i>... (truncated)</i>"
+
+    def test_text_within_limit_is_unchanged(self) -> None:
+        assert truncate("<b>short</b>") == "<b>short</b>"

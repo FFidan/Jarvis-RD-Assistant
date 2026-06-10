@@ -335,3 +335,105 @@ async def test_project_papers_detach_idor_rejected(
         f"IDOR: user B successfully deleted project_papers link "
         f"(project={project_id}, paper={paper_id}) — ownership guard failed"
     )
+
+
+# ---------------------------------------------------------------------------
+# M8b — get_project counts are user-scoped (defense-in-depth)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_project_detail_question_count_excludes_other_users_rows(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """open_question_count counts only the caller's project_questions rows.
+
+    Defense-in-depth for the LATERAL count in get_project: a project_questions
+    row carrying another user's user_id on the same project_id must NOT be
+    counted for the owner.
+    """
+    # Verified: services/learning_engine/learning_engine/routers/projects.py:162-165
+    # Fresh project → deterministic zero baseline for all counts.
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        create_resp = await c.post("/api/projects", json={"name": "M8b Count Scoping"})
+    assert create_resp.status_code == 201, (
+        f"POST /api/projects failed: {create_resp.status_code}: {create_resp.text[:300]}"
+    )
+    project_id = create_resp.json()["id"]
+
+    # One question owned by user A, one cross-user row stamped with user B's id.
+    await contract_conn.execute(
+        "INSERT INTO project_questions (project_id, user_id, body) VALUES ($1, $2, $3)",
+        project_id,
+        contract_two_users.user_a_id,
+        "own open question",
+    )
+    await contract_conn.execute(
+        "INSERT INTO project_questions (project_id, user_id, body) VALUES ($1, $2, $3)",
+        project_id,
+        contract_two_users.user_b_id,
+        "cross-user question that must not be counted",
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.get(f"/api/projects/{project_id}")
+    assert resp.status_code == 200, (
+        f"GET /api/projects/{project_id} failed: {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert body["open_question_count"] == 1, (
+        f"open_question_count must exclude other users' rows: expected 1, "
+        f"got {body['open_question_count']}"
+    )
+    assert body["paper_count"] == 0, (
+        f"Fresh project must have paper_count 0; got {body['paper_count']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# M8c — link_paper: zotero.push enqueue unavailability is loud, not fatal
+# ---------------------------------------------------------------------------
+
+
+async def test_project_papers_attach_zotero_enqueue_unavailable_is_loud_not_fatal(
+    contract_two_users, contract_conn, _le_app, _configure_api_key, monkeypatch, caplog
+):
+    """Linking a starred paper still returns 201 when zotero.push is not in the
+    task registry, and the skip is logged at ERROR level (not silently swallowed).
+
+    Pins the M8c fix: the registry lookup lives outside the enqueue try/except,
+    so a missing registration surfaces as a distinct ERROR log while the link
+    itself (already committed) succeeds.
+    """
+    # Verified: services/learning_engine/learning_engine/routers/project_papers.py:104-155
+    import logging as _logging
+    from types import MappingProxyType
+
+    from jarvis_common import task_registry as _task_registry
+
+    project_id = contract_two_users.project_id_a
+    paper_id = contract_two_users.paper_id_a
+
+    # Star the paper so link_paper takes the zotero-push branch.
+    await contract_conn.execute(
+        "INSERT INTO paper_user_state (paper_id, user_id, starred) VALUES ($1, $2, TRUE) "
+        "ON CONFLICT (paper_id, user_id) DO UPDATE SET starred = TRUE",
+        paper_id,
+        contract_two_users.user_a_id,
+    )
+    # Force the missing-registration path deterministically — other test modules
+    # in the same process may have populated the process-global registry.
+    monkeypatch.setattr(_task_registry, "KIND_TO_TASK", MappingProxyType({}))
+
+    with caplog.at_level(_logging.ERROR, logger="learning_engine.routers.project_papers"):
+        async with _client(_le_app, contract_two_users.cookie_a) as c:
+            resp = await c.post(f"/api/projects/{project_id}/papers/{paper_id}")
+
+    assert resp.status_code == 201, (
+        f"link_paper must succeed despite unavailable zotero.push enqueue; "
+        f"got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert resp.json() == {"project_id": project_id, "paper_id": paper_id}
+    error_messages = [r.getMessage() for r in caplog.records if r.levelno >= _logging.ERROR]
+    assert any("zotero.push" in m for m in error_messages), (
+        f"Missing zotero.push registration must be logged at ERROR; got {error_messages}"
+    )

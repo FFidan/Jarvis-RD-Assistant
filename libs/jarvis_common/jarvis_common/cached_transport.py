@@ -12,6 +12,7 @@ body containing unresolved entity references is rejected rather than cached.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -151,6 +152,10 @@ class CachingTransport(httpx.AsyncBaseTransport):
         self._store: OrderedDict[str, tuple[float, int, list[tuple[bytes, bytes]], bytes]] = (
             OrderedDict()
         )
+        # Single-flight is PER-KEY, not one instance-wide lock: an instance lock
+        # would serialize unrelated hosts (e.g. arXiv's 3s pacing would stall
+        # Crossref/OpenAlex fetches). Only concurrent GETs for the SAME key wait.
+        self._inflight: dict[str, asyncio.Future[None]] = {}
         self.hits = 0
         self.misses = 0
 
@@ -160,33 +165,54 @@ class CachingTransport(httpx.AsyncBaseTransport):
             return await self._inner.handle_async_request(request)
 
         key = _cache_key(request.url)
-        now = time.monotonic()
-        hit = self._store.get(key)
-        if hit is not None and now - hit[0] < self._ttl:
-            self.hits += 1
-            self._store.move_to_end(key)
-            logger.debug("source-cache HIT %s h=%d m=%d", key, self.hits, self.misses)
-            return httpx.Response(hit[1], headers=hit[2], content=hit[3], request=request)
-
-        response = await self._inner.handle_async_request(request)
-        ctype = response.headers.get("content-type", "").lower()
-        is_binary = any(tok in ctype for tok in _UNCACHEABLE_CONTENT)
-        if response.status_code == 200 and not is_binary:
-            body = await response.aread()
-            safe_headers = _safe_headers(response.headers.raw)
-            if _is_cacheable_body(request.url.host, body):
-                self._store[key] = (now, response.status_code, safe_headers, body)
+        while True:
+            now = time.monotonic()
+            hit = self._store.get(key)
+            if hit is not None and now - hit[0] < self._ttl:
+                self.hits += 1
                 self._store.move_to_end(key)
-                if len(self._store) > self._max:
-                    self._store.popitem(last=False)
-            else:
-                logger.debug("source-cache SKIP (empty/malformed body) %s", key)
-            # Body was consumed by aread(); rebuild a fresh response either way so
-            # the caller still gets it (uncached on skip → can transiently retry).
-            response = httpx.Response(200, headers=safe_headers, content=body, request=request)
-        self.misses += 1
-        logger.debug("source-cache MISS %s h=%d m=%d", key, self.hits, self.misses)
-        return response
+                logger.debug("source-cache HIT %s h=%d m=%d", key, self.hits, self.misses)
+                return httpx.Response(hit[1], headers=hit[2], content=hit[3], request=request)
+            leader = self._inflight.get(key)
+            if leader is None:
+                break  # no fetch in flight for this key — become the leader
+            # Same key already being fetched: await the leader's outcome (shield
+            # so a cancelled waiter can't cancel the shared future; a leader
+            # failure re-raises here in every waiter), then re-check the cache.
+            await asyncio.shield(leader)
+
+        fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._inflight[key] = fut
+        try:
+            response = await self._inner.handle_async_request(request)
+            ctype = response.headers.get("content-type", "").lower()
+            is_binary = any(tok in ctype for tok in _UNCACHEABLE_CONTENT)
+            if response.status_code == 200 and not is_binary:
+                body = await response.aread()
+                safe_headers = _safe_headers(response.headers.raw)
+                if _is_cacheable_body(request.url.host, body):
+                    self._store[key] = (now, response.status_code, safe_headers, body)
+                    self._store.move_to_end(key)
+                    if len(self._store) > self._max:
+                        self._store.popitem(last=False)
+                else:
+                    logger.debug("source-cache SKIP (empty/malformed body) %s", key)
+                # Body was consumed by aread(); rebuild a fresh response either way so
+                # the caller still gets it (uncached on skip → can transiently retry).
+                response = httpx.Response(200, headers=safe_headers, content=body, request=request)
+            self.misses += 1
+            logger.debug("source-cache MISS %s h=%d m=%d", key, self.hits, self.misses)
+            return response
+        except Exception as exc:
+            fut.set_exception(exc)
+            fut.exception()  # mark retrieved so a waiter-less failure doesn't warn at GC
+            raise
+        finally:
+            # Always clear the in-flight entry so a failed/cancelled fetch never
+            # poisons the key — the next caller for it retries upstream fresh.
+            self._inflight.pop(key, None)
+            if not fut.done():
+                fut.set_result(None)
 
     async def aclose(self) -> None:
         """Close the underlying transport; cache entries are discarded."""

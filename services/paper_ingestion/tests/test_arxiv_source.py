@@ -481,3 +481,53 @@ async def test_fetch_xml_retry_after_boundary(header_value: str, expected_sleep:
     assert matching_calls, (
         f"Expected sleep call with {expected_sleep}s, got calls: {mock_sleep.call_args_list}"
     )
+
+
+# ---------------------------------------------------------------------------
+# M10c: author term injection — embedded quotes and boolean operators
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_search_author_with_embedded_quotes_sanitized():
+    """M10c: author containing embedded double-quotes is stripped and wrapped in a
+    quoted phrase term — au:"..." — so the arXiv query parser never sees bare quotes
+    or operator-injecting characters inside the author field.
+    """
+    fixture = _empty_xml()
+    route = respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, content=fixture))
+
+    source = _make_source()
+    # Author name with embedded quotes and leading/trailing spaces.
+    await source.search(
+        query="neural ODE",
+        max_results=5,
+        author='"O\'Brien AND NOT Smith"',
+    )
+
+    assert route.call_count == 1
+    params = dict(route.calls[0].request.url.params)
+    sq = params.get("search_query", "")
+
+    # The au: field must be wrapped in double-quotes (phrase form).
+    assert sq.startswith('au:"'), f'Expected au:"...", got: {sq!r}'
+    # No stray double-quotes inside the sanitized author token.
+    # Strip the wrapping au:"..." part and check inner content.
+    inner = sq.split('au:"')[1].split('"')[0]
+    assert '"' not in inner, f"Embedded quote leaked into au field: {inner!r}"
+
+
+@respx.mock
+async def test_search_author_clean_name_uses_quoted_phrase():
+    """M10c: clean author names (no special chars) are also wrapped as quoted phrase terms."""
+    fixture = _empty_xml()
+    route = respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, content=fixture))
+
+    source = _make_source()
+    await source.search(query="transformer", max_results=5, author="Yann LeCun")
+
+    assert route.call_count == 1
+    params = dict(route.calls[0].request.url.params)
+    sq = params.get("search_query", "")
+
+    assert 'au:"Yann LeCun"' in sq, f'Expected au:"Yann LeCun" in search_query, got: {sq!r}'

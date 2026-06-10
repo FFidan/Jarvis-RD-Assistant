@@ -305,4 +305,83 @@ describe('SmtpSection — Save', () => {
     // Host field is empty — button should be disabled
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
+
+  it('shows port error and disables Save when port is out of range', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+
+    const user = userEvent.setup();
+    await renderSmtp();
+
+    // Wait for hydration
+    await screen.findByLabelText(/host/i);
+
+    const portInput = screen.getByLabelText(/port/i);
+    await user.clear(portInput);
+    await user.type(portInput, '99999');
+
+    expect(screen.getByText(/port must be a number between 1 and 65535/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('shows port error and disables Save when port is non-numeric', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+
+    const user = userEvent.setup();
+    await renderSmtp();
+
+    await screen.findByLabelText(/host/i);
+
+    const portInput = screen.getByLabelText(/port/i);
+    await user.clear(portInput);
+    await user.type(portInput, 'abc');
+
+    expect(screen.getByText(/port must be a number between 1 and 65535/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('enables Save and hides port error when port is valid', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+
+    const user = userEvent.setup();
+    await renderSmtp();
+
+    await screen.findByLabelText(/host/i);
+
+    const portInput = screen.getByLabelText(/port/i);
+    await user.clear(portInput);
+    await user.type(portInput, '99999');
+
+    // Confirm error is shown
+    expect(screen.getByText(/port must be a number between 1 and 65535/i)).toBeInTheDocument();
+
+    // Fix the port
+    await user.clear(portInput);
+    await user.type(portInput, '465');
+
+    expect(screen.queryByText(/port must be a number between 1 and 65535/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SmtpSection — config fetch error
+// ---------------------------------------------------------------------------
+
+describe('SmtpSection — config fetch error', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows an error message (not an empty form) when getSmtpConfig fails', async () => {
+    mockGetSmtpConfig.mockRejectedValue(new Error('Network error'));
+
+    await renderSmtp();
+
+    await waitFor(() =>
+      expect(screen.getByText(/failed to load smtp settings/i)).toBeInTheDocument(),
+    );
+
+    // The form must not render — no Save button visible
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
 });

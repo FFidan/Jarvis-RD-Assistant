@@ -41,6 +41,9 @@ def _make_command_update_and_context(chat_id=_TEST_CHAT_ID):
     update.effective_chat.id = chat_id
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
+    # A real command Update carries no callback_query — keep the mock faithful
+    # (review_start branches on `update.callback_query is not None`).
+    update.callback_query = None
 
     context = MagicMock()
     context.user_data = {}
@@ -462,6 +465,79 @@ async def test_rate_card_ratings_1_and_2_send_correct_payload(
     # Response text must contain the human-readable label for the rating
     edit_text = update.callback_query.edit_message_text.call_args[0][0]
     assert expected_label in edit_text
+
+
+# ---------------------------------------------------------------------------
+# Tests: H6 — review_start via the inline "Start Review" button must answer
+# the callback query (otherwise the Telegram client spins forever)
+# ---------------------------------------------------------------------------
+
+# Separate chat_id bucket so review_start's 5-call rate-limit quota from the
+# command-path tests above does not bleed into these callback-path tests.
+_H6_CHAT_ID = 22222
+
+
+def _make_start_review_callback_update(chat_id=_H6_CHAT_ID):
+    """Build a faithful callback-entry Update for review_start (start_review button)."""
+    from telegram import Message
+
+    update, context, mock_http = _make_callback_update_and_context("start_review", chat_id=chat_id)
+    # A callback Update carries no update.message; the reply target is the
+    # callback query's message (spec'd so isinstance(raw, Message) passes).
+    update.message = None
+    update.callback_query.message = MagicMock(spec=Message)
+    return update, context, mock_http
+
+
+@pytest.mark.asyncio
+async def test_review_start_callback_answers_query_when_no_cards_due() -> None:
+    """Inline-button entry must answer the callback query even on the
+    no-due-cards early END — otherwise the button spinner never stops (H6)."""
+    update, context, mock_http = _make_start_review_callback_update()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = []
+    mock_http.get.return_value = mock_resp
+
+    result = await review_start(update, context)
+
+    assert result == ConversationHandler_END
+    update.callback_query.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_review_start_callback_answers_query_on_auth_fail() -> None:
+    """Inline-button entry must answer the callback query even when auth_check
+    denies and the handler ENDs without any user-visible reply (H6)."""
+    from unittest.mock import patch
+
+    update, context, _mock_http = _make_start_review_callback_update()
+
+    with patch(
+        "telegram_bot.handlers.review_handler.auth_check",
+        new=AsyncMock(return_value=(False, None)),
+    ):
+        result = await review_start(update, context)
+
+    assert result == ConversationHandler_END
+    update.callback_query.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_review_start_command_path_does_not_touch_callback_query() -> None:
+    """/review (command entry) has no callback query — the H6 ack must be a
+    no-op there and the first card still renders."""
+    update, context, mock_http = _make_command_update_and_context()
+    card = _sample_card()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = [card]
+    mock_http.get.return_value = mock_resp
+
+    result = await review_start(update, context)
+
+    assert result == SHOWING_FRONT
+    assert update.callback_query is None  # nothing answered, nothing mutated
 
 
 # ---------------------------------------------------------------------------

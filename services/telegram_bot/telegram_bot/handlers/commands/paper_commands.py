@@ -9,6 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from telegram_bot import services_client
+from telegram_bot.config import _owner_headers
 from telegram_bot.formatters import (
     format_morning_briefing,
     format_paper_card,
@@ -18,7 +19,6 @@ from telegram_bot.formatters import (
 )
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import (
-    _owner_headers,
     get_config,
     get_http,
     get_jarvis_user_id,

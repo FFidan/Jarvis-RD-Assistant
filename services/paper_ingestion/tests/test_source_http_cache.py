@@ -17,6 +17,7 @@ Plus PI-D/PI-E lock-in (tests 7-9) and SEC-3 regression (tests 14-15).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -384,3 +385,115 @@ async def test_normal_atom_still_admitted_after_sec3_hardening():
     assert inner.calls == 1
     assert transport.hits == 1
     assert r1.content == r2.content == _ATOM_OK
+
+
+# ---------------------------------------------------------------------------
+# 16-18. M4 — per-key single-flight for concurrent GETs
+# ---------------------------------------------------------------------------
+
+
+class _GatedInner(httpx.AsyncBaseTransport):
+    """Counting inner whose responses block until ``release`` is set.
+
+    A response item may be an Exception instance, which is raised (after the
+    gate opens) instead of returned — used to exercise leader-failure paths.
+    """
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+        self.release = asyncio.Event()
+
+    async def handle_async_request(self, request):
+        self.calls += 1
+        item = self.responses.pop(0) if self.responses else (200, b"{}")
+        await self.release.wait()
+        if isinstance(item, Exception):
+            raise item
+        status, body, *rest = item
+        headers = rest[0] if rest else None
+        return httpx.Response(status, content=body, headers=headers, request=request)
+
+    async def aclose(self):  # noqa: D401
+        pass
+
+
+async def _yield_loop(n: int = 20) -> None:
+    """Yield control *n* times so every runnable task reaches its block point."""
+    for _ in range(n):
+        await asyncio.sleep(0)
+
+
+async def test_concurrent_same_url_single_upstream_call():
+    """Two concurrent GETs to the same URL: one upstream call, same body for both."""
+    inner = _GatedInner([(200, b'{"data":[]}'), (200, b'{"data":["other"]}')])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        t1 = asyncio.create_task(client.get(_S2_URL))
+        t2 = asyncio.create_task(client.get(_S2_URL))
+        try:
+            await _yield_loop()
+            # Both tasks are inside the transport while the leader's fetch is
+            # still blocked: the waiter must NOT have issued a second call.
+            assert inner.calls == 1
+            assert not t1.done() and not t2.done()
+        finally:
+            inner.release.set()
+        r1, r2 = await asyncio.gather(t1, t2)
+
+    assert inner.calls == 1
+    assert r1.status_code == r2.status_code == 200
+    assert r1.content == r2.content == b'{"data":[]}'
+    assert transport.hits == 1  # the waiter is served from the freshly-cached entry
+
+
+async def test_concurrent_different_urls_not_serialized():
+    """Single-flight is per-key: GETs to different hosts proceed concurrently —
+    both upstream calls are entered before either response is released."""
+    inner = _GatedInner([(200, b'{"a":1}'), (200, _ATOM_OK)])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        t1 = asyncio.create_task(client.get(_S2_URL))
+        t2 = asyncio.create_task(client.get(_ARXIV))
+        try:
+            await _yield_loop()
+            # An instance-wide lock would hold the second fetch back while the
+            # first is parked on the gate; per-key flight lets both enter.
+            assert inner.calls == 2
+        finally:
+            inner.release.set()
+        r1, r2 = await asyncio.gather(t1, t2)
+
+    assert inner.calls == 2
+    assert r1.status_code == r2.status_code == 200
+    assert transport.hits == 0
+
+
+async def test_leader_failure_propagates_and_key_retries():
+    """Leader fetch raising: the waiter sees the same exception, the in-flight
+    entry is cleaned up, and the next call for the key retries upstream."""
+    boom = RuntimeError("upstream exploded")
+    inner = _GatedInner([boom, (200, b'{"data":[]}')])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        t1 = asyncio.create_task(client.get(_S2_URL))
+        t2 = asyncio.create_task(client.get(_S2_URL))
+        try:
+            await _yield_loop()
+            assert inner.calls == 1  # waiter is parked on the leader's flight
+        finally:
+            inner.release.set()
+        results = await asyncio.gather(t1, t2, return_exceptions=True)
+
+        # Both the leader and the waiter observe the failure — no hang.
+        assert all(r is boom for r in results)
+        # Failed flight must not poison the key: a fresh call hits upstream.
+        assert transport._inflight == {}
+        r3 = await client.get(_S2_URL)
+
+    assert inner.calls == 2
+    assert r3.status_code == 200
+    assert r3.content == b'{"data":[]}'

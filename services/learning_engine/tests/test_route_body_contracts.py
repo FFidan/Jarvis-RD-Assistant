@@ -44,3 +44,29 @@ def test_generation_routes_declare_request_bodies() -> None:
     schema = _openapi()
     for path in ("/api/generate", "/api/generate/batch"):
         _assert_request_body(schema, "post", path)
+
+
+def test_intent_routes_declare_response_schemas() -> None:
+    """GET/POST /api/executive/intent/today must expose the IntentRow response contract (M9)."""
+    schema = _openapi()
+    for method in ("get", "post"):
+        operation = schema["paths"]["/api/executive/intent/today"][method]
+        json_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        assert json_schema.get("$ref") == "#/components/schemas/IntentRow", (
+            f"{method.upper()} /api/executive/intent/today must declare the IntentRow "
+            f"response schema; got {json_schema!r}"
+        )
+    properties = schema["components"]["schemas"]["IntentRow"]["properties"]
+    assert set(properties) == {"intent", "updated_at"}, (
+        f"IntentRow response schema drifted: {sorted(properties)}"
+    )
+
+
+def test_my_day_bundle_declares_response_schema() -> None:
+    """GET /api/executive/my-day-bundle must keep its MyDayBundleResponse contract (M9)."""
+    schema = _openapi()
+    operation = schema["paths"]["/api/executive/my-day-bundle"]["get"]
+    json_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert json_schema.get("$ref") == "#/components/schemas/MyDayBundleResponse", (
+        f"GET /api/executive/my-day-bundle must declare MyDayBundleResponse; got {json_schema!r}"
+    )

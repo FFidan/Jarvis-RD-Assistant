@@ -309,7 +309,7 @@ All ongoing configuration goes through the web wizard and Settings — no `.env`
 
 | Setting | Where | Restart? |
 |---|---|---|
-| SMTP relay | Settings → Integrations → SMTP / onboarding wizard | No |
+| SMTP relay | Settings → System → Email / SMTP / onboarding wizard | No |
 | Cloud LLM keys (OpenAI, Anthropic, Gemini) | Settings → Models → Cloud Providers | No |
 | Telegram bot token | Settings → Integrations → Bot Token | Yes — `docker compose restart telegram_bot` |
 | Access mode (single ↔ multi-user) | Settings → System → Access Mode | Yes — `docker compose restart paper_ingestion learning_engine` |

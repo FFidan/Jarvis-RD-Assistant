@@ -145,3 +145,35 @@ async def test_rate_limiter_bucket_reset_after_sleep(monkeypatch):
     # last_refill must be set to the time after the sleep, not before it.
     assert limiter.last_refill >= before
     assert limiter.last_refill <= after + 0.1  # within a reasonable window
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_holds_lock_across_sleep_serializing_concurrent_acquirers():
+    """Characterization guard for falsified audit finding M3 (2026-06-10).
+
+    acquire() deliberately holds self._lock across asyncio.sleep: N concurrent
+    acquirers are served one per 1/rate interval. Releasing the lock before the
+    sleep (the audit's proposed "fix") would let all waiters burst at once.
+    """
+    import asyncio
+    import time
+
+    from jarvis_common.source_rate_limiter import SourceRateLimiter
+
+    interval = 0.1
+    limiter = SourceRateLimiter(rate_per_second=1.0 / interval, burst=1)
+    completions: list[float] = []
+
+    async def _acquire_and_stamp() -> None:
+        await limiter.acquire()
+        completions.append(time.monotonic())
+
+    await asyncio.gather(*(_acquire_and_stamp() for _ in range(3)))
+
+    assert len(completions) == 3
+    completions.sort()
+    spacings = [later - earlier for earlier, later in zip(completions, completions[1:])]
+    assert all(spacing >= 0.8 * interval for spacing in spacings), (
+        f"concurrent acquirers must dispense serially ~{interval}s apart (no burst); "
+        f"got spacings {spacings}"
+    )

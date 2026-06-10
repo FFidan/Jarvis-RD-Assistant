@@ -243,11 +243,17 @@ async def _paper_analyze_job(
     )
 
     await ctx.update_progress(1.0, "Done")
-    return {
+    composite: dict[str, Any] = {
         "paper_id": paper_id,
         "chunk_count": result.get("chunk_count", 0),
         "process_status": result.get("status"),
     }
+    # Thread best-effort process-step warnings (e.g. Qdrant stale-vector cleanup
+    # failure) into the composite result; omit the key entirely when clean.
+    process_warnings = result.get("warnings")
+    if process_warnings:
+        composite["warnings"] = process_warnings
+    return composite
 
 
 async def _paper_summarize_job(

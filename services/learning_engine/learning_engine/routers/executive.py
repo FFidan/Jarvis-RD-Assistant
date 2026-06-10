@@ -264,7 +264,7 @@ async def get_my_day_bundle(
         description="Caller UTC offset in minutes east of UTC (JS -getTimezoneOffset()).",
     ),
     user_id: int = Depends(current_user_id_strict_with_owner_override),
-) -> dict[str, Any]:
+) -> MyDayBundleResponse:
     """One-round-trip superset of the My-Day page's ~11 calls.
 
     Returns ``{tasks, intent, threads, yesterday, journal}``.
@@ -336,13 +336,14 @@ async def get_my_day_bundle(
         ],
     }
 
-    return {
-        "tasks": [MyDayTaskItem.model_validate(dict(t)).model_dump(mode="json") for t in tasks],
-        "intent": intent,
-        "threads": [_thread_payload(r) for r in thread_rows],
-        "yesterday": yesterday,
-        "journal": _journal_payload(journal_row),
-    }
+    return MyDayBundleResponse(
+        tasks=[MyDayTaskItem.model_validate(dict(t)).model_dump(mode="json") for t in tasks],
+        # dict() re-pins the IntentRow TypedDict to dict[str, Any] for the model field.
+        intent=dict(intent),
+        threads=[_thread_payload(r) for r in thread_rows],
+        yesterday=yesterday,
+        journal=_journal_payload(journal_row),
+    )
 
 
 @router.post("/tasks", status_code=201, response_model=TaskResponse)

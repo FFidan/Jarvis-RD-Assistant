@@ -254,7 +254,7 @@ export function ResearchFeedPage() {
       );
       void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
       void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
-      toast.success(`Saved ${data.length} paper(s) to your library.`);
+      toast.success(`Saved ${data.length} paper(s). Next: Analyze a paper to unlock Ask.`);
     },
     onError: (error) => {
       toast.error(errorMessage(error, 'Save failed. Check service logs.'));

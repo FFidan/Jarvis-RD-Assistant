@@ -320,7 +320,11 @@ async def annotate_paper(
             )
         except asyncpg.ForeignKeyViolationError as e:
             raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found") from e
-    assert row is not None  # RETURNING guarantees a row on success
+    if row is None:
+        raise RuntimeError(
+            f"annotate_paper: RETURNING produced no row "
+            f"(paper_id={paper_id!r}, user_id={user_id!r})"
+        )
     return UserStateResponse(**dict(row))
 
 

@@ -337,3 +337,101 @@ async def test_paper_summarize_job_forwards_user_id(monkeypatch):
 
     _summ_stub.generate_paper_summary.assert_awaited_once()
     assert _summ_stub.generate_paper_summary.await_args.kwargs.get("user_id") == user_id
+
+
+# ---------------------------------------------------------------------------
+# W1-T4 — _paper_analyze_job must thread process-step warnings into its
+# composite result (and omit the key entirely when the process step is clean).
+# ---------------------------------------------------------------------------
+
+
+async def _run_analyze_job_with_process_result(tmp_path, monkeypatch, process_result: dict):
+    """Drive _paper_analyze_job through the local-paper happy path; return its result.
+
+    run_process_pdf is stubbed to return *process_result*; the heavy
+    summarization module is stubbed out (matching this file's convention).
+    The paper row is local + already downloaded, so the download step is
+    skipped and the only fetchrow call is the initial load (user_id absent →
+    assert_paper_ownership short-circuits in single-user mode).
+    """
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_analyze_job  # noqa: PLC0415
+
+    pdf_file = tmp_path / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 stub")
+
+    row = {
+        "id": 7,
+        "source_type": "local",
+        "pdf_url": None,
+        "pdf_downloaded": True,
+        "pdf_local_path": str(pdf_file),
+    }
+    pool = _make_pool(row)
+
+    # The autouse _install_stubs fixture replaces paper_ingestion.services with
+    # a bare MagicMock; install the submodules the handler imports (setitem
+    # auto-reverts at teardown).
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
+    _workflow_stub.run_process_pdf = AsyncMock(return_value=process_result)
+    _summ_stub = MagicMock()
+    _summ_stub.generate_paper_summary = AsyncMock()
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", _summ_stub)
+
+    # Populate svc so the handler resolves pdf_processor/embedder/verifier.
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
+    svc.verifier = MagicMock()
+
+    # Override PDF_STORAGE_PATH to tmp_path so the path-traversal check passes.
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+
+    return await _paper_analyze_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"paper_id": 7},  # user_id absent → None → single-user mode
+        ctx=_make_ctx(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_paper_analyze_job_composite_carries_process_warnings(tmp_path, monkeypatch):
+    """When the process step reports warnings (e.g. Qdrant stale-vector cleanup
+    failure), the analyze-chain composite result must carry them through —
+    before the fix only chunk_count/process_status were copied, silently
+    dropping warnings on the analyze path."""
+    warnings = [
+        "Stale-vector cleanup failed: 3 stale vector(s) may remain in Qdrant"
+        " (DB chunk rows are authoritative; see service logs)."
+    ]
+    result = await _run_analyze_job_with_process_result(
+        tmp_path,
+        monkeypatch,
+        {"paper_id": 7, "chunk_count": 5, "status": "processed", "warnings": warnings},
+    )
+
+    assert result["warnings"] == warnings
+    assert result["chunk_count"] == 5
+    assert result["process_status"] == "processed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "process_result",
+    [
+        {"paper_id": 7, "chunk_count": 5, "status": "processed"},
+        {"paper_id": 7, "chunk_count": 5, "status": "processed", "warnings": []},
+    ],
+    ids=["no-warnings-key", "empty-warnings-list"],
+)
+async def test_paper_analyze_job_composite_omits_warnings_when_clean(
+    tmp_path, monkeypatch, process_result
+):
+    """The composite result must NOT contain a warnings key when the process
+    step reported none — no empty-list field is introduced."""
+    result = await _run_analyze_job_with_process_result(tmp_path, monkeypatch, process_result)
+
+    assert "warnings" not in result
+    assert result["process_status"] == "processed"

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { SearchPreviewResult } from '@/types';
+import { registerSessionReset } from '@/stores/session-reset';
 
 /**
  * Global store for the ⌘K command-palette overlay.
@@ -58,3 +59,6 @@ export const useCommandPalette = create<CommandPaletteState>((set) => ({
   setErrored: (errored) => set({ errored }),
   _reset: () => set(COMMAND_PALETTE_INITIAL_STATE),
 }));
+
+// Reset command-palette state on logout (see stores/session-reset).
+registerSessionReset(() => useCommandPalette.getState()._reset());

@@ -119,6 +119,7 @@ export function HealthDots({ compact = false, adminLink }: HealthDotsProps) {
     refetchInterval: 30_000,
     // Don't throw on individual probe failures — fetchStackHealth never rejects
     retry: false,
+    placeholderData: (prev) => prev,
   });
 
   // While loading or if the whole query errored, show a neutral dot

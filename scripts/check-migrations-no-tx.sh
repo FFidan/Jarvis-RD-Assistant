@@ -93,6 +93,7 @@ SEEDED_MAX=$(printf '%s\n' "$SEEDED_VERSIONS" | tail -1)
 # VALUES block — robust to future squash additions.
 EXPECTED=$(awk '/INSERT INTO schema_migrations/,/ON CONFLICT \(version\)/' db/init.sql \
   | grep -oE '\([0-9]+\)' | tr -d '()' | sort -n | tail -1)
+[ -n "$EXPECTED" ] || { echo "ERROR: could not derive expected migration count from db/init.sql" >&2; exit 1; }
 
 if [ "$SEEDED_COUNT" -ne "$EXPECTED" ] || [ "$SEEDED_MIN" -ne 1 ] || [ "$SEEDED_MAX" -ne "$EXPECTED" ]; then
   echo "db/init.sql schema_migrations bootstrap must seed exactly versions 1..${EXPECTED} contiguous." >&2

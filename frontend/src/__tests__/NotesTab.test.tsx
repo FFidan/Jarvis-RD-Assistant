@@ -5,6 +5,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotesTab } from '@/components/paper/NotesTab';
 import type { Note } from '@/types';
 
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+
+import { toast } from 'sonner';
+
 vi.mock('@/stores/job-store', () => ({
   useJobStore: (selector: (s: { trackExternalJob: ReturnType<typeof vi.fn> }) => unknown) =>
     selector({ trackExternalJob: vi.fn() }),
@@ -80,6 +86,36 @@ describe('NotesTab', () => {
       expect(screen.getByRole('alert')).toBeInTheDocument();
     });
     expect(screen.getByRole('alert')).toHaveTextContent('Network error');
+  });
+
+  it('test_delete_error_fires_toast: deleteMut onError fires toast.error on failure', async () => {
+    const userNote = makeNote({ id: 7, source: 'user', user_note: 'My note to delete' });
+    vi.mocked(fetchNotes).mockImplementation(async (_paperId, source) => {
+      if (source === 'user') return [userNote];
+      return [];
+    });
+    vi.mocked(deleteNote).mockRejectedValue(new Error('Server error'));
+    const user = userEvent.setup();
+    renderTab();
+
+    const deleteBtn = await screen.findByRole('button', { name: /delete/i });
+    await user.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Failed to delete note', expect.objectContaining({ description: 'Server error' }));
+    });
+  });
+
+  it('test_promote_error_fires_toast: promoteZoteroMut onError fires toast.error on failure', async () => {
+    vi.mocked(promoteZoteroNote).mockRejectedValue(new Error('Promote failed'));
+    const user = userEvent.setup();
+    renderTab();
+
+    await user.click(await screen.findByRole('button', { name: /promote verified evidence/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Failed to promote Zotero highlight', expect.objectContaining({ description: 'Promote failed' }));
+    });
   });
 
   it('shows Zotero highlights as unpromoted until explicit verification', async () => {

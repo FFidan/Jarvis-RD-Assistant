@@ -7,10 +7,10 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from telegram_bot.config import _owner_headers
 from telegram_bot.formatters import format_help
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import (
-    _owner_headers,
     auth_check,
     get_config,
     get_db,

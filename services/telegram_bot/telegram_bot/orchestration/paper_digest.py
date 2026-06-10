@@ -9,13 +9,28 @@ import httpx
 from telegram import Bot
 
 from telegram_bot import owner as _owner
-from telegram_bot.config import BotConfig
-from telegram_bot.formatters import format_weekly_digest, truncate
-from telegram_bot.handlers.helpers import _owner_headers
+from telegram_bot.config import BotConfig, _owner_headers
+from telegram_bot.formatters import (
+    MAX_MESSAGE_LENGTH,
+    TRUNCATION_HEADROOM,
+    format_weekly_digest,
+    truncate,
+)
 
 # HTML tags supported by Telegram's HTML parse mode that can span text.
 _OPEN_TAG_RE = re.compile(r"<(b|i|u|s|a|code|pre|tg-spoiler)(?:\s[^>]*)?>", re.IGNORECASE)
 _CLOSE_TAG_RE = re.compile(r"</(b|i|u|s|a|code|pre|tg-spoiler)>", re.IGNORECASE)
+
+# Largest chunk `truncate` passes through unmodified (4096 - 100 = 3996).  A
+# balanced chunk at or below this is sent byte-for-byte intact; anything above
+# is hard-cut by the send-time `truncate`, which could slice the HTML mid-tag
+# or strip the closers `_balance_chunk` just appended (M12b).
+_SAFE_CHUNK_LIMIT = MAX_MESSAGE_LENGTH - TRUNCATION_HEADROOM
+
+# Budget for pre-truncating an oversized raw chunk before re-balancing: leaves
+# room under _SAFE_CHUNK_LIMIT for truncate's "... (truncated)" marker plus the
+# tag openers/closers `_balance_chunk` adds around the chunk.
+_PRE_TRUNCATE_BUDGET = 3800
 
 
 def _balance_chunk(chunk: str, open_stack: list[str]) -> tuple[str, list[str]]:
@@ -165,7 +180,10 @@ async def _send_chunked(bot: Bot, chat_id: int, lines: list[str]) -> None:
     current = ""
     for line in lines:
         if len(current) + len(line) + 1 > 3900:
-            raw_chunks.append(current)
+            # Skip the empty chunk an over-budget *first* line would produce
+            # (Telegram rejects empty messages).
+            if current:
+                raw_chunks.append(current)
             current = line
         else:
             current += "\n" + line if current else line
@@ -177,7 +195,15 @@ async def _send_chunked(bot: Bot, chat_id: int, lines: list[str]) -> None:
     open_stack: list[str] = []
     balanced_chunks: list[str] = []
     for raw in raw_chunks:
-        balanced, open_stack = _balance_chunk(raw, open_stack)
+        balanced, next_stack = _balance_chunk(raw, open_stack)
+        if len(balanced) > _SAFE_CHUNK_LIMIT:
+            # M12b: the send-time `truncate` would hard-cut this chunk's HTML
+            # (mid-tag, or stripping the closers added above).  Cut the *raw*
+            # text first — `truncate` backs out of a partially-cut tag/entity —
+            # then re-balance so any tag the cut leaves open is closed again.
+            raw = truncate(raw, max_length=_PRE_TRUNCATE_BUDGET + TRUNCATION_HEADROOM)
+            balanced, next_stack = _balance_chunk(raw, open_stack)
+        open_stack = next_stack
         balanced_chunks.append(balanced)
 
     for idx, chunk in enumerate(balanced_chunks, 1):

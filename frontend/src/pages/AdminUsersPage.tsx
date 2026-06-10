@@ -245,8 +245,9 @@ export function AdminUsersPage() {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.users() });
       setPendingDelete(null);
     },
-    onError: () => {
+    onError: (err) => {
       setPendingDelete(null);
+      toast.error(err instanceof ApiError ? err.detail : 'Failed to remove user.');
     },
   });
 

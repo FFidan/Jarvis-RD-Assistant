@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { downloadPdf, processPdf, summarizePaper, generateCardsJob, fetchDecks } from '@/lib/api';
@@ -60,7 +61,7 @@ type AnalyzeStep = null | 'downloading' | 'processing' | 'summarizing';
 
 const ANALYZE_STEPS = [
   { key: 'downloading', label: 'Downloading PDF' },
-  { key: 'processing', label: 'Processing & embedding' },
+  { key: 'processing', label: 'Processing' },
   { key: 'summarizing', label: 'Generating summary' },
 ] as const;
 
@@ -79,6 +80,7 @@ export function ActionsSidebar({
   recentFeedback = null,
   state = 'inbox',
 }: ActionsSidebarProps) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
   const isRunning = useJobStore((s) => s.isRunning);
@@ -163,6 +165,9 @@ export function ActionsSidebar({
         } else if (event.type === 'complete') {
           setActionResult({ type: 'success', message: 'Analysis complete' });
           queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.detail(paperId) });
+          toast.success('Analyzed! You can now Ask across your library', {
+            action: { label: 'Go to Ask', onClick: () => navigate('/ask') },
+          });
         } else if (event.type === 'error') {
           const failedStep = event.step || 'analysis';
           const stage = (event.step as 'downloading' | 'processing' | 'summarizing') || null;
@@ -202,7 +207,7 @@ export function ActionsSidebar({
       setAnalyzeStep(null);
       abortRef.current = null;
     }
-  }, [paperId, queryClient]);
+  }, [paperId, queryClient, navigate]);
 
   const downloadMut = useMutation({
     mutationFn: () => downloadPdf(paperId),

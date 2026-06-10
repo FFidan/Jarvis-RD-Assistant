@@ -11,12 +11,18 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, Protocol, TypedDict
 
 import asyncpg
 import httpx
-import torch
 from qdrant_client.models import PointIdsList
+
+# torch is an optional GPU dependency: CPU-only / scheduler deployments must be
+# able to import this module without it (same guard as ingestion.qwen3_reranker).
+try:
+    import torch
+except ImportError:
+    torch = None  # type: ignore[assignment]
 
 from paper_ingestion.db_types import ConnLike
 from paper_ingestion.ingestion.embedder import (
@@ -45,11 +51,16 @@ class ProcessPdfResult(TypedDict):
     status : str
         ``"already_processed"`` if chunks already existed and *force* was
         ``False``; ``"processed"`` after a successful embed+store run.
+    warnings : list[str]
+        Optional; present only when a best-effort post-step partially failed
+        (e.g. stale Qdrant vectors could not be deleted). The run itself still
+        succeeded — DB chunk rows are authoritative.
     """
 
     paper_id: int
     chunk_count: int
     status: Literal["already_processed", "processed"]
+    warnings: NotRequired[list[str]]
 
 
 class ProcessPdfProgressContext(Protocol):
@@ -308,12 +319,6 @@ async def run_process_pdf(
         # Subtract newly upserted IDs: deterministic uuid5 IDs are identical for
         # unchanged chunk indices, so deleting them would erase just-written vectors.
         point_ids_to_delete = list(set(point_ids_to_delete) - set(point_ids))
-    except torch.OutOfMemoryError as e:
-        logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, e)
-        raise RuntimeError(
-            "PDF text-extraction GPU out-of-memory. Lower OLLAMA_MAX_LOADED_MODELS"
-            " (default 3 → try 2) or set TORCH_DEVICE=cpu for the paper_ingestion service."
-        ) from e
     except EmbeddingBatchError as e:
         # Earlier batches embedded successfully; persist their chunk rows so a
         # retry resumes (Phase-1 idempotency + ON CONFLICT) instead of
@@ -341,6 +346,15 @@ async def run_process_pdf(
             f"({len(e.completed_chunks)} chunks saved — retry to resume)."
         ) from e
     except RuntimeError as e:
+        # torch.OutOfMemoryError subclasses RuntimeError; the isinstance check
+        # (rather than a dedicated except clause) keeps this handler valid when
+        # torch is absent (torch is None — see guarded import above).
+        if torch is not None and isinstance(e, torch.OutOfMemoryError):
+            logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, e)
+            raise RuntimeError(
+                "PDF text-extraction GPU out-of-memory. Lower OLLAMA_MAX_LOADED_MODELS"
+                " (default 3 → try 2) or set TORCH_DEVICE=cpu for the paper_ingestion service."
+            ) from e
         msg = str(e)
         if "CUDA out of memory" in msg or "CUDA error" in msg:
             logger.error("PDF text-extraction CUDA error for paper %d: %s", paper_id, e)
@@ -390,6 +404,9 @@ async def run_process_pdf(
     # Qdrant cleanup runs after DB replacement so a failed force reprocess keeps
     # the previous chunk rows intact. point_ids_to_delete contains only stale IDs
     # (new IDs already subtracted above), so unchanged chunk indices are not deleted.
+    # Cleanup is best-effort (DB chunk rows are authoritative): a failure must not
+    # fail the job, but it is surfaced via the result's ``warnings`` field.
+    cleanup_warnings: list[str] = []
     if point_ids_to_delete:
         try:
             await embedder.qdrant.delete(
@@ -398,9 +415,20 @@ async def run_process_pdf(
             )
         except Exception as e:
             logger.error("Qdrant cleanup failed for paper %d: %s", paper_id, e, exc_info=True)
+            cleanup_warnings.append(
+                f"Stale-vector cleanup failed: {len(point_ids_to_delete)} stale vector(s)"
+                " may remain in Qdrant (DB chunk rows are authoritative; see service logs)."
+            )
 
     # Report embedding progress (single batch for now since executemany is atomic)
     await _maybe_progress(0.7 + 0.3 * (1 / total_batches), f"Embedding batch 1/{total_batches}")
     await _maybe_progress(1.0, "Done")
 
-    return {"paper_id": paper_id, "chunk_count": len(chunks), "status": "processed"}
+    result: ProcessPdfResult = {
+        "paper_id": paper_id,
+        "chunk_count": len(chunks),
+        "status": "processed",
+    }
+    if cleanup_warnings:
+        result["warnings"] = cleanup_warnings
+    return result

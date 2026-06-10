@@ -28,7 +28,6 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, ORJSONResponse
 from jarvis_common import (
     ServiceLifespanConfig,
-    build_database_url,
     configure_lifespan,
     configure_logging,
     configure_middleware_and_errors,
@@ -38,6 +37,7 @@ from jarvis_common import (
 )
 from jarvis_common.app_factory import (
     make_init_langfuse_hook,
+    make_procrastinate_worker_hook,
 )
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
@@ -47,6 +47,7 @@ from jarvis_common.db_helpers import _ALIAS_MODELS
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.settings import get_core_settings
 from jarvis_common.verify import QuoteVerifier
+from jarvis_common.warmup import make_warmup_hook, warm_chat_model, warm_embedding_model
 from qdrant_client import AsyncQdrantClient
 
 # Trigger source registration via imports
@@ -54,6 +55,7 @@ import paper_ingestion.sources  # noqa: F401
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import limiter
 from paper_ingestion.ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedding_config import EMBEDDING_MODEL
 from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
 from paper_ingestion.migrations_runner import run_migrations
 from paper_ingestion.models import PaperSourceConfig, SourceType
@@ -326,49 +328,25 @@ async def _start_scheduler_hook(app: FastAPI) -> None:
     app.state.scheduler = await start_scheduler(app, interval_hours=interval)
 
 
-async def _start_procrastinate_worker(app: FastAPI) -> None:
-    """B.4 Step 4 — start the procrastinate worker (legacy worker removed).
+def _register_tasks(procrastinate_app: Any) -> None:
+    """Bridge for ``make_procrastinate_worker_hook`` — registers paper_ingestion handlers.
 
-    Wires the procrastinate ``App`` connector with ``DATABASE_URL`` (the same
-    DSN backing ``app.state.db_pool``), registers paper_ingestion task handlers
-    (dependency inversion — service owns its kind→handler mapping), opens
-    the connector, threads ``(pool, http_client)`` into ``task_registry`` so
-    task wrappers can access the shared singletons, then starts the worker as
-    a background asyncio task. Stored on ``app.state`` for the symmetric
-    teardown.
+    The service owns its kind→handler mapping (dependency inversion); the
+    import stays deferred so task-handler modules load at lifespan start,
+    not at module import.
     """
-    from jarvis_common.task_registry import (  # noqa: PLC0415
-        app as procrastinate_app,
-    )
-    from jarvis_common.task_registry import (
-        set_dependencies,
-    )
-    from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
-
     from paper_ingestion._task_register import (  # noqa: PLC0415
         register_paper_ingestion_tasks,
     )
 
-    # Register kind→handler mappings BEFORE the worker starts.
     register_paper_ingestion_tasks(procrastinate_app)
 
-    # The connector built at task_registry import time has no DSN — replace it
-    # with one bound to the same DSN the app_factory pool uses (reads from
-    # /run/secrets/postgres_password; falls back to DATABASE_URL in tests).
-    procrastinate_app.connector = AiopgConnector(dsn=build_database_url())
-    procrastinate_app.job_manager.connector = procrastinate_app.connector
-    await procrastinate_app.open_async()
 
-    set_dependencies(app.state.db_pool, app.state.http_client)
-
-    app.state.procrastinate_app = procrastinate_app
-    app.state.procrastinate_worker_task = asyncio.create_task(
-        procrastinate_app.run_worker_async(
-            queues=["paper_ingestion", "builtin"],
-            install_signal_handlers=False,
-        ),
-        name="procrastinate_worker",
-    )
+# B.4 Step 4 — start the procrastinate worker polling paper_ingestion + builtin
+# (LOW-DRY1: hook body shared via jarvis_common.app_factory).
+_start_procrastinate_worker = make_procrastinate_worker_hook(
+    _register_tasks, queues=["paper_ingestion", "builtin"]
+)
 
 
 async def _shutdown_qdrant(app: FastAPI) -> None:
@@ -414,6 +392,12 @@ _lifespan_config = ServiceLifespanConfig(
         _autoconfigure_models_hook,
         _start_scheduler_hook,
         _start_procrastinate_worker,
+        make_warmup_hook(
+            lambda app: [
+                lambda: warm_embedding_model(app.state.http_client, EMBEDDING_MODEL),
+                lambda: warm_chat_model(app.state.http_client),
+            ]
+        ),
     ],
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     custom_teardown_tasks=[
@@ -428,6 +412,7 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # _autoconfigure_models_hook
         _shutdown_scheduler,  # _start_scheduler_hook
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
+        None,  # make_warmup_hook (fire-and-forget; cancelled at process exit)
     ],
 )
 

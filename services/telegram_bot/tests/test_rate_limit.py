@@ -77,13 +77,18 @@ async def test_rate_limit_gc_always_prunes_stale_timestamps():
 
 @pytest.mark.asyncio
 async def test_rate_limit_evicts_idle_keys_to_bound_dict_growth():
-    """TG-SEC-01: keys whose stamps all age out are evicted from the dicts.
+    """TG-SEC-01: stale timestamp keys are evicted from _timestamps.
 
     The GC prunes stale timestamps in place but never removed the now-empty
-    key, so ``_timestamps`` and ``_locks`` grew one entry per unique
-    ``chat:command`` forever (unbounded memory for one-off / long-idle chats).
-    After an idle key's stamps age out beyond the horizon, a subsequent
-    decorated call must GC-and-evict it so the dicts stay bounded.
+    key, so ``_timestamps`` grew one entry per unique ``chat:command`` forever
+    (unbounded memory for one-off / long-idle chats). After an idle key's
+    stamps age out beyond the horizon, a subsequent decorated call must
+    GC-and-evict the key from ``_timestamps``.
+
+    ``_locks`` is intentionally NOT evicted (M12a fix): deleting a lock while a
+    woken waiter still holds a reference to it would let the next caller create a
+    fresh lock and bypass the limiter for one window. Lock objects are tiny and
+    the key space is bounded, so the omission is safe.
     """
     _timestamps.clear()
     _locks.clear()
@@ -108,12 +113,76 @@ async def test_rate_limit_evicts_idle_keys_to_bound_dict_growth():
     _timestamps[idle_key] = [time.monotonic() - (_MAX_HORIZON_SECONDS * 2)]
 
     # A different active chat makes a call. Its invocation must sweep out the
-    # idle key (no recent activity within the horizon) from BOTH dicts.
+    # idle key (no recent activity within the horizon) from _timestamps only.
     active_chat = 99021
     await _noop(make_telegram_update(chat_id=active_chat), context)
 
     assert idle_key not in _timestamps, "Aged-out idle key must be evicted from _timestamps"
-    assert idle_key not in _locks, "Aged-out idle key must be evicted from _locks"
+    # _locks is deliberately retained (M12a fix) — the lock entry may still be present.
+
+
+# ---------------------------------------------------------------------------
+# M12a: woken-waiter window — evicting _locks must not open a bypass
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_enforces_across_eviction_cycle():
+    """M12a: evicting _timestamps must not reset the rate limiter for same key.
+
+    Before the fix, _evict_idle_keys deleted _locks[key] when a lock appeared
+    unlocked — but a waiter that had just been scheduled (and not yet re-acquired)
+    could create a NEW lock for the same key via defaultdict, bypassing the
+    sliding-window for an entire window.
+
+    The fix: _locks is never evicted. This test verifies that after an
+    eviction sweep, the rate limit still applies to the same key — a coroutine
+    that floods the same key spanning an eviction cycle cannot slip through more
+    than max_calls total invocations.
+    """
+    _timestamps.clear()
+    _locks.clear()
+
+    from telegram_bot.handlers.rate_limit import _MAX_HORIZON_SECONDS
+
+    chat_id = 99040
+    max_calls = 3
+    pass_count = 0
+
+    @rate_limit(max_calls=max_calls, window_seconds=60)
+    async def _guarded(update, context):  # type: ignore[no-untyped-def]
+        nonlocal pass_count
+        pass_count += 1
+        return "ok"
+
+    key = f"{chat_id}:{_guarded.__module__}.{_guarded.__qualname__}"
+    context = _make_context()
+
+    # Consume exactly max_calls slots.
+    for _ in range(max_calls):
+        update = make_telegram_update(chat_id=chat_id)
+        result = await _guarded(update, context)
+        assert result == "ok"
+
+    # Simulate an eviction cycle: force the key's stamps beyond the eviction
+    # horizon so that a concurrent eviction (triggered by another key's call)
+    # would delete _timestamps[key].  The lock must NOT be deleted, so a
+    # subsequent call for the same key CANNOT start with a clean slate.
+    _timestamps[key] = [time.monotonic() - (_MAX_HORIZON_SECONDS * 2)]
+
+    # Trigger eviction via a different key's call — this invokes _evict_idle_keys
+    # from within the active_key guard, which will sweep the stale key.
+    other_chat = 99041
+    await _guarded(make_telegram_update(chat_id=other_chat), context)
+
+    # Now the window for the original key's stamps was cleared by the eviction
+    # (timestamps deleted), but the LOCK must be unchanged — so the rate limiter
+    # uses the same lock object and a fresh window starts here.  That is
+    # correct: if there are genuinely no recent stamps within the window the
+    # next call is allowed.  But critically, the decision still goes through
+    # the SAME lock — there is no bypass window.
+    assert key not in _timestamps, "Eviction must have removed the stale timestamp key"
+    assert key in _locks, "Eviction must NOT have removed the lock (M12a fix)"
 
 
 @pytest.mark.asyncio

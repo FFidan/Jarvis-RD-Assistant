@@ -10,7 +10,6 @@ factory).  Service-specific init (FSRS retention loading, CardGenerator,
 AnkiExporter) lives in ``custom_init_tasks`` hooks below.
 """
 
-import asyncio
 import logging
 from typing import Any
 
@@ -18,7 +17,6 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse, ORJSONResponse
 from jarvis_common import (
     ServiceLifespanConfig,
-    build_database_url,
     configure_lifespan,
     configure_logging,
     configure_middleware_and_errors,
@@ -28,12 +26,14 @@ from jarvis_common import (
 )
 from jarvis_common.app_factory import (
     make_init_langfuse_hook,
+    make_procrastinate_worker_hook,
 )
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
 )
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.settings import get_core_settings
+from jarvis_common.warmup import make_warmup_hook, warm_chat_model
 
 from learning_engine.anki_exporter import AnkiExporter
 from learning_engine.deps import limiter
@@ -79,45 +79,25 @@ async def _init_fsrs_and_generators(app: FastAPI) -> None:
     app.state.anki_exporter = AnkiExporter()
 
 
-async def _start_procrastinate_worker(app: FastAPI) -> None:
-    """B.4 Step 4 — start the procrastinate worker (legacy worker removed).
+def _register_tasks(procrastinate_app: Any) -> None:
+    """Bridge for ``make_procrastinate_worker_hook`` — registers learning_engine handlers.
 
-    Wires the procrastinate ``App`` connector to ``DATABASE_URL``, registers
-    learning_engine task handlers (dependency inversion — service owns
-    its kind→handler mapping), and starts the worker polling the
-    ``learning_engine`` + ``builtin`` queues.
+    The service owns its kind→handler mapping (dependency inversion); the
+    import stays deferred so task-handler modules load at lifespan start,
+    not at module import.
     """
-    from jarvis_common.task_registry import (  # noqa: PLC0415
-        app as procrastinate_app,
-    )
-    from jarvis_common.task_registry import (
-        set_dependencies,
-    )
-    from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
-
     from learning_engine._task_register import (  # noqa: PLC0415
         register_learning_engine_tasks,
     )
 
-    # Register kind→handler mappings BEFORE the worker starts.
     register_learning_engine_tasks(procrastinate_app)
 
-    # Bind the connector to the same DSN the app_factory pool uses (reads from
-    # /run/secrets/postgres_password; falls back to DATABASE_URL in tests).
-    procrastinate_app.connector = AiopgConnector(dsn=build_database_url())
-    procrastinate_app.job_manager.connector = procrastinate_app.connector
-    await procrastinate_app.open_async()
 
-    set_dependencies(app.state.db_pool, app.state.http_client)
-
-    app.state.procrastinate_app = procrastinate_app
-    app.state.procrastinate_worker_task = asyncio.create_task(
-        procrastinate_app.run_worker_async(
-            queues=["learning_engine", "builtin"],
-            install_signal_handlers=False,
-        ),
-        name="procrastinate_worker",
-    )
+# B.4 Step 4 — start the procrastinate worker polling learning_engine + builtin
+# (LOW-DRY1: hook body shared via jarvis_common.app_factory).
+_start_procrastinate_worker = make_procrastinate_worker_hook(
+    _register_tasks, queues=["learning_engine", "builtin"]
+)
 
 
 async def _shutdown_procrastinate_worker(app: FastAPI) -> None:
@@ -140,6 +120,7 @@ _lifespan_config = ServiceLifespanConfig(
         make_init_langfuse_hook(_set_openai_client),
         _init_fsrs_and_generators,
         _start_procrastinate_worker,
+        make_warmup_hook(lambda app: [lambda: warm_chat_model(app.state.http_client)]),
         _log_le_started,
     ],
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
@@ -148,6 +129,7 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # init_langfuse_hook
         None,  # _init_fsrs_and_generators
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
+        None,  # make_warmup_hook (fire-and-forget; cancelled at process exit)
         None,  # _log_le_started
     ],
 )

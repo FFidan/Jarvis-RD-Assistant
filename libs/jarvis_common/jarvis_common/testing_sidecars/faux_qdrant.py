@@ -240,6 +240,18 @@ def _matches_condition(payload: dict[str, Any], condition: Any) -> bool:
     if nested_filter is not None:
         return _matches_filter(payload, nested_filter)
 
+    # A bare ``Filter`` nested as a condition (Qdrant's Condition union
+    # includes Filter — used to AND a user-scope sub-filter into an outer
+    # ``must`` list, e.g. search_chunks_in_paper / discover_from_seeds).
+    # Recurse with full must/should/must_not semantics so nested scope
+    # filters stay restrictive, exactly as in real Qdrant.
+    if (
+        getattr(condition, "must", None) is not None
+        or getattr(condition, "should", None) is not None
+        or getattr(condition, "must_not", None) is not None
+    ):
+        return _matches_filter(payload, condition)
+
     return True
 
 

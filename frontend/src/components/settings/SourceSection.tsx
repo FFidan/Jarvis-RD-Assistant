@@ -164,6 +164,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
                       className="h-8 text-sm"
+                      autoComplete="off"
                     />
                     <Button
                       size="icon"

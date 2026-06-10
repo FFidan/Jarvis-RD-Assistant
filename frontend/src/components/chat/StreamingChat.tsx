@@ -16,17 +16,31 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { AlertTriangle, Send, Square, Trash2 } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { Send, Square, Trash2 } from 'lucide-react';
 
 interface StreamingChatProps {
   chatId: string;
   scope: 'single-paper' | 'cross-paper';
   paperId?: number;
+  /**
+   * Whether the library contains at least one analyzed (chunked) paper.
+   * When false the input area is wrapped in a tooltip explaining the prerequisite.
+   * Defaults to true so existing callers without the prop are unaffected.
+   */
+  hasAnalyzedPapers?: boolean;
 }
 
-export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
-  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat, modelUsed, streamError } =
+export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true }: StreamingChatProps) {
+  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat, modelUsed, streamError, elapsedSeconds } =
     useStreamingChat({ chatId, scope, paperId });
+  // First question of this chat: the warm-up hint only applies before any prior answer.
+  const isFirstQuestion = messages.filter((m) => m.role === 'user').length <= 1;
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -95,6 +109,8 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
                 message={msg}
                 isLoading={isStreaming && i === messages.length - 1 && msg.role === 'assistant'}
                 phase={phase}
+                elapsedSeconds={elapsedSeconds}
+                isFirstQuestion={isFirstQuestion}
               />
               {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
                 <SourcesAccordion sources={msg.sources} />
@@ -118,36 +134,48 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
       {/* Input */}
       <div className="border-t p-4">
         {!isStreaming && modelUsed && (
-          <div className="mb-2 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            <span>Answered by fallback model: <strong>{modelUsed}</strong></span>
-          </div>
+          <p className="mb-2 text-xs text-muted-foreground">Model: {modelUsed}</p>
         )}
-        <form onSubmit={handleSubmit} className="flex gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask a question..."
-            className="min-h-[40px] max-h-[120px] resize-none"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSubmit(e);
-              }
-            }}
-          />
-          <div className="flex flex-col gap-1">
-            {isStreaming ? (
-              <Button type="button" variant="destructive" size="icon" onClick={stopStreaming} aria-label="Stop streaming">
-                <Square className="h-4 w-4" />
-              </Button>
-            ) : (
-              <Button type="submit" size="icon" disabled={!input.trim()} aria-label="Send message">
-                <Send className="h-4 w-4" />
-              </Button>
+        <TooltipProvider>
+          <Tooltip open={!hasAnalyzedPapers ? undefined : false}>
+            <TooltipTrigger asChild>
+              {/* span wrapper needed so tooltip fires even when inner inputs are disabled */}
+              <span className="block">
+                <form onSubmit={handleSubmit} className="flex gap-2">
+                  <Textarea
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="Ask a question..."
+                    className="min-h-[40px] max-h-[120px] resize-none"
+                    disabled={!hasAnalyzedPapers}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSubmit(e);
+                      }
+                    }}
+                  />
+                  <div className="flex flex-col gap-1">
+                    {isStreaming ? (
+                      <Button type="button" variant="destructive" size="icon" onClick={stopStreaming} aria-label="Stop streaming">
+                        <Square className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button type="submit" size="icon" disabled={!input.trim() || !hasAnalyzedPapers} aria-label="Send message">
+                        <Send className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                </form>
+              </span>
+            </TooltipTrigger>
+            {!hasAnalyzedPapers && (
+              <TooltipContent side="top" className="text-xs">
+                Process at least one paper first
+              </TooltipContent>
             )}
-          </div>
-        </form>
+          </Tooltip>
+        </TooltipProvider>
       </div>
     </div>
   );

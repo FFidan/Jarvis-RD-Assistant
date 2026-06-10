@@ -50,6 +50,7 @@ from paper_ingestion.rag.streaming import (
     sse_error_stream,
     stream_rag_events,
 )
+from paper_ingestion.rag.verification import verify_answer_summary
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -175,7 +176,7 @@ async def summarize_paper(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/papers/batch-summarize", response_model=BatchSummarizeResponse)
+@router.post("/papers/batch-summarize", response_model=BatchSummarizeResponse, status_code=202)
 @limiter.limit("2/minute")
 async def batch_summarize_papers(
     request: Request,
@@ -298,8 +299,6 @@ async def ask_paper(
         "per_sentence": [],
     }
     try:
-        from paper_ingestion.rag.verification import verify_answer_summary
-
         verification = await verify_answer_summary(answer, sources, verifier, db_pool)
     except Exception as exc:  # noqa: BLE001
         logger.warning("RAG verification failed for paper %d: %s", paper_id, exc, exc_info=True)
@@ -461,8 +460,6 @@ async def ask_cross_paper(
         "per_sentence": [],
     }
     try:
-        from paper_ingestion.rag.verification import verify_answer_summary
-
         verification = await verify_answer_summary(answer, sources_list, verifier, db_pool)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Cross-paper RAG verification failed: %s", exc, exc_info=True)

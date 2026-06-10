@@ -1,5 +1,6 @@
-"""Pure unit tests for ReviewSyncResponse schema (CFG-SYNCSTATS-1) and
-_build_fsrs_manager_from_db single-step warning path (CFG-RECVAL-1).
+"""Pure unit tests for ReviewSyncResponse schema (CFG-SYNCSTATS-1),
+_build_fsrs_manager_from_db single-step warning path (CFG-RECVAL-1),
+and the skipped-card idempotency fix (M11d).
 
 These tests assert only on schema and unit-level behaviour, with no
 mock-units patching router internals. Shape: pure-unit (no DB, no HTTP).
@@ -8,11 +9,12 @@ mock-units patching router internals. Shape: pure-unit (no DB, no HTTP).
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from learning_engine.models import ReviewSyncResponse
+from learning_engine.models import ReviewSyncRequest, ReviewSyncResponse
 
 
 def test_sync_response_has_already_synced_field():
@@ -117,3 +119,73 @@ async def test_build_fsrs_manager_two_steps_no_warning(caplog):
         r for r in caplog.records if "element" in r.message and "learning_steps" in r.message
     ]
     assert not step_warnings, "No warning expected for standard 2-step list"
+
+
+# ---------------------------------------------------------------------------
+# M11d — duplicate idempotency_key for a missing card (SKIP-DEDUP-1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_duplicate_key_for_missing_card_counts_as_skipped_then_already_synced():
+    """Two events with the same idempotency_key for a nonexistent card:
+    first → skipped=1, second → already_synced=1 (NOT double-skipped).
+
+    Regression guard for M11d: before the fix, the skipped-card path did NOT
+    add the key to ``applied``, so both occurrences incremented ``skipped``
+    instead of the second being counted as ``already_synced``.
+
+    Shape: pure-unit — mocked pool, no HTTP, no DB.
+    """
+    from jarvis_common.testing import make_pool_and_conn
+
+    from learning_engine.routers.review import sync_reviews
+
+    idem_key = "dup-skip-key-001"
+    reviewed_at = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+    # Both events share the same idempotency_key; the card does not exist.
+    body = ReviewSyncRequest(
+        reviews=[
+            {  # type: ignore[list-item]
+                "idempotency_key": idem_key,
+                "card_id": 99999,
+                "rating": 3,
+                "reviewed_at": reviewed_at.isoformat(),
+            },
+            {  # type: ignore[list-item]
+                "idempotency_key": idem_key,
+                "card_id": 99999,
+                "rating": 3,
+                "reviewed_at": reviewed_at.isoformat(),
+            },
+        ]
+    )
+
+    # Pre-flight fetch: returns [] (no pre-existing applied keys and no fsrs config).
+    # Chunk fetchrow: returns None (card not found).
+    pool, conn = make_pool_and_conn(fetch_return=[], fetchrow_return=None)
+
+    # Unwrap @limiter.limit so we can call the handler directly without an HTTP request.
+    handler = getattr(sync_reviews, "__wrapped__", sync_reviews)
+    request_mock = MagicMock()
+
+    result = await handler(
+        request=request_mock,
+        body=body,
+        db_pool=pool,
+        user_id=1,
+    )
+
+    assert isinstance(result, ReviewSyncResponse), f"Expected ReviewSyncResponse; got {result!r}"
+    assert result.skipped == 1, (
+        f"Expected skipped=1 (first occurrence); got skipped={result.skipped}. "
+        "The second occurrence must NOT be double-counted as skipped."
+    )
+    assert result.already_synced == 1, (
+        f"Expected already_synced=1 (second occurrence hits idempotency fast-path); "
+        f"got already_synced={result.already_synced}."
+    )
+    assert result.synced == 0, (
+        f"Expected synced=0 (no card exists to write); got synced={result.synced}."
+    )

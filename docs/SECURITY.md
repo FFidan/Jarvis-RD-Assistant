@@ -60,6 +60,12 @@ accessible to every authenticated user without requiring a ``user_library``
 membership row.  This reflects instance configuration (feed settings, Pulse
 model), not any individual user's behavior.
 
+Citation metadata surfaced in RAG answers (e.g. the title/authors of a cited
+paper) is drawn from this shared corpus layer by design — citations name public
+scholarly works, so a cited paper's bibliographic detail may appear in any
+user's answer even if that paper is not in their own ``user_library``. No
+per-user activity (library membership, notes, ratings) crosses this boundary.
+
 ### What is strictly per-user (activity/output layer)
 
 The following is **never cross-visible** — every query is scoped to
@@ -202,6 +208,21 @@ admin actions.
 
 The audit log is readable by admins at `GET /api/admin/audit-log`
 (cursor-paginated, admin session required).
+
+### Append-only invariant and GDPR erasure
+
+`audit_log` is append-only: the `no_update_audit_log` and `no_delete_audit_log`
+RULEs rewrite any ordinary `UPDATE`/`DELETE` into a no-op, so the operational
+record cannot be tampered with after the fact. Because `audit_log.user_id` is a
+free-text column (not a foreign key), hard-deleting a user does not cascade to
+it. To honour GDPR erasure, the daily purge (`jobs/data_purge.py`) anonymizes a
+hard-deleted user's audit rows — nulling `user_id` and stripping PII metadata
+keys (e.g. `ip`) while keeping the non-identifying operational record (action,
+resource, timestamp). This is the one sanctioned mutation: it brackets the
+`UPDATE` with `ALTER TABLE … DISABLE/ENABLE RULE no_update_audit_log` in a single
+transaction (RULEs are query-rewrite and role-independent, so `SECURITY DEFINER`
+cannot bypass them); the rule is re-enabled before commit, so ordinary writes
+remain no-ops.
 
 ---
 

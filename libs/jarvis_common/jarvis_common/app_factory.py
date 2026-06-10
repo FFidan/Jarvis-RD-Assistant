@@ -38,9 +38,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from jarvis_common.auth import (
+    RAW_CLIENT_SCOPE_KEY,
     refresh_allowed_networks_cache,
     refresh_api_key_cache,
     validate_production_config,
@@ -308,6 +310,33 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
     return lifespan
 
 
+class RawClientStashMiddleware:
+    """Snapshot the real transport peer before ProxyHeaders rewrites it (M5).
+
+    Pure-ASGI and minimal on purpose: no Request construction, one scope write.
+    MUST be registered AFTER ProxyHeadersMiddleware (Starlette: last-added =
+    outermost = runs first) so it sees the ORIGINAL ``scope["client"]`` — the
+    actual socket peer — and stashes it under
+    :data:`jarvis_common.auth.RAW_CLIENT_SCOPE_KEY` before
+    ProxyHeadersMiddleware overwrites ``scope["client"]`` in place from
+    X-Forwarded-For. The X-Owner-User-Id guard in :mod:`jarvis_common.auth`
+    requires BOTH this raw peer AND the rewritten client to be allowlisted, so
+    a forged XFF from a non-allowlisted source can no longer spoof its way
+    onto the owner-override path.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            # Key PRESENCE (even with a None value) tells the auth guard the
+            # middleware ran; the guard fails safe (rejects) when the stash
+            # exists but carries no usable IP.
+            scope[RAW_CLIENT_SCOPE_KEY] = scope.get("client")
+        await self.app(scope, receive, send)
+
+
 def configure_middleware_and_errors(
     app: FastAPI,
     *,
@@ -323,7 +352,9 @@ def configure_middleware_and_errors(
     1b. CorrelationIdMiddleware (wraps RequestID -- reads/emits X-Correlation-Id)
     2. SlowAPIMiddleware (rate limiting)
     3. CORSMiddleware
-    4. ProxyHeadersMiddleware (added last -- outermost, decodes XFF first)
+    4. ProxyHeadersMiddleware (decodes XFF -- rewrites scope["client"] in place)
+    5. RawClientStashMiddleware (added last -- outermost, snapshots the raw
+       socket peer BEFORE ProxyHeadersMiddleware rewrites scope["client"])
 
     Parameters
     ----------
@@ -380,10 +411,18 @@ def configure_middleware_and_errors(
         allow_credentials=use_credentials,
     )
 
-    # 4. ProxyHeadersMiddleware -- outermost.
+    # 4. ProxyHeadersMiddleware -- rewrites scope["client"] from X-Forwarded-For.
     # uvicorn vs starlette ASGI-scope stubs are nominally incompatible despite
     # being structurally identical; safe to ignore until upstream stubs reconcile.
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxy_hosts)  # type: ignore[reportArgumentType]
+
+    # 5. RawClientStashMiddleware -- added LAST so it runs OUTERMOST/first,
+    # BEFORE ProxyHeadersMiddleware mutates scope["client"] from X-Forwarded-For.
+    # The X-Owner-User-Id guard (jarvis_common.auth) requires BOTH the stashed
+    # raw socket peer AND the rewritten client to be allowlisted (M5). Service
+    # middleware added after this call (e.g. SessionMiddleware) wraps further
+    # outside, which is harmless as long as it does not rewrite scope["client"].
+    app.add_middleware(RawClientStashMiddleware)
 
     # Standardized error handlers
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
@@ -452,10 +491,75 @@ def make_init_langfuse_hook(
     return _hook
 
 
+def make_procrastinate_worker_hook(
+    register_fn: Callable[[Any], None],
+    queues: list[str],
+) -> LifespanHook:
+    """Return a lifespan hook that starts the procrastinate worker for a service.
+
+    LOW-DRY1: ``paper_ingestion`` and ``learning_engine`` carried near-identical
+    ``_start_procrastinate_worker`` hooks differing only in the task-register
+    function and the queue list — those two variations are injected here.  The
+    teardown counterpart is already shared (:func:`shutdown_procrastinate_worker`).
+
+    The returned hook wires the procrastinate ``App`` connector to the same DSN
+    backing ``app.state.db_pool`` (reads from ``/run/secrets/postgres_password``;
+    falls back to ``DATABASE_URL`` in tests), calls ``register_fn`` BEFORE the
+    worker starts, opens the connector, threads ``(pool, http_client)`` into
+    ``task_registry`` so task wrappers can access the shared singletons, then
+    starts the worker as a background asyncio task.  Stored on ``app.state``
+    for the symmetric teardown.
+
+    Parameters
+    ----------
+    register_fn:
+        Service-owned callable receiving the procrastinate ``App`` and
+        registering the service's kind→handler mapping (dependency inversion —
+        the service keeps its register import deferred inside this callable,
+        so jarvis_common never imports service code).
+    queues:
+        Queue names the worker polls (e.g. ``["paper_ingestion", "builtin"]``).
+    """
+
+    async def _hook(app: FastAPI) -> None:
+        from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
+
+        from jarvis_common.task_registry import (  # noqa: PLC0415
+            app as procrastinate_app,
+        )
+        from jarvis_common.task_registry import (
+            set_dependencies,
+        )
+
+        # Register kind→handler mappings BEFORE the worker starts.
+        register_fn(procrastinate_app)
+
+        # The connector built at task_registry import time has no DSN — replace it
+        # with one bound to the same DSN the app_factory pool uses (reads from
+        # /run/secrets/postgres_password; falls back to DATABASE_URL in tests).
+        procrastinate_app.connector = AiopgConnector(dsn=build_database_url())
+        procrastinate_app.job_manager.connector = procrastinate_app.connector
+        await procrastinate_app.open_async()
+
+        set_dependencies(app.state.db_pool, app.state.http_client)
+
+        app.state.procrastinate_app = procrastinate_app
+        app.state.procrastinate_worker_task = asyncio.create_task(
+            procrastinate_app.run_worker_async(
+                queues=queues,
+                install_signal_handlers=False,
+            ),
+            name="procrastinate_worker",
+        )
+
+    return _hook
+
+
 __all__ = [
     "ServiceLifespanConfig",
     "configure_lifespan",
     "configure_middleware_and_errors",
     "init_langfuse_hook",
     "make_init_langfuse_hook",
+    "make_procrastinate_worker_hook",
 ]

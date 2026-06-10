@@ -18,8 +18,7 @@ from typing import Any
 
 import httpx
 
-from telegram_bot.config import BotConfig
-from telegram_bot.handlers.helpers import _owner_headers
+from telegram_bot.config import BotConfig, _owner_headers
 
 __all__ = [
     "fetch_projects",
@@ -271,11 +270,12 @@ async def fetch_new_paper_count(
     *,
     hours: int = 24,
 ) -> int:
-    """GET {paper_ingestion}/api/papers/feed?date_from=<ISO now-hours>&limit=1 → resp["total"].
+    """GET {paper_ingestion}/api/papers/feed?date_from=<ISO date>&limit=1 → resp["total"].
 
-    **R6 — day-granularity note:** ``date_from`` is sent as an ISO datetime
-    (UTC now − *hours*), but the feed endpoint treats it as a date, so the
-    effective window is day-granular.  This is acceptable for a briefing stat.
+    **R6 — day-granularity note:** the cutoff is computed as a datetime
+    (UTC now − *hours*) but sent as an ISO **date** (the endpoint's
+    ``date_from`` is a DATE param), so the effective window is day-granular.
+    This is acceptable for a briefing stat.
 
     Returns
     -------

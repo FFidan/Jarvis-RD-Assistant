@@ -150,6 +150,43 @@ def test_config_jarvis_base_url_https_accepted():
     assert config.jarvis_base_url == "https://jarvis.example.com"
 
 
+# ---------------------------------------------------------------------------
+# M12d — DSN credential redaction in the pool-creation log line
+# ---------------------------------------------------------------------------
+
+
+def test_redact_dsn_strips_userinfo_and_query():
+    """_redact_dsn keeps only hostname:port/path — no userinfo, no query string."""
+    from telegram_bot.config import _redact_dsn
+
+    assert _redact_dsn("postgresql://u:pw@h:5432/db") == "h:5432/db"
+    # Query strings can carry password= — they must be dropped too.
+    assert _redact_dsn("postgresql://h/db?password=qpw") == "h/db"
+
+
+@pytest.mark.asyncio
+async def test_create_db_pool_log_redacts_credentials(caplog):
+    """The 'Database pool created' log line must never leak DSN credentials.
+
+    A DSN of the form user:password@host must surface as host:port/db only —
+    neither the username nor the password substring may appear in the log.
+    """
+    import logging
+    from unittest.mock import AsyncMock
+
+    from telegram_bot.config import create_db_pool
+
+    dsn = "postgresql://dbuser:hunter2@dbhost:5433/jarvis"
+    with patch("telegram_bot.config.asyncpg.create_pool", new=AsyncMock(return_value=object())):
+        with caplog.at_level(logging.INFO, logger="telegram_bot.config"):
+            await create_db_pool(dsn)
+
+    assert "Database pool created" in caplog.text
+    assert "hunter2" not in caplog.text
+    assert "dbuser" not in caplog.text
+    assert "dbhost:5433/jarvis" in caplog.text
+
+
 def test_config_jarvis_api_key_file_oserror_falls_through_to_none(tmp_path):
     """JARVIS_API_KEY_FILE pointing to an unreadable path must NOT raise.
 

@@ -7,6 +7,8 @@ interface UIState {
   sidebarCollapsed: boolean;
   selectedPaperId: number | null;
   checklistDismissed: boolean;
+  /** True once the one-time onboarding-complete celebration has been shown. */
+  onboardingCelebrated: boolean;
   paperDetailNoteDismissed: boolean;
   setupBannerDismissed: boolean;
   /** Last-used preset id on the Logs Events tab. Empty string = no preset. */
@@ -14,6 +16,7 @@ interface UIState {
   toggleSidebar: () => void;
   setSelectedPaperId: (id: number | null) => void;
   dismissChecklist: () => void;
+  markOnboardingCelebrated: () => void;
   setPaperDetailNoteDismissed: (value: boolean) => void;
   dismissSetupBanner: () => void;
   setLogsPreset: (id: string) => void;
@@ -26,6 +29,7 @@ const UI_INITIAL_STATE = {
   sidebarCollapsed: false,
   selectedPaperId: null as number | null,
   checklistDismissed: false,
+  onboardingCelebrated: false,
   paperDetailNoteDismissed: false,
   setupBannerDismissed: false,
   logsPreset: '',
@@ -45,6 +49,9 @@ export const useUIStore = create<UIState>()(
       dismissChecklist() {
         set({ checklistDismissed: true });
       },
+      markOnboardingCelebrated() {
+        set({ onboardingCelebrated: true });
+      },
       setPaperDetailNoteDismissed(value: boolean) {
         set({ paperDetailNoteDismissed: value });
       },
@@ -62,6 +69,7 @@ export const useUIStore = create<UIState>()(
       name: UI_STORE_KEY,
       partialize: (state) => ({
         checklistDismissed: state.checklistDismissed,
+        onboardingCelebrated: state.onboardingCelebrated,
         paperDetailNoteDismissed: state.paperDetailNoteDismissed,
         setupBannerDismissed: state.setupBannerDismissed,
         logsPreset: state.logsPreset,

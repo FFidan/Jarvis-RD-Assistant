@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import asyncpg
 from jarvis_common import init_pg_connection
@@ -210,6 +211,37 @@ class BotConfig(JarvisCommonSettings):
         )
 
 
+def _owner_headers(config: BotConfig, user_id: int | None) -> dict[str, str]:
+    """Build the standard backend auth headers for a bot→backend HTTP call.
+
+    Always includes ``X-API-Key`` when configured. Adds ``X-Owner-User-Id``
+    when *user_id* is not ``None`` so the backend can scope the response to
+    the correct paired user.
+
+    Lives here (the leaf config module) rather than in ``handlers.helpers`` so
+    that transport-layer modules like ``services_client`` don't have to import
+    the handler chain just to build headers.
+    """
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
+    if user_id is not None:
+        headers["X-Owner-User-Id"] = str(user_id)
+    return headers
+
+
+def _redact_dsn(dsn: str) -> str:
+    """Return a credential-free ``host:port/db`` rendering of a DSN for logging.
+
+    Strips the ``user:password@`` userinfo and any query string (which may
+    carry ``password=``) — only hostname, port, and database path survive.
+    """
+    parsed = urlparse(dsn)
+    host = parsed.hostname or "?"
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return f"{host}{port}{parsed.path}"
+
+
 async def create_db_pool(database_url: str) -> asyncpg.Pool:
     """Create an asyncpg connection pool with JSON codec support.
 
@@ -224,5 +256,5 @@ async def create_db_pool(database_url: str) -> asyncpg.Pool:
         Ready-to-use connection pool.
     """
     pool = await asyncpg.create_pool(database_url, min_size=2, max_size=5, init=init_pg_connection)
-    logger.info("Database pool created: %s", database_url.split("@")[-1])
+    logger.info("Database pool created: %s", _redact_dsn(database_url))
     return pool

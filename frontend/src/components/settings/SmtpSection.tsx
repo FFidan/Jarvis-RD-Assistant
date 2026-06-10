@@ -29,7 +29,7 @@ import type { SmtpConfig } from '@/types';
 export function SmtpSection() {
   const qc = useQueryClient();
 
-  const { data: config, isLoading } = useQuery<SmtpConfig>({
+  const { data: config, isLoading, isError: isConfigError } = useQuery<SmtpConfig>({
     queryKey: QUERY_KEYS.account.smtp(),
     queryFn: getSmtpConfig,
     staleTime: 60_000,
@@ -61,9 +61,14 @@ export function SmtpSection() {
     },
   });
 
+  const portNum = parseInt(port, 10);
+  const portError =
+    port !== '' && (Number.isNaN(portNum) || portNum < 1 || portNum > 65535)
+      ? 'Port must be a number between 1 and 65535'
+      : null;
+
   const handleSave = () => {
-    const portNum = parseInt(port, 10);
-    if (!host || !fromEmail || Number.isNaN(portNum)) return;
+    if (!host || !fromEmail || portError !== null || Number.isNaN(portNum)) return;
     saveMut.mutate({
       host,
       port: portNum,
@@ -77,6 +82,14 @@ export function SmtpSection() {
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading SMTP settings…</p>;
+  }
+
+  if (isConfigError) {
+    return (
+      <p className="text-sm text-destructive">
+        Failed to load SMTP settings. Please refresh.
+      </p>
+    );
   }
 
   const hasExistingPassword = config?.has_password ?? false;
@@ -116,7 +129,14 @@ export function SmtpSection() {
                 onChange={(e) => setPort(e.target.value)}
                 inputMode="numeric"
                 autoComplete="off"
+                aria-invalid={portError !== null}
+                aria-describedby={portError ? 'smtp-port-error' : undefined}
               />
+              {portError && (
+                <p id="smtp-port-error" className="text-xs text-destructive">
+                  {portError}
+                </p>
+              )}
             </div>
 
             <div className="space-y-1.5">
@@ -166,7 +186,7 @@ export function SmtpSection() {
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <Button
               onClick={handleSave}
-              disabled={saveMut.isPending || !host || !fromEmail}
+              disabled={saveMut.isPending || !host || !fromEmail || portError !== null}
             >
               {saveMut.isPending ? 'Saving…' : 'Save'}
             </Button>

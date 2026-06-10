@@ -83,6 +83,54 @@ async def test_faux_qdrant_filters_scores_counts_and_deletes_points():
     assert remaining.count == 0
 
 
+async def test_faux_qdrant_nested_filter_in_must_is_restrictive():
+    """A Filter nested inside an outer ``must`` list is AND-combined, not ignored.
+
+    Mirrors the production composition in ``search_chunks_in_paper`` /
+    ``discover_from_seeds``: ``Filter(must=[<paper cond>, <user-scope Filter>])``.
+    The nested sub-Filter's ``should`` branches must stay restrictive.
+    """
+    qdrant = FauxQdrantClient()
+    await qdrant.create_collection(
+        collection_name="paper_chunks",
+        vectors_config=VectorParams(size=2, distance=Distance.COSINE),
+    )
+    await qdrant.upsert(
+        collection_name="paper_chunks",
+        points=[
+            PointStruct(id="a", vector=[1.0, 0.0], payload={"paper_id": 1, "user_id": 7}),
+            PointStruct(id="b", vector=[1.0, 0.0], payload={"paper_id": 1, "user_id": 8}),
+            PointStruct(id="c", vector=[1.0, 0.0], payload={"paper_id": 1, "user_id": None}),
+            PointStruct(id="d", vector=[1.0, 0.0], payload={"paper_id": 2, "user_id": 7}),
+        ],
+    )
+
+    from qdrant_client.models import IsNullCondition, PayloadField
+
+    nested_scope = Filter(
+        should=[
+            FieldCondition(key="user_id", match=MatchValue(value=7)),
+            IsNullCondition(is_null=PayloadField(key="user_id")),
+        ]
+    )
+    outer = Filter(
+        must=[
+            FieldCondition(key="paper_id", match=MatchValue(value=1)),
+            nested_scope,
+        ]
+    )
+    response = await qdrant.query_points(
+        collection_name="paper_chunks",
+        query=[1.0, 0.0],
+        query_filter=outer,
+        limit=10,
+        with_payload=True,
+    )
+
+    # paper 1 AND (user 7 OR canonical): "a" + "c"; excludes user-8 "b" and paper-2 "d".
+    assert sorted(point.id for point in response.points) == ["a", "c"]
+
+
 def test_cosine_raises_on_dimension_mismatch():
     """_cosine must raise ValueError when query and vector lengths differ."""
     with pytest.raises(ValueError, match="dimension mismatch"):

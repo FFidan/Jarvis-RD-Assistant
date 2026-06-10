@@ -116,12 +116,24 @@ async def prepare_single_paper_rag(
     ----------
     user_id:
         Caller user ID. Primary user-scope is enforced upstream by
-        ``assert_paper_ownership`` at the route boundary; this parameter
-        is accepted for symmetry with ``prepare_cross_paper_rag`` and
-        future defense-in-depth Qdrant-payload filtering.
+        ``assert_paper_ownership`` at the route boundary; when set, it is
+        also threaded into ``search_chunks_in_paper`` together with the
+        caller's own ``user_library`` paper ids as defense-in-depth (M7)
+        Qdrant-payload filtering.
     """
+    library_paper_ids: list[int] | None = None
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
+        # M7 defense-in-depth: fetch the CALLER'S OWN library paper ids so the
+        # Qdrant search below stays scoped per-tenant while shared-corpus
+        # papers embedded by another user remain retrievable (PI-RAG-001 —
+        # mirrors prepare_cross_paper_rag).
+        if paper and user_id is not None:
+            lib_rows = await conn.fetch(
+                "SELECT paper_id FROM user_library WHERE user_id = $1",
+                user_id,
+            )
+            library_paper_ids = [row["paper_id"] for row in lib_rows]
     if not paper:
         raise PaperNotFoundError("Paper not found")
 
@@ -131,6 +143,8 @@ async def prepare_single_paper_rag(
         paper_id=paper_id,
         limit=body.max_chunks * 4,
         score_threshold=_SEARCH_SCORE_THRESHOLD,
+        user_id=user_id,
+        library_paper_ids=library_paper_ids,
     )
     # Cross-encoder rerank for quality, then trim to requested max_chunks
     chunks = await embedder.rerank_chunks(body.question, chunks, top_k=body.max_chunks)

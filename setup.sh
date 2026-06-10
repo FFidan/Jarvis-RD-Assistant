@@ -628,6 +628,7 @@ case "$access_mode" in
   2)
     ACCESS_MODE_LABEL="lan"
     DASHBOARD_BIND_HOST="0.0.0.0"
+    warn "LAN mode binds the dashboard to 0.0.0.0 — reachable by every host on your network. Only use this on a trusted LAN; for untrusted networks prefer the Tailscale/tunnel option."
     # Remove any stale docker-compose.override.yml — port binding is now
     # controlled by DASHBOARD_BIND_HOST in .env, so the override is not needed
     # and a leftover one would cause Docker to create duplicate port bindings.

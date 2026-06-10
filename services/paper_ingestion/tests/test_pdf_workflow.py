@@ -87,7 +87,14 @@ async def test_run_process_pdf_keeps_new_chunks_when_qdrant_cleanup_fails():
         force=True,
     )
 
-    assert result == {"paper_id": 5, "chunk_count": 1, "status": "processed"}
+    assert result["paper_id"] == 5
+    assert result["chunk_count"] == 1
+    assert result["status"] == "processed"
+    # M11a: the best-effort cleanup failure is surfaced in the payload, not silent.
+    warnings = result["warnings"]
+    assert len(warnings) == 1
+    assert "Stale-vector cleanup failed" in warnings[0]
+    assert "1 stale vector(s)" in warnings[0]
     conn.execute.assert_any_await("DELETE FROM paper_chunks WHERE paper_id = $1", 5)
     conn.executemany.assert_awaited_once()
     embedder.qdrant.delete.assert_awaited_once()
@@ -387,6 +394,49 @@ async def test_pdf_workflow_relabels_cuda_runtime_error():
             pdf_processor=pdf_processor,
             embedder=embedder,
         )
+
+
+@pytest.mark.asyncio
+async def test_pdf_workflow_importable_and_error_paths_safe_without_torch():
+    """H8: torch is an optional GPU dependency — the module must import with
+    torch absent, and the error handlers must not explode at exception time
+    (the old ``except torch.OutOfMemoryError`` clause raised when torch=None)."""
+    import importlib
+    import sys
+
+    from paper_ingestion.services import pdf_workflow
+
+    real_torch = sys.modules["torch"]
+    # A None entry in sys.modules makes ``import torch`` raise ImportError.
+    sys.modules["torch"] = None  # type: ignore[assignment]
+    try:
+        reloaded = importlib.reload(pdf_workflow)
+        # Guarded import took the ImportError branch.
+        assert reloaded.torch is None
+
+        conn = AsyncMock()
+        conn.fetchval.return_value = 0
+        pool, _ = make_pool_and_conn(conn=conn)
+        pdf_processor = MagicMock()
+        pdf_processor.process = AsyncMock(
+            side_effect=RuntimeError("CUDA out of memory: tried to allocate 2 GiB")
+        )
+        embedder = MagicMock()
+
+        # The RuntimeError handler is entered (the path that previously
+        # dereferenced torch.OutOfMemoryError); the string-match CUDA branch
+        # still produces the GPU-specific message without exploding.
+        with pytest.raises(RuntimeError, match="GPU error"):
+            await reloaded.run_process_pdf(
+                paper_id=46,
+                pdf_path=Path("/tmp/paper.pdf"),
+                db_pool=pool,
+                pdf_processor=pdf_processor,
+                embedder=embedder,
+            )
+    finally:
+        sys.modules["torch"] = real_torch
+        importlib.reload(pdf_workflow)
 
 
 @pytest.mark.asyncio

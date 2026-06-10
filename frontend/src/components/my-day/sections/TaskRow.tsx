@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
+import { toast } from 'sonner';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { updateTask, deleteTask } from '@/lib/api';
 import type { MyDayTask } from '@/types';
@@ -18,11 +19,17 @@ export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
   const completeMutation = useMutation({
     mutationFn: () => updateTask(task.id, { status: 'done' }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() }),
+    onError: (err: Error) => {
+      toast.error(`Failed to mark done: ${err.message ?? 'unknown error'}`);
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteTask(task.id),
     onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myDay.today() }),
+    onError: (err: Error) => {
+      toast.error(`Failed to delete task: ${err.message ?? 'unknown error'}`);
+    },
   });
 
   return (

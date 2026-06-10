@@ -271,3 +271,120 @@ describe('ConfidenceBadge dialog', () => {
     expect(screen.queryByText('Confirmed by source A.')).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// U1-fe — elapsed timer display and warm-up hint in ChatMessage
+// ---------------------------------------------------------------------------
+
+const loadingAssistantMsg: ChatMessageType = {
+  id: 'loading',
+  role: 'assistant',
+  content: '',
+};
+
+describe('ChatMessage — U1-fe elapsed timer and jargon reword', () => {
+  it('shows "Searching your papers…" (not "chunks") when phase=searching', () => {
+    render(
+      <ChatMessage
+        message={loadingAssistantMsg}
+        isLoading
+        phase="searching"
+        elapsedSeconds={0}
+      />,
+    );
+    expect(screen.getByText(/Searching your papers/)).toBeInTheDocument();
+    expect(screen.queryByText(/paper chunks/)).not.toBeInTheDocument();
+  });
+
+  it('shows "Generating response…" when phase=streaming', () => {
+    render(
+      <ChatMessage
+        message={loadingAssistantMsg}
+        isLoading
+        phase="streaming"
+        elapsedSeconds={0}
+      />,
+    );
+    expect(screen.getByText(/Generating response/)).toBeInTheDocument();
+  });
+
+  it('shows elapsed seconds suffix when elapsedSeconds > 0', () => {
+    render(
+      <ChatMessage
+        message={loadingAssistantMsg}
+        isLoading
+        phase="streaming"
+        elapsedSeconds={12}
+      />,
+    );
+    expect(screen.getByText(/12s/)).toBeInTheDocument();
+  });
+
+  it('does NOT show elapsed suffix when elapsedSeconds is 0', () => {
+    render(
+      <ChatMessage
+        message={loadingAssistantMsg}
+        isLoading
+        phase="searching"
+        elapsedSeconds={0}
+      />,
+    );
+    expect(screen.queryByText(/0s/)).not.toBeInTheDocument();
+  });
+
+  it('does NOT show warm-up hint below the threshold (4s)', () => {
+    render(
+      <ChatMessage
+        message={loadingAssistantMsg}
+        isLoading
+        phase="searching"
+        elapsedSeconds={4}
+        isFirstQuestion
+      />,
+    );
+    expect(screen.queryByText(/warms up the model/)).not.toBeInTheDocument();
+  });
+
+  it('shows warm-up hint at threshold (5s) on first question', () => {
+    render(
+      <ChatMessage
+        message={loadingAssistantMsg}
+        isLoading
+        phase="searching"
+        elapsedSeconds={5}
+        isFirstQuestion
+      />,
+    );
+    expect(screen.getByText(/First question warms up the model/)).toBeInTheDocument();
+  });
+
+  it('does NOT show warm-up hint when isFirstQuestion is false', () => {
+    render(
+      <ChatMessage
+        message={loadingAssistantMsg}
+        isLoading
+        phase="searching"
+        elapsedSeconds={10}
+        isFirstQuestion={false}
+      />,
+    );
+    expect(screen.queryByText(/warms up the model/)).not.toBeInTheDocument();
+  });
+
+  it('does NOT show warm-up hint when not loading', () => {
+    const msg: ChatMessageType = {
+      id: 'done',
+      role: 'assistant',
+      content: 'The answer.',
+    };
+    render(
+      <ChatMessage
+        message={msg}
+        isLoading={false}
+        elapsedSeconds={10}
+        isFirstQuestion
+      />,
+    );
+    expect(screen.queryByText(/warms up the model/)).not.toBeInTheDocument();
+  });
+});

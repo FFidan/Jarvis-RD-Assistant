@@ -51,7 +51,7 @@ async def get_citation_graph(
         return await build_citation_graph(conn, paper_ids, depth, user_id=user_id)
 
 
-@router.post("/batch-fetch", response_model=BatchCitationFetchResponse)
+@router.post("/batch-fetch", response_model=BatchCitationFetchResponse, status_code=202)
 @limiter.limit("2/minute")
 async def batch_fetch_citations(
     request: Request,

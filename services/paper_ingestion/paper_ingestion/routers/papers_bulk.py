@@ -118,7 +118,7 @@ async def bulk_action_papers(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/process_batch", response_model=JobCreateResponse)
+@router.post("/process_batch", response_model=JobCreateResponse, status_code=202)
 @limiter.limit("10/minute")
 async def process_batch(
     request: Request,

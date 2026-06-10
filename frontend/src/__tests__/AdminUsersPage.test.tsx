@@ -574,3 +574,36 @@ describe('AdminOnlyRoute guard', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// H5g — deleteMutation onError fires toast
+// ---------------------------------------------------------------------------
+
+describe('AdminUsersPage — delete mutation onError toast (H5g)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _mockRole = 'admin';
+    _mockUserId = 1;
+  });
+
+  it('fires toast.error when deleteUser fails', async () => {
+    const { toast } = await import('sonner');
+    deleteUserMock.mockRejectedValueOnce(new Error('server error'));
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    // Open delete confirmation for alice
+    await userEvent.click(screen.getByRole('button', { name: /remove alice@example\.com/i }));
+    // Confirm in the AlertDialog
+    await userEvent.click(screen.getByRole('button', { name: /^remove$/i }));
+
+    await waitFor(() => {
+      expect(deleteUserMock).toHaveBeenCalledWith(2);
+    });
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalled();
+    });
+  });
+});

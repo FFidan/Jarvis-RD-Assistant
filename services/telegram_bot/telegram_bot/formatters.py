@@ -118,6 +118,13 @@ def truncate(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:
     if len(text) <= limit:
         return text
     truncated = text[:limit]
+    # Back up before a partially-cut HTML tag: a trailing "<" without a
+    # matching ">" means the cut landed inside a tag such as "</b>" or
+    # '<a href="...">', which Telegram's HTML parser rejects with a 400.
+    lt_pos = truncated.rfind("<")
+    if lt_pos != -1 and ">" not in truncated[lt_pos:]:
+        truncated = truncated[:lt_pos]
+    # Likewise back up before a partially-cut HTML entity (e.g. "&amp").
     amp_pos = truncated.rfind("&")
     if amp_pos != -1 and ";" not in truncated[amp_pos:]:
         truncated = truncated[:amp_pos]

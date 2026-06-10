@@ -38,6 +38,50 @@ _DELETE_EXPIRED_USERS_EXCLUDING = (
     " AND id <> ALL($1::int[])"
 )
 
+# audit_log.user_id is a free-text column (NOT an FK), so DELETE FROM users does
+# not cascade to it — a purged user's audit rows, and any PII in their metadata,
+# survive the hard-delete unless explicitly anonymized. The table is protected
+# by the no_update_audit_log RULE (db/init.sql); RULEs are query-rewrite and
+# role-independent, so SECURITY DEFINER / triggers do NOT bypass them. The only
+# way to erase is DISABLE RULE -> UPDATE -> ENABLE RULE in one transaction.
+_AUDIT_PII_METADATA_KEYS = [
+    "ip",
+    "client_ip",
+    "raw_client_ip",
+    "ua_prefix",
+    "email",
+    "new_email_hash",
+    "user_agent",
+    "username",
+    "telegram_username",
+    "name",
+]
+_ANONYMIZE_AUDIT_LOG = (
+    "UPDATE audit_log SET user_id = NULL, metadata = metadata - $2::text[]"
+    " WHERE user_id = ANY($1::text[])"
+)
+
+
+async def _anonymize_audit_log_for_users(conn: Any, uids: list[int]) -> int:
+    """Null the user_id and strip PII metadata from purged users' audit rows.
+
+    The ALTER TABLE DISABLE/ENABLE RULE bracket is transactional and takes an
+    AccessExclusiveLock, so the window is race-free; if the UPDATE fails the
+    transaction rolls back and the rule is left enabled (no finally needed).
+    The operational record (action, resource, timestamp) is retained.
+    """
+    if not uids:
+        return 0
+    uid_strs = [str(u) for u in uids]
+    async with conn.transaction():
+        await conn.execute("ALTER TABLE audit_log DISABLE RULE no_update_audit_log")
+        result = await conn.execute(_ANONYMIZE_AUDIT_LOG, uid_strs, _AUDIT_PII_METADATA_KEYS)
+        await conn.execute("ALTER TABLE audit_log ENABLE RULE no_update_audit_log")
+    try:
+        return int(result.split()[-1])
+    except Exception:
+        return 0
+
 
 async def _purge_qdrant_for_user(qdrant: Any, uid: int) -> int:
     """Delete all Qdrant vectors whose payload ``user_id`` matches *uid*.
@@ -120,6 +164,11 @@ async def data_purge_task(app: Any) -> None:
             # Passing an empty list deletes all expired rows (regression-equivalent).
             result = await conn.execute(_DELETE_EXPIRED_USERS_EXCLUDING, list(failed_uids))
 
+            # GDPR erasure: anonymize the hard-deleted users' audit_log rows
+            # (audit_log has no FK to users, so the DELETE above does not reach it).
+            purged_uids = [uid for uid in expired_ids if uid not in failed_uids]
+            audit_rows_anonymized = await _anonymize_audit_log_for_users(conn, purged_uids)
+
         try:
             deleted: int | None = int(result.split()[-1])
         except Exception:
@@ -130,6 +179,7 @@ async def data_purge_task(app: Any) -> None:
             "user_ids": expired_ids,
             "users_deleted": deleted,
             "qdrant_vectors_deleted": qdrant_vectors,
+            "audit_rows_anonymized": audit_rows_anonymized,
         }
         if qdrant_errors:
             metadata["qdrant_errors"] = qdrant_errors

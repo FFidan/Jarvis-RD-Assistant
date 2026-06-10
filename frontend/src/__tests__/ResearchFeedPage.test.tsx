@@ -1476,7 +1476,7 @@ describe('ResearchFeedPage', () => {
     await user.click(screen.getByRole('button', { name: /save 1 selected/i }));
 
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith('Saved 1 paper(s) to your library.');
+      expect(toast.success).toHaveBeenCalledWith('Saved 1 paper(s). Next: Analyze a paper to unlock Ask.');
     });
 
     // F1 IA: Discover (search surface) facet uses aria-pressed (not aria-selected)

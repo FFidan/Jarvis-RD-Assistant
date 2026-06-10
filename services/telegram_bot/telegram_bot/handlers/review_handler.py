@@ -19,9 +19,9 @@ from telegram.ext import (
     ConversationHandler,
 )
 
+from telegram_bot.config import _owner_headers
 from telegram_bot.formatters import format_card_back, format_card_front
 from telegram_bot.handlers.helpers import (
-    _owner_headers,
     auth_check,
     get_config,
     get_db,
@@ -113,6 +113,13 @@ async def review_start(
             ``update.callback_query.message`` (callback path).  Passing this
             explicitly avoids mutating ``update.message`` from callback sites.
     """
+    # H6: on the inline-button entry path, answer the callback query up front —
+    # before ANY early return — or the user's Telegram client shows a loading
+    # spinner indefinitely (unauthorized / no-due-cards / missing-message paths
+    # all end the conversation without otherwise acknowledging the button).
+    if update.callback_query is not None:
+        await update.callback_query.answer()
+
     # Resolve the reply target without mutating the Update object.
     msg: Message | None = message
     if msg is None:

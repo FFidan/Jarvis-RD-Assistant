@@ -27,7 +27,15 @@ vi.mock('@/lib/api', () => ({
   deleteTask: vi.fn(),
 }));
 
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 const { updateTask, deleteTask } = await import('@/lib/api');
+const { toast } = await import('sonner');
 
 // ---------------------------------------------------------------------------
 // Shared fixture
@@ -105,5 +113,31 @@ describe('TaskRow', () => {
 
     const focusBtn = screen.getByTitle(/A Pomodoro is already running/i);
     expect(focusBtn).toBeDisabled();
+  });
+
+  it('shows error toast when complete mutation fails', async () => {
+    const user = userEvent.setup();
+    vi.mocked(updateTask).mockRejectedValue(new Error('Network error'));
+    renderRow();
+
+    const completeBtn = screen.getByRole('button', { name: /Mark task done/i });
+    await user.click(completeBtn);
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      'Failed to mark done: Network error',
+    );
+  });
+
+  it('shows error toast when delete mutation fails', async () => {
+    const user = userEvent.setup();
+    vi.mocked(deleteTask).mockRejectedValue(new Error('Server error'));
+    renderRow();
+
+    const deleteBtn = screen.getByRole('button', { name: /Delete task/i });
+    await user.click(deleteBtn);
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      'Failed to delete task: Server error',
+    );
   });
 });

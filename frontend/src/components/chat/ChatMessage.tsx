@@ -9,9 +9,15 @@ interface ChatMessageProps {
   isLoading?: boolean;
   /** When isLoading is true, phase drives the spinner caption */
   phase?: 'idle' | 'searching' | 'streaming';
+  /** Seconds elapsed since the request started; rendered in the thinking indicator */
+  elapsedSeconds?: number;
+  /** True when this is the first question of the session (used to show warm-up hint) */
+  isFirstQuestion?: boolean;
 }
 
-export function ChatMessage({ message, isLoading, phase }: ChatMessageProps) {
+const WARMUP_HINT_THRESHOLD_S = 5;
+
+export function ChatMessage({ message, isLoading, phase, elapsedSeconds = 0, isFirstQuestion = false }: ChatMessageProps) {
   const isUser = message.role === 'user';
 
   return (
@@ -55,11 +61,19 @@ export function ChatMessage({ message, isLoading, phase }: ChatMessageProps) {
             )}
           </>
         ) : isLoading ? (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="text-sm">
-              {phase === 'searching' ? 'Searching paper chunks…' : 'Generating response…'}
-            </span>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-sm">
+                {phase === 'searching' ? 'Searching your papers…' : 'Generating response…'}
+                {elapsedSeconds > 0 && ` ${elapsedSeconds}s`}
+              </span>
+            </div>
+            {isFirstQuestion && elapsedSeconds >= WARMUP_HINT_THRESHOLD_S && (
+              <p className="text-xs text-muted-foreground pl-6">
+                First question warms up the model — this can take a moment.
+              </p>
+            )}
           </div>
         ) : null}
       </div>

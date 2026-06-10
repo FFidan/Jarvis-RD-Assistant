@@ -8,6 +8,26 @@ import { ActionsSidebar } from '@/components/paper/ActionsSidebar';
 import type { AnalyzeEvent } from '@/lib/sse';
 import type { Job } from '@/stores/job-store';
 
+// --- Mock sonner toast ---
+
+const toastMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+}));
+
+vi.mock('sonner', () => ({
+  toast: toastMocks,
+}));
+
+// --- Mock useNavigate ---
+
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('react-router-dom')>();
+  return { ...orig, useNavigate: () => mockNavigate };
+});
+
 // --- Mock SSE streamAnalyze ---
 
 let mockStreamEvents: AnalyzeEvent[] = [];
@@ -140,6 +160,7 @@ describe('ActionsSidebar', () => {
     mockStreamEvents = [];
     mockStreamError = null;
     mockStreamGate = null;
+    mockNavigate.mockReset();
     // Re-apply default mocks after clearAllMocks
     vi.mocked(downloadPdf).mockResolvedValue({} as never);
     vi.mocked(processPdf).mockResolvedValue({ job_id: 'job-process-001', status: 'queued' } as never);
@@ -595,6 +616,44 @@ describe('ActionsSidebar', () => {
     // Unsafe href → label shown as inert text, NOT a Link.
     expect(screen.getByText('Click here')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Click here' })).not.toBeInTheDocument();
+  });
+
+  it('step tracker shows "Processing" label (not "Processing & embedding")', () => {
+    renderSidebar();
+    expect(screen.getByText('Processing')).toBeInTheDocument();
+    expect(screen.queryByText(/embedding/i)).not.toBeInTheDocument();
+  });
+
+  it('analyze success fires toast.success with Ask guidance and Go-to-Ask action', async () => {
+    const user = userEvent.setup();
+
+    mockStreamEvents = [
+      { type: 'step', step: 'downloading', status: 'started' },
+      { type: 'step', step: 'downloading', status: 'completed' },
+      { type: 'step', step: 'processing', status: 'started' },
+      { type: 'step', step: 'processing', status: 'completed', chunk_count: 5 },
+      { type: 'step', step: 'summarizing', status: 'started' },
+      { type: 'step', step: 'summarizing', status: 'completed' },
+      { type: 'complete', paper_id: 42 },
+    ];
+
+    renderSidebar();
+    await user.click(screen.getByRole('button', { name: /Analyze Paper/ }));
+
+    await waitFor(() => {
+      expect(toastMocks.success).toHaveBeenCalledWith(
+        'Analyzed! You can now Ask across your library',
+        expect.objectContaining({
+          action: expect.objectContaining({ label: 'Go to Ask' }),
+        }),
+      );
+    });
+
+    // Invoke the action's onClick to confirm it navigates to /ask
+    const call = toastMocks.success.mock.calls[0];
+    const opts = call?.[1] as { action?: { label: string; onClick: () => void } } | undefined;
+    opts?.action?.onClick();
+    expect(mockNavigate).toHaveBeenCalledWith('/ask');
   });
 
   it('renders tooltip info icons for visible action buttons', async () => {

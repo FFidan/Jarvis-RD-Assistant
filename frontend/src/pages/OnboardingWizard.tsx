@@ -935,6 +935,7 @@ function SourceKeyRow({ source }: { source: SourceConfig }) {
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               className="h-8 text-sm flex-1"
+              autoComplete="off"
               autoFocus
             />
             <Button size="sm" variant="ghost" disabled={!apiKey || saveMut.isPending} onClick={() => saveMut.mutate()}>

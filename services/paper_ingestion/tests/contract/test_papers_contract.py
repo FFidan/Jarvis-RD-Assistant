@@ -2025,3 +2025,37 @@ async def test_delete_paper_feedback_rejects_cross_owner(
         user_a_id,
     )
     assert row is not None, "user A's feedback row was deleted by user B's cross-owner DELETE"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/process_batch — enqueues 202 + job_id
+# ---------------------------------------------------------------------------
+
+
+async def test_process_batch_enqueues_202_with_job_id(
+    contract_two_users, _pi_app_with_pool, _configure_api_key
+):
+    """POST /api/papers/process_batch returns 202 + job_id for an owned paper.
+
+    Ownership fast-granted because paper_id_a is owned by user_a (discovered_by matches).
+    The task_registry entry for papers.batch_process is patched so no worker is needed.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/papers_bulk.py:121
+    # (process_batch: assert_papers_ownership then defer_async, returns JobCreateResponse).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    mock_task = AsyncMock()
+    mock_task.defer_async = AsyncMock()
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"papers.batch_process": mock_task}):
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+            resp = await c.post(
+                "/api/papers/process_batch",
+                json={"paper_ids": [contract_two_users.paper_id_a]},
+            )
+
+    assert resp.status_code == 202, resp.text[:300]
+    body = resp.json()
+    assert body.get("job_id"), f"Missing job_id: {body}"
+    assert body.get("status") == "queued", f"Expected status=queued: {body}"
+    mock_task.defer_async.assert_awaited_once()

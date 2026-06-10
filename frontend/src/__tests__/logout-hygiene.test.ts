@@ -46,6 +46,7 @@ const { useJobStore } = await import('@/stores/job-store');
 const { useBulkSelection } = await import('@/stores/bulk-selection-store');
 const { usePomodoroStore } = await import('@/stores/pomodoro-store');
 const { useKeyboardShortcuts } = await import('@/stores/keyboard-shortcuts-store');
+const { useCommandPalette } = await import('@/stores/command-palette-store');
 
 // --- QueryClient mock ---
 
@@ -82,6 +83,7 @@ function seedStores() {
   useBulkSelection.setState({ selectedIds: new Set([1, 2, 3]) });
   usePomodoroStore.setState({ phase: 'work', startedAt: Date.now() });
   useKeyboardShortcuts.setState({ isOpen: true });
+  useCommandPalette.setState({ results: [{ external_id: 'p-1', title: 'Test Paper', source_type: 'arxiv', authors: [], abstract: null, published_date: null, url: 'http://example.com', pdf_url: null, citation_count: 0, metadata: {}, library_match: null }], query: 'test', isOpen: true });
 }
 
 describe('logout-hygiene', () => {
@@ -155,6 +157,14 @@ describe('logout-hygiene', () => {
     useAuthStore.getState().logout();
     await flushPromises();
     expect(useKeyboardShortcuts.getState().isOpen).toBe(false);
+  });
+
+  it('resets command-palette-store on logout', async () => {
+    useAuthStore.getState().logout();
+    await flushPromises();
+    expect(useCommandPalette.getState().results).toEqual([]);
+    expect(useCommandPalette.getState().query).toBe('');
+    expect(useCommandPalette.getState().isOpen).toBe(false);
   });
 
   it('posts JARVIS_LOGOUT message to the service worker on logout', async () => {

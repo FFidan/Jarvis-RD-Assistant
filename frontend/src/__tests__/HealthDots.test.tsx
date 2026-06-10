@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HealthDots } from '@/components/shared/HealthDots';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import type { StackHealthSummary } from '@/lib/api';
 
 // Mock the api module so we control fetchStackHealth return values
@@ -242,6 +243,37 @@ describe('HealthDots', () => {
     renderHealthDots();
 
     expect(screen.getByTestId('health-dots-loading')).toBeInTheDocument();
+  });
+
+  it('does not flash "Checking services…" during refetch when cached data exists', async () => {
+    // First fetch succeeds and populates cache
+    mockFetchStackHealth.mockResolvedValue(makeAllOk());
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HealthDots />
+      </QueryClientProvider>,
+    );
+
+    // Wait for initial data to render
+    await screen.findByTestId('health-pill-toggle');
+
+    // Trigger a manual refetch while mock is still pending (simulates background refresh)
+    let resolveRefetch!: (v: ReturnType<typeof makeAllOk>) => void;
+    mockFetchStackHealth.mockReturnValue(
+      new Promise<ReturnType<typeof makeAllOk>>((res) => { resolveRefetch = res; }),
+    );
+    void queryClient.refetchQueries({ queryKey: QUERY_KEYS.stack.health() });
+
+    // During the in-flight refetch the pill (cached data) must still be visible
+    expect(screen.queryByText('Checking services…')).not.toBeInTheDocument();
+    expect(screen.getByTestId('health-pill-toggle')).toBeInTheDocument();
+
+    // Resolve the refetch so the test cleans up properly
+    resolveRefetch(makeAllOk());
+    await screen.findByTestId('health-pill-toggle');
   });
 
   // --- Mixed states in expanded grid ---

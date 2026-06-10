@@ -10,6 +10,7 @@ from jarvis_common.event_log import log_event
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from telegram_bot.formatters import escape
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import get_db
 from telegram_bot.handlers.rate_limit import rate_limit
@@ -292,7 +293,7 @@ async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    username_part = f" (@{row['telegram_username']})" if row["telegram_username"] else ""
+    username_part = f" (@{escape(row['telegram_username'])})" if row["telegram_username"] else ""
     paired_at = row["paired_at"]
     paired_str = paired_at.strftime("%Y-%m-%d %H:%M UTC") if paired_at else "unknown"
 

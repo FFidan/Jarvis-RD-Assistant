@@ -132,8 +132,9 @@ sync_secret INFRA_INGEST_KEY   infra_ingest_key.txt   "openssl rand -hex 32"
 # JARVIS_CONFIG_KEY is the Fernet write-key for the user_config table.
 # sync_secret preserves any existing .env value verbatim; rotating this key
 # would render every encrypted user_config row unreadable, so we never
-# regenerate when an existing value is present.  ``Fernet.generate_key()``
-# emits the same shape as ``openssl rand -base64 32`` (32 bytes urlsafe-b64).
+# regenerate when an existing value is present.  ``openssl rand -base64 32``
+# emits 32 random bytes as standard base64; Fernet's urlsafe decoder accepts it
+# (it only maps -_ to +/, leaving +/ intact), so it is a valid JARVIS_CONFIG_KEY.
 sync_secret JARVIS_CONFIG_KEY  jarvis_config_key.txt  "openssl rand -base64 32 | tr -d '\\n'"
 
 # JARVIS_MODEL_HMAC_KEY signs the Pulse classifier pickle blobs (HMAC-SHA256).

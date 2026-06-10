@@ -10,6 +10,7 @@ import {
 } from '@/lib/api';
 import type { Note } from '@/types';
 import { useJobStore } from '@/stores/job-store';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -71,6 +72,10 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notes.user(paperId) });
     },
+    onError: (err) =>
+      toast.error('Failed to delete note', {
+        description: errorMessage(err),
+      }),
   });
 
   const syncZoteroMut = useMutation({
@@ -90,6 +95,10 @@ export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notes.zotero(paperId) });
     },
+    onError: (err) =>
+      toast.error('Failed to promote Zotero highlight', {
+        description: errorMessage(err),
+      }),
   });
 
   const verificationLabel = (note: Note) => {

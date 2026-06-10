@@ -151,3 +151,31 @@ async def test_a28_get_paper_citations_user_b_gets_403_404(
     assert resp.status_code in (403, 404), (
         f"User B should get 403/404 for user A's citations; got {resp.status_code}"
     )
+
+
+# ---------------------------------------------------------------------------
+# A29: POST /api/citations/batch-fetch — enqueues 202 + queued message
+# ---------------------------------------------------------------------------
+
+
+async def test_a29_batch_fetch_citations_enqueues_202(
+    contract_two_users, _pi_app_with_pool, _configure_api_key
+):
+    """POST /api/citations/batch-fetch returns 202 + queued message; task_registry carve-out.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/citations.py:54
+    # (batch_fetch_citations defers citations.batch_fetch and returns BatchCitationFetchResponse).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    mock_task = AsyncMock()
+    mock_task.defer_async = AsyncMock()
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"citations.batch_fetch": mock_task}):
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+            resp = await c.post("/api/citations/batch-fetch")
+
+    assert resp.status_code == 202, resp.text[:300]
+    body = resp.json()
+    assert body.get("queued") == 1, f"Expected queued=1: {body}"
+    assert "message" in body, f"Missing 'message' key: {body}"
+    mock_task.defer_async.assert_awaited_once()

@@ -21,8 +21,9 @@ from telegram import Message, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from telegram_bot import services_client
+from telegram_bot.config import _owner_headers
 from telegram_bot.formatters import format_paper_detail, format_project_status
-from telegram_bot.handlers.helpers import _owner_headers, auth_check, get_config, get_db, get_http
+from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)

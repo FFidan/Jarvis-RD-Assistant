@@ -117,7 +117,7 @@ async def test_c7_02_fetch_and_process_local_pdf_returns_queued(
     """POST /api/analytics/fetch-and-process with a local-PDF stub enqueues paper.process.
 
     Seeds a stub paper with pdf_downloaded=True + pdf_local_path; verifies the
-    handler returns 200 + status="queued" + job_id; asserts the stub flag cleared.
+    handler returns 202 + status="queued" + job_id; asserts the stub flag cleared.
 
     # Verified: services/paper_ingestion/paper_ingestion/routers/analytics.py:88
     # (fetch_and_process_foundational: local-PDF branch defers paper.process).
@@ -148,7 +148,7 @@ async def test_c7_02_fetch_and_process_local_pdf_returns_queued(
                 json={"paper_id": stub_id},
             )
 
-    assert resp.status_code == 200, resp.text[:300]
+    assert resp.status_code == 202, resp.text[:300]
     body = resp.json()
     assert body.get("status") == "queued"
     assert body.get("job_id"), f"Missing job_id: {body}"
@@ -272,7 +272,7 @@ async def test_c7_05_fetch_and_process_no_pdf_returns_no_pdf_status(
             json={"paper_id": stub_id},
         )
 
-    assert resp.status_code == 200, resp.text[:300]
+    assert resp.status_code == 202, resp.text[:300]
     body = resp.json()
     assert body.get("status") == "no_pdf", (
         f"Expected status=no_pdf when no PDF available; got {body}"

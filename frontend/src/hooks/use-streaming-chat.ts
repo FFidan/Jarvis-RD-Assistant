@@ -32,6 +32,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
   const [sources, setSources] = useState<Source[]>([]);
   const [modelUsed, setModelUsed] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   // D.3 — AbortController is now stored in the module-level activeStreams map
   // (keyed by chatId) so streams survive component unmount during navigation.
   // The ref here is only used by stopStreaming() to abort imperatively.
@@ -43,6 +44,22 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  // Elapsed-seconds counter: ticks every second while a request is in flight.
+  // Keyed on isIdle so the interval starts once on transition to active and
+  // is cleared (with a reset) on transition back to idle.
+  const isIdle = phase === 'idle';
+  useEffect(() => {
+    if (isIdle) {
+      setElapsedSeconds(0);
+      return;
+    }
+    setElapsedSeconds(0);
+    const id = setInterval(() => {
+      setElapsedSeconds((s) => s + 1);
+    }, 1000);
+    return () => { clearInterval(id); };
+  }, [isIdle]);
 
   // Reactive: true whenever ANY hook instance has registered a stream for this
   // chatId, even if this particular instance just remounted (navigation back).
@@ -143,6 +160,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
     sources,
     isStreaming,
     phase,
+    elapsedSeconds,
     sendMessage,
     stopStreaming,
     clearChat: () => { setStreamError(null); clearChat(chatId); },

@@ -1059,4 +1059,270 @@ describe('JobStore', () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
+
+  // ----- eviction-timer + logout-scoped backoff hygiene (M13c / W4-T8) -----
+  //
+  // NOTE: these tests deliberately avoid asserting on vi.getTimerCount() —
+  // unfinished reconnect chains from earlier tests in this file ("zombies")
+  // schedule timers of their own at unpredictable await points. All assertions
+  // are therefore scoped to this test's job id (removeJob spy args / stream URL
+  // filter), which zombies can never touch.
+
+  /**
+   * Swap the store's removeJob for a spy so a firing eviction timer is
+   * observable (the timer callback resolves removeJob via get() at fire time).
+   * Returns the spy + a restore function. The spy survives _reset because
+   * JOB_INITIAL_STATE only carries jobs/activeAborts.
+   */
+  function spyOnRemoveJob(): { removeSpy: ReturnType<typeof vi.fn<(jobId: string) => void>>; restore: () => void } {
+    const origRemove = useJobStore.getState().removeJob;
+    const removeSpy = vi.fn<(jobId: string) => void>();
+    useJobStore.setState({ removeJob: removeSpy });
+    return {
+      removeSpy,
+      restore: () => useJobStore.setState({ removeJob: origRemove }),
+    };
+  }
+
+  it('eviction timer fires removeJob after the eviction delay when not cancelled (control)', async () => {
+    // Positive control: proves cancelJob really arms an eviction timer, so the
+    // cancellation tests below are not vacuously green.
+    vi.useFakeTimers();
+    const { cancelJob: apiCancelJob } = await import('@/lib/api');
+    vi.mocked(apiCancelJob).mockResolvedValue(undefined);
+
+    useJobStore.setState({
+      jobs: { 'job-evict-fires': makeJob({ id: 'job-evict-fires', status: 'running' }) },
+      activeAborts: {},
+    });
+    await useJobStore.getState().cancelJob('job-evict-fires');
+
+    const { removeSpy, restore } = spyOnRemoveJob();
+    try {
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1); // past EVICT_DELAY_MS
+      expect(removeSpy).toHaveBeenCalledWith('job-evict-fires');
+    } finally {
+      restore();
+    }
+  });
+
+  it('_reset: cancels both terminal-eviction and cancel-eviction timers (M13c)', async () => {
+    vi.useFakeTimers();
+    const { cancelJob: apiCancelJob } = await import('@/lib/api');
+    vi.mocked(apiCancelJob).mockResolvedValue(undefined);
+
+    // Job A reaches a terminal state via SSE → post-terminal eviction timer.
+    vi.spyOn(sseReader, 'createSSEReader').mockImplementation(async function* (url) {
+      if (url === '/api/jobs/job-evict-terminal/stream') {
+        yield JSON.stringify({ status: 'succeeded', progress: 100 });
+      }
+      // any other URL (zombie reconnects): end immediately
+    });
+    useJobStore.setState({
+      jobs: {
+        'job-evict-terminal': makeJob({ id: 'job-evict-terminal', status: 'running' }),
+        'job-evict-cancel': makeJob({ id: 'job-evict-cancel', status: 'running' }),
+      },
+      activeAborts: {},
+    });
+    useJobStore.getState().subscribe('job-evict-terminal');
+
+    // Drain microtasks until the terminal event is processed (eviction armed).
+    for (
+      let i = 0;
+      i < 50 && useJobStore.getState().jobs['job-evict-terminal']?.status !== 'succeeded';
+      i++
+    ) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(requireJob(useJobStore.getState().jobs['job-evict-terminal']).status).toBe('succeeded');
+
+    // Job B is cancelled → post-cancel eviction timer.
+    await useJobStore.getState().cancelJob('job-evict-cancel');
+    expect(requireJob(useJobStore.getState().jobs['job-evict-cancel']).status).toBe('cancelled');
+
+    const { removeSpy, restore } = spyOnRemoveJob();
+    try {
+      useJobStore.getState()._reset(); // logout
+
+      // Neither eviction timer may fire into post-logout state.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000); // past EVICT_DELAY_MS
+      expect(removeSpy).not.toHaveBeenCalledWith('job-evict-terminal');
+      expect(removeSpy).not.toHaveBeenCalledWith('job-evict-cancel');
+    } finally {
+      restore();
+    }
+  });
+
+  it('removeJob: clears a pending eviction timer for an early-dismissed job (M13c)', async () => {
+    vi.useFakeTimers();
+    const { cancelJob: apiCancelJob } = await import('@/lib/api');
+    vi.mocked(apiCancelJob).mockResolvedValue(undefined);
+
+    useJobStore.setState({
+      jobs: { 'job-dismiss': makeJob({ id: 'job-dismiss', status: 'running' }) },
+      activeAborts: {},
+    });
+    await useJobStore.getState().cancelJob('job-dismiss'); // eviction armed (see control test)
+
+    // User dismisses the cancelled job before the eviction delay elapses.
+    useJobStore.getState().removeJob('job-dismiss');
+
+    const { removeSpy, restore } = spyOnRemoveJob();
+    try {
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000);
+      // The orphaned timer must NOT fire again for the already-removed job.
+      expect(removeSpy).not.toHaveBeenCalledWith('job-dismiss');
+    } finally {
+      restore();
+    }
+  });
+
+  it('_reset during reconnect backoff aborts the pending sleep via the logout-scoped signal', async () => {
+    // Auth stays TRUE throughout — proves the resubscribe is stopped by the
+    // logout-scoped signal aborting the sleep, NOT by the post-sleep
+    // isAuthenticated guard.
+    vi.useFakeTimers();
+    const { useAuthStore } = await import('@/stores/auth-store');
+    const { getJob } = await import('@/lib/api');
+    vi.mocked(useAuthStore.getState).mockReturnValue({
+      getApiKey: vi.fn(() => 'test-key'),
+      getUser: vi.fn(() => null),
+      logout: vi.fn(),
+      isAuthenticated: true,
+      authTime: null,
+      apiKey: 'test-key',
+      user: null,
+      lastError: null,
+      login: vi.fn(),
+      loginWithSession: vi.fn(),
+      isSessionValid: vi.fn(() => true),
+      expireSession: vi.fn(),
+    });
+    vi.mocked(getJob).mockResolvedValue(null as unknown as ReturnType<typeof getJob> extends Promise<infer T> ? T : never);
+
+    // Streams end without a terminal event → _reconcileOrRetry → getJob null →
+    // _reconnectAfterDrop → backoff sleep (for our job AND for zombies).
+    const readerSpy = vi.spyOn(sseReader, 'createSSEReader').mockImplementation(
+      async function* () {
+        // Yield nothing
+      },
+    );
+
+    const jobId = 'job-reset-backoff';
+    const streamUrl = `/api/jobs/${jobId}/stream`;
+    const ourCalls = () => readerSpy.mock.calls.filter((c) => c[0] === streamUrl).length;
+
+    useJobStore.setState({
+      jobs: { [jobId]: makeJob({ id: jobId, status: 'running' }) },
+      activeAborts: {},
+    });
+    useJobStore.getState().subscribe(jobId);
+
+    // Drain microtasks until OUR job's reconcile poll happened; everything from
+    // there to the backoff sleep is pure microtasks, so a bounded extra drain
+    // deterministically arms the sleep.
+    for (
+      let i = 0;
+      i < 50 && !vi.mocked(getJob).mock.calls.some((c) => c[0] === jobId);
+      i++
+    ) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(getJob).toHaveBeenCalledWith(jobId);
+    for (let i = 0; i < 20; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(ourCalls()).toBe(1); // backoff pending, not yet resubscribed
+
+    useJobStore.getState()._reset(); // logout
+
+    // Advancing far past every backoff step must produce NO resubscribe for
+    // our job: the logout-scoped signal rejected the pending sleep.
+    await vi.advanceTimersByTimeAsync(10_000);
+    for (let i = 0; i < 20; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(ourCalls()).toBe(1);
+  });
+
+  it('subscribe: streaming_timeout backoff completes and resubscribes when not logged out (G-01 guard)', async () => {
+    // The backoff sleep must receive the logout-scoped signal, NOT the SSE
+    // controller's (already-aborted) signal. A G-01 regression would reject the
+    // sleep immediately → no resubscribe for this job.
+    vi.useFakeTimers();
+    const jobId = 'job-timeout-normal';
+    const streamUrl = `/api/jobs/${jobId}/stream`;
+
+    let ourCall = 0;
+    const readerSpy = vi.spyOn(sseReader, 'createSSEReader').mockImplementation(
+      async function* (url) {
+        if (url !== streamUrl) return; // zombie reconnects: end immediately
+        ourCall += 1;
+        yield ourCall === 1
+          ? JSON.stringify({ status: 'streaming_timeout' })
+          : JSON.stringify({ status: 'succeeded', progress: 100 });
+      },
+    );
+    const ourCalls = () => readerSpy.mock.calls.filter((c) => c[0] === streamUrl).length;
+
+    useJobStore.setState({
+      jobs: { [jobId]: makeJob({ id: jobId, status: 'running' }) },
+      activeAborts: {},
+    });
+    useJobStore.getState().subscribe(jobId);
+
+    // The path from subscribe to the backoff sleep is pure microtasks — drain.
+    for (let i = 0; i < 20; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(ourCalls()).toBe(1); // backoff pending — no instant resubscribe
+
+    // Sleep completes after the base delay → store resubscribes (auth stays true).
+    await vi.advanceTimersByTimeAsync(1000);
+    for (let i = 0; i < 20; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(ourCalls()).toBe(2);
+  });
+
+  it('_reset re-arms the logout signal: backoff sleeps after a later login are not pre-aborted', async () => {
+    // A logout aborts the logout-scoped controller; _reset must replace it so
+    // the NEXT session's reconnect backoffs still work. A regression that kept
+    // the aborted controller would reject every future sleep instantly.
+    vi.useFakeTimers();
+    useJobStore.getState()._reset(); // simulate a previous logout
+
+    const jobId = 'job-relogin-backoff';
+    const streamUrl = `/api/jobs/${jobId}/stream`;
+
+    let ourCall = 0;
+    const readerSpy = vi.spyOn(sseReader, 'createSSEReader').mockImplementation(
+      async function* (url) {
+        if (url !== streamUrl) return; // zombie reconnects: end immediately
+        ourCall += 1;
+        yield ourCall === 1
+          ? JSON.stringify({ status: 'streaming_timeout' })
+          : JSON.stringify({ status: 'succeeded', progress: 100 });
+      },
+    );
+    const ourCalls = () => readerSpy.mock.calls.filter((c) => c[0] === streamUrl).length;
+
+    useJobStore.setState({
+      jobs: { [jobId]: makeJob({ id: jobId, status: 'running' }) },
+      activeAborts: {},
+    });
+    useJobStore.getState().subscribe(jobId);
+
+    for (let i = 0; i < 20; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(ourCalls()).toBe(1); // sleep armed with the FRESH signal — no instant abort
+
+    await vi.advanceTimersByTimeAsync(1000);
+    for (let i = 0; i < 20; i++) {
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(ourCalls()).toBe(2); // backoff ran to completion; resubscribed
+  });
 });

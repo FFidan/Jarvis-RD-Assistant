@@ -400,6 +400,76 @@ async def test_whoami_does_not_leak_db_user_id():
 
 
 # ---------------------------------------------------------------------------
+# M12c: /whoami must HTML-escape telegram_username
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_whoami_escapes_username_angle_bracket():
+    """M12c: username containing '<' must be HTML-escaped in the reply."""
+    paired_at = datetime.now(UTC)
+    row = {
+        "user_id": 1,
+        "telegram_username": "<script>",
+        "paired_at": paired_at,
+    }
+    pool = _make_pool(_make_conn(), fetchrow_return=row)
+    update = make_telegram_update(chat_id=42)
+    context = _make_context(pool, args=[])
+
+    await whoami_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "<script>" not in text, (
+        f"M12c: raw '<script>' must not appear in /whoami reply: {text!r}"
+    )
+    assert "&lt;script&gt;" in text, (
+        f"M12c: escaped '&lt;script&gt;' must appear in /whoami reply: {text!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_whoami_escapes_username_ampersand():
+    """M12c: username containing '&' must be HTML-escaped in the reply."""
+    paired_at = datetime.now(UTC)
+    row = {
+        "user_id": 2,
+        "telegram_username": "AT&T",
+        "paired_at": paired_at,
+    }
+    pool = _make_pool(_make_conn(), fetchrow_return=row)
+    update = make_telegram_update(chat_id=43)
+    context = _make_context(pool, args=[])
+
+    await whoami_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "AT&T" not in text, f"M12c: raw '&' must not appear in /whoami reply: {text!r}"
+    assert "AT&amp;T" in text, f"M12c: escaped 'AT&amp;T' must appear in /whoami reply: {text!r}"
+
+
+@pytest.mark.asyncio
+async def test_whoami_plain_username_unaffected():
+    """M12c: a username with no HTML-special chars renders unchanged."""
+    paired_at = datetime.now(UTC)
+    row = {
+        "user_id": 3,
+        "telegram_username": "alice_bob",
+        "paired_at": paired_at,
+    }
+    pool = _make_pool(_make_conn(), fetchrow_return=row)
+    update = make_telegram_update(chat_id=44)
+    context = _make_context(pool, args=[])
+
+    await whoami_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "alice_bob" in text, (
+        f"M12c: plain username 'alice_bob' must appear unchanged in /whoami reply: {text!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # DOS-3: /whoami rate-limit (5/minute per chat)
 # ---------------------------------------------------------------------------
 

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2, CreditCard } from 'lucide-react';
+import { toast } from 'sonner';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchCards, deleteCard } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -38,6 +39,7 @@ export function CardList({ deckId }: CardListProps) {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cards.stats() });
       setDeleteId(null);
     },
+    onError: () => toast.error('Failed to delete card. Please try again.'),
   });
 
   if (isLoading) {

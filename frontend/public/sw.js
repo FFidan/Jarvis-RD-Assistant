@@ -114,6 +114,13 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('message', (event) => {
+  // Reject messages from foreign origins. Same-origin postMessage from the
+  // app (navigator.serviceWorker.controller.postMessage) may arrive with
+  // event.origin === '' in some browsers, so we only block when origin is
+  // truthy AND doesn't match ours — leaving the legitimate same-origin path
+  // unaffected.
+  if (event.origin && event.origin !== self.location.origin) return;
+
   const data = event.data || {};
   if (data.type === 'SKIP_WAITING') {
     self.skipWaiting();

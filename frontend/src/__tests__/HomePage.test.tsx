@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HomePage } from '@/pages/HomePage';
+import { useUIStore } from '@/stores/ui-store';
 
 // Mock the api module
 vi.mock('@/lib/api', () => ({
@@ -191,6 +192,61 @@ describe('HomePage', () => {
       await userEvent.click(screen.getByRole('button', { name: /continue/i }));
       await waitFor(() => expect(batchSummarizePapers).toHaveBeenCalledTimes(1));
       expect(await screen.findByText('Queued 7 papers')).toBeInTheDocument();
+    });
+  });
+
+  describe('onboarding celebration', () => {
+    const CELEBRATION_TEXT = 'All set! Happy researching.';
+    // Captured before any test swaps in a spy, so beforeEach can restore it.
+    const realMarkOnboardingCelebrated = useUIStore.getState().markOnboardingCelebrated;
+
+    beforeEach(() => {
+      localStorage.clear();
+      useUIStore.getState()._reset();
+      useUIStore.setState({ markOnboardingCelebrated: realMarkOnboardingCelebrated });
+    });
+
+    it('shows the celebration when stage is complete and not yet celebrated', async () => {
+      vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+      renderHomePage();
+      expect(await screen.findByText(CELEBRATION_TEXT)).toBeInTheDocument();
+      // The persisted flag flips immediately so the celebration never re-fires...
+      await waitFor(() => expect(useUIStore.getState().onboardingCelebrated).toBe(true));
+      // ...but the latched card stays visible for the current visit.
+      expect(screen.getByText(CELEBRATION_TEXT)).toBeInTheDocument();
+    });
+
+    it('calls markOnboardingCelebrated exactly once (no effect re-fire loop)', async () => {
+      vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+      const spy = vi.fn(realMarkOnboardingCelebrated);
+      useUIStore.setState({ markOnboardingCelebrated: spy });
+      renderHomePage();
+      expect(await screen.findByText(CELEBRATION_TEXT)).toBeInTheDocument();
+      await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+      // Force an extra render pass; the effect must not fire again.
+      act(() => {
+        useUIStore.setState({ sidebarCollapsed: true });
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(CELEBRATION_TEXT)).toBeInTheDocument();
+    });
+
+    it('does not show the celebration when already celebrated', async () => {
+      useUIStore.setState({ onboardingCelebrated: true });
+      vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+      renderHomePage();
+      expect(await screen.findByText('Library')).toBeInTheDocument();
+      expect(screen.queryByText(CELEBRATION_TEXT)).toBeNull();
+    });
+
+    it('does not show the celebration while onboarding is incomplete', async () => {
+      vi.mocked(fetchDashboardMetrics).mockResolvedValue({
+        ...mockMetrics,
+        onboarding_stage: 'needs_papers',
+      });
+      renderHomePage();
+      expect(await screen.findByText('Welcome to JARVIS Research Assistant')).toBeInTheDocument();
+      expect(screen.queryByText(CELEBRATION_TEXT)).toBeNull();
     });
   });
 });

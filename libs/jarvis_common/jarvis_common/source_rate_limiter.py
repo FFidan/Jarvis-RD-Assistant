@@ -121,7 +121,9 @@ class PersistentSourceRateLimiter:
         the other(s) read the current ``last_request_at``, sleep for the
         remaining interval, and retry the claim once.
 
-        Also honours ``cooldown_until`` (hard API cooldown) — both workers sleep.
+        Also honours ``cooldown_until`` (hard API cooldown) — workers sleep out
+        the cooldown once, then re-attempt the (bounded) slot claim so
+        post-cooldown requests stay spaced instead of bursting.
 
         Falls back to the in-memory fallback (or a bare sleep) on DB error.
         """
@@ -140,7 +142,7 @@ class PersistentSourceRateLimiter:
                 await asyncio.sleep(self._min_interval)
 
     async def _acquire_with_retry(self) -> None:
-        """Inner acquire: atomic cooldown-check + slot claim (one retry).
+        """Inner acquire: atomic cooldown-check + slot claim (bounded retries).
 
         The cooldown check (``SELECT … FOR UPDATE``) and the slot claim
         (``INSERT … ON CONFLICT … RETURNING``) run in the **same**
@@ -155,17 +157,26 @@ class PersistentSourceRateLimiter:
         as plain floats inside the transaction block and only acted on after
         the connection is fully released.
         """
-        # ── Attempt loop (up to 2 tries) ─────────────────────────────────────
-        # Each attempt opens ONE connection, runs ONE transaction that:
+        # ── Bounded attempt loop ─────────────────────────────────────────────
+        # Each iteration opens ONE connection, runs ONE transaction that:
         #   a) locks the existing row (if any) with SELECT … FOR UPDATE,
         #   b) checks cooldown_until — if active, records cooldown_wait and
         #      aborts the transaction without writing,
         #   c) otherwise issues the conditional INSERT … ON CONFLICT slot claim.
         # The connection is released before sleeping (H-1).
-        for attempt in range(2):
+        #
+        # Budget (M2): at most ONE cooldown sleep + up to 2 claim attempts (one
+        # miss-sleep between them).  A cooldown must loop back to RE-CLAIM after
+        # sleeping — returning early would let every cooldown waiter burst
+        # through unspaced with the slot never claimed; a cooldown still/again
+        # active after the one allowed sleep must end at the raise below
+        # (fallback throttling), never an unbounded loop or a silent skip.
+        cooldown_sleeps = 0
+        claim_attempts = 0
+        while True:
             cooldown_wait: float | None = None
             claimed: bool = False
-            wait_after_miss: float | None = None  # set on attempt-0 miss
+            wait_after_miss: float | None = None  # set on first-claim miss
 
             async with self._pool.acquire() as conn:
                 async with conn.transaction():
@@ -194,6 +205,7 @@ class PersistentSourceRateLimiter:
                         # Cooldown not active — attempt the conditional slot claim
                         # inside the same transaction so the FOR UPDATE lock
                         # covers the gap between check and write.
+                        claim_attempts += 1
                         claimed_row = await conn.fetchrow(
                             """
                             INSERT INTO source_health
@@ -213,10 +225,11 @@ class PersistentSourceRateLimiter:
                         )
                         if claimed_row is not None:
                             claimed = True
-                        elif attempt == 0:
-                            # Slot taken; read last_request_at to compute wait.
-                            # locked_row already has last_request_at from the
-                            # FOR UPDATE fetch above — use it directly.
+                        elif claim_attempts < 2:
+                            # First claim miss: slot taken; read last_request_at
+                            # to compute the wait. locked_row already has
+                            # last_request_at from the FOR UPDATE fetch above —
+                            # use it directly.
                             if locked_row is not None and locked_row["last_request_at"] is not None:
                                 elapsed = (
                                     datetime.now(tz=UTC) - locked_row["last_request_at"]
@@ -226,40 +239,46 @@ class PersistentSourceRateLimiter:
                                 wait_after_miss = self._min_interval
 
             # ── Connection released above (H-1) — sleep outside of it ────────
-            if cooldown_wait is not None:
+            if cooldown_wait is not None and cooldown_sleeps == 0:
+                cooldown_sleeps = 1
                 _logger.debug(
                     "PersistentSourceRateLimiter[%s] in cooldown; sleeping %.1fs",
                     self._source_type,
                     cooldown_wait,
                 )
                 await asyncio.sleep(cooldown_wait)
-                return
+                # Loop back to RE-CLAIM the slot now that the cooldown elapsed
+                # (returning here would let every waiter burst through unspaced).
+                continue
 
             if claimed:
                 return
 
-            if wait_after_miss is not None:
-                # attempt == 0: slot taken by another worker; sleep then retry.
+            if cooldown_wait is None and wait_after_miss is not None:
+                # First claim miss: slot taken by another worker; sleep then retry.
                 _logger.debug(
                     "PersistentSourceRateLimiter[%s] slot taken; sleeping %.1fs",
                     self._source_type,
                     wait_after_miss,
                 )
                 await asyncio.sleep(wait_after_miss)
-                # loop continues → attempt == 1
-            else:
-                # attempt == 1: second claim failed after sleeping.  Abnormal
-                # (two workers racing on a very short interval, or clock skew).
-                # Raise so acquire() falls back — never silently skip limiting.
-                _logger.warning(
-                    "PersistentSourceRateLimiter[%s] slot still taken after retry; "
-                    "rate-limit enforced via fallback",
-                    self._source_type,
-                )
-                raise RuntimeError(
-                    f"PersistentSourceRateLimiter[{self._source_type}]: "
-                    "slot claim failed on both attempts — rate-limit enforced via fallback"
-                )
+                continue  # → second (final) claim attempt
+
+            # Budget exhausted: either the cooldown was re-armed after its one
+            # allowed sleep, or the slot stayed taken after both claim attempts
+            # (two workers racing on a very short interval, or clock skew).
+            # Raise so acquire() falls back — never silently skip limiting.
+            _logger.warning(
+                "PersistentSourceRateLimiter[%s] claim budget exhausted "
+                "(cooldown re-armed or slot still taken after retry); "
+                "rate-limit enforced via fallback",
+                self._source_type,
+            )
+            raise RuntimeError(
+                f"PersistentSourceRateLimiter[{self._source_type}]: "
+                "slot claim failed within the bounded attempt budget — "
+                "rate-limit enforced via fallback"
+            )
 
     async def update_last_request(
         self,

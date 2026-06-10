@@ -37,6 +37,7 @@ printf '%s\n' "smoke-backup-encrypt-key" > "$TMP_DIR/backup_encrypt_key.txt"
 printf '%s\n' "$(openssl rand -hex 32)" > "$TMP_DIR/jarvis_model_hmac_key.txt"
 printf '%s\n' "smoke-langfuse-pk" > "$TMP_DIR/langfuse_init_pk.txt"
 printf '%s\n' "smoke-langfuse-sk" > "$TMP_DIR/langfuse_init_sk.txt"
+printf '%s\n' "smoke-infra-ingest-key" > "$TMP_DIR/infra_ingest_key.txt"
 
 cat > "$OVERRIDE_FILE" <<YAML
 secrets:
@@ -68,6 +69,8 @@ secrets:
     file: $TMP_DIR/langfuse_init_pk.txt
   langfuse_init_sk:
     file: $TMP_DIR/langfuse_init_sk.txt
+  infra_ingest_key:
+    file: $TMP_DIR/infra_ingest_key.txt
 YAML
 
 compose() {

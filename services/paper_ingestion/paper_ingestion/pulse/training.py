@@ -43,9 +43,11 @@ def _hmac_key() -> bytes:
         raise RuntimeError(
             "JARVIS_MODEL_HMAC_KEY must be set in production (no derivation fallback)"
         )
-    api_key = os.environ.get("JARVIS_API_KEY")
-    if api_key:
-        return hashlib.sha256(b"model-signing:" + api_key.encode()).digest()
+    api_key_secret = get_secrets_settings().jarvis_api_key
+    if api_key_secret:
+        return hashlib.sha256(
+            b"model-signing:" + api_key_secret.get_secret_value().encode()
+        ).digest()
     raise RuntimeError(
         "Pulse model HMAC key required: set JARVIS_MODEL_HMAC_KEY (preferred) "
         "or JARVIS_API_KEY. The previous public-literal fallback was removed "

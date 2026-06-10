@@ -120,6 +120,8 @@ class EmbeddingSearchMixin:
         paper_id: int,
         limit: int = 5,
         score_threshold: float = 0.3,
+        user_id: int | None = None,
+        library_paper_ids: list[int] | None = None,
     ) -> list[dict]:
         """Retrieve the top-k most relevant chunks from a specific paper.
 
@@ -136,6 +138,17 @@ class EmbeddingSearchMixin:
             Maximum chunks to return (1-20).
         score_threshold : float
             Minimum cosine similarity score (0.0-1.0).
+        user_id : int | None
+            Defense-in-depth (M7): when set, additionally restrict to chunks
+            owned by ``user_id``, canonical chunks (``user_id`` payload IS
+            NULL), or chunks for papers in ``library_paper_ids``.  Callers
+            pre-assert paper ownership at the route boundary; ``None``
+            preserves unscoped behaviour (system-context paths such as
+            extraction).
+        library_paper_ids : list[int] | None
+            The CALLER'S OWN ``user_library`` paper ids (PI-RAG-001 widening)
+            so shared-corpus papers embedded by another user stay retrievable
+            — see ``_user_scope_filter``.
 
         Returns
         -------
@@ -150,19 +163,22 @@ class EmbeddingSearchMixin:
         # Let RuntimeError from embed_texts propagate (callers handle it)
         query_embedding = (await self.embed_texts([query_text]))[0]
 
+        must_clauses: list = [FieldCondition(key="paper_id", match=MatchValue(value=paper_id))]
+        # M7: nest the user scope as ONE sub-Filter element of the outer `must`
+        # list so it is AND-combined with the paper_id condition.  Do NOT
+        # flat-merge its `should` branches into this Filter: in Qdrant a
+        # `should` list sitting beside a `must` list is advisory
+        # (scoring-only), not restrictive — the M6 trap.
+        user_scope = _user_scope_filter(user_id, library_paper_ids)
+        if user_scope is not None:
+            must_clauses.append(user_scope)
+
         try:
             response = await self.qdrant.query_points(
                 collection_name=COLLECTION_NAME,
                 query=query_embedding,
                 limit=limit,
-                query_filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key="paper_id",
-                            match=MatchValue(value=paper_id),
-                        )
-                    ]
-                ),
+                query_filter=Filter(must=must_clauses),
                 score_threshold=score_threshold,
                 with_payload=True,
             )

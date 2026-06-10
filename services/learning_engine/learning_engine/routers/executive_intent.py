@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/executive", tags=["executive"])
 # the per-route dependency here would be redundant.
 
 
-@router.get("/intent/today")
+@router.get("/intent/today", response_model=IntentRow)
 @limiter.limit("60/minute")
 async def get_intent_today(
     request: Request,
@@ -36,7 +36,7 @@ async def get_intent_today(
     return await _get_intent_today(db_pool, user_id)
 
 
-@router.post("/intent/today")
+@router.post("/intent/today", response_model=IntentRow)
 @limiter.limit("30/minute")
 async def save_intent_today(
     request: Request,

@@ -11,12 +11,23 @@
  */
 
 import { MessageCircleQuestion } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { StreamingChat } from '@/components/chat/StreamingChat';
+import { fetchDashboardMetrics } from '@/lib/api';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 /** Stable chatId for the cross-paper Ask workspace (session-wide). */
 const ASK_CHAT_ID = 'global-ask';
 
 export function AskPage() {
+  // Ask needs at least one analyzed paper to retrieve over; reuse the dashboard
+  // metric the app already caches (stage 'complete' === topics+papers+analyzed).
+  const { data: metrics } = useQuery({
+    queryKey: QUERY_KEYS.dashboard.metrics(),
+    queryFn: fetchDashboardMetrics,
+  });
+  const hasAnalyzedPapers = metrics?.onboarding_stage === 'complete';
+
   return (
     <div className="flex flex-col h-full" data-testid="ask-page">
       {/* Page header */}
@@ -37,6 +48,7 @@ export function AskPage() {
         <StreamingChat
           chatId={ASK_CHAT_ID}
           scope="cross-paper"
+          hasAnalyzedPapers={hasAnalyzedPapers}
         />
       </div>
     </div>

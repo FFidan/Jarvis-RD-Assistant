@@ -317,7 +317,7 @@ async def test_rag_batch_summarize_query_includes_user_filter(_app, monkeypatch)
     ) as client:
         resp = await client.post("/api/papers/batch-summarize")
 
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
     # Canonical-corpus: in single-user mode the batch-summarize SQL
     # selects unsummarized papers from the canonical corpus directly (no
     # legacy `p.user_id IS NULL OR p.user_id = $N` predicate; no rename
@@ -384,7 +384,7 @@ async def test_process_batch_rejects_non_owned_paper(_app, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_batch_accepts_owned_paper(_app, monkeypatch):
-    """POST /api/papers/process_batch: a paper owned by the caller (fast-grant) → 200/job queued.
+    """POST /api/papers/process_batch: a paper owned by the caller (fast-grant) → 202/job queued.
 
     discovered_by matches the caller (user 1) → assert_papers_ownership short-circuits
     the user_library lookup and the job is enqueued.
@@ -414,8 +414,8 @@ async def test_process_batch_accepts_owned_paper(_app, monkeypatch):
             json={"paper_ids": [42]},
         )
 
-    assert resp.status_code == 200, (
-        f"Expected 200 for caller-owned paper in process_batch; got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 202, (
+        f"Expected 202 for caller-owned paper in process_batch; got {resp.status_code}: {resp.text}"
     )
     assert "job_id" in resp.json(), f"Response must contain job_id; got: {resp.json()}"
     mock_task.defer_async.assert_awaited_once()

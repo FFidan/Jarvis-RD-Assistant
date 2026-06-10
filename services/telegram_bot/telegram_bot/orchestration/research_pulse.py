@@ -14,9 +14,8 @@ import httpx
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from telegram_bot import owner as _owner
-from telegram_bot.config import BotConfig
+from telegram_bot.config import BotConfig, _owner_headers
 from telegram_bot.formatters import format_paper_card, truncate
-from telegram_bot.handlers.helpers import _owner_headers
 
 logger = logging.getLogger(__name__)
 

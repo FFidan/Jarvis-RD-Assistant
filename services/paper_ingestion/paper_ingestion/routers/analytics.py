@@ -86,7 +86,7 @@ async def get_missing_foundational(
     ]
 
 
-@router.post("/fetch-and-process", response_model=FetchAndProcessResponse)
+@router.post("/fetch-and-process", response_model=FetchAndProcessResponse, status_code=202)
 @limiter.limit("10/minute")
 async def fetch_and_process_foundational(
     request: Request,

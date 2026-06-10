@@ -483,7 +483,7 @@ services:
       - jarvis
 
   langfuse-postgres:
-    image: postgres:16.8-alpine
+    image: ${LANGFUSE_POSTGRES_IMAGE:-postgres:16.8-alpine}
     profiles: [observability]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]

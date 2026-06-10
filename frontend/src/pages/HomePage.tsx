@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Link } from 'react-router-dom';
@@ -95,7 +96,8 @@ export function HomePage() {
     refetchInterval: 60_000,
   });
 
-  const { checklistDismissed, dismissChecklist } = useUIStore();
+  const { checklistDismissed, dismissChecklist, onboardingCelebrated, markOnboardingCelebrated } =
+    useUIStore();
 
   const stage = metrics?.onboarding_stage ?? 'needs_topics';
   const hasTopics = stage !== 'needs_topics';
@@ -103,6 +105,21 @@ export function HomePage() {
   const hasProcessedPapers = hasPapers && stage === 'complete';
 
   const showChecklist = !checklistDismissed && metrics?.onboarding_stage !== 'complete' && !isLoading;
+
+  // One-time onboarding-complete celebration. Visibility is latched into local
+  // state BEFORE the persisted flag flips: marking celebrated immediately makes
+  // celebrationEligible false, so without the latch the card would vanish on the
+  // very next render. The eligibility guard also makes the effect fire exactly
+  // once — after the flag is set, re-runs (and remounts/reloads) are no-ops.
+  const [showCelebration, setShowCelebration] = useState(false);
+  const celebrationEligible =
+    !isLoading && metrics?.onboarding_stage === 'complete' && !onboardingCelebrated;
+  useEffect(() => {
+    if (celebrationEligible) {
+      setShowCelebration(true);
+      markOnboardingCelebrated();
+    }
+  }, [celebrationEligible, markOnboardingCelebrated]);
 
   const steps = [
     {
@@ -135,6 +152,15 @@ export function HomePage() {
       <h1 className="text-[32px] leading-tight tracking-tight text-strong">Dashboard</h1>
 
       <SetupBanner />
+
+      {showCelebration && (
+        <Card className="rounded-md border-hair shadow-none">
+          <CardContent className="flex items-center gap-3 pt-6">
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-[var(--status-ok)]" />
+            <p className="font-medium">All set! Happy researching.</p>
+          </CardContent>
+        </Card>
+      )}
 
       {showChecklist && (
         <>

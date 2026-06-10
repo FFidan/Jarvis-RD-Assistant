@@ -86,6 +86,9 @@ jobs:
       - name: Install osv-scanner v2.0.2 (prebuilt binary; no Go toolchain)
         run: |
           curl -fsSL -o /tmp/osv-scanner https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64
+          # Integrity check: verify the downloaded binary matches the SHA-256 published
+          # in osv-scanner_SHA256SUMS for v2.0.2 before executing it (supply-chain defence).
+          echo "3abcfd7126c453a00421487e721b296e0cb68085bd431d6cef60872774170fc8  /tmp/osv-scanner" | sha256sum -c
           chmod +x /tmp/osv-scanner
           /tmp/osv-scanner --version
 

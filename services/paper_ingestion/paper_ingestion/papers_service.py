@@ -180,7 +180,10 @@ async def get_feed_counts(
             row = await conn.fetchrow(sql, user_id)
         else:
             row = await conn.fetchrow(sql)
-        assert row is not None  # aggregate query always returns one row
+        if row is None:
+            raise RuntimeError(
+                f"get_feed_counts: aggregate SELECT returned no row (user_id={user_id!r})"
+            )
 
         # UI v3 facet rail: by_source / by_topic / untagged — honour requested scope.
         by_source, by_topic_rows, untagged = await fetch_feed_facet_counts(

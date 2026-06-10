@@ -184,6 +184,105 @@ async def test_send_chunked_handles_nested_tags():
         assert a_opens == a_closes, f"Unbalanced <a> in chunk: {text!r}"
 
 
+def _assert_valid_telegram_chunk(text: str) -> None:
+    """Assert *text* is a self-contained, sendable Telegram HTML message.
+
+    Checks: non-empty, within the 4096-char limit, no partially-cut tag
+    (every ``<`` has a matching ``>`` before the next ``<``), no dangling
+    entity tail, and balanced open/close counts for spanning tags.
+    """
+    import re
+
+    assert text, "chunk must not be empty (Telegram rejects empty messages)"
+    assert len(text) <= 4096, f"chunk exceeds Telegram's 4096-char limit: {len(text)}"
+
+    # No split/dangling tag anywhere (M12b: truncate must never cut mid-tag).
+    search_from = 0
+    while True:
+        lt = text.find("<", search_from)
+        if lt == -1:
+            break
+        gt = text.find(">", lt)
+        next_lt = text.find("<", lt + 1)
+        assert gt != -1 and (next_lt == -1 or gt < next_lt), (
+            f"partially-cut tag at offset {lt}: {text[lt : lt + 40]!r}"
+        )
+        search_from = gt + 1
+
+    # No partially-cut entity at the end (e.g. '&amp' without ';').
+    assert not re.search(r"&[A-Za-z#0-9]*$", text), f"dangling entity tail: {text[-12:]!r}"
+
+    # Balanced spanning tags — Telegram parses each message in isolation.
+    for opener, closer in ((r"<b>", r"</b>"), (r"<i>", r"</i>"), (r"<a\b[^>]*>", r"</a>")):
+        opens = len(re.findall(opener, text, re.IGNORECASE))
+        closes = len(re.findall(closer, text, re.IGNORECASE))
+        assert opens == closes, f"unbalanced {opener} ({opens} vs {closes}) in chunk: {text!r}"
+
+
+@pytest.mark.asyncio
+async def test_send_chunked_truncates_overlong_tagged_line_without_breaking_html():
+    """M12b: a single line longer than truncate's hard limit stays valid HTML.
+
+    Before the fix, the send-time ``truncate`` hard-cut the *balanced* chunk at
+    3996 chars, discarding the ``</b>`` closer (and potentially slicing
+    mid-tag) → Telegram 400 'can't parse entities'.  Now the raw chunk is cut
+    first and re-balanced, so the emitted chunk is self-contained valid HTML.
+    """
+    bot = AsyncMock()
+    lines = ["<b>" + "x" * 4500 + "</b>"]
+
+    await paper_digest._send_chunked(bot, 1234, lines)
+
+    assert bot.send_message.await_count >= 1
+    for call in bot.send_message.await_args_list:
+        _assert_valid_telegram_chunk(call.kwargs["text"])
+    # The kept prefix of the line must survive (content actually delivered).
+    first_text = bot.send_message.await_args_list[0].kwargs["text"]
+    assert first_text.startswith("<b>" + "x" * 100)
+
+
+@pytest.mark.asyncio
+async def test_send_chunked_never_cuts_inside_a_tag_near_truncate_limit():
+    """M12b: a tag sitting right where truncate's 3996 hard cut lands must not be split."""
+    bot = AsyncMock()
+    # The <a> tag starts at offset 3970; the old hard cut at 3996 landed inside
+    # its href, emitting a dangling '<a href="http://example.c' fragment.
+    lines = ["x" * 3970 + '<a href="http://example.com/page">go</a>']
+
+    await paper_digest._send_chunked(bot, 1234, lines)
+
+    assert bot.send_message.await_count >= 1
+    for call in bot.send_message.await_args_list:
+        _assert_valid_telegram_chunk(call.kwargs["text"])
+
+
+@pytest.mark.asyncio
+async def test_send_chunked_nested_tags_near_limit_kept_intact():
+    """Nested <b><i>…<a>…</a></i></b> with a chunk near the truncate limit.
+
+    The first chunk lands just above the 3900 builder budget *with* its
+    balancing closers but below truncate's 3996 limit — it must be delivered
+    byte-for-byte intact (no truncation regression) and every chunk must be
+    valid Telegram HTML.
+    """
+    bot = AsyncMock()
+    pad = "x" * 3890
+    lines = [
+        "<b><i>" + pad,
+        'tail <a href="http://example.com">link</a></i></b>',
+    ]
+
+    await paper_digest._send_chunked(bot, 1234, lines)
+
+    assert bot.send_message.await_count >= 2
+    chunks = [call.kwargs["text"] for call in bot.send_message.await_args_list]
+    for chunk in chunks:
+        _assert_valid_telegram_chunk(chunk)
+    # No content loss: the balanced first chunk fits under the truncate limit.
+    assert pad in chunks[0], "first chunk must keep its full padding (no truncation)"
+    assert "... (truncated)" not in chunks[0]
+
+
 @pytest.mark.asyncio
 async def test_run_paper_digest_uses_llm_digest_when_topics_present():
     """run_paper_digest prefers the API digest when it returns topics.

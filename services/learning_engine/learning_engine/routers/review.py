@@ -219,6 +219,11 @@ async def sync_reviews(
             keys,
         )
         applied = {r["idempotency_key"] for r in applied_rows}
+        # Build FSRSManager once from the current DB state (desired_retention +
+        # learning_steps from user_config).  Constructing it once per request
+        # is correct: all events in the batch share the same FSRS parameters,
+        # and the connection is released afterwards so the chunk loop can
+        # acquire fresh connections without holding the pool slot.
         fsrs_manager = await _build_fsrs_manager_from_db(conn, user_id=user_id)
 
     # Process events in chunks of 50; acquire a fresh connection per chunk.
@@ -238,6 +243,10 @@ async def sync_reviews(
                         user_id,
                     )
                     if not card:
+                        # Mark key as seen so a duplicate of this event in the same
+                        # batch hits the idempotency fast-path (already_synced) rather
+                        # than re-doing the lookup and double-counting as skipped.
+                        applied.add(event.idempotency_key)
                         skipped += 1
                         continue
                     new_state, log_dict, next_due = fsrs_manager.schedule_review(

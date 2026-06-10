@@ -161,7 +161,7 @@ async def get_project(
             ) pp ON TRUE
             LEFT JOIN LATERAL (
                 SELECT COUNT(*) AS c
-                FROM project_questions WHERE project_id = $1
+                FROM project_questions WHERE project_id = $1 AND user_id = $2
             ) pq ON TRUE
             """,
             project_id,

@@ -38,15 +38,22 @@ def _evict_idle_keys(now: float, active_key: str) -> None:
     """Evict keys with no recent activity to bound dict growth (TG-SEC-01).
 
     The GC prunes stale timestamps in place but never removed the now-empty
-    keys, so ``_timestamps``/``_locks`` grew one entry per unique
-    ``chat:command`` forever (one-off / long-idle chats leak memory). This
-    opportunistic sweep, run on each invocation, drops keys whose every stamp
-    has aged beyond the longest window any decorator could care about.
+    keys, so ``_timestamps`` grew one entry per unique ``chat:command`` forever
+    (one-off / long-idle chats leak memory). This opportunistic sweep, run on
+    each invocation, drops keys whose every stamp has aged beyond the longest
+    window any decorator could care about.
 
     *active_key* (the caller currently inside its own lock, about to append a
-    fresh stamp) is skipped. A lock is only evicted when it is not currently
-    locked — a coroutine awaiting/holding it must keep its lock identity.
-    Synchronous (no ``await``), so the scan is atomic w.r.t. other coroutines.
+    fresh stamp) is skipped.  Synchronous (no ``await``), so the scan is
+    atomic w.r.t. other coroutines.
+
+    ``_locks`` is intentionally NOT evicted here.  A coroutine that has just
+    released its lock but whose waiter hasn't been scheduled yet would have its
+    lock object deleted; the next caller would then create a brand-new lock
+    (defaultdict) for the same key, bypassing the rate limiter for an entire
+    window (M12a — woken-waiter window).  Lock entries are tiny asyncio.Lock
+    objects; the key space is bounded by the finite set of distinct
+    ``chat_id:command`` pairs, so the omission is safe.
     """
     horizon = _MAX_HORIZON_SECONDS
     for key in [k for k in _timestamps if k != active_key]:
@@ -54,9 +61,6 @@ def _evict_idle_keys(now: float, active_key: str) -> None:
         if stamps and now - stamps[-1] < horizon:
             continue  # has activity within any plausible window — keep
         del _timestamps[key]
-        lock = _locks.get(key)
-        if lock is not None and not lock.locked():
-            del _locks[key]
 
 
 def rate_limit(

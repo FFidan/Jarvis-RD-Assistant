@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Sparkles, RefreshCw, Loader2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
@@ -15,9 +15,10 @@ import {
 } from '@/components/ui/tooltip';
 import { PulseCard } from '@/components/pulse/PulseCard';
 import { useJobStore } from '@/stores/job-store';
-import { ApiError, fetchPulseToday, ratePulseCard } from '@/lib/api';
+import { ApiError, fetchPulseToday } from '@/lib/api';
 import { formatTime } from '@/lib/relative-time';
 import { errorMessage } from '@/lib/errors';
+import { usePulseRating } from '@/hooks/usePulseRating';
 import type { PulseDeck, PulseRating } from '@/types';
 
 /** Returns the age in hours since `iso`. */
@@ -126,7 +127,6 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
 
   const startJob = useJobStore((s) => s.startJob);
   const isGenerating = useJobStore((s) => s.hasRunning('pulse.generate'));
-  const queryClient = useQueryClient();
 
   const handleGenerate = async () => {
     try {
@@ -140,34 +140,8 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
     }
   };
 
-  const rateMutation = useMutation({
-    mutationFn: ({ paperId, rating }: { paperId: number; rating: PulseRating }) =>
-      ratePulseCard(paperId, rating),
-    onMutate: async ({ paperId, rating }) => {
-      if (rating !== 'save') return undefined;
-      const prev = queryClient.getQueryData<PulseDeck>(QUERY_KEYS.pulse.today());
-      if (prev) {
-        queryClient.setQueryData<PulseDeck>(QUERY_KEYS.pulse.today(), {
-          ...prev,
-          cards: prev.cards.map((c) =>
-            c.paper_id === paperId ? { ...c, user_state: 'to_read' } : c,
-          ),
-        });
-      }
-      return { prev };
-    },
-    onSuccess: (_data, { paperId }) => {
-      setRatedCards((prev) => new Set(prev).add(paperId));
-    },
-    onError: (err: Error, _vars, context) => {
-      if (context?.prev !== undefined) {
-        queryClient.setQueryData(QUERY_KEYS.pulse.today(), context.prev);
-      }
-      toast.error(`Failed to rate card: ${err.message ?? 'unknown error'}`);
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.pulse.today() });
-    },
+  const rateMutation = usePulseRating({
+    onSuccess: ({ paperId }) => setRatedCards((prev) => new Set(prev).add(paperId)),
   });
 
   const handleRate = (paperId: number, rating: PulseRating) => {

@@ -44,20 +44,30 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 mkdir -p "$BACKUP_DIR"
 
 echo "[$(date -Iseconds)] Starting backup..."
+# Write to a temp file and only promote it on full-pipeline success (set -o
+# pipefail + the mv below), so a mid-stream pg_dump/gzip/openssl failure can
+# never leave a truncated archive that looks like a valid backup.
 if [ -n "$ENC_KEYFILE" ] && [ -s "$ENC_KEYFILE" ]; then
   BACKUP_FILE="${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz.enc"
+else
+  BACKUP_FILE="${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz"
+fi
+TMP_FILE="${BACKUP_FILE}.tmp"
+trap 'rm -f "${TMP_FILE:-}"' EXIT
+
+if [ -n "$ENC_KEYFILE" ] && [ -s "$ENC_KEYFILE" ]; then
   pg_dump -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" -d "${PGDATABASE:-jarvis}" \
     --no-owner --no-acl \
     | gzip \
-    | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -kfile "$ENC_KEYFILE" > "$BACKUP_FILE"
-  echo "[$(date -Iseconds)] Encrypted backup saved to $BACKUP_FILE"
+    | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -kfile "$ENC_KEYFILE" > "$TMP_FILE"
 else
-  BACKUP_FILE="${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz"
   pg_dump -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" -d "${PGDATABASE:-jarvis}" \
-    --no-owner --no-acl | gzip > "$BACKUP_FILE"
+    --no-owner --no-acl | gzip > "$TMP_FILE"
 fi
-# Restrict archive permissions so only root/owner can read it.
-chmod 600 "$BACKUP_FILE"
+# Restrict archive permissions so only root/owner can read it, then atomically
+# promote the completed temp file to its final name.
+chmod 600 "$TMP_FILE"
+mv "$TMP_FILE" "$BACKUP_FILE"
 echo "[$(date -Iseconds)] Backup saved to $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
 
 # Optional S3 upload

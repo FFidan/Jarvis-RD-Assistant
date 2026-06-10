@@ -13,6 +13,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AskPage } from '@/pages/AskPage';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -43,9 +44,14 @@ vi.mock('@/stores/auth-store', () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
-function renderAskPage() {
+function renderAskPage(onboardingStage: string = 'complete') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
+  });
+  // Seed the dashboard-metrics query so AskPage's Ask-gating reflects whether
+  // the library has analyzed papers (stage 'complete') without a network call.
+  queryClient.setQueryData(QUERY_KEYS.dashboard.metrics(), {
+    onboarding_stage: onboardingStage,
   });
 
   return render(
@@ -121,5 +127,11 @@ describe('AskPage', () => {
   it('has data-testid="ask-page"', () => {
     renderAskPage();
     expect(screen.getByTestId('ask-page')).toBeInTheDocument();
+  });
+
+  it('gates the input when the library has no analyzed papers', () => {
+    renderAskPage('needs_papers');
+    const textarea = screen.getByPlaceholderText(/Ask a question/);
+    expect(textarea).toBeDisabled();
   });
 });

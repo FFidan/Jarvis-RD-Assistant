@@ -94,6 +94,41 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 /** Delay before evicting terminal jobs from the store (ms). */
 const EVICT_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
+/**
+ * Pending eviction timers keyed by job id (M13c). Handles are tracked so an
+ * early removeJob — or a logout `_reset` — cancels them instead of leaving
+ * orphaned timers firing against cleared state.
+ */
+const evictionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelEviction(jobId: string): void {
+  const handle = evictionTimers.get(jobId);
+  if (handle !== undefined) {
+    clearTimeout(handle);
+    evictionTimers.delete(jobId);
+  }
+}
+
+function cancelAllEvictions(): void {
+  for (const handle of evictionTimers.values()) clearTimeout(handle);
+  evictionTimers.clear();
+}
+
+function scheduleEviction(jobId: string, evict: () => void): void {
+  cancelEviction(jobId); // never leave two live timers for one job
+  evictionTimers.set(jobId, setTimeout(evict, EVICT_DELAY_MS));
+}
+
+/**
+ * Logout-scoped abort controller: cancels reconnect-backoff sleeps on `_reset`
+ * (logout). Deliberately SEPARATE from each subscription's SSE AbortController —
+ * by the time a backoff sleep starts, `_cleanupSubscription` has already aborted
+ * the SSE controller, so passing the SSE signal to sleep() would throw
+ * AbortError immediately (the G-01 trap). Re-armed after every reset so a
+ * subsequent login starts with a fresh, un-aborted signal.
+ */
+let logoutAbort = new AbortController();
+
 function getPaperIdFromJob(job: Job): number | null {
   const paperId = job.payload?.paper_id;
   return typeof paperId === 'number' && Number.isFinite(paperId) ? paperId : null;
@@ -255,14 +290,20 @@ export const useJobStore = create<JobStore>()(
             }
           }
           get()._cleanupSubscription(jobId);
-          setTimeout(() => {
-            get().removeJob(jobId);
-          }, EVICT_DELAY_MS);
+          scheduleEviction(jobId, () => get().removeJob(jobId));
         };
 
         const _reconnectAfterDrop = async (delayMs: number) => {
           get()._cleanupSubscription(jobId);
-          await sleep(delayMs);
+          // G-01: do NOT pass this subscription's SSE signal to sleep — the
+          // _cleanupSubscription above just aborted it, so it would throw
+          // AbortError immediately. The logout-scoped signal only aborts on
+          // _reset, cancelling the pending backoff when the user logs out.
+          try {
+            await sleep(delayMs, logoutAbort.signal);
+          } catch {
+            return; // logged out during the backoff — drop the reconnect
+          }
           if (!useAuthStore.getState().isAuthenticated) return;
           const nextDelay = Math.min(delayMs * 2, RECONNECT_MAX_DELAY_MS);
           get().subscribe(jobId, nextDelay);
@@ -304,8 +345,15 @@ export const useJobStore = create<JobStore>()(
                 if ((event as { status?: string }).status === 'streaming_timeout') {
                   get()._cleanupSubscription(jobId);
                   // controller is already aborted by _cleanupSubscription, so do NOT
-                  // pass its signal to sleep — it would throw AbortError immediately (G-01)
-                  await sleep(currentReconnectDelay);
+                  // pass its signal to sleep — it would throw AbortError immediately (G-01).
+                  // The logout-scoped signal is safe here: it only fires on _reset.
+                  // Explicit try/catch so the surrounding malformed-frame catch
+                  // cannot swallow the abort and keep iterating a dead stream.
+                  try {
+                    await sleep(currentReconnectDelay, logoutAbort.signal);
+                  } catch {
+                    return; // logged out during the backoff — stop reconnecting
+                  }
                   if (!useAuthStore.getState().isAuthenticated) return;
                   const nextDelay = Math.min(currentReconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
                   get().subscribe(jobId, nextDelay);
@@ -366,12 +414,13 @@ export const useJobStore = create<JobStore>()(
         const job = get().jobs[jobId];
         if (job) {
           get()._upsertJob({ ...job, status: 'cancelled' });
-          // Schedule eviction
-          setTimeout(() => get().removeJob(jobId), EVICT_DELAY_MS);
+          // Schedule eviction (handle tracked so removeJob/_reset can cancel it — M13c)
+          scheduleEviction(jobId, () => get().removeJob(jobId));
         }
       },
 
       removeJob(jobId) {
+        cancelEviction(jobId);
         get()._cleanupSubscription(jobId);
         set((state) => {
           const { [jobId]: _removed, ...rest } = state.jobs;
@@ -419,6 +468,12 @@ export const useJobStore = create<JobStore>()(
         for (const ctrl of Object.values(get().activeAborts)) {
           ctrl.abort();
         }
+        // Cancel any reconnect backoff currently sleeping, then re-arm the
+        // logout signal so the next login starts un-aborted.
+        logoutAbort.abort();
+        logoutAbort = new AbortController();
+        // M13c: cancel all pending eviction timers so none fire post-logout.
+        cancelAllEvictions();
         set(JOB_INITIAL_STATE);
       },
     }),
