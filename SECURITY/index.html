@@ -1273,6 +1273,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Audit Log">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#append-only-invariant-and-gdpr-erasure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Append-only invariant and GDPR erasure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1736,6 +1753,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Audit Log">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#append-only-invariant-and-gdpr-erasure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Append-only invariant and GDPR erasure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1891,6 +1925,11 @@ in <code>libs/jarvis_common/jarvis_common/db_helpers.py</code>.</p>
 accessible to every authenticated user without requiring a <code>user_library</code>
 membership row.  This reflects instance configuration (feed settings, Pulse
 model), not any individual user's behavior.</p>
+<p>Citation metadata surfaced in RAG answers (e.g. the title/authors of a cited
+paper) is drawn from this shared corpus layer by design — citations name public
+scholarly works, so a cited paper's bibliographic detail may appear in any
+user's answer even if that paper is not in their own <code>user_library</code>. No
+per-user activity (library membership, notes, ratings) crosses this boundary.</p>
 <h3 id="what-is-strictly-per-user-activityoutput-layer">What is strictly per-user (activity/output layer)<a class="headerlink" href="#what-is-strictly-per-user-activityoutput-layer" title="Permanent link">&para;</a></h3>
 <p>The following is <strong>never cross-visible</strong> — every query is scoped to
 <code>user_id</code> and no cross-user join is permitted:</p>
@@ -2069,6 +2108,19 @@ user-data routes, magic-link request and verify, user creation and deletion,
 admin actions.</p>
 <p>The audit log is readable by admins at <code>GET /api/admin/audit-log</code>
 (cursor-paginated, admin session required).</p>
+<h3 id="append-only-invariant-and-gdpr-erasure">Append-only invariant and GDPR erasure<a class="headerlink" href="#append-only-invariant-and-gdpr-erasure" title="Permanent link">&para;</a></h3>
+<p><code>audit_log</code> is append-only: the <code>no_update_audit_log</code> and <code>no_delete_audit_log</code>
+RULEs rewrite any ordinary <code>UPDATE</code>/<code>DELETE</code> into a no-op, so the operational
+record cannot be tampered with after the fact. Because <code>audit_log.user_id</code> is a
+free-text column (not a foreign key), hard-deleting a user does not cascade to
+it. To honour GDPR erasure, the daily purge (<code>jobs/data_purge.py</code>) anonymizes a
+hard-deleted user's audit rows — nulling <code>user_id</code> and stripping PII metadata
+keys (e.g. <code>ip</code>) while keeping the non-identifying operational record (action,
+resource, timestamp). This is the one sanctioned mutation: it brackets the
+<code>UPDATE</code> with <code>ALTER TABLE … DISABLE/ENABLE RULE no_update_audit_log</code> in a single
+transaction (RULEs are query-rewrite and role-independent, so <code>SECURITY DEFINER</code>
+cannot bypass them); the rule is re-enabled before commit, so ordinary writes
+remain no-ops.</p>
 <hr />
 <h2 id="vulnerability-disclosure">Vulnerability Disclosure<a class="headerlink" href="#vulnerability-disclosure" title="Permanent link">&para;</a></h2>
 <p>Reporting a vulnerability is documented in the repository's top-level
