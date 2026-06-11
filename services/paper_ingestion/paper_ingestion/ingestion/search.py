@@ -227,16 +227,20 @@ class EmbeddingSearchMixin:
         Returns
         -------
         list[dict]
-            Reranked chunks, limited to top_k.
+            Reranked chunks, limited to top_k.  When the reranker actually
+            ran, each returned chunk carries a ``rerank_score`` key (raw
+            backend score); fallback paths return chunks WITHOUT
+            ``rerank_score`` — its absence tells downstream relevance floors
+            to skip filtering.
         """
         from jarvis_common.settings import get_reranker_settings
 
-        # PI-CORR-02: only skip reranking when there are strictly FEWER candidates
-        # than top_k. At len(chunks) == top_k the reranker must still run: it
-        # reorders the candidates by relevance rather than returning them in their
-        # input (vector-similarity) order. A `<=` guard silently dropped that
-        # reordering at the equal-count boundary.
-        if len(chunks) < top_k:
+        # Rerank whenever there is something to reorder.  Even with fewer
+        # candidates than top_k the reranker must run: its scores feed the
+        # downstream relevance floor (``rerank_score`` attached below).  The
+        # former `len(chunks) < top_k` guard silently skipped both the
+        # reordering and the score attachment for small candidate sets.
+        if len(chunks) <= 1:
             return chunks[:top_k]
 
         backend = get_reranker_settings().reranker_backend
@@ -254,8 +258,10 @@ class EmbeddingSearchMixin:
 
         passages = [c.get("content", "") for c in chunks]
         try:
-            ranked = await asyncio.to_thread(reranker.rerank, query, passages, top_k)
-            return [chunks[idx] for idx, _score in ranked]
+            ranked = await asyncio.to_thread(
+                reranker.rerank, query, passages, min(top_k, len(chunks))
+            )
+            return [{**chunks[idx], "rerank_score": float(score)} for idx, score in ranked]
         except Exception:
             logger.exception("Reranking failed; returning unranked results")
             return chunks[:top_k]

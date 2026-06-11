@@ -20,7 +20,8 @@ from jarvis_common.llm_client import (
     get_litellm_config,
     observe,
 )
-from jarvis_common.prompt_safety import wrap_delimited
+from jarvis_common.prompt_safety import max_input_chars, wrap_delimited
+from jarvis_common.settings import get_core_settings
 from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion._state import svc
@@ -45,6 +46,10 @@ if TYPE_CHECKING:
     import openai
 
 logger = logging.getLogger(__name__)
+
+# Output budget for the structured findings+quotes JSON (~1,800-2,300 tokens at
+# 8 findings); also reserved out of the input char budget so both fit num_ctx.
+_SUMMARY_OUTPUT_TOKENS = 3500
 
 _SYSTEM_SUMMARIZE = """\
 You are a research assistant. Summarize the following paper excerpts.
@@ -86,104 +91,45 @@ async def _find_cross_references(
     title: str,
     embedder: "Embedder | None" = None,
 ) -> list[CrossReference]:
-    """Find other papers that may be related using semantic similarity or keyword overlap.
+    """Find related papers via semantic similarity over chunk vectors.
 
-    If an embedder is provided, attempts semantic similarity search via Qdrant first.
-    Falls back to keyword-based title overlap if semantic search fails or is unavailable.
+    Returns ``[]`` when the semantic path is unavailable, fails, or finds
+    nothing — honest empty beats keyword-overlap false links.
     """
-    # Always fetch discovered_by so the keyword fallback can apply the visibility
-    # predicate even when no embedder is provided.
+    if embedder is None:
+        return []
+
     abstract_row = await conn.fetchrow(
         "SELECT abstract, discovered_by FROM papers WHERE id = $1", paper_id
     )
     abstract = abstract_row["abstract"] if abstract_row and abstract_row["abstract"] else ""
     owner_id = abstract_row["discovered_by"] if abstract_row else None
 
-    # --- Semantic similarity approach (preferred) ---
-    if embedder is not None:
-        try:
-            query_text = f"{title}. {abstract}"
-
-            results = await embedder.search_similar(
-                query_text=query_text,
-                limit=15,
-                paper_id_filter=paper_id,
-                score_threshold=0.65,
-                user_id=owner_id,
-            )
-
-            if results:
-                # Deduplicate by paper_id, keep highest score
-                deduped = deduplicate_by_paper_id(results)
-
-                # Sort by score descending
-                sorted_results = sorted(deduped, key=lambda x: x["score"], reverse=True)
-
-                cross_refs: list[CrossReference] = []
-                for r in sorted_results[:5]:
-                    cross_refs.append(
-                        CrossReference(
-                            related_paper_id=r["paper_id"],
-                            relationship="semantic_similarity",
-                            explanation=f"Semantic similarity score: {r['score']:.3f}",
-                        )
-                    )
-                if cross_refs:
-                    return cross_refs
-        except Exception:
-            logger.warning(
-                "Semantic cross-reference search failed for paper %d, falling back to keywords",
-                paper_id,
-                exc_info=True,
-            )
-
-    # --- Keyword fallback approach ---
-    # Extract significant words from title (>3 chars, skip common words)
-    stop_words = {"the", "and", "for", "with", "from", "that", "this", "into", "using"}
-    words = [w.lower() for w in title.split() if len(w) > 3 and w.lower() not in stop_words]
-    words = words[:5]  # Limit to 5 keywords so conditions count matches params count
-    if not words:
+    try:
+        results = await embedder.search_similar(
+            query_text=f"{title}. {abstract}",
+            limit=15,
+            paper_id_filter=paper_id,
+            score_threshold=0.65,
+            user_id=owner_id,
+        )
+    except Exception:
+        logger.warning(
+            "Semantic cross-reference search failed for paper %d; returning no cross-references",
+            paper_id,
+            exc_info=True,
+        )
         return []
 
-    # Build ILIKE conditions for each keyword
-    # NOTE: Placeholder indices ($N) are computed from range(), never from user input -- safe
-    patterns = [f"%{w.replace('%', r'\%').replace('_', r'\_')}%" for w in words]
-
-    # Visibility predicate mirrors the semantic path: restrict to papers whose
-    # owner matches (discovered_by IS NULL = canonical/public, or same user,
-    # or the user has it in their library).  This prevents title-keyword leaks
-    # across user boundaries.
-    rows = await conn.fetch(
-        """
-        SELECT id, title FROM papers
-        WHERE id != $1
-          AND EXISTS (
-              SELECT 1
-              FROM unnest($2::text[]) AS pattern
-              WHERE LOWER(title) LIKE pattern ESCAPE '\\'
-          )
-          AND (
-              discovered_by IS NULL
-              OR discovered_by = $3
-              OR EXISTS (
-                  SELECT 1 FROM user_library ul
-                  WHERE ul.user_id = $3 AND ul.paper_id = papers.id
-              )
-          )
-        LIMIT 5
-        """,
-        paper_id,
-        patterns,
-        owner_id,
-    )
-
+    deduped = deduplicate_by_paper_id(results or [])
+    sorted_results = sorted(deduped, key=lambda x: x["score"], reverse=True)
     return [
         CrossReference(
-            related_paper_id=row["id"],
-            relationship="potential_overlap",
-            explanation=f"Title keyword overlap with: {row['title'][:100]}",
+            related_paper_id=r["paper_id"],
+            relationship="semantic_similarity",
+            explanation=f"Semantic similarity score: {r['score']:.3f}",
         )
-        for row in rows
+        for r in sorted_results[:5]
     ]
 
 
@@ -197,12 +143,14 @@ async def generate_paper_summary(
     *,
     user_id: int | None = None,
     openai_client: "openai.AsyncOpenAI | None" = None,
+    force: bool = False,
 ) -> SummaryResponse:
     """Generate an LLM summary for a paper with quote verification.
 
     Fetches chunks, calls the LLM, verifies quoted findings against source
     text, and stores the resulting summary.  Returns the existing summary
-    if one already exists (idempotent).
+    if one already exists (idempotent), unless ``force=True`` — then the
+    summary is regenerated and upserted over the existing row.
 
     Parameters
     ----------
@@ -222,14 +170,16 @@ async def generate_paper_summary(
             # Idempotency: return the caller's existing summary. Scoped by
             # user_id — paper_summaries is per-user (UNIQUE (paper_id, user_id)),
             # so an unscoped check would return another user's summary content.
-            existing = await conn.fetchrow(
-                "SELECT * FROM paper_summaries"
-                " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
-                paper_id,
-                user_id,
-            )
-            if existing:
-                return row_to_summary_response(existing)
+            # force=True skips this; the ON CONFLICT upsert makes re-runs safe.
+            if not force:
+                existing = await conn.fetchrow(
+                    "SELECT * FROM paper_summaries"
+                    " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                    paper_id,
+                    user_id,
+                )
+                if existing:
+                    return row_to_summary_response(existing)
 
             chunk_rows = await conn.fetch(
                 "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index", paper_id
@@ -254,11 +204,15 @@ async def generate_paper_summary(
     # Build prompt -- metadata from DB (originally from source API, never LLM)
     safe_title, _ = wrap_delimited("title", paper_row["title"])
     safe_authors, _ = wrap_delimited("authors", ", ".join(paper_row["authors"]))
-    paper_text_block, was_truncated = wrap_delimited("paper_text", full_text, max_chars=50000)
+    max_chars = max_input_chars(
+        get_core_settings().llm_smart_num_ctx, reserved_output_tokens=_SUMMARY_OUTPUT_TOKENS
+    )
+    paper_text_block, was_truncated = wrap_delimited("paper_text", full_text, max_chars=max_chars)
     if was_truncated:
         logger.warning(
-            "summarization: truncated full_text from %d to 50000 chars (paper_id=%s)",
+            "summarization: truncated full_text from %d to %d chars (paper_id=%s)",
             len(full_text),
+            max_chars,
             paper_id,
         )
     prompt = SUMMARIZE_PROMPT_TEMPLATE.format(
@@ -279,7 +233,7 @@ async def generate_paper_summary(
             prompt=prompt,
             options=ChatCompletionOptions(
                 model=llm_model_name,
-                max_tokens=2000,
+                max_tokens=_SUMMARY_OUTPUT_TOKENS,
                 temperature=0.1,
                 timeout=LLM_TIMEOUT_LONG,
                 system=_SYSTEM_SUMMARIZE,
@@ -343,23 +297,18 @@ async def generate_paper_summary(
             if candidate.resolve().is_relative_to(snapshot_base_path):
                 f.snapshot_path = str(candidate.relative_to(snapshot_base_path))
 
-    # If verification failed or no findings, fall back to abstract (anti-hallucination rule 6)
+    # Verification failure drops the findings but keeps the LLM's own
+    # brief/detailed — the UI labels them "LLM-generated"; confidence LOW +
+    # summary_verified=False carry the trust signal. The abstract substitutes
+    # only when the LLM text itself is empty.
     summary_brief = parsed.summary_brief
     summary_detailed = parsed.summary_detailed
-    if report.total_findings == 0:
-        # LLM produced no verifiable findings -- treat as verification failure
-        summary_brief = (
-            f"Unable to summarize reliably (no verifiable findings). "
-            f"Original abstract: {paper_row['abstract'] or 'N/A'}"
-        )
-        summary_detailed = paper_row["abstract"] or "No abstract available."
+    if report.total_findings == 0 or report.verified_count == 0:
         verified_findings = []
-    elif report.total_findings > 0 and report.verified_count == 0:
-        summary_brief = (
-            f"Unable to summarize reliably. Original abstract: {paper_row['abstract'] or 'N/A'}"
-        )
-        summary_detailed = paper_row["abstract"] or "No abstract available."
-        verified_findings = []
+        if not (summary_brief or "").strip():
+            summary_brief = paper_row["abstract"] or "No abstract available."
+        if not (summary_detailed or "").strip():
+            summary_detailed = paper_row["abstract"] or "No abstract available."
 
     # --- Store in DB (new connection, no advisory lock) ---
     # ON CONFLICT DO UPDATE handles the rare race where two concurrent requests

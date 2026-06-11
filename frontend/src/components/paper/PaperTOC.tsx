@@ -151,7 +151,7 @@ export function PaperTOC({
             done={chunkCount > 0}
             inProgress={pdfDownloaded && chunkCount === 0 && !processingFailed}
             failed={processingFailed && chunkCount === 0}
-            label={chunkCount > 0 ? `${chunkCount} chunks` : 'Processing…'}
+            label={chunkCount > 0 ? `${chunkCount} passages` : 'Processing…'}
           />
           <PipelineStep
             done={hasSummary}

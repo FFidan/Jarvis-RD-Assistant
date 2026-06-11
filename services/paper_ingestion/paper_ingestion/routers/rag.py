@@ -26,6 +26,7 @@ from jarvis_common.llm_client import (
 )
 from jarvis_common.sse import SSE_DONE, sse_event
 from jarvis_common.verify import QuoteVerifier
+from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from paper_ingestion.deps import (
@@ -149,15 +150,25 @@ async def _call_rag_llm(
 # ---------------------------------------------------------------------------
 
 
+class SummarizeRequest(BaseModel):
+    """Optional JSON body for POST /api/summarize/{paper_id}."""
+
+    force: bool = False
+
+
 @router.post("/summarize/{paper_id}", response_model=JobCreateResponse, status_code=202)
 @limiter.limit("5/minute")
 async def summarize_paper(
     request: Request,
     paper_id: int,
+    body: SummarizeRequest | None = None,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
 ) -> JobCreateResponse:
-    """Enqueue LLM summary generation with quote verification."""
+    """Enqueue LLM summary generation with quote verification.
+
+    ``{"force": true}`` regenerates an existing summary in place.
+    """
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     import uuid  # noqa: PLC0415
@@ -166,7 +177,10 @@ async def summarize_paper(
 
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["paper.summarize"].defer_async(
-        job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id
+        job_id=jarvis_job_id,
+        user_id=user_id,
+        paper_id=paper_id,
+        force=body.force if body is not None else False,
     )
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 

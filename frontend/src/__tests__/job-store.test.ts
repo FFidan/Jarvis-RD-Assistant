@@ -535,6 +535,33 @@ describe('JobStore', () => {
     expect(toast.success).toHaveBeenCalledWith('pulse.generate completed');
   });
 
+  it('subscribe: succeeded card.generate with zero cards does NOT fire the success toast', async () => {
+    const { toast } = await import('sonner');
+
+    const job = makeJob({ id: 'job-0c', kind: 'card.generate', status: 'running' });
+    useJobStore.setState({ jobs: { 'job-0c': job }, activeAborts: {} });
+
+    const doneEvent = JSON.stringify({
+      status: 'succeeded',
+      progress: 100,
+      progress_message: null,
+      result: { cards_created: 0, confidence: 'LOW' },
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([`data: ${doneEvent}\n\n`]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().subscribe('job-0c');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(requireJob(useJobStore.getState().jobs['job-0c'], 'job-0c').status).toBe('succeeded');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
   it('subscribe: failed terminal event fires toast.error with message', async () => {
     const { toast } = await import('sonner');
 

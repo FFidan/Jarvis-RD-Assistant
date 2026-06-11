@@ -1,6 +1,15 @@
 """RAG / ask-endpoint Pydantic models."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+class HistoryTurn(BaseModel):
+    """One prior chat turn; content is treated as DATA, never instructions."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
 
 
 class AskRequest(BaseModel):
@@ -8,6 +17,7 @@ class AskRequest(BaseModel):
 
     question: str = Field(..., min_length=1, max_length=2000)
     max_chunks: int = Field(default=5, ge=1, le=10)
+    history: list[HistoryTurn] = Field(default_factory=list, max_length=12)
 
 
 class CrossPaperAskRequest(BaseModel):
@@ -17,6 +27,7 @@ class CrossPaperAskRequest(BaseModel):
     max_chunks: int = Field(default=10, ge=1, le=20)
     max_papers: int = Field(default=5, ge=1, le=15)
     decompose: bool = Field(default=True)
+    history: list[HistoryTurn] = Field(default_factory=list, max_length=12)
 
 
 class AskSourceItem(BaseModel):

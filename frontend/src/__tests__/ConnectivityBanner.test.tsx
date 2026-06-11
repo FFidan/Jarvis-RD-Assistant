@@ -42,10 +42,12 @@ beforeEach(() => {
   _canInstall = false;
   _installListeners = [];
   mockPromptInstall.mockResolvedValue('accepted');
+  localStorage.clear();
 });
 
 afterEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 // ---------------------------------------------------------------------------
@@ -130,6 +132,30 @@ describe('InstallAffordance (inside ConnectivityBanner)', () => {
       _installListeners.forEach((cb) => cb(true));
     });
     expect(screen.getByTestId('install-affordance')).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Install banner localStorage persistence
+// ---------------------------------------------------------------------------
+
+describe('InstallAffordance — localStorage persistence', () => {
+  it('dismiss writes the localStorage key', () => {
+    _canInstall = true;
+    render(<ConnectivityBanner />);
+    expect(screen.getByTestId('install-affordance')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('install-affordance-dismiss'));
+    expect(localStorage.getItem('jarvis.install-banner-dismissed')).toBe('1');
+  });
+
+  it('banner stays hidden on remount when localStorage key is set', () => {
+    localStorage.setItem('jarvis.install-banner-dismissed', '1');
+    _canInstall = true;
+    const { unmount } = render(<ConnectivityBanner />);
+    expect(screen.queryByTestId('install-affordance')).toBeNull();
+    unmount();
+    render(<ConnectivityBanner />);
+    expect(screen.queryByTestId('install-affordance')).toBeNull();
   });
 });
 

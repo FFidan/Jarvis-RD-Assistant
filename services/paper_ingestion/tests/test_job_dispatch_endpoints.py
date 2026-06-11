@@ -63,6 +63,28 @@ async def test_summarize_endpoint_enqueues_job(app_with_pool):
     assert call_kwargs["paper_id"] == 42
     assert "job_id" in call_kwargs
     assert "user_id" in call_kwargs
+    assert call_kwargs["force"] is False  # absent body defaults to non-forced
+
+
+async def test_summarize_endpoint_forwards_force_flag(app_with_pool):
+    """POST /api/summarize/{paper_id} with {"force": true} threads force into the job payload."""
+    from unittest.mock import MagicMock
+
+    import jarvis_common.task_registry as task_registry
+
+    app, _pool = app_with_pool
+    mock_task = MagicMock()
+    defer_async = AsyncMock()
+    mock_task.defer_async = defer_async
+    with patch.dict(task_registry._TASK_MAP, {"paper.summarize": mock_task}):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post("/api/summarize/42", json={"force": True})
+
+    assert resp.status_code == 202
+    defer_async.assert_awaited_once()
+    assert defer_async.call_args.kwargs["force"] is True
 
 
 async def test_extract_endpoint_enqueues_single_extraction_job(app_with_pool):

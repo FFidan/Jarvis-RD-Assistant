@@ -26,6 +26,8 @@ Marking a paper as read (or opening its detail view) removes it from the Inbox; 
 
 The Library contains all **saved** papers — those you have explicitly kept or that have been moved out of the Inbox.
 
+**Filter box** — a search input at the top of the list. Once three or more characters are typed, the box performs a server-side full-text search across titles, authors, and abstracts across your whole library.
+
 **Scope selector** at the top of the list toggles between:
 
 - **My library** — papers you have personally saved or interacted with.

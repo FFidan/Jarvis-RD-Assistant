@@ -245,6 +245,33 @@ describe('ResearchFeedPage — F4 discoverable upload', () => {
   });
 });
 
+describe('ResearchFeedPage — surface-aware H1', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows "Library" H1 on library surface', async () => {
+    renderPage('?surface=library');
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Library');
+    });
+  });
+
+  it('shows "Discover" H1 on search surface', async () => {
+    renderPage('?surface=search');
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Discover');
+    });
+  });
+
+  it('shows "Library" H1 on inbox surface (not search)', async () => {
+    renderPage('?surface=inbox');
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Library');
+    });
+  });
+});
+
 describe('FacetRail — F4 honest facet empty-state copy', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -87,7 +87,7 @@ describe('PaperTOC — pipeline status', () => {
 
   it('shows chunk count when chunks > 0', () => {
     renderTOC({ pdfDownloaded: true, chunkCount: 42, hasSummary: false });
-    expect(screen.getByText('42 chunks')).toBeInTheDocument();
+    expect(screen.getByText('42 passages')).toBeInTheDocument();
   });
 
   it('shows Summarized when hasSummary=true', () => {
@@ -98,7 +98,7 @@ describe('PaperTOC — pipeline status', () => {
   it('pipeline status: full pipeline complete', () => {
     renderTOC({ pdfDownloaded: true, chunkCount: 5, hasSummary: true });
     expect(screen.getByText('Downloaded')).toBeInTheDocument();
-    expect(screen.getByText('5 chunks')).toBeInTheDocument();
+    expect(screen.getByText('5 passages')).toBeInTheDocument();
     expect(screen.getByText('Summarized')).toBeInTheDocument();
   });
 });

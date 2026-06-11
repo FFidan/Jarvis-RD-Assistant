@@ -257,7 +257,12 @@ export const useJobStore = create<JobStore>()(
         // Internal helper: fire toast + invalidate queries for a terminal job
         const _handleTerminal = (job: Job) => {
           if (job.status === 'succeeded') {
-            toast.success(`${job.kind} completed`);
+            // Zero-card generation is a degraded outcome — the paper view shows
+            // its own warning; a green "completed" toast would contradict it.
+            const zeroCards =
+              job.kind === 'card.generate' &&
+              (job.result as { cards_created?: number } | null)?.cards_created === 0;
+            if (!zeroCards) toast.success(`${job.kind} completed`);
             const keysFactory = INVALIDATE_ON_SUCCESS[job.kind];
             if (keysFactory) {
               for (const key of keysFactory(job)) {

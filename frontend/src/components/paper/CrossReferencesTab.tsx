@@ -1,7 +1,13 @@
+import { Link } from 'react-router-dom';
 import type { Summary, CrossReference } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
 import { Link2 } from 'lucide-react';
+
+const RELATIONSHIP_LABELS: Record<string, string> = {
+  semantic_similarity: 'Similar content',
+  potential_overlap: 'Possible overlap',
+};
 
 interface CrossReferencesTabProps {
   summary: Summary | null;
@@ -25,7 +31,7 @@ export function CrossReferencesTab({ summary }: CrossReferencesTabProps) {
       <EmptyState
         icon={Link2}
         title="No cross-references"
-        description="No cross-references found."
+        description="No strong cross-references found yet — they appear as more of your library is analyzed."
       />
     );
   }
@@ -36,12 +42,15 @@ export function CrossReferencesTab({ summary }: CrossReferencesTabProps) {
         <Card key={`${ref.related_paper_id}-${ref.relationship}`} className="rounded-md border-hair shadow-none">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">
-              Related Paper #{ref.related_paper_id}
+              <Link to={`/paper/${ref.related_paper_id}`} className="underline hover:no-underline">
+                Open related paper
+              </Link>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 text-sm">
             <p>
-              <span className="font-medium">Relationship:</span> {ref.relationship}
+              <span className="font-medium">Relationship:</span>{' '}
+              {RELATIONSHIP_LABELS[ref.relationship] ?? ref.relationship}
             </p>
             <p className="text-muted-foreground">{ref.explanation}</p>
             {ref.related_quote && (

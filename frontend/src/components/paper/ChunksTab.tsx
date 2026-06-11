@@ -48,7 +48,7 @@ export function ChunksTab({ chunks }: ChunksTabProps) {
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-muted-foreground">{chunks.length} chunks extracted</p>
+      <p className="text-sm text-muted-foreground">{chunks.length} passages from the PDF</p>
       <div className="space-y-2">
         {chunks.map((chunk) => (
           <ChunkItem key={chunk.id} chunk={chunk} />

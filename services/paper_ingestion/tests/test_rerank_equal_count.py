@@ -1,10 +1,9 @@
-"""PI-CORR-02 — rerank must run when candidate count equals top_k.
+"""Rerank must run when candidate count equals top_k.
 
-``rerank_chunks`` short-circuits with ``if len(chunks) <= top_k: return
-chunks[:top_k]``. At exactly ``len(chunks) == top_k`` that skips the reranker
-entirely and returns the chunks in their *input* (vector-similarity) order
-rather than the reranker's relevance order — a silent correctness bug. The
-guard should be ``<`` so reranking still reorders an equal-count candidate set.
+``rerank_chunks`` only short-circuits for trivial inputs (``len(chunks) <= 1``).
+At ``len(chunks) == top_k`` the reranker must still run so the candidate set is
+returned in the reranker's relevance order (with ``rerank_score`` attached)
+rather than the input vector-similarity order.
 
 Only a real reranker (one that returns a non-identity ordering) distinguishes
 the two: the assertion below would pass spuriously with an identity reranker,

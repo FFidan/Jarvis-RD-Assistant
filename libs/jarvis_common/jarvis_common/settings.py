@@ -124,6 +124,10 @@ class CoreSettings(BaseSettings):
     # SSRF guard escape-hatch: set ALLOW_PRIVATE_SMTP_HOST=true only when the
     # relay is an internal/corporate host on a known-trusted network.
     allow_private_smtp_host: bool = False
+    llm_smart_num_ctx: int = 8192
+    """Context window configured for the `smart` alias in litellm/config.yaml.
+    MUST track that file's num_ctx — code budgets prompt input against this.
+    Raise BOTH together (and restart the litellm container) on bigger GPUs."""
 
     @model_validator(mode="before")
     @classmethod

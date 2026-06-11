@@ -126,21 +126,60 @@ def test_compute_result_uses_expected_confidence_thresholds(
         for _ in range(verified_count)
     ]
 
-    result = generator._compute_result(verified_cards, total_count, "Title", "Abstract")
+    result = generator._compute_result(verified_cards, total_count, "Title")
 
     assert result["confidence"] == expected_confidence
 
 
-def test_compute_result_falls_back_to_abstract_when_all_cards_fail():
-    """100% verification failure returns a single abstract-backed fallback card."""
+def test_compute_result_returns_empty_when_all_cards_fail():
+    """100% verification failure returns no cards — batch generation retries next run."""
     generator, _ = _make_generator()
 
-    result = generator._compute_result([], 2, "Test Paper", "Fallback abstract")
+    result = generator._compute_result([], 2, "Test Paper")
 
+    assert result["cards"] == []
     assert result["confidence"] == "LOW"
-    assert len(result["cards"]) == 1
-    assert result["cards"][0]["back"] == "Fallback abstract"
-    assert result["cards"][0]["evidence"]["verified"] is False
+
+
+@pytest.mark.parametrize(
+    ("front", "should_survive"),
+    [
+        ("What is the main contribution of the paper?", False),
+        ("How does the proposed method differ from standard gradient descent?", False),
+        ("What is the key difference between Neural ODEs and normalizing flows?", True),
+        ("What does the paper-folding theorem state?", True),
+        ("Which limitation did the study by Smith et al. identify?", True),
+        ("What is the study of adversarial robustness called?", True),
+    ],
+)
+def test_generic_fronts_are_filtered(front, should_survive, monkeypatch, tmp_path):
+    """Cards with non-self-contained fronts are discarded; specific fronts survive."""
+    generator, _ = _make_generator()
+    monkeypatch.setenv("SNAPSHOT_STORAGE_PATH", str(tmp_path))
+
+    verified = generator._verify_raw_cards(
+        raw_cards=[
+            CardOutput(
+                card_type="concept",
+                front=front,
+                back="A concise answer.",
+                evidence_quote="improves retrieval quality",
+                page_number=3,
+            )
+        ],
+        full_text=" ".join(chunk["content"] for chunk in _make_chunks()),
+        chunks=_make_chunks(),
+        paper_id=None,
+    )
+
+    assert (len(verified) == 1) is should_survive
+
+
+def test_system_prompt_mandates_self_contained_fronts() -> None:
+    """The self-containment rule must stay in the system prompt verbatim."""
+    from learning_engine.card_generator import _SYSTEM_CARD_GENERATION
+
+    assert "SELF-CONTAINED" in _SYSTEM_CARD_GENERATION
 
 
 @pytest.mark.asyncio
@@ -275,6 +314,67 @@ def test_card_generation_shape_a_system_prompt_is_non_empty() -> None:
     assert "{title}" in _CARD_DATA_TEMPLATE
     assert "{text}" in _CARD_DATA_TEMPLATE
     assert "{max_cards}" in _CARD_DATA_TEMPLATE
+
+
+# ---------------------------------------------------------------------------
+# Gap 3 — all-generic-fronts end-to-end returns empty / LOW
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_all_generic_fronts_returns_empty_low(monkeypatch, tmp_path):
+    """When every raw card carries a generic non-self-contained front, all are
+    filtered by _verify_raw_cards before quote verification, so the final
+    result must have cards == [], confidence == 'LOW', and total_count equal
+    to the number of attempted cards.
+
+    Mirrors the integration path used by test_generic_fronts_are_filtered,
+    but drives the full generate_cards → _call_llm_for_cards → _verify_raw_cards
+    → _compute_result chain via a mocked _call_llm_for_cards return value.
+    """
+    monkeypatch.setenv("SNAPSHOT_STORAGE_PATH", str(tmp_path))
+
+    generator, _ = _make_generator()
+
+    # Two cards — both fronts are generic and will be filtered by _GENERIC_FRONT_RE.
+    generator._call_llm_for_cards = AsyncMock(
+        return_value=CardGenerationOutput(
+            cards=[
+                CardOutput(
+                    card_type="concept",
+                    front="What is the main contribution of the paper?",
+                    back="The authors propose a novel training scheme.",
+                    evidence_quote="improves retrieval quality",
+                    page_number=3,
+                ),
+                CardOutput(
+                    card_type="comparison",
+                    front="How does the proposed method differ from the baseline?",
+                    back="It achieves lower perplexity than the baseline.",
+                    evidence_quote="A second chunk for comparison cards.",
+                    page_number=4,
+                ),
+            ]
+        )
+    )
+
+    result = await generator.generate_cards(
+        title="Test Paper on Generics",
+        authors=["Author A"],
+        chunks=_make_chunks(),
+        openai_client=_make_openai_client(),
+        paper_id=None,
+        abstract="An abstract.",
+    )
+
+    assert result["cards"] == [], (
+        f"Expected empty cards list when all fronts are generic; got {result['cards']}"
+    )
+    assert result["confidence"] == "LOW", (
+        f"Expected LOW confidence when all cards filtered; got {result['confidence']!r}"
+    )
+    # total_count reflects the number of raw cards attempted (both generic fronts).
+    assert result["total_count"] == 2, f"Expected total_count=2; got {result['total_count']}"
 
 
 @pytest.mark.asyncio

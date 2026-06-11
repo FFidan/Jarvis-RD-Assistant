@@ -96,11 +96,10 @@ async def test_find_cross_references_prefers_semantic_results():
 
 
 @pytest.mark.asyncio
-async def test_find_cross_references_falls_back_to_keyword_overlap():
-    """Keyword fallback is used when semantic search fails."""
+async def test_find_cross_references_returns_empty_when_semantic_unavailable():
+    """Semantic search failure yields [] — there is no keyword fallback anymore."""
     conn = AsyncMock()
     conn.fetchrow.return_value = {"abstract": "Abstract", "discovered_by": None}
-    conn.fetch.return_value = [{"id": 8, "title": "Retrieval Agents"}]
     embedder = AsyncMock()
     embedder.search_similar.side_effect = RuntimeError("qdrant down")
 
@@ -111,9 +110,8 @@ async def test_find_cross_references_falls_back_to_keyword_overlap():
         embedder=embedder,
     )
 
-    assert len(result) == 1
-    assert result[0].relationship == "potential_overlap"
-    assert result[0].related_paper_id == 8
+    assert result == []
+    conn.fetch.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -266,6 +264,11 @@ async def test_generate_paper_summary_confidence_none_roundtrips_without_validat
     Regression guard: jarvis_common.verify.Confidence.NONE was not in the local
     Confidence enum, so row_to_summary_response raised a Pydantic ValidationError on
     read-back whenever verify_findings returned NONE (empty findings list).
+
+    Also pins the degrade contract: the LLM's own brief/detailed survive
+    verification failure (abstract substitution happens ONLY when the parsed
+    text is empty), and the NONE→LOW confidence mapping for the DB CHECK
+    constraint is unchanged.
     """
     conn_phase1 = AsyncMock()
     conn_phase1.fetchrow.side_effect = [_paper_row(), None]
@@ -275,11 +278,8 @@ async def test_generate_paper_summary_confidence_none_roundtrips_without_validat
     stored_row = {
         "id": 5,
         "paper_id": 7,
-        "summary_brief": (
-            "Unable to summarize reliably (no verifiable findings). "
-            "Original abstract: Original abstract text."
-        ),
-        "summary_detailed": "Original abstract text.",
+        "summary_brief": "draft brief",
+        "summary_detailed": "draft detailed",
         "tldr": "semantic scholar summary",
         "key_findings": [],
         "methodology": None,
@@ -328,72 +328,62 @@ async def test_generate_paper_summary_confidence_none_roundtrips_without_validat
     assert result.confidence == Confidence.NONE
     assert result.summary_verified is False
 
+    # Degrade contract: parsed brief/detailed are kept verbatim ($2/$3) and
+    # confidence NONE is mapped to LOW ($9) for the DB CHECK constraint.
+    insert_args = conn_phase2.fetchrow.call_args.args
+    assert insert_args[2] == "draft brief"
+    assert insert_args[3] == "draft detailed"
+    assert insert_args[9] == "LOW"
+
 
 # ---------------------------------------------------------------------------
-# keyword-fallback visibility predicate
+# semantic-only cross-reference contract (keyword fallback deleted)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_cross_references_filter_unseen_papers():
-    """Keyword-fallback SQL must include a visibility predicate.
+    """No embedder → [] with zero DB queries.
 
-    The generated query should contain ``discovered_by IS NULL OR discovered_by = $``
-    so that papers owned by other users are not exposed via title-keyword match.
+    The keyword ILIKE fallback (which linked unrelated papers on any shared
+    >3-char title word) is deleted; without a semantic path there is nothing
+    to return and no query that could leak other users' papers.
     """
     conn = AsyncMock()
-    # fetchrow: no abstract_row so discovered_by is None (no embedder branch taken)
-    conn.fetchrow.return_value = {"abstract": None, "discovered_by": 42}
-    conn.fetch.return_value = []
 
-    await summarization._find_cross_references(
+    result = await summarization._find_cross_references(
         conn,
         paper_id=7,
         title="Retrieval Augmented Generation Systems",
-        embedder=None,  # force keyword fallback
+        embedder=None,
     )
 
-    # Must have issued conn.fetch at some point (keyword path)
-    assert conn.fetch.called, "keyword fallback should call conn.fetch"
-
-    # Behaviour-shape assertion: owner_id (42 from fetchrow stub) reaches the
-    # query as a bind parameter. The visibility predicate's exact text is
-    # exercised by the live-PG contract test, not asserted here (TS-02).
-    fetch_call = conn.fetch.call_args
-    bound_params = fetch_call.args[1:]
-    assert 42 in bound_params, (
-        f"keyword-fallback must bind owner_id=42 as a parameter; got: {bound_params}"
-    )
+    assert result == []
+    conn.fetchrow.assert_not_called()
+    conn.fetch.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_cross_references_keyword_fallback_passes_owner_id():
-    """owner_id is always fetched and forwarded to the keyword-fallback query.
+async def test_cross_references_semantic_path_passes_owner_id():
+    """discovered_by is fetched and bound as user_id so the search is user-scoped.
 
-    Even when no embedder is supplied, the function must fetch discovered_by
-    from the papers row and bind it as a parameter so the visibility predicate
-    can filter results to the correct user scope.
+    Empty semantic results stay empty — no fallback query is issued.
     """
     conn = AsyncMock()
     conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
-    conn.fetch.return_value = [{"id": 8, "title": "Retrieval Augmented Generation"}]
+    embedder = AsyncMock()
+    embedder.search_similar.return_value = []
 
     result = await summarization._find_cross_references(
         conn,
         paper_id=7,
         title="Retrieval Augmented Generation",
-        embedder=None,
+        embedder=embedder,
     )
 
-    # fetchrow must have been called to get discovered_by (even without embedder)
-    assert conn.fetchrow.called, "should always fetch paper row to get owner_id"
-    fetch_call = conn.fetch.call_args
-    bound_params = fetch_call.args[1:]  # positional params after SQL string
-    # owner_id (99) must appear in the bound parameters
-    assert 99 in bound_params, (
-        f"owner_id 99 should be bound as a parameter; got params: {bound_params}"
-    )
-    assert len(result) == 1
+    assert result == []
+    assert embedder.search_similar.call_args.kwargs["user_id"] == 99
+    conn.fetch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -660,3 +650,177 @@ async def test_generate_paper_summary_uses_arg_client_when_svc_client_none(monke
             f"got: {call_args[0] if call_args else 'no args'}"
         )
         assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# degrade contract — abstract substitutes ONLY when the LLM text is empty
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_degraded_summary_substitutes_abstract_only_when_llm_text_empty():
+    """Verification failure with EMPTY parsed brief/detailed falls back to the abstract.
+
+    Companion to the confidence-NONE roundtrip test (which pins that non-empty
+    LLM text survives). No 'Unable to summarize reliably' boilerplate anywhere.
+    """
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = [_chunk_row()]
+
+    stored_row = {
+        "id": 5,
+        "paper_id": 7,
+        "summary_brief": "Original abstract text.",
+        "summary_detailed": "Original abstract text.",
+        "tldr": "semantic scholar summary",
+        "key_findings": [],
+        "methodology": None,
+        "limitations": None,
+        "relevance_notes": None,
+        "confidence": "NONE",
+        "cross_references": [],
+        "llm_model": "smart-model",
+        "summary_verified": False,
+        "created_at": datetime.now(UTC),
+    }
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = stored_row
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    llm_output = SummarizationOutput(
+        tldr="",
+        summary_brief="",
+        summary_detailed="",
+        key_findings=[],
+    )
+
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=0,
+        verified_count=0,
+        confidence=Confidence.NONE,
+    )
+
+    patch_ctx, _llm_mock = _patched_call_llm(return_value=llm_output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+        )
+
+    insert_args = conn_phase2.fetchrow.call_args.args
+    assert insert_args[2] == "Original abstract text."
+    assert insert_args[3] == "Original abstract text."
+    assert "Unable to summarize reliably" not in insert_args[2]
+
+
+# ---------------------------------------------------------------------------
+# force=True — regenerate over an existing summary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_force_regenerates_existing_summary():
+    """force=True skips the idempotency early-return and upserts a fresh summary."""
+    conn_phase1 = AsyncMock()
+    # Only the paper-existence lookup; the idempotency query must NOT be issued
+    # even though a summary row exists in the DB.
+    conn_phase1.fetchrow.side_effect = [_paper_row()]
+    conn_phase1.fetch.return_value = [_chunk_row()]
+
+    stored_row = {
+        "id": 5,
+        "paper_id": 7,
+        "user_id": 42,
+        "summary_brief": "Fresh brief",
+        "summary_detailed": "Fresh detailed",
+        "tldr": "Fresh tldr",
+        "key_findings": [],
+        "methodology": None,
+        "limitations": None,
+        "relevance_notes": None,
+        "confidence": "HIGH",
+        "cross_references": [],
+        "llm_model": "smart",
+        "summary_verified": True,
+        "created_at": datetime.now(UTC),
+    }
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = stored_row
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    llm_output = SummarizationOutput(
+        tldr="Fresh tldr",
+        summary_brief="Fresh brief",
+        summary_detailed="Fresh detailed",
+        key_findings=[],
+    )
+
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=1,
+        verified_count=1,
+        confidence=Confidence.HIGH,
+    )
+
+    patch_ctx, llm_mock = _patched_call_llm(return_value=llm_output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+            user_id=42,
+            force=True,
+        )
+
+    llm_mock.assert_called_once()
+    assert conn_phase1.fetchrow.call_count == 1, (
+        "force=True must skip the idempotency lookup — only the paper row is fetched"
+    )
+    assert conn_phase2.fetchrow.called, "the upsert must run"
+    insert_args = conn_phase2.fetchrow.call_args.args
+    assert insert_args[2] == "Fresh brief"
+    assert result.summary_brief == "Fresh brief"
+
+
+@pytest.mark.asyncio
+async def test_paper_summarize_job_forwards_force(monkeypatch):
+    """_paper_summarize_job reads payload['force'] and forwards it as a keyword."""
+    from paper_ingestion.paper_jobs import _paper_summarize_job
+
+    monkeypatch.setattr(summarization.svc, "verifier", MagicMock())
+    monkeypatch.setattr(summarization.svc, "embedder", MagicMock())
+    # _paper_summarize_job imports generate_paper_summary at call time, so
+    # patching the module attribute intercepts the call.
+    gen_mock = AsyncMock(return_value=MagicMock(id=1))
+    monkeypatch.setattr(summarization, "generate_paper_summary", gen_mock)
+
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {"discovered_by": 42}  # ownership granted
+    pool = _make_pool(conn)
+    ctx = MagicMock(update_progress=AsyncMock())
+
+    await _paper_summarize_job(
+        pool=pool,
+        http_client=AsyncMock(),
+        payload={"paper_id": 7, "user_id": 42, "force": True},
+        ctx=ctx,
+    )
+
+    gen_mock.assert_awaited_once()
+    assert gen_mock.await_args.kwargs.get("force") is True
+    assert gen_mock.await_args.kwargs.get("user_id") == 42

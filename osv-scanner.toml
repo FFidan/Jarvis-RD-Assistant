@@ -1,0 +1,6 @@
+# Vulnerability suppressions for the osv-scanner CI job (.github/workflows/security.yml).
+# Keep entries in sync with the pip-audit --ignore-vuln flags in that workflow.
+
+[[IgnoredVulns]]
+id = "GHSA-rrmf-rvhw-rf47"
+reason = "torch CVE-2025-3000: no compatible patched wheel yet (last_affected=2.12.0); re-evaluate at next torch bump"

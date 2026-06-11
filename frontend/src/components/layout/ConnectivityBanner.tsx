@@ -58,10 +58,18 @@ function OfflineBanner() {
 // Install affordance
 // ---------------------------------------------------------------------------
 
+const INSTALL_BANNER_KEY = 'jarvis.install-banner-dismissed';
+
 /** Dismissible "Install app" prompt driven by P1a pwa.ts. */
 function InstallAffordance() {
   const [installable, setInstallable] = useState<boolean>(canInstall);
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(INSTALL_BANNER_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     // Subscribe to availability changes (canInstall fires after beforeinstallprompt).
@@ -77,6 +85,11 @@ function InstallAffordance() {
   }, []);
 
   const handleDismiss = useCallback(() => {
+    try {
+      localStorage.setItem(INSTALL_BANNER_KEY, '1');
+    } catch {
+      // Safari private mode — proceed without persistence
+    }
     setDismissed(true);
   }, []);
 

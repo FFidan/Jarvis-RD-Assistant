@@ -1,7 +1,7 @@
 {
   "name": "jarvis-frontend",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": "Ferhat Fidan <jarvis-rd@limitcycle.dev>",
   "license": "MIT",
   "type": "module",

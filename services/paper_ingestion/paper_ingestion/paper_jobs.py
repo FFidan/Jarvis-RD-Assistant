@@ -158,6 +158,7 @@ async def _paper_analyze_job(
 
     paper_id: int = payload["paper_id"]
     user_id: int | None = payload.get("user_id")
+    force: bool = bool(payload.get("force", False))
     async with pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 
@@ -240,6 +241,7 @@ async def _paper_analyze_job(
         verifier,
         embedder,
         user_id=user_id,
+        force=force,
     )
 
     await ctx.update_progress(1.0, "Done")
@@ -267,6 +269,7 @@ async def _paper_summarize_job(
 
     paper_id: int = int(payload["paper_id"])
     user_id: int | None = payload.get("user_id")
+    force = bool(payload.get("force", False))
     async with pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 
@@ -280,7 +283,7 @@ async def _paper_summarize_job(
 
     await ctx.update_progress(0.1, "Summarizing")
     summary = await generate_paper_summary(
-        paper_id, pool, http_client, verifier, embedder, user_id=user_id
+        paper_id, pool, http_client, verifier, embedder, user_id=user_id, force=force
     )
     await ctx.update_progress(1.0, "Done")
     return {"paper_id": paper_id, "summary_id": summary.id, "status": "summarized"}

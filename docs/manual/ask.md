@@ -28,9 +28,11 @@ Each answer message contains:
 
 **ConfidenceBadge** — an indicator of how well the retrieved chunks support the answer. A high-confidence answer is grounded in several closely matching chunks; a low-confidence answer means the library may not contain strong evidence for the question.
 
-**SourcesAccordion** — collapsed by default; click to expand. Lists the paper chunks that were retrieved and used to construct the answer. Each source shows the paper title, chunk excerpt, and a link to the [Paper Detail](paper-detail.md) page for that paper.
+**SourcesAccordion** — collapsed by default; click to expand. Lists the **Source Passages** retrieved and used to construct the answer. Each entry shows the paper title, the passage excerpt, and a link to the [Paper Detail](paper-detail.md) page for that paper.
 
 **FeedbackButtons** — thumbs-up and thumbs-down buttons for rating the answer quality. Your ratings are recorded and can inform future improvements to the retrieval pipeline.
+
+Follow-up questions carry the current conversation context, so you can build on a previous answer without repeating background information.
 
 ---
 

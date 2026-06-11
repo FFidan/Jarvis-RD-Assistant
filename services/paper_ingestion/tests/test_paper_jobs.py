@@ -435,3 +435,66 @@ async def test_paper_analyze_job_composite_omits_warnings_when_clean(
 
     assert "warnings" not in result
     assert result["process_status"] == "processed"
+
+
+# ---------------------------------------------------------------------------
+# Gap 4 — _paper_analyze_job forwards force=True to generate_paper_summary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_analyze_job_forwards_force(tmp_path, monkeypatch):
+    """_paper_analyze_job must pass force=True from the payload to
+    generate_paper_summary when the caller requests a forced re-summarization.
+
+    The generate_paper_summary import lives inside the function body, so it is
+    patched via the summarization submodule stub — matching this file's
+    autouse convention (monkeypatch.setitem auto-reverts at teardown).
+    """
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_analyze_job  # noqa: PLC0415
+
+    pdf_file = tmp_path / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 stub")
+
+    row = {
+        "id": 7,
+        "source_type": "local",
+        "pdf_url": None,
+        "pdf_downloaded": True,
+        "pdf_local_path": str(pdf_file),
+    }
+    pool = _make_pool(row)
+
+    # Stub the pdf_workflow and summarization submodules (matching _run_analyze_job_with_process_result).
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
+    _workflow_stub.run_process_pdf = AsyncMock(
+        return_value={"paper_id": 7, "chunk_count": 3, "status": "processed"}
+    )
+    mock_generate_summary = AsyncMock()
+    _summ_stub = MagicMock()
+    _summ_stub.generate_paper_summary = mock_generate_summary
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", _summ_stub)
+
+    # Populate svc so the handler resolves pdf_processor/embedder/verifier.
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
+    svc.verifier = MagicMock()
+
+    # Override PDF_STORAGE_PATH to tmp_path so path-traversal check passes.
+    monkeypatch.setattr(pj, "PDF_STORAGE_PATH", str(tmp_path))
+
+    await _paper_analyze_job(
+        pool=pool,
+        http_client=MagicMock(),
+        payload={"paper_id": 7, "user_id": None, "force": True},
+        ctx=_make_ctx(),
+    )
+
+    mock_generate_summary.assert_awaited_once()
+    call_kwargs = mock_generate_summary.await_args.kwargs
+    assert call_kwargs.get("force") is True, (
+        f"generate_paper_summary must be called with force=True; got kwargs: {call_kwargs}"
+    )

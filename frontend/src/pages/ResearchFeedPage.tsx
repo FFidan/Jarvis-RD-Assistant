@@ -369,8 +369,12 @@ export function ResearchFeedPage() {
       {/* Page header */}
       <div className="shrink-0 px-4 pb-3 pt-4 sm:px-6">
         <h1 className="flex items-center gap-2 text-[28px] leading-tight tracking-tight text-strong">
-          <BookOpenIcon className="h-7 w-7" />
-          Library
+          {surface === 'search' ? (
+            <Compass className="h-7 w-7" />
+          ) : (
+            <BookOpenIcon className="h-7 w-7" />
+          )}
+          {surface === 'search' ? 'Discover' : 'Library'}
         </h1>
       </div>
 
@@ -396,9 +400,9 @@ export function ResearchFeedPage() {
                 className="min-w-0 flex-1"
                 placeholder={
                   surface === 'inbox'
-                    ? 'Filter inbox by title or author…'
+                    ? 'Search inbox by title, author, or abstract…'
                     : surface === 'library'
-                      ? 'Filter library by title or author…'
+                      ? 'Search library by title, author, or abstract…'
                       : 'Filter trash by title or author…'
                 }
               />

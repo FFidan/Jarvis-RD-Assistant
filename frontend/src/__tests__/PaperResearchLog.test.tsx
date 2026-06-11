@@ -270,7 +270,7 @@ describe('PaperResearchLog — chunks (lazy)', () => {
 
   it('shows chunk count in expand toggle button', () => {
     renderLog();
-    expect(screen.getByTestId('chunks-expand-toggle')).toHaveTextContent('Show 2 chunks');
+    expect(screen.getByTestId('chunks-expand-toggle')).toHaveTextContent('Show 2 passages');
   });
 
   it('expands chunks when toggle is clicked', async () => {
@@ -280,7 +280,7 @@ describe('PaperResearchLog — chunks (lazy)', () => {
     await user.click(toggle);
     // After expanding LazyChunksSection, ChunksTab renders "N chunks extracted"
     await waitFor(() => {
-      expect(screen.getByText(/2 chunks extracted/)).toBeInTheDocument();
+      expect(screen.getByText(/2 passages from the PDF/)).toBeInTheDocument();
     });
     // Individual chunk header buttons visible
     expect(screen.getByText(/Chunk 0/)).toBeInTheDocument();
@@ -293,11 +293,11 @@ describe('PaperResearchLog — chunks (lazy)', () => {
     const toggle = screen.getByTestId('chunks-expand-toggle');
     await user.click(toggle); // expand
     await waitFor(() => {
-      expect(screen.getByText(/2 chunks extracted/)).toBeInTheDocument();
+      expect(screen.getByText(/2 passages from the PDF/)).toBeInTheDocument();
     });
     await user.click(toggle); // collapse
     await waitFor(() => {
-      expect(screen.queryByText(/2 chunks extracted/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/2 passages from the PDF/)).not.toBeInTheDocument();
     });
   });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
@@ -296,5 +296,137 @@ describe('FeedView — shortcut callback freshness', () => {
     });
 
     await waitFor(() => expect(getPath()).toBe('/paper/10'));
+  });
+});
+
+describe('FeedView — server-side search debounce', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function renderWithFilter(surface: Parameters<typeof FeedView>[0]['surface'], listFilter: string) {
+    return render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <MemoryRouter>
+          <FeedView surface={surface} listFilter={listFilter} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('sends q param after 300ms debounce for library surface with ≥3-char filter', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchFeed).mockClear();
+
+    renderWithFilter('library', 'neural');
+
+    // Wait for initial fetch (serverQuery='', no q)
+    await waitFor(() => expect(vi.mocked(api.fetchFeed)).toHaveBeenCalled());
+
+    vi.mocked(api.fetchFeed).mockClear();
+
+    // Advance past the 300ms debounce window
+    await act(async () => { vi.advanceTimersByTime(350); });
+
+    // A fetch with q='neural' should have been triggered
+    await waitFor(() =>
+      expect(vi.mocked(api.fetchFeed)).toHaveBeenCalledWith(
+        expect.objectContaining({ q: 'neural' }),
+      ),
+    );
+  });
+
+  it('sends q param after 300ms debounce for inbox surface with ≥3-char filter', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchFeed).mockClear();
+
+    renderWithFilter('inbox', 'bert');
+
+    await waitFor(() => expect(vi.mocked(api.fetchFeed)).toHaveBeenCalled());
+
+    vi.mocked(api.fetchFeed).mockClear();
+
+    await act(async () => { vi.advanceTimersByTime(350); });
+
+    await waitFor(() =>
+      expect(vi.mocked(api.fetchFeed)).toHaveBeenCalledWith(
+        expect.objectContaining({ q: 'bert' }),
+      ),
+    );
+  });
+
+  it('does not send q for a filter shorter than 3 chars', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchFeed).mockClear();
+
+    renderWithFilter('library', 'ai');
+
+    await act(async () => { vi.advanceTimersByTime(400); });
+    await waitFor(() => expect(vi.mocked(api.fetchFeed)).toHaveBeenCalled());
+
+    // All calls should have no q or q=undefined
+    for (const [params] of vi.mocked(api.fetchFeed).mock.calls) {
+      expect((params as { q?: string }).q).toBeUndefined();
+    }
+  });
+
+  it('does not send q before the 300ms debounce window elapses', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchFeed).mockClear();
+
+    renderWithFilter('library', 'transformer');
+
+    // Wait for initial query (serverQuery='') to fire
+    await waitFor(() => expect(vi.mocked(api.fetchFeed)).toHaveBeenCalled());
+
+    const callCount = vi.mocked(api.fetchFeed).mock.calls.length;
+
+    // Advance only 100ms — debounce not yet fired, no new calls expected
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Same number of calls — debounce hasn't fired
+    expect(vi.mocked(api.fetchFeed).mock.calls.length).toBe(callCount);
+    // None of the calls so far should have q set
+    for (const [params] of vi.mocked(api.fetchFeed).mock.calls) {
+      expect((params as { q?: string }).q).toBeUndefined();
+    }
+  });
+
+  it('does not send q for trash surface even with ≥3-char filter', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchFeed).mockClear();
+
+    renderWithFilter('trash', 'neural');
+
+    await act(async () => { vi.advanceTimersByTime(400); });
+    await waitFor(() => expect(vi.mocked(api.fetchFeed)).toHaveBeenCalled());
+
+    for (const [params] of vi.mocked(api.fetchFeed).mock.calls) {
+      expect((params as { q?: string }).q).toBeUndefined();
+    }
+  });
+
+  it('does not re-filter server search results client-side', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchFeed).mockClear();
+    vi.mocked(api.fetchFeed).mockResolvedValue({ papers: [mockPaper], total: 1 });
+
+    // 'neural' matches this paper server-side (e.g. via abstract FTS) but is
+    // NOT a substring of its title or authors — the overlay must not hide it.
+    renderWithFilter('library', 'neural');
+
+    await waitFor(() => expect(vi.mocked(api.fetchFeed)).toHaveBeenCalled());
+    await act(async () => { vi.advanceTimersByTime(350); });
+    await waitFor(() =>
+      expect(vi.mocked(api.fetchFeed)).toHaveBeenCalledWith(
+        expect.objectContaining({ q: 'neural' }),
+      ),
+    );
+
+    expect(await screen.findByText('Surface Callback Test Paper')).toBeInTheDocument();
   });
 });

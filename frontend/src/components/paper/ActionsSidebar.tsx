@@ -113,10 +113,21 @@ export function ActionsSidebar({
     if (!genJob || !TERMINAL_STATUSES.includes(genJob.status)) return;
     if (genJob.status === 'succeeded') {
       const r = (genJob.result ?? {}) as { cards_created?: number; confidence?: string | number };
-      const detail = r.cards_created != null
-        ? `Generated ${r.cards_created} cards${r.confidence != null ? ` (confidence: ${r.confidence})` : ''}`
-        : 'Cards generated';
-      setActionResult({ type: 'success', message: detail });
+      if (r.cards_created === 0) {
+        toast.warning(
+          'No reliable cards could be generated from this paper. Try Regenerate Summary first, or check that a capable model is configured (Settings → Models).',
+        );
+        setActionResult({
+          type: 'error',
+          message: 'No cards were generated. Try Regenerate Summary first.',
+        });
+        setShowAdvanced(true);
+      } else {
+        const detail = r.cards_created != null
+          ? `Generated ${r.cards_created} cards${r.confidence != null ? ` (confidence: ${r.confidence})` : ''}`
+          : 'Cards generated';
+        setActionResult({ type: 'success', message: detail });
+      }
     } else if (genJob.status === 'failed') {
       setActionResult({
         type: 'error',
@@ -231,7 +242,7 @@ export function ActionsSidebar({
       });
       setActionResult({
         type: 'success',
-        message: `Processing queued (job ${data.job_id})`,
+        message: 'Processing queued — track progress in the jobs panel',
       });
     },
     onError: (err) => {
@@ -248,10 +259,26 @@ export function ActionsSidebar({
         payload: { paper_id: paperId },
         status: 'queued',
       });
-      setActionResult({ type: 'success', message: `Summary queued (job ${data.job_id})` });
+      setActionResult({ type: 'success', message: 'Summary queued — track progress in the jobs panel' });
     },
     onError: (err) => {
       setActionResult({ type: 'error', message: errorMessage(err, 'Summarization failed') });
+    },
+  });
+
+  const regenerateSummarizeMut = useMutation({
+    mutationFn: () => summarizePaper(paperId, { force: true }),
+    onSuccess: (data) => {
+      trackExternalJob({
+        jobId: data.job_id,
+        kind: 'paper.summarize',
+        payload: { paper_id: paperId },
+        status: 'queued',
+      });
+      setActionResult({ type: 'success', message: 'Summary queued — track progress in the jobs panel' });
+    },
+    onError: (err) => {
+      setActionResult({ type: 'error', message: errorMessage(err, 'Regeneration failed') });
     },
   });
 
@@ -273,7 +300,7 @@ export function ActionsSidebar({
   });
 
   const isGenPending = generateMut.isPending || isRunning('card.generate', { paper_id: paperId, deck_id: Number(deckId) });
-  const anyPending = downloadMut.isPending || processMut.isPending || summarizeMut.isPending || isGenPending || isAnalyzing;
+  const anyPending = downloadMut.isPending || processMut.isPending || summarizeMut.isPending || regenerateSummarizeMut.isPending || isGenPending || isAnalyzing;
 
   const analyzeLabel = (() => {
     switch (analyzeStep) {
@@ -407,6 +434,19 @@ export function ActionsSidebar({
                   className="ml-auto"
                   triggerElement="span"
                 />
+              </Button>
+            )}
+
+            {hasChunks && hasSummary && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => { setActionResult(null); regenerateSummarizeMut.mutate(); }}
+                disabled={anyPending}
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                {regenerateSummarizeMut.isPending ? 'Regenerating...' : 'Regenerate Summary'}
               </Button>
             )}
 

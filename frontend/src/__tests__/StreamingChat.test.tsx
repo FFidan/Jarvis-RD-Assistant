@@ -157,25 +157,25 @@ describe('StreamingChat — HIGH-FE-01 key stability', () => {
   });
 });
 
-describe('StreamingChat — U2 model footer wording', () => {
+describe('StreamingChat — model footer removed', () => {
   beforeEach(() => {
     mockUseStreamingChat.mockReturnValue(baseHookReturn());
   });
 
-  it('does not render the alarming "fallback model" text when modelUsed is null', () => {
+  it('does not render any model footer when modelUsed is null', () => {
     render(<StreamingChat chatId="c1" scope="cross-paper" />);
+    expect(screen.queryByText(/Model:/)).toBeNull();
     expect(screen.queryByText(/fallback model/i)).toBeNull();
   });
 
-  it('renders neutral "Model: <name>" footer when modelUsed is set (not streaming)', () => {
+  it('does not render any model footer when modelUsed is set (not streaming)', () => {
     mockUseStreamingChat.mockReturnValue(baseHookReturn({ modelUsed: 'qwen3:4b', isStreaming: false }));
     render(<StreamingChat chatId="c1" scope="cross-paper" />);
-    // Must contain the neutral label — no "fallback model" wording
-    expect(screen.getByText(/^Model: qwen3:4b$/)).toBeInTheDocument();
+    expect(screen.queryByText(/Model:/)).toBeNull();
     expect(screen.queryByText(/fallback model/i)).toBeNull();
   });
 
-  it('hides the model footer while streaming', () => {
+  it('does not render any model footer while streaming', () => {
     mockUseStreamingChat.mockReturnValue(baseHookReturn({ modelUsed: 'qwen3:4b', isStreaming: true }));
     render(<StreamingChat chatId="c1" scope="cross-paper" />);
     expect(screen.queryByText(/Model:/)).toBeNull();

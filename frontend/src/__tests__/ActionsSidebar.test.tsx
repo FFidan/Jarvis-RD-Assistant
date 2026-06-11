@@ -656,6 +656,67 @@ describe('ActionsSidebar', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/ask');
   });
 
+  // ----- Regenerate Summary action -----
+
+  it('clicking "Regenerate Summary" calls summarizePaper with {force: true}', async () => {
+    const user = userEvent.setup();
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ActionsSidebar paperId={42} pdfDownloaded hasChunks hasSummary />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // Expand advanced panel to reveal the Regenerate Summary button
+    await user.click(screen.getByRole('button', { name: /Show advanced/ }));
+    const regenBtn = await screen.findByRole('button', { name: /Regenerate Summary/ });
+    await user.click(regenBtn);
+
+    await waitFor(() => {
+      expect(vi.mocked(summarizePaper)).toHaveBeenCalledWith(42, { force: true });
+    });
+  });
+
+  // ----- Zero-cards feedback -----
+
+  it('a succeeded card.generate job with cards_created=0 shows the zero-cards warning toast', async () => {
+    await startGenerate();
+
+    setMockJob('test-job-001', makeJob({
+      id: 'test-job-001',
+      status: 'succeeded',
+      result: { cards_created: 0, confidence: 'LOW' },
+    }));
+
+    await waitFor(() => {
+      expect(toastMocks.warning).toHaveBeenCalledWith(
+        expect.stringContaining('No reliable cards could be generated'),
+      );
+    });
+    // No contradictory green "Generated 0 cards" banner alongside the warning.
+    expect(screen.queryByText(/Generated 0 cards/)).toBeNull();
+    expect(screen.getByText(/No cards were generated/)).toBeInTheDocument();
+  });
+
+  it('a succeeded card.generate job with cards_created>0 does NOT show the zero-cards warning toast', async () => {
+    await startGenerate();
+
+    setMockJob('test-job-001', makeJob({
+      id: 'test-job-001',
+      status: 'succeeded',
+      result: { cards_created: 3, confidence: 'HIGH' },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Generated 3 cards (confidence: HIGH)')).toBeInTheDocument();
+    });
+
+    expect(toastMocks.warning).not.toHaveBeenCalled();
+  });
+
   it('renders tooltip info icons for visible action buttons', async () => {
     const user = userEvent.setup();
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
+from jarvis_common.prompt_safety import max_input_chars, safe_for_prompt, wrap_delimited
 
 
 class TestEscapeLlmText:
@@ -286,3 +286,13 @@ class TestSafeForPromptPI11AndSECHIGH06b:
         result = safe_for_prompt("line1\x0dline2", mode="strip")
         assert "\x0d" not in result
         assert "line1line2" in result
+
+
+def test_max_input_chars_budget_math():
+    # (8192 - 2048 - 1000) tokens * 2.6 chars/token = 13374
+    assert max_input_chars(8192, 2048) == 13374
+
+
+def test_max_input_chars_never_below_floor():
+    # floor: 1024 tokens * 2.6 = 2662 even when reservations exceed ctx
+    assert max_input_chars(1024, 2048) == 2662

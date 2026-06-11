@@ -48,6 +48,7 @@ async def _analyze_stream(
     pdf_processor,
     embedder,
     verifier,
+    force: bool = False,
 ):
     """Async generator: download → process → summarize with SSE progress events.
 
@@ -190,6 +191,7 @@ async def _analyze_stream(
             verifier,
             embedder,
             user_id=user_id,
+            force=force,
         )
     except Exception as exc:
         logger.error("Summarization failed for paper %d: %s", paper_id, exc, exc_info=True)
@@ -214,6 +216,7 @@ async def analyze_paper(
     request: Request,
     paper_id: int,
     async_mode: bool = Query(default=False, alias="async"),
+    force: bool = Query(default=False),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     pdf_processor=Depends(get_pdf_processor),
@@ -240,12 +243,14 @@ async def analyze_paper(
 
         jarvis_job_id = str(uuid.uuid4())
         await KIND_TO_TASK["paper.analyze"].defer_async(
-            job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id
+            job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id, force=force
         )
         return {"job_id": jarvis_job_id, "status": "queued"}
 
     return StreamingResponse(
-        _analyze_stream(request, paper_id, db_pool, http_client, pdf_processor, embedder, verifier),
+        _analyze_stream(
+            request, paper_id, db_pool, http_client, pdf_processor, embedder, verifier, force=force
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

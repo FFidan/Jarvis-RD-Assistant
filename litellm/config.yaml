@@ -47,6 +47,10 @@ model_list:
       # so the embedder stays on GPU. Admins with more VRAM can switch the
       # smart role back to a 14B model via the in-app model picker
       # (Settings → llm.smart_model) — no file edit required.
+      # num_ctx pairs with the app setting LLM_SMART_NUM_CTX (default 8192) — the app
+      # budgets prompt input against it. Raise BOTH together on bigger GPUs (e.g.
+      # 16384 ≈ +1-1.5 GB KV cache for qwen3:8b) and recreate this container.
+      # At 8192, summaries/cards read roughly the first ~10-13k chars of a paper.
       model: "ollama/qwen3:8b"
       api_base: "http://ollama:11434"
       temperature: 0.2

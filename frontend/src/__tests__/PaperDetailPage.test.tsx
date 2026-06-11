@@ -353,9 +353,9 @@ describe('PaperDetailPage', () => {
 
     await user.click(screen.getByTestId('chunks-expand-toggle'));
 
-    // After expanding LazyChunksSection, ChunksTab renders "N chunks extracted"
+    // After expanding LazyChunksSection, ChunksTab renders "N passages from the PDF"
     await waitFor(() => {
-      expect(screen.getByText(/2 chunks extracted/)).toBeInTheDocument();
+      expect(screen.getByText(/2 passages from the PDF/)).toBeInTheDocument();
     });
     // Individual chunk buttons are visible
     expect(screen.getByText(/Chunk 0/)).toBeInTheDocument();

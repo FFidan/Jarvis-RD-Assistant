@@ -457,3 +457,192 @@ describe('use-streaming-chat — U1-fe elapsedSeconds timer', () => {
     act(() => { vi.advanceTimersByTime(5000); });
   });
 });
+
+// ---------------------------------------------------------------------------
+// C1 — history sent in the POST body
+// ---------------------------------------------------------------------------
+
+describe('use-streaming-chat — C1 conversation history in POST body', () => {
+  /** Capture bodies posted to streamSSE across calls */
+  const capturedBodies: unknown[] = [];
+
+  beforeEach(() => {
+    resetStore();
+    capturedBodies.length = 0;
+    vi.clearAllMocks();
+    mockStreamSSE.mockImplementation(async function* (_url, body) {
+      capturedBodies.push(body);
+      yield { type: 'token', content: 'reply' };
+    });
+  });
+
+  it('sends history:[] on the first question (no prior turns)', async () => {
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'hist-first', scope: 'cross-paper' }),
+    );
+
+    act(() => { void result.current.sendMessage('What is this paper about?'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    expect(capturedBodies).toHaveLength(1);
+    const body = capturedBodies[0] as { history: unknown[] };
+    expect(body.history).toEqual([]);
+  });
+
+  it('excludes the just-added user message and assistant placeholder from history', async () => {
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'hist-excl', scope: 'cross-paper' }),
+    );
+
+    // First turn: history=[]
+    act(() => { void result.current.sendMessage('First question'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    // Second turn: history should contain exactly the first user + assistant
+    // exchange, NOT the new user message or the new assistant placeholder
+    act(() => { void result.current.sendMessage('Follow-up question'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    expect(capturedBodies).toHaveLength(2);
+    const secondBody = capturedBodies[1] as { history: { role: string; content: string }[] };
+    expect(secondBody.history).toHaveLength(2);
+    expect(secondBody.history[0]).toMatchObject({ role: 'user', content: 'First question' });
+    expect(secondBody.history[1]).toMatchObject({ role: 'assistant', content: 'reply' });
+
+    // The new user message "Follow-up question" must NOT appear in history
+    const historyContents = secondBody.history.map((h) => h.content);
+    expect(historyContents).not.toContain('Follow-up question');
+  });
+
+  it('sends at most 6 prior turns when the chat has more than 6', async () => {
+    // Pre-populate the store with 8 turns (4 exchanges)
+    useChatStore.setState({
+      chats: {
+        'hist-limit': [
+          { id: '1', role: 'user', content: 'Q1' },
+          { id: '2', role: 'assistant', content: 'A1' },
+          { id: '3', role: 'user', content: 'Q2' },
+          { id: '4', role: 'assistant', content: 'A2' },
+          { id: '5', role: 'user', content: 'Q3' },
+          { id: '6', role: 'assistant', content: 'A3' },
+          { id: '7', role: 'user', content: 'Q4' },
+          { id: '8', role: 'assistant', content: 'A4' },
+        ],
+      },
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'hist-limit', scope: 'cross-paper' }),
+    );
+
+    act(() => { void result.current.sendMessage('Q5'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    const body = capturedBodies[0] as { history: { role: string; content: string }[] };
+    expect(body.history).toHaveLength(6);
+    // Should be the LAST 6 (turns 3–8: Q2 A2 Q3 A3 Q4 A4)
+    expect(body.history[0]).toMatchObject({ role: 'user', content: 'Q2' });
+    expect(body.history[5]).toMatchObject({ role: 'assistant', content: 'A4' });
+  });
+
+  it('strips streamed error suffixes from history and drops error-only messages', async () => {
+    useChatStore.setState({
+      chats: {
+        'hist-err': [
+          { id: '1', role: 'user', content: 'Q1' },
+          { id: '2', role: 'assistant', content: 'partial answer\n\n**Error:** Request timed out' },
+          { id: '3', role: 'user', content: 'Q2' },
+          { id: '4', role: 'assistant', content: '\n\n**Error:** Unknown streaming error' },
+        ],
+      },
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'hist-err', scope: 'cross-paper' }),
+    );
+
+    act(() => { void result.current.sendMessage('Q3'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    const body = capturedBodies[0] as { history: { role: string; content: string }[] };
+    // Error-only assistant message dropped entirely; suffix stripped from the partial one.
+    expect(body.history).toHaveLength(3);
+    expect(body.history[1]).toMatchObject({ role: 'assistant', content: 'partial answer' });
+    for (const turn of body.history) {
+      expect(turn.content).not.toContain('**Error:**');
+    }
+  });
+
+  it('filters out whitespace-only / empty-content messages before sending', async () => {
+    // Pre-populate with one legit exchange and one whitespace-only assistant message
+    useChatStore.setState({
+      chats: {
+        'hist-filter': [
+          { id: '1', role: 'user', content: 'Real question' },
+          { id: '2', role: 'assistant', content: '   ' }, // whitespace-only (streaming placeholder)
+        ],
+      },
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'hist-filter', scope: 'cross-paper' }),
+    );
+
+    act(() => { void result.current.sendMessage('Next question'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    const body = capturedBodies[0] as { history: { role: string; content: string }[] };
+    // The whitespace-only assistant message must be excluded; only the real user turn survives
+    expect(body.history).toHaveLength(1);
+    expect(body.history[0]).toMatchObject({ role: 'user', content: 'Real question' });
+  });
+
+  it('includes history:prior in single-paper scope POST body', async () => {
+    // Pre-populate with one exchange
+    useChatStore.setState({
+      chats: {
+        'hist-single': [
+          { id: '1', role: 'user', content: 'Paper question' },
+          { id: '2', role: 'assistant', content: 'Paper answer' },
+        ],
+      },
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'hist-single', scope: 'single-paper', paperId: 42 }),
+    );
+
+    act(() => { void result.current.sendMessage('Follow up on paper'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    const body = capturedBodies[0] as { question: string; history: { role: string; content: string }[] };
+    expect(body.history).toHaveLength(2);
+    expect(body.history[0]).toMatchObject({ role: 'user', content: 'Paper question' });
+    expect(body.history[1]).toMatchObject({ role: 'assistant', content: 'Paper answer' });
+    // decompose must NOT be in single-paper body
+    expect(body).not.toHaveProperty('decompose');
+  });
+
+  it('truncates content to 4000 chars per turn', async () => {
+    const longContent = 'x'.repeat(5000);
+    useChatStore.setState({
+      chats: {
+        'hist-truncate': [
+          { id: '1', role: 'user', content: longContent },
+          { id: '2', role: 'assistant', content: 'short' },
+        ],
+      },
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'hist-truncate', scope: 'cross-paper' }),
+    );
+
+    act(() => { void result.current.sendMessage('Next'); });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    const body = capturedBodies[0] as { history: { role: string; content: string }[] };
+    expect(body.history[0]?.content).toHaveLength(4000);
+    expect(body.history[1]?.content).toBe('short');
+  });
+});

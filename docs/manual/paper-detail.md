@@ -19,7 +19,7 @@ The TOC also shows the **pipeline status** for this paper:
 | Indicator | Meaning |
 |-----------|---------|
 | PDF downloaded | The source PDF has been fetched and stored |
-| Chunks | The PDF text has been split into chunks |
+| Source Passages | The PDF text has been split into passages for retrieval |
 | Summary | The AI summary has been generated |
 | Failed | One or more pipeline steps encountered an error |
 
@@ -73,9 +73,9 @@ Your personal notes for this paper. Notes are displayed read-only in the centre 
 
 > **Offline:** Notes are displayed from the local cache. Editing requires an active connection and is disabled offline.
 
-### Chunks
+### Source Passages
 
-A lazy-loading section that lists the text chunks generated from the PDF. Chunks expand on click to show the full text. Useful for verifying which parts of the paper were processed and for cross-checking RAG citations.
+A lazy-loading section that lists the text passages generated from the PDF. Passages expand on click to show the full text. Useful for verifying which parts of the paper were processed and for cross-checking RAG citations.
 
 ### Ask — single-paper RAG
 
@@ -104,9 +104,10 @@ A visual step tracker shows which steps are complete, running, or queued. You ca
 | Button | Action |
 |--------|--------|
 | Download | Fetch and store the PDF |
-| Process | Extract and chunk the PDF text |
+| Process | Extract the PDF text and split it into source passages |
 | Summarise | Generate the AI summary |
-| Generate Cards | Create spaced-repetition cards from this paper's chunks |
+| Regenerate Summary | Re-run the summarisation step without re-analysing the whole paper |
+| Generate Cards | Create spaced-repetition cards from this paper's source passages |
 | Extract Entities | Run the entity extraction pipeline for the Knowledge Graph |
 | Zotero push | Push this paper's metadata to your configured Zotero library |
 

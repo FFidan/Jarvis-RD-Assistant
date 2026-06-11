@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { errorMessage } from '@/lib/errors';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -115,14 +115,26 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
     [setSearchParams],
   );
 
-  const lastSurfaceFilterRef = useRef<string>(`${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}`);
+  const serverSearchSurface = surface === 'library' || surface === 'inbox';
+  const [serverQuery, setServerQuery] = useState<string>('');
   useEffect(() => {
-    const key = `${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}`;
+    const trimmed = listFilter?.trim() ?? '';
+    if (!serverSearchSurface || trimmed.length < 3) {
+      setServerQuery('');
+      return;
+    }
+    const id = setTimeout(() => setServerQuery(trimmed), 300);
+    return () => clearTimeout(id);
+  }, [listFilter, serverSearchSurface]);
+
+  const lastSurfaceFilterRef = useRef<string>(`${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}|`);
+  useEffect(() => {
+    const key = `${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}|${serverQuery}`;
     if (lastSurfaceFilterRef.current !== key) {
       lastSurfaceFilterRef.current = key;
       if (offset !== 0) setPagination(0, limit);
     }
-  }, [surface, filter, scope, topicId, offset, limit, setPagination]);
+  }, [surface, filter, scope, topicId, serverQuery, offset, limit, setPagination]);
 
   // Keyboard-navigation focused row index (j/k)
   const [focusedIdx, setFocusedIdx] = useState<number>(0);
@@ -134,23 +146,26 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
   const selectedIds = useBulkSelection((s) => s.selectedIds);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: QUERY_KEYS.papers.feed(surface, filter ?? '', scope, limit, offset, sourceTypes ? [sourceTypes] : null, topicId ?? null),
+    queryKey: [...QUERY_KEYS.papers.feed(surface, filter ?? '', scope, limit, offset, sourceTypes ? [sourceTypes] : null, topicId ?? null), serverQuery],
     // fetchFeed accepts SurfaceView string
-    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes, topicId }),
+    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes, topicId, q: serverQuery || undefined }),
+    placeholderData: keepPreviousData,
   });
 
   // Spec §3.4: client-side scoped list-filter (title/author, within active facets)
   const papers = useMemo(() => {
     // Cast inside memo so the expression doesn't escape and destabilise deps
     const raw = (data?.papers ?? []) as FeedPaper[];
-    if (!listFilter) return raw;
+    // Server-side search (q) already matched title/abstract/authors with
+    // stemming — re-filtering by substring here would hide legitimate hits.
+    if (!listFilter || serverQuery) return raw;
     const q = listFilter.toLowerCase();
     return raw.filter(
       (p) =>
         p.title.toLowerCase().includes(q) ||
         p.authors.some((a) => a.toLowerCase().includes(q)),
     );
-  }, [data?.papers, listFilter]);
+  }, [data?.papers, listFilter, serverQuery]);
 
   const invalidateFeed = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });

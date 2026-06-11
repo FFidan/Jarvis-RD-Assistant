@@ -36,10 +36,9 @@ export function SourcesAccordion({ sources }: SourcesAccordionProps) {
               <div className="mt-1 text-muted-foreground line-clamp-3">
                 <MarkdownContent className="prose prose-xs dark:prose-invert max-w-none text-muted-foreground">{source.text || source.content || ''}</MarkdownContent>
               </div>
-              <p className="mt-1 text-muted-foreground">
-                {source.page_number != null && `p.${source.page_number} `}
-                Score: {source.score.toFixed(3)}
-              </p>
+              {source.page_number != null && (
+                <p className="mt-1 text-muted-foreground">p.{source.page_number}</p>
+              )}
             </div>
           ))}
         </div>

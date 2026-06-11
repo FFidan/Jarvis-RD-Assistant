@@ -15,7 +15,7 @@ from paper_ingestion.models import CrossPaperAskRequest
 # ---------------------------------------------------------------------------
 
 
-async def test_dedup_max_chunks_per_paper():
+async def test_dedup_max_chunks_per_paper(monkeypatch):
     """prepare_cross_paper_rag deduplicates: keeps at most 2 chunks per paper
     and trims to max_papers by best-chunk score.
 
@@ -25,6 +25,10 @@ async def test_dedup_max_chunks_per_paper():
     on the CrossPaperRagPrep.sources that come back out.
     """
     from unittest.mock import AsyncMock, MagicMock
+
+    # Mechanics under test = dedup, not relevance: the controlled scores
+    # (0.6-0.9) would otherwise be filtered by the relative cosine cutoff.
+    monkeypatch.setenv("RAG_RELATIVE_SCORE_CUTOFF", "0")
 
     from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
@@ -88,6 +92,178 @@ async def test_dedup_max_chunks_per_paper():
     chunk_counts = Counter(s["paper_id"] for s in result.sources)
     for pid, count in chunk_counts.items():
         assert count <= 2, f"Paper {pid} contributed {count} chunks — dedup cap is 2"
+
+
+# ---------------------------------------------------------------------------
+# Relevance gates: Layer 1 relative cosine cutoff + Layer 2 rerank-score floor
+# ---------------------------------------------------------------------------
+
+
+def _make_cutoff_pool(db_rows: list[dict], library_rows: list[dict]):
+    """Mock pool routing user_library lookups vs paper-metadata fetches."""
+
+    async def _fetch(sql, *args):  # noqa: ARG001
+        return library_rows if "user_library WHERE user_id" in sql else db_rows
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=_fetch)
+    db_pool = MagicMock()
+    db_pool.acquire.return_value.__aenter__.return_value = conn
+    return db_pool
+
+
+async def test_relative_cutoff_drops_low_cosine_chunks(monkeypatch):
+    """Layer 1 (always-on): chunks below top_score * 0.85 are dropped BEFORE rerank.
+
+    Mirrors the live finding: top hit 0.765 → cutoff 0.650 → the 0.48-0.52
+    off-topic band drops, even with the reranker disabled (identity mock,
+    no rerank_score attached).
+    """
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
+
+    monkeypatch.delenv("RAG_RELATIVE_SCORE_CUTOFF", raising=False)
+    monkeypatch.delenv("RAG_MIN_RERANK_SCORE", raising=False)
+
+    all_chunks = [
+        {"paper_id": 1, "chunk_index": 0, "content": "on-topic", "page_number": 1, "score": 0.765},
+        {"paper_id": 2, "chunk_index": 0, "content": "junk-a", "page_number": 1, "score": 0.52},
+        {"paper_id": 3, "chunk_index": 0, "content": "junk-b", "page_number": 1, "score": 0.48},
+    ]
+    mock_embedder = MagicMock()
+    mock_embedder.search_chunks_global = AsyncMock(return_value=all_chunks)
+    mock_embedder.rerank_chunks = AsyncMock(side_effect=lambda q, c, top_k: c[:top_k])
+
+    db_pool = _make_cutoff_pool(
+        db_rows=[{"id": 1, "title": "Paper One", "authors": "A", "url": "http://p1"}],
+        library_rows=[{"paper_id": 1}, {"paper_id": 2}, {"paper_id": 3}],
+    )
+    body = CrossPaperAskRequest(question="cutoff test", decompose=False)
+
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+
+    assert isinstance(result, CrossPaperRagPrep), f"Expected CrossPaperRagPrep, got {result!r}"
+    assert {s["paper_id"] for s in result.sources} == {1}, (
+        "Only the 0.765 chunk survives the 0.85 relative cutoff (threshold 0.650)"
+    )
+    # Placement proof: the cutoff runs BEFORE rerank — the reranker must only
+    # see the surviving chunk.
+    rerank_call = mock_embedder.rerank_chunks.await_args
+    assert [c["paper_id"] for c in rerank_call.args[1]] == [1]
+
+
+async def test_relative_cutoff_is_per_subquery_in_decompose_path(monkeypatch):
+    """Decomposed sub-queries embed separately, so their cosine scales differ:
+    the cutoff must run per sub-query list, never across the merged pool —
+    otherwise one strong facet silently deletes another facet's best hits.
+    """
+    from paper_ingestion.rag import streaming as streaming_mod
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
+
+    monkeypatch.delenv("RAG_RELATIVE_SCORE_CUTOFF", raising=False)
+    monkeypatch.delenv("RAG_MIN_RERANK_SCORE", raising=False)
+
+    facet_a = [
+        {
+            "paper_id": 1,
+            "chunk_index": 0,
+            "content": "facet-a-hit",
+            "page_number": 1,
+            "score": 0.78,
+        },
+        {
+            "paper_id": 2,
+            "chunk_index": 0,
+            "content": "facet-a-junk",
+            "page_number": 1,
+            "score": 0.40,
+        },
+    ]
+    facet_b = [
+        {
+            "paper_id": 3,
+            "chunk_index": 0,
+            "content": "facet-b-hit",
+            "page_number": 1,
+            "score": 0.62,
+        },
+        {
+            "paper_id": 4,
+            "chunk_index": 0,
+            "content": "facet-b-junk",
+            "page_number": 1,
+            "score": 0.30,
+        },
+    ]
+
+    async def _decompose(question, model):  # noqa: ARG001
+        return ["facet a", "facet b"]
+
+    monkeypatch.setattr(streaming_mod, "decompose_query", _decompose)
+    monkeypatch.setattr(streaming_mod, "get_fast_model", lambda: "fast")
+
+    async def _search(*, query_text, **kwargs):  # noqa: ARG001
+        return facet_a if query_text == "facet a" else facet_b
+
+    mock_embedder = MagicMock()
+    mock_embedder.search_chunks_global = AsyncMock(side_effect=_search)
+    mock_embedder.rerank_chunks = AsyncMock(side_effect=lambda q, c, top_k: c[:top_k])
+
+    db_pool = _make_cutoff_pool(
+        db_rows=[
+            {"id": 1, "title": "Paper One", "authors": "A", "url": "http://p1"},
+            {"id": 3, "title": "Paper Three", "authors": "B", "url": "http://p3"},
+        ],
+        library_rows=[{"paper_id": n} for n in (1, 2, 3, 4)],
+    )
+    body = CrossPaperAskRequest(question="multi-facet question", decompose=True)
+
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+
+    assert isinstance(result, CrossPaperRagPrep), f"Expected CrossPaperRagPrep, got {result!r}"
+    # Facet B's best hit (0.62) survives even though it is far below facet A's
+    # 0.78; a merged-pool cutoff (0.78 * 0.85 = 0.663) would have deleted it.
+    assert {s["paper_id"] for s in result.sources} == {1, 3}
+    reranked = mock_embedder.rerank_chunks.await_args.args[1]
+    assert {c["paper_id"] for c in reranked} == {1, 3}
+
+
+async def test_rerank_floor_backend_default_drops_and_degrades(monkeypatch):
+    """Layer 2: with the default cross-encoder backend the floor is 3.0; when
+    EVERY chunk reranks below it, the result degrades to CrossPaperRagNoResults.
+    """
+    from paper_ingestion.rag.streaming import CrossPaperRagNoResults, prepare_cross_paper_rag
+
+    monkeypatch.delenv("RAG_MIN_RERANK_SCORE", raising=False)
+    monkeypatch.delenv("RERANKER_BACKEND", raising=False)  # default backend → floor 3.0
+
+    # Close cosine scores so Layer 1 keeps both; Layer 2 is the gate under test.
+    all_chunks = [
+        {"paper_id": 1, "chunk_index": 0, "content": "weak-a", "page_number": 1, "score": 0.9},
+        {"paper_id": 2, "chunk_index": 0, "content": "weak-b", "page_number": 1, "score": 0.88},
+    ]
+
+    def _rerank_with_scores(q, chunks, top_k):  # noqa: ARG001
+        # Observed irrelevant band for the default cross-encoder: ~+0.4..+2.7.
+        scores = [2.7, 0.4]
+        return [{**c, "rerank_score": s} for c, s in zip(chunks, scores)]
+
+    mock_embedder = MagicMock()
+    mock_embedder.search_chunks_global = AsyncMock(return_value=all_chunks)
+    mock_embedder.rerank_chunks = AsyncMock(side_effect=_rerank_with_scores)
+
+    db_pool = _make_cutoff_pool(
+        db_rows=[],
+        library_rows=[{"paper_id": 1}, {"paper_id": 2}],
+    )
+    body = CrossPaperAskRequest(question="floor test", decompose=False)
+
+    result = await prepare_cross_paper_rag(mock_embedder, db_pool, body, AsyncMock(), user_id=1)
+
+    assert isinstance(result, CrossPaperRagNoResults), (
+        f"All chunks below the 3.0 floor must degrade to no-results; got {result!r}"
+    )
+    assert "No relevant information" in result.answer
+    assert result.sources == []
 
 
 # ---------------------------------------------------------------------------
@@ -267,8 +443,10 @@ async def test_confidence_event_emitted_before_done():
 
     from paper_ingestion.rag.streaming import stream_rag_events
 
+    # NOTE: the answer must be a >= 4-word sentence — verification drops
+    # shorter segments as non-claims, which would empty per_sentence.
     sse_lines = [
-        'data: {"choices": [{"delta": {"content": "Transformers use attention."}}]}',
+        'data: {"choices": [{"delta": {"content": "Transformers rely on attention mechanisms."}}]}',
         "data: [DONE]",
     ]
 
@@ -282,7 +460,7 @@ async def test_confidence_event_emitted_before_done():
         {
             "paper_id": 10,
             "chunk_index": 0,
-            "content": "Transformers use attention.",
+            "content": "Transformers rely on attention mechanisms.",
             "page_number": 2,
             "score": 0.88,
             "paper_title": "Transformer Paper",
@@ -307,7 +485,7 @@ async def test_confidence_event_emitted_before_done():
 
     # DB returns one chunk row per paper_id
     rows_by_pid: dict[int, list[dict]] = {
-        10: [{"content": "Transformers use attention."}],
+        10: [{"content": "Transformers rely on attention mechanisms."}],
         20: [{"content": "Evidence about attention mechanisms."}],
     }
 

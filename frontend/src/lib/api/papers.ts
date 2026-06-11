@@ -299,8 +299,9 @@ export async function fetchFeed(params: {
   offset?: number;
   sourceTypes?: string | null;
   topicId?: number | null;
+  q?: string;
 }): Promise<FeedResponse> {
-  const { view, filter, scope, limit = 30, offset = 0, sourceTypes, topicId } = params;
+  const { view, filter, scope, limit = 30, offset = 0, sourceTypes, topicId, q } = params;
 
   // Map (surface=library, filter=X) → backend view name. Otherwise the surface
   // value itself is already a valid backend view (inbox/library/trash overlap).
@@ -328,6 +329,9 @@ export async function fetchFeed(params: {
   }
   if (topicId != null) {
     searchParams.set('topic_id', String(topicId));
+  }
+  if (q) {
+    searchParams.set('q', q);
   }
   return apiFetch<FeedResponse>(`/api/papers/feed?${searchParams.toString()}`);
 }
@@ -371,8 +375,11 @@ export const downloadPdf = (paperId: number) =>
 export const processPdf = (paperId: number) =>
   apiFetch<{ job_id: string; status: string }>(`/api/process-pdf/${paperId}`, { method: 'POST' });
 
-export const summarizePaper = (paperId: number) =>
-  apiFetch<JobAccepted>(`/api/summarize/${paperId}`, { method: 'POST' });
+export const summarizePaper = (paperId: number, opts?: { force?: boolean }) =>
+  apiFetch<JobAccepted>(`/api/summarize/${paperId}`, {
+    method: 'POST',
+    ...(opts?.force === true ? { body: JSON.stringify({ force: true }) } : {}),
+  });
 
 export const fetchNotes = (paperId: number, source?: 'user' | 'zotero') =>
   apiFetch<Note[]>(`/api/papers/${paperId}/notes${source ? `?source=${source}` : ''}`);

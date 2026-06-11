@@ -100,7 +100,7 @@ function FeedPaperRowInner({
 
   return (
     <div className="rounded-lg border p-4">
-      <div className="flex gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row">
         {/* Bulk selection checkbox */}
         {effectiveToggle && (
           <div className="flex items-start pt-1">
@@ -129,7 +129,7 @@ function FeedPaperRowInner({
         )}
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-lg font-semibold leading-tight">{paper.title}</h3>
             {state === 'inbox' && (
               <Badge variant="default" className="text-xs">
@@ -155,7 +155,7 @@ function FeedPaperRowInner({
           ) : null}
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-1">
+        <div className="flex flex-row flex-wrap items-center gap-2 sm:shrink-0 sm:flex-col sm:items-end sm:gap-1">
           <Badge variant="outline">{paper.source_type.toUpperCase()}</Badge>
           {/* Spec §5.5: Pulse-origin papers also appear in Inbox; this badge makes the
               overlap legible without separating the data models. */}

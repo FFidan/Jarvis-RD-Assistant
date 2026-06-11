@@ -34,12 +34,12 @@ export function ChatMessage({ message, isLoading, phase, elapsedSeconds = 0, isF
           <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
         ) : message.content ? (
           <>
-            {message.confidence && message.confidence !== 'HIGH' && (
+            {message.confidence && (message.confidence === 'UNVERIFIED' || message.confidence === 'LOW') && (
               <div className="mb-2 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span>
-                  Some answer sentences were not verified against retrieved sources. Check the
-                  verification details before relying on them.
+                  Some statements could not be matched to the source text — verify important details
+                  against the cited passages.
                 </span>
               </div>
             )}

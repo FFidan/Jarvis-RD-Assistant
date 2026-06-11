@@ -235,6 +235,12 @@ describe('FeedPaperRow', () => {
     await user.click(screen.getByRole('checkbox', { name: `Select ${paper.title} for bulk action` }));
     expect(onToggleSelect).toHaveBeenCalledWith(paper.id);
   });
+
+  it('row container has mobile-first stacking classes (sm:flex-row)', () => {
+    const { container } = renderRow({ paper });
+    const row = container.querySelector('.flex.flex-col.gap-3.sm\\:flex-row');
+    expect(row).not.toBeNull();
+  });
 });
 
 // DOM-F-02 (regression): stable onHardDelete — FeedPaperRow must be memo'd and

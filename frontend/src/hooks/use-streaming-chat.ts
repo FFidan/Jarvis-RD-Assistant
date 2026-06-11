@@ -72,6 +72,20 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
     async (question: string) => {
       if (phaseRef.current !== 'idle') return;
 
+      // Capture prior turns BEFORE adding the new user message and the assistant
+      // placeholder — both addMessage calls below would otherwise appear in the
+      // history we send to the backend.
+      const prior = (useChatStore.getState().chats[chatId] || [])
+        // Streamed "**Error:**" suffixes are UI-only — never model context.
+        .map((m) => ({ role: m.role, content: (m.content.split('\n\n**Error:**')[0] ?? '').trim() }))
+        .filter((m) => m.content.length > 0)
+        .slice(-6)
+        .map((m) => ({
+          role: m.role,
+          // slice() can split an astral pair; drop a trailing lone surrogate.
+          content: m.content.slice(0, 4000).replace(/[\uD800-\uDBFF]$/, ''),
+        }));
+
       // Add user message
       addMessage(chatId, { role: 'user', content: question });
       // Add empty assistant message to stream into
@@ -93,8 +107,8 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
 
       const body =
         scope === 'single-paper'
-          ? { question }
-          : { question, decompose: true };
+          ? { question, history: prior }
+          : { question, decompose: true, history: prior };
 
       try {
         for await (const event of streamSSE(url, body, controller.signal)) {

@@ -237,8 +237,8 @@ export function TopicSection() {
                         </p>
                       )}
                     </div>
-                    <div className="flex shrink-0 items-center gap-3">
-                      <div className="flex items-center gap-2">
+                    <div className="flex shrink-0 flex-wrap items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
                         <Switch
                           id={`sub-${topic.id}`}
                           checked={subscriptions.includes(topic.id)}
@@ -247,7 +247,7 @@ export function TopicSection() {
                         />
                         <label
                           htmlFor={`sub-${topic.id}`}
-                          className="cursor-pointer text-xs text-muted-foreground"
+                          className="cursor-pointer whitespace-nowrap text-xs text-muted-foreground"
                           title="When enabled, papers matching this topic are automatically added to your library during auto-fetch."
                         >
                           Auto-add matches

@@ -152,3 +152,23 @@ def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> tupl
         body = body[:max_chars]
         truncated = True
     return f"<{tag}>\n{body}\n</{tag}>", truncated
+
+
+# Scientific prose with math/citations tokenizes denser than plain English:
+# measured ~2.4-2.6 chars/token on LaTeX-heavy arXiv text with qwen3-class
+# tokenizers (19.4k chars overflowed an 8192-token window in production).
+APPROX_CHARS_PER_TOKEN = 2.6
+_MIN_INPUT_TOKENS = 1024
+
+
+def max_input_chars(
+    num_ctx_tokens: int, reserved_output_tokens: int, overhead_tokens: int = 1000
+) -> int:
+    """Char budget for prompt DATA so input + reserved output fit the model context.
+
+    overhead_tokens covers the system prompt, chat-template framing, and the
+    Instructor JSON-schema injection. The floor deliberately exceeds tiny
+    contexts — callers get a usable minimum rather than zero.
+    """
+    usable = num_ctx_tokens - reserved_output_tokens - overhead_tokens
+    return int(max(usable, _MIN_INPUT_TOKENS) * APPROX_CHARS_PER_TOKEN)

@@ -245,3 +245,194 @@ async def test_prepare_cross_paper_rag_chunk_data_not_in_system():
     assert attacker_text in user_content or "IGNORE" in user_content, (
         "Chunk text must flow into the user message (escaped or raw)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Conversation memory: history turns inserted between system and user message
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_history_turns_are_escaped_and_bounded():
+    """7 history turns in → 6 out (oldest dropped); content arrives escaped.
+
+    History sits between the system message and the final user message and
+    must NOT change retrieval — the question alone drives the Qdrant search.
+    """
+    from paper_ingestion.models import AskRequest
+    from paper_ingestion.models.rag import HistoryTurn
+
+    history = [
+        HistoryTurn(role="user" if i % 2 else "assistant", content=f"turn-{i}") for i in range(1, 7)
+    ]
+    history.append(HistoryTurn(role="user", content="follow-up with <b>markup</b>"))
+    assert len(history) == 7
+
+    body = AskRequest(question="And the second paper?", max_chunks=3, history=history)
+    pool = _make_pool()
+    embedder = _make_embedder()
+
+    messages, _ = await prepare_single_paper_rag(
+        embedder, pool, paper_id=1, body=body, http_client=AsyncMock(), user_id=1
+    )
+
+    # Shape: [system, *6 history turns, user] — oldest of the 7 turns dropped.
+    roles = [m["role"] for m in messages]
+    assert roles[0] == "system" and roles[-1] == "user"
+    history_msgs = messages[1:-1]
+    assert len(history_msgs) == 6, f"Expected 6 history messages, got {len(history_msgs)}"
+    assert all(m["content"] != "turn-1" for m in history_msgs), "Oldest turn must be dropped"
+    assert history_msgs[0]["content"] == "turn-2", "Turn order must be preserved (oldest first)"
+
+    # History content is DATA: angle brackets arrive escaped.
+    markup_msg = history_msgs[-1]["content"]
+    assert "&lt;b&gt;" in markup_msg, f"Expected escaped markup, got {markup_msg!r}"
+    assert "<b>" not in markup_msg, "Raw markup must never reach the prompt"
+
+    # Retrieval is driven by the bare question only — never by history.
+    embedder.search_chunks_in_paper.assert_awaited_once()
+    assert (
+        embedder.search_chunks_in_paper.await_args.kwargs["query_text"] == "And the second paper?"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 1 — single-paper Layer-2 rerank floor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_single_paper_rerank_floor_drops_all_raises(monkeypatch):
+    """Chunks reranked below the default cross-encoder floor (3.0) must all be
+    dropped, causing NoRelevantChunksError.
+
+    The default backend is 'cross-encoder' → floor is 3.0.  Both test chunks
+    carry rerank_score < 3.0 so none survive the Layer-2 gate.
+    """
+    from paper_ingestion.models import AskRequest
+    from paper_ingestion.rag.exceptions import NoRelevantChunksError
+
+    # Pin to the cross-encoder default (floor=3.0) by removing the env var.
+    monkeypatch.delenv("RAG_MIN_RERANK_SCORE", raising=False)
+
+    # Chunks after reranking — both scored below 3.0.
+    low_chunks = [
+        {
+            "content": "Chunk A — poor relevance.",
+            "page_number": 1,
+            "score": 0.7,
+            "chunk_index": 0,
+            "rerank_score": 2.7,
+        },
+        {
+            "content": "Chunk B — even worse.",
+            "page_number": 2,
+            "score": 0.6,
+            "chunk_index": 1,
+            "rerank_score": 0.4,
+        },
+    ]
+    embedder = _make_embedder(chunks=low_chunks)
+    # rerank_chunks returns the same low-scored chunks unchanged.
+    embedder.rerank_chunks = AsyncMock(return_value=low_chunks)
+
+    body = AskRequest(question="Does this relate?", max_chunks=5)
+    pool = _make_pool()
+
+    with pytest.raises(NoRelevantChunksError):
+        await prepare_single_paper_rag(
+            embedder, pool, paper_id=1, body=body, http_client=AsyncMock(), user_id=1
+        )
+
+
+@pytest.mark.asyncio
+async def test_single_paper_chunks_without_rerank_score_pass_floor(monkeypatch):
+    """Chunks WITHOUT 'rerank_score' key (reranker disabled) bypass the floor
+    and are all retained — absence of the key ⇒ skip the gate.
+    """
+    from paper_ingestion.models import AskRequest
+
+    # Pin to the cross-encoder default so the floor would be 3.0 if applied.
+    monkeypatch.delenv("RAG_MIN_RERANK_SCORE", raising=False)
+
+    # No rerank_score key on any chunk.
+    no_rerank_chunks = [
+        {
+            "content": "First chunk without rerank score.",
+            "page_number": 1,
+            "score": 0.85,
+            "chunk_index": 0,
+        },
+        {
+            "content": "Second chunk without rerank score.",
+            "page_number": 2,
+            "score": 0.80,
+            "chunk_index": 1,
+        },
+    ]
+    embedder = _make_embedder(chunks=no_rerank_chunks)
+    embedder.rerank_chunks = AsyncMock(return_value=no_rerank_chunks)
+
+    body = AskRequest(question="Tell me about the method.", max_chunks=5)
+    pool = _make_pool()
+
+    messages, sources = await prepare_single_paper_rag(
+        embedder, pool, paper_id=1, body=body, http_client=AsyncMock(), user_id=1
+    )
+
+    # Both chunks must survive — all returned as sources.
+    assert len(sources) == 2, f"Expected 2 sources (all chunks kept); got {len(sources)}"
+    # Messages must still be well-formed [system, user].
+    roles = [m["role"] for m in messages]
+    assert roles[0] == "system" and roles[-1] == "user"
+
+
+# ---------------------------------------------------------------------------
+# Gap 2 — history char-budget trim
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_history_char_budget_drops_oldest_beyond_turn_cap():
+    """6 turns of ~1100 chars each (≈6600 total) must be trimmed to 5 turns,
+    dropping the OLDEST turn while preserving order of the remaining 5.
+
+    _HISTORY_MAX_TURNS=6 keeps all 6; the char-budget loop then pops the
+    oldest until total chars ≤ 6000, resulting in 5 turns.
+    """
+    from paper_ingestion.models import AskRequest
+    from paper_ingestion.models.rag import HistoryTurn
+
+    # Build 6 turns, each with content of ~1100 chars so total ≈ 6600 chars.
+    filler = "x" * 1090
+    turns = [
+        HistoryTurn(role="user" if i % 2 == 0 else "assistant", content=f"turn-{i}-{filler}")
+        for i in range(6)
+    ]
+    assert len(turns) == 6
+    body = AskRequest(question="Final question?", max_chunks=3, history=turns)
+    pool = _make_pool()
+    embedder = _make_embedder()
+
+    messages, _ = await prepare_single_paper_rag(
+        embedder, pool, paper_id=1, body=body, http_client=AsyncMock(), user_id=1
+    )
+
+    # Shape: [system, *history_msgs, user]
+    history_msgs = messages[1:-1]
+
+    # The char-budget loop must have dropped 1 turn → 5 history messages.
+    assert len(history_msgs) == 5, (
+        f"Expected 5 history messages after char-budget trim; got {len(history_msgs)}"
+    )
+
+    # The OLDEST turn (turn-0) must be absent.
+    contents = [m["content"] for m in history_msgs]
+    assert not any("turn-0-" in c for c in contents), (
+        "Oldest turn (turn-0) must be dropped by char-budget trim"
+    )
+
+    # turn-1 is now the oldest survivor and must come first (order preserved).
+    assert "turn-1-" in contents[0], (
+        f"turn-1 must be the oldest surviving turn; first msg content prefix: {contents[0][:30]}"
+    )

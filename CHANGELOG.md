@@ -3,6 +3,82 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## v0.7.0 (2026-06-11) — Research Quality
+
+Focused research-quality release: self-contained flashcards, more reliable AI
+summaries, a smarter Ask pipeline, server-side library search, and several
+mobile refinements.
+
+### Upgrade Notes
+
+- **LiteLLM `num_ctx` migration.** Summaries and flashcards now budget their
+  prompt input to the model's context window instead of sending a fixed amount
+  that silently overflowed it. If you have customised `num_ctx` in
+  `litellm/config.yaml`, set the new `LLM_SMART_NUM_CTX` environment variable
+  to the same value and recreate the proxy and its consumers
+  (`docker compose up -d --force-recreate litellm paper_ingestion
+  learning_engine`). When the variable is unset the app assumes the stock
+  8192-token context.
+- **New optional Ask tuning knobs.**
+  `RAG_RELATIVE_SCORE_CUTOFF` (default `0.85`) gates retrieved sources by their
+  relevance relative to the top-scoring result for each query facet.
+  `RAG_MIN_RERANK_SCORE` sets a hard floor when the optional reranker is
+  enabled. Both can be left unset to accept the defaults.
+
+### Added
+
+- **Library search.** The filter box in the Library and Inbox now performs a
+  server-side full-text search (title, author, and abstract with stemming) when
+  three or more characters are typed. Previously the box only filtered the
+  already-loaded page.
+- **Regenerate Summary action.** A "Regenerate Summary" button is now available
+  in the paper sidebar so you can re-run the summarisation step without
+  re-analysing the whole paper.
+- **Calibrated confidence badge.** The Ask answer badge now reflects the
+  degree of grounded support (Verified / Mostly verified / Partially verified /
+  Unverified) rather than
+  a simple pass/fail. A warning is shown only for low-confidence and unverified
+  answers.
+
+### Changed
+
+- **Flashcard fronts are self-contained.** A generic-question filter prevents
+  cards whose front question only makes sense with the paper in hand (e.g. "What
+  is the main contribution of this paper?"). Generation prompts are rewritten to
+  produce standalone questions. If no suitable cards can be generated, a clear
+  message with guidance is shown rather than a synthetic fallback card.
+- **Summary reliability on small models.** The output budget for AI summaries
+  is raised, and the prompt input is budgeted to the model's context window via
+  the new `LLM_SMART_NUM_CTX` setting (paired with LiteLLM's `num_ctx`). When
+  the LLM returns a summary that does not pass quality verification, the result
+  is still displayed with a "low-confidence" label instead of being silently
+  replaced by an error string.
+- **Cross-references are semantic-only.** Cross-reference suggestions between
+  papers are now based on embedding similarity rather than keyword overlap,
+  eliminating spurious links caused by shared common words.
+- **Ask context carries across follow-ups.** Follow-up questions in the Ask
+  workspace now include the current conversation context, enabling coherent
+  multi-turn research dialogues.
+- **Ask source panel wording.** Retrieved passages are now labelled "Source
+  Passages" in the UI. Numeric relevance scores, model names, and internal job
+  IDs have been removed from the answer view.
+- **Relevance gate for retrieved sources.** Retrieved passages are filtered by
+  a relative-score gate per query facet before being used to construct an answer.
+  An optional reranker floor (`RAG_MIN_RERANK_SCORE`) is applied when the
+  reranker is enabled.
+- **Feed cards stack on mobile.** Research feed cards now stack vertically on
+  narrow phone viewports. Topic rows wrap correctly, the Discover heading is
+  visible, and the install-banner dismissal is persisted across page loads.
+
+### Security / Dependencies
+
+- The PyTorch advisory CVE-2025-3000 is triaged in the security scan
+  configuration. No patched wheel is available from upstream at this time; the
+  vulnerability affects PyTorch model serialisation and is not reachable via
+  JARVIS's default Ollama-based inference path.
+
+---
+
 ## v0.6.0 (2026-06-06) — first public release
 
 First public release of JARVIS RD Assistant. Highlights since v0.5.0: **per-user

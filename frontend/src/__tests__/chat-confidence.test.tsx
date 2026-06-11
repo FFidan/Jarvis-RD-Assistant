@@ -273,6 +273,56 @@ describe('ConfidenceBadge dialog', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Gap 5 — ChatMessage amber warning banner gating (LOW / UNVERIFIED only)
+// ---------------------------------------------------------------------------
+
+describe('ChatMessage amber warning banner', () => {
+  it('does NOT show banner for MEDIUM confidence', () => {
+    const message: ChatMessageType = {
+      id: 'banner-medium',
+      role: 'assistant',
+      content: 'A mostly verified response.',
+      confidence: 'MEDIUM',
+      verified_fraction: 0.6,
+      per_sentence: [
+        { text: 'A mostly verified response.', verified: true },
+        { text: 'One unverified sentence.', verified: false },
+      ],
+    };
+    const { container } = render(<ChatMessage message={message} />);
+    const bannerText = container.querySelector('.border-amber-200');
+    expect(bannerText).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be matched to the source text/)).not.toBeInTheDocument();
+  });
+
+  it('shows banner for LOW confidence', () => {
+    const message: ChatMessageType = {
+      id: 'banner-low',
+      role: 'assistant',
+      content: 'A partially verified response.',
+      confidence: 'LOW',
+      verified_fraction: 0.2,
+      per_sentence: [{ text: 'A partially verified response.', verified: false }],
+    };
+    render(<ChatMessage message={message} />);
+    expect(screen.getByText(/could not be matched to the source text/)).toBeInTheDocument();
+  });
+
+  it('shows banner for UNVERIFIED confidence', () => {
+    const message: ChatMessageType = {
+      id: 'banner-unverified',
+      role: 'assistant',
+      content: 'An unverified response.',
+      confidence: 'UNVERIFIED',
+      verified_fraction: 0,
+      per_sentence: [{ text: 'An unverified response.', verified: false }],
+    };
+    render(<ChatMessage message={message} />);
+    expect(screen.getByText(/could not be matched to the source text/)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // U1-fe — elapsed timer display and warm-up hint in ChatMessage
 // ---------------------------------------------------------------------------
 

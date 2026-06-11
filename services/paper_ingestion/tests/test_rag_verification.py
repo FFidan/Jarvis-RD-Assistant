@@ -2,12 +2,40 @@
 
 PI-10: _SENTENCE_RE must NOT split on lowercase-continuation (e.g. "one. and this").
        Also verifies digit and quote boundaries ARE split correctly.
+
+Also covers RAG verification calibration (v0.7):
+- the trailing "Citations:" block is stripped before sentence splitting,
+- short non-claim segments (< 4 words) are excluded from the verification set,
+- the grounded-support path accepts >= RAG_SUPPORT_FUZZY matches that the
+  SHARED QuoteVerifier still rejects at its untouched verbatim bar (97).
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
 
-from paper_ingestion.rag.verification import _SENTENCE_RE, _split_sentences
+from jarvis_common.verify import FUZZY_THRESHOLD, DictChunk, QuoteVerifier
+
+from paper_ingestion.rag.verification import (
+    _SENTENCE_RE,
+    RAG_SUPPORT_FUZZY,
+    RagConfidence,
+    _split_sentences,
+    verify_answer_sentences,
+)
+
+if TYPE_CHECKING:
+    import asyncpg
+
+
+def _unused_pool() -> asyncpg.Pool:
+    """Sentinel pool — the single-paper path (no paper_id) must never touch the DB."""
+
+    class _ExplodingPool:
+        def acquire(self):
+            raise AssertionError("DB pool must not be used in the single-paper path")
+
+    return cast("asyncpg.Pool", _ExplodingPool())
 
 
 # ---------------------------------------------------------------------------
@@ -68,3 +96,86 @@ def test_split_sentences_lowercase_continuation_is_one_sentence():
     assert len(sentences) == 1, (
         f"Lowercase continuation must not generate a second sentence; got: {sentences}"
     )
+
+
+# ---------------------------------------------------------------------------
+# RAG verification calibration (v0.7)
+# ---------------------------------------------------------------------------
+
+_CLAIM = "The model improves benchmark accuracy substantially across evaluated datasets."
+
+
+async def test_citations_block_excluded():
+    """The trailing Citations block (multi-line AND single-line tail) is stripped."""
+    sources = [{"content": _CLAIM + " Additional supporting context follows here."}]
+    verifier = QuoteVerifier()
+
+    multi_line = _CLAIM + "\nCitations:\n[1] Vaswani et al., Attention Is All You Need."
+    # Single-line tail with >= 4 words so it would FAIL verification if not stripped
+    # (i.e. this form is not rescued by the short-segment filter alone).
+    single_line = _CLAIM + "\nCitations: [Paper 1], [Paper 2], [Paper 3]"
+
+    for answer in (multi_line, single_line):
+        report = await verify_answer_sentences(answer, sources, verifier, _unused_pool())
+        texts = [s.text for s in report.per_sentence]
+        assert report.total == 1, f"citations block leaked into sentences: {texts}"
+        assert all("citation" not in t.lower() for t in texts), texts
+        assert all("[1]" not in t and "[Paper" not in t for t in texts), texts
+        assert report.verified_count == 1
+        assert report.pass_rate == 1.0
+
+
+async def test_short_label_segments_skipped():
+    """A <= 3-word segment (e.g. 'In summary:') is excluded from the total count."""
+    sources = [{"content": _CLAIM}]
+    verifier = QuoteVerifier()
+
+    answer = _CLAIM + " In summary:"
+    report = await verify_answer_sentences(answer, sources, verifier, _unused_pool())
+
+    texts = [s.text for s in report.per_sentence]
+    assert report.total == 1, f"short label must not count toward total; got: {texts}"
+    assert "In summary:" not in texts
+    assert report.verified_count == 1
+    assert report.pass_rate == 1.0  # the label counted neither as pass nor fail
+    assert report.confidence == RagConfidence.HIGH
+
+
+# Fixture pair for the grounded-support band: the paraphrase swaps
+# "mechanisms" -> "modules" and "representations" -> "encodings", which lands
+# its rapidfuzz partial_ratio against the chunk at ~86.5 (in [80, 97)).
+_SUPPORT_CHUNK = (
+    "The transformer architecture relies entirely on self-attention mechanisms "
+    "to compute representations of its input and output sequences, dispensing "
+    "with recurrence and convolutions entirely."
+)
+_SUPPORT_PARAPHRASE = (
+    "The transformer architecture relies entirely on self-attention modules "
+    "to compute encodings of its input and output sequences."
+)
+
+
+async def test_support_bar_accepts_what_97_rejects():
+    """A ~86 partial_ratio paraphrase passes the support path while the SHARED verifier
+    still rejects it at the untouched 97 verbatim bar."""
+    verifier = QuoteVerifier()
+
+    # 1) Direct check against the shared verifier: NOT verified at 97 …
+    chunks = [DictChunk({"id": 0, "content": _SUPPORT_CHUNK, "page_number": None})]
+    result = verifier.verify_quote(_SUPPORT_PARAPHRASE, _SUPPORT_CHUNK, chunks)
+    assert result.verified is False, "shared verifier must NOT have been loosened"
+    assert result.match_score is not None
+    score = result.match_score * 100
+    assert RAG_SUPPORT_FUZZY <= score < FUZZY_THRESHOLD, (
+        f"fixture drifted out of the support band [80, 97): partial_ratio={score:.2f}"
+    )
+
+    # 2) … but the RAG grounded-support path (>= 80) accepts it.
+    sources = [{"content": _SUPPORT_CHUNK}]
+    report = await verify_answer_sentences(_SUPPORT_PARAPHRASE, sources, verifier, _unused_pool())
+    assert report.total == 1
+    assert report.verified_count == 1, (
+        f"support-band sentence must be accepted; per_sentence={report.per_sentence}"
+    )
+    assert report.pass_rate == 1.0
+    assert report.confidence == RagConfidence.HIGH

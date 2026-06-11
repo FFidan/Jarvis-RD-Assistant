@@ -92,7 +92,7 @@ function LazyChunksSection({ chunks }: { chunks: Chunk[] }) {
         ) : (
           <ChevronRight className="h-4 w-4" />
         )}
-        {expanded ? 'Hide' : 'Show'} {chunks.length} chunk{chunks.length !== 1 ? 's' : ''}
+        {expanded ? 'Hide' : 'Show'} {chunks.length} passage{chunks.length !== 1 ? 's' : ''}
       </button>
       {expanded && (
         <div className="mt-4">
@@ -336,7 +336,7 @@ export function PaperResearchLog({
       </ResearchSection>
 
       {/* ── § Chunks (lazy) ──────────────────────────────────────────── */}
-      <ResearchSection id="section-chunks" title={`Chunks${chunks.length > 0 ? ` (${chunks.length})` : ''}`}>
+      <ResearchSection id="section-chunks" title={`Source Passages${chunks.length > 0 ? ` (${chunks.length})` : ''}`}>
         {chunks.length > 0 ? (
           <LazyChunksSection chunks={chunks} />
         ) : (

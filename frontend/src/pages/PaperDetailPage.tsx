@@ -200,7 +200,7 @@ export function PaperDetailPage() {
     { id: 'section-crossrefs', label: 'Cross-references', count: crossRefCount },
     { id: 'section-contradictions', label: 'Contradictions', count: contradictionCount },
     { id: 'section-notes', label: 'Your Notes', count: noteCount },
-    { id: 'section-chunks', label: 'Chunks', count: chunks.length },
+    { id: 'section-chunks', label: 'Source Passages', count: chunks.length },
     { id: 'section-ask', label: 'Ask This Paper' },
   ];
 

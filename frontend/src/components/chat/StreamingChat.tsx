@@ -37,7 +37,7 @@ interface StreamingChatProps {
 }
 
 export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true }: StreamingChatProps) {
-  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat, modelUsed, streamError, elapsedSeconds } =
+  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat, streamError, elapsedSeconds } =
     useStreamingChat({ chatId, scope, paperId });
   // First question of this chat: the warm-up hint only applies before any prior answer.
   const isFirstQuestion = messages.filter((m) => m.role === 'user').length <= 1;
@@ -133,9 +133,6 @@ export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true
 
       {/* Input */}
       <div className="border-t p-4">
-        {!isStreaming && modelUsed && (
-          <p className="mb-2 text-xs text-muted-foreground">Model: {modelUsed}</p>
-        )}
         <TooltipProvider>
           <Tooltip open={!hasAnalyzedPapers ? undefined : false}>
             <TooltipTrigger asChild>

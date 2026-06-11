@@ -7,6 +7,7 @@ these functions without triggering the ``fitz`` (PyMuPDF) import chain.
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,7 @@ from jarvis_common.llm_client import (
     strip_think_streaming,
 )
 from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
+from jarvis_common.settings import get_reranker_settings
 from jarvis_common.sse import SSE_DONE, sse_event
 
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
@@ -31,6 +33,7 @@ if TYPE_CHECKING:
     from jarvis_common.verify import QuoteVerifier
 
     from paper_ingestion.ingestion.embedder import Embedder
+    from paper_ingestion.models.rag import HistoryTurn
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +82,75 @@ class CrossPaperRagNoResults:
 
     answer: str
     sources: list[dict] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Relevance-gate + conversation-history helpers
+# ---------------------------------------------------------------------------
+
+_HISTORY_MAX_TURNS = 6
+_HISTORY_MAX_CHARS = 6000
+
+
+def _rerank_score_floor() -> float:
+    """Backend-aware minimum rerank score (Layer 2 relevance gate)."""
+    # Falsy check (not `is not None`): compose forwards the var with an
+    # empty-string default, which means "use the backend default".
+    _floor_env = os.getenv("RAG_MIN_RERANK_SCORE")
+    if _floor_env:
+        try:
+            return float(_floor_env)
+        except ValueError:
+            logger.warning(
+                "RAG_MIN_RERANK_SCORE=%r is not a valid float; using backend default",
+                _floor_env,
+            )
+    # qwen3 reranker: logit(yes)-logit(no), 0.0 is the decision boundary.
+    # Default cross-encoder (mxbai-rerank-v2 via LogitScore): unbounded
+    # logits where irrelevant passages still score ~+0.4..+2.7 — 3.0
+    # separates the observed relevant (~8+) from irrelevant bands.
+    return 0.0 if get_reranker_settings().reranker_backend == "qwen3" else 3.0
+
+
+def _apply_relative_cutoff(chunks: list[dict]) -> list[dict]:
+    """Drop chunks scoring far below the best hit of the SAME query embedding.
+
+    Cosine scores are only comparable within one query — across decomposed
+    sub-queries the scales differ, so callers apply this per sub-query result
+    list BEFORE merging (absolute floors don't transfer across embedding
+    models either). The top-scoring chunk always survives.
+    """
+    cutoff_env = os.getenv("RAG_RELATIVE_SCORE_CUTOFF") or "0.85"
+    try:
+        rel_cutoff = float(cutoff_env)
+    except ValueError:
+        logger.warning(
+            "RAG_RELATIVE_SCORE_CUTOFF=%r is not a valid float; using default 0.85",
+            cutoff_env,
+        )
+        rel_cutoff = 0.85
+    if not chunks or not 0.0 < rel_cutoff < 1.0:
+        return chunks
+    top = max(c["score"] for c in chunks)
+    return [c for c in chunks if c["score"] >= top * rel_cutoff]
+
+
+def _build_history_messages(history: "list[HistoryTurn]") -> list[dict[str, str]]:
+    """Convert prior chat turns into LLM chat messages.
+
+    Keeps only the most recent ``_HISTORY_MAX_TURNS`` turns, escapes each
+    content (history is DATA, never instructions), then drops oldest turns
+    until the total stays within ``_HISTORY_MAX_CHARS``.  History must NOT
+    influence retrieval — the question alone drives embedding/decomposition;
+    these messages only sit between the system and final user message.
+    """
+    msgs = [
+        {"role": turn.role, "content": safe_for_prompt(turn.content, mode="escape")}
+        for turn in history[-_HISTORY_MAX_TURNS:]
+    ]
+    while msgs and sum(len(m["content"]) for m in msgs) > _HISTORY_MAX_CHARS:
+        msgs.pop(0)
+    return msgs
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +222,21 @@ async def prepare_single_paper_rag(
     chunks = await embedder.rerank_chunks(body.question, chunks, top_k=body.max_chunks)
     if not chunks:
         raise NoRelevantChunksError(
-            "No relevant chunks found. Has this paper been processed? "
+            "No relevant passages found. Has this paper been processed? "
             "Run 'Process PDF' first to extract and embed the paper text."
         )
+
+    # Layer 2 relevance gate (reranker-enabled installs only): drop chunks the
+    # reranker scored below the backend-aware floor.  Chunks WITHOUT a
+    # rerank_score (reranker disabled/unavailable) are kept — absence ⇒ skip.
+    # No relative cosine cutoff here: a single paper's chunks are topically
+    # homogeneous, so a relative cutoff would discard valid context.
+    _min_rerank = _rerank_score_floor()
+    chunks = [
+        c for c in chunks if c.get("rerank_score") is None or c["rerank_score"] >= _min_rerank
+    ]
+    if not chunks:
+        raise NoRelevantChunksError("No relevant passages found for this question in the paper.")
 
     # Build RAG prompt — full chunk text flows through to the prompt.
     # C-10: Wrap question and title in XML-style delimiters to prevent prompt injection.
@@ -172,6 +256,7 @@ async def prepare_single_paper_rag(
 
     messages = [
         {"role": "system", "content": _SYSTEM_SINGLE_PAPER_RAG},
+        *_build_history_messages(body.history),
         {"role": "user", "content": user_content},
     ]
     sources_list = [
@@ -249,21 +334,25 @@ async def prepare_cross_paper_rag(
                 )
             )
 
-            # Merge: flatten all chunks, dedup by (paper_id, chunk_index) keeping highest score
+            # Merge: flatten all chunks, dedup by (paper_id, chunk_index) keeping
+            # highest score. The relevance cutoff runs per sub-query list — each
+            # list's scores are cosine vs its OWN sub-query embedding.
             seen: dict[tuple[int, int], dict] = {}
             for chunk_list in results:
-                for chunk in chunk_list:
+                for chunk in _apply_relative_cutoff(chunk_list):
                     key = (chunk["paper_id"], chunk["chunk_index"])
                     if key not in seen or chunk["score"] > seen[key]["score"]:
                         seen[key] = chunk
             all_chunks = list(seen.values())
         else:
-            all_chunks = await embedder.search_chunks_global(
-                query_text=body.question,
-                limit=body.max_chunks * 2,
-                score_threshold=_SEARCH_SCORE_THRESHOLD,
-                user_id=user_id,
-                library_paper_ids=library_paper_ids,
+            all_chunks = _apply_relative_cutoff(
+                await embedder.search_chunks_global(
+                    query_text=body.question,
+                    limit=body.max_chunks * 2,
+                    score_threshold=_SEARCH_SCORE_THRESHOLD,
+                    user_id=user_id,
+                    library_paper_ids=library_paper_ids,
+                )
             )
 
         if not all_chunks:
@@ -281,6 +370,24 @@ async def prepare_cross_paper_rag(
         all_chunks = await embedder.rerank_chunks(
             body.question, all_chunks, top_k=body.max_chunks * 2
         )
+
+        # Layer 2 relevance gate (reranker-enabled installs only): drop chunks
+        # the reranker scored below the backend-aware floor.  Chunks WITHOUT a
+        # rerank_score (reranker disabled/unavailable) are kept — absence ⇒
+        # the floor is skipped.
+        _min_rerank = _rerank_score_floor()
+        floored = [
+            c
+            for c in all_chunks
+            if c.get("rerank_score") is None or c["rerank_score"] >= _min_rerank
+        ]
+        if floored:
+            all_chunks = floored
+        else:
+            return CrossPaperRagNoResults(
+                answer="No relevant information found in the paper collection.",
+                sources=[],
+            )
 
         # 2. Deduplicate: group by paper_id, keep top 2 chunks per paper
         chunks_by_paper: dict[int, list[dict]] = {}
@@ -374,6 +481,7 @@ async def prepare_cross_paper_rag(
 
         messages = [
             {"role": "system", "content": _SYSTEM_CROSS_PAPER_RAG},
+            *_build_history_messages(body.history),
             {"role": "user", "content": user_content},
         ]
         sources_list = [
