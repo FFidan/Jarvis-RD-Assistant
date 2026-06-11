@@ -735,14 +735,14 @@ wheels = [
 
 [[package]]
 name = "docling"
-version = "2.96.0"
+version = "2.101.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docling-slim", extra = ["standard"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/ed/7753896a09aa92fea514e1754d684805adea5b6d10f1e6a6936e671d3d64/docling-2.96.0.tar.gz", hash = "sha256:6d2bcfd20f5dddba88967da63b9d343c586e6c8e43d1ec018a28b5ae55361567", size = 8718, upload-time = "2026-05-28T11:32:19.641Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a8/03/3fc134bd4255397960df9c2adcfd48318e221f33588137d20322441d5fca/docling-2.101.0.tar.gz", hash = "sha256:7d50eeee0c73b206e433b7e45bd42b74f688557293ebdfb8cec8a79ff267abc9", size = 8845, upload-time = "2026-06-10T16:04:07.053Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/45/b1002f6ebcf817f1133f0a971110bfef29399acf9814d80106d457207649/docling-2.96.0-py3-none-any.whl", hash = "sha256:24c6f8f7c53557446d23b6d4f5fccb89847cfa5ffc09b4ad759e8d7760b461cc", size = 4758, upload-time = "2026-05-28T11:32:18.412Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/2e/90efdee1d0c3d329b347b5810c007bb19f822873455c4bd61acacee3cbfa/docling-2.101.0-py3-none-any.whl", hash = "sha256:f3cd3e1b5e2daeb7c06bcef6ea7cb2596537fd2e7b44174a952956c7a0715888", size = 5015, upload-time = "2026-06-10T16:04:05.911Z" },
 ]
 
 [package.optional-dependencies]
@@ -752,7 +752,7 @@ rapidocr = [
 
 [[package]]
 name = "docling-core"
-version = "2.77.1"
+version = "2.81.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "defusedxml" },
@@ -768,15 +768,16 @@ dependencies = [
     { name = "typer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/5b/2c57066e2900b815d177e73d19e78a7766a3e4da3e5762df48b83493a135/docling_core-2.77.1.tar.gz", hash = "sha256:d93c7cdc0de4bbf36ef74fb4c3c3d49bb8420ff27201f3b66908672326835b47", size = 328061, upload-time = "2026-05-26T15:23:24.967Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/6d/0582f6c48d78b10b70b0519b3c295f716756a69ed3bbebcfc2335a9d87a5/docling_core-2.81.0.tar.gz", hash = "sha256:db496c2dd5aa71f0f6536eae4a4b5cda391a645eda97206cf8a8e8641b18a5a0", size = 350488, upload-time = "2026-06-10T14:26:08.061Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f0/ed/00dc4f21b9b47a6e89e026f0aeaa4d5aab03fe8135867aeeff66bd153fe8/docling_core-2.77.1-py3-none-any.whl", hash = "sha256:4e38df7143e2ecfe69ecf05278e8e25063a9ec1b6d0b5e28e3b8f1db7cc5ed72", size = 283903, upload-time = "2026-05-26T15:23:23.272Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/c2/6f102e0b6b7c6705807acbb0173d18179496406b754068e71a7da458f54a/docling_core-2.81.0-py3-none-any.whl", hash = "sha256:5ab2628fd389e9beeeebafceff9177457ba9d816b9533e3c1faa530b75c9c5ac", size = 297048, upload-time = "2026-06-10T14:26:06.342Z" },
 ]
 
 [package.optional-dependencies]
 chunking = [
     { name = "semchunk" },
-    { name = "transformers" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
     { name = "tree-sitter" },
     { name = "tree-sitter-c" },
     { name = "tree-sitter-javascript" },
@@ -801,7 +802,8 @@ dependencies = [
     { name = "torch" },
     { name = "torchvision" },
     { name = "tqdm" },
-    { name = "transformers" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c1/25/84166f5751d7837612138966669019a4ef67c09bf6d3ef8d3cc1aa0e6268/docling_ibm_models-3.13.2.tar.gz", hash = "sha256:195e02dd119df34d2ce5f76ac614da82825851013e4898db7b0468cdf8740a3d", size = 98655, upload-time = "2026-04-23T11:04:23.517Z" }
 wheels = [
@@ -837,7 +839,7 @@ wheels = [
 
 [[package]]
 name = "docling-slim"
-version = "2.96.0"
+version = "2.101.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -849,9 +851,9 @@ dependencies = [
     { name = "requests" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d4/6f/8eaaf836fc0f25f517e912edbd497f3ebfb7076581c112fa43c5357f6e4b/docling_slim-2.96.0.tar.gz", hash = "sha256:79bf4a5a96ac6a321fa813764b5498277fc59d935d0c75e6309492ddc064336f", size = 403287, upload-time = "2026-05-28T11:30:58.468Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/1d/1f7b82f1a9a2116accc215fcefe79d0c8ddd6757c6496b0f3eb02989e45a/docling_slim-2.101.0.tar.gz", hash = "sha256:7c2f098885892ca74522130ffcbabe62cbdc26afd483249a841798387fb49235", size = 415777, upload-time = "2026-06-10T16:02:45.835Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/ff/729689c5f89224a714b880896657226f8318852d2438431324dde9bccacd/docling_slim-2.96.0-py3-none-any.whl", hash = "sha256:242d7665e62c2e3897ed6f565e5bd6c44d75ea31876c6667e428dc92081be3bf", size = 522623, upload-time = "2026-05-28T11:30:56.44Z" },
+    { url = "https://files.pythonhosted.org/packages/31/4b/cce1670a139a74f9e8505ac4ef2c84d1125661307336b0d3dc4aa93ae590/docling_slim-2.101.0-py3-none-any.whl", hash = "sha256:3b8f2acf0aeb30b2c0e5245e4663e76500d513ea2bf3555ecb68e46aa30a5276", size = 537763, upload-time = "2026-06-10T16:02:44.016Z" },
 ]
 
 [package.optional-dependencies]
@@ -869,6 +871,7 @@ standard = [
     { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "lxml" },
+    { name = "mail-parser" },
     { name = "marko" },
     { name = "numpy" },
     { name = "openpyxl" },
@@ -1458,7 +1461,8 @@ dev = [
     { name = "structlog" },
     { name = "tach" },
     { name = "tiktoken" },
-    { name = "transformers" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
     { name = "urllib3" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "uvloop" },
@@ -1547,7 +1551,8 @@ paper-ingestion = [
     { name = "slowapi" },
     { name = "structlog" },
     { name = "tiktoken" },
-    { name = "transformers" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
     { name = "urllib3" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "uvloop" },
@@ -1591,7 +1596,7 @@ dev = [
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=46.0.7" },
-    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.97.0" },
+    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.102.0" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.136.1,<0.138.0" },
     { name = "fsrs", specifier = ">=4.0.0,<6.0.0" },
@@ -1691,7 +1696,7 @@ paper-ingestion = [
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=46.0.7" },
-    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.97.0" },
+    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.102.0" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.136.1,<0.138.0" },
     { name = "gitpython", specifier = ">=3.1.50" },
@@ -1990,6 +1995,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/ca/77123e4d77df3cb1e968ade7b1f808f5d3a5c1c96b18a33895397de292c1/lxml-6.1.0-cp314-cp314t-win32.whl", hash = "sha256:00750d63ef0031a05331b9223463b1c7c02b9004cef2346a5b2877f0f9494dd2", size = 3897377, upload-time = "2026-04-18T04:32:07.656Z" },
     { url = "https://files.pythonhosted.org/packages/64/ce/3554833989d074267c063209bae8b09815e5656456a2d332b947806b05ff/lxml-6.1.0-cp314-cp314t-win_amd64.whl", hash = "sha256:80410c3a7e3c617af04de17caa9f9f20adaa817093293d69eae7d7d0522836f5", size = 4392701, upload-time = "2026-04-18T04:32:12.113Z" },
     { url = "https://files.pythonhosted.org/packages/2b/a0/9b916c68c0e57752c07f8f64b30138d9d4059dbeb27b90274dedbea128ff/lxml-6.1.0-cp314-cp314t-win_arm64.whl", hash = "sha256:26dd9f57ee3bd41e7d35b4c98a2ffd89ed11591649f421f0ec19f67d50ec67ac", size = 3817120, upload-time = "2026-04-18T04:32:15.803Z" },
+]
+
+[[package]]
+name = "mail-parser"
+version = "4.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/01/6b/55b188888abccfc1dba0617a6d99da1c39dc355822900ae9d5bccf8756b2/mail_parser-4.3.0.tar.gz", hash = "sha256:fb4c64ec0a74ed095b3bad274ab08f6fca024ad5fbf72ff9ccc501ba654ba3b2", size = 2792149, upload-time = "2026-05-27T22:15:14.938Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/4f/38717202a3be94a37c262907adca700498fbb435a8356cfaed38387469c8/mail_parser-4.3.0-py3-none-any.whl", hash = "sha256:e4092a15023b7075f4666f5040e2fca71fa35a7020753b7e90359c357ed3a099", size = 33895, upload-time = "2026-05-27T22:15:13.063Z" },
 ]
 
 [[package]]
@@ -4108,7 +4122,8 @@ dependencies = [
     { name = "scipy" },
     { name = "torch" },
     { name = "tqdm" },
-    { name = "transformers" },
+    { name = "transformers", version = "5.8.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin'" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4d/68/7f98c221940ce783b492ad6140384daf2e2918cd7175009d6a362c22b9ee/sentence_transformers-5.4.1.tar.gz", hash = "sha256:436bcb1182a0ff42a8fb2b1c43498a70d0a75b688d182f2cd0d1dd115af61ddc", size = 428910, upload-time = "2026-04-14T13:34:59.006Z" }
@@ -4565,18 +4580,69 @@ wheels = [
 
 [[package]]
 name = "transformers"
+version = "5.8.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'darwin'",
+    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'darwin'",
+    "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'darwin'",
+    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "huggingface-hub", marker = "sys_platform == 'darwin'" },
+    { name = "numpy", marker = "sys_platform == 'darwin'" },
+    { name = "packaging", marker = "sys_platform == 'darwin'" },
+    { name = "pyyaml", marker = "sys_platform == 'darwin'" },
+    { name = "regex", marker = "sys_platform == 'darwin'" },
+    { name = "safetensors", marker = "sys_platform == 'darwin'" },
+    { name = "tokenizers", marker = "sys_platform == 'darwin'" },
+    { name = "tqdm", marker = "sys_platform == 'darwin'" },
+    { name = "typer", marker = "sys_platform == 'darwin'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e7/e6/4134ea2fbea322cddc7ffc94a0d8ee47fe32ce8e876b320cd37d88edfc4d/transformers-5.8.1.tar.gz", hash = "sha256:4dd5b6de4105725104d84fd6abd74b305f4debfc251b38c648ee5dd087cf543b", size = 8532019, upload-time = "2026-05-13T03:21:57.234Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fc/b1/8be7e7ef0b5200491312201918b6125ef9c9df9dd0f0240ccef9ac824e6b/transformers-5.8.1-py3-none-any.whl", hash = "sha256:5340fb95962162cdfdae5cc91d7f8fedd92ed75216c1154c5e1f590fcf56dd0e", size = 10632882, upload-time = "2026-05-13T03:21:52.876Z" },
+]
+
+[[package]]
+name = "transformers"
 version = "5.9.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version >= '3.14' and platform_machine != 'aarch64' and platform_machine != 's390x' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.14' and platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version == '3.13.*' and platform_machine != 'aarch64' and platform_machine != 's390x' and sys_platform == 'linux') or (python_full_version == '3.13.*' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "python_full_version == '3.13.*' and platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and platform_machine != 's390x' and sys_platform == 'emscripten'",
+    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 's390x' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine != 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'emscripten'",
+    "python_full_version < '3.13' and platform_machine == 's390x' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+]
 dependencies = [
-    { name = "huggingface-hub" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "pyyaml" },
-    { name = "regex" },
-    { name = "safetensors" },
-    { name = "tokenizers" },
-    { name = "tqdm" },
-    { name = "typer" },
+    { name = "huggingface-hub", marker = "sys_platform != 'darwin'" },
+    { name = "numpy", marker = "sys_platform != 'darwin'" },
+    { name = "packaging", marker = "sys_platform != 'darwin'" },
+    { name = "pyyaml", marker = "sys_platform != 'darwin'" },
+    { name = "regex", marker = "sys_platform != 'darwin'" },
+    { name = "safetensors", marker = "sys_platform != 'darwin'" },
+    { name = "tokenizers", marker = "sys_platform != 'darwin'" },
+    { name = "tqdm", marker = "sys_platform != 'darwin'" },
+    { name = "typer", marker = "sys_platform != 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/51/58/7f843608f2e8421f86bb97060b54649be6239ec612b82bf9d41e65c26c00/transformers-5.9.0.tar.gz", hash = "sha256:25997cb8fa6053533171634b6162d7df54346530ec2aa9b42bb834e63668c842", size = 8642240, upload-time = "2026-05-20T14:50:49.278Z" }
 wheels = [
