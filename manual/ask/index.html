@@ -1561,8 +1561,9 @@
 <p>Answers stream token-by-token via SSE (server-sent events). A <strong>loading indicator</strong> is shown while the system is retrieving and ranking chunks; the answer text then appears progressively as the model generates it.</p>
 <p>Each answer message contains:</p>
 <p><strong>ConfidenceBadge</strong> — an indicator of how well the retrieved chunks support the answer. A high-confidence answer is grounded in several closely matching chunks; a low-confidence answer means the library may not contain strong evidence for the question.</p>
-<p><strong>SourcesAccordion</strong> — collapsed by default; click to expand. Lists the paper chunks that were retrieved and used to construct the answer. Each source shows the paper title, chunk excerpt, and a link to the <a href="../paper-detail/">Paper Detail</a> page for that paper.</p>
+<p><strong>SourcesAccordion</strong> — collapsed by default; click to expand. Lists the <strong>Source Passages</strong> retrieved and used to construct the answer. Each entry shows the paper title, the passage excerpt, and a link to the <a href="../paper-detail/">Paper Detail</a> page for that paper.</p>
 <p><strong>FeedbackButtons</strong> — thumbs-up and thumbs-down buttons for rating the answer quality. Your ratings are recorded and can inform future improvements to the retrieval pipeline.</p>
+<p>Follow-up questions carry the current conversation context, so you can build on a previous answer without repeating background information.</p>
 <hr />
 <h2 id="message-history">Message history<a class="headerlink" href="#message-history" title="Permanent link">&para;</a></h2>
 <p>Conversation messages persist across navigation within the same session using the <strong>chat store</strong>. If you navigate away to another page and return to <code>/ask</code>, your previous messages are still visible. The history is cleared when you sign out or start a new session.</p>

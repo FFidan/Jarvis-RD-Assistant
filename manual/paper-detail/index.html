@@ -769,10 +769,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#chunks" class="md-nav__link">
+  <a href="#source-passages" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Chunks
+        Source Passages
       
     </span>
   </a>
@@ -1743,10 +1743,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#chunks" class="md-nav__link">
+  <a href="#source-passages" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Chunks
+        Source Passages
       
     </span>
   </a>
@@ -1907,8 +1907,8 @@
 <td>The source PDF has been fetched and stored</td>
 </tr>
 <tr>
-<td>Chunks</td>
-<td>The PDF text has been split into chunks</td>
+<td>Source Passages</td>
+<td>The PDF text has been split into passages for retrieval</td>
 </tr>
 <tr>
 <td>Summary</td>
@@ -1947,8 +1947,8 @@
 <blockquote>
 <p><strong>Offline:</strong> Notes are displayed from the local cache. Editing requires an active connection and is disabled offline.</p>
 </blockquote>
-<h3 id="chunks">Chunks<a class="headerlink" href="#chunks" title="Permanent link">&para;</a></h3>
-<p>A lazy-loading section that lists the text chunks generated from the PDF. Chunks expand on click to show the full text. Useful for verifying which parts of the paper were processed and for cross-checking RAG citations.</p>
+<h3 id="source-passages">Source Passages<a class="headerlink" href="#source-passages" title="Permanent link">&para;</a></h3>
+<p>A lazy-loading section that lists the text passages generated from the PDF. Passages expand on click to show the full text. Useful for verifying which parts of the paper were processed and for cross-checking RAG citations.</p>
 <h3 id="ask-single-paper-rag">Ask — single-paper RAG<a class="headerlink" href="#ask-single-paper-rag" title="Permanent link">&para;</a></h3>
 <p>An inline chat interface scoped to this paper. Enter a question; the system retrieves relevant chunks from this paper only and generates a grounded answer with citations.</p>
 <blockquote>
@@ -1980,15 +1980,19 @@
 </tr>
 <tr>
 <td>Process</td>
-<td>Extract and chunk the PDF text</td>
+<td>Extract the PDF text and split it into source passages</td>
 </tr>
 <tr>
 <td>Summarise</td>
 <td>Generate the AI summary</td>
 </tr>
 <tr>
+<td>Regenerate Summary</td>
+<td>Re-run the summarisation step without re-analysing the whole paper</td>
+</tr>
+<tr>
 <td>Generate Cards</td>
-<td>Create spaced-repetition cards from this paper's chunks</td>
+<td>Create spaced-repetition cards from this paper's source passages</td>
 </tr>
 <tr>
 <td>Extract Entities</td>
