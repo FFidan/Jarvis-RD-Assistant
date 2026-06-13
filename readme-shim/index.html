@@ -851,6 +851,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/hardware-and-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What your hardware gets you
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/context-window/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context window
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/telegram/" class="md-nav__link">
         
   
@@ -1921,7 +1977,8 @@
 <ul>
 <li>Docker Engine 24+ with Compose v2, <code>openssl</code>, <code>git</code></li>
 <li>~20 GB free disk space</li>
-<li>NVIDIA GPU optional (CPU works fine)</li>
+<li>NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. The first run pulls 7–11 GB of model data; allow 20–60 minutes on a typical connection.</li>
+<li>On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.</li>
 <li><code>./setup.sh --check</code> verifies all of these (read-only preflight)</li>
 <li><strong>Windows:</strong> use WSL2 + Docker Desktop</li>
 <li><strong>Non-interactive installs:</strong> use <code>scripts/jarvis-setup.sh</code> for CI / cloud-init</li>
@@ -1932,6 +1989,8 @@
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>./setup.sh
 </code></pre></div>
 <p><code>setup.sh</code> generates strong random secrets, configures TLS, brings the Docker Compose stack up, waits for the dashboard, and opens <strong>http://localhost:3001</strong> — the first-run wizard creates the admin account. Pass <code>--mode single</code> (API-key login, no SMTP) or <code>--mode multi</code> (magic-link email). See <a href="../DEPLOYMENT/#single-user-vs-multi-user-mode">docs/DEPLOYMENT.md</a> for the trade-off.</p>
+<p>Re-running <code>./setup.sh</code> keeps your data: answering <code>N</code> (the default) at the <code>Overwrite?</code> prompt preserves your existing <code>.env</code> — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (7–11 GB; 20–60 min on a typical connection) streams its progress directly to your terminal before the services start, so the initial pull shows visible progress instead of a silent wait.</p>
+<p>In single-user mode (<code>JARVIS_SETUP_MODE=single</code>), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.</p>
 <p><strong>Non-interactive (CI / cloud-init):</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./setup.sh<span class="w"> </span>--non-interactive<span class="w"> </span>--profile<span class="o">=</span>dev<span class="w">  </span><span class="c1"># local dev / CI smoke test</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>

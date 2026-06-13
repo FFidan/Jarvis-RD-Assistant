@@ -659,34 +659,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Signing in — /auth/verify (user)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#magic-link-login-primary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Magic-link login (primary)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-key-fallback" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API-key fallback
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -697,6 +669,56 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#your-first-paper-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Your first paper (user)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Your first paper (user)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#save-a-paper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save a paper
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#analyze-the-paper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Analyze the paper
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-you-see-after-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you see after analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1071,6 +1093,62 @@
     
   
     Settings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hardware-and-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What your hardware gets you
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../context-window/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context window
   
 
     
@@ -1679,34 +1757,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Signing in — /auth/verify (user)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#magic-link-login-primary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Magic-link login (primary)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-key-fallback" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API-key fallback
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -1717,6 +1767,56 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#your-first-paper-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Your first paper (user)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Your first paper (user)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#save-a-paper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save a paper
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#analyze-the-paper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Analyze the paper
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-you-see-after-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you see after analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1799,17 +1899,14 @@
 <p>Setup is complete. <code>setup_completed</code> is set to <code>true</code>. The wizard does not appear again. The page redirects to <code>/</code> (the Home page).</p>
 <hr />
 <h2 id="signing-in-authverify-user">Signing in — <code>/auth/verify</code> (user)<a class="headerlink" href="#signing-in-authverify-user" title="Permanent link">&para;</a></h2>
-<!-- screenshot: LoginPage showing the email input and "Send sign-in link" button -->
+<!-- screenshot: LoginPage showing the email input and "Send magic link" button -->
 
-<h3 id="magic-link-login-primary">Magic-link login (primary)<a class="headerlink" href="#magic-link-login-primary" title="Permanent link">&para;</a></h3>
-<ol>
-<li>Navigate to the JARVIS RD Assistant URL. If you are not signed in you will see the <strong>Login</strong> page.</li>
-<li>Enter your email address and click <strong>Send sign-in link</strong>.</li>
-<li>Open the email and click the one-shot link. It lands on <code>/auth/verify</code>, which creates your session and redirects you to the application.</li>
-</ol>
-<p>The magic-link is single-use and expires after a short window. If it has expired, return to the login page and request a new one.</p>
-<h3 id="api-key-fallback">API-key fallback<a class="headerlink" href="#api-key-fallback" title="Permanent link">&para;</a></h3>
-<p>If SMTP is not configured, or if you prefer direct key-based access, click <strong>Use API key instead</strong> on the login page and enter your API key. This method does not require email delivery.</p>
+<p><strong>Signing in</strong> depends on how the server is configured.</p>
+<ul>
+<li><strong>If SMTP is configured</strong> (your admin set up an email relay in Settings → System → Email / SMTP), the login page defaults to the magic-link tab: enter your email address, click <strong>Send magic link</strong>, and click the link in the email you receive. The link is single-use and expires after a short window; return to the login page and request a new one if it has expired.</li>
+<li><strong>Single-user mode without SMTP:</strong> the login page defaults to the API-key tab. Enter the <code>JARVIS_API_KEY</code> value set in your server's environment and click <strong>Sign In</strong>.</li>
+<li><strong>Multi-user mode without SMTP:</strong> the login page stays on the magic-link tab with a notice that links cannot be delivered. Ask your admin to configure SMTP in Settings → System → Email / SMTP. The API-key tab is still reachable, but the backend rejects API-key sign-in once more than one account exists — unless the operator has explicitly set <code>API_KEY_LOGIN_ENABLED=true</code>.</li>
+</ul>
 <hr />
 <h2 id="onboarding-tour-user">Onboarding tour (user)<a class="headerlink" href="#onboarding-tour-user" title="Permanent link">&para;</a></h2>
 <!-- screenshot: Onboarding tour overlay — step 1 pointing at Settings → Sources in the sidebar -->
@@ -1823,8 +1920,26 @@
 </ol>
 <p>You can dismiss the tour at any step. It does not repeat once dismissed.</p>
 <hr />
+<h2 id="your-first-paper-user">Your first paper (user)<a class="headerlink" href="#your-first-paper-user" title="Permanent link">&para;</a></h2>
+<p>Once you are signed in and the onboarding wizard is complete, here is the fastest path to a working research session.</p>
+<h3 id="save-a-paper">Save a paper<a class="headerlink" href="#save-a-paper" title="Permanent link">&para;</a></h3>
+<p>Open <strong>Discover</strong> from the sidebar to browse the Pulse recommendation deck, or go to <strong>Library → Add paper</strong> and paste an arXiv URL, DOI, or title. Saving a paper adds it to your library with metadata (title, authors, abstract) but does not yet extract findings.</p>
+<blockquote>
+<p><strong>Single-user mode note:</strong> if you are the only user on this instance, do not expose the dashboard to the open internet without first reviewing the access mode and authentication settings. Single-user installs with API-key login are designed for loopback or VPN access.</p>
+</blockquote>
+<h3 id="analyze-the-paper">Analyze the paper<a class="headerlink" href="#analyze-the-paper" title="Permanent link">&para;</a></h3>
+<p>Click the paper card in your Library and then click <strong>Analyze</strong>. JARVIS runs the full analysis pipeline: it fetches the PDF, chunks and embeds the text, extracts findings with exact-quote backing, generates flashcards, and builds the knowledge graph for that paper.</p>
+<p>On a GPU this typically takes a few minutes. On CPU-only hardware it can take 30 minutes or more — the progress indicator in the paper detail view shows each stage as it completes.</p>
+<h3 id="what-you-see-after-analysis">What you see after analysis<a class="headerlink" href="#what-you-see-after-analysis" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Summary tab</strong> — a verified summary of the paper's main contributions, with each claim linked to a source quote and page number.</li>
+<li><strong>Cards tab</strong> — FSRS flashcards generated from the paper's key findings. Open <strong>Learning → Cards</strong> to start a review session.</li>
+<li><strong>Ask</strong> — once your first paper is analyzed you can ask questions about it (and any other analyzed papers in your library). Open <strong>Ask</strong> from the sidebar, type a question, and JARVIS retrieves relevant passages and synthesises a cited answer.</li>
+</ul>
+<p>The <strong>Knowledge Graph</strong> in the sidebar shows entities and relationships extracted from your analyzed papers.</p>
+<hr />
 <h2 id="what-comes-next">What comes next<a class="headerlink" href="#what-comes-next" title="Permanent link">&para;</a></h2>
-<p>Once you are signed in and the wizard is complete, continue to <a href="../navigation/">Navigation</a> for a tour of the AppShell and sidebar, or jump directly to <a href="../research-feed/">Research Feed &amp; Library</a> to start adding papers.</p>
+<p>Continue to <a href="../navigation/">Navigation</a> for a tour of the AppShell and sidebar, or jump directly to <a href="../research-feed/">Research Feed &amp; Library</a> to start adding more papers.</p>
 
 
 

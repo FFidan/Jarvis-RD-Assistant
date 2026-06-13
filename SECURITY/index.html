@@ -851,6 +851,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/hardware-and-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What your hardware gets you
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/context-window/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context window
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/telegram/" class="md-nav__link">
         
   
@@ -1225,6 +1281,17 @@
   
     <nav class="md-nav" aria-label="Secret Environment Variables">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cloud-llm-provider-keys-at-rest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud LLM Provider Keys at Rest
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#x-owner-user-id-mechanism" class="md-nav__link">
@@ -1707,6 +1774,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#cloud-llm-provider-keys-at-rest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud LLM Provider Keys at Rest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#x-owner-user-id-mechanism" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2022,6 +2100,11 @@ explicitly set in the environment. An explicit env var always wins.</p>
 <td>Yes (startup refuses if absent; derivation from <code>JARVIS_API_KEY</code> is refused in production)</td>
 </tr>
 <tr>
+<td><code>LITELLM_SALT_KEY</code></td>
+<td>Salt key LiteLLM uses to encrypt model credentials (cloud provider API keys) stored in its admin database. Auto-generated into <code>secrets/litellm_salt_key.txt</code> by <code>scripts/init-secrets.sh</code>; delivered as a Docker secret. <strong>Never rotate</strong> — LiteLLM decrypts stored credentials with this exact key, and without a dedicated salt LiteLLM falls back to the master key, so a master-key rotation would brick every encrypted row.</td>
+<td>Yes (the litellm container refuses to start without it)</td>
+</tr>
+<tr>
 <td><code>SMTP_HOST</code> / <code>SMTP_USER</code> / <code>SMTP_PASS</code></td>
 <td>SMTP relay credentials for magic-link delivery. Without these (or when set to empty strings, which are silently ignored — see the SMTP entry in <a href="../known-residual-risks/">known-residual-risks.md</a>), links fall back to container stdout.</td>
 <td>Strongly recommended</td>
@@ -2038,6 +2121,22 @@ explicitly set in the environment. An explicit env var always wins.</p>
 </tr>
 </tbody>
 </table>
+<h3 id="cloud-llm-provider-keys-at-rest">Cloud LLM Provider Keys at Rest<a class="headerlink" href="#cloud-llm-provider-keys-at-rest" title="Permanent link">&para;</a></h3>
+<p>Cloud provider API keys (<code>llm.anthropic.api_key</code>, <code>llm.openai.api_key</code>,
+<code>llm.google.api_key</code>) entered in Settings live in TWO encrypted stores:</p>
+<ol>
+<li><strong><code>user_config.encrypted_value</code></strong> — Fernet-encrypted under
+   <code>JARVIS_CONFIG_KEY</code>. This is the source of truth; it survives LiteLLM
+   resets and is what the UI masks/reads back.</li>
+<li><strong>LiteLLM's admin database</strong> (<code>litellm</code> DB in the bundled Postgres) — when
+   a cloud model is assigned to a role, the key is decrypted in memory and
+   carried in the <code>POST /model/new</code> payload; LiteLLM persists it in
+   <code>LiteLLM_ProxyModelTable</code> encrypted under <code>LITELLM_SALT_KEY</code>.</li>
+</ol>
+<p>Keys are never written to <code>.env</code>, <code>litellm/config.yaml</code>, container
+environment blocks (visible via <code>docker inspect</code>), or any other file.
+Rotating <code>JARVIS_CONFIG_KEY</code> (supported, see below) does not affect store 2;
+<code>LITELLM_SALT_KEY</code> itself must never rotate (see the table above).</p>
 <h3 id="x-owner-user-id-mechanism">X-Owner-User-Id Mechanism<a class="headerlink" href="#x-owner-user-id-mechanism" title="Permanent link">&para;</a></h3>
 <p>The Telegram bot sends <code>X-Owner-User-Id: &lt;user_id&gt;</code> to route per-user API
 calls. This header is only honored when all three guards pass:</p>

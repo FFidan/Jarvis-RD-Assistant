@@ -986,6 +986,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../hardware-and-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What your hardware gets you
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../context-window/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context window
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../telegram/" class="md-nav__link">
         
   
@@ -1541,7 +1597,7 @@
   
 
 
-<!-- verified-against-UI: 2026-05-18 | routes: /ask -->
+<!-- verified-against-UI: 2026-06-12 | routes: /ask -->
 
 <h1 id="ask-cross-paper-rag">Ask — Cross-paper RAG<a class="headerlink" href="#ask-cross-paper-rag" title="Permanent link">&para;</a></h1>
 <p>The <strong>Ask</strong> workspace at <code>/ask</code> lets you pose questions that are answered from your entire library at once, rather than from a single paper. It uses a retrieval-augmented generation (RAG) pipeline that searches across all your embedded paper chunks, re-ranks results, and streams a grounded answer with citations.</p>
@@ -1560,7 +1616,37 @@
 <h3 id="streaming-answers">Streaming answers<a class="headerlink" href="#streaming-answers" title="Permanent link">&para;</a></h3>
 <p>Answers stream token-by-token via SSE (server-sent events). A <strong>loading indicator</strong> is shown while the system is retrieving and ranking chunks; the answer text then appears progressively as the model generates it.</p>
 <p>Each answer message contains:</p>
-<p><strong>ConfidenceBadge</strong> — an indicator of how well the retrieved chunks support the answer. A high-confidence answer is grounded in several closely matching chunks; a low-confidence answer means the library may not contain strong evidence for the question.</p>
+<p><strong>ConfidenceBadge</strong> — an indicator of how well the retrieved source passages support the answer, measured by sentence-level matching. There are four levels:</p>
+<table>
+<thead>
+<tr>
+<th>Badge</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Verified</strong></td>
+<td>Every checkable sentence in the answer matched a source passage</td>
+</tr>
+<tr>
+<td><strong>Mostly verified</strong></td>
+<td>At least half of the checkable sentences matched</td>
+</tr>
+<tr>
+<td><strong>Partially verified</strong></td>
+<td>Some checkable sentences matched</td>
+</tr>
+<tr>
+<td><strong>Unverified</strong></td>
+<td>None of the checkable sentences matched</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Unverified ≠ wrong.</strong> It means the system could not match the answer's sentences to the retrieved source passages — the answer may still be accurate, but it could not be verified against what was retrieved from your library.</p>
+</blockquote>
+<p>Click the badge to see which sentences could not be matched to a source.</p>
 <p><strong>SourcesAccordion</strong> — collapsed by default; click to expand. Lists the <strong>Source Passages</strong> retrieved and used to construct the answer. Each entry shows the paper title, the passage excerpt, and a link to the <a href="../paper-detail/">Paper Detail</a> page for that paper.</p>
 <p><strong>FeedbackButtons</strong> — thumbs-up and thumbs-down buttons for rating the answer quality. Your ratings are recorded and can inform future improvements to the retrieval pipeline.</p>
 <p>Follow-up questions carry the current conversation context, so you can build on a previous answer without repeating background information.</p>

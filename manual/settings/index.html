@@ -16,7 +16,7 @@
         <link rel="prev" href="../analytics/">
       
       
-        <link rel="next" href="../telegram/">
+        <link rel="next" href="../hardware-and-models/">
       
       
         
@@ -1225,6 +1225,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../hardware-and-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What your hardware gets you
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../context-window/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context window
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../telegram/" class="md-nav__link">
         
   
@@ -2044,7 +2100,19 @@
 <h2 id="iii-models">§III — Models<a class="headerlink" href="#iii-models" title="Permanent link">&para;</a></h2>
 <p><strong>ADMIN only.</strong></p>
 <h3 id="llm-models">LLM Models<a class="headerlink" href="#llm-models" title="Permanent link">&para;</a></h3>
-<p>Configure which model aliases (<strong>smart</strong>, <strong>fast</strong>, <strong>embed</strong>) are mapped to which local or cloud models. The smart model is used for summarisation and reasoning; the fast model is used for lower-latency tasks; the embed model is used for generating embeddings.</p>
+<p>Choose the models JARVIS uses. Each control is labelled in plain language with its technical alias in parentheses, so you don't need to know the jargon:</p>
+<ul>
+<li><strong>Main model (smart)</strong> — writes your summaries, cards, and Ask answers.</li>
+<li><strong>Quick model (fast)</strong> — scores and triages papers.</li>
+<li><strong>Embedding model (embed)</strong> — powers search; it is fixed, and changing it requires re-indexing your library.</li>
+<li><strong>Reading window (num_ctx)</strong> — how much of each paper the AI reads at once.</li>
+</ul>
+<p>Your choice applies automatically — there is no separate "save and restart" step. Operator-level tuning knobs (such as the reading window and the thinking toggle) sit behind a per-model <strong>Configure</strong> disclosure so the everyday controls stay uncluttered.</p>
+<p><strong>First-run pick banner.</strong> After setup completes, a green banner shows the model JARVIS selected for your GPU — for example, "We picked qwen3:8b for your 15.9 GB GPU — change anytime in Settings → Models." This is just a confirmation; use the dropdowns below to change the selection at any time.</p>
+<p><strong>Advisory recommendation banner.</strong> Below the first-run confirmation, an advisory banner lists the per-alias recommendations for your hardware tier. This is informational only — it does not change your active model automatically.</p>
+<p><strong>Hardware source line.</strong> JARVIS shows a short detail line below the hardware strip explaining how VRAM was detected — for example, "GPU detected inside the container" (or "GPU detected on the host at install time", "estimated from Apple Silicon unified memory", or "no GPU detected — running on CPU").</p>
+<p><strong>GPU overlay divergence warning.</strong> If an amber warning reads "{N} GB detected on host — GPU overlay not active", JARVIS detected GPU VRAM from the host but the Docker GPU overlay is not active for this container. Re-run <code>setup.sh</code> with GPU support enabled to activate the overlay and use the detected VRAM for model inference.</p>
+<p>If a model card shows a <strong>pending — applying automatically</strong> badge, your choice was saved but the model service is temporarily unavailable (for example, it is still starting up or its database is unreachable). JARVIS keeps your selection and retries delivery automatically — roughly every 30 seconds — and applies it the moment the model service recovers, with no restart or further action needed from you. In the meantime, summaries and answers continue to use the previously active model, so nothing silently breaks. A badge that persists for many minutes means the model service is stuck unhealthy; check the Health indicators.</p>
 <h3 id="cloud-providers">Cloud Providers<a class="headerlink" href="#cloud-providers" title="Permanent link">&para;</a></h3>
 <p>Configure API keys and endpoints for cloud LLM providers (OpenAI, Anthropic, Gemini) and LiteLLM routing. Changes here affect which models are available for the LLM configuration item above.</p>
 <h3 id="ai-backend">AI Backend<a class="headerlink" href="#ai-backend" title="Permanent link">&para;</a></h3>
@@ -2069,7 +2137,7 @@
 <p>Configure Pulse-specific settings. The panel is divided into two cards:</p>
 <ul>
 <li><strong>Schedule card</strong> — toggle Pulse on/off, set the daily run time, and adjust the <strong>deck size</strong> (5–30 papers; slider), ranking candidates, lookback window, and startup grace period.</li>
-<li><strong>Advanced tuning card</strong> (collapsible) — fine-tune how candidates are ranked: signal-weight sliders for relevance, recency, and citation count, plus discovery balance and negative-feedback controls. Weight presets cover common configurations.</li>
+<li><strong>Advanced tuning card</strong> (collapsible) — fine-tune how candidates are ranked: signal-weight sliders for relevance, recency, and citation count, plus discovery balance and negative-feedback controls. Weight presets cover common configurations. Includes a <strong>Recommendations enabled</strong> toggle that controls whether personalised paper recommendations are computed at all.</li>
 </ul>
 <h3 id="timer">Timer<a class="headerlink" href="#timer" title="Permanent link">&para;</a></h3>
 <p>Configure the Pomodoro-style session timer available in the TopBar: work interval, break interval, and long-break interval.</p>

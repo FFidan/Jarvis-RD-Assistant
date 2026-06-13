@@ -851,6 +851,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/hardware-and-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What your hardware gets you
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/context-window/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context window
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/telegram/" class="md-nav__link">
         
   
@@ -1623,7 +1679,7 @@
 <li><strong>Docker Engine</strong> 24+ with Docker Compose v2</li>
 <li><strong>RAM</strong>: 4 GB minimum, 8 GB recommended (for local LLMs via Ollama)</li>
 <li><strong>Disk</strong>: 20 GB+ (PDFs and page snapshots accumulate over time)</li>
-<li><strong>GPU</strong>: NVIDIA GPU optional (faster Ollama inference; CPU works fine). GPU acceleration is enabled via the <code>docker-compose.gpu.yml</code> overlay; <code>setup.sh</code> adds it automatically when it detects the Docker nvidia runtime.</li>
+<li><strong>GPU</strong>: NVIDIA GPU optional (faster Ollama inference). On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported but slower. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop. GPU acceleration is enabled via the <code>docker-compose.gpu.yml</code> overlay; <code>setup.sh</code> adds it automatically when it detects the Docker nvidia runtime.</li>
 <li><strong>OS</strong>: Linux recommended. macOS supported. Windows via WSL2.</li>
 <li><strong>Python</strong>: 3.12+ for all services</li>
 </ul>
@@ -1635,7 +1691,7 @@
 </code></pre></div>
 <p>Groups: <code>jarvis-common</code> (shared), <code>paper-ingestion</code>, <code>paper-ingestion-optional</code>,
 <code>learning-engine</code>, <code>telegram-bot</code>. FastAPI pinned <code>&gt;=0.136.1,&lt;0.138.0</code>.</p>
-<p>Frontend (<code>frontend/package.json</code>): React ^19, TypeScript ^5.6, Vite ^6,
+<p>Frontend (<code>frontend/package.json</code>): React ^19, TypeScript ^5.6, Vite ^8,
 TanStack Query ^5, Zustand ^5, React Router ^7, Recharts ^2.15,
 Cytoscape ^3.33, Lucide React, Radix UI, Playwright (dev).</p>
 <p>Dev deps (root): <code>pytest&gt;=8.0</code>, <code>pytest-asyncio&gt;=0.24.0</code>, <code>ruff&gt;=0.8.0</code>,

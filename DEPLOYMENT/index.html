@@ -851,6 +851,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/hardware-and-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What your hardware gets you
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual/context-window/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context window
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/telegram/" class="md-nav__link">
         
   
@@ -2449,7 +2505,7 @@
 <p>OpenAlex requires <code>OPENALEX_EMAIL</code> or <code>OPENALEX_API_KEY</code>. PubMed works without a key but an NCBI key raises the rate limit.</p>
 <hr />
 <h2 id="gpu-acceleration-optional">GPU acceleration (optional)<a class="headerlink" href="#gpu-acceleration-optional" title="Permanent link">&para;</a></h2>
-<p>The default stack is CPU-safe. Ollama runs on CPU out of the box — slower for large models, but fully functional.</p>
+<p>The default stack is CPU-safe. Ollama runs on CPU out of the box. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported, just slower. The first run also pulls 7–11 GB of model data; allow 20–60 minutes on a typical connection. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.</p>
 <h3 id="standard-gpu-overlay-auto-engaged-by-setupsh">Standard GPU overlay (auto-engaged by <code>setup.sh</code>)<a class="headerlink" href="#standard-gpu-overlay-auto-engaged-by-setupsh" title="Permanent link">&para;</a></h3>
 <p><code>setup.sh</code> automatically enables GPU support when it detects the Docker NVIDIA runtime (<code>docker info</code> probe). On a CUDA-capable host with the NVIDIA Container Toolkit installed, run <code>setup.sh</code> once — it merges <code>docker-compose.gpu.yml</code> into the active compose file list and <strong>persists <code>COMPOSE_FILE</code> to <code>.env</code></strong>, so every subsequent <code>docker compose up -d</code> call continues to use the GPU overlay without any extra flags.</p>
 <p>To start with the GPU overlay manually (without running <code>setup.sh</code>):</p>
@@ -2778,6 +2834,8 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>./setup.sh<span class="w"> </span>--check
 </code></pre></div>
 <p>Read-only and idempotent. Verifies Docker Engine, Docker Compose v2, <code>openssl</code>, GPU toolkit (informational), and <code>.env</code> presence. Exit 0 = PASS, exit 1 = FAIL.</p>
+<p><code>setup.sh</code> verifies the Docker <em>daemon</em> is reachable (<code>docker info</code>), not just that the <code>docker</code> binary is installed — both in <code>./setup.sh --check</code> and at the start of a real install, before any prompt. If the daemon is down (Docker Desktop not started, <code>DOCKER_HOST</code> misconfigured, or missing group permissions), the installer exits immediately with a fix hint instead of crashing mid-wizard.</p>
+<p>Re-runs: running <code>./setup.sh</code> with an existing <code>.env</code> and declining the overwrite prompt no longer exits with services stopped — it keeps your <code>.env</code> (secrets, database, and model selection untouched) and starts the stack with it via <code>docker compose up -d</code>, honouring the <code>COMPOSE_FILE</code> and <code>COMPOSE_PROFILES</code> values persisted in <code>.env</code>. New installs write <code>COMPOSE_PROFILES=&lt;selection&gt;</code> (for example <code>telegram</code>, <code>tunnel</code>) into <code>.env</code>; for older <code>.env</code> files without it, setup derives the telegram profile from a non-empty <code>TELEGRAM_BOT_TOKEN</code> and prints a notice.</p>
 <p>Key flags: <code>--mode &lt;single|multi&gt;</code>, <code>--domain &lt;host&gt;</code>, <code>--admin-email &lt;email&gt;</code>, <code>--profile &lt;dev|local-https|letsencrypt&gt;</code> (default <code>dev</code>; <code>letsencrypt</code> requires <code>--domain</code> + <code>--admin-email</code>), <code>--smtp-host/--smtp-user/--smtp-pass-file</code>. Run <code>./setup.sh --help</code> for the full reference. <code>TELEGRAM_BOT_TOKEN</code> in the environment enables Telegram automatically.</p>
 <h3 id="single-user-vs-multi-user-mode">Single-user vs multi-user mode<a class="headerlink" href="#single-user-vs-multi-user-mode" title="Permanent link">&para;</a></h3>
 <p><code>single</code> (default) — API-key login, no SMTP required. <code>multi</code> — email magic-link, SMTP relay required. Single-user is not an auth downgrade — <code>JARVIS_API_KEY</code> still gates all REST calls.</p>
