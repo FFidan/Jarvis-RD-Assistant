@@ -79,6 +79,7 @@ exclude_docs: |
   perf/
   audit/
   personal/
+  superpowers/
   manual/_meta.md
   PRD.md
   # System Contracts: demoted from the public site (internal full-fidelity

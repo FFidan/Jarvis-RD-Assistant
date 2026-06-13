@@ -90,6 +90,8 @@ htmlcov/
 .superpowers/
 .gemini/
 inspection/
+# Local token-usage analytics output
+codeburn-*
 
 # Test artifacts
 **/test-results/
