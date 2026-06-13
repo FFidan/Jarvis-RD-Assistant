@@ -132,10 +132,6 @@ async def test_generate_weekly_summary_theme_attribute_in_output() -> None:
             "paper_ingestion.weekly_summary.get_smart_model",
             return_value="smart",
         ),
-        patch(
-            "paper_ingestion.weekly_summary.get_litellm_config",
-            return_value=MagicMock(),
-        ),
     ):
         result = await generate_weekly_summary(
             db_pool=mock_pool,
@@ -153,17 +149,20 @@ async def test_generate_weekly_summary_theme_attribute_in_output() -> None:
     theme_dict = topic["themes"][0]
     assert isinstance(theme_dict, dict), "themes must be dicts at response boundary"
     assert theme_dict["theme"] == "Transformers outperform RNNs on long-range dependencies."
-    assert "verified" not in theme_dict, (
-        "raw themes list must NOT carry verified annotation (use verified_themes instead)"
+    # themes[] carries the verification annotation in place — this is what the
+    # frontend's VerificationBadge consumes.
+    assert "verified" in theme_dict, "themes list must carry verified annotation in place"
+    assert "verification_reason" in theme_dict
+    assert theme_dict["verified"] is True, (
+        "theme closely paraphrasing the paper briefs must verify against them"
     )
+    assert theme_dict["verification_reason"] is None
 
-    # verified_themes / unverified_themes carry verification annotations.
+    # verified_themes / unverified_themes split lists hold the same annotated
+    # dicts (documented back-compat).
     all_annotated = topic["verified_themes"] + topic["unverified_themes"]
     assert len(all_annotated) == 1, "each theme must appear in exactly one annotated list"
-    annotated = all_annotated[0]
-    assert "verified" in annotated
-    assert "verification_reason" in annotated
-    assert annotated["theme"] == "Transformers outperform RNNs on long-range dependencies."
+    assert all_annotated[0] is theme_dict, "split lists must hold the same annotated dicts"
 
 
 @pytest.mark.asyncio
@@ -259,7 +258,6 @@ async def test_weekly_summary_fallback_escapes_topic() -> None:
 
     with (
         patch("paper_ingestion.weekly_summary.get_smart_model", return_value="smart"),
-        patch("paper_ingestion.weekly_summary.get_litellm_config", return_value=MagicMock()),
     ):
         result = await generate_weekly_summary(
             db_pool=mock_pool,
@@ -303,3 +301,179 @@ def test_weekly_summary_papers_block_no_double_escape() -> None:
     assert "&lt;" in papers_block, (
         "Single-escape missing: < must be encoded as &lt; by wrap_delimited"
     )
+
+
+# ---------------------------------------------------------------------------
+# Theme verification: support-bar calibration band split
+# ---------------------------------------------------------------------------
+
+# Real stored title + summary_brief corpus used to calibrate WEEKLY_SUPPORT_FUZZY.
+_CALIBRATION_CORPUS = [
+    {
+        "id": 450,
+        "text": (
+            "Lite Transformer with Long-Short Range Attention "
+            "Lite Transformer introduces Long-Short Range Attention (LSRA) to reduce "
+            "computation while maintaining performance. It outperforms standard "
+            "transformers in multiple language tasks and achieves significant model "
+            "compression."
+        ),
+    },
+    {
+        "id": 452,
+        "text": (
+            "On Learning the Transformer Kernel "
+            "KL-TRANSFORMER is a data-driven framework for learning the kernel function "
+            "in Transformers, reducing computational complexity from quadratic to "
+            "linear. It achieves performance comparable to existing efficient models "
+            "and demonstrates the impact of kernel choice on performance."
+        ),
+    },
+    {
+        "id": 84,
+        "text": (
+            "Port Hamiltonian Neural Networks For Learning Dynamical Systems Desai 2021 "
+            "The paper introduces pHNNs, a neural network framework based on "
+            "port-Hamiltonian formalism, which outperforms existing methods in learning "
+            "dynamics of non-autonomous systems. It is tested on chaotic and "
+            "relativistic systems, showing robustness to noise and minimal data."
+        ),
+    },
+    {
+        "id": 456,
+        "text": (
+            "Transformer-VQ: Linear-Time Transformers via Vector Quantization "
+            "Transformer-VQ introduces a decoder-only transformer with linear-time "
+            "self-attention using vector quantization and a novel caching mechanism. "
+            "It achieves strong results on Enwik8, PG-19, and ImageNet64, with "
+            "significant speed improvements over quadratic-time transformers."
+        ),
+    },
+]
+
+# Themes the live smart model generated from this corpus with the module's
+# exact prompt.  The first two are lexically supported by the briefs; the
+# third is a cross-paper abstraction that scores below the in-domain noise
+# floor (see weekly_summary docstring) and must stay honestly unverified.
+_SUPPORTED_THEMES = [
+    "Efficient Transformers leverage novel attention mechanisms to reduce "
+    "computational complexity while maintaining performance.",
+    "The choice of kernel function in Transformers significantly impacts both "
+    "efficiency and performance.",
+]
+_ABSTRACTION_THEME = (
+    "Model compression and efficiency gains are achievable without sacrificing "
+    "task performance across various benchmarks."
+)
+
+# Plausible in-domain claims NOT derivable from the corpus — the negative band.
+_FABRICATED_THEMES = [
+    "Sparse mixture-of-experts routing reduces transformer inference cost by an "
+    "order of magnitude.",
+    "Quantizing attention weights to 4-bit precision preserves accuracy on "
+    "summarization benchmarks.",
+    "Recurrent memory tokens allow transformers to process million-token contexts "
+    "without retraining.",
+    "Knowledge distillation from larger teacher models yields compact student "
+    "transformers with minimal accuracy loss.",
+    "Hardware-aware architecture search discovers transformer variants optimized "
+    "for mobile inference latency.",
+]
+
+
+def _calibration_setup():
+    from jarvis_common.verify import DictChunk, QuoteVerifier
+
+    chunks = [
+        DictChunk({"id": p["id"], "content": p["text"], "page_number": None})
+        for p in _CALIBRATION_CORPUS
+    ]
+    corpus = " ".join(p["text"] for p in _CALIBRATION_CORPUS)
+    return QuoteVerifier(), corpus, chunks
+
+
+def test_weekly_support_bar_splits_fabricated_from_supported() -> None:
+    """WEEKLY_SUPPORT_FUZZY separates fabricated themes from supported ones with margin.
+
+    Measured bands: supported themes score >= 56, fabricated themes <= 51.
+    The bar (54) must sit strictly between the two with margin on both sides,
+    so every fabricated probe stays unverified while supported themes verify.
+    """
+    from paper_ingestion.weekly_summary import WEEKLY_SUPPORT_FUZZY, _theme_supported
+
+    verifier, corpus, chunks = _calibration_setup()
+
+    positive_scores = []
+    for theme in _SUPPORTED_THEMES:
+        supported, score = _theme_supported(verifier, theme, corpus, chunks)
+        assert supported, f"supported theme must verify: {theme[:60]}"
+        assert score is not None
+        positive_scores.append(score * 100)
+
+    negative_scores = []
+    for theme in _FABRICATED_THEMES:
+        supported, score = _theme_supported(verifier, theme, corpus, chunks)
+        assert not supported, f"fabricated theme must stay unverified: {theme[:60]}"
+        assert score is not None
+        negative_scores.append(score * 100)
+
+    # Band split with margin: negative max < bar <= positive min, gap >= 2 points
+    # on each side so small corpus drift cannot flip a verdict.
+    assert max(negative_scores) <= WEEKLY_SUPPORT_FUZZY - 2, (
+        f"fabricated band ({max(negative_scores):.1f}) too close to bar {WEEKLY_SUPPORT_FUZZY}"
+    )
+    assert min(positive_scores) >= WEEKLY_SUPPORT_FUZZY + 2, (
+        f"supported band ({min(positive_scores):.1f}) too close to bar {WEEKLY_SUPPORT_FUZZY}"
+    )
+
+
+def test_weekly_support_bar_keeps_abstraction_unverified() -> None:
+    """A cross-paper abstraction below the noise floor stays unverified.
+
+    Its score (46.6) is BELOW the fabricated band's max (51.0): any bar low
+    enough to verify it would also verify every fabricated theme.  Pinning it
+    unverified documents that the bar cannot be lowered to chase it.
+    """
+    from paper_ingestion.weekly_summary import _theme_supported
+
+    verifier, corpus, chunks = _calibration_setup()
+
+    supported, score = _theme_supported(verifier, _ABSTRACTION_THEME, corpus, chunks)
+    assert not supported
+    assert score is not None
+    fabricated_max = max(
+        s * 100
+        for _, s in (_theme_supported(verifier, t, corpus, chunks) for t in _FABRICATED_THEMES)
+        if s is not None
+    )
+    assert score * 100 < fabricated_max, (
+        "abstraction theme must score below the fabricated noise floor — if this "
+        "starts passing, recalibrate the bar instead of special-casing"
+    )
+
+
+def test_paper_reference_markers_stripped_before_scoring() -> None:
+    """[Paper N] markers are removed; legitimate bracketed content survives."""
+    from paper_ingestion.weekly_summary import _PAPER_REF_RE
+
+    text = "Attention scales [Paper 1] [Paper 12] but [CLS] tokens and [2026] remain."
+    stripped = _PAPER_REF_RE.sub("", text)
+    assert "[Paper 1]" not in stripped
+    assert "[Paper 12]" not in stripped
+    assert "[CLS]" in stripped, "non-marker brackets must survive"
+    assert "[2026]" in stripped, "non-marker brackets must survive"
+
+
+def test_paper_reference_markers_raise_match_score() -> None:
+    """Stripping markers must not lower the fuzzy score for a supported theme."""
+    from paper_ingestion.weekly_summary import _theme_supported
+
+    verifier, corpus, chunks = _calibration_setup()
+
+    clean = _SUPPORTED_THEMES[0]
+    with_markers = f"{clean[:-1]} [Paper 1] [Paper 2] [Paper 4]."
+    _, clean_score = _theme_supported(verifier, clean, corpus, chunks)
+    supported, marked_score = _theme_supported(verifier, with_markers, corpus, chunks)
+    assert supported, "markers must not push a supported theme below the bar"
+    assert clean_score is not None and marked_score is not None
+    assert marked_score >= clean_score - 0.02

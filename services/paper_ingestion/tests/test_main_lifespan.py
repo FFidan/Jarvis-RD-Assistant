@@ -25,6 +25,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _reset_reconciler_log_state():
+    """The reconciler's transition-only logging keeps module-level state
+    (failure streaks + once-per-value seen-sets) — clear it per test so the
+    first-failure / first-anomaly log assertions are deterministic."""
+    from paper_ingestion import main as main_module
+
+    main_module._RECONCILE_FAILURE_STREAKS.clear()
+    main_module._ALIAS_PLACEHOLDER_LOGGED.clear()
+    main_module._EMBED_MISMATCH_WARNED.clear()
+    yield
+    main_module._RECONCILE_FAILURE_STREAKS.clear()
+    main_module._ALIAS_PLACEHOLDER_LOGGED.clear()
+    main_module._EMBED_MISMATCH_WARNED.clear()
+
+
 @pytest.fixture()
 def fake_pool() -> AsyncMock:
     pool = AsyncMock()
@@ -259,13 +275,94 @@ async def test_autoconfigure_models_hook_sets_flag_and_writes_user_config() -> N
 
 
 @pytest.mark.asyncio
-async def test_autoconfigure_models_hook_stores_bare_string_not_double_encoded() -> None:
-    """Regression: value stored for llm.* keys must be a bare Python str, not json.dumps(str).
+async def test_autoconfigure_host_gpu_divergence_seeds_conservatively() -> None:
+    """FX3: when host_gpu_divergence is True (host VRAM env set but the
+    in-container probe sees no GPU), the hook must seed off the conservative
+    vram=0 path — smallest-first model + catalog-default num_ctx — NOT off the
+    phantom host VRAM. With installed {qwen3:4b, qwen3:8b} on a (phantom) 24 GB
+    box, smart must be qwen3:4b (smallest-first) and its num_ctx must be the
+    catalog default (8192), never an oversized 24 GB-derived stop.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import FastAPI
+    from paper_ingestion.main import _autoconfigure_models_hook
+    from paper_ingestion.services.model_lifecycle import HardwareInfo, catalog_entry_for_model
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+    conn.fetchrow.return_value = None  # first boot
+
+    diverged_hw = HardwareInfo(
+        vram_gb=24.0,
+        vram_source="host-env",
+        tier=3,
+        detected_at="2026-06-12T00:00:00+00:00",
+        machine_id="test",
+        host_gpu_divergence=True,
+    )
+
+    class _TagsClient:
+        async def get(self, url, **kwargs):
+            payload = {
+                "models": [
+                    {"name": "qwen3:4b", "size": 1, "details": {}},
+                    {"name": "qwen3:8b", "size": 1, "details": {}},
+                ]
+            }
+            return SimpleNamespace(
+                status_code=200, raise_for_status=lambda: None, json=lambda: payload
+            )
+
+    app = FastAPI()
+    app.state.db_pool = pool
+    app.state.http_client = _TagsClient()
+
+    with (
+        patch("paper_ingestion.main.detect_hardware", return_value=diverged_hw),
+        patch(
+            "paper_ingestion.services.litellm_config.update_litellm_model",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await _autoconfigure_models_hook(app)
+
+    # Collect (key, value) for each llm.* INSERT.
+    llm_inserts = {
+        c.args[1]: c.args[2]
+        for c in conn.execute.await_args_list
+        if len(c.args) >= 3 and isinstance(c.args[1], str) and c.args[1].startswith("llm.")
+    }
+
+    # Conservative smallest-first: smart=4b (NOT 8b, which the 24 GB path would pick).
+    assert llm_inserts.get("llm.smart_model") == "qwen3:4b"
+    assert llm_inserts.get("llm.fast_model") == "qwen3:4b"
+
+    # num_ctx is the catalog default for the chosen model, never an oversized stop.
+    qwen4b_default = catalog_entry_for_model("qwen3:4b").default_num_ctx
+    assert llm_inserts.get("llm.test.smart_num_ctx") == qwen4b_default
+    assert llm_inserts.get("llm.test.fast_num_ctx") == qwen4b_default
+
+
+@pytest.mark.asyncio
+async def test_autoconfigure_models_hook_stores_bare_string_models_and_int_num_ctx() -> None:
+    """Regression: ``llm.*_model`` rows store a bare Python str (not json.dumps(str)),
+    and ``llm.<machine>.<role>_num_ctx`` rows store a bare Python int.
 
     asyncpg's JSONB codec (registered in init_pg_connection) already calls
-    json.dumps on the value before sending it to Postgres.  Wrapping the model_id
-    in json.dumps() a second time would produce ``'"mistral-nemo"'`` in the DB
-    (a JSON-encoded JSON string) instead of the bare string ``"mistral-nemo"``.
+    json.dumps on the value before sending it to Postgres.  Wrapping a model_id
+    in json.dumps() a second time would produce ``'"qwen3:4b"'`` in the DB
+    (a JSON-encoded JSON string) instead of the bare string ``"qwen3:4b"``.
+
+    Widened intent (Wave-2 FX10): the hook now also seeds per-machine num_ctx
+    rows alongside each model. Those carry an int value — assert the model rows
+    stay bare strings AND the num_ctx rows stay bare ints (neither stringified
+    nor double-encoded JSON).
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -283,7 +380,11 @@ async def test_autoconfigure_models_hook_stores_bare_string_not_double_encoded()
     conn.fetchrow.return_value = None  # first boot
 
     tier1_hw = HardwareInfo(
-        vram_gb=8.0, vram_source="nvidia-smi", tier=1, detected_at="2026-05-14T00:00:00+00:00"
+        vram_gb=8.0,
+        vram_source="nvidia-smi",
+        tier=1,
+        detected_at="2026-05-14T00:00:00+00:00",
+        machine_id="test",
     )
 
     app = FastAPI()
@@ -293,10 +394,6 @@ async def test_autoconfigure_models_hook_stores_bare_string_not_double_encoded()
         patch(
             "paper_ingestion.services.model_lifecycle.detect_hardware",
             return_value=tier1_hw,
-        ),
-        patch(
-            "paper_ingestion.services.model_lifecycle.recommendations_for_role",
-            return_value=[{"id": "mistral-nemo", "status": "downloadable", "tier": 1}],
         ),
         patch(
             "paper_ingestion.services.litellm_config.update_litellm_model",
@@ -313,21 +410,37 @@ async def test_autoconfigure_models_hook_stores_bare_string_not_double_encoded()
     ]
     assert llm_inserts, "Expected at least one INSERT for llm.* keys"
 
-    for c in llm_inserts:
+    model_inserts = [c for c in llm_inserts if c.args[1].endswith("_model")]
+    num_ctx_inserts = [c for c in llm_inserts if c.args[1].endswith("_num_ctx")]
+    assert model_inserts, "Expected llm.*_model INSERT(s)"
+    assert num_ctx_inserts, "Expected llm.<machine>.<role>_num_ctx INSERT(s)"
+
+    for c in model_inserts:
         # args[2] is the value parameter ($2::jsonb).
         value_arg = c.args[2]
         # Must be a plain Python str — NOT the result of json.dumps(str)  # nolint:jsonb-double-encode
-        # which would look like '"mistral-nemo"' (starts and ends with a quote).
-        assert isinstance(value_arg, str), f"Expected str, got {type(value_arg)}"
+        # which would look like '"qwen3:4b"' (starts and ends with a quote).
+        assert isinstance(value_arg, str), f"Expected str for {c.args[1]}, got {type(value_arg)}"
         assert not (value_arg.startswith('"') and value_arg.endswith('"')), (
             f"Value {value_arg!r} looks double-encoded (json.dumps was applied "
             "before passing to asyncpg). Pass model_id directly."
         )
 
+    for c in num_ctx_inserts:
+        value_arg = c.args[2]
+        # bool is an int subclass — exclude it so a stray True/False is caught.
+        assert isinstance(value_arg, int) and not isinstance(value_arg, bool), (
+            f"Expected bare int for {c.args[1]}, got {type(value_arg)}: {value_arg!r}"
+        )
+
 
 @pytest.mark.asyncio
 async def test_autoconfigure_models_hook_is_idempotent() -> None:
-    """When flag is already set, the hook returns early without writing anything."""
+    """When flag is already set, the hook returns early without writing anything.
+
+    The hook no longer delivers to LiteLLM at all (the boot reconciler owns
+    delivery), so its only DB read is the autoconfigured flag itself.
+    """
     from unittest.mock import AsyncMock, MagicMock
 
     from fastapi import FastAPI
@@ -340,102 +453,190 @@ async def test_autoconfigure_models_hook_is_idempotent() -> None:
     ctx.__aexit__ = AsyncMock(return_value=False)
     pool.acquire.return_value = ctx
 
-    # _rehydrate returns None (no stored prefs), but autoconfigured flag IS present.
-    conn.fetchrow.side_effect = [
-        None,  # llm.smart_model in _rehydrate
-        None,  # llm.fast_model in _rehydrate
-        None,  # llm.embed_model in _rehydrate
-        {"value": "true"},  # system.models_autoconfigured → already set
-    ]
+    # system.models_autoconfigured → already set
+    conn.fetchrow.return_value = {"value": "true"}
 
     app = FastAPI()
     app.state.db_pool = pool
 
-    with patch(
-        "paper_ingestion.services.litellm_config.update_litellm_model",
-        new=AsyncMock(return_value=True),
-    ):
-        await _autoconfigure_models_hook(app)
+    await _autoconfigure_models_hook(app)
 
     # No INSERT should have been executed (idempotent early-return).
     conn.execute.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_rehydrate_litellm_aliases_skips_no_db_connected(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """When LiteLLM returns HTTP 400 No DB Connected, rehydrate logs and skips."""
-    import logging
-    from unittest.mock import AsyncMock, MagicMock
+# ---------------------------------------------------------------------------
+# LiteLLM model reconciler — structural + behavioral
+# ---------------------------------------------------------------------------
 
-    from paper_ingestion.main import _rehydrate_litellm_aliases
 
+def _make_pool() -> tuple[MagicMock, AsyncMock]:
+    """Pool-shaped mock whose acquire() yields a single AsyncMock connection."""
     pool = MagicMock()
     conn = AsyncMock()
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
     ctx.__aexit__ = AsyncMock(return_value=False)
     pool.acquire.return_value = ctx
+    return pool, conn
 
-    # Return a row for every key so update_litellm_model is actually called.
+
+def test_lifespan_config_includes_litellm_reconciler_hooks() -> None:
+    """The reconciler start hook is wired with a paired teardown, after autoconfigure.
+
+    Ordering matters: the reconciler reads the llm.* rows that
+    _autoconfigure_models_hook writes on first boot.
+    """
+    from paper_ingestion.main import (
+        _autoconfigure_models_hook,
+        _lifespan_config,
+        _shutdown_litellm_reconciler,
+        _start_litellm_reconciler,
+    )
+
+    assert _start_litellm_reconciler in _lifespan_config.custom_init_tasks
+    idx = _lifespan_config.custom_init_tasks.index(_start_litellm_reconciler)
+    # Same index in teardown list = compensating teardown wiring.
+    assert _lifespan_config.custom_teardown_tasks[idx] is _shutdown_litellm_reconciler
+    assert _lifespan_config.custom_init_tasks.index(_autoconfigure_models_hook) < idx
+
+
+@pytest.mark.asyncio
+async def test_reconcile_no_db_marks_pending_and_returns_false(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A LiteLLM "No DB Connected" failure is surfaced, never silently skipped.
+
+    Inversion of the old rehydrate semantics: a DB-less proxy (prisma migrate
+    failed) is a degraded state the reconciler keeps retrying — each affected
+    role is marked pending (UI pill) and the pass reports failure so the loop
+    runs again. It must NOT raise (boot survives LiteLLM warming up).
+    """
+    import logging
+
+    from paper_ingestion.main import _reconcile_litellm_models_once
+
+    pool, conn = _make_pool()
     conn.fetchrow.return_value = {"value": "qwen3:4b"}
 
     no_db_exc = RuntimeError(
-        "LiteLLM /config/update failed for alias 'smart': HTTP 400 No DB Connected"
+        "LiteLLM /model/new failed for alias 'smart': "
+        'HTTP 500 {"error": "No DB Connected. Here\'s how to do it - ..."}'
     )
 
+    mock_pending = AsyncMock()
+    mock_fallback = AsyncMock()
     with (
-        caplog.at_level(logging.INFO, logger="paper_ingestion.main"),
+        caplog.at_level(logging.WARNING, logger="paper_ingestion.main"),
         patch(
             "paper_ingestion.services.litellm_config.update_litellm_model",
             new=AsyncMock(side_effect=no_db_exc),
         ),
+        patch(
+            "paper_ingestion.services.litellm_config.ensure_smart_fallback",
+            new=mock_fallback,
+        ),
+        patch(
+            "paper_ingestion.services.config_write._update_delivery_pending_roles",
+            new=mock_pending,
+        ),
     ):
         # Must NOT raise.
-        await _rehydrate_litellm_aliases(pool)
+        result = await _reconcile_litellm_models_once(pool)
+
+    assert result is False, "a failed delivery must report the pass as failed (loop retries)"
+
+    # Every undelivered role is marked pending — never a phantom "applied".
+    # (embed is dimension-locked and never auto-delivered, so no marker for it.)
+    recorded = [(c.kwargs["roles"], c.kwargs["pending"]) for c in mock_pending.await_args_list]
+    assert recorded == [({"smart"}, True), ({"fast"}, True)], (
+        f"Expected smart+fast marked pending; got: {recorded}"
+    )
+
+    # smart-fallback is not attempted while the roles are undelivered.
+    mock_fallback.assert_not_awaited()
 
     assert any(
-        "no admin db attached" in record.message.lower()
+        "will retry" in record.message
         for record in caplog.records
-        if record.levelno == logging.INFO
-    ), f"Expected INFO log about 'no admin db attached'; got: {[r.message for r in caplog.records]}"
-
-
-# ---------------------------------------------------------------------------
-# _rehydrate_litellm_aliases — alias-placeholder guard
-# ---------------------------------------------------------------------------
+        if record.levelno == logging.WARNING
+    ), f"Expected WARNING log about retrying; got: {[r.message for r in caplog.records]}"
 
 
 @pytest.mark.asyncio
-async def test_rehydrate_litellm_aliases_skips_bare_alias(
+async def test_reconcile_success_clears_pending_and_creates_fallback() -> None:
+    """A successful pass clears pending markers and ensures smart-fallback.
+
+    Covers both success shapes: True (deployment replaced) AND False ("nothing
+    to change" — the alias already routes that model). Either way LiteLLM
+    routes the committed model, so any stale marker from a pre-restart "No DB
+    Connected" commit must be cleared (restart-after-DB-attach recovery).
+    """
+    from paper_ingestion.main import _reconcile_litellm_models_once
+
+    pool, conn = _make_pool()
+    conn.fetchrow.side_effect = [
+        {"value": "qwen3:8b"},  # llm.smart_model — update returns True
+        {"value": "qwen3:4b"},  # llm.fast_model  — update returns False (already routed)
+        None,  # llm.embed_model — no row: nothing to warn about
+    ]
+
+    mock_update = AsyncMock(side_effect=[True, False])
+    mock_fallback = AsyncMock(return_value=True)
+    mock_pending = AsyncMock()
+    with (
+        patch(
+            "paper_ingestion.services.litellm_config.update_litellm_model",
+            new=mock_update,
+        ),
+        patch(
+            "paper_ingestion.services.litellm_config.ensure_smart_fallback",
+            new=mock_fallback,
+        ),
+        patch(
+            "paper_ingestion.services.config_write._update_delivery_pending_roles",
+            new=mock_pending,
+        ),
+    ):
+        result = await _reconcile_litellm_models_once(pool)
+
+    assert result is True
+
+    recorded = [(c.kwargs["roles"], c.kwargs["pending"]) for c in mock_pending.await_args_list]
+    assert recorded == [({"smart"}, False), ({"fast"}, False)], (
+        f"Expected smart+fast cleared (False return included); got: {recorded}"
+    )
+
+    delivered = [c.args[:2] for c in mock_update.await_args_list]
+    assert delivered == [("llm.smart_model", "qwen3:8b"), ("llm.fast_model", "qwen3:4b")]
+
+    # The smart-fallback deployment group is created from the fast-tier model.
+    assert mock_fallback.await_args is not None
+    assert mock_fallback.await_args.args[0] == "qwen3:4b"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_ignores_bare_alias_and_falls_back_to_env(
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """When user_config stores a bare alias ("smart"), rehydrate must skip it.
+    """A stored bare alias ("smart") is never forwarded — the .env fallback wins.
 
     Defense-in-depth: a stray re-seed could write "smart"/"fast"/"embed" back
-    into user_config.  If forwarded to LiteLLM as ``ollama/smart`` that 404s.
-    The guard in _rehydrate_litellm_aliases must catch and log these values.
+    into user_config. Forwarding "smart" to LiteLLM would create
+    ``ollama/smart`` → 404, so the reconciler falls back to the setup-chosen
+    .env model (JARVIS_SMART_MODEL) instead.
     """
     import logging
-    from unittest.mock import AsyncMock, MagicMock
 
-    from paper_ingestion.main import _rehydrate_litellm_aliases
+    from paper_ingestion.main import _reconcile_litellm_models_once
 
-    pool = MagicMock()
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = ctx
-
-    # llm.smart_model → bare alias "smart" (should be skipped)
-    # llm.fast_model  → real model (should be forwarded)
-    # llm.embed_model → None (no row — should be skipped as usual)
+    monkeypatch.setenv("JARVIS_SMART_MODEL", "qwen3:14b")
+    pool, conn = _make_pool()
     conn.fetchrow.side_effect = [
-        {"value": "smart"},  # llm.smart_model — bare alias
+        {"value": "smart"},  # llm.smart_model — bare alias placeholder
         {"value": "qwen3:4b"},  # llm.fast_model  — real model
-        None,  # llm.embed_model  — not set
+        None,  # llm.embed_model — not set
     ]
 
     mock_update = AsyncMock(return_value=True)
@@ -445,66 +646,65 @@ async def test_rehydrate_litellm_aliases_skips_bare_alias(
             "paper_ingestion.services.litellm_config.update_litellm_model",
             new=mock_update,
         ),
+        patch(
+            "paper_ingestion.services.litellm_config.ensure_smart_fallback",
+            new=AsyncMock(return_value=False),
+        ),
+        # Pending bookkeeping is not under test here — stub it so the real
+        # helper never runs SQL against the AsyncMock connection.
+        patch(
+            "paper_ingestion.services.config_write._update_delivery_pending_roles",
+            new=AsyncMock(),
+        ),
     ):
-        await _rehydrate_litellm_aliases(pool)
+        result = await _reconcile_litellm_models_once(pool)
 
-    # update_litellm_model must NOT have been called with the bare alias key.
-    called_keys = [call.args[0] for call in mock_update.await_args_list]
-    assert "llm.smart_model" not in called_keys, (
-        f"update_litellm_model was unexpectedly called for llm.smart_model "
-        f"(bare alias 'smart'); calls: {mock_update.await_args_list}"
+    assert result is True
+    delivered = {c.args[0]: c.args[1] for c in mock_update.await_args_list}
+    assert delivered == {"llm.smart_model": "qwen3:14b", "llm.fast_model": "qwen3:4b"}, (
+        f"Expected env fallback for smart + stored model for fast; got: {delivered}"
     )
 
-    # The real model must still be forwarded.
-    assert "llm.fast_model" in called_keys, (
-        f"update_litellm_model was not called for llm.fast_model; "
-        f"calls: {mock_update.await_args_list}"
-    )
-
-    # An INFO log must mention the skipped key.
+    # An INFO log must mention the ignored key.
     assert any(
-        "llm.smart_model" in record.message and "alias" in record.message.lower()
+        "llm.smart_model" in record.message and "alias placeholder" in record.message
         for record in caplog.records
         if record.levelno == logging.INFO
-    ), (
-        f"Expected INFO log about alias skip for llm.smart_model; got: {[r.message for r in caplog.records]}"
-    )
+    ), f"Expected INFO log about alias-placeholder skip; got: {[r.message for r in caplog.records]}"
 
 
 @pytest.mark.asyncio
-async def test_rehydrate_litellm_aliases_forwards_real_model() -> None:
-    """When user_config stores a real model id, rehydrate must forward it to LiteLLM."""
-    from unittest.mock import AsyncMock, MagicMock, call
+async def test_reconcile_missing_rows_use_env_then_static_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No stored rows: the .env value wins when set, else the static pulled default."""
+    from paper_ingestion.main import _reconcile_litellm_models_once
 
-    from paper_ingestion.main import _rehydrate_litellm_aliases
-
-    pool = MagicMock()
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = ctx
-
-    # All three keys return real model names.
-    conn.fetchrow.side_effect = [
-        {"value": "qwen3:8b"},  # llm.smart_model
-        {"value": "qwen3:4b"},  # llm.fast_model
-        {"value": "nomic-embed-text"},  # llm.embed_model
-    ]
+    monkeypatch.setenv("JARVIS_SMART_MODEL", "qwen3:30b-a3b")
+    monkeypatch.delenv("JARVIS_FAST_MODEL", raising=False)
+    pool, conn = _make_pool()
+    conn.fetchrow.return_value = None
 
     mock_update = AsyncMock(return_value=True)
-    with patch(
-        "paper_ingestion.services.litellm_config.update_litellm_model",
-        new=mock_update,
+    with (
+        patch(
+            "paper_ingestion.services.litellm_config.update_litellm_model",
+            new=mock_update,
+        ),
+        patch(
+            "paper_ingestion.services.litellm_config.ensure_smart_fallback",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "paper_ingestion.services.config_write._update_delivery_pending_roles",
+            new=AsyncMock(),
+        ),
     ):
-        await _rehydrate_litellm_aliases(pool)
+        result = await _reconcile_litellm_models_once(pool)
 
-    mock_update.assert_any_await("llm.smart_model", "qwen3:8b")
-    # Verify the exact call for smart_model is present with the right model id.
-    assert call("llm.smart_model", "qwen3:8b") in mock_update.await_args_list, (
-        f"Expected call('llm.smart_model', 'qwen3:8b') not found; "
-        f"actual calls: {mock_update.await_args_list}"
-    )
+    assert result is True
+    delivered = {c.args[0]: c.args[1] for c in mock_update.await_args_list}
+    assert delivered == {"llm.smart_model": "qwen3:30b-a3b", "llm.fast_model": "qwen3:4b"}
 
 
 # ---------------------------------------------------------------------------
@@ -586,30 +786,278 @@ async def test_init_source_singletons_passes_db_pool_to_ctor() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rehydrate_litellm_aliases_reraises_502() -> None:
-    """Non-400 / non-'No DB Connected' RuntimeErrors propagate unchanged."""
-    from unittest.mock import AsyncMock, MagicMock
+async def test_reconcile_transport_error_marks_pending_not_raises() -> None:
+    """ANY delivery failure (e.g. HTTP 502) is caught, marked pending, retried.
 
-    from paper_ingestion.main import _rehydrate_litellm_aliases
+    Inversion of the old rehydrate reraise-502 semantics: the reconciler owns
+    retries now, so a transient gateway error must not crash the pass (or the
+    lifespan) — it marks the roles pending and reports failure so the loop
+    runs again.
+    """
+    from paper_ingestion.main import _reconcile_litellm_models_once
 
-    pool = MagicMock()
-    conn = AsyncMock()
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire.return_value = ctx
-
+    pool, conn = _make_pool()
     conn.fetchrow.return_value = {"value": "qwen3:4b"}
 
-    gateway_exc = RuntimeError(
-        "LiteLLM /config/update failed for alias 'smart': HTTP 502 Bad Gateway"
-    )
+    gateway_exc = RuntimeError("LiteLLM /model/new failed for alias 'smart': HTTP 502 Bad Gateway")
 
+    mock_pending = AsyncMock()
     with (
         patch(
             "paper_ingestion.services.litellm_config.update_litellm_model",
             new=AsyncMock(side_effect=gateway_exc),
         ),
-        pytest.raises(RuntimeError, match="HTTP 502"),
+        patch(
+            "paper_ingestion.services.litellm_config.ensure_smart_fallback",
+            new=AsyncMock(),
+        ),
+        patch(
+            "paper_ingestion.services.config_write._update_delivery_pending_roles",
+            new=mock_pending,
+        ),
     ):
-        await _rehydrate_litellm_aliases(pool)
+        # Must NOT raise.
+        result = await _reconcile_litellm_models_once(pool)
+
+    assert result is False
+    recorded = [(c.kwargs["roles"], c.kwargs["pending"]) for c in mock_pending.await_args_list]
+    assert recorded == [({"smart"}, True), ({"fast"}, True)]
+
+
+def _reconcile_patches(update_mock: AsyncMock, fallback_mock: AsyncMock):
+    """The three patches every reconcile-pass test needs (update/fallback/pending)."""
+    return (
+        patch(
+            "paper_ingestion.services.litellm_config.update_litellm_model",
+            new=update_mock,
+        ),
+        patch(
+            "paper_ingestion.services.litellm_config.ensure_smart_fallback",
+            new=fallback_mock,
+        ),
+        patch(
+            "paper_ingestion.services.config_write._update_delivery_pending_roles",
+            new=AsyncMock(),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_failure_warning_is_transition_gated(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Delivery-failure WARNINGs fire on the failure TRANSITION, not every pass.
+
+    A LiteLLM degraded for hours would otherwise emit a full traceback per role
+    every 30 s. Contract: first consecutive failure per role logs the full
+    WARNING+traceback; repeat failures stay silent (until the terse Nth-pass
+    heartbeat); a success resets the streak so the next outage logs fully again.
+    """
+    import logging
+
+    from paper_ingestion.main import _reconcile_litellm_models_once
+
+    pool, conn = _make_pool()
+    conn.fetchrow.return_value = None  # roles fall back to static defaults; no embed row
+
+    def _full_warnings(key: str) -> list[logging.LogRecord]:
+        return [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and f"could not deliver {key}" in r.message
+        ]
+
+    failing = AsyncMock(side_effect=RuntimeError("HTTP 502 Bad Gateway"))
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.main"):
+        with contextlib.ExitStack() as stack:
+            for p in _reconcile_patches(failing, AsyncMock()):
+                stack.enter_context(p)
+            assert await _reconcile_litellm_models_once(pool) is False
+            assert await _reconcile_litellm_models_once(pool) is False
+
+        # Two failing passes → exactly ONE full warning per role, traceback attached.
+        for key in ("llm.smart_model", "llm.fast_model"):
+            records = _full_warnings(key)
+            assert len(records) == 1, f"expected one transition warning for {key}"
+            assert records[0].exc_info is not None
+
+        # A successful pass resets the streak...
+        with contextlib.ExitStack() as stack:
+            for p in _reconcile_patches(
+                AsyncMock(return_value=True), AsyncMock(return_value=False)
+            ):
+                stack.enter_context(p)
+            assert await _reconcile_litellm_models_once(pool) is True
+
+        # ...so the next outage is a fresh transition and logs fully again.
+        with contextlib.ExitStack() as stack:
+            for p in _reconcile_patches(failing, AsyncMock()):
+                stack.enter_context(p)
+            assert await _reconcile_litellm_models_once(pool) is False
+        assert len(_full_warnings("llm.smart_model")) == 2
+
+
+@pytest.mark.asyncio
+async def test_reconcile_persistent_failure_logs_terse_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """While a failure persists, a terse no-traceback WARNING fires every Nth pass."""
+    import logging
+
+    from paper_ingestion import main as main_module
+    from paper_ingestion.main import _reconcile_litellm_models_once
+
+    monkeypatch.setattr(main_module, "_RECONCILE_TERSE_EVERY_N", 2)
+    pool, conn = _make_pool()
+    conn.fetchrow.return_value = None
+
+    failing = AsyncMock(side_effect=RuntimeError("HTTP 502 Bad Gateway"))
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.main"):
+        with contextlib.ExitStack() as stack:
+            for p in _reconcile_patches(failing, AsyncMock()):
+                stack.enter_context(p)
+            for _ in range(3):  # streaks 0 (full), 1 (silent), 2 (terse heartbeat)
+                await _reconcile_litellm_models_once(pool)
+
+    terse = [r for r in caplog.records if "still cannot deliver llm.smart_model" in r.message]
+    assert len(terse) == 1
+    assert terse[0].exc_info is None  # terse heartbeat carries no traceback
+
+
+@pytest.mark.asyncio
+async def test_reconcile_bare_alias_logged_once_per_value(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The bare-alias-placeholder INFO fires once per distinct stored value,
+    not on every 30 s pass (the stored row repeats identically forever)."""
+    import logging
+
+    from paper_ingestion.main import _reconcile_litellm_models_once
+
+    pool, conn = _make_pool()
+    conn.fetchrow.side_effect = [
+        {"value": "smart"},  # llm.smart_model — bare alias placeholder (pass 1)
+        {"value": "qwen3:4b"},  # llm.fast_model
+        None,  # llm.embed_model
+        {"value": "smart"},  # pass 2 — same placeholder
+        {"value": "qwen3:4b"},
+        None,
+    ]
+
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.main"):
+        with contextlib.ExitStack() as stack:
+            for p in _reconcile_patches(
+                AsyncMock(return_value=True), AsyncMock(return_value=False)
+            ):
+                stack.enter_context(p)
+            await _reconcile_litellm_models_once(pool)
+            await _reconcile_litellm_models_once(pool)
+
+    placeholder_logs = [r for r in caplog.records if "alias placeholder" in r.message]
+    assert len(placeholder_logs) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_embed_mismatch_warned_once_per_value(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The legacy embed-row mismatch WARNING fires once per distinct value,
+    not on every 30 s pass."""
+    import logging
+
+    from paper_ingestion.main import _reconcile_litellm_models_once
+
+    pool, conn = _make_pool()
+    conn.fetchrow.side_effect = [
+        None,  # llm.smart_model (pass 1)
+        None,  # llm.fast_model
+        {"value": "mxbai-embed-large"},  # llm.embed_model — legacy mismatch
+        None,  # pass 2
+        None,
+        {"value": "mxbai-embed-large"},
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.main"):
+        with contextlib.ExitStack() as stack:
+            for p in _reconcile_patches(
+                AsyncMock(return_value=True), AsyncMock(return_value=False)
+            ):
+                stack.enter_context(p)
+            await _reconcile_litellm_models_once(pool)
+            await _reconcile_litellm_models_once(pool)
+
+    embed_warnings = [r for r in caplog.records if "YAML-seeded" in r.message]
+    assert len(embed_warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconciler_loop_is_persistent_across_success() -> None:
+    """The loop keeps polling on the 30 s cadence even AFTER a successful pass.
+
+    Persistence is the contract: a LiteLLM that later restarts DB-less comes
+    back with NO smart/fast deployments (de-seeded YAML), so a stopped loop
+    would leave the deployment LLM-dead until a service restart. Only
+    cancellation (lifespan teardown) ends the loop.
+    """
+    from paper_ingestion.main import (
+        _LITELLM_RECONCILE_INTERVAL_SECONDS,
+        _litellm_model_reconciler_loop,
+    )
+
+    sleeps: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) >= 3:
+            raise asyncio.CancelledError
+
+    mock_reconcile = AsyncMock(side_effect=[False, True, True])
+    with (
+        patch(
+            "paper_ingestion.main._reconcile_litellm_models_once",
+            new=mock_reconcile,
+        ),
+        patch("paper_ingestion.main.asyncio.sleep", new=_fake_sleep),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _litellm_model_reconciler_loop(MagicMock())
+
+    # Three passes ran (failure AND successes), with a sleep after each —
+    # success does not break the loop.
+    assert mock_reconcile.await_count == 3
+    assert sleeps == [_LITELLM_RECONCILE_INTERVAL_SECONDS] * 3
+
+
+@pytest.mark.asyncio
+async def test_start_and_shutdown_reconciler_hooks_cancel_cleanly() -> None:
+    """_start creates the named background task; _shutdown cancels and awaits it."""
+    from fastapi import FastAPI
+    from paper_ingestion.main import (
+        _shutdown_litellm_reconciler,
+        _start_litellm_reconciler,
+    )
+
+    started = asyncio.Event()
+
+    async def _never_done(pool: Any) -> bool:
+        started.set()
+        await asyncio.Event().wait()  # blocks until cancelled
+        return False
+
+    app = FastAPI()
+    app.state.db_pool = MagicMock()
+    with patch(
+        "paper_ingestion.main._reconcile_litellm_models_once",
+        new=_never_done,
+    ):
+        await _start_litellm_reconciler(app)
+        task = app.state.litellm_reconciler_task
+        assert isinstance(task, asyncio.Task)
+        assert task.get_name() == "litellm_model_reconciler"
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        assert not task.done()
+
+        await _shutdown_litellm_reconciler(app)
+        assert task.done()
+        assert task.cancelled()

@@ -20,6 +20,7 @@ import { getNavigate } from '@/lib/navigate-bridge';
 import { isSafeRelativeHref } from '@/lib/safe-href';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { errorMessage } from '@/lib/errors';
+import type { PaperDetail } from '@/types';
 
 /**
  * Per-kind query invalidation: when a job of the given kind reaches
@@ -132,6 +133,38 @@ let logoutAbort = new AbortController();
 function getPaperIdFromJob(job: Job): number | null {
   const paperId = job.payload?.paper_id;
   return typeof paperId === 'number' && Number.isFinite(paperId) ? paperId : null;
+}
+
+/**
+ * Merge a finished `paper.summarize` job's `coverage`/`passes` into the cached
+ * paper-detail summary so the research-log banners render from the real flow.
+ *
+ * The backend puts these on the JOB result (omit-when-clean), but the persisted
+ * GET /api/papers/:id summary never carries them (non-persisted, always null),
+ * so the invalidation refetch alone would wipe any banner. We patch the cache
+ * directly here. Merge (not replace): absent keys leave the cached value
+ * untouched, and a clean job (no coverage/passes) leaves the cache alone.
+ */
+function applySummaryCoverageToCache(job: Job): void {
+  const paperId = getPaperIdFromJob(job);
+  if (paperId == null) return;
+  const result = job.result as { coverage?: number; passes?: number } | null;
+  if (result == null) return;
+  const hasCoverage = typeof result.coverage === 'number';
+  const hasPasses = typeof result.passes === 'number';
+  if (!hasCoverage && !hasPasses) return; // clean job — nothing to patch
+
+  queryClient.setQueryData<PaperDetail>(QUERY_KEYS.papers.detail(paperId), (prev) => {
+    if (!prev || !prev.summary) return prev; // no cached detail/summary to merge into
+    return {
+      ...prev,
+      summary: {
+        ...prev.summary,
+        ...(hasCoverage ? { coverage: result.coverage } : {}),
+        ...(hasPasses ? { passes: result.passes } : {}),
+      },
+    };
+  });
 }
 
 export interface Job {
@@ -263,6 +296,10 @@ export const useJobStore = create<JobStore>()(
               job.kind === 'card.generate' &&
               (job.result as { cards_created?: number } | null)?.cards_created === 0;
             if (!zeroCards) toast.success(`${job.kind} completed`);
+            // Patch coverage/passes into the paper-detail cache BEFORE invalidating:
+            // the refetched GET never carries them, so the banner state must be
+            // merged from the job result here.
+            if (job.kind === 'paper.summarize') applySummaryCoverageToCache(job);
             const keysFactory = INVALIDATE_ON_SUCCESS[job.kind];
             if (keysFactory) {
               for (const key of keysFactory(job)) {

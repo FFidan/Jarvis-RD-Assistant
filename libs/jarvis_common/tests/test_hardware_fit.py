@@ -2,16 +2,20 @@
 
 Coverage:
 - 16 GB dev-box (16 384 MiB → MID bucket) → qwen3:8b / qwen3:4b / qwen3-embedding:4b
-- 48 GB workstation (49 152 MiB → HIGH bucket) → qwen3:32b (confirm_on_target=True)
+- 48 GB workstation (49 152 MiB → HIGH bucket) → qwen3:30b-a3b (confirm_on_target=False)
 - Entry-class GPU (8 192 MiB → ENTRY bucket) → qwen3:4b for smart+fast
 - CPU-only / below-min (2 048 MiB) → CPU_ONLY bucket, conservative fallback
 - Exact threshold boundaries (VRAM_TIER2_MB, VRAM_TIER4_MB)
 - None VRAM → safe default, no crash, empty aliases list
 - All buckets covered, no mystery numbers
+- Cross-plane: every ollama model in recommend_models + llm-tier-candidates.yaml resolves to a catalog id
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import yaml
 from jarvis_common.hardware_fit import (
     VRAM_MIN_MB,
     VRAM_TIER2_MB,
@@ -21,6 +25,7 @@ from jarvis_common.hardware_fit import (
     VramBucket,
     recommend_models,
 )
+from jarvis_common.model_catalog import load_model_catalog
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -97,19 +102,19 @@ def test_48gb_bucket_is_high():
     assert rec.bucket == VramBucket.HIGH
 
 
-def test_48gb_smart_is_qwen3_32b():
-    """48 GB → smart alias = qwen3:32b (larger model for high-VRAM box)."""
+def test_48gb_smart_is_qwen3_30b_a3b():
+    """48 GB → smart alias = qwen3:30b-a3b (live-validated on RTX 5880 Ada, v0.7)."""
     rec = recommend_models(49_152)
-    assert _alias(rec, "smart") == "qwen3:32b"
+    assert _alias(rec, "smart") == "qwen3:30b-a3b"
 
 
-def test_48gb_smart_confirm_on_target_true():
-    """48 GB smart recommendation has confirm_on_target=True (bench not yet run)."""
+def test_48gb_smart_confirm_on_target_false():
+    """48 GB smart recommendation has confirm_on_target=False (live-deployment validated)."""
     rec = recommend_models(49_152)
-    assert _confirm(rec, "smart") is True
+    assert _confirm(rec, "smart") is False
 
 
-def test_48gb_fast_confirm_on_target_false():
+def test_48gb_fast_embed_confirm_on_target_false():
     """48 GB fast/embed are measured defaults — confirm_on_target must be False."""
     rec = recommend_models(49_152)
     assert _confirm(rec, "fast") is False
@@ -255,3 +260,92 @@ def test_threshold_values_match_documented_gb():
     assert VRAM_TIER2_MB == 10_240  # 10 GB
     assert VRAM_TIER3_MB == 20_480  # 20 GB
     assert VRAM_TIER4_MB == 40_960  # 40 GB
+
+
+# ---------------------------------------------------------------------------
+# Cross-plane catalog consistency — every ollama model we recommend must
+# resolve to a valid catalog id.  This is the test that would have caught
+# the un-pullable qwen3:32b recommendation.
+# ---------------------------------------------------------------------------
+
+_VRAM_PROBE_POINTS = (0, 2_048, 8_192, 16_384, 32_768, 49_152)
+
+
+def _catalog_ids() -> frozenset[str]:
+    entries = load_model_catalog()
+    ids: set[str] = set()
+    for e in entries:
+        ids.add(e.id)
+        if e.ollama_tag:
+            ids.add(e.ollama_tag)
+    return frozenset(ids)
+
+
+def _find_tier_candidates_yaml() -> Path:
+    """Locate config/llm-tier-candidates.yaml by walking up from this file."""
+    for ancestor in Path(__file__).resolve().parents:
+        candidate = ancestor / "config" / "llm-tier-candidates.yaml"
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("config/llm-tier-candidates.yaml not found from test tree")
+
+
+def test_recommend_models_ollama_models_all_in_catalog():
+    """Every ollama model emitted by recommend_models resolves to a catalog id.
+
+    Catches the qwen3:32b class of bug: a non-catalog model recommended by
+    hardware_fit that the UI would try (and fail) to pull.
+    """
+    catalog = _catalog_ids()
+    for vram in _VRAM_PROBE_POINTS:
+        rec = recommend_models(vram)
+        for alias_rec in rec.aliases:
+            assert alias_rec.model in catalog, (
+                f"vram={vram} bucket={rec.bucket.name}: "
+                f"alias '{alias_rec.alias}' model '{alias_rec.model}' not in model_catalog.json"
+            )
+
+
+def test_tier_candidates_yaml_all_ollama_models_in_catalog_full_audit():
+    """Full-file cross-plane check: every ollama model in llm-tier-candidates.yaml
+    should resolve to a catalog id.  vLLM entries are exempt.
+
+    Known pre-existing gaps (need separate catalog additions; new gaps still fail):
+      cpu/lt-8: qwen3:1.7b
+      lt-8: llama3.2:3b
+      8-16: qwen2.5:7b-instruct, deepseek-r1:7b
+      16-24/24-48: qwen2.5:7b-instruct
+    """
+    known_catalog_gaps = frozenset(
+        {
+            "qwen3:1.7b",
+            "llama3.2:3b",
+            "qwen2.5:7b-instruct",
+            "deepseek-r1:7b",
+        }
+    )
+
+    catalog = _catalog_ids()
+    config_path = _find_tier_candidates_yaml()
+    data = yaml.safe_load(config_path.read_text())
+
+    new_gaps: list[str] = []
+    for tier_name, tier_data in data.get("tiers", {}).items():
+        fallback = tier_data.get("fallback_for_tier", {})
+        if fallback.get("backend") == "ollama":
+            model = fallback["model"]
+            if model not in catalog and model not in known_catalog_gaps:
+                new_gaps.append(f"tier '{tier_name}' fallback_for_tier: {model}")
+
+        for candidate in tier_data.get("candidates", []):
+            if candidate.get("backend") != "ollama":
+                continue
+            model = candidate["model"]
+            if model not in catalog and model not in known_catalog_gaps:
+                new_gaps.append(f"tier '{tier_name}' rank={candidate.get('rank')}: {model}")
+
+    assert not new_gaps, (
+        "New ollama models added to llm-tier-candidates.yaml are missing from "
+        "model_catalog.json — add catalog entries before shipping:\n"
+        + "\n".join(f"  {g}" for g in new_gaps)
+    )

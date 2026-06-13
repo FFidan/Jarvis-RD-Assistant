@@ -316,7 +316,11 @@ async def test_paper_summarize_job_forwards_user_id(monkeypatch):
     # `paper_ingestion.services` package with a bare MagicMock; install the
     # submodule the handler imports). setitem auto-reverts at teardown.
     _summ_stub = MagicMock()
-    _summ_stub.generate_paper_summary = AsyncMock(return_value=MagicMock(id=1))
+    fake_result = MagicMock()
+    fake_result.summary.id = 1
+    fake_result.coverage = 1.0
+    fake_result.passes = 1
+    _summ_stub.generate_paper_summary = AsyncMock(return_value=fake_result)
     monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", _summ_stub)
 
     # Mock pool: assert_paper_ownership does `fetchrow("SELECT discovered_by ...")`;

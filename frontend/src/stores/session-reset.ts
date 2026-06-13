@@ -9,7 +9,7 @@
  *     dependency (job-store reads auth state at call time) stays a one-way edge —
  *     no import cycle; and
  *   - the stores remain statically imported by their components only, so there is
- *     no mixed static/dynamic import for Rollup to refuse to code-split.
+ *     no mixed static/dynamic import for the bundler to refuse to code-split.
  *
  * Registration runs as a module-init side effect: a store is reset on logout only
  * if it was imported during the session — which it is, if it holds any state.

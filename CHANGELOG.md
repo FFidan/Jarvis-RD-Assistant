@@ -3,6 +3,63 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## v0.8.0 (2026-06-13) — Trustworthy & Frictionless
+
+A reliability- and trust-focused release. The goal: a researcher with no CS
+background can install JARVIS, get a correct full-coverage summary and a
+trustworthy Ask answer — with the right model for their hardware actually
+running — without editing a file or learning the word "num_ctx".
+
+### Highlights
+
+- **Install that survives a bare machine.** `./setup.sh` no longer crashes on
+  hosts without PyYAML, checks Docker daemon access up front, keeps your data
+  when you re-run it, and streams the first model pull so the long download is
+  visible. Honest CPU/GPU speed expectations are documented up front (including
+  macOS).
+- **Model choices are real, or honestly pending.** Changing the main/quick model
+  in Settings now actually re-routes the LLM and survives a restart. If the model
+  service is briefly unavailable your choice is saved and applied automatically
+  within about 30 seconds, with a clear "applying" badge — never a silent revert
+  to the old model.
+- **The right model out of the box.** On first run JARVIS picks the largest model
+  your GPU can comfortably run (keeping the embedder resident) plus a safe
+  reading window to match — no manual tuning — and tells you what it picked.
+- **Long papers are read in full.** Summaries and flashcards now read 100% of a
+  paper via a map-reduce pass instead of only the opening pages, with a quiet
+  note showing how many passes it took. Verified quotes are only ever taken from
+  text the model actually read.
+- **One reading window.** The context size is a single plain-language slider
+  ("Reading window") in Settings → Models that flows through the whole pipeline;
+  raising it speeds up GPU analysis and is bounded to a memory-safe maximum.
+- **A trust layer you can read.** Ask answers carry an honest confidence badge
+  with in-app definitions, short factual answers no longer show a misleading
+  "unverified" banner, and the weekly digest's theme verification is real.
+- **Frictionless research flow.** You can Ask as soon as a paper is analysed
+  (no Topics required), there is one "Analyze" verb everywhere, the feed
+  surfaces are named consistently (Library / Discover), errors tell you what to
+  do next, and the Pulse deck can be regenerated where it lives.
+- **A gentler learning curve.** A new simple navigation mode shows just the daily
+  essentials for first-time users (everything else one click away), and the model
+  settings now read in plain language.
+- **Hardening.** Card generation degrades gracefully on provider errors,
+  cross-tenant vector isolation is enforced, contradiction scans de-duplicate
+  concurrent runs, and several configuration values are now validated. The
+  frontend build moved to Vite 8's Rust toolchain (Rolldown), which also drops
+  a vulnerable build-time dependency.
+
+### Upgrade Notes
+
+- **Re-run `scripts/init-secrets.sh` before `docker compose up`.** This release
+  adds a required `litellm_salt_key` secret; compose will not start without it.
+- **Model configuration now lives in the LiteLLM admin database**, delivered via
+  the model-management API rather than the YAML file. Fresh installs need no
+  action; existing installs reconcile automatically on first boot. The switchable
+  `smart`/`fast` aliases are no longer seeded from `litellm/config.yaml`.
+- **The reading window (`num_ctx`) is now a single value** on the Settings →
+  Models slider. The `LLM_SMART_NUM_CTX` environment variable remains the
+  boot-time default/fallback only — you no longer keep it in sync by hand.
+
 ## v0.7.0 (2026-06-11) — Research Quality
 
 Focused research-quality release: self-contained flashcards, more reliable AI

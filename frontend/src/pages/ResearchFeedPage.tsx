@@ -94,6 +94,9 @@ export function ResearchFeedPage() {
   const rawSource = searchParams.get('source');
   const rawFacetSource = searchParams.get('facet_source');
   const rawFacetTopic = searchParams.get('facet_topic');
+  // ?q= carries a prefill query from the command palette; ?action=upload scrolls to the upload zone.
+  const rawQ = searchParams.get('q') ?? '';
+  const actionUpload = searchParams.get('action') === 'upload';
 
   // M16: unknown surface → 'inbox' fallback (spec §3.5: default = Inbox)
   // 'ask' is removed from feed; any ?surface=ask URL lands on inbox.
@@ -124,6 +127,9 @@ export function ResearchFeedPage() {
       : rawTopicVal && !isNaN(Number(rawTopicVal))
         ? Number(rawTopicVal)
         : null;
+
+  // Ref for the PDF upload zone — used to scroll+focus when ?action=upload is set.
+  const uploadZoneRef = useRef<HTMLDivElement>(null);
 
   // Scoped list-filter: title/author text filter within the active faceted view
   const [listFilter, setListFilter] = useState('');
@@ -172,6 +178,13 @@ export function ResearchFeedPage() {
     }
   }, [counts, online, searchParams, setSearchParams]);
 
+  // ── Scroll to upload zone when ?action=upload is present ────────────────
+  useEffect(() => {
+    if (surface === 'search' && actionUpload && uploadZoneRef.current) {
+      uploadZoneRef.current.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    }
+  }, [surface, actionUpload]);
+
   // ── legacy ?tab=pulse redirect → /my-day ─────────────────────────────────
   const navigate = useNavigate();
   useEffect(() => {
@@ -187,6 +200,11 @@ export function ResearchFeedPage() {
   const [sourceErrors, setSourceErrors] = useState<Record<string, SearchPreviewSourceError>>({});
   const [selectedSourceTypes, setSelectedSourceTypes] = useState<string[]>([]);
   const queryClient = useQueryClient();
+
+  const handleUploadComplete = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+    void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
+  }, [queryClient]);
 
   const { data: allSources } = useQuery<SourceConfig[]>({
     queryKey: QUERY_KEYS.sources.list(),
@@ -416,6 +434,7 @@ export function ResearchFeedPage() {
                     setSearchParams((prev) => {
                       const p = new URLSearchParams(prev);
                       p.set('surface', 'search');
+                      p.set('action', 'upload');
                       return p;
                     })
                   }
@@ -546,6 +565,7 @@ export function ResearchFeedPage() {
                         setSearchParams((prev) => {
                           const p = new URLSearchParams(prev);
                           p.set('surface', 'search');
+                          p.set('action', 'upload');
                           return p;
                         })
                       }
@@ -650,10 +670,21 @@ export function ResearchFeedPage() {
                     </div>
                   )}
 
+                  {/* When ?action=upload the upload zone is hoisted above search to be immediately visible. */}
+                  {actionUpload && (
+                    <div ref={uploadZoneRef} className="border-b border-hair pb-4 mb-2" data-testid="upload-zone-hoisted">
+                      <p className="mb-2 text-xs font-medium text-muted-foreground">
+                        Upload a local PDF:
+                      </p>
+                      <PdfUploadZone onComplete={handleUploadComplete} />
+                    </div>
+                  )}
+
                   <SearchBar
                     onSearch={handleSearch}
                     isLoading={searchMutation.isPending}
                     sourceTypes={selectedSourceTypes}
+                    initialQuery={rawQ}
                   />
                   {searchErrorMessage && (
                     <p className="text-sm text-destructive">{searchErrorMessage}</p>
@@ -668,16 +699,15 @@ export function ResearchFeedPage() {
                     />
                   )}
 
-                  {/* PDF upload preserved in search surface */}
-                  <div className="mt-6 border-t border-hair pt-4">
-                    <p className="mb-2 text-xs font-medium text-muted-foreground">
-                      Or upload a local PDF:
-                    </p>
-                    <PdfUploadZone onComplete={() => {
-                      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
-                      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
-                    }} />
-                  </div>
+                  {/* PDF upload zone — always available at bottom; hoisted to top when ?action=upload */}
+                  {!actionUpload && (
+                    <div className="mt-6 border-t border-hair pt-4">
+                      <p className="mb-2 text-xs font-medium text-muted-foreground">
+                        Or upload a local PDF:
+                      </p>
+                      <PdfUploadZone onComplete={handleUploadComplete} />
+                    </div>
+                  )}
                 </>
               )}
             </div>

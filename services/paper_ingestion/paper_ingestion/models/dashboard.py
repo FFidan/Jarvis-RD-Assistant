@@ -15,6 +15,7 @@ class DashboardMetrics(BaseModel):
     active_projects: int
     topic_count: int
     nudge_count: int
+    chunked_papers: int = 0
     onboarding_stage: Literal["needs_topics", "needs_papers", "needs_processing", "complete"] = (
         "needs_topics"
     )

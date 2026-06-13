@@ -160,6 +160,16 @@ def test_build_contradiction_candidates_downranks_same_polarity():
 @pytest.mark.asyncio
 async def test_scan_contradictions_persists_only_when_both_quotes_verify(monkeypatch):
     """LLM-positive candidates are inserted only after both quotes verify."""
+    from unittest.mock import MagicMock
+
+    _lock_cm = MagicMock()
+    _lock_cm.__aenter__ = AsyncMock(return_value=True)
+    _lock_cm.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        "paper_ingestion.services.contradictions.AdvisoryLock",
+        lambda *a, **kw: _lock_cm,
+    )
+
     pool, conn = _make_pool_and_conn()
     conn.fetch.side_effect = [
         [
@@ -257,6 +267,16 @@ async def test_scan_contradictions_persists_only_when_both_quotes_verify(monkeyp
 @pytest.mark.asyncio
 async def test_scan_contradictions_discards_unverified_llm_quotes(monkeypatch):
     """A candidate is not stored when the classifier returns unsupported quotes."""
+    from unittest.mock import MagicMock
+
+    _lock_cm = MagicMock()
+    _lock_cm.__aenter__ = AsyncMock(return_value=True)
+    _lock_cm.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        "paper_ingestion.services.contradictions.AdvisoryLock",
+        lambda *a, **kw: _lock_cm,
+    )
+
     pool, conn = _make_pool_and_conn()
     conn.fetch.side_effect = [
         [
@@ -768,6 +788,91 @@ def test_system_contradictions_contains_rubric():
     assert "Rules:" in _SYSTEM_CONTRADICTIONS
     assert "Do not invent" in _SYSTEM_CONTRADICTIONS
     assert "is_contradiction" in _SYSTEM_CONTRADICTIONS
+
+
+# ---------------------------------------------------------------------------
+# T6.3 — per-user advisory-lock dedup: second concurrent enqueue short-circuits
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scan_contradictions_dedup_returns_in_progress_when_locked(monkeypatch):
+    """A second concurrent scan for the same user short-circuits via advisory lock.
+
+    When AdvisoryLock returns False (lock already held by a running scan),
+    scan_contradictions must return immediately with scan_already_in_progress=True
+    and must not call _do_scan_contradictions or touch the DB.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    pool = MagicMock()
+
+    lock_cm = MagicMock()
+    lock_cm.__aenter__ = AsyncMock(return_value=False)
+    lock_cm.__aexit__ = AsyncMock(return_value=False)
+
+    inner_scan = AsyncMock()
+
+    with (
+        patch(
+            "paper_ingestion.services.contradictions.AdvisoryLock",
+            return_value=lock_cm,
+        ),
+        patch(
+            "paper_ingestion.services.contradictions._do_scan_contradictions",
+            inner_scan,
+        ),
+    ):
+        result = await scan_contradictions(
+            pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock(), user_id=7
+        )
+
+    assert result == {"scan_already_in_progress": True}
+    inner_scan.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scan_contradictions_dedup_proceeds_when_lock_acquired(monkeypatch):
+    """scan_contradictions runs normally when the advisory lock is acquired.
+
+    When AdvisoryLock returns True (no concurrent scan), the scan proceeds and
+    returns the normal result dict (not the in-progress sentinel).
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    pool = MagicMock()
+
+    lock_cm = MagicMock()
+    lock_cm.__aenter__ = AsyncMock(return_value=True)
+    lock_cm.__aexit__ = AsyncMock(return_value=False)
+
+    expected = {
+        "paper_id": None,
+        "candidate_count": 0,
+        "contradictions_found": 0,
+        "contradiction_ids": [],
+        "llm_failures": 0,
+        "verification_failures": 0,
+    }
+    inner_scan = AsyncMock(return_value=expected)
+
+    with (
+        patch(
+            "paper_ingestion.services.contradictions.AdvisoryLock",
+            return_value=lock_cm,
+        ),
+        patch(
+            "paper_ingestion.services.contradictions._do_scan_contradictions",
+            inner_scan,
+        ),
+    ):
+        result = await scan_contradictions(
+            pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock(), user_id=7
+        )
+
+    assert result == expected
+    assert "scan_already_in_progress" not in result
+    inner_scan.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

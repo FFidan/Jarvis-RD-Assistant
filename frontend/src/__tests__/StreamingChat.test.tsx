@@ -192,11 +192,11 @@ describe('StreamingChat — Ask-gating tooltip', () => {
     expect(screen.queryByTestId('tooltip-content')).toBeNull();
   });
 
-  it('renders the tooltip content "Process at least one paper first" when hasAnalyzedPapers is false', () => {
+  it('renders the tooltip content "Analyze at least one paper first" when hasAnalyzedPapers is false', () => {
     render(<StreamingChat chatId="c1" scope="cross-paper" hasAnalyzedPapers={false} />);
     const tooltip = screen.getByTestId('tooltip-content');
     expect(tooltip).toBeTruthy();
-    expect(tooltip.textContent).toBe('Process at least one paper first');
+    expect(tooltip.textContent).toBe('Analyze at least one paper first');
   });
 
   it('disables the textarea when hasAnalyzedPapers is false', () => {

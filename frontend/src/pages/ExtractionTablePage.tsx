@@ -99,7 +99,7 @@ export function ExtractionTablePage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-1 text-lg">
               Extraction Template
-              <InfoTooltip content="Templates define which facts to extract. Create or edit templates in Settings > Extraction Templates." />
+              <InfoTooltip content="Templates define which facts to extract. Ask an admin to create or edit templates." />
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -114,7 +114,7 @@ export function ExtractionTablePage() {
             ) : (
               <EmptyState
                 title="No templates"
-                description="Create an extraction template in Settings first."
+                description="No extraction templates are available yet. Ask an admin to create one."
                 icon={TableProperties}
               />
             )}
@@ -164,7 +164,7 @@ export function ExtractionTablePage() {
               'Extract Selected'
             )}
           </Button>
-          <p className="text-xs text-muted-foreground mt-1">Sends selected papers to the LLM to fill in each template field. May take 30–60 seconds per paper.</p>
+          <p className="text-xs text-muted-foreground mt-1">Sends selected papers to an AI model to fill in each template field. May take 30–60 seconds per paper.</p>
         </div>
 
         {tableQuery.data && tableQuery.data.length > 0 && (

@@ -57,7 +57,7 @@ export function SessionBreadcrumb({ deckName, onNavigateToLibrary }: BreadcrumbP
       aria-label="Breadcrumb"
       className="flex items-center gap-1 text-xs text-muted-foreground tracking-wide"
     >
-      <span>Reflect</span>
+      <span>Learn</span>
       <ChevronRight className="h-3 w-3" />
       <button
         type="button"

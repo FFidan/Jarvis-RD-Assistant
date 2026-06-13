@@ -121,9 +121,28 @@ explicitly set in the environment. An explicit env var always wins.
 | `JARVIS_CONFIG_KEY` | Fernet key for `user_config.encrypted_value` at-rest encryption. | Yes (startup refuses if absent) |
 | `JARVIS_CONFIG_KEY_OLD` | Previous Fernet key — enables zero-downtime rotation via MultiFernet. Set during key rotation; remove after. | No (rotation only) |
 | `JARVIS_MODEL_HMAC_KEY` | Dedicated HMAC-SHA256 key for Pulse classifier pickle signing (see below). Min 32 chars. | Yes (startup refuses if absent; derivation from `JARVIS_API_KEY` is refused in production) |
+| `LITELLM_SALT_KEY` | Salt key LiteLLM uses to encrypt model credentials (cloud provider API keys) stored in its admin database. Auto-generated into `secrets/litellm_salt_key.txt` by `scripts/init-secrets.sh`; delivered as a Docker secret. **Never rotate** — LiteLLM decrypts stored credentials with this exact key, and without a dedicated salt LiteLLM falls back to the master key, so a master-key rotation would brick every encrypted row. | Yes (the litellm container refuses to start without it) |
 | `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | SMTP relay credentials for magic-link delivery. Without these (or when set to empty strings, which are silently ignored — see the SMTP entry in [known-residual-risks.md](known-residual-risks.md)), links fall back to container stdout. | Strongly recommended |
 | `OWNER_OVERRIDE_ALLOWED_CIDRS` | Comma-separated CIDR allowlist for the `X-Owner-User-Id` header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the jarvis bridge subnet (tracks `JARVIS_NET_SUBNET`, default `10.137.241.0/24`) so the bot is trusted. The bare code default (`127.0.0.0/8`) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly. | No (compose default is correct) |
 | `ALLOW_PRIVATE_SMTP_HOST` | Default `false`. When `false`, the SMTP host is validated at config-save AND at magic-link send time and rejected if it resolves to a private/loopback/link-local/reserved address (SSRF guard). Set `true` ONLY if you run a legitimate **internal SMTP relay** on a private address/hostname — otherwise magic-link delivery to that relay is refused. | No (set only for an internal relay) |
+
+### Cloud LLM Provider Keys at Rest
+
+Cloud provider API keys (`llm.anthropic.api_key`, `llm.openai.api_key`,
+`llm.google.api_key`) entered in Settings live in TWO encrypted stores:
+
+1. **`user_config.encrypted_value`** — Fernet-encrypted under
+   `JARVIS_CONFIG_KEY`. This is the source of truth; it survives LiteLLM
+   resets and is what the UI masks/reads back.
+2. **LiteLLM's admin database** (`litellm` DB in the bundled Postgres) — when
+   a cloud model is assigned to a role, the key is decrypted in memory and
+   carried in the `POST /model/new` payload; LiteLLM persists it in
+   `LiteLLM_ProxyModelTable` encrypted under `LITELLM_SALT_KEY`.
+
+Keys are never written to `.env`, `litellm/config.yaml`, container
+environment blocks (visible via `docker inspect`), or any other file.
+Rotating `JARVIS_CONFIG_KEY` (supported, see below) does not affect store 2;
+`LITELLM_SALT_KEY` itself must never rotate (see the table above).
 
 ### X-Owner-User-Id Mechanism
 

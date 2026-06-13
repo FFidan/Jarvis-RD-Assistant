@@ -6,8 +6,8 @@
  *   - AND user_config onboarding_dismissed !== true
  *
  * Steps walk the core happy path:
- *   1. Sidebar "Settings" (Sources sub-section anchor) → connect a source
- *   2. Sidebar "Settings" (Topics sub-section anchor) → define a topic
+ *   1. Settings left rail → Sources (admin only) → connect a source
+ *   2. Settings left rail → Research → Topics → define a topic
  *   3. Pulse Deck "Generate" button → run Pulse
  *   4. A Pulse card → rate cards so JARVIS learns
  *
@@ -15,48 +15,50 @@
  * setConfig (PUT /api/config/onboarding.dismissed).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Joyride, { ACTIONS, EVENTS, STATUS, type CallBackProps, type Step } from 'react-joyride';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { fetchTopics, fetchFeed, setConfig } from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
 
 // ── Tour steps ─────────────────────────────────────────────────────────────
 
-const TOUR_STEPS: Step[] = [
-  {
-    target: '[data-tour-id="sidebar-settings"]',
-    title: 'Connect a Source',
-    content:
-      'Start by connecting a source — arXiv, Semantic Scholar, or OpenAlex — so JARVIS can fetch papers for you. Open Settings and go to the Sources tab.',
-    placement: 'right',
-    disableBeacon: true,
-  },
-  {
-    target: '[data-tour-id="sidebar-settings"]',
-    title: 'Define a Topic',
-    content:
-      'Define research topics to focus your feed. JARVIS uses these to score and rank every incoming paper. Open Settings and go to the Topics tab.',
-    placement: 'right',
-    disableBeacon: true,
-  },
-  {
-    target: '[data-tour-id="pulse-generate-btn"]',
-    title: 'Run Pulse',
-    content:
-      'Once you have sources and topics, run Pulse to get your first batch of AI-curated, personalised paper recommendations.',
-    placement: 'bottom',
-    disableBeacon: true,
-  },
-  {
-    target: '[data-tour-id="pulse-card-first"]',
-    title: 'Rate Cards',
-    content:
-      'Give thumbs up or thumbs down on cards. JARVIS learns from every signal to sharpen future recommendations.',
-    placement: 'bottom',
-    disableBeacon: true,
-  },
-];
+const STEP_SOURCES: Step = {
+  target: '[data-tour-id="sidebar-settings"]',
+  title: 'Connect a Source',
+  content:
+    'Start by connecting a source — arXiv, Semantic Scholar, or OpenAlex — so JARVIS can fetch papers for you. Open Settings and choose Sources in the left rail.',
+  placement: 'right',
+  disableBeacon: true,
+};
+
+const STEP_TOPICS: Step = {
+  target: '[data-tour-id="sidebar-settings"]',
+  title: 'Define a Topic',
+  content:
+    'Define research topics to focus your feed. JARVIS uses these to score and rank every incoming paper. Open Settings and choose Research → Topics in the left rail.',
+  placement: 'right',
+  disableBeacon: true,
+};
+
+const STEP_PULSE: Step = {
+  target: '[data-tour-id="pulse-generate-btn"]',
+  title: 'Run Pulse',
+  content:
+    'Once you have sources and topics, run Pulse to get your first batch of AI-curated, personalised paper recommendations.',
+  placement: 'bottom',
+  disableBeacon: true,
+};
+
+const STEP_RATE: Step = {
+  target: '[data-tour-id="pulse-card-first"]',
+  title: 'Rate Cards',
+  content:
+    'Give thumbs up or thumbs down on cards. JARVIS learns from every signal to sharpen future recommendations.',
+  placement: 'bottom',
+  disableBeacon: true,
+};
 
 // ── Trigger-condition hook ─────────────────────────────────────────────────
 
@@ -122,6 +124,14 @@ export default function OnboardingTour() {
   const [stepIndex, setStepIndex] = useState(0);
   const { loading, eligible } = useOnboardingEligibility();
   const [dismissed, persistDismiss] = useDismissedState();
+  const user = useAuthStore((s) => s.user);
+
+  const steps = useMemo<Step[]>(() => {
+    const isAdmin = user?.role === 'admin';
+    return isAdmin
+      ? [STEP_SOURCES, STEP_TOPICS, STEP_PULSE, STEP_RATE]
+      : [STEP_TOPICS, STEP_PULSE, STEP_RATE];
+  }, [user?.role]);
 
   // Start the tour once eligibility resolves and user hasn't dismissed it.
   useEffect(() => {
@@ -165,7 +175,7 @@ export default function OnboardingTour() {
       continuous
       run={run}
       stepIndex={stepIndex}
-      steps={TOUR_STEPS}
+      steps={steps}
       callback={handleCallback}
       scrollToFirstStep
       showProgress

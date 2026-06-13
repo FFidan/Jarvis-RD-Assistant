@@ -20,6 +20,7 @@ from paper_ingestion.rag.verification import (
     _SENTENCE_RE,
     RAG_SUPPORT_FUZZY,
     RagConfidence,
+    _build_confidence,
     _split_sentences,
     verify_answer_sentences,
 )
@@ -179,3 +180,61 @@ async def test_support_bar_accepts_what_97_rejects():
     )
     assert report.pass_rate == 1.0
     assert report.confidence == RagConfidence.HIGH
+
+
+# ---------------------------------------------------------------------------
+# Short-answer sentinel: None confidence vs the checked-and-failed UNVERIFIED path
+# ---------------------------------------------------------------------------
+
+
+async def test_short_answer_yields_none_confidence():
+    """A sub-4-word answer like 'MNIST and CIFAR-10.' has no verifiable sentences.
+
+    total==0 path must return confidence=None, not UNVERIFIED.  The router
+    already initialises verification with confidence=None as its fallback, so
+    this is the consistent sentinel: no badge, no amber banner on the FE.
+    """
+    sources = [{"content": "We evaluated on MNIST and CIFAR-10 benchmarks."}]
+    verifier = QuoteVerifier()
+    report = await verify_answer_sentences("MNIST and CIFAR-10.", sources, verifier, _unused_pool())
+    assert report.total == 0, (
+        f"short answer must produce 0 verifiable sentences; got {report.total}"
+    )
+    assert report.confidence is None, (
+        f"total==0 must yield confidence=None, not {report.confidence!r}"
+    )
+
+
+async def test_all_fail_yields_unverified():
+    """When sentences exist but none verify, confidence==UNVERIFIED (not None).
+
+    UNVERIFIED stays for real failures (pass_rate==0.0, total>0).
+    """
+    sources = [{"content": "Completely unrelated source text about something else entirely."}]
+    verifier = QuoteVerifier()
+    # Long enough to be a verifiable sentence (>= 4 words) and not in the source.
+    answer = "The transformer architecture was introduced by Einstein in 1905."
+    report = await verify_answer_sentences(answer, sources, verifier, _unused_pool())
+    assert report.total >= 1
+    assert report.verified_count == 0
+    assert report.confidence == RagConfidence.UNVERIFIED
+
+
+def test_build_confidence_medium_boundary_pin():
+    """DELIBERATE: Ask path uses pass_rate >= 0.5 → MEDIUM (inclusive lower boundary).
+
+    This diverges from the jarvis_common verify_findings path (pass_rate > 0.5).
+    Both boundaries are intentional and independently pinned in their respective
+    test files.  Do NOT unify them without updating both tests and both docstrings.
+    """
+    # Exactly 0.5 → MEDIUM (inclusive)
+    assert _build_confidence(0.5, 2) == RagConfidence.MEDIUM
+    # Just below 0.5 → LOW
+    assert _build_confidence(0.49, 100) == RagConfidence.LOW
+    # Strictly above 0.5 → MEDIUM
+    assert _build_confidence(0.6, 5) == RagConfidence.MEDIUM
+
+
+def test_build_confidence_none_when_total_zero():
+    """total==0 → None (not UNVERIFIED); preserves the no-badge sentinel."""
+    assert _build_confidence(0.0, 0) is None

@@ -90,7 +90,7 @@ Nine `call_llm_structured` call sites. Each site has its own row below; details 
 | 4 | Flashcard generation | [learning_engine/card_generator.py:106](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/learning_engine/learning_engine/card_generator.py#L106) | `validated_model(model)` (default `"smart"`) | `CardGenerationOutput` | Yes (per-card `evidence_quote`) |
 | 5 | Contradiction classifier | [services/contradictions.py:266](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/contradictions.py#L266) | `get_smart_model()` | `ContradictionClassification` | Yes (post-LLM, on `quote_a` and `quote_b`) |
 | 6 | Weekly digest | [weekly_summary.py:187](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/weekly_summary.py#L187) | `get_smart_model()` | `WeeklyDigestOutput` | Optional (per-theme cheap fuzzy match against title+brief corpus) |
-| 7 | Paper summarization | [services/summarization.py:272](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/summarization.py#L272) | `get_smart_model()` | `SummarizationOutput` | Yes (per-finding quote verified against chunk text) |
+| 7 | Paper summarization | [services/summarization.py:207](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/summarization.py#L207) | `get_smart_model()` | `SummarizationOutput` (single window) / `WindowDigest` + `CondensedDigest` + `ReduceSummary` (map-reduce, §4.7) | Yes (per-finding quote verified against the window the model saw) |
 | 8 | Query decomposition | [rag/decomposition.py:74](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/rag/decomposition.py#L74) | `"fast"` (default, caller-overridable) | `RootModel[list[str]]` | No (structural sub-queries; no scientific claim to verify) |
 | 9 | RAG answer (`/ask`) | [routers/rag.py:132](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/rag.py#L132) | resolved `smart` alias | `AskResponse` | Yes (sentence-level verifier on the answer; sources carry per-sentence confidence) |
 
@@ -279,6 +279,48 @@ class WeeklyDigestOutput(BaseModel):
 
 ---
 
+### 4.7 Site 7 — Paper summarization (single-window fast path + map-reduce)
+
+`generate_paper_summary` reads the **entire** paper regardless of length.
+
+**Single-window fast path.** When the escaped full text fits the input char
+budget (`max_input_chars(llm_smart_num_ctx, reserved_output_tokens=3500)`),
+the summary is one `call_llm_structured` call returning `SummarizationOutput`
+— prompt, options, and verification identical to the historical behavior.
+
+**Map-reduce path** (text exceeds one window):
+
+1. **Windowing** — `chunk_windows` (`jarvis_common/text_windows.py`) groups
+   the `chunk_index`-ordered chunks into consecutive windows within the
+   budget, preferring `## ` section boundaries. Every chunk lands in exactly
+   one window; nothing is dropped or pre-truncated.
+2. **Map** — one sequential digest call per window (`WindowDigest`:
+   key points + at most 3 candidate findings, `reserved_output≈1200`
+   tokens). **Quotes are minted only here**, where the model actually saw
+   the text, and each is verified by `QuoteVerifier` against THAT window's
+   chunks; unverified findings are discarded immediately.
+3. **Reduce** — one call (`ReduceSummary`, `reserved_output=3500`)
+   synthesizes brief/detailed/methodology/limitations from the digests.
+   `ReduceSummary` and `CondensedDigest` have **no quote-bearing fields**:
+   the reduce stages structurally cannot mint or repair a quote.
+   Carried-over `key_findings` keep their window-verified quotes.
+4. **Hierarchical condense** — when the concatenated digests exceed one
+   window (or more than 12 digests would feed one reduce call), digests are
+   condensed level-wise (`CondensedDigest`) until they fit, so arbitrarily
+   long papers stay 100% read.
+
+Each stage's input flows through `wrap_delimited(max_chars=…)`; the char
+budget is re-read from settings before the reduce stage rather than reusing
+the boot-time value.
+
+The service returns `SummaryGenerationResult`: the stored `SummaryResponse`
+plus `coverage` (1.0 on both generation paths — full text read by
+construction; 0.0 only when the degraded abstract-fallback replaced the
+summary text) and `passes` (window count: 1 on the fast path, 0 on the
+idempotent existing-summary return).
+
+---
+
 ## 5. Anti-hallucination integration
 
 LLM-generated scientific content MUST remain evidence-backed per
@@ -286,17 +328,131 @@ LLM-generated scientific content MUST remain evidence-backed per
 catches *shape* errors but cannot catch *fabrication*. The QuoteVerifier
 layer remains mandatory for sites that produce verifiable claims.
 
-| Site | Verifier type | Path |
-|---|---|---|
-| 1 Pulse Stage-2 | `QuoteVerifier` (optional) | [verification.py:verify_pulse_reasoning](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/verification.py) called at [scoring.py:303-308](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L303-L308) — verifies `reasoning` against title+abstract |
-| 2 Extraction | `QuoteVerifier` (mandatory) | [extraction/core.py:197-215](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/core.py#L197-L215) — per-field; unverified `value` is dropped |
-| 3 KG entity | `QuoteVerifier` (mandatory) | [extraction/entities.py:399-413](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/entities.py#L399-L413) — relationships dropped if `evidence` not verifiable against full text |
-| 4 Card gen | Custom fuzzy verify (`_verify_quote`) | [card_generator.py:72-79](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/learning_engine/learning_engine/card_generator.py#L72-L79) — unverified cards dropped; rule 5/6/7 confidence + abstract fallback ([card_generator.py:138-263](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/learning_engine/learning_engine/card_generator.py#L138-L263)) |
-| 5 Contradiction | `QuoteVerifier` (mandatory) | [contradictions.py:_quotes_verify](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/contradictions.py#L408-L425) — both quotes verified; if either fails, contradiction NOT persisted |
-| 6 Weekly digest | Cheap fuzzy verifier (per-theme) | [weekly_summary.py:212-237](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/weekly_summary.py#L212-L237) — themes split into `verified_themes` / `unverified_themes` (display only) |
-
 Anti-hallucination is **separate from Instructor validation**. Instructor
 ensures shape; QuoteVerifier ensures grounding. Both are required.
+
+### 5.1 Verification tier model
+
+Four distinct verification semantics are in use. Each has its own bar and
+confidence vocabulary; they must not be conflated.
+
+**Tier 1 — Verbatim quote grounding** (`jarvis_common/verify.py`)
+
+The shared `QuoteVerifier` runs exact substring match first, then
+`rapidfuzz.fuzz.partial_ratio`. A quote passes at `FUZZY_THRESHOLD = 97`
+(percent). Summary-level confidence is then computed over the pass rate:
+
+| Pass rate | `Confidence` (StrEnum) |
+|---|---|
+| 100 % | `HIGH` |
+| > 50 % | `MEDIUM` |
+| ≤ 50 % | `LOW` |
+| no findings | `NONE` |
+
+Note the strict `> 50 %` boundary for MEDIUM — a 50 % pass rate is LOW.
+
+Used by: Extraction (Site 2), KG entities (Site 3), Paper summarization
+(Site 7). Unverified values are **dropped**, not stored with a low-confidence
+flag.
+
+**Tier 2 — RAG grounded-support** (`rag/verification.py`)
+
+Synthesized RAG answers are paraphrases, not verbatim quotes. The verifier
+splits the answer into sentences and accepts a sentence as grounded if the
+shared verifier's best fuzzy score reaches `RAG_SUPPORT_FUZZY = 70` (percent)
+— even when `verified=False` from the shared verifier (which uses the 97
+bar). Calibrated against the live corpus: grounded synthesis scores ~75–77
+against source passages while domain-plausible fabrications top out ~57,
+giving comfortable margin on both sides.
+
+Per-sentence confidence uses `RagConfidence` (StrEnum: HIGH / MEDIUM / LOW /
+UNVERIFIED):
+
+| Sentence pass rate | `RagConfidence` |
+|---|---|
+| 100 % | `HIGH` |
+| ≥ 50 % | `MEDIUM` |
+| > 0 % | `LOW` |
+| 0 % (with ≥ 1 checkable sentence) | `UNVERIFIED` |
+| no checkable sentences | `None` — no confidence event, no badge |
+
+Note the `≥ 50 %` boundary for MEDIUM here — this diverges deliberately from
+Tier 1's `> 50 %`. Do not "fix" either boundary without updating both modules
+and this contract.
+
+Used by: RAG answer (Site 9). Confidence stored on `AskResponse`.
+
+**Tier 3 — Pulse reasoning score-buckets** (`pulse/verification.py`)
+
+The Pulse Stage-2 verifier scores the LLM-generated `reasoning` sentence
+against the paper title + abstract using the shared `QuoteVerifier`, then
+maps the raw `partial_ratio` score to `RagConfidence` buckets. The mapping is
+persisted to `pulse_cards.reasoning_confidence` (CHECK constraint
+`pulse_cards_reasoning_confidence_check` in `db/init.sql`) and MUST NOT
+change silently:
+
+| Score | `RagConfidence` |
+|---|---|
+| ≥ 97 % | `HIGH` |
+| ≥ 85 % | `MEDIUM` |
+| ≥ 70 % | `LOW` |
+| < 70 % or None | `UNVERIFIED` |
+
+These three constants (97 / 85 / 70) are owned by `_score_to_confidence` in
+`pulse/verification.py`. A DB migration is required if they change.
+
+Used by: Pulse Stage-2 (Site 1). Optional — the card is retained with Stage 1
+signals only when reasoning verification fails.
+
+**Tier 4 — Weekly digest theme support**
+
+Each LLM-generated theme sentence (with `[Paper N]` reference markers
+stripped before scoring) is verified against the concatenated paper title +
+`summary_brief` corpus for the topic via the shared `QuoteVerifier`'s fuzzy
+scorer, judged against this tier's own support bar — themes are paraphrases,
+so the 97 % verbatim bar does not apply here. This is a **display-only,
+ephemeral** check — results are annotated inline on each theme dict
+(`verified` bool + `verification_reason` str) and split into
+`verified_themes` / `unverified_themes` for the frontend's VerificationBadge.
+Nothing is persisted; themes are shown either way.
+
+The support bar and bands for this tier are live-calibrated against the
+actual title + brief corpus. The authoritative bar value and the calibration
+bands are recorded in the module docstring of
+`services/paper_ingestion/paper_ingestion/weekly_summary.py` — treat that
+docstring as the source of truth rather than duplicating the number here.
+
+Used by: Weekly digest (Site 6).
+
+---
+
+### 5.2 Confidence vocabulary summary
+
+Two distinct StrEnum types are in use:
+
+| Enum | Values | Modules |
+|---|---|---|
+| `Confidence` | `NONE / HIGH / MEDIUM / LOW` | `jarvis_common.verify` (Tier 1) |
+| `RagConfidence` | `HIGH / MEDIUM / LOW / UNVERIFIED` | `rag.verification` (Tier 2), `pulse.verification` (Tier 3) |
+
+They are not interchangeable. `NONE` (Tier 1) signals "nothing to verify";
+`UNVERIFIED` (Tiers 2/3) signals "verified and failed." The MEDIUM boundary
+diverges deliberately between Tier 1 (`> 50 %`) and Tier 2 (`≥ 50 %`).
+
+---
+
+### 5.3 Per-site verifier table
+
+| Site | Verifier type | Path |
+|---|---|---|
+| 1 Pulse Stage-2 | `QuoteVerifier` (optional, Tier 3 bucket mapping) | [verification.py:verify_pulse_reasoning](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/verification.py) called at [scoring.py:303-308](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/scoring.py#L303-L308) — verifies `reasoning` against title+abstract |
+| 2 Extraction | `QuoteVerifier` (mandatory, Tier 1) | [extraction/core.py:197-215](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/core.py#L197-L215) — per-field; unverified `value` is dropped |
+| 3 KG entity | `QuoteVerifier` (mandatory, Tier 1) | [extraction/entities.py:399-413](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/entities.py#L399-L413) — relationships dropped if `evidence` not verifiable against full text |
+| 4 Card gen | Custom fuzzy verify (`_verify_quote`) | [card_generator.py:72-79](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/learning_engine/learning_engine/card_generator.py#L72-L79) — unverified cards dropped; rule 5/6/7 confidence + abstract fallback ([card_generator.py:138-263](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/learning_engine/learning_engine/card_generator.py#L138-L263)) |
+| 5 Contradiction | `QuoteVerifier` (mandatory, Tier 1) | [contradictions.py:_quotes_verify](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/contradictions.py#L408-L425) — both quotes verified; if either fails, contradiction NOT persisted |
+| 6 Weekly digest | `QuoteVerifier` (display-only, Tier 4) | [weekly_summary.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/weekly_summary.py) `_theme_supported` — themes annotated with `verified` / `verification_reason`; split into `verified_themes` / `unverified_themes` (display only, not persisted) |
+| 7 Summarization | `QuoteVerifier` (mandatory, Tier 1) | per-window in map-reduce path; unverified findings discarded immediately (§4.7) |
+| 9 RAG answer | `verify_answer_sentences` (Tier 2) | [rag/verification.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/rag/verification.py) — sentence-level grounded-support at 70 %; result on `AskResponse` |
 
 ---
 
@@ -425,7 +581,8 @@ The implementation MUST satisfy these. Testable.
 | Site 4 `call_llm_structured` (cards) | services/learning_engine/learning_engine/card_generator.py:106 | `CardGenerationOutput` |
 | Site 5 `call_llm_structured` (contradictions) | services/paper_ingestion/paper_ingestion/services/contradictions.py:266 | `ContradictionClassification` |
 | Site 6 `call_llm_structured` (weekly) | services/paper_ingestion/paper_ingestion/weekly_summary.py:187 | `WeeklyDigestOutput` |
-| Site 7 `call_llm_structured` (summarization) | services/paper_ingestion/paper_ingestion/services/summarization.py:272 | `SummarizationOutput` |
+| Site 7 `call_llm_structured` (summarization) | services/paper_ingestion/paper_ingestion/services/summarization.py:207 | Shared by all summarization stages via `_call_summarize_llm`; `SummarizationOutput` / `WindowDigest` / `CondensedDigest` / `ReduceSummary` |
+| `chunk_windows` | libs/jarvis_common/jarvis_common/text_windows.py:15 | Groups ordered chunks into char-budget windows; every chunk in exactly one window |
 | Site 8 `decompose_query` `call_llm_structured` | services/paper_ingestion/paper_ingestion/rag/decomposition.py:74 | `RootModel[list[str]]` sub-queries |
 | Site 9 RAG answer `_call_rag_llm` | services/paper_ingestion/paper_ingestion/routers/rag.py:132 | `AskResponse`; called by `ask_paper` / `ask_cross_paper` |
 | `AskResponse` model | services/paper_ingestion/paper_ingestion/models/rag.py:40-47 | answer + sources + confidence + per-sentence verification |

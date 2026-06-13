@@ -14,6 +14,7 @@ import { trashAndRejectPaper, unsavePaper } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import type { PulseCardItem, PulseRating } from '@/types';
 import { ScoreStack } from '@/components/my-day/sections/ScoreStack';
+import { displayReasoning } from '@/components/pulse/reasoning-display';
 
 import { toScoreParts } from '@/lib/score-utils';
 
@@ -187,10 +188,10 @@ export function PulseCard({
             showBadges
             className="max-w-[28rem] mt-2"
           />
-          {card.reasoning && (
+          {displayReasoning(card.reasoning) && (
             <div className="mt-2 flex items-start gap-1.5">
               <p className="line-clamp-2 text-sm italic text-muted-foreground">
-                {card.reasoning}
+                {displayReasoning(card.reasoning)}
               </p>
               {card.reasoning_verified === true && (
                 <span

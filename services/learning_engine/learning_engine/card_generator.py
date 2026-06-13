@@ -14,9 +14,11 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
+import openai
+from instructor.core import InstructorRetryException
 from jarvis_common import validated_model
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_LONG,
@@ -30,12 +32,6 @@ from jarvis_common.settings import get_core_settings
 from jarvis_common.verify import DictChunk, QuoteVerifier
 
 from learning_engine.card_models import CardGenerationOutput, CardOutput
-
-if TYPE_CHECKING:
-    import openai
-
-
-from instructor.core import InstructorRetryException
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +96,14 @@ _GENERIC_FRONT_RE = re.compile(
 )
 
 
-def _empty_result() -> dict:
-    return {"cards": [], "confidence": "LOW", "verified_count": 0, "total_count": 0}
+def _empty_result(reason: str = "no_cards") -> dict:
+    return {
+        "cards": [],
+        "confidence": "LOW",
+        "verified_count": 0,
+        "total_count": 0,
+        "reason": reason,
+    }
 
 
 class CardGenerator:
@@ -136,7 +138,6 @@ class CardGenerator:
                 response_model=CardGenerationOutput,
                 prompt=prompt,
                 options=options,
-                config=self.litellm_config,
             )
         except (RuntimeError, pydantic.ValidationError) as exc:
             logger.error("LLM call failed during card generation: %s", exc)
@@ -276,6 +277,8 @@ class CardGenerator:
         abstract: str | None = None,
         max_cards: int = 5,
         model: str = "smart",
+        summary_text: str | None = None,
+        num_ctx: int | None = None,
     ) -> dict[str, Any]:
         """Generate and verify flashcards from paper chunks.
 
@@ -300,6 +303,12 @@ class CardGenerator:
             fallback card was removed — 100% failure now returns no cards).
         max_cards : int
             Maximum number of cards to generate.
+        summary_text : str | None
+            Full-paper digest substituted for the raw chunk join when the
+            paper exceeds one window; verification still uses ``full_text``.
+        num_ctx : int | None
+            Effective smart-role context window for the input budget;
+            ``None`` falls back to ``CoreSettings.llm_smart_num_ctx``.
 
         Returns
         -------
@@ -313,17 +322,28 @@ class CardGenerator:
 
         safe_title, _ = wrap_delimited("title", title)
         safe_authors, _ = wrap_delimited("authors", ", ".join(authors))
-        # Budget computed at call time — settings can be env-overridden per process.
         # ollama silently truncates from the HEAD of an oversized prompt (where the
         # rules live), so the input must fit num_ctx minus the reserved output.
         _budget = max_input_chars(
-            get_core_settings().llm_smart_num_ctx, reserved_output_tokens=2048
+            num_ctx if num_ctx is not None else get_core_settings().llm_smart_num_ctx,
+            reserved_output_tokens=2048,
         )
-        safe_text, was_truncated = wrap_delimited("paper_text", escaped_text, max_chars=_budget)
-        if was_truncated:
-            logger.warning(
-                "card generation: input truncated to %d chars to fit model context", _budget
+        if len(escaped_text) > _budget and summary_text:
+            digest = summary_text.replace("{", "{{").replace("}", "}}")
+            safe_text, _ = wrap_delimited("paper_text", digest, max_chars=_budget)
+            logger.info(
+                "card generation: using reduce-stage digest for paper_id=%s "
+                "(escaped_text=%d chars, budget=%d chars)",
+                paper_id,
+                len(escaped_text),
+                _budget,
             )
+        else:
+            safe_text, was_truncated = wrap_delimited("paper_text", escaped_text, max_chars=_budget)
+            if was_truncated:
+                logger.warning(
+                    "card generation: input truncated to %d chars to fit model context", _budget
+                )
         prompt = _CARD_DATA_TEMPLATE.format(
             title=safe_title,
             authors=safe_authors,
@@ -331,7 +351,11 @@ class CardGenerator:
             max_cards=max_cards,
         )
 
-        output = await self._call_llm_for_cards(prompt, model, openai_client)
+        try:
+            output = await self._call_llm_for_cards(prompt, model, openai_client)
+        except openai.APIStatusError as exc:
+            logger.error("Provider returned HTTP error during card generation: %s", exc)
+            return _empty_result(reason="llm_error")
         if output is None:
             return _empty_result()
 

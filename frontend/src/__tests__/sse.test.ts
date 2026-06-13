@@ -220,6 +220,63 @@ describe('streamSSE', () => {
     await expect(gen.next()).rejects.toThrow('500');
   });
 
+  it('keeps the generic message on 500 even when the body carries a detail', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'internal stack trace' }), { status: 500 }),
+    );
+
+    const gen = streamSSE('/api/ask/stream', { question: 'test' });
+    const err = await gen.next().catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('SSE 500: Server error');
+  });
+
+  it('appends a string detail from the body on 4xx', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Question too long (max 2000 chars)' }), { status: 422 }),
+    );
+
+    const gen = streamSSE('/api/ask/stream', { question: 'test' });
+    const err = await gen.next().catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('422');
+    expect((err as Error).message).toContain('Question too long (max 2000 chars)');
+  });
+
+  it('JSON-stringifies an object detail from the body on 4xx', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: { field: 'question', issue: 'required' } }), { status: 400 }),
+    );
+
+    const gen = streamSSE('/api/ask/stream', { question: 'test' });
+    const err = await gen.next().catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('400');
+    expect((err as Error).message).toContain('{"field":"question","issue":"required"}');
+  });
+
+  it('falls back to the generic message when the 4xx body is not JSON', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<html>Bad Request</html>', { status: 400 }),
+    );
+
+    const gen = streamSSE('/api/ask/stream', { question: 'test' });
+    const err = await gen.next().catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('SSE 400: Request failed');
+  });
+
+  it('keeps the generic message when a 4xx body carries detail: null', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: null }), { status: 422 }),
+    );
+
+    const gen = streamSSE('/api/ask/stream', { question: 'test' });
+    const err = await gen.next().catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('SSE 422: Request failed');
+  });
+
   it('rejects with AbortError when signal is aborted while fetch is in flight', async () => {
     const ac = new AbortController();
 

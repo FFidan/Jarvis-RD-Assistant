@@ -57,10 +57,24 @@ vi.mock('@/components/ui/slider', () => ({
   ),
 }));
 
-// Mock ModelSelector (not under test here)
+// Mock ModelSelector (not under test here). Exposes a change button so tests
+// can drive the model-save mutation per config key.
 vi.mock('@/components/shared/ModelSelector', () => ({
-  ModelSelector: ({ value }: { value: string }) => (
-    <div data-testid="model-selector">{value}</div>
+  ModelSelector: ({ value, onChange, configKey }: {
+    value: string;
+    onChange?: (v: string) => void;
+    configKey?: string;
+  }) => (
+    <div data-testid="model-selector">
+      {value}
+      <button
+        type="button"
+        data-testid={`model-change-${configKey}`}
+        onClick={() => onChange?.('changed-model:1b')}
+      >
+        change
+      </button>
+    </div>
   ),
 }));
 
@@ -296,6 +310,114 @@ describe('IngestionSection — num_ctx slider', () => {
     // The slider should start at index 1 (4096)
     const slider = screen.getByTestId('slider-smart') as HTMLInputElement;
     expect(slider.value).toBe('1');
+  });
+});
+
+describe('IngestionSection — num_ctx save failure honesty', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+  });
+
+  it('shows an inline error and rolls the slider back when num_ctx save fails', async () => {
+    const { setConfig } = await import('@/lib/api');
+    vi.mocked(setConfig).mockRejectedValueOnce(new Error('HTTP 400: rejected'));
+
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('configure-toggle-smart'));
+    await waitFor(() => {
+      expect(screen.getByTestId('slider-smart')).toBeInTheDocument();
+    });
+
+    const slider = screen.getByTestId('slider-smart') as HTMLInputElement;
+    // Default 8192 = index 2; move down to index 1 (4096) and commit
+    fireEvent.change(slider, { target: { value: '1' } });
+    fireEvent.mouseUp(slider);
+
+    await waitFor(() => {
+      expect(setConfig).toHaveBeenCalledWith('llm.host-test-gpu.smart_num_ctx', 4096);
+    });
+
+    // Inline error rendered + slider rolled back to the persisted stop (8192)
+    await waitFor(() => {
+      expect(screen.getByTestId('num-ctx-save-error-smart')).toHaveTextContent(
+        /Failed to save: HTTP 400: rejected/,
+      );
+    });
+    expect(slider.value).toBe('2');
+  });
+});
+
+describe('IngestionSection — per-key save errors', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+  });
+
+  it('paints the failed save error ONLY under the card whose key failed', async () => {
+    const { setConfig } = await import('@/lib/api');
+    vi.mocked(setConfig).mockRejectedValueOnce(new Error('HTTP 400: rejected'));
+
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('model-change-llm.smart_model')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('model-change-llm.smart_model'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('config-save-error-llm.smart_model')).toHaveTextContent(
+        /Failed to save: HTTP 400: rejected/,
+      );
+    });
+    // The identical error must NOT paint under the fast and embed cards.
+    expect(screen.queryByTestId('config-save-error-llm.fast_model')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('config-save-error-llm.embed_model')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+});
+
+describe('IngestionSection — model delivery pending pill', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { fetchConfig } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+  });
+
+  it('renders the pending pill only for roles with delivery=pending_restart', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      delivery: { smart: 'pending_restart', fast: 'applied', embed: 'applied' },
+    });
+
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('delivery-pending-smart')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('delivery-pending-smart').textContent).toMatch(
+      /pending — applying automatically/,
+    );
+    expect(screen.queryByTestId('delivery-pending-fast')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('delivery-pending-embed')).not.toBeInTheDocument();
+  });
+
+  it('renders no pill when the delivery field is absent (older backend)', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('configure-toggle-smart')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('delivery-pending-smart')).not.toBeInTheDocument();
   });
 });
 
@@ -773,5 +895,216 @@ describe('IngestionSection — degraded backend (no fit_detail)', () => {
     });
     // No hardware strip when hardware is absent
     expect(screen.queryByTestId('hardware-strip')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 3 — new FE hunks (T2.4)
+// ---------------------------------------------------------------------------
+
+describe('IngestionSection — first-boot model banner (Part 3-1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the CURRENT smart model (not the bucket recommendation) for the detected GPU', async () => {
+    // current.smart_model is qwen3:14b (what autoconfigure actually seeded);
+    // the bucket recommendation's smart alias is qwen3:8b. The banner must
+    // assert the model that was actually picked — qwen3:14b, not qwen3:8b.
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware_recommendation: hwRecommendationMid,
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('first-boot-model-banner')).toBeInTheDocument();
+    });
+
+    const banner = screen.getByTestId('first-boot-model-banner');
+    expect(banner.textContent).toMatch(/We picked/);
+    // CURRENT smart model renders; the recommendation's qwen3:8b is NOT asserted.
+    expect(banner.textContent).toMatch(/qwen3:14b/);
+    expect(banner.textContent).not.toMatch(/qwen3:8b/);
+    expect(banner.textContent).toMatch(/15\.9.*GB.*GPU/);
+    expect(banner.textContent).toMatch(/change anytime in Settings.*Models/i);
+  });
+
+  it('does NOT render first-boot banner when there is no current smart model (even with a recommendation)', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      current: {},
+      hardware_recommendation: hwRecommendationMid,
+    });
+
+    renderSection();
+
+    // The advisory recommendation banner still renders (recommendation present)…
+    await waitFor(() => {
+      expect(screen.getByTestId('hw-recommendation-banner')).toBeInTheDocument();
+    });
+    // …but the first-boot banner is hidden because no current smart model exists.
+    expect(screen.queryByTestId('first-boot-model-banner')).not.toBeInTheDocument();
+  });
+
+  it('does NOT render first-boot banner on CPU (no GPU / vram 0)', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware: { ...hardwareWith16GB, vram_gb: 0 },
+      hardware_recommendation: hwRecommendationNullVram,
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hw-recommendation-banner')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('first-boot-model-banner')).not.toBeInTheDocument();
+  });
+});
+
+describe('IngestionSection — hardware source line (Part 3-2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders hardware-source-line when vram_source_detail is present', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware: {
+        ...hardwareWith16GB,
+        vram_source_detail: 'nvidia-smi (GPU 0: RTX 4090, 24576 MiB)',
+      },
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hardware-source-line')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('hardware-source-line').textContent).toContain('nvidia-smi (GPU 0: RTX 4090');
+  });
+
+  it('does NOT render hardware-source-line when vram_source_detail is absent', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hardware-strip')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('hardware-source-line')).not.toBeInTheDocument();
+  });
+});
+
+describe('IngestionSection — GPU overlay divergence line (Part 3-3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders gpu-overlay-divergence warning when host_gpu_divergence is true', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware: {
+        ...hardwareWith16GB,
+        host_gpu_divergence: true,
+      },
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('gpu-overlay-divergence')).toBeInTheDocument();
+    });
+    const line = screen.getByTestId('gpu-overlay-divergence');
+    expect(line.textContent).toMatch(/15\.9.*GB.*detected on host/);
+    expect(line.textContent).toMatch(/GPU overlay not active/);
+  });
+
+  it('does NOT render gpu-overlay-divergence when host_gpu_divergence is false', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware: {
+        ...hardwareWith16GB,
+        host_gpu_divergence: false,
+      },
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hardware-strip')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('gpu-overlay-divergence')).not.toBeInTheDocument();
+  });
+
+  it('does NOT render gpu-overlay-divergence when host_gpu_divergence is absent', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hardware-strip')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('gpu-overlay-divergence')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Researcher-language pass — §III model controls carry plain-language labels
+// + a one-sentence "what this does" description for each role.
+// ---------------------------------------------------------------------------
+
+describe('IngestionSection — researcher-language model labels', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+  });
+
+  it('renders a plain-language top-of-page description for the LLM Models group', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-models-description')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('llm-models-description').textContent).toMatch(/apply changes for you/i);
+  });
+
+  it('labels each role in plain language with the technical alias in parentheses', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByText('Main model (smart)')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Quick model (fast)')).toBeInTheDocument();
+    expect(screen.getByText('Embedding model (embed)')).toBeInTheDocument();
+  });
+
+  it('describes what each model does and that choices apply automatically', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByText(/Writes your summaries, cards, and Ask answers/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Scores and triages incoming papers/i)).toBeInTheDocument();
+    expect(screen.getByText(/Powers search across your library/i)).toBeInTheDocument();
+    // Post-W1/2/3 truth: model choices apply automatically (not "pending restart").
+    expect(screen.getAllByText(/applies automatically/i).length).toBeGreaterThanOrEqual(2);
   });
 });

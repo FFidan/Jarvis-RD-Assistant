@@ -121,6 +121,14 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
 
     Always returns ``{"sent": true}`` regardless of whether the email exists,
     so an attacker cannot enumerate valid accounts by timing/response shape.
+
+    When SMTP is unconfigured (no relay in DB or env) the link is silently
+    dropped after token generation: ``send_magic_link`` takes the dev-mode
+    fallback that records only a SHA-256 hash of the email in ``system_events``
+    (visible in Logs Live) without delivering the link anywhere.  The response
+    is still ``{"sent": true}`` so enumeration resistance is preserved — callers
+    MUST use the ``smtp_configured`` field on ``GET /api/setup/status`` to
+    surface this condition in the UI before the user submits an email.
     """
     pool = request.app.state.db_pool
     email_norm = body.email.lower().strip()

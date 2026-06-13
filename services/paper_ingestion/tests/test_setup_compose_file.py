@@ -136,7 +136,7 @@ def test_resolve_nvidia_smi_prefers_path(tmp_path: Path) -> None:
 
 
 def test_resolve_nvidia_smi_falls_back_to_wsl_path(tmp_path: Path) -> None:
-    """When nvidia-smi is NOT on PATH, the WSL2 location is used (the REDACTED-HOST case)."""
+    """When nvidia-smi is NOT on PATH, the WSL2 fallback location is used."""
     empty = tmp_path / "empty"
     empty.mkdir()
     wsl = tmp_path / "wsl-nvidia-smi"

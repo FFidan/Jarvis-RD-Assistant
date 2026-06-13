@@ -123,7 +123,7 @@ describe('CommandPaletteSearch (F1)', () => {
 
     act(() => useCommandPalette.getState().open());
 
-    const input = await screen.findByPlaceholderText(/search your papers/i);
+    const input = await screen.findByPlaceholderText(/search your papers…/i);
     await user.type(input, 'attention');
 
     // Flush the 250ms debounce.
@@ -225,12 +225,11 @@ describe('CommandPaletteSearch (F1)', () => {
     await user.click(result);
 
     // After selecting, the palette closes and we navigate to the Discover/search
-    // surface — with NO dead `q` param (the surface does not read one).
+    // surface with the typed query carried as ?q= so SearchBar is prefilled.
     await waitFor(() => expect(useCommandPalette.getState().isOpen).toBe(false));
     await waitFor(() =>
-      expect(screen.getByTestId('loc').textContent).toBe('/feed?surface=search'),
+      expect(screen.getByTestId('loc').textContent).toBe('/feed?surface=search&q=residual'),
     );
-    expect(screen.getByTestId('loc').textContent).not.toContain('q=');
   });
 
   it('not-in-library result is not disabled (has no aria-disabled=true attribute)', async () => {

@@ -332,7 +332,6 @@ async def call_llm_structured(
     prompt: str | None = None,
     messages: list[dict[str, str]] | None = None,
     options: ChatCompletionOptions | None = None,
-    config: LiteLLMConfig | None = None,
     max_retries: int = 2,
 ) -> T:
     """Structured LLM call via Instructor. Returns a validated Pydantic instance.
@@ -352,14 +351,11 @@ async def call_llm_structured(
         are provided, ``prompt`` is appended as a final user message.
     options:
         Model / token / temperature options.  Defaults to ChatCompletionOptions().
-    config:
-        LiteLLM config; defaults to env-resolved config.
     max_retries:
         Instructor retry budget (default 2).
 
     """
     _options = options or ChatCompletionOptions()
-    _config = config or get_litellm_config()
     _messages: list[dict[str, str]] = list(messages) if messages else []
     if prompt:
         if _options.system and not any(m.get("role") == "system" for m in _messages):

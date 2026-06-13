@@ -436,3 +436,156 @@ async def test_history_char_budget_drops_oldest_beyond_turn_cap():
     assert "turn-1-" in contents[0], (
         f"turn-1 must be the oldest surviving turn; first msg content prefix: {contents[0][:30]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Context-window char budget: tail chunks dropped so prompt + answer fit
+# ---------------------------------------------------------------------------
+
+
+def _prompt_budget() -> int:
+    from jarvis_common.prompt_safety import max_input_chars
+    from jarvis_common.settings import get_core_settings
+    from paper_ingestion.rag.streaming import _ANSWER_MAX_TOKENS
+
+    return max_input_chars(
+        get_core_settings().llm_smart_num_ctx, reserved_output_tokens=_ANSWER_MAX_TOKENS
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_paper_oversized_chunks_dropped_to_fit_budget(monkeypatch):
+    """Oversized chunk sets must lose tail chunks until the prompt fits the
+    char budget, with sources staying 1:1 with the chunks in the prompt."""
+    from paper_ingestion.models import AskRequest
+
+    monkeypatch.setenv("LLM_SMART_NUM_CTX", "1000")
+    chunks = [
+        {
+            "content": f"marker-{i}-" + "x" * 1200,
+            "page_number": i + 1,
+            "score": 0.9 - i * 0.01,
+            "chunk_index": i,
+        }
+        for i in range(5)
+    ]
+    embedder = _make_embedder(chunks=chunks)
+    body = AskRequest(question="What fits the window?", max_chunks=5)
+    pool = _make_pool()
+
+    messages, sources = await prepare_single_paper_rag(
+        embedder, pool, paper_id=1, body=body, http_client=AsyncMock(), user_id=1
+    )
+
+    assert 1 <= len(sources) < 5, f"Expected tail chunks dropped; got {len(sources)} sources"
+    total = sum(len(m["content"]) for m in messages)
+    assert total <= _prompt_budget(), f"Prompt ({total} chars) exceeds budget {_prompt_budget()}"
+
+    # Tail-drop: surviving sources are the head of the original order.
+    assert [s["content"] for s in sources] == [c["content"] for c in chunks[: len(sources)]]
+
+    # 1:1 invariant: every prompt chunk is a source and vice versa.
+    user_content = messages[-1]["content"]
+    for i, c in enumerate(chunks):
+        in_prompt = f"marker-{i}-" in user_content
+        in_sources = any(s["content"] == c["content"] for s in sources)
+        assert in_prompt == in_sources, f"chunk {i}: in_prompt={in_prompt} in_sources={in_sources}"
+
+
+@pytest.mark.asyncio
+async def test_single_paper_under_budget_keeps_all_chunks():
+    """Under the char budget, every chunk reaches both prompt and sources."""
+    from paper_ingestion.models import AskRequest
+
+    chunks = [
+        {"content": f"small-{i}", "page_number": i + 1, "score": 0.9, "chunk_index": i}
+        for i in range(3)
+    ]
+    embedder = _make_embedder(chunks=chunks)
+    body = AskRequest(question="Short question.", max_chunks=5)
+    pool = _make_pool()
+
+    messages, sources = await prepare_single_paper_rag(
+        embedder, pool, paper_id=1, body=body, http_client=AsyncMock(), user_id=1
+    )
+
+    assert [s["content"] for s in sources] == [c["content"] for c in chunks]
+    user_content = messages[-1]["content"]
+    assert all(f"small-{i}" in user_content for i in range(3))
+
+
+@pytest.mark.asyncio
+async def test_cross_paper_oversized_chunks_dropped_to_fit_budget(monkeypatch):
+    """Worst-case cross-paper assembly must fit the window; sources mirror the
+    post-drop chunk list exactly."""
+    from paper_ingestion.models import CrossPaperAskRequest
+
+    monkeypatch.setenv("LLM_SMART_NUM_CTX", "1000")
+    chunks = [
+        {
+            "paper_id": pid,
+            "chunk_index": ci,
+            "content": f"marker-{pid}-{ci}-" + "x" * 1200,
+            "page_number": ci + 1,
+            "score": 0.90 - (pid * 2 + ci) * 0.005,
+        }
+        for pid in (1, 2, 3)
+        for ci in (0, 1)
+    ]
+    paper_rows = [
+        {"id": pid, "title": f"Paper {pid}", "authors": [], "url": f"http://example.com/{pid}"}
+        for pid in (1, 2, 3)
+    ]
+    embedder = _make_cross_paper_embedder(chunks=chunks)
+    pool = _make_cross_paper_pool(paper_rows=paper_rows)
+    body = CrossPaperAskRequest(
+        question="Compare all of it.", decompose=False, max_chunks=6, max_papers=3
+    )
+
+    result = await prepare_cross_paper_rag(embedder, pool, body=body, http_client=AsyncMock())
+
+    assert hasattr(result, "messages"), f"Expected CrossPaperRagPrep; got {result!r}"
+    assert 1 <= len(result.sources) < 6, (
+        f"Expected tail chunks dropped; got {len(result.sources)} sources"
+    )
+    total = sum(len(m["content"]) for m in result.messages)
+    assert total <= _prompt_budget(), f"Prompt ({total} chars) exceeds budget {_prompt_budget()}"
+
+    user_content = result.messages[-1]["content"]
+    source_contents = {s["content"] for s in result.sources}
+    for c in chunks:
+        marker = c["content"][: c["content"].index("x")]
+        in_prompt = marker in user_content
+        in_sources = c["content"] in source_contents
+        assert in_prompt == in_sources, f"{marker}: in_prompt={in_prompt} in_sources={in_sources}"
+
+
+@pytest.mark.asyncio
+async def test_cross_paper_under_budget_keeps_all_chunks():
+    """Under the char budget, the cross-paper prompt and sources are untouched."""
+    from paper_ingestion.models import CrossPaperAskRequest
+
+    chunks = [
+        {
+            "paper_id": pid,
+            "chunk_index": 0,
+            "content": f"small-{pid}",
+            "page_number": 1,
+            "score": 0.9 - pid * 0.01,
+        }
+        for pid in (1, 2)
+    ]
+    paper_rows = [
+        {"id": pid, "title": f"Paper {pid}", "authors": [], "url": f"http://example.com/{pid}"}
+        for pid in (1, 2)
+    ]
+    embedder = _make_cross_paper_embedder(chunks=chunks)
+    pool = _make_cross_paper_pool(paper_rows=paper_rows)
+    body = CrossPaperAskRequest(question="Tiny question.", decompose=False)
+
+    result = await prepare_cross_paper_rag(embedder, pool, body=body, http_client=AsyncMock())
+
+    assert hasattr(result, "messages"), f"Expected CrossPaperRagPrep; got {result!r}"
+    assert {s["content"] for s in result.sources} == {c["content"] for c in chunks}
+    user_content = result.messages[-1]["content"]
+    assert all(f"small-{pid}" in user_content for pid in (1, 2))

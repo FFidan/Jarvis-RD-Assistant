@@ -22,6 +22,7 @@ import { getFirstRunStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
 import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
+import { LogsRoute } from '@/components/auth/LogsRoute';
 
 // Heavy pages lazy-loaded to reduce initial bundle size.
 // - Graph pages pull cytoscape (~432 kB).
@@ -197,7 +198,7 @@ export function App() {
                   <Route path="/my-day" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><MyDayPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="settings" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><SettingsPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="analytics" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AnalyticsPage /></Suspense></RouteErrorBoundary>} />
-                  <Route path="logs" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><LogsPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
+                  <Route path="logs" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><LogsRoute><LogsPage /></LogsRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/users" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/audit-log" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminAuditLogPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/system-health" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminSystemHealthPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />

@@ -85,30 +85,8 @@ detect_hw_tier() {  # echoes: cpu | lt-8 | 8-16 | 16-24 | 24-48 | ge-48
   fi
 }
 
-_default_model_for_tier() {
-  # $1 = tier, $2 = backend; reads config/llm-tier-candidates.yaml when present
-  python3 - "$1" "$2" <<'PY'
-import sys, yaml
-tier, backend = sys.argv[1:3]
-_OLLAMA_FALLBACK = {
-    "cpu": "qwen3:1.7b", "lt-8": "qwen3:1.7b",
-    "8-16": "qwen2.5:7b-instruct", "16-24": "qwen2.5:7b-instruct",
-    "24-48": "qwen3:8b", "ge-48": "qwen3:14b",
-}
-try:
-    with open("config/llm-tier-candidates.yaml") as f:
-        data = yaml.safe_load(f)
-except FileNotFoundError:
-    print(_OLLAMA_FALLBACK.get(tier, "qwen3:1.7b"))
-    sys.exit(0)
-for c in data["tiers"].get(tier, {}).get("candidates", []):
-    if c["backend"] == backend:
-        print(c["model"])
-        sys.exit(0)
-fb = data["tiers"][tier]["fallback_for_tier"]
-print(fb["model"])
-PY
-}
+# _default_model_for_tier lives in scripts/setup_lib.sh (sourced below) so the
+# PyYAML-optional fallback path is unit-testable.
 
 prompt_ai_backend() {
   local tier; tier=$(detect_hw_tier)
@@ -162,6 +140,8 @@ run_doctor() {
   printf '%s--- setup.sh --check (read-only) -------------------------------%s\n' "$C_BOLD" "$C_RESET"
   if command -v docker >/dev/null 2>&1; then ok "docker present"; else err "docker missing — $(os_install_hint docker)"; fail=1; fi
   if docker compose version >/dev/null 2>&1; then ok "docker compose v2 present"; else err "docker compose v2 missing"; fail=1; fi
+  # `docker info` (not a socket stat) so DOCKER_HOST/rootless setups are honoured.
+  if docker info >/dev/null 2>&1; then ok "docker daemon reachable"; else err "docker daemon unreachable — start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), or check DOCKER_HOST/permissions"; fail=1; fi
   if command -v openssl >/dev/null 2>&1; then ok "openssl present"; else err "openssl missing"; fail=1; fi
   # Detect GPU presence and, if found, surface an advisory model recommendation.
   # VRAM detection uses nvidia-smi --query-gpu=memory.total (MiB); the advisory
@@ -451,15 +431,32 @@ case "$COMPOSE_VER" in
   *)        warn "Unexpected Compose version '$COMPOSE_VER' — expected v2.x. Proceeding." ;;
 esac
 
+# Fatal daemon probe — must run before the idempotency gate and every prompt,
+# so a dead daemon can never strand a half-answered wizard or persist a stale
+# COMPOSE_FILE. `docker info` (not a socket stat) honours DOCKER_HOST/rootless.
+docker info >/dev/null 2>&1 \
+  || die "Docker daemon is not reachable ('docker info' failed)." \
+         "Start Docker (Docker Desktop on macOS; 'sudo systemctl start docker' on Linux), check DOCKER_HOST/permissions, then re-run ./setup.sh"
+
 command -v openssl >/dev/null 2>&1 \
   || die "openssl required for secret generation." \
          "$(os_install_hint docker)"
 
-# GPU is informational — not fatal.
-if command -v nvidia-smi >/dev/null 2>&1; then
-  GPU_LINE="$(nvidia-smi -L 2>/dev/null | head -n 1 || true)"
+# GPU is informational — not fatal. Resolve nvidia-smi via the WSL2-aware helper
+# (same as detect_hw_tier) so WSL2 hosts — where nvidia-smi is off PATH at
+# /usr/lib/wsl/lib/nvidia-smi — still capture JARVIS_HOST_VRAM_MB for the GPU
+# overlay handoff. A bare `command -v nvidia-smi` would miss them.
+NI_HOST_VRAM_MB=""
+_ni_smi="$(resolve_nvidia_smi 2>/dev/null || true)"
+if [ -n "$_ni_smi" ]; then
+  GPU_LINE="$("$_ni_smi" -L 2>/dev/null | head -n 1 || true)"
   if [ -n "$GPU_LINE" ]; then
     ok "GPU detected: $GPU_LINE"
+    _vram_mb="$("$_ni_smi" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+    case "$_vram_mb" in
+      ''|*[!0-9]*) ;;
+      *) NI_HOST_VRAM_MB="$_vram_mb" ;;
+    esac
   else
     warn "nvidia-smi present but no GPU enumerated — Ollama will run on CPU (slower)."
   fi
@@ -487,8 +484,22 @@ if [ "${#PORTS_IN_USE[@]}" -gt 0 ]; then
   warn "Ports already in use: ${PORTS_IN_USE[*]}. Services on these ports may conflict on startup."
 fi
 
+# existing_env_value KEY — print the current value of KEY from .env, or nothing
+# if .env is absent or KEY is absent/empty. A present-but-empty `KEY=` counts
+# as absent (the `=.\+` requires at least one char after `=`). The value is
+# emitted verbatim after the first `=`, so `=`, `/`, `+`, and base64 padding
+# survive intact.
+existing_env_value() {
+  [ -f .env ] || return 1
+  grep -qE "^$1=.+" .env 2>/dev/null || return 1
+  grep "^$1=" .env | head -n 1 | cut -d'=' -f2-
+}
+
 # -----------------------------------------------------------------------------
 # 3. Idempotency gate
+# Declining the overwrite keeps .env AND starts the stack with it — a re-run
+# must never dead-end with services down. COMPOSE_FILE and COMPOSE_PROFILES
+# persisted in .env are honoured natively by docker compose.
 # -----------------------------------------------------------------------------
 if [ -f .env ]; then
   printf '\n%sConfiguration already exists (.env).%s\n' "$C_YELLOW" "$C_RESET"
@@ -498,7 +509,30 @@ if [ -f .env ]; then
     read -rp "Overwrite? (y/N): " reply
     case "$reply" in
       [yY]|[yY][eE][sS]) info "Proceeding — existing .env will be replaced." ;;
-      *) ok "Keeping existing .env. Exiting."; exit 0 ;;
+      *)
+        ok "Keeping existing .env — starting the stack with it."
+        KEEP_PROFILE_ARGS=()
+        if ! existing_env_value COMPOSE_PROFILES >/dev/null; then
+          # Pre-v0.8 .env files never persisted the profile selection.
+          if existing_env_value TELEGRAM_BOT_TOKEN >/dev/null; then
+            KEEP_PROFILE_ARGS+=(--profile telegram)
+            info "No COMPOSE_PROFILES in .env — enabling the telegram profile (TELEGRAM_BOT_TOKEN is set)."
+          fi
+        fi
+        # Source versions.env so the postgres SHA-digest pin and image tags
+        # are available on the keep-path the same as on the normal install path.
+        if [ -f versions.env ]; then
+          # shellcheck disable=SC1091  # versions.env is runtime-provided KEY=VALUE data, not a script
+          set -a && . ./versions.env && set +a
+        fi
+        info "Starting services with: docker compose ${KEEP_PROFILE_ARGS[*]:-} up -d"
+        if ! docker compose ${KEEP_PROFILE_ARGS[@]+"${KEEP_PROFILE_ARGS[@]}"} up -d; then
+          die "docker compose up failed." \
+              "Inspect logs: docker compose logs --tail=200"
+        fi
+        ok "Stack started with the existing configuration. To regenerate .env, re-run ./setup.sh and answer 'y'."
+        exit 0
+        ;;
     esac
   fi
 fi
@@ -518,17 +552,8 @@ fi
 # openssl-generate a fresh value when the key is absent or empty (mirrors the
 # never-clobber contract of scripts/init-secrets.sh::sync_secret).  This must
 # read .env BEFORE section 7 overwrites it via tempfile + mv.
-
-# existing_env_value KEY — print the current value of KEY from .env, or nothing
-# if .env is absent or KEY is absent/empty. A present-but-empty `KEY=` counts
-# as absent (the `=.\+` requires at least one char after `=`). The value is
-# emitted verbatim after the first `=`, so `=`, `/`, `+`, and base64 padding
-# survive intact.
-existing_env_value() {
-  [ -f .env ] || return 1
-  grep -qE "^$1=.+" .env 2>/dev/null || return 1
-  grep "^$1=" .env | head -n 1 | cut -d'=' -f2-
-}
+# (existing_env_value is defined above section 3 — the idempotency gate's
+# keep-and-start path needs it first.)
 
 info "Generating secrets..."
 POSTGRES_PASSWORD="$(existing_env_value POSTGRES_PASSWORD || openssl rand -hex 24)"
@@ -789,6 +814,16 @@ else
   fi
 fi
 
+# Comma-joined profile selection, persisted as COMPOSE_PROFILES in .env so a
+# bare `docker compose up -d` (and the keep-and-start re-run path) starts the
+# same profile set the wizard selected.
+COMPOSE_PROFILES_VALUE=""
+if [ "$USE_TUNNEL_PROFILE" -eq 1 ]; then
+  COMPOSE_PROFILES_VALUE="tunnel"
+fi
+if [ "$USE_TELEGRAM_PROFILE" -eq 1 ]; then
+  COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE:+${COMPOSE_PROFILES_VALUE},}telegram"
+fi
 # -----------------------------------------------------------------------------
 # 7. Write .env (tempfile + mv, macOS-safe)
 # -----------------------------------------------------------------------------
@@ -850,11 +885,13 @@ sub_value() {
     API_KEY_LOGIN_ENABLED) [ "$NI_MODE" = "single" ] && printf 'true' || printf 'false' ;;
     JARVIS_HW_TIER)
       printf '%s' "${NI_HW_TIER:-$(detect_hw_tier)}" ;;
+    JARVIS_HOST_VRAM_MB)
+      [ -n "$NI_HOST_VRAM_MB" ] && printf '%s' "$NI_HOST_VRAM_MB" || return 1 ;;
     JARVIS_LLM_BACKEND)
       printf '%s' "${NI_LLM_BACKEND:-auto}" ;;
     JARVIS_SMART_MODEL)
       printf '%s' "${NI_SMART_MODEL:-}" ;;
-    COMPOSE_PROFILES) printf '' ;;
+    COMPOSE_PROFILES) printf '%s' "$COMPOSE_PROFILES_VALUE" ;;
     OLLAMA_MODELS) compute_ollama_models "${NI_SMART_MODEL:-qwen3:8b}" ;;
     *) return 1 ;;
   esac
@@ -903,12 +940,13 @@ info "Writing Docker secret files via scripts/init-secrets.sh..."
 bash "${SCRIPT_DIR}/scripts/init-secrets.sh"
 ok "Docker secret files ready in secrets/ (mode 600)."
 
-if [ -n "${NI_LLM_BACKEND:-}" ] && [ -n "${NI_SMART_MODEL:-}" ]; then
-  JARVIS_LLM_BACKEND="${NI_LLM_BACKEND}" \
-  JARVIS_SMART_MODEL="${NI_SMART_MODEL}" \
-  JARVIS_HW_TIER="${NI_HW_TIER}" \
-    bash scripts/render-litellm-config.sh || warn "litellm render failed (continuing)"
-fi
+# De-seed guard: switchable model aliases (smart/fast/smart-fallback) live in
+# LiteLLM's admin DB (delivered by the paper_ingestion boot reconciler), never
+# in litellm/config.yaml — a YAML alias would stack with its DB replacement and
+# keep routing the stale model. The script scrubs any legacy YAML aliases
+# (upgrade path) and needs no env inputs; the chosen model reaches the system
+# via .env (JARVIS_SMART_MODEL) + the boot reconciler.
+bash scripts/render-litellm-config.sh || warn "litellm config de-seed failed (continuing)"
 
 # init-secrets.sh does NOT generate the Langfuse init keypair, yet the default
 # (no-profile) paper_ingestion/learning_engine services mount langfuse_init_pk
@@ -991,8 +1029,38 @@ fi
 _has_override=0; [ -f docker-compose.override.yml ] && _has_override=1
 _has_nvidia=0; [ "${#COMPOSE_OVERLAY[@]}" -gt 0 ] && _has_nvidia=1
 upsert_env_var COMPOSE_FILE "$(compute_compose_file "$_has_nvidia" "$_has_override")"
+# Start Ollama alone first, then run the model pull as an attached one-off so
+# its progress streams to the terminal — buried inside a bare `up -d` the
+# 7-11 GB first pull looks like a hang.
+info "Starting Ollama: docker compose ${COMPOSE_FILE_ARGS[*]:-} up -d ollama"
+if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} up -d ollama; then
+  die "docker compose up failed." \
+      "Inspect logs: docker compose logs --tail=200"
+fi
+wait_healthy ollama 180 \
+  || warn "Ollama is still starting — model inventory unknown; proceeding to the model pull."
+
+_FIRST_RUN_PULL=0
+if docker compose exec -T ollama ollama list 2>/dev/null | tail -n +2 | grep -q .; then
+  : # models already present — bootstrap below is a fast verify
+else
+  _FIRST_RUN_PULL=1
+  printf '\n'
+  printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s  Downloading models (7-11 GB) — first run can take 20-60 min. %s\n' "$C_YELLOW" "$C_RESET"
+  printf '%s  Pull progress streams below. This is not an error.           %s\n' "$C_YELLOW" "$C_RESET"
+  printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
+  printf '\n'
+fi
+
+info "Pulling models via ollama-bootstrap..."
+if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} run --rm ollama-bootstrap; then
+  die "Model download failed (ollama-bootstrap)." \
+      "Check network/disk space and re-run ./setup.sh — or pull manually: docker compose exec ollama ollama pull <model>"
+fi
+
 info "Starting services with: docker compose ${COMPOSE_FILE_ARGS[*]:-} ${PROFILE_ARGS[*]:-} up -d"
-if ! docker compose "${COMPOSE_FILE_ARGS[@]}" "${PROFILE_ARGS[@]}" up -d; then
+if ! docker compose ${COMPOSE_FILE_ARGS[@]+"${COMPOSE_FILE_ARGS[@]}"} ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} up -d; then
   die "docker compose up failed." \
       "Inspect logs: docker compose logs --tail=200"
 fi
@@ -1007,26 +1075,10 @@ MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboar
 printf '\n'
 info "Waiting for services to become healthy..."
 
-# Detect first-run: if ollama has no models yet, paper_ingestion and
-# learning_engine will block behind ollama-bootstrap pulling ~14 GB.
-# The audit entry "ollama 60s" was imprecise — ollama itself already has a
-# 180s budget; the real blocker is paper_ingestion (60s) timing out while
-# waiting for ollama-bootstrap to finish pulling.  Give every app service a
-# long budget when models are absent, and print a clear banner so users do
-# not mistake the wait for a hang.
-_FIRST_RUN_PULL=0
-if docker compose exec -T ollama ollama list 2>/dev/null | grep -q 'NAME'; then
-  : # models present — normal budgets apply
-else
-  _FIRST_RUN_PULL=1
-  printf '\n'
-  printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
-  printf '%s  Downloading models — first run can take 20-60 min.           %s\n' "$C_YELLOW" "$C_RESET"
-  printf '%s  This is not an error. Please wait...                         %s\n' "$C_YELLOW" "$C_RESET"
-  printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
-  printf '\n'
-fi
-
+# _FIRST_RUN_PULL was detected in section 10 (before the streamed bootstrap
+# pull). The pull already finished by now, but the compose-managed bootstrap
+# re-runs as a dependency of paper_ingestion/learning_engine, so first runs
+# keep the generous 3600s budgets as a safety margin.
 SETUP_FAILED=()
 for svc in "${MANDATORY_SVCS[@]}"; do
   case "$svc" in

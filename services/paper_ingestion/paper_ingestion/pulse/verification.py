@@ -4,10 +4,20 @@ Thin wrapper around the existing :class:`QuoteVerifier` that scores a Pulse
 card's LLM-generated ``reasoning`` sentence against the candidate paper's
 title + abstract. The result is a (verified, RagConfidence) tuple, which the
 deck persistence layer stores on ``pulse_cards.reasoning_verified`` +
-``pulse_cards.reasoning_confidence`` (migration 034).
+``pulse_cards.reasoning_confidence`` (CHECK constraint
+``pulse_cards_reasoning_confidence_check`` in ``db/init.sql``).
 
-Reuses the same exact/fuzzy matching logic as ``rag/verification.py`` —
-does not re-implement thresholds.
+Score-to-confidence mapping (``_score_to_confidence``):
+
+- HIGH  — partial_ratio ≥ 97 (matches ``QuoteVerifier.FUZZY_THRESHOLD``)
+- MEDIUM — partial_ratio ≥ 85
+- LOW   — partial_ratio ≥ 70
+- UNVERIFIED — below 70 or score is None
+
+These thresholds are persisted to DB as ``RagConfidence`` enum values and
+MUST NOT be changed silently — a migration is required if the mapping shifts.
+Reuses the same exact/fuzzy matching logic as ``rag/verification.py`` for
+the underlying score; the three-tier bucketing above is unique to this module.
 """
 
 from __future__ import annotations

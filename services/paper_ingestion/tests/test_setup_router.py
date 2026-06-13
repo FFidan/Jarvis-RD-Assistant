@@ -139,3 +139,84 @@ async def test_create_first_admin_logs_hash_not_raw_email(monkeypatch, caplog) -
     assert not any(raw_email in r.message for r in caplog.records), (
         "Raw email must not appear in any log record"
     )
+
+
+# ---------------------------------------------------------------------------
+# F6: configure_cloud_llm_keys delivery hardening
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_configure_cloud_llm_keys_uses_config_lock_and_machine_id(monkeypatch):
+    """configure_cloud_llm_keys re-push must go through _config_lock and pass machine_id."""
+
+    import paper_ingestion.services.litellm_config as litellm_mod
+
+    # Conn returns the active fast model for the ROLE_TO_ALIAS key lookup.
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        side_effect=lambda q, *a: (
+            {"value": "anthropic/claude-haiku-4-5"} if "llm.fast_model" in a else None
+        )
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    # Capture the machine_id passed to update_litellm_model and whether the
+    # call happened inside _config_lock.
+    captured: list[dict] = []
+    lock_held_during: list[bool] = []
+
+    async def fake_update(alias_key, model_id, *, db_pool, machine_id):
+        lock_held_during.append(litellm_mod._config_lock.locked())
+        captured.append({"alias_key": alias_key, "machine_id": machine_id})
+        return True
+
+    monkeypatch.setattr(litellm_mod, "update_litellm_model", fake_update)
+    monkeypatch.setattr("paper_ingestion.routers.setup.socket.gethostname", lambda: "test-host")
+
+    # require_unconfigured_or_admin: no admin exists (fetchval = 0)
+    conn.fetchval = AsyncMock(return_value=0)
+    # Bypass _persist_config entirely — this test is about the delivery plane
+    monkeypatch.setattr(
+        "paper_ingestion.routers.setup._persist_config", AsyncMock(return_value=None)
+    )
+
+    body = setup_router.CloudLlmKeysBody(anthropic="sk-ant-test-key-xxxxxxxxxxxx")
+    result = await setup_router.configure_cloud_llm_keys(body, request)
+
+    assert result.restart_required is False
+    assert any(c["machine_id"] == "test-host" for c in captured), (
+        "machine_id=socket.gethostname() must be passed to update_litellm_model"
+    )
+    assert all(lock_held_during), "_config_lock must be held during update_litellm_model"
+
+
+@pytest.mark.asyncio
+async def test_configure_cloud_llm_keys_push_failure_no_restart_required(monkeypatch):
+    """A failed live push must NOT set restart_required — reconciler retries in ≤30 s."""
+    import paper_ingestion.services.litellm_config as litellm_mod
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        side_effect=lambda q, *a: {"value": "openai/gpt-4o"} if "llm.smart_model" in a else None
+    )
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.execute = AsyncMock(return_value=None)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    async def failing_update(alias_key, model_id, *, db_pool, machine_id):
+        raise RuntimeError("LiteLLM unreachable")
+
+    monkeypatch.setattr(litellm_mod, "update_litellm_model", failing_update)
+    monkeypatch.setattr("paper_ingestion.routers.setup.socket.gethostname", lambda: "test-host")
+    monkeypatch.setattr(
+        "paper_ingestion.routers.setup._persist_config", AsyncMock(return_value=None)
+    )
+
+    body = setup_router.CloudLlmKeysBody(openai="sk-openai-test-key-xxxxxxxxxxxx")
+    result = await setup_router.configure_cloud_llm_keys(body, request)
+
+    assert result.restart_required is False
+    assert result.applied_now == []

@@ -44,11 +44,10 @@ from paper_ingestion.routers.settings_sources import (  # noqa: F401
 )
 
 # update_litellm_model is passed to write_config so the router-module symbol is
-# what tests monkeypatch.  ROLE_TO_ALIAS / reload_litellm are re-exported for
-# any caller that previously imported them from this module.
+# what tests monkeypatch.  ROLE_TO_ALIAS is re-exported for any caller that
+# previously imported it from this module.
 from paper_ingestion.services.litellm_config import (
     ROLE_TO_ALIAS,  # noqa: F401
-    reload_litellm,  # noqa: F401
     update_litellm_model,
 )
 

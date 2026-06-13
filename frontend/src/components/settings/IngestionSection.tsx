@@ -25,9 +25,13 @@ const isNumCtx = (n: number): n is NumCtx => (NUM_CTX_STOPS as readonly number[]
 interface HardwareInfoApi {
   vram_gb?: number;
   vram_source?: string;
+  /** Human-readable detail string for how VRAM was detected (e.g. "nvidia-smi (GPU 0: RTX 4090)"). */
+  vram_source_detail?: string;
   tier?: number;
   detected_at?: string;
   machine_id?: string;
+  /** True when host GPU differs from the active GPU overlay — host VRAM reported, overlay not active. */
+  host_gpu_divergence?: boolean;
 }
 
 interface ModelCatalogEntryApi {
@@ -47,6 +51,10 @@ interface ModelCatalogEntryApi {
 type SystemModelsApi = Pick<SystemModelsResponse, 'hardware_recommendation'> & {
   hardware?: HardwareInfoApi;
   catalog?: ModelCatalogEntryApi[];
+  /** Per-role LiteLLM delivery state — absent on older backends. */
+  delivery?: Record<string, 'pending_restart' | 'applied'>;
+  /** Committed per-role model intent (what autoconfigure / Settings stored). */
+  current?: { smart_model?: string; fast_model?: string; embed_model?: string };
 };
 
 type FitDetailWithBaseline = ModelFitDetail & {
@@ -152,32 +160,84 @@ function HardwareStrip({ hardware }: HardwareStripProps) {
     .join(' · ');
 
   return (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      className="mb-3 w-full cursor-pointer rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground select-none text-left"
-      onClick={() => setExpanded((v) => !v)}
-      data-testid="hardware-strip"
-    >
-      <span className="font-medium text-foreground">{summary}</span>
-      {expanded && (
-        <span className="ml-3 space-x-3">
-          {hardware.vram_source && (
-            <span>
-              Source: <span className="text-foreground">{hardware.vram_source}</span>
-            </span>
-          )}
-          {hardware.detected_at && (
-            <span>
-              Detected:{' '}
-              <span className="text-foreground">
-                {new Date(hardware.detected_at).toLocaleString()}
+    <div className="mb-3 space-y-1">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        className="w-full cursor-pointer rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground select-none text-left"
+        onClick={() => setExpanded((v) => !v)}
+        data-testid="hardware-strip"
+      >
+        <span className="font-medium text-foreground">{summary}</span>
+        {expanded && (
+          <span className="ml-3 space-x-3">
+            {hardware.vram_source && (
+              <span>
+                Source: <span className="text-foreground">{hardware.vram_source}</span>
               </span>
-            </span>
-          )}
-        </span>
+            )}
+            {hardware.detected_at && (
+              <span>
+                Detected:{' '}
+                <span className="text-foreground">
+                  {new Date(hardware.detected_at).toLocaleString()}
+                </span>
+              </span>
+            )}
+          </span>
+        )}
+      </button>
+      {hardware.vram_source_detail && (
+        <p
+          className="px-1 text-xs text-muted-foreground"
+          data-testid="hardware-source-line"
+        >
+          {hardware.vram_source_detail}
+        </p>
       )}
-    </button>
+      {hardware.host_gpu_divergence === true && typeof hardware.vram_gb === 'number' && (
+        <p
+          className="rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"
+          data-testid="gpu-overlay-divergence"
+        >
+          {hardware.vram_gb.toFixed(1)} GB detected on host — GPU overlay not active
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FirstBootModelBanner — shown once after autoconfigure picks a model
+// ---------------------------------------------------------------------------
+
+interface FirstBootModelBannerProps {
+  /** The CURRENT smart model autoconfigure actually seeded on first boot. */
+  smartModel?: string;
+  vramGb?: number;
+}
+
+/**
+ * Shown after setup autoconfigure has seeded the smart model.
+ * Renders "We picked {model} for your {vram} GB GPU — change anytime in Settings → Models."
+ *
+ * Feeds off the CURRENT smart model (what autoconfigure actually wrote), NOT the
+ * static hardware-recommendation bucket — on boxes where the bucket recommends a
+ * model that was never pulled (e.g. 48 GB → qwen3:30b-a3b while only qwen3:8b is
+ * installed) the recommendation would assert a pick that never happened. Hidden
+ * when there is no current smart model or no GPU (vram null / 0).
+ */
+function FirstBootModelBanner({ smartModel, vramGb }: FirstBootModelBannerProps) {
+  if (!smartModel || vramGb === undefined || vramGb <= 0) return null;
+
+  return (
+    <div
+      className="mb-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+      data-testid="first-boot-model-banner"
+    >
+      We picked <span className="font-mono font-medium">{smartModel}</span> for your{' '}
+      {vramGb.toFixed(1)} GB GPU — change anytime in Settings → Models
+    </div>
   );
 }
 
@@ -361,6 +421,9 @@ function NumCtxSlider({
     return idx >= 0 ? idx : 0;
   });
 
+  // Inline save-failure message (a silent slider snap would look saved)
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const currentStop = stops[sliderIndex] ?? stops[0];
 
   // Memoize required VRAM for the current slider position (used in fit badge + label rows)
@@ -394,7 +457,19 @@ function NumCtxSlider({
 
   const saveMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() }),
+    onSuccess: () => {
+      setSaveError(null);
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.all() });
+    },
+    onError: (error: Error, variables) => {
+      setSaveError(`Failed to save: ${error.message}`);
+      if (variables.key === numCtxKey) {
+        // Roll the slider back to the persisted value — a failed save must
+        // not keep looking saved.
+        const persistedIdx = isNumCtx(initialStop) ? stops.indexOf(initialStop) : -1;
+        setSliderIndex(persistedIdx >= 0 ? persistedIdx : 0);
+      }
+    },
   });
 
   const handleSliderChange = (values: number[]) => {
@@ -427,7 +502,7 @@ function NumCtxSlider({
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label className="text-xs text-muted-foreground">
-            Context length (num_ctx): <span className="font-medium text-foreground">{currentStop.toLocaleString()}</span>
+            Reading window — how much of each paper the AI reads at once (tokens): <span className="font-medium text-foreground">{currentStop.toLocaleString()}</span>
           </Label>
           {badgeStatus !== 'unknown' && (
             <FitBadge
@@ -464,6 +539,15 @@ function NumCtxSlider({
             );
           })}
         </div>
+        {saveError && (
+          <p
+            className="text-sm text-destructive"
+            role="alert"
+            data-testid={`num-ctx-save-error-${role}`}
+          >
+            {saveError}
+          </p>
+        )}
       </div>
 
       {supportsThinking && (
@@ -498,6 +582,8 @@ interface LlmModelCardProps {
   isPending: boolean;
   /** Config entries from parent (to avoid a second fetch in NumCtxSlider). */
   configs: ConfigEntry[];
+  /** LiteLLM delivery state for this role — "pending_restart" shows the pill. */
+  deliveryStatus?: 'pending_restart' | 'applied';
 }
 
 function LlmModelCard({
@@ -509,6 +595,7 @@ function LlmModelCard({
   onSave,
   isPending,
   configs,
+  deliveryStatus,
 }: LlmModelCardProps) {
   const [configureOpen, setConfigureOpen] = useState(false);
 
@@ -523,7 +610,18 @@ function LlmModelCard({
     <Card className="rounded-md border-hair shadow-none">
       <CardContent className="flex items-center gap-4 p-4">
         <div className="flex-1 min-w-0 space-y-2">
-          <div className="font-medium text-sm">{meta.label}</div>
+          <div className="flex items-center gap-2">
+            <div className="font-medium text-sm">{meta.label}</div>
+            {deliveryStatus === 'pending_restart' && (
+              <span
+                className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                data-testid={`delivery-pending-${role}`}
+                title="Saved. The model service is temporarily unavailable, so JARVIS retries automatically and applies your choice as soon as it recovers. Answers keep using the previous model until then."
+              >
+                pending — applying automatically
+              </span>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground">{meta.description}</p>
           <ModelSelector
             value={currentValue}
@@ -617,18 +715,21 @@ const CONFIG_METADATA: Record<
       "Minutes between a new card's first review attempts before it enters the FSRS long-term schedule. [1, 10] = reviewed after 1 min, then 10 min.",
   },
   'llm.embed_model': {
-    label: 'Embedding Model',
-    description: 'Model used for generating text embeddings',
+    label: 'Embedding model (embed)',
+    description:
+      'Powers search across your library. Fixed once chosen — switching it requires re-indexing every paper.',
     group: 'LLM Models',
   },
   'llm.fast_model': {
-    label: 'Fast Model',
-    description: 'Lightweight model for quick tasks like tagging and decomposition',
+    label: 'Quick model (fast)',
+    description:
+      'Scores and triages incoming papers. Pick a small, fast model — your choice applies automatically.',
     group: 'LLM Models',
   },
   'llm.smart_model': {
-    label: 'Smart Model',
-    description: 'High-capability model for summarization, extraction, and RAG',
+    label: 'Main model (smart)',
+    description:
+      'Writes your summaries, cards, and Ask answers. Pick the strongest model your GPU fits — your choice applies automatically.',
     group: 'LLM Models',
   },
 };
@@ -659,7 +760,10 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   const queryClient = useQueryClient();
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
-  const [saveError, setSaveError] = useState<string | null>(null);
+  // Keyed by config key so a failed save paints ONLY under the card that
+  // failed — a single section-global string would render under every card
+  // taking the custom-element path (all three model cards).
+  const [saveError, setSaveError] = useState<{ key: string; message: string } | null>(null);
 
   const { data: configs = [], isLoading } = useQuery({
     queryKey: QUERY_KEYS.config.all(),
@@ -679,6 +783,9 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   const machineId = hardware?.machine_id ?? 'local';
   // B3-2: per-VRAM advisory recommendation (optional — absent on older backends)
   const hardwareRecommendation = systemModels?.hardware_recommendation;
+  // First-boot banner shows the CURRENT smart model autoconfigure actually
+  // seeded (current.smart_model), not the static bucket recommendation.
+  const currentSmartModel = systemModels?.current?.smart_model;
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
@@ -688,8 +795,8 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
       setEditingKey(null);
       setSaveError(null);
     },
-    onError: (error: Error) => {
-      setSaveError(`Failed to save: ${error.message}`);
+    onError: (error: Error, variables) => {
+      setSaveError({ key: variables.key, message: `Failed to save: ${error.message}` });
     },
   });
 
@@ -768,9 +875,18 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
           <h4 className="mt-4 mb-2 text-sm font-semibold text-muted-foreground first:mt-0">
             {group}
           </h4>
+          {group === 'LLM Models' && (
+            <p className="mb-3 text-sm text-muted-foreground" data-testid="llm-models-description">
+              Choose the models that read and write your research. We pick sensible
+              defaults for your GPU and apply changes for you.
+            </p>
+          )}
           {/* Hardware strip — shown once at top of LLM Models group (§6.2) */}
           {group === 'LLM Models' && hardware && (
             <HardwareStrip hardware={hardware} />
+          )}
+          {group === 'LLM Models' && currentSmartModel && (
+            <FirstBootModelBanner smartModel={currentSmartModel} vramGb={hardware?.vram_gb} />
           )}
           {/* B3-2: Per-VRAM advisory recommendation banner */}
           {group === 'LLM Models' && hardwareRecommendation && (
@@ -794,6 +910,7 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
                     onSave={(key, value) => setMut.mutate({ key, value })}
                     isPending={setMut.isPending}
                     configs={configs}
+                    deliveryStatus={systemModels?.delivery?.[role]}
                   />
                 );
               })() : undefined;
@@ -805,7 +922,7 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
                   customElement={customElement}
                   editingKey={editingKey}
                   editValue={editValue}
-                  saveError={saveError}
+                  saveError={saveError?.key === entry.key ? saveError.message : null}
                   isMutPending={setMut.isPending}
                   onMutate={(key, value) => setMut.mutate({ key, value })}
                   onStartEdit={startEdit}
@@ -821,6 +938,9 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
       {/* Render hardware strip + recommendation even if LLM Models group is absent (edge case) */}
       {!llmGroup && hardware && (
         <HardwareStrip hardware={hardware} />
+      )}
+      {!llmGroup && currentSmartModel && (
+        <FirstBootModelBanner smartModel={currentSmartModel} vramGb={hardware?.vram_gb} />
       )}
       {!llmGroup && hardwareRecommendation && (
         <HardwareRecommendationBanner recommendation={hardwareRecommendation} />

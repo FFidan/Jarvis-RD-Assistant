@@ -1,12 +1,3 @@
-/**
- * OnboardingTour tests
- *
- * Covers:
- *  1. Tour renders for new users (zero topics + zero papers, not dismissed).
- *  2. Tour does NOT render after onboarding_dismissed=true.
- *  3. Skip button persists onboarding_dismissed=true.
- */
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -14,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { OnboardingTour } from '@/components/onboarding/OnboardingTour';
 import * as api from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
 
@@ -88,6 +80,8 @@ describe('OnboardingTour', () => {
     vi.clearAllMocks();
     // Clear the localStorage dismissed flag so each test starts clean.
     localStorage.removeItem('jarvis-onboarding-dismissed');
+    // Default: admin user.
+    useAuthStore.setState({ user: { id: 1, email: 'a@b.com', role: 'admin' } });
 
     // Default: new user — zero topics, zero papers.
     vi.mocked(api.fetchTopics).mockResolvedValue([]);
@@ -158,5 +152,29 @@ describe('OnboardingTour', () => {
 
     // localStorage flag must also be set.
     expect(localStorage.getItem('jarvis-onboarding-dismissed')).toBe('true');
+  });
+
+  it('shows Sources as first step for admin users', async () => {
+    useAuthStore.setState({ user: { id: 1, email: 'admin@example.com', role: 'admin' } });
+    renderTour();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('joyride-tour')).toBeInTheDocument();
+    }, { timeout: 2000 });
+
+    expect(screen.getByTestId('joyride-step-title')).toHaveTextContent('Connect a Source');
+    expect(screen.getByTestId('joyride-step-content')).toHaveTextContent('left rail');
+  });
+
+  it('starts at Topics (not Sources) for member users', async () => {
+    useAuthStore.setState({ user: { id: 2, email: 'member@example.com', role: 'user' } });
+    renderTour();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('joyride-tour')).toBeInTheDocument();
+    }, { timeout: 2000 });
+
+    expect(screen.getByTestId('joyride-step-title')).toHaveTextContent('Define a Topic');
+    expect(screen.queryByTestId('joyride-step-title')).not.toHaveTextContent('Connect a Source');
   });
 });

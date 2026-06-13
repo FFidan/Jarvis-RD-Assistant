@@ -316,60 +316,227 @@ async def test_put_telegram_owner_chat_id_null_clears(contract_conn, pi_settings
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_put_config_db_committed_before_litellm_called(
-    contract_conn, pi_settings_client, monkeypatch
-):
-    """DB row is written even when _apply_litellm_runtime_update raises.
+async def test_put_config_litellm_delivery_ordering(contract_conn, pi_settings_client, monkeypatch):
+    """Fail-closed delivery contract for LiteLLM runtime keys (CRIT-1).
 
-    Verifies BUG-D4-004 fix: DB write happens BEFORE LiteLLM runtime update so
-    that a LiteLLM failure does not discard the persisted config value.
-    Also verifies that when _write_config_row raises, _apply_litellm_runtime_update
-    is never called.
+    Part 1: a real (non-"No DB Connected") delivery failure returns 400 and
+    writes NO config row, so the UI snap-back is truthful.
+    Part 1b: the stock-compose "No DB Connected" failure commits the row,
+    returns HTTP 200, and records the role in llm.delivery_pending so
+    GET /api/system/models surfaces delivery="pending_restart" — never a
+    silent phantom "applied".
+    Part 2: delivery fires first; when the subsequent DB write fails the PUT
+    raises (no row committed) and one reconciler pass re-delivers the stored
+    (old) model back to LiteLLM.
     """
+    from fastapi import HTTPException
+
     import paper_ingestion.services.config_write as _config_write
 
-    # -- Part 1: LiteLLM fails → DB row still committed ----------------------
+    # -- Part 1: delivery fails (non-No-DB) → 400 + row NOT written ----------
     litellm_called: list[str] = []
 
     async def _litellm_fail(**kwargs):  # noqa: ARG001
         litellm_called.append("called")
-        raise RuntimeError("litellm-fail")
+        raise HTTPException(status_code=400, detail="litellm-fail")
 
     monkeypatch.setattr(_config_write, "_apply_litellm_runtime_update", _litellm_fail)
 
-    with pytest.raises(RuntimeError, match="litellm-fail"):
-        await pi_settings_client.put(
-            "/api/config/pulse.deck_size",
-            json={"key": "pulse.deck_size", "value": 42},
-        )
+    resp = await pi_settings_client.put(
+        "/api/config/llm.contract-host.smart_num_ctx",
+        json={"key": "llm.contract-host.smart_num_ctx", "value": 4096},
+    )
+    assert resp.status_code == 400
+    assert "litellm-fail" in resp.json()["detail"]
     row = await contract_conn.fetchrow(
         "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
-        "pulse.deck_size",
+        "llm.contract-host.smart_num_ctx",
     )
-    assert row is not None
-    assert row["value"] == 42
+    assert row is None, "fail-closed: a delivery failure must not commit the row"
     assert litellm_called
 
-    # -- Part 2: DB write fails → LiteLLM update never called ----------------
+    # -- Part 1b: "No DB Connected" → 200 + row committed + role pending -----
+    async def _litellm_no_db(**kwargs):  # noqa: ARG001
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "LiteLLM /model/new failed for alias 'smart': "
+                'HTTP 500 {"error": "No DB Connected"}'
+            ),
+        )
+
+    monkeypatch.setattr(_config_write, "_apply_litellm_runtime_update", _litellm_no_db)
+
+    resp = await pi_settings_client.put(
+        "/api/config/llm.contract-host.smart_num_ctx",
+        json={"key": "llm.contract-host.smart_num_ctx", "value": 8192},
+    )
+    assert resp.status_code == 200, f"No-DB carve-out must return 200: {resp.json()}"
+    assert resp.json()["value"] == 8192
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+        "llm.contract-host.smart_num_ctx",
+    )
+    assert row is not None, "No-DB carve-out must commit the row"
+    assert row["value"] == 8192
+    pending = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'llm.delivery_pending' AND user_id IS NULL",
+    )
+    assert pending is not None, "No-DB carve-out must record the pending role"
+    assert "smart" in pending["value"]
+
+    # -- Part 2: runtime key — delivery succeeds but _write_config_row fails --
+    # Pins: delivery→commit ordering for LiteLLM runtime keys. When a PUT to
+    # llm.smart_model delivers the new model to LiteLLM successfully but the
+    # subsequent DB write fails, the PUT must raise (no committed row) and one
+    # reconciler pass must re-deliver the STORED (old) model back to LiteLLM.
     monkeypatch.undo()
 
-    litellm_reached: list[str] = []
+    import paper_ingestion.services.config_db as _config_db
+    import paper_ingestion.services.litellm_config as _litellm_cfg
+    from paper_ingestion.main import _reconcile_litellm_models_once
 
-    async def _litellm_spy(**kwargs):  # noqa: ARG001
-        litellm_reached.append("called")
+    # Seed the "old" stored model so the reconciler has something to re-deliver.
+    await contract_conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES (NULL, 'llm.smart_model', $1::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE SET value = $1::jsonb""",
+        "qwen3:4b",
+    )
 
-    async def _db_fail(*args, **kwargs):  # noqa: ARG001
-        raise RuntimeError("db-fail")
+    delivered_models: list[str] = []
 
-    monkeypatch.setattr(_config_write, "_write_config_row", _db_fail)
-    monkeypatch.setattr(_config_write, "_apply_litellm_runtime_update", _litellm_spy)
+    async def _capture_delivery(config_key: str, model_name: str, **kwargs: object) -> bool:  # noqa: ARG001
+        delivered_models.append(model_name)
+        return True
 
-    with pytest.raises(RuntimeError, match="db-fail"):
+    # Stub LiteLLM HTTP calls so reconciler/delivery doesn't need a live proxy.
+    async def _fake_deployments() -> list[dict]:
+        return []
+
+    monkeypatch.setattr(_litellm_cfg, "get_litellm_deployments", _fake_deployments)
+    monkeypatch.setattr(_litellm_cfg, "update_litellm_model", _capture_delivery)
+    # The PUT route binds update_litellm_model early (settings.py passes it as
+    # update_litellm_model_fn) — patch the router namespace too.
+    import paper_ingestion.routers.settings as _settings_router
+
+    monkeypatch.setattr(_settings_router, "update_litellm_model", _capture_delivery)
+
+    # Model-key PUTs verify the model against Ollama tags first; no Ollama here.
+    async def _allow_model(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(_config_write, "validate_model_assignment", _allow_model)
+
+    # Make _write_config_row fail after delivery has fired.
+    _orig_write_config_row = _config_db._write_config_row
+
+    write_call_count = 0
+
+    async def _write_then_fail(conn, **kwargs: object) -> None:
+        nonlocal write_call_count
+        write_call_count += 1
+        raise RuntimeError("db-write-fail")
+
+    monkeypatch.setattr(_config_db, "_write_config_row", _write_then_fail)
+    # config_write imports _write_config_row at its module level; patch there too.
+    monkeypatch.setattr(_config_write, "_write_config_row", _write_then_fail)
+
+    # PUT llm.smart_model = "qwen3:8b" — delivery fires (LiteLLM accepts) then
+    # the row write fails. The ASGI test transport re-raises app exceptions, so
+    # the failed PUT surfaces as the raw RuntimeError (a deployed server would
+    # return 500); either way no row may be committed.
+    with pytest.raises(RuntimeError, match="db-write-fail"):
         await pi_settings_client.put(
-            "/api/config/pulse.deck_size",
-            json={"key": "pulse.deck_size", "value": 99},
+            "/api/config/llm.smart_model",
+            json={"key": "llm.smart_model", "value": "qwen3:8b"},
         )
-    assert not litellm_reached
+    # Delivery fired for the new model.
+    assert "qwen3:8b" in delivered_models, (
+        f"Delivery must have fired for 'qwen3:8b' before the write failed; delivered={delivered_models}"
+    )
+    # No row committed for the new value — old "qwen3:4b" row is intact.
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'llm.smart_model' AND user_id IS NULL"
+    )
+    assert row is not None, "Old stored model row must survive the failed PUT"
+    assert str(row["value"]) == "qwen3:4b", (
+        f"Old stored model must be 'qwen3:4b', got {row['value']!r}"
+    )
+
+    # Restore _write_config_row so the reconciler can write pending bookkeeping.
+    monkeypatch.setattr(_config_db, "_write_config_row", _orig_write_config_row)
+    monkeypatch.setattr(_config_write, "_write_config_row", _orig_write_config_row)
+
+    # One reconciler pass must re-deliver the STORED (old) model "qwen3:4b".
+    delivered_models.clear()
+    shared = SharedConnPool(contract_conn)
+    await _reconcile_litellm_models_once(shared)
+
+    assert "qwen3:4b" in delivered_models, (
+        f"Reconciler must re-deliver the stored model 'qwen3:4b' within one pass; "
+        f"delivered={delivered_models}"
+    )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_put_config_litellm_skipped_pending_semantics(
+    contract_conn, pi_settings_client, monkeypatch
+):
+    """ "Skipped" delivery nuance for llm.delivery_pending.
+
+    A MODEL-class key (llm.*_model) whose delivery is "skipped" means the alias
+    already routes that exact model — truthfully applied, so the role is
+    CLEARED from llm.delivery_pending (re-selecting the routed model must not
+    leave a permanent false pill). A NUM_CTX-class key skipped on a cloud model
+    says nothing about model delivery, so pending stays untouched.
+    """
+    import paper_ingestion.services.config_write as _config_write
+
+    # Seed: smart is pending (e.g. a row committed under "No DB Connected").
+    await contract_conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES (NULL, 'llm.delivery_pending', $1::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE SET value = $1::jsonb""",
+        ["smart"],
+    )
+
+    async def _litellm_skipped(**kwargs):  # noqa: ARG001
+        return "skipped"
+
+    async def _allow_model(**kwargs):  # noqa: ARG001
+        return None
+
+    monkeypatch.setattr(_config_write, "_apply_litellm_runtime_update", _litellm_skipped)
+    # Bypass the outbound Ollama model-existence probe (idiomatic mock carve-out).
+    monkeypatch.setattr(_config_write, "validate_model_assignment", _allow_model)
+
+    # -- num_ctx skipped (cloud model) → pending NOT cleared ------------------
+    resp = await pi_settings_client.put(
+        "/api/config/llm.contract-host.smart_num_ctx",
+        json={"key": "llm.contract-host.smart_num_ctx", "value": 4096},
+    )
+    assert resp.status_code == 200, f"num_ctx PUT failed: {resp.json()}"
+    pending = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'llm.delivery_pending' AND user_id IS NULL",
+    )
+    assert pending is not None and pending["value"] == ["smart"], (
+        f"num_ctx 'skipped' must NOT touch pending; got {pending and pending['value']!r}"
+    )
+
+    # -- model-role skipped (alias already routes it) → role cleared ----------
+    resp = await pi_settings_client.put(
+        "/api/config/llm.smart_model",
+        json={"key": "llm.smart_model", "value": "qwen3:14b"},
+    )
+    assert resp.status_code == 200, f"model PUT failed: {resp.json()}"
+    pending = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = 'llm.delivery_pending' AND user_id IS NULL",
+    )
+    assert pending is not None, "pending row must survive (emptied, not deleted)"
+    assert "smart" not in pending["value"], (
+        f"model-key 'skipped' must clear the role from pending; got {pending['value']!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

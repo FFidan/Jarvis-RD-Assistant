@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Shared setup.sh helpers, factored out so they can be unit-tested directly
 # (setup.sh itself is not cleanly sourceable). Concerns:
-#   - compute_compose_file   : which compose overlays to persist into .env
-#   - compute_ollama_models  : which Ollama tags the bootstrap must pull
-#   - upsert_env_var          : idempotent in-place .env key write
-#   - resolve_nvidia_smi      : locate nvidia-smi (PATH or the WSL2 location)
+#   - compute_compose_file       : which compose overlays to persist into .env
+#   - compute_ollama_models      : which Ollama tags the bootstrap must pull
+#   - upsert_env_var             : idempotent in-place .env key write
+#   - resolve_nvidia_smi         : locate nvidia-smi (PATH or the WSL2 location)
+#   - _default_model_for_tier    : tier+backend -> default model id
 # Sourced by setup.sh (which cd's to the repo root first, so the relative `.env`
 # in upsert_env_var resolves correctly).
 
@@ -24,6 +25,55 @@ resolve_nvidia_smi() {
     return 0
   fi
   return 1
+}
+
+# _default_model_for_tier TIER BACKEND -> echoes the default model id for the
+# tier/backend pair. Reads config/llm-tier-candidates.yaml (relative — setup.sh
+# cd's to the repo root) when host python3 has PyYAML; without PyYAML or without
+# the file it falls back to _OLLAMA_FALLBACK, which mirrors the YAML's per-tier
+# ollama answers — keep the dict in sync when the YAML changes.
+# stdout is command-substituted into .env, so diagnostics go to stderr ONLY.
+# Malformed YAML must still fail loudly (no bare except).
+_default_model_for_tier() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+tier, backend = sys.argv[1:3]
+_OLLAMA_FALLBACK = {
+    "cpu": "qwen3:1.7b", "lt-8": "qwen3:1.7b",
+    "8-16": "qwen2.5:7b-instruct", "16-24": "qwen2.5:7b-instruct",
+    "24-48": "qwen2.5:7b-instruct", "ge-48": "qwen3:30b-a3b",
+}
+
+
+def _fallback() -> None:
+    print(_OLLAMA_FALLBACK.get(tier, "qwen3:1.7b"))
+    sys.exit(0)
+
+
+if yaml is None:
+    print(
+        "[WARN] host python3 has no PyYAML — using built-in tier defaults",
+        file=sys.stderr,
+    )
+    _fallback()
+try:
+    with open("config/llm-tier-candidates.yaml") as f:
+        data = yaml.safe_load(f)
+except (ImportError, FileNotFoundError):
+    _fallback()
+for c in data["tiers"].get(tier, {}).get("candidates", []):
+    if c["backend"] == backend:
+        print(c["model"])
+        sys.exit(0)
+fb = data["tiers"][tier]["fallback_for_tier"]
+print(fb["model"])
+PY
 }
 
 # compute_compose_file NVIDIA_PRESENT OVERRIDE_PRESENT -> echoes colon-joined COMPOSE_FILE.

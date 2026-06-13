@@ -534,6 +534,17 @@ describe('ModelSelector', () => {
     renderComponent({ value: 'qwen3-embedding:0.6b', configKey: 'llm.embed_model' });
 
     await waitFor(() => {
+      expect(screen.getByText('Manage installed models')).toBeInTheDocument();
+    });
+
+    // Delete button is hidden until the manage section is expanded
+    expect(
+      screen.queryByRole('button', { name: 'Delete model Qwen3 Embedding 0.6B' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Manage installed models'));
+
+    await waitFor(() => {
       expect(
         screen.getByRole('button', { name: 'Delete model Qwen3 Embedding 0.6B' }),
       ).toBeInTheDocument();
@@ -593,11 +604,32 @@ describe('ModelSelector', () => {
     await waitFor(() => {
       expect(screen.getByText('Qwen3 14B')).toBeInTheDocument();
     });
-    // The active smart model should not have a delete button;
-    // other pulled non-active models (e.g. the embed model) may still show one.
     expect(
       screen.queryByRole('button', { name: /delete model qwen3 14b/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it('hides delete actions until manage section is expanded', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue(defaultModels);
+
+    renderComponent({ value: 'qwen3-embedding:0.6b', configKey: 'llm.embed_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Manage installed models')).toBeInTheDocument();
+    });
+
+    expect(
+      screen.queryByRole('button', { name: /delete model/i }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Manage installed models'));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Delete model Qwen3 Embedding 0.6B' }),
+      ).toBeInTheDocument();
+    });
   });
 
   it('normalizes :latest suffix when matching selected local models', async () => {
@@ -698,6 +730,59 @@ describe('ModelSelector', () => {
     });
     // Cloud badge should be visible
     expect(screen.getByText('Cloud')).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Routing divergence line (T1.3)
+  // -------------------------------------------------------------------------
+
+  it('shows routing divergence line when LiteLLM serves a different model than saved', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      current: { smart_model: 'qwen3:14b' },
+      routing: { smart: 'qwen3:8b' },
+    });
+
+    renderComponent({ configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('routing-diverged-smart')).toBeInTheDocument();
+    });
+    const line = screen.getByTestId('routing-diverged-smart');
+    expect(line).toHaveTextContent('Saved: qwen3:14b · currently serving: qwen3:8b');
+  });
+
+  it('does not show routing divergence line when routing matches saved model', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      current: { smart_model: 'qwen3:14b' },
+      routing: { smart: 'qwen3:14b' },
+    });
+
+    renderComponent({ configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Qwen3 14B')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('routing-diverged-smart')).not.toBeInTheDocument();
+  });
+
+  it('does not show routing divergence line when routing is absent (backend pre-T1.3)', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      current: { smart_model: 'qwen3:14b' },
+      // routing absent — older backend
+    });
+
+    renderComponent({ configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Qwen3 14B')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('routing-diverged-smart')).not.toBeInTheDocument();
   });
 
   // DA-07: effectiveFit predicate unification

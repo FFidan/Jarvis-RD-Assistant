@@ -28,47 +28,23 @@ export default defineConfig({
     },
   },
   build: {
-    rollupOptions: {
+    rolldownOptions: {
       output: {
-        manualChunks(id) {
-          if (id.includes('node_modules/cytoscape')) return 'vendor-cytoscape';
-          // Recharts and its transitive deps (d3-*, victory-vendor, react-smooth,
-          // react-is, decimal.js-light, internmap, robust-predicates, delaunator)
-          // are only used by lazy-loaded routes. Bucketing them all into one
-          // chunk keeps the main bundle free of recharts code.
-          if (
-            id.includes('node_modules/recharts') ||
-            id.includes('node_modules/react-smooth') ||
-            id.includes('node_modules/victory-vendor') ||
-            id.includes('node_modules/d3-') ||
-            id.includes('node_modules/decimal.js-light') ||
-            id.includes('node_modules/internmap') ||
-            id.includes('node_modules/robust-predicates') ||
-            id.includes('node_modules/delaunator')
-          ) {
-            return 'vendor-recharts';
-          }
-          if (
-            id.includes('node_modules/react-markdown') ||
-            id.includes('node_modules/rehype') ||
-            id.includes('node_modules/remark') ||
-            id.includes('node_modules/unified') ||
-            id.includes('node_modules/mdast') ||
-            id.includes('node_modules/hast') ||
-            id.includes('node_modules/micromark') ||
-            id.includes('node_modules/vfile') ||
-            id.includes('node_modules/unist') ||
-            id.includes('node_modules/katex') ||
-            id.includes('node_modules/property-information') ||
-            id.includes('node_modules/character-entities') ||
-            id.includes('node_modules/decode-named-character-reference') ||
-            id.includes('node_modules/longest-streak') ||
-            id.includes('node_modules/zwitch') ||
-            id.includes('node_modules/space-separated-tokens') ||
-            id.includes('node_modules/comma-separated-tokens')
-          ) {
-            return 'vendor-markdown';
-          }
+        // Bucket lazy-route-only vendor libraries into stable chunks so the main
+        // bundle stays free of recharts/markdown/cytoscape code. Each `test`
+        // matches that library family's module paths under node_modules.
+        codeSplitting: {
+          groups: [
+            { name: 'vendor-cytoscape', test: /node_modules\/cytoscape/ },
+            {
+              name: 'vendor-recharts',
+              test: /node_modules\/(recharts|react-smooth|victory-vendor|d3-|decimal\.js-light|internmap|robust-predicates|delaunator)/,
+            },
+            {
+              name: 'vendor-markdown',
+              test: /node_modules\/(react-markdown|rehype|remark|unified|mdast|hast|micromark|vfile|unist|katex|property-information|character-entities|decode-named-character-reference|longest-streak|zwitch|space-separated-tokens|comma-separated-tokens)/,
+            },
+          ],
         },
       },
     },

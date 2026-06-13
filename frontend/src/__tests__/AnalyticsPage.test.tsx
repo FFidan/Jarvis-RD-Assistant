@@ -1,6 +1,6 @@
 /**
- * AnalyticsPage unit tests — covers the Reflect IA:
- *  - Breadcrumb, hero "Reflect", period subtitle
+ * AnalyticsPage unit tests — covers the Analytics IA:
+ *  - Breadcrumb ("Learn" group), hero "Analytics", period subtitle
  *  - § section markers (REVIEW · N DAYS, READING CADENCE, LIBRARY, REVIEWS, COST)
  *  - KPI band renders via summaryQuery
  *  - DateRangeFilter drives days param into summary + chart queries
@@ -64,26 +64,26 @@ function renderPage() {
   );
 }
 
-describe('AnalyticsPage — Reflect IA', () => {
+describe('AnalyticsPage — Analytics IA', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   // ── Hero identity ────────────────────────────────────────────────────────
 
-  it('renders the Reflect hero heading', () => {
+  it('renders the Analytics hero heading', () => {
     renderPage();
-    // h1 "Reflect" — use role to avoid ambiguity with breadcrumb span
-    expect(screen.getByRole('heading', { name: 'Reflect' })).toBeInTheDocument();
+    // h1 "Analytics" (the page name) — use role to avoid ambiguity with the breadcrumb span
+    expect(screen.getByRole('heading', { name: 'Analytics' })).toBeInTheDocument();
   });
 
   it('renders the breadcrumb with Analytics link', () => {
     renderPage();
     // breadcrumb "Analytics" is an anchor link
     expect(screen.getByRole('link', { name: 'Analytics' })).toBeInTheDocument();
-    // breadcrumb "Reflect" text appears in the nav
+    // breadcrumb group "Learn" (the real sidebar group for Analytics) appears in the nav
     const nav = screen.getByRole('navigation');
-    expect(nav).toHaveTextContent('Reflect');
+    expect(nav).toHaveTextContent('Learn');
   });
 
   it('renders § REVIEW · 30 DAYS marker with default days', () => {

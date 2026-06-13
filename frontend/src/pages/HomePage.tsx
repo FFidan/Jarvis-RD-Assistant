@@ -4,7 +4,7 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { Link } from 'react-router-dom';
 import {
   CheckCircle2, Circle, ArrowRight, X,
-  Cog, FileText, Sparkles, Loader2,
+  Wand2, Loader2, ChevronDown, ChevronRight, Cog, FileText, Sparkles,
 } from 'lucide-react';
 import { fetchDashboardMetrics, batchProcessPapers, batchSummarizePapers, batchExtractEntities } from '@/lib/api';
 import { MetricTileGrid } from '@/components/home/MetricTileGrid';
@@ -90,6 +90,7 @@ function BatchButton<T>({
 }
 
 export function HomePage() {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const { data: metrics, isLoading } = useQuery({
     queryKey: QUERY_KEYS.dashboard.metrics(),
     queryFn: fetchDashboardMetrics,
@@ -133,16 +134,16 @@ export function HomePage() {
       done: hasPapers,
       label: 'Fetch your first papers',
       description: 'Search arXiv and Semantic Scholar',
-      actionLabel: 'Go to Feed',
-      actionHref: '/feed',
+      actionLabel: 'Open Library',
+      actionHref: '/feed?surface=library',
       disabled: !hasTopics,
     },
     {
       done: hasProcessedPapers,
       label: 'Analyze a paper',
       description: 'Download, process, and summarize',
-      actionLabel: 'Go to Feed',
-      actionHref: '/feed',
+      actionLabel: 'Open Library',
+      actionHref: '/feed?surface=library',
       disabled: !hasPapers,
     },
   ];
@@ -213,30 +214,56 @@ export function HomePage() {
         </CardHeader>
         <CardContent>
           <p className="mb-4 text-sm text-muted-foreground">
-            Process unanalyzed papers in bulk. Run in order: Process → Summarize → Extract.
+            Analyze unprocessed papers in bulk — downloads, processes, and summarizes each one.
           </p>
-          <div className="flex flex-wrap gap-3">
-            <BatchButton
-              label="Process PDFs"
-              icon={Cog}
-              mutationFn={batchProcessPapers}
-              formatResult={(d) => `Queued ${d.queued} papers`}
-              confirmMessage="This will process PDFs for all papers in your library. This may take several minutes. Continue?"
-            />
-            <BatchButton
-              label="Summarize"
-              icon={FileText}
-              mutationFn={batchSummarizePapers}
-              formatResult={(d) => `Queued ${d.total_unsummarized} papers`}
-              confirmMessage="This will generate AI summaries for all unprocessed papers. This costs LLM tokens. Continue?"
-            />
-            <BatchButton
-              label="Extract Entities"
-              icon={Sparkles}
-              mutationFn={batchExtractEntities}
-              formatResult={(d) => `Extracted ${d.extracted} papers`}
-              confirmMessage="This will extract entities from all papers. This costs LLM tokens. Continue?"
-            />
+          <BatchButton
+            label="Analyze all new papers"
+            icon={Wand2}
+            mutationFn={batchProcessPapers}
+            formatResult={(d) => `Queued ${d.queued} papers`}
+            confirmMessage="This will analyze all new papers in your library. This may take several minutes and costs LLM tokens. Continue?"
+            confirmTitle="Analyze all new papers?"
+          />
+          <div className="mt-4">
+            <button
+              type="button"
+              className="flex items-center gap-1 text-sm text-muted-foreground"
+              onClick={() => setAdvancedOpen((v) => !v)}
+              aria-expanded={advancedOpen}
+              aria-controls="batch-advanced"
+            >
+              {advancedOpen ? (
+                <ChevronDown className="h-4 w-4 shrink-0" />
+              ) : (
+                <ChevronRight className="h-4 w-4 shrink-0" />
+              )}
+              Advanced
+            </button>
+            {advancedOpen && (
+              <div id="batch-advanced" className="mt-3 flex flex-wrap gap-3">
+                <BatchButton
+                  label="Process PDFs"
+                  icon={Cog}
+                  mutationFn={batchProcessPapers}
+                  formatResult={(d) => `Queued ${d.queued} papers`}
+                  confirmMessage="This will process PDFs for all papers in your library. This may take several minutes. Continue?"
+                />
+                <BatchButton
+                  label="Summarize"
+                  icon={FileText}
+                  mutationFn={batchSummarizePapers}
+                  formatResult={(d) => `Queued ${d.total_unsummarized} papers`}
+                  confirmMessage="This will generate AI summaries for all unprocessed papers. This costs LLM tokens. Continue?"
+                />
+                <BatchButton
+                  label="Extract Entities"
+                  icon={Sparkles}
+                  mutationFn={batchExtractEntities}
+                  formatResult={(d) => `Extracted ${d.extracted} papers`}
+                  confirmMessage="This will extract entities from all papers. This costs LLM tokens. Continue?"
+                />
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

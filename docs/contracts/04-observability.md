@@ -80,20 +80,20 @@ calls automatically nest as child spans of the active trace.
 
 | Trace | Outer function | File:line | One trace produced when |
 |---|---|---|---|
-| **Pulse run** | `run_pulse` | [pulse/job.py:100](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L100) | Cron fires OR `pulse.generate` job dispatched |
-| **RAG question (single-paper)** | `prepare_single_paper_rag` | [rag/streaming.py:101](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/rag/streaming.py#L101) | User asks a question on a paper |
-| **RAG question (cross-paper)** | `prepare_cross_paper_rag` | [rag/streaming.py:175](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/rag/streaming.py#L175) | User asks a cross-paper question; includes `decompose_query` child span |
-| **Extraction batch** | `batch_extract` | [extraction/core.py:315](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/core.py#L315) | User triggers batch extraction over N papers |
-| **Single-paper extraction** | `extract_fields_for_paper` | [extraction/core.py:102](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/core.py#L102) | User triggers single-paper extraction OR is invoked from `batch_extract` (in which case it's a child span of the batch trace) |
-| **KG entity extraction** | `extract_entities_for_paper` | [extraction/entities.py:97](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/entities.py#L97) | User triggers entity extraction |
-| **Card generation** | `CardGenerator.generate_cards` | [learning_engine/card_generator.py:250](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/learning_engine/learning_engine/card_generator.py#L250) | User generates flashcards for a paper |
-| **Weekly summary run** | `generate_weekly_summary` | [weekly_summary.py:58](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/weekly_summary.py#L58) | Scheduled weekly digest job runs |
-| **Contradiction scan** | `scan_contradictions` | [services/contradictions.py:285](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/contradictions.py#L285) | User triggers a contradiction scan (single-paper or library-wide) |
+| **Pulse run** | `run_pulse` | [pulse/job.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py) | Cron fires OR `pulse.generate` job dispatched |
+| **RAG question (single-paper)** | `prepare_single_paper_rag` | [rag/streaming.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/rag/streaming.py) | User asks a question on a paper |
+| **RAG question (cross-paper)** | `prepare_cross_paper_rag` | [rag/streaming.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/rag/streaming.py) | User asks a cross-paper question; includes `decompose_query` child span |
+| **Extraction batch** | `batch_extract` | [extraction/core.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/core.py) | User triggers batch extraction over N papers |
+| **Single-paper extraction** | `extract_fields_for_paper` | [extraction/core.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/core.py) | User triggers single-paper extraction OR is invoked from `batch_extract` (in which case it's a child span of the batch trace) |
+| **KG entity extraction** | `extract_entities_for_paper` | [extraction/entities.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/entities.py) | User triggers entity extraction |
+| **Card generation** | `CardGenerator.generate_cards` | [learning_engine/card_generator.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/learning_engine/learning_engine/card_generator.py) | User generates flashcards for a paper |
+| **Weekly summary run** | `generate_weekly_summary` | [weekly_summary.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/weekly_summary.py) | Scheduled weekly digest job runs |
+| **Contradiction scan** | `scan_contradictions` | [services/contradictions.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/contradictions.py) | User triggers a contradiction scan (single-paper or library-wide) |
 
 **Implicit nested span:** every call to `call_llm_structured`
 gets a `@observe(as_type="generation")` wrap at the choke-point function
 itself, capturing model, input messages, validated output, latency.
-Streaming RAG calls in [rag/streaming.py:381](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/rag/streaming.py#L381) get their own
+Streaming RAG calls in [rag/streaming.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/rag/streaming.py) get their own
 `@observe(as_type="generation")` wrap at the streaming call site (since
 they don't go through the choke-point).
 
@@ -180,7 +180,7 @@ JARVIS contract is self-hosted-first.
 
 ## 7. SDK initialization
 
-Once per service in [`configure_lifespan`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/app_factory.py#L223) at startup. Roughly:
+Once per service in [`configure_lifespan`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/app_factory.py) at startup. Roughly:
 
 ```python
 # Pseudocode — mirrors _langfuse_lifespan_hook in jarvis_common/llm_client.py
@@ -205,7 +205,7 @@ missing. The `@observe()` decorator from `langfuse.decorators` handles
 the no-op case automatically when the SDK is uninitialized.
 
 The lifespan teardown counterpart (per the equal-length contract enforced by
-[configure_lifespan](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/app_factory.py#L223)) is `langfuse.shutdown()` — flushes pending spans
+[configure_lifespan](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/app_factory.py)) is `langfuse.shutdown()` — flushes pending spans
 to the backend, important for short-lived workers.
 
 ---
@@ -335,17 +335,17 @@ The implementation MUST satisfy these. Testable.
 
 | Citation | File:line | One-line behavior |
 |---|---|---|
-| `run_pulse` (trace root) | services/paper_ingestion/paper_ingestion/pulse/job.py:100 | Top-level Pulse pipeline; one trace per overnight run |
-| `prepare_single_paper_rag` | services/paper_ingestion/paper_ingestion/rag/streaming.py:101 | RAG single-paper path |
-| `prepare_cross_paper_rag` | services/paper_ingestion/paper_ingestion/rag/streaming.py:175 | RAG cross-paper path; includes `decompose_query` child span |
-| Streaming chat completion call | services/paper_ingestion/paper_ingestion/rag/streaming.py:381 | Raw `httpx.stream`; gets generation-type span (not via choke-point) |
-| `batch_extract` | services/paper_ingestion/paper_ingestion/extraction/core.py:315 | Multi-paper extraction trace |
-| `extract_fields_for_paper` | services/paper_ingestion/paper_ingestion/extraction/core.py:102 | Per-paper extraction trace OR child span of batch |
-| `extract_entities_for_paper` | services/paper_ingestion/paper_ingestion/extraction/entities.py:97 | KG entity extraction trace |
-| `CardGenerator.generate_cards` | services/learning_engine/learning_engine/card_generator.py:250 | Card generation trace |
-| `generate_weekly_summary` | services/paper_ingestion/paper_ingestion/weekly_summary.py:58 | Weekly digest trace |
-| `scan_contradictions` | services/paper_ingestion/paper_ingestion/services/contradictions.py:285 | Contradiction scan trace |
-| `configure_lifespan` (SDK init point) | libs/jarvis_common/jarvis_common/app_factory.py:223 | Equal-length init/teardown lifespan builder |
-| `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/services/config_metadata.py:237-247 | Privacy: plaintext NEVER in span metadata |
+| `run_pulse` (trace root) | services/paper_ingestion/paper_ingestion/pulse/job.py | Top-level Pulse pipeline; one trace per overnight run |
+| `prepare_single_paper_rag` | services/paper_ingestion/paper_ingestion/rag/streaming.py | RAG single-paper path |
+| `prepare_cross_paper_rag` | services/paper_ingestion/paper_ingestion/rag/streaming.py | RAG cross-paper path; includes `decompose_query` child span |
+| Streaming chat completion call | services/paper_ingestion/paper_ingestion/rag/streaming.py | Raw `httpx.stream`; gets generation-type span (not via choke-point) |
+| `batch_extract` | services/paper_ingestion/paper_ingestion/extraction/core.py | Multi-paper extraction trace |
+| `extract_fields_for_paper` | services/paper_ingestion/paper_ingestion/extraction/core.py | Per-paper extraction trace OR child span of batch |
+| `extract_entities_for_paper` | services/paper_ingestion/paper_ingestion/extraction/entities.py | KG entity extraction trace |
+| `CardGenerator.generate_cards` | services/learning_engine/learning_engine/card_generator.py | Card generation trace |
+| `generate_weekly_summary` | services/paper_ingestion/paper_ingestion/weekly_summary.py | Weekly digest trace |
+| `scan_contradictions` | services/paper_ingestion/paper_ingestion/services/contradictions.py | Contradiction scan trace |
+| `configure_lifespan` (SDK init point) | libs/jarvis_common/jarvis_common/app_factory.py | Equal-length init/teardown lifespan builder |
+| `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/services/config_metadata.py | Privacy: plaintext NEVER in span metadata |
 | `mask_secret` | libs/jarvis_common/jarvis_common/crypto.py | Helper for scrubbing values before span attachment |
-| `observability.langfuse_dashboard_url` validator | services/paper_ingestion/paper_ingestion/services/config_validators.py:188 | Restricts the dashboard link to https / loopback http |
+| `observability.langfuse_dashboard_url` validator | services/paper_ingestion/paper_ingestion/services/config_validators.py | Restricts the dashboard link to https / loopback http |

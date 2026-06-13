@@ -139,6 +139,7 @@ export function PulseAdvancedTuningCard({
 }: PulseAdvancedTuningCardProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
+  const recommendationEnabled = getConfigValue<boolean>(configs, 'recommendation.enabled', true);
   const likedWeightConfig = getConfigValue<number>(configs, 'recommendation.liked_weight', 0.6);
   const projectWeightConfig = getConfigValue<number>(configs, 'recommendation.project_weight', 0.4);
   const l2LambdaConfig = getConfigValue<number>(configs, 'pulse.l2_lambda', 0.5);
@@ -325,7 +326,35 @@ export function PulseAdvancedTuningCard({
 
           {/* Discovery seed balance */}
           <div className="space-y-4 border-t pt-4">
-            <h4 className="text-sm font-medium">Discovery seed balance</h4>
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-medium">Discovery seed balance</h4>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="recommendation-enabled-toggle" className="text-xs">
+                  Recommendations enabled
+                </Label>
+                <button
+                  id="recommendation-enabled-toggle"
+                  type="button"
+                  role="switch"
+                  aria-label="Recommendations enabled"
+                  data-testid="recommendation-enabled-toggle"
+                  aria-checked={!!recommendationEnabled}
+                  onClick={() =>
+                    setMut.mutate({ key: 'recommendation.enabled', value: !recommendationEnabled })
+                  }
+                  disabled={settingsControlsDisabled}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
+                    recommendationEnabled ? 'bg-primary' : 'bg-input'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform ${
+                      recommendationEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
 
             <div className="space-y-1">
               <Label className="flex items-center justify-between text-xs">

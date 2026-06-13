@@ -125,9 +125,17 @@ class CoreSettings(BaseSettings):
     # relay is an internal/corporate host on a known-trusted network.
     allow_private_smtp_host: bool = False
     llm_smart_num_ctx: int = 8192
-    """Context window configured for the `smart` alias in litellm/config.yaml.
-    MUST track that file's num_ctx — code budgets prompt input against this.
-    Raise BOTH together (and restart the litellm container) on bigger GPUs."""
+    """Default/boot context window for the `smart` alias (matches the LiteLLM
+    bootstrap params). Prompt budgets prefer the delivered system row
+    (``llm.smart_num_ctx``, written when the Settings slider delivery
+    succeeds) via :func:`jarvis_common.effective_num_ctx`; this env value is
+    the fallback — and the operative value on vLLM stacks, where it must
+    match the compose ``--max-model-len``."""
+
+    llm_fast_num_ctx: int = 4096
+    """Default/boot context window for the `fast` alias (matches the LiteLLM
+    bootstrap params). Same row-then-fallback resolution as
+    ``llm_smart_num_ctx`` — see :func:`jarvis_common.effective_num_ctx`."""
 
     @model_validator(mode="before")
     @classmethod

@@ -33,3 +33,40 @@ class SummarizationOutput(BaseModel):
     methodology: str | None = None
     limitations: str | None = None
     relevance_notes: str | None = None
+
+
+class WindowDigest(BaseModel):
+    """Structured digest of one paper window from the map stage.
+
+    The only model in the summarization pipeline allowed to carry candidate
+    quotes — each is verified against the window the model actually saw.
+    """
+
+    key_points: list[str] = []
+    key_findings: list[KeyFindingOutput] = []
+
+
+class CondensedDigest(BaseModel):
+    """Key points merging several window digests at an intermediate reduce level.
+
+    Deliberately quote-free: quotes exist only in map-stage digests and are
+    carried forward programmatically, never re-generated.
+    """
+
+    key_points: list[str] = []
+
+
+class ReduceSummary(BaseModel):
+    """Final summary synthesized from window digests.
+
+    Deliberately has no ``key_findings`` field — findings carry over from the
+    map stage with their window-verified quotes, so the reduce stage cannot
+    mint or repair quotes.
+    """
+
+    tldr: str = ""
+    summary_brief: str = ""
+    summary_detailed: str = ""
+    methodology: str | None = None
+    limitations: str | None = None
+    relevance_notes: str | None = None

@@ -10,12 +10,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-# conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models /
-# rapidfuzz stubs.
+from jarvis_common.verify import QuoteVerifier
+
 from paper_ingestion.exceptions import EmptyChunksError, LLMError, PaperNotFoundError
 from paper_ingestion.models import Confidence
 from paper_ingestion.services import summarization
-from paper_ingestion.services.summarization_models import SummarizationOutput
+from paper_ingestion.services.summarization_models import (
+    CondensedDigest,
+    KeyFindingOutput,
+    ReduceSummary,
+    SummarizationOutput,
+    WindowDigest,
+)
 
 
 @asynccontextmanager
@@ -140,7 +146,8 @@ async def test_generate_paper_summary_returns_existing_summary():
             embedder=embedder,
         )
 
-    assert result == "existing-summary"
+    assert result.summary == "existing-summary"
+    assert result.passes == 0
     llm_mock.assert_not_called()
     convert.assert_called_once()
 
@@ -325,8 +332,8 @@ async def test_generate_paper_summary_confidence_none_roundtrips_without_validat
             embedder=MagicMock(),
         )
 
-    assert result.confidence == Confidence.NONE
-    assert result.summary_verified is False
+    assert result.summary.confidence == Confidence.NONE
+    assert result.summary.summary_verified is False
 
     # Degrade contract: parsed brief/detailed are kept verbatim ($2/$3) and
     # confidence NONE is mapped to LOW ($9) for the DB CHECK constraint.
@@ -364,13 +371,47 @@ async def test_cross_references_filter_unseen_papers():
 
 
 @pytest.mark.asyncio
-async def test_cross_references_semantic_path_passes_owner_id():
-    """discovered_by is fetched and bound as user_id so the search is user-scoped.
+async def test_cross_references_semantic_path_scopes_to_requester_not_owner():
+    """The cross-ref search must bind the REQUESTING user, not the paper owner.
 
-    Empty semantic results stay empty — no fallback query is issued.
+    Inverts the prior owner-scoping pin: binding the owner (``discovered_by``)
+    let one tenant's cross-ref pull in another tenant's chunks.  The requester's
+    own ``user_library`` is threaded as ``library_paper_ids`` (PI-RAG-001) so
+    shared-corpus papers in the requester's library stay reachable — verified
+    by the positive assertion below.
     """
     conn = AsyncMock()
     conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
+    # The requester's own library: a shared-corpus paper embedded by another user.
+    conn.fetch.return_value = [{"paper_id": 7}, {"paper_id": 555}]
+    embedder = AsyncMock()
+    embedder.search_similar.return_value = []
+
+    result = await summarization._find_cross_references(
+        conn,
+        paper_id=7,
+        title="Retrieval Augmented Generation",
+        embedder=embedder,
+        requester_id=42,
+    )
+
+    assert result == []
+    kwargs = embedder.search_similar.call_args.kwargs
+    assert kwargs["user_id"] == 42, "search must scope to the requester (42), not the owner (99)"
+    assert kwargs["library_paper_ids"] == [7, 555], (
+        "the requester's own user_library must be threaded so a shared-corpus "
+        "paper (555) embedded by another user stays reachable (PI-RAG-001)"
+    )
+    # The library lookup must be keyed on the REQUESTER's id.
+    assert conn.fetch.await_args.args[-1] == 42
+
+
+@pytest.mark.asyncio
+async def test_cross_references_semantic_path_falls_back_to_owner_for_system_jobs():
+    """With no requester (system job), the search falls back to the paper owner."""
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {"abstract": None, "discovered_by": 99}
+    conn.fetch.return_value = [{"paper_id": 7}]
     embedder = AsyncMock()
     embedder.search_similar.return_value = []
 
@@ -383,7 +424,8 @@ async def test_cross_references_semantic_path_passes_owner_id():
 
     assert result == []
     assert embedder.search_similar.call_args.kwargs["user_id"] == 99
-    conn.fetch.assert_not_called()
+    assert embedder.search_similar.call_args.kwargs["library_paper_ids"] == [7]
+    assert conn.fetch.await_args.args[-1] == 99
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +750,7 @@ async def test_degraded_summary_substitutes_abstract_only_when_llm_text_empty():
         patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
         patch_ctx,
     ):
-        await summarization.generate_paper_summary(
+        result = await summarization.generate_paper_summary(
             paper_id=7,
             db_pool=pool,
             http_client=AsyncMock(),
@@ -720,6 +762,7 @@ async def test_degraded_summary_substitutes_abstract_only_when_llm_text_empty():
     assert insert_args[2] == "Original abstract text."
     assert insert_args[3] == "Original abstract text."
     assert "Unable to summarize reliably" not in insert_args[2]
+    assert result.coverage == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -794,7 +837,7 @@ async def test_force_regenerates_existing_summary():
     assert conn_phase2.fetchrow.called, "the upsert must run"
     insert_args = conn_phase2.fetchrow.call_args.args
     assert insert_args[2] == "Fresh brief"
-    assert result.summary_brief == "Fresh brief"
+    assert result.summary.summary_brief == "Fresh brief"
 
 
 @pytest.mark.asyncio
@@ -806,7 +849,11 @@ async def test_paper_summarize_job_forwards_force(monkeypatch):
     monkeypatch.setattr(summarization.svc, "embedder", MagicMock())
     # _paper_summarize_job imports generate_paper_summary at call time, so
     # patching the module attribute intercepts the call.
-    gen_mock = AsyncMock(return_value=MagicMock(id=1))
+    fake_result = MagicMock()
+    fake_result.summary.id = 1
+    fake_result.coverage = 1.0
+    fake_result.passes = 1
+    gen_mock = AsyncMock(return_value=fake_result)
     monkeypatch.setattr(summarization, "generate_paper_summary", gen_mock)
 
     conn = AsyncMock()
@@ -824,3 +871,364 @@ async def test_paper_summarize_job_forwards_force(monkeypatch):
     gen_mock.assert_awaited_once()
     assert gen_mock.await_args.kwargs.get("force") is True
     assert gen_mock.await_args.kwargs.get("user_id") == 42
+
+
+# ---------------------------------------------------------------------------
+# map-reduce path — full coverage, window-verified quotes only
+# ---------------------------------------------------------------------------
+
+
+def _chunk_rows(contents: list[str]) -> list[dict]:
+    """Build ordered chunk DB rows from a list of chunk contents."""
+    return [
+        {**_chunk_row(), "id": i + 1, "chunk_index": i, "content": c, "end_char": len(c)}
+        for i, c in enumerate(contents)
+    ]
+
+
+def _stored_row(**overrides) -> dict:
+    """Return a stored paper_summaries row accepted by row_to_summary_response."""
+    row = {
+        "id": 5,
+        "paper_id": 7,
+        "summary_brief": "brief",
+        "summary_detailed": "detailed",
+        "tldr": "tldr",
+        "key_findings": [],
+        "methodology": None,
+        "limitations": None,
+        "relevance_notes": None,
+        "confidence": "HIGH",
+        "cross_references": [],
+        "llm_model": "smart",
+        "summary_verified": True,
+        "created_at": datetime.now(UTC),
+    }
+    row.update(overrides)
+    return row
+
+
+def _window_llm(digests_by_marker: dict, reduce_output: ReduceSummary):
+    """Side effect that answers per-window digest, condense, and reduce calls."""
+
+    def side_effect(client, *, response_model, prompt, options=None, config=None, **_):
+        if response_model is WindowDigest:
+            matches = [d for m, d in digests_by_marker.items() if m in prompt]
+            assert len(matches) == 1, f"prompt must contain exactly one window: {prompt[:120]}"
+            return matches[0]
+        if response_model is CondensedDigest:
+            return CondensedDigest(key_points=["merged"])
+        if response_model is ReduceSummary:
+            return reduce_output
+        raise AssertionError(f"unexpected response_model: {response_model}")
+
+    return side_effect
+
+
+_LONG_PAPER_CONTENTS = [
+    "## Alpha\nThe alpha experiment shows a unique alpha result.\n" + "alpha filler " * 140,
+    "## Beta\nThe beta experiment shows a distinctive beta outcome.\n" + "beta filler " * 150,
+    "## Gamma\nThe gamma experiment shows a singular gamma effect.\n" + "gamma filler " * 140,
+]
+
+
+async def _run_long_paper(monkeypatch, budget_fn, side_effect, stored_row):
+    """Drive generate_paper_summary over the three-section long paper."""
+
+    async def _budget(db_pool, reserved_output_tokens):  # noqa: ARG001 — seam is async
+        return budget_fn(reserved_output_tokens)
+
+    monkeypatch.setattr(summarization, "_input_char_budget", _budget)
+
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = _chunk_rows(_LONG_PAPER_CONTENTS)
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = stored_row
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    patch_ctx, llm_mock = _patched_call_llm(side_effect=side_effect)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=QuoteVerifier(),
+            embedder=MagicMock(),
+        )
+    return result, llm_mock, conn_phase2
+
+
+@pytest.mark.asyncio
+async def test_map_reduce_reads_every_window_and_carries_window_verified_quotes(monkeypatch):
+    """Each window gets its own digest call and only window-verified quotes survive.
+
+    The reduce stage cannot mint quotes: stored finding quotes must be a subset
+    of the quotes produced (and verified) at the map stage.
+    """
+    digests = {
+        "unique alpha result": WindowDigest(
+            key_points=["alpha-point"],
+            key_findings=[KeyFindingOutput(finding="alpha finding", quote="unique alpha result")],
+        ),
+        "distinctive beta outcome": WindowDigest(
+            key_points=["beta-point"],
+            key_findings=[
+                KeyFindingOutput(
+                    finding="beta hallucination", quote="this quote was never in the paper"
+                )
+            ],
+        ),
+        "singular gamma effect": WindowDigest(
+            key_points=["gamma-point"],
+            key_findings=[KeyFindingOutput(finding="gamma finding", quote="singular gamma effect")],
+        ),
+    }
+    reduce_output = ReduceSummary(
+        tldr="map reduce tldr",
+        summary_brief="combined brief",
+        summary_detailed="combined detailed",
+    )
+
+    result, llm_mock, conn_phase2 = await _run_long_paper(
+        monkeypatch,
+        lambda reserved: 2000 if reserved == summarization._DIGEST_OUTPUT_TOKENS else 5000,
+        _window_llm(digests, reduce_output),
+        _stored_row(confidence="MEDIUM", summary_verified=False),
+    )
+
+    digest_prompts = [
+        c.kwargs["prompt"]
+        for c in llm_mock.call_args_list
+        if c.kwargs["response_model"] is WindowDigest
+    ]
+    assert len(digest_prompts) == 3
+    for marker in ("unique alpha result", "distinctive beta outcome", "singular gamma effect"):
+        assert sum(marker in p for p in digest_prompts) == 1
+
+    reduce_calls = [
+        c for c in llm_mock.call_args_list if c.kwargs["response_model"] is ReduceSummary
+    ]
+    assert len(reduce_calls) == 1
+    reduce_prompt = reduce_calls[0].kwargs["prompt"]
+    for point in ("alpha-point", "beta-point", "gamma-point"):
+        assert point in reduce_prompt
+    assert "unique alpha result" in reduce_prompt
+    assert llm_mock.call_count == 4
+
+    stored_findings = conn_phase2.fetchrow.call_args.args[5]
+    stored_quotes = {f["quote"] for f in stored_findings}
+    map_quotes = {f.quote for d in digests.values() for f in d.key_findings}
+    assert stored_quotes == {"unique alpha result", "singular gamma effect"}
+    assert stored_quotes <= map_quotes
+    assert all(f["verified"] for f in stored_findings)
+    assert conn_phase2.fetchrow.call_args.args[9] == "MEDIUM"
+    assert result.passes == 3
+    assert result.coverage == 1.0
+
+
+@pytest.mark.asyncio
+async def test_digest_overflow_goes_through_hierarchical_condense(monkeypatch):
+    """Digests exceeding one reduce window are condensed level-wise before the reduce."""
+    digests = {
+        "unique alpha result": WindowDigest(key_points=["alpha " + "x" * 300]),
+        "distinctive beta outcome": WindowDigest(key_points=["beta " + "y" * 300]),
+        "singular gamma effect": WindowDigest(key_points=["gamma " + "z" * 300]),
+    }
+    reduce_output = ReduceSummary(
+        tldr="hier tldr",
+        summary_brief="hier brief",
+        summary_detailed="hier detailed",
+    )
+
+    result, llm_mock, conn_phase2 = await _run_long_paper(
+        monkeypatch,
+        lambda reserved: 2000 if reserved == summarization._DIGEST_OUTPUT_TOKENS else 600,
+        _window_llm(digests, reduce_output),
+        _stored_row(confidence="LOW", summary_verified=False),
+    )
+
+    models_called = [c.kwargs["response_model"] for c in llm_mock.call_args_list]
+    assert models_called.count(WindowDigest) == 3
+    assert models_called.count(CondensedDigest) == 3
+    assert models_called.count(ReduceSummary) == 1
+    assert llm_mock.call_count == 7
+
+    reduce_call = next(
+        c for c in llm_mock.call_args_list if c.kwargs["response_model"] is ReduceSummary
+    )
+    assert "merged" in reduce_call.kwargs["prompt"]
+
+    assert conn_phase2.fetchrow.call_args.args[5] == []
+    assert conn_phase2.fetchrow.call_args.args[9] == "LOW"
+    assert result.passes == 3
+    assert result.coverage == 1.0
+
+
+@pytest.mark.asyncio
+async def test_single_window_paper_keeps_single_call_and_prompt_shape():
+    """Short papers keep exactly one LLM call with the unchanged prompt and options."""
+    from jarvis_common.prompt_safety import max_input_chars, wrap_delimited
+    from jarvis_common.settings import get_core_settings
+
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = [_chunk_row()]
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = _stored_row()
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=1,
+        verified_count=1,
+        confidence=Confidence.HIGH,
+    )
+
+    llm_output = SummarizationOutput(
+        tldr="A good paper",
+        summary_brief="Brief summary",
+        summary_detailed="Detailed summary",
+        key_findings=[],
+    )
+    patch_ctx, llm_mock = _patched_call_llm(return_value=llm_output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+        )
+
+    llm_mock.assert_called_once()
+    kwargs = llm_mock.call_args.kwargs
+    assert kwargs["response_model"] is SummarizationOutput
+
+    expected_max = max_input_chars(
+        get_core_settings().llm_smart_num_ctx,
+        reserved_output_tokens=summarization._SUMMARY_OUTPUT_TOKENS,
+    )
+    expected_title, _ = wrap_delimited("title", "Test Paper")
+    expected_authors, _ = wrap_delimited("authors", "Ada")
+    expected_text, truncated = wrap_delimited(
+        "paper_text", "This paper improves retrieval quality.", max_chars=expected_max
+    )
+    assert truncated is False
+    assert kwargs["prompt"] == summarization.SUMMARIZE_PROMPT_TEMPLATE.format(
+        title=expected_title, authors=expected_authors, text=expected_text
+    )
+    options = kwargs["options"]
+    assert options.system == summarization._SYSTEM_SUMMARIZE
+    assert options.max_tokens == summarization._SUMMARY_OUTPUT_TOKENS
+    assert result.passes == 1
+    assert result.coverage == 1.0
+
+
+# ---------------------------------------------------------------------------
+# map-reduce degraded + condense-cap edge paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_map_reduce_all_findings_unverified_degrades_to_coverage_zero(monkeypatch):
+    """When no window finding verifies AND the reduce text is empty, the summary
+    degrades to the abstract fallback with coverage 0.0 — the honest "nothing
+    verified" signal the banner reads."""
+    digests = {
+        "unique alpha result": WindowDigest(
+            key_points=["alpha-point"],
+            key_findings=[
+                KeyFindingOutput(finding="alpha", quote="this quote is absent from alpha")
+            ],
+        ),
+        "distinctive beta outcome": WindowDigest(
+            key_points=["beta-point"],
+            key_findings=[KeyFindingOutput(finding="beta", quote="this quote is absent from beta")],
+        ),
+        "singular gamma effect": WindowDigest(
+            key_points=["gamma-point"],
+            key_findings=[
+                KeyFindingOutput(finding="gamma", quote="this quote is absent from gamma")
+            ],
+        ),
+    }
+    # Empty brief/detailed forces the abstract substitution (degraded path).
+    reduce_output = ReduceSummary(tldr="unverified tldr")
+
+    result, _llm_mock, conn_phase2 = await _run_long_paper(
+        monkeypatch,
+        lambda reserved: 2000 if reserved == summarization._DIGEST_OUTPUT_TOKENS else 5000,
+        _window_llm(digests, reduce_output),
+        _stored_row(confidence="LOW", summary_verified=False),
+    )
+
+    assert result.coverage == 0.0
+    # No verified findings were stored.
+    assert conn_phase2.fetchrow.call_args.args[5] == []
+    # The degraded summary substituted the abstract for the empty reduce text.
+    # Positional INSERT args: [0]=sql, [1]=paper_id, [2]=summary_brief.
+    assert conn_phase2.fetchrow.call_args.args[2] == _paper_row()["abstract"]
+
+
+@pytest.mark.asyncio
+async def test_condense_level_cap_warns_but_still_returns_reduce_summary(monkeypatch, caplog):
+    """A reduce budget so tight the digests can never shrink to one window hits the
+    level cap: a WARNING fires and the reduce summary is still produced (no crash)."""
+    import logging
+
+    # Level-0 digests are large (rendered key points), so they overflow the tiny
+    # reduce budget and force the condense loop to run.
+    digests = {
+        "unique alpha result": WindowDigest(key_points=["alpha-point " + "A" * 400]),
+        "distinctive beta outcome": WindowDigest(key_points=["beta-point " + "B" * 400]),
+        "singular gamma effect": WindowDigest(key_points=["gamma-point " + "G" * 400]),
+    }
+    reduce_output = ReduceSummary(
+        tldr="capped tldr",
+        summary_brief="capped brief",
+        summary_detailed="capped detailed",
+    )
+
+    # Condense never shrinks: each merged digest stays large enough that the
+    # regroup keeps producing multiple groups, so the loop runs to the level cap.
+    _big = "C" * 400
+
+    def side_effect(client, *, response_model, prompt, options=None, config=None, **_):
+        if response_model is WindowDigest:
+            matches = [d for m, d in digests.items() if m in prompt]
+            assert len(matches) == 1
+            return matches[0]
+        if response_model is CondensedDigest:
+            return CondensedDigest(key_points=[_big])
+        if response_model is ReduceSummary:
+            return reduce_output
+        raise AssertionError(f"unexpected response_model: {response_model}")
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.summarization"):
+        result, llm_mock, conn_phase2 = await _run_long_paper(
+            monkeypatch,
+            # Digest budget large (3 windows); reduce budget tiny so digests never fit.
+            lambda reserved: 2000 if reserved == summarization._DIGEST_OUTPUT_TOKENS else 700,
+            side_effect,
+            _stored_row(confidence="LOW", summary_verified=False),
+        )
+
+    # The reduce summary was still produced despite the truncated input — its
+    # brief was written to the DB (positional INSERT arg [2]).
+    reduce_calls = [
+        c for c in llm_mock.call_args_list if c.kwargs["response_model"] is ReduceSummary
+    ]
+    assert len(reduce_calls) == 1
+    assert result.passes == 3
+    assert conn_phase2.fetchrow.call_args.args[2] == "capped brief"
+    # A truncation/cap warning fired (either the level cap or the regroup floor).
+    assert any("truncated" in r.message and r.levelno == logging.WARNING for r in caplog.records)

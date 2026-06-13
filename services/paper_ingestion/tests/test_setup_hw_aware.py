@@ -2,13 +2,17 @@
 
 Verifies that --non-interactive runs with --backend/--smart-model flags write
 JARVIS_HW_TIER, JARVIS_LLM_BACKEND, JARVIS_SMART_MODEL, and COMPOSE_PROFILES
-into .env, and that --check surfaces a ``HW tier:`` advisory line.
+into .env, that --check surfaces a ``HW tier:`` advisory line, that
+_default_model_for_tier survives a host python3 without PyYAML, and that a
+re-run which keeps the existing .env still starts the stack.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,10 +25,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 _requires_bash = pytest.mark.skipif(
     shutil.which("bash") is None,
     reason="bash not available on this host",
-)
-_requires_docker = pytest.mark.skipif(
-    shutil.which("docker") is None,
-    reason="docker CLI not available on this host",
 )
 _requires_openssl = pytest.mark.skipif(
     shutil.which("openssl") is None,
@@ -61,22 +61,87 @@ def _stage_hw_tmpdir(tmp: Path) -> None:
         shutil.copytree(str(litellm_src), str(tmp / "litellm"))
 
 
+def _write_pyyaml_import_error_shim(tmp: Path) -> Path:
+    """Return a PYTHONPATH dir whose ``yaml`` package raises ImportError."""
+    pkg = tmp / "pyyaml_shim" / "yaml"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("raise ImportError('PyYAML unavailable (test shim)')\n")
+    return pkg.parent
+
+
+def _write_python3_wrapper(tmp: Path) -> Path:
+    """Return a PATH dir whose ``python3`` execs the running interpreter.
+
+    The running interpreter is the project venv, which has PyYAML — so the
+    yaml-reading path is exercised deterministically regardless of what the
+    host ``python3`` ships.
+    """
+    bin_dir = tmp / "pybin"
+    bin_dir.mkdir()
+    wrapper = bin_dir / "python3"
+    wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    wrapper.chmod(0o755)
+    return bin_dir
+
+
+def _write_docker_shim(tmp: Path, *, up_exit_code: int) -> tuple[Path, Path]:
+    """Return (PATH dir with a ``docker`` stub, invocation log path).
+
+    The stub logs every invocation, reports a v2 compose version, succeeds for
+    ``docker info`` (the fatal daemon probe), and exits ``up_exit_code`` for
+    any ``compose ... up -d ...`` call.
+    """
+    bin_dir = tmp / "dockerbin"
+    bin_dir.mkdir()
+    log = tmp / "docker-invocations.log"
+    log.touch()
+    stub = bin_dir / "docker"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> '{log}'\n"
+        'case "$*" in\n'
+        '  "compose version --short") echo "2.99.0" ;;\n'
+        f'  compose*"up -d"*) exit {up_exit_code} ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    stub.chmod(0o755)
+    return bin_dir, log
+
+
+def _run_default_model_for_tier(
+    tmp: Path, tier: str, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-c", f"source scripts/setup_lib.sh && _default_model_for_tier {tier} ollama"],
+        cwd=str(tmp),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
 @_requires_bash
-@_requires_docker
 @_requires_openssl
 def test_setup_writes_hw_tier_keys(tmp_path):
     """--non-interactive --backend ollama --smart-model writes hw-aware .env keys.
 
     Verifies JARVIS_HW_TIER, JARVIS_LLM_BACKEND, JARVIS_SMART_MODEL, and
-    COMPOSE_PROFILES are written by setup.sh, regardless of whether
-    ``docker compose up -d`` succeeds (it will fail in an isolated tmpdir with
-    no compose.yml — that is expected and intentionally tolerated).
+    COMPOSE_PROFILES are written by setup.sh. docker is PATH-shimmed: ``docker
+    info`` succeeds (the pre-prompt fatal daemon probe must pass, even on
+    daemon-less hosts) and ``compose ... up -d`` fails so the run stops right
+    after the .env write instead of waiting on services.
 
-    If setup.sh exits before writing .env (i.e. docker/openssl prereqs are
-    missing or docker compose v2 is unavailable), the test is skipped rather
-    than failed — the behaviour under test (the .env write step) was not reached.
+    If setup.sh exits before writing .env (i.e. openssl or another prereq is
+    absent), the test is skipped rather than failed — the behaviour under test
+    (the .env write step) was not reached.
     """
     _stage_hw_tmpdir(tmp_path)
+    docker_bin, _log = _write_docker_shim(tmp_path, up_exit_code=1)
+    env = dict(os.environ)
+    env["PATH"] = f"{docker_bin}{os.pathsep}{env['PATH']}"
 
     result = subprocess.run(
         [
@@ -91,6 +156,7 @@ def test_setup_writes_hw_tier_keys(tmp_path):
             "qwen3:1.7b",
         ],
         cwd=str(tmp_path),
+        env=env,
         capture_output=True,
         text=True,
         timeout=180,
@@ -149,3 +215,130 @@ def test_setup_check_reports_hw_tier(tmp_path):
         f"Expected 'PREFLIGHT:' in --check output (regression), got:\n{combined}"
     )
     assert not (tmp_path / ".env").exists(), "--check must not write a .env file"
+
+
+@_requires_bash
+def test_default_model_fallback_without_pyyaml(tmp_path):
+    """A python3 without PyYAML must yield the fallback model — and ONLY that.
+
+    stdout of _default_model_for_tier is command-substituted into
+    NI_SMART_MODEL (and from there into .env), so any stdout pollution
+    corrupts the written config. The exact-match assertion guards that.
+    """
+    _stage_hw_tmpdir(tmp_path)
+    python_bin = _write_python3_wrapper(tmp_path)
+    env = dict(os.environ)
+    env["PATH"] = f"{python_bin}{os.pathsep}{env['PATH']}"
+    env["PYTHONPATH"] = str(_write_pyyaml_import_error_shim(tmp_path))
+
+    result = _run_default_model_for_tier(tmp_path, "ge-48", env)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert result.stdout == "qwen3:30b-a3b\n", f"stdout polluted or wrong: {result.stdout!r}"
+    assert "PyYAML" in result.stderr, f"expected stderr diagnostic, got: {result.stderr!r}"
+
+
+@_requires_bash
+def test_default_model_yaml_and_fallback_agree_per_tier(tmp_path):
+    """The built-in fallback dict must mirror the YAML's per-tier answers.
+
+    Runs _default_model_for_tier per tier twice — once with PyYAML available
+    (the venv interpreter) and once with the ImportError shim — and asserts
+    both paths print the same model.
+    """
+    _stage_hw_tmpdir(tmp_path)
+    python_bin = _write_python3_wrapper(tmp_path)
+    yaml_env = dict(os.environ)
+    yaml_env["PATH"] = f"{python_bin}{os.pathsep}{yaml_env['PATH']}"
+    yaml_env.pop("PYTHONPATH", None)
+    no_yaml_env = dict(yaml_env, PYTHONPATH=str(_write_pyyaml_import_error_shim(tmp_path)))
+
+    for tier in ("cpu", "lt-8", "8-16", "16-24", "24-48", "ge-48"):
+        with_yaml = _run_default_model_for_tier(tmp_path, tier, yaml_env)
+        without_yaml = _run_default_model_for_tier(tmp_path, tier, no_yaml_env)
+        assert with_yaml.returncode == 0, f"{tier}: {with_yaml.stderr}"
+        assert without_yaml.returncode == 0, f"{tier}: {without_yaml.stderr}"
+        assert with_yaml.stdout == without_yaml.stdout != "", (
+            f"{tier}: yaml path {with_yaml.stdout!r} != fallback {without_yaml.stdout!r}"
+        )
+
+
+@_requires_bash
+@_requires_openssl
+def test_setup_rerun_keep_env_empty_profile_args_starts_stack(tmp_path):
+    """Keep-and-start path with empty KEEP_PROFILE_ARGS must not crash under set -u.
+
+    A legacy .env with neither COMPOSE_PROFILES nor TELEGRAM_BOT_TOKEN leaves
+    KEEP_PROFILE_ARGS=() empty.  On bash < 4.4, ``"${KEEP_PROFILE_ARGS[@]}"``
+    under ``set -u`` raises "unbound variable" — guard: the portable idiom
+    ``${ARR[@]+"${ARR[@]}"}`` must be used at the site.  Asserts that the script
+    reaches the stack-start path and runs plain ``docker compose up -d`` (no
+    ``--profile`` flags).
+    """
+    _stage_hw_tmpdir(tmp_path)
+    # Minimal .env: no TELEGRAM_BOT_TOKEN, no COMPOSE_PROFILES → KEEP_PROFILE_ARGS stays empty.
+    env_before = "JARVIS_SECRET_KEY=existing_secret\n"
+    (tmp_path / ".env").write_text(env_before)
+    docker_bin, log = _write_docker_shim(tmp_path, up_exit_code=0)
+    env = dict(os.environ)
+    env["PATH"] = f"{docker_bin}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", "setup.sh"],
+        cwd=str(tmp_path),
+        env=env,
+        input="\n",
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        f"setup.sh crashed (KEEP_PROFILE_ARGS empty under set -u?)\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Keeping existing .env" in result.stdout
+    invocations = log.read_text().splitlines()
+    # Must run plain "compose up -d" — no --profile flags injected.
+    assert "compose up -d" in invocations, (
+        f"plain compose up -d not found; docker invocations: {invocations}"
+    )
+    assert (tmp_path / ".env").read_text() == env_before, ".env must be untouched"
+
+
+@_requires_bash
+@_requires_openssl
+def test_setup_rerun_keep_env_starts_stack(tmp_path):
+    """Declining the overwrite prompt keeps .env AND starts the stack.
+
+    The pre-v0.8 dead end ("Keeping existing .env. Exiting." with services
+    down) must not return. A legacy .env without COMPOSE_PROFILES but with a
+    TELEGRAM_BOT_TOKEN must derive ``--profile telegram``. docker is
+    PATH-shimmed; the invocation log proves the stack-start path was reached.
+    """
+    _stage_hw_tmpdir(tmp_path)
+    env_before = "TELEGRAM_BOT_TOKEN=123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+    (tmp_path / ".env").write_text(env_before)
+    docker_bin, log = _write_docker_shim(tmp_path, up_exit_code=0)
+    env = dict(os.environ)
+    env["PATH"] = f"{docker_bin}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", "setup.sh"],
+        cwd=str(tmp_path),
+        env=env,
+        input="\n",
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "Keeping existing .env" in result.stdout
+    invocations = log.read_text().splitlines()
+    assert "compose --profile telegram up -d" in invocations, (
+        f"stack-start path not reached; docker invocations: {invocations}"
+    )
+    assert (tmp_path / ".env").read_text() == env_before, ".env must be untouched"

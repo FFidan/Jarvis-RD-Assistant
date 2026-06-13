@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles } from 'lucide-react';
+import { Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,6 +17,7 @@ import { useJobStore } from '@/stores/job-store';
 import { errorMessage } from '@/lib/errors';
 import { usePulseRating } from '@/hooks/usePulseRating';
 import type { PulseDeck as PulseDeckType, PulseRating, PulseSourceDiagnostic } from '@/types';
+import { LLM_SCORING_FAILED } from '@/components/pulse/reasoning-display';
 
 function sourceDiagnosticsFromStats(
   stats: Record<string, unknown>,
@@ -171,6 +172,10 @@ export function PulseDeck() {
   const degradedDetails = allDegradedDetails.slice(0, 3);
   const hiddenDegradedCount = Math.max(0, allDegradedDetails.length - degradedDetails.length);
 
+  const allScoringUnavailable =
+    deck.cards.length > 0 &&
+    deck.cards.every((c) => c.reasoning === LLM_SCORING_FAILED);
+
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
@@ -185,17 +190,25 @@ export function PulseDeck() {
             onRetry={handleGenerateNow}
           />
         )}
-        {deck.card_count === 0 && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="ml-auto"
-            onClick={handleGenerateNow}
-            disabled={isGenerating}
-          >
-            {isGenerating ? 'Generating...' : 'Regenerate'}
-          </Button>
-        )}
+        <Button
+          size="sm"
+          variant="outline"
+          className="ml-auto"
+          onClick={handleGenerateNow}
+          disabled={isGenerating}
+        >
+          {isGenerating ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Generating…
+            </>
+          ) : (
+            <>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Regenerate
+            </>
+          )}
+        </Button>
       </div>
       <p className="text-sm text-muted-foreground -mt-1">
         Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
@@ -218,25 +231,70 @@ export function PulseDeck() {
           )}
         </div>
       )}
-      <div className="space-y-3">
-        {deck.cards.map((card, idx) => {
-          const pendingSavePaperId = rateMutation.variables?.paperId;
-          return (
-            <div
-              key={card.card_id}
-              data-tour-id={idx === 0 ? 'pulse-card-first' : undefined}
-            >
-              <PulseCard
-                card={card}
-                onRate={handleRate}
-                onOpen={handleOpen}
-                rated={ratedCards.has(card.paper_id)}
-                savePending={pendingSavePaperId === card.paper_id && rateMutation.isPending}
-              />
-            </div>
-          );
-        })}
-      </div>
+      {allScoringUnavailable && (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-muted bg-muted/20 px-3 py-2">
+          <p className="text-sm text-muted-foreground">
+            AI scoring is unavailable for all cards. Regenerating may improve results.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleGenerateNow}
+            disabled={isGenerating}
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Generating…
+              </>
+            ) : (
+              'Regenerate'
+            )}
+          </Button>
+        </div>
+      )}
+      {deck.cards.length === 0 && !deck.degraded_reason ? (
+        <Card>
+          <CardContent className="flex flex-col items-start gap-3 py-6">
+            <p className="text-muted-foreground text-sm">
+              Today's deck has no cards yet — regenerate to refresh your recommendations.
+            </p>
+            <Button size="sm" onClick={handleGenerateNow} disabled={isGenerating}>
+              {isGenerating ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Regenerate deck
+                </>
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {deck.cards.map((card, idx) => {
+            const pendingSavePaperId = rateMutation.variables?.paperId;
+            return (
+              <div
+                key={card.card_id}
+                data-tour-id={idx === 0 ? 'pulse-card-first' : undefined}
+              >
+                <PulseCard
+                  card={card}
+                  onRate={handleRate}
+                  onOpen={handleOpen}
+                  rated={ratedCards.has(card.paper_id)}
+                  savePending={pendingSavePaperId === card.paper_id && rateMutation.isPending}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }

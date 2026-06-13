@@ -1,11 +1,14 @@
 """Top-level write_config orchestration and LiteLLM runtime update helper."""
 
 import logging
+import re
+import socket
 from typing import Any
 
 import asyncpg
 import httpx
 from jarvis_common.crypto import encrypt_secret, mask_secret
+from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
 
 from paper_ingestion.services.config_db import _write_config_row
 from paper_ingestion.services.config_metadata import (
@@ -18,6 +21,7 @@ from paper_ingestion.services.config_metadata import (
 from paper_ingestion.services.config_validators import (
     _CONFIG_VALIDATORS,
     _validate_bool,
+    _validate_num_ctx_bounds,
     _validate_positive_int,
 )
 from paper_ingestion.services.model_assignment import (
@@ -37,6 +41,24 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+# System row tracking model roles whose committed config LiteLLM has not
+# accepted yet (litellm running without its admin DB, e.g. prisma migrate
+# failed and the proxy degraded to DB-less mode). GET /api/system/models
+# surfaces these roles as delivery="pending_restart" while the boot reconciler
+# keeps retrying.
+_DELIVERY_PENDING_KEY = "llm.delivery_pending"
+
+
+def _is_litellm_no_db_error(detail: str) -> bool:
+    """Match LiteLLM's /model/new | /model/delete failure when no admin DB is attached.
+
+    A DB-less proxy rejects every model-management call with a body containing
+    "No DB Connected" (/model/new wraps it as HTTP 500, /config-era paths used
+    HTTP 400 — match the substring, not the status). Mirrors the boot
+    reconciler's matcher in ``main``.
+    """
+    return "No DB Connected" in detail
 
 
 async def _fetch_system_config_values(
@@ -60,20 +82,24 @@ async def _apply_litellm_runtime_update(
     key: str,
     value: Any,
     update_litellm_model_fn: Any,
-) -> None:
-    """Apply model and per-machine runtime settings to LiteLLM after the DB write."""
+) -> str:
+    """Deliver a model-role / per-machine runtime change to LiteLLM.
+
+    Returns ``"applied"`` when LiteLLM accepted the update, ``"skipped"`` when
+    no delivery applies (non-runtime key, num_ctx on a cloud model, or nothing
+    needed updating). Raises ``HTTPException(400)`` when delivery failed.
+    """
     from fastapi import HTTPException  # noqa: PLC0415
 
     from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
         ROLE_TO_ALIAS,
         _config_lock,
-        reload_litellm,
         update_litellm_model,
     )
 
     runtime_key = _classify_litellm_runtime_key(key)
     if runtime_key is None:
-        return
+        return "skipped"
 
     _update_fn = (
         update_litellm_model_fn if update_litellm_model_fn is not None else update_litellm_model
@@ -84,7 +110,15 @@ async def _apply_litellm_runtime_update(
             updated = False
             kind = runtime_key["kind"]
             if kind == "model_role":
-                updated = await _update_fn(key, str(value), db_pool=db_pool)
+                # machine_id lets the delivery pick up THIS machine's stored
+                # num_ctx / thinking preferences for the new model. Deployments
+                # are deployment-global in LiteLLM: last writer wins.
+                updated = await _update_fn(
+                    key,
+                    str(value),
+                    db_pool=db_pool,
+                    machine_id=socket.gethostname(),
+                )
             elif kind == "num_ctx":
                 role_key = runtime_key["role_key"]
                 model_values = await _fetch_system_config_values(db_pool, [role_key])
@@ -93,7 +127,7 @@ async def _apply_litellm_runtime_update(
                     raise RuntimeError(f"No model is assigned for {role_key}")
                 model_id_str = str(model_id)
                 if _is_cloud_model_assignment(model_id_str):
-                    return
+                    return "skipped"
                 updated = await _update_fn(
                     role_key,
                     model_id_str,
@@ -121,12 +155,82 @@ async def _apply_litellm_runtime_update(
                     )
                     updated = bool(alias_updated) or updated
 
-            if updated:
-                reloaded = await reload_litellm()
-                if not reloaded:
-                    raise RuntimeError("LiteLLM accepted the alias update but reload failed")
+            # No reload step: /model/new registers the deployment with the
+            # router immediately (and persists it in LiteLLM's admin DB).
+            return "applied" if updated else "skipped"
     except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        full_msg = str(exc)
+        logger.error("LiteLLM delivery failure: %s", full_msg)
+        m = re.match(r"^(.*?HTTP\s+\d+)\s+.+$", full_msg, re.DOTALL)
+        safe_detail = m.group(1) if m else full_msg
+        raise HTTPException(status_code=400, detail=safe_detail) from exc
+
+
+async def _pending_roles_for_runtime_key(
+    db_pool: asyncpg.Pool,
+    runtime_key: dict[str, str],
+) -> set[str]:
+    """Return the model roles (smart/fast/embed) whose LiteLLM routing *key* affects."""
+    from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS  # noqa: PLC0415
+
+    if runtime_key["kind"] in ("model_role", "num_ctx"):
+        return {ROLE_TO_ALIAS[runtime_key["role_key"]]}
+    # thinking_disabled: affects every role currently routed to this model.
+    assignments = await _fetch_system_config_values(db_pool, sorted(ROLE_TO_ALIAS))
+    return {
+        ROLE_TO_ALIAS[role_key]
+        for role_key, assigned in assignments.items()
+        if str(assigned) == runtime_key["model_id"]
+    }
+
+
+async def _update_delivery_pending_roles_on_conn(
+    conn: Any,
+    *,
+    roles: set[str],
+    pending: bool,
+) -> None:
+    """Add or clear *roles* in the ``llm.delivery_pending`` system row, on *conn*.
+
+    A successful delivery clears its roles (the alias now routes the committed
+    model); a "No DB Connected" failure adds them so the UI can show
+    "pending — not yet delivered" instead of a phantom "applied".
+
+    Caller must hold an open transaction on *conn*: the ``FOR UPDATE`` locks the
+    pending row so concurrent read-modify-write cycles serialize instead of
+    silently dropping each other's roles.
+    """
+    if not roles:
+        return
+    row = await conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL FOR UPDATE",
+        _DELIVERY_PENDING_KEY,
+    )
+    raw = row["value"] if row is not None else None
+    current: set[str] = {str(r) for r in raw} if isinstance(raw, list) else set()
+    updated = current | roles if pending else current - roles
+    if updated == current and isinstance(raw, list):
+        return
+    if raw is None and not updated:
+        return
+    await _write_config_row(conn, user_id=None, key=_DELIVERY_PENDING_KEY, value=sorted(updated))
+
+
+async def _update_delivery_pending_roles(
+    db_pool: asyncpg.Pool,
+    *,
+    roles: set[str],
+    pending: bool,
+) -> None:
+    """Pool-level wrapper for :func:`_update_delivery_pending_roles_on_conn`.
+
+    Runs the read-modify-write in its own short transaction. Used where no
+    surrounding transaction exists (e.g. boot-time rehydrate in ``main.py``).
+    """
+    if not roles:
+        return
+    async with db_pool.acquire() as conn, conn.transaction():
+        await _update_delivery_pending_roles_on_conn(conn, roles=roles, pending=pending)
 
 
 async def write_config(
@@ -146,7 +250,11 @@ async def write_config(
     Returns the display value (masked if the key is an encrypted secret).
 
     Raises ``fastapi.HTTPException`` on validation failure, model-assignment
-    rejection, LiteLLM update failure, or scheduler rollback.
+    rejection, LiteLLM update failure, or scheduler rollback. For LiteLLM
+    runtime keys a delivery failure means NO row is written (fail-closed),
+    except the "No DB Connected" case (LiteLLM degraded to DB-less mode),
+    where the row is committed and the role is recorded in
+    ``llm.delivery_pending`` while the boot reconciler keeps retrying.
     """
     from fastapi import HTTPException  # noqa: PLC0415
 
@@ -158,6 +266,11 @@ async def write_config(
     if runtime_key is not None and runtime_key["kind"] == "num_ctx":
         try:
             _validate_positive_int(value)
+            role_key = runtime_key["role_key"]
+            assigned = (await _fetch_system_config_values(db_pool, [role_key])).get(role_key)
+            await _validate_num_ctx_bounds(
+                value, model_id=str(assigned) if assigned is not None else None
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     elif runtime_key is not None and runtime_key["kind"] == "thinking_disabled":
@@ -184,6 +297,68 @@ async def write_config(
             model_id=str(value),
             db_pool=db_pool,
         )
+
+    # LiteLLM runtime keys: deliver FIRST, commit the row only on success
+    # (fail-closed). The old order (commit, then deliver) produced phantom
+    # state — GET /api/system/models reported the new model while LiteLLM kept
+    # routing the old one. Carve-out: when LiteLLM rejects the update solely
+    # because no admin DB is attached ("No DB Connected", e.g. prisma migrate
+    # failed and the proxy degraded to DB-less mode), the row IS committed and
+    # the affected roles are marked delivery-pending so the UI says "pending —
+    # not yet delivered" instead of failing the model picker entirely; the
+    # boot reconciler retries until LiteLLM recovers. Runtime keys have no
+    # scheduler / encryption side-effects, so this branch returns early.
+    if runtime_key is not None:
+        try:
+            outcome = await _apply_litellm_runtime_update(
+                db_pool=db_pool,
+                key=key,
+                value=value,
+                update_litellm_model_fn=update_litellm_model_fn,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 400 and _is_litellm_no_db_error(str(exc.detail)):
+                outcome = "pending_restart"
+            else:
+                # Real delivery failure: surface the 400 with NO row written,
+                # so the UI snap-back matches the persisted state.
+                raise
+        # "Skipped" nuance: for a MODEL-class key (llm.*_model) "skipped" means
+        # the alias already routes this exact model — truthfully applied, so
+        # the role's pending marker must be CLEARED (re-selecting the routed
+        # model must not leave a permanent false pill). For a num_ctx /
+        # thinking key, "skipped" (e.g. num_ctx on a cloud model) says NOTHING
+        # about model delivery, so pending must stay untouched.
+        roles: set[str]
+        if outcome == "skipped" and runtime_key["kind"] != "model_role":
+            roles = set()
+        else:
+            roles = await _pending_roles_for_runtime_key(db_pool, runtime_key)
+        # Row commit + pending bookkeeping happen in ONE transaction on ONE
+        # connection: a pending-write failure rolls back the row commit (no
+        # committed-row-without-marker window), and the FOR UPDATE inside the
+        # helper serializes concurrent PUTs over the pending row.
+        async with db_pool.acquire() as conn, conn.transaction():
+            await _write_config_row(conn, user_id=row_user_id, key=key, value=value)
+            if runtime_key["kind"] == "num_ctx" and outcome == "applied":
+                # System-scoped effective-context row consumed by the prompt
+                # budget readers (jarvis_common.effective_num_ctx). LiteLLM
+                # deployments are deployment-global, so the budget follows the
+                # last delivered value regardless of which machine wrote it.
+                # Deliberately NOT an allowed public /api/config key — written
+                # only here, on delivery success.
+                await _write_config_row(
+                    conn,
+                    user_id=None,
+                    key=f"llm.{runtime_key['role']}_num_ctx",
+                    value=value,
+                )
+            await _update_delivery_pending_roles_on_conn(
+                conn, roles=roles, pending=(outcome == "pending_restart")
+            )
+        if runtime_key["kind"] == "num_ctx" and outcome == "applied":
+            invalidate_effective_num_ctx_cache()
+        return value
 
     # Read old cron values before overwriting (for rollback)
     old_pulse_cron: str | None = None
@@ -220,17 +395,6 @@ async def write_config(
             )
         else:
             await _write_config_row(conn, user_id=row_user_id, key=key, value=value)
-
-    # LiteLLM runtime update after DB commit; on failure the DB write stays
-    # committed (LiteLLM reconciles from DB on reload).
-    # The ``update_litellm_model_fn`` parameter lets callers (i.e. the router)
-    # pass a monkeypatched reference so test patches remain effective.
-    await _apply_litellm_runtime_update(
-        db_pool=db_pool,
-        key=key,
-        value=value,
-        update_litellm_model_fn=update_litellm_model_fn,
-    )
 
     # Scheduler side-effects
     if key == "pulse.cron":

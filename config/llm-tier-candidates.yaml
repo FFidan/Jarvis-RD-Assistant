@@ -114,6 +114,12 @@ tiers:
         score: 84
         evidence: bench
         reasoning: "Bench-validated on the ≥48 GB tier (RTX 5880 Ada). Thinking-mode model; think-strip improvement visible vs earlier baselines. Same empty-answer-on-truncation caveat as the 14B (see known issues below). Recommended when the 14B is too slow or memory-constrained."
+      - backend: ollama
+        model: qwen3:30b-a3b
+        rank: 3
+        score: null
+        evidence: live-deployment
+        reasoning: "Live-deployment validated on a 48 GB RTX 5880 Ada at 16k context (v0.7). Catalog-verified and assignable via the UI. Recommended Ollama default for ≥40 GB hardware; does not require vLLM."
 
 # Known issues + future candidates:
 #

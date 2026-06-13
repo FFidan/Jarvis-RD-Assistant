@@ -27,6 +27,7 @@ from typing import Any
 
 import asyncpg
 import httpx
+from jarvis_common import effective_num_ctx
 from jarvis_common.advisory_lock import AdvisoryLock, _kind_lock_key
 from jarvis_common.event_log import log_event
 from jarvis_common.jobs import ProgressContext
@@ -219,7 +220,7 @@ async def run_pulse(
         await ctx.update_progress(0.85, "Stage 2 LLM scoring")
         if await ctx.is_cancelled():
             raise asyncio.CancelledError()
-    stage2_out, degraded_reason, llm_calls = await _run_stage2(stage1_out, profile, ctx)
+    stage2_out, degraded_reason, llm_calls = await _run_stage2(stage1_out, profile, ctx, db_pool)
     stats["stage2_scored"] = len(stage2_out)
     stats["llm_calls"] = llm_calls
     if degraded_reason:
@@ -296,6 +297,7 @@ async def _run_stage2(
     stage1_out: list[ScoredCandidate],
     profile: Any,
     ctx: Any,
+    db_pool: Any,
 ) -> tuple[list[ScoredCandidate], str | None, int]:
     """Stage 4 — LLM rerank with timeout + fallback.
 
@@ -319,6 +321,7 @@ async def _run_stage2(
                 profile,
                 verifier=services.verifier,
                 openai_client=services.openai_client,
+                num_ctx=await effective_num_ctx(db_pool, "fast"),
             )
             if ctx:
                 await ctx.update_progress(

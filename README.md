@@ -37,7 +37,8 @@
 
 - Docker Engine 24+ with Compose v2, `openssl`, `git`
 - ~20 GB free disk space
-- NVIDIA GPU optional (CPU works fine)
+- NVIDIA GPU optional. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more. The first run pulls 7–11 GB of model data; allow 20–60 minutes on a typical connection.
+- On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
 - `./setup.sh --check` verifies all of these (read-only preflight)
 - **Windows:** use WSL2 + Docker Desktop
 - **Non-interactive installs:** use `scripts/jarvis-setup.sh` for CI / cloud-init
@@ -50,6 +51,10 @@ cd Jarvis-RD-Assistant
 ```
 
 `setup.sh` generates strong random secrets, configures TLS, brings the Docker Compose stack up, waits for the dashboard, and opens **http://localhost:3001** — the first-run wizard creates the admin account. Pass `--mode single` (API-key login, no SMTP) or `--mode multi` (magic-link email). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#single-user-vs-multi-user-mode) for the trade-off.
+
+Re-running `./setup.sh` keeps your data: answering `N` (the default) at the `Overwrite?` prompt preserves your existing `.env` — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (7–11 GB; 20–60 min on a typical connection) streams its progress directly to your terminal before the services start, so the initial pull shows visible progress instead of a silent wait.
+
+In single-user mode (`JARVIS_SETUP_MODE=single`), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.
 
 **Non-interactive (CI / cloud-init):**
 

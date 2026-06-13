@@ -1,41 +1,46 @@
-"""Helper to update LiteLLM config when user changes model assignments.
+"""Deliver model-role changes to LiteLLM via its admin database.
 
-When a user selects a different Ollama model for a role (smart/fast/embed)
-in the Settings UI, this module updates the litellm config.yaml to route
-the alias to the new model. LiteLLM picks up the change on next request
-(config is re-read from the mounted volume).
+When a user selects a different model for a role (smart/fast) in the Settings
+UI — or the boot reconciler re-applies stored choices — the change is delivered
+with ``POST /model/new`` (create the replacement deployment) followed by
+``POST /model/delete`` (remove the superseded DB deployments). LiteLLM
+persists DB deployments in ``LiteLLM_ProxyModelTable`` (loaded at boot and
+reconciled by LiteLLM's own background job), so deliveries survive LiteLLM
+restarts.
 
-For cloud-provider models (anthropic/, openai/, gemini/) the YAML is
-read-only (SEC-002), so the model + API key are injected via LiteLLM's
-``POST /config/update`` endpoint in-memory instead of writing to disk.
+Why not LiteLLM's legacy config-update endpoint: the pinned image silently
+DROPS the request's ``model_list`` there, so every such delivery was a 200
+no-op — the worst kind of phantom. Why the YAML carries no smart/fast aliases:
+YAML-seeded deployments can never be removed at runtime (``/model/delete``
+only deletes DB rows), so a DB ``smart`` would STACK with a YAML ``smart`` and
+latency-based routing could keep preferring the stale model. The switchable
+aliases therefore live ONLY in the admin DB; ``litellm/config.yaml`` keeps the
+dimension-locked ``embed`` aliases plus router/general settings.
 
-Note: the litellm config mount is read-only in production (SEC-002).
-``update_litellm_model`` validates the model name via an allowlist and raises
-``RuntimeError`` on any OS-level write failure so the router can return a
-clear 400 instead of a confusing IO error.
+Cloud-provider keys (anthropic/openai/gemini) are Fernet-decrypted from
+``user_config`` in memory and carried in the ``/model/new`` payload; LiteLLM
+stores them encrypted under the pinned ``LITELLM_SALT_KEY`` in its admin DB.
+They are never written to the YAML or any other file (SEC-002).
 """
 
 import asyncio
+import hashlib
 import logging
 import re
-from pathlib import Path
 from typing import Any
 
 import httpx
-import yaml
 from jarvis_common.crypto import resolve_secret_row
+from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
 from jarvis_common.llm_client import build_litellm_headers, get_litellm_config
 
 logger = logging.getLogger(__name__)
 
-# Serializes concurrent LiteLLM config updates — the settings router imports this
-# to guard PUT /api/config/{llm.*_model} against racy YAML rewrites / overlapping
-# POST /config/update calls.
+# Serializes concurrent LiteLLM delivery sequences — the settings router imports
+# this to guard PUT /api/config/{llm.*} against interleaved /model/new +
+# /model/delete pairs (an interleave could delete a deployment another request
+# just created).
 _config_lock = asyncio.Lock()  # pyright: ignore[reportUnusedVariable]  # imported from routers/settings.py
-
-
-class ProviderKeyMissing(Exception):  # noqa: N818
-    """Raised when a cloud-provider API key is required but not configured."""
 
 
 # Map from LiteLLM model prefix → canonical provider name used in user_config keys.
@@ -45,6 +50,101 @@ _CLOUD_PREFIX_TO_PROVIDER: dict[str, str] = {
     "openai": "openai",
     "gemini": "google",
 }
+
+ROLE_TO_ALIAS: dict[str, str] = {
+    "llm.smart_model": "smart",
+    "llm.fast_model": "fast",
+    "llm.embed_model": "embed",
+}
+
+# Tuned defaults for deployments the app creates when an alias has no existing
+# deployment to inherit from (first bootstrap after the YAML de-seed). These
+# mirror the values formerly seeded in litellm/config.yaml.
+#
+# Placement invariant (verified against the pinned LiteLLM image): for ollama/
+# models, num_ctx and think must be TOP-LEVEL litellm_params. Non-OpenAI
+# providers pass unknown top-level params straight into Ollama's ``options``
+# (and the ollama transforms pop top-level ``think`` into the request body),
+# while a nested ``extra_body`` is forwarded verbatim under ``options`` and
+# silently ignored by Ollama.
+ALIAS_BOOTSTRAP_PARAMS: dict[str, dict[str, Any]] = {
+    "smart": {
+        "temperature": 0.2,
+        "num_ctx": 8192,
+        "think": False,
+        "timeout": 300,
+        "num_retries": 2,
+    },
+    "fast": {
+        "temperature": 0.1,
+        "num_ctx": 4096,
+        "think": False,
+    },
+    # smart's resilience fallback: the fast-tier model with a longer timeout.
+    "smart-fallback": {
+        "temperature": 0.1,
+        "num_ctx": 4096,
+        "think": False,
+        "timeout": 120,
+        "num_retries": 2,
+    },
+}
+
+# litellm_params keys the app manages / carries forward when replacing a
+# deployment. Anything else returned by /v1/model/info (internal flags,
+# defaults) is dropped on purpose — explicit over accidental carriage.
+_CARRIED_PARAM_KEYS = (
+    "model",
+    "api_base",
+    "temperature",
+    "num_ctx",
+    "think",
+    "timeout",
+    "num_retries",
+    "keep_alive",
+    "dimensions",
+)
+
+_HTTP_TIMEOUT = 15.0
+
+# Cloud no-op fingerprinting. The pinned LiteLLM image's /v1/model/info POPS
+# litellm_params.api_key from every deployment it returns
+# (remove_sensitive_info_from_deployment in the proxy), so the deployed key can
+# never be compared directly. Without a no-op check the ~30 s reconciler would
+# re-deliver every cloud alias forever: deployment-id churn, router
+# cooldown/latency state resets, an INFO line every pass, and the plaintext key
+# re-transmitted 2,880x/day. Instead we remember, per alias, the
+# (model, think, key-fingerprint) of the LAST successful delivery made BY THIS
+# PROCESS and no-op only when both the live routing state (model/think from
+# /v1/model/info) and the fingerprint match. Process-local on purpose: the
+# cache clears on restart (one harmless redelivery per boot, which
+# self-corrects), and a genuine key rotation changes the fingerprint so the
+# very next delivery call (configure_cloud_llm_keys re-push, Settings PUT, or
+# a reconciler pass) carries the fresh key.
+_CLOUD_DELIVERED_FINGERPRINTS: dict[str, tuple[str, Any, str]] = {}
+
+# The always-pulled OLLAMA_MODELS default for the fast tier (matches the
+# static fallback in main.py's _LITELLM_ROLE_FALLBACKS). Used to pin
+# smart-fallback when a cloud fast model has no provider key.
+_STATIC_FALLBACK_MODEL = "qwen3:4b"
+
+# ensure_smart_fallback runs every reconciler pass; a missing cloud key must
+# warn once per distinct model, not every 30 s.
+_FALLBACK_KEYLESS_WARNED: set[str] = set()
+
+
+def _key_fingerprint(api_key: str | None) -> str:
+    """Short non-reversible identity for a delivered key ('' = no key)."""
+    if not api_key:
+        return ""
+    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
+
+
+def _redact_secret(text: str, secret: Any) -> str:
+    """Strip *secret* from error text before it reaches logs / HTTP details."""
+    if isinstance(secret, str) and secret:
+        return text.replace(secret, "***")
+    return text
 
 
 async def get_provider_api_key(provider: str, db_pool: Any) -> str | None:
@@ -86,8 +186,8 @@ async def get_provider_api_key(provider: str, db_pool: Any) -> str | None:
 def _validate_model_name(ollama_model_name: str) -> None:
     """Reject model names that contain path traversal or shell metacharacters.
 
-    The model name is interpolated into a YAML string; a value like
-    ``../../etc/passwd`` or ``; rm -rf /`` must never reach the config file.
+    The model name is sent to LiteLLM's admin API; a value like
+    ``../../etc/passwd`` or ``; rm -rf /`` must never reach a config surface.
     Permit only ``[a-zA-Z0-9._:-]`` characters (covers all real Ollama IDs).
     """
     if not re.fullmatch(r"[a-zA-Z0-9._:\-]+", ollama_model_name):
@@ -95,16 +195,6 @@ def _validate_model_name(ollama_model_name: str) -> None:
             f"Model name {ollama_model_name!r} contains disallowed characters. "
             "Only alphanumerics and . _ : - are permitted."
         )
-
-
-# Mounted in docker-compose.yml as a shared volume
-LITELLM_CONFIG_PATH = Path("/app/litellm_config/config.yaml")
-
-ROLE_TO_ALIAS: dict[str, str] = {
-    "llm.smart_model": "smart",
-    "llm.fast_model": "fast",
-    "llm.embed_model": "embed",
-}
 
 
 async def _get_thinking_disabled(
@@ -175,6 +265,216 @@ async def _get_num_ctx(
         return None
 
 
+# ---------------------------------------------------------------------------
+# LiteLLM admin-API primitives
+# ---------------------------------------------------------------------------
+
+
+async def get_litellm_deployments() -> list[dict[str, Any]]:
+    """Return all LiteLLM deployments via ``GET /v1/model/info``.
+
+    Each entry is ``{"model_name": str, "litellm_params": dict,
+    "model_info": {"id": str, "db_model": bool, ...}}``. ``db_model`` is True
+    for admin-DB deployments (deletable via ``/model/delete``) and False for
+    YAML-seeded ones (NOT deletable at runtime). ``litellm_params.api_key`` is
+    masked by LiteLLM and never round-trips through this call.
+
+    Raises ``RuntimeError`` on transport failure or any HTTP >= 400.
+    """
+    litellm_cfg = get_litellm_config()
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.get(
+                f"{litellm_cfg.base_url}/v1/model/info",
+                headers=build_litellm_headers(litellm_cfg),
+            )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"LiteLLM /v1/model/info unreachable: {exc}") from exc
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"LiteLLM /v1/model/info failed: HTTP {resp.status_code} {resp.text[:300]}"
+        )
+    data = resp.json().get("data")
+    if not isinstance(data, list):
+        raise RuntimeError("LiteLLM /v1/model/info returned an unexpected shape (no data list)")
+    return [d for d in data if isinstance(d, dict)]
+
+
+async def _post_model_new(alias: str, litellm_params: dict[str, Any]) -> str | None:
+    """Create a deployment for *alias* via ``POST /model/new``.
+
+    Returns the new deployment id when LiteLLM reports one, else None.
+    Raises ``RuntimeError`` on transport failure or HTTP >= 400; the message
+    carries the response body so callers can detect the "No DB Connected"
+    degraded state.
+    """
+    litellm_cfg = get_litellm_config()
+    payload = {"model_name": alias, "litellm_params": litellm_params}
+    # The payload may carry a decrypted cloud api_key, and FastAPI 422s echo the
+    # submitted body — any raised error text must be redacted or the plaintext
+    # key flows into HTTPException details (browser), reconciler warning
+    # tracebacks (docker logs -> Vector), and setup.py warnings.
+    api_key = litellm_params.get("api_key")
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                f"{litellm_cfg.base_url}/model/new",
+                json=payload,
+                headers=build_litellm_headers(litellm_cfg),
+            )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"LiteLLM /model/new unreachable for alias {alias!r}: "
+            f"{_redact_secret(str(exc), api_key)}"
+        ) from exc
+    if resp.status_code >= 400:
+        # Redact BEFORE truncating — a key straddling the 500-char cut would
+        # survive a truncate-then-replace.
+        body_text = _redact_secret(resp.text, api_key)
+        raise RuntimeError(
+            f"LiteLLM /model/new failed for alias {alias!r}: "
+            f"HTTP {resp.status_code} {body_text[:500]}"
+        )
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    model_id = body.get("model_id") if isinstance(body, dict) else None
+    return str(model_id) if model_id else None
+
+
+async def _post_model_delete(deployment_id: str) -> None:
+    """Delete a DB deployment by id via ``POST /model/delete``.
+
+    Raises ``RuntimeError`` on transport failure or HTTP >= 400.
+    """
+    litellm_cfg = get_litellm_config()
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                f"{litellm_cfg.base_url}/model/delete",
+                json={"id": deployment_id},
+                headers=build_litellm_headers(litellm_cfg),
+            )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"LiteLLM /model/delete unreachable for deployment {deployment_id!r}: {exc}"
+        ) from exc
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"LiteLLM /model/delete failed for deployment {deployment_id!r}: "
+            f"HTTP {resp.status_code} {resp.text[:300]}"
+        )
+
+
+def _deployments_for_alias(
+    deployments: list[dict[str, Any]], alias: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split *alias*'s deployments into (db_deployments, yaml_deployments)."""
+    db_entries: list[dict[str, Any]] = []
+    yaml_entries: list[dict[str, Any]] = []
+    for entry in deployments:
+        if entry.get("model_name") != alias:
+            continue
+        info = entry.get("model_info") or {}
+        if isinstance(info, dict) and info.get("db_model"):
+            db_entries.append(entry)
+        else:
+            yaml_entries.append(entry)
+    return db_entries, yaml_entries
+
+
+def _deployment_id(entry: dict[str, Any]) -> str | None:
+    info = entry.get("model_info") or {}
+    if isinstance(info, dict) and info.get("id"):
+        return str(info["id"])
+    return None
+
+
+def _carry_base_params(entry: dict[str, Any] | None) -> dict[str, Any]:
+    """Extract the managed litellm_params from an existing deployment.
+
+    Lifts legacy ``extra_body`` values (num_ctx/think) to top level — the only
+    placement Ollama actually honours (see module docstring) — and drops
+    everything outside the managed whitelist.
+    """
+    if entry is None:
+        return {}
+    raw = entry.get("litellm_params")
+    if not isinstance(raw, dict):
+        return {}
+    carried = {k: raw[k] for k in _CARRIED_PARAM_KEYS if raw.get(k) is not None}
+    extra = raw.get("extra_body")
+    if isinstance(extra, dict):
+        if "num_ctx" not in carried and extra.get("num_ctx") is not None:
+            carried["num_ctx"] = extra["num_ctx"]
+        if "think" not in carried and extra.get("think") is not None:
+            carried["think"] = extra["think"]
+    return carried
+
+
+def _routing_signature(params: dict[str, Any]) -> tuple[Any, Any, Any]:
+    """(model, num_ctx, think) — the routing-relevant identity of a deployment."""
+    extra = params.get("extra_body") if isinstance(params.get("extra_body"), dict) else {}
+    return (
+        params.get("model"),
+        params.get("num_ctx", extra.get("num_ctx") if isinstance(extra, dict) else None),
+        params.get("think", extra.get("think") if isinstance(extra, dict) else None),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Delivery orchestration
+# ---------------------------------------------------------------------------
+
+
+async def _replace_alias_deployment(
+    alias: str,
+    new_params: dict[str, Any],
+    stale_db_entries: list[dict[str, Any]],
+) -> bool:
+    """Create the replacement deployment, then delete the superseded DB rows.
+
+    Create-first ordering keeps the old routing intact if the create fails.
+    If a delete fails afterwards the new and old deployments would STACK
+    (latency routing may keep preferring the old model), so the just-created
+    deployment is rolled back best-effort and the error is raised.
+    """
+    new_id = await _post_model_new(alias, new_params)
+    delete_errors: list[str] = []
+    for entry in stale_db_entries:
+        dep_id = _deployment_id(entry)
+        if dep_id is None or dep_id == new_id:
+            continue
+        try:
+            await _post_model_delete(dep_id)
+        except RuntimeError as exc:
+            delete_errors.append(str(exc))
+    if delete_errors:
+        if new_id is not None:
+            try:
+                await _post_model_delete(new_id)
+            except RuntimeError:
+                logger.warning(
+                    "Rollback delete of just-created deployment %r for alias %r failed",
+                    new_id,
+                    alias,
+                    exc_info=True,
+                )
+        raise RuntimeError(
+            f"LiteLLM stale-deployment cleanup failed for alias {alias!r} "
+            f"(delivery rolled back): {'; '.join(delete_errors)}"
+        )
+    logger.info(
+        "LiteLLM alias %r now routes %s (deployment %s; %d stale deployment(s) removed)",
+        alias,
+        new_params.get("model"),
+        new_id or "<unknown id>",
+        len(stale_db_entries),
+    )
+    return True
+
+
 async def update_litellm_model(
     config_key: str,
     model_name: str,
@@ -183,17 +483,24 @@ async def update_litellm_model(
     num_ctx: int | None = None,
     thinking_disabled: bool | None = None,
 ) -> bool:
-    """Route an alias to a new model, injecting cloud API keys when needed.
+    """Route an alias to a new model via LiteLLM's admin DB.
 
-    For local Ollama models the existing litellm config.yaml is updated on
-    disk (SEC-002: only valid when the mount is read-write).  For cloud-provider
-    models (``anthropic/``, ``openai/``, ``gemini/``) the change is delivered
-    via LiteLLM's ``POST /config/update`` endpoint instead -- the YAML is never
-    written (SEC-002 compliance).
+    Resolves the alias's current deployments (``GET /v1/model/info``), creates
+    the replacement (``POST /model/new`` — carrying merged num_ctx / think /
+    temperature / api_base, and the Fernet-decrypted provider key for cloud
+    models), then deletes the superseded DB deployments (``POST
+    /model/delete``). Deployments are deployment-global: the last writer wins
+    across machines; per-machine num_ctx / thinking preferences are read from
+    user_config for the *delivering* machine.
 
     ``num_ctx`` and ``thinking_disabled`` are pending per-machine settings
-    overrides. ``num_ctx`` is local/Ollama-only; thinking overrides may be
-    included for catalog entries that support thinking.
+    overrides and win over persisted DB state. ``num_ctx`` is local/Ollama-only.
+
+    Returns True when a delivery happened, False when nothing needed changing
+    (the alias already routes the requested model with the same effective
+    params). Raises ``RuntimeError`` when delivery fails — including the
+    "No DB Connected" degraded state, which callers map to the
+    ``llm.delivery_pending`` bookkeeping.
     """
     # Resolve config_key -> alias. Accept either format for convenience.
     alias = ROLE_TO_ALIAS.get(config_key) or (
@@ -206,8 +513,8 @@ async def update_litellm_model(
     # Detect cloud-provider prefix. gemini/ maps to the "google" provider name.
     # -------------------------------------------------------------------------
     cloud_provider: str | None = None
-    # Normalize: strip :latest -- Ollama's default implicit tag is never stored in
-    # config.yaml, so "mistral-nemo:latest" and "mistral-nemo" must be treated as equal.
+    # Normalize: strip :latest -- Ollama's default implicit tag is never stored
+    # anywhere, so "mistral-nemo:latest" and "mistral-nemo" must be treated as equal.
     if model_name.endswith(":latest"):
         model_name = model_name[:-7]
     model_suffix = model_name  # the part after provider/ (or full name for Ollama)
@@ -215,26 +522,22 @@ async def update_litellm_model(
     if "/" in model_name:
         prefix, model_suffix = model_name.split("/", 1)
         cloud_provider = _CLOUD_PREFIX_TO_PROVIDER.get(prefix)
-        # model_suffix already holds the part after "/" -- validate only that part.
 
     # SEC-002: validate the model-name portion (no path traversal / shell chars).
     # For "provider/model-name" strings we validate only the model-name suffix.
     _validate_model_name(model_suffix)
 
     # -------------------------------------------------------------------------
-    # Hardware-aware propagation.
-    # num_ctx is an Ollama runtime option and must not be sent to cloud provider
-    # aliases. Thinking is model-scoped but only meaningful for thinking-capable
-    # catalog entries. Explicit keyword values represent pending settings writes
-    # and must win over persisted DB state.
+    # Hardware-aware overrides. num_ctx is an Ollama runtime option and must
+    # not be sent to cloud provider aliases. Thinking is model-scoped but only
+    # meaningful for thinking-capable catalog entries. Explicit keyword values
+    # represent pending settings writes and win over persisted DB state.
     # -------------------------------------------------------------------------
-    extra_body: dict[str, Any] | None = None
+    effective_num_ctx: int | None = None
     if cloud_provider is None:
         effective_num_ctx = num_ctx
         if effective_num_ctx is None:
             effective_num_ctx = await _get_num_ctx(alias, machine_id, db_pool)
-        if effective_num_ctx is not None:
-            extra_body = {"num_ctx": effective_num_ctx}
 
     # Import here to avoid circular import at module level
     from jarvis_common.model_catalog import ModelCatalogEntry, load_model_catalog  # noqa: PLC0415
@@ -247,6 +550,7 @@ async def update_litellm_model(
         if entry_bare == bare_model or _entry.id == model_name:
             catalog_entry = _entry
             break
+    effective_thinking_disabled: bool | None = None
     if catalog_entry is not None and catalog_entry.supports_thinking:
         effective_thinking_disabled = thinking_disabled
         if effective_thinking_disabled is None:
@@ -256,9 +560,6 @@ async def update_litellm_model(
                 db_pool,
             )
         if effective_thinking_disabled:
-            if extra_body is None:
-                extra_body = {}
-            extra_body["think"] = False
             logger.info(
                 "Thinking mode disabled for model %r on machine %r (alias %r)",
                 model_name,
@@ -267,249 +568,259 @@ async def update_litellm_model(
             )
 
     # -------------------------------------------------------------------------
-    # Cloud-provider path: POST to /config/update (never touch the YAML file).
+    # Resolve current routing state.
+    # -------------------------------------------------------------------------
+    deployments = await get_litellm_deployments()
+    db_entries, yaml_entries = _deployments_for_alias(deployments, alias)
+    base_entry = db_entries[0] if db_entries else (yaml_entries[0] if yaml_entries else None)
+    base_params = _carry_base_params(base_entry)
+
+    # New model string: caller-supplied provider prefix wins; otherwise inherit
+    # the existing entry's prefix; otherwise default to ollama/.
+    existing_model = str(base_params.get("model", ""))
+    if "/" in model_name:
+        new_model = model_name
+    elif "/" in existing_model and not existing_model.startswith("ollama/"):
+        existing_prefix = existing_model.split("/")[0]
+        new_model = f"{existing_prefix}/{model_name}"
+    else:
+        new_model = f"ollama/{model_name}"
+
+    # -------------------------------------------------------------------------
+    # Embed guard: the embed alias is dimension-locked to the Qdrant collection
+    # and stays YAML-seeded. Re-selecting the routed model is a no-op; routing
+    # it anywhere else is refused (a DB embed deployment would stack with the
+    # YAML one and latency routing would mix embedders).
+    # -------------------------------------------------------------------------
+    if alias == "embed":
+        routed = {
+            str((e.get("litellm_params") or {}).get("model", ""))
+            for e in (*db_entries, *yaml_entries)
+        }
+        if new_model in routed:
+            return False
+        raise RuntimeError(
+            f"The embed alias is dimension-locked to the Qdrant collection and cannot "
+            f"be re-routed at runtime (requested {new_model!r}). Switching embedders is "
+            "a deliberate operation: edit litellm/config.yaml and re-embed the corpus."
+        )
+
+    # -------------------------------------------------------------------------
+    # Cloud path: deliver model + decrypted key. The no-op mirrors the ollama
+    # shape (single DB entry, no YAML stack, signature match) with the cloud
+    # signature = (model, think, key-fingerprint) — num_ctx/api_base don't
+    # apply. /v1/model/info pops api_key, so the key leg of the signature is
+    # the process-local fingerprint of the last delivery (see
+    # _CLOUD_DELIVERED_FINGERPRINTS above) — key rotation still re-delivers
+    # because the fresh key's fingerprint differs from the cached one.
     # -------------------------------------------------------------------------
     if cloud_provider is not None:
+        api_key: str | None = None
         if db_pool is None:
             logger.warning(
                 "Cannot inject cloud API key for alias %r -- db_pool not provided; "
-                "falling back to Ollama alias update",
+                "delivering the deployment without a key",
                 alias,
             )
-            cloud_provider = None  # fall through to YAML path below
         else:
             api_key = await get_provider_api_key(cloud_provider, db_pool)
             if api_key is None:
                 logger.warning(
                     "No API key configured for provider %r (alias %r) -- "
-                    "falling back to Ollama alias update",
+                    "delivering the deployment without a key; requests will fail "
+                    "until the key is saved",
                     cloud_provider,
                     alias,
                 )
-                cloud_provider = None  # fall through to YAML path below
-            else:
-                return await _post_config_update(alias, model_name, api_key, extra_body=extra_body)
+        new_params: dict[str, Any] = {
+            k: v
+            for k, v in base_params.items()
+            # Ollama-only / local-transport params must not leak onto a cloud deployment.
+            if k not in ("api_base", "num_ctx", "keep_alive", "dimensions", "think", "model")
+        }
+        new_params["model"] = new_model
+        if api_key is not None:
+            new_params["api_key"] = api_key
+        if effective_thinking_disabled:
+            new_params["think"] = False
+
+        desired_cloud = (new_model, new_params.get("think"), _key_fingerprint(api_key))
+        if len(db_entries) == 1 and not yaml_entries:
+            deployed = db_entries[0].get("litellm_params") or {}
+            if (
+                deployed.get("model") == new_model
+                and deployed.get("think") == new_params.get("think")
+                and _CLOUD_DELIVERED_FINGERPRINTS.get(alias) == desired_cloud
+            ):
+                return False
+        delivered = await _replace_alias_deployment(alias, new_params, db_entries)
+        _CLOUD_DELIVERED_FINGERPRINTS[alias] = desired_cloud
+        return delivered
 
     # -------------------------------------------------------------------------
-    # Local / Ollama path: update the YAML file on disk.
-    # For models without a provider prefix, prepend ollama/.
-    # For models whose existing YAML entry already has a provider prefix, reuse it.
+    # Local / Ollama path.
     # -------------------------------------------------------------------------
-    if not LITELLM_CONFIG_PATH.exists():
-        logger.warning("LiteLLM config not found at %s", LITELLM_CONFIG_PATH)
-        return False
-
-    config = yaml.safe_load(LITELLM_CONFIG_PATH.read_text())
-    updated = False
-    new_model = model_name  # fallback; set in loop below when alias found
-    for entry in config.get("model_list", []):
-        if entry.get("model_name") == alias:
-            existing_model = (entry.get("litellm_params") or {}).get("model", "")
-            # Compute the new model string.
-            if "/" in model_name:
-                # Caller supplied a full provider/model string.
-                new_model = model_name
-            elif "/" in existing_model:
-                # Inherit the existing provider prefix (A6).
-                existing_prefix = existing_model.split("/")[0]
-                new_model = f"{existing_prefix}/{model_name}"
-            else:
-                new_model = f"ollama/{model_name}"
-
-            # A2: guard litellm_params null in YAML.
-            params = entry.get("litellm_params")
-            if params is None:
-                params = {}
-                entry["litellm_params"] = params
-
-            model_changed = existing_model != new_model
-            if model_changed:
-                params["model"] = new_model
-                logger.info(
-                    "Updated LiteLLM alias %r: %s -> %s",
-                    alias,
-                    existing_model,
-                    new_model,
-                )
-
-            # Propagate hardware overrides regardless of model change. A pending
-            # thinking_disabled=False write removes only the think flag while
-            # preserving any other extra_body values such as num_ctx.
-            hardware_changed = False
-            if extra_body is not None:
-                existing_extra = params.get("extra_body")
-                if not isinstance(existing_extra, dict):
-                    existing_extra = {}
-                merged_extra = {**existing_extra, **extra_body}
-                if thinking_disabled is False:
-                    merged_extra.pop("think", None)
-                if merged_extra != existing_extra:
-                    if merged_extra:
-                        params["extra_body"] = merged_extra
-                    else:
-                        params.pop("extra_body", None)
-                    hardware_changed = True
-            elif thinking_disabled is False:
-                existing_extra = params.get("extra_body")
-                if isinstance(existing_extra, dict) and "think" in existing_extra:
-                    remaining_extra = dict(existing_extra)
-                    remaining_extra.pop("think", None)
-                    if remaining_extra:
-                        params["extra_body"] = remaining_extra
-                    else:
-                        params.pop("extra_body", None)
-                    hardware_changed = True
-            if hardware_changed:
-                updated = True
-                logger.info(
-                    "Updated LiteLLM hardware params for alias %r: extra_body=%r",
-                    alias,
-                    params.get("extra_body"),
-                )
-
-            if model_changed:
-                updated = True
-            break
-
-    if updated:
-        try:
-            LITELLM_CONFIG_PATH.write_text(
-                yaml.dump(config, default_flow_style=False, sort_keys=False)
-            )
-        except OSError:
-            logger.warning("LiteLLM config is :ro; falling back to in-memory /config/update")
-            merged_extra = params.get("extra_body") if isinstance(params, dict) else None
-            return await _post_ollama_alias_update(
-                alias,
-                new_model,
-                extra_body=merged_extra if isinstance(merged_extra, dict) else None,
-            )
-
-    return updated
-
-
-async def _post_config_update(
-    alias: str,
-    model_name: str,
-    api_key: str,
-    extra_body: dict[str, Any] | None = None,
-) -> bool:
-    """POST a model alias update to LiteLLM's /config/update endpoint.
-
-    The API key is injected into the in-memory litellm_params dict and is
-    **never** written to the YAML file on disk (SEC-002).
-
-    Returns True on success (HTTP < 400), False otherwise.
-    """
-    litellm_params: dict[str, Any] = {
-        "model": model_name,
-        "api_key": api_key,
-    }
-    if extra_body is not None:
-        litellm_params["extra_body"] = extra_body
-    payload: dict[str, Any] = {
-        "model_list": [
-            {
-                "model_name": alias,
-                "litellm_params": litellm_params,
-            }
-        ]
-    }
-    try:
-        litellm_cfg = get_litellm_config()
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                f"{litellm_cfg.base_url}/config/update",
-                json=payload,
-                headers=build_litellm_headers(litellm_cfg),
-            )
-        if resp.status_code < 400:
-            logger.info(
-                "Cloud alias %r → %s pushed to LiteLLM via /config/update",
-                alias,
-                model_name,
-            )
-            return True
-        text = resp.text[:500]
-        raise RuntimeError(
-            f"LiteLLM /config/update failed for alias {alias!r}: HTTP {resp.status_code} {text}"
-        )
-    except Exception as exc:
-        if isinstance(exc, RuntimeError):
-            raise
-        raise RuntimeError(f"Could not push cloud alias {alias!r} to LiteLLM: {exc}") from exc
-
-
-async def _post_ollama_alias_update(
-    alias: str,
-    litellm_model_string: str,
-    extra_body: dict[str, Any] | None = None,
-) -> bool:
-    """Push an Ollama alias update to LiteLLM /config/update in-memory (no api_key needed)."""
     from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
-    litellm_params: dict[str, Any] = {
-        "model": litellm_model_string,
+    new_params = {k: v for k, v in base_params.items() if k != "model"}
+    if base_entry is None:
+        # Fresh creation (post-de-seed bootstrap): seed the tuned defaults.
+        new_params = {**ALIAS_BOOTSTRAP_PARAMS.get(alias, {}), **new_params}
+    new_params["model"] = new_model
+    if new_model.startswith("ollama/"):
+        new_params["api_base"] = get_paper_ingestion_settings().ollama_base_url
+    # else (inherited non-cloud prefix, e.g. the vLLM openai/ spike): keep the
+    # carried api_base — forcing the Ollama URL would break that transport.
+    if effective_num_ctx is not None and new_model.startswith("ollama/"):
+        new_params["num_ctx"] = effective_num_ctx
+    if effective_thinking_disabled:
+        new_params["think"] = False
+    elif thinking_disabled is False:
+        # Explicit re-enable: remove the think flag, preserving everything else.
+        new_params.pop("think", None)
+
+    desired_signature = _routing_signature(new_params)
+    if len(db_entries) == 1 and not yaml_entries:
+        if _routing_signature(db_entries[0].get("litellm_params") or {}) == desired_signature:
+            return False
+    elif not db_entries and yaml_entries:
+        if any(
+            _routing_signature(e.get("litellm_params") or {}) == desired_signature
+            for e in yaml_entries
+        ):
+            # The YAML already routes exactly this; a DB copy would stack.
+            return False
+        logger.warning(
+            "Alias %r is YAML-seeded with different routing than requested. The YAML "
+            "deployment cannot be removed at runtime and will STACK with the new DB "
+            "deployment — remove the %r entry from litellm/config.yaml.",
+            alias,
+            alias,
+        )
+
+    delivered = await _replace_alias_deployment(alias, new_params, db_entries)
+
+    # Keep the prompt-budget source of truth in lock-step with the value just
+    # delivered to the (deployment-global) proxy. The Settings PUT path writes
+    # this same system row on success; without mirroring it here, a reconciler
+    # or model-change delivery of a per-machine num_ctx would route the new
+    # window while the budget readers kept using a stale one (silent overflow
+    # across a fleet). Only when a num_ctx actually rode the delivery.
+    if (
+        delivered
+        and db_pool is not None
+        and effective_num_ctx is not None
+        and new_model.startswith("ollama/")
+    ):
+        from paper_ingestion.services.config_db import _upsert_system_num_ctx  # noqa: PLC0415
+
+        async with db_pool.acquire() as conn:
+            await _upsert_system_num_ctx(conn, alias, effective_num_ctx)
+        invalidate_effective_num_ctx_cache()
+
+    return delivered
+
+
+async def ensure_smart_fallback(
+    fast_model: str,
+    db_pool: Any = None,
+    machine_id: str = "",  # noqa: ARG001  (signature parity with update_litellm_model; reserved)
+) -> bool:
+    """Ensure the ``smart-fallback`` deployment group exists and routes *fast_model*.
+
+    ``router_settings.fallbacks`` in the YAML maps ``smart → ["smart-fallback"]``;
+    this function creates the real deployment behind that group (the fast-tier
+    model with a longer timeout). Cloud fast models mirror
+    ``update_litellm_model``'s cloud semantics (no api_base/num_ctx/think; the
+    Fernet-decrypted provider key is carried); when the provider key is missing
+    the fallback pins to the static pulled default instead of creating a
+    deployment that cannot authenticate — i.e. one guaranteed to fail exactly
+    when smart fails. Returns True when a delivery happened, False when the
+    deployment already routes the target. Raises ``RuntimeError`` on delivery
+    failure.
+    """
+    if fast_model.endswith(":latest"):
+        fast_model = fast_model[:-7]
+    _validate_model_name(fast_model.split("/", 1)[-1])
+
+    cloud_provider: str | None = None
+    if "/" in fast_model:
+        cloud_provider = _CLOUD_PREFIX_TO_PROVIDER.get(fast_model.split("/", 1)[0])
+
+    api_key: str | None = None
+    if cloud_provider is not None:
+        if db_pool is not None:
+            api_key = await get_provider_api_key(cloud_provider, db_pool)
+        if api_key is None:
+            if fast_model not in _FALLBACK_KEYLESS_WARNED:
+                _FALLBACK_KEYLESS_WARNED.add(fast_model)
+                logger.warning(
+                    "smart-fallback: no %r API key available for %r; pinning the "
+                    "fallback to the static default %r until a key is saved",
+                    cloud_provider,
+                    fast_model,
+                    _STATIC_FALLBACK_MODEL,
+                )
+            cloud_provider = None
+            fast_model = _STATIC_FALLBACK_MODEL
+
+    new_model = fast_model if "/" in fast_model else f"ollama/{fast_model}"
+
+    deployments = await get_litellm_deployments()
+    db_entries, yaml_entries = _deployments_for_alias(deployments, "smart-fallback")
+
+    if cloud_provider is not None:
+        # Same no-op shape as update_litellm_model's cloud branch: live model
+        # match + process-local key fingerprint, so a rotated key re-delivers
+        # within one reconciler pass instead of riding the stale key forever.
+        desired_cloud = (new_model, None, _key_fingerprint(api_key))
+        if (
+            len(db_entries) == 1
+            and not yaml_entries
+            and (db_entries[0].get("litellm_params") or {}).get("model") == new_model
+            and _CLOUD_DELIVERED_FINGERPRINTS.get("smart-fallback") == desired_cloud
+        ):
+            return False
+        cloud_params: dict[str, Any] = {
+            k: v
+            for k, v in ALIAS_BOOTSTRAP_PARAMS["smart-fallback"].items()
+            # Ollama-only params must not leak onto a cloud deployment.
+            if k not in ("num_ctx", "think")
+        }
+        cloud_params["model"] = new_model
+        cloud_params["api_key"] = api_key
+        delivered = await _replace_alias_deployment("smart-fallback", cloud_params, db_entries)
+        _CLOUD_DELIVERED_FINGERPRINTS["smart-fallback"] = desired_cloud
+        return delivered
+
+    matching_db = [
+        e for e in db_entries if str((e.get("litellm_params") or {}).get("model", "")) == new_model
+    ]
+    stale_db = [e for e in db_entries if e not in matching_db]
+
+    if matching_db or any(
+        str((e.get("litellm_params") or {}).get("model", "")) == new_model for e in yaml_entries
+    ):
+        # A matching deployment already exists. Delete stale sibling DB entries
+        # so they cannot keep diverting traffic — mirrors the create-first/
+        # delete-old ordering of _replace_alias_deployment (delete-only here
+        # because the matching deployment is already correct).
+        for entry in stale_db:
+            dep_id = _deployment_id(entry)
+            if dep_id is not None:
+                try:
+                    await _post_model_delete(dep_id)
+                except RuntimeError as exc:
+                    logger.warning(
+                        "Could not delete stale smart-fallback sibling %s: %s", dep_id, exc
+                    )
+        return False
+
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+    new_params: dict[str, Any] = {
+        **ALIAS_BOOTSTRAP_PARAMS["smart-fallback"],
+        "model": new_model,
         "api_base": get_paper_ingestion_settings().ollama_base_url,
     }
-    if extra_body is not None:
-        litellm_params["extra_body"] = extra_body
-    payload: dict[str, Any] = {
-        "model_list": [
-            {
-                "model_name": alias,
-                "litellm_params": litellm_params,
-            }
-        ]
-    }
-    litellm_cfg = get_litellm_config()
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.post(
-            f"{litellm_cfg.base_url}/config/update",
-            json=payload,
-            headers=build_litellm_headers(litellm_cfg),
-        )
-    if resp.status_code < 400:
-        logger.info(
-            "Ollama alias %r → %s pushed via /config/update (YAML is :ro)",
-            alias,
-            litellm_model_string,
-        )
-        return True
-    text = resp.text[:300]
-    raise RuntimeError(
-        f"LiteLLM /config/update failed for alias {alias!r}: HTTP {resp.status_code} {text}"
-    )
-
-
-async def reload_litellm() -> bool:
-    """Signal LiteLLM to reload its config.
-
-    Attempts to call the internal reload endpoint. If that fails,
-    the config change will still take effect on LiteLLM's next restart.
-    """
-    try:
-        # A5: use shared helper instead of local _get_litellm_key
-        litellm_cfg = get_litellm_config()
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            # LiteLLM proxy supports config reload via internal API
-            resp = await client.post(
-                f"{litellm_cfg.base_url}/config/update",
-                json={},
-                headers=build_litellm_headers(litellm_cfg),
-            )
-            if resp.status_code < 400:
-                logger.info("LiteLLM config reloaded successfully")
-                return True
-            # A4: improved logging on non-2xx response
-            logger.warning(
-                "LiteLLM reload returned %s — config will apply on next LiteLLM restart",
-                resp.status_code,
-            )
-    except Exception as exc:
-        logger.warning(
-            "Could not signal LiteLLM to reload — config will apply on next LiteLLM restart: %r",
-            exc,
-            exc_info=True,
-        )
-    return False
+    return await _replace_alias_deployment("smart-fallback", new_params, db_entries)

@@ -123,7 +123,7 @@ function DetailContent({
   }
 
   if (section === 'models') {
-    if (item === 'llm') return <IngestionSection />;
+    if (item === 'llm') return <IngestionSection filterGroups={['LLM Models']} />;
     if (item === 'providers') {
       return (
         <div className="space-y-6">

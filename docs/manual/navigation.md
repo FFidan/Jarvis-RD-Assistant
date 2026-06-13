@@ -32,10 +32,20 @@ The sidebar is divided into five labelled groups identified by Roman numerals. E
 | **Ⅳ Ask** — *Cross-paper reasoning and workspace.* | [Ask](ask.md) (`/ask`) |
 | **Ⅴ Admin** — *Users, health, and audit trail.* (**admin role only**) | [User Management](admin.md) (`/admin/users`) · [System Health](admin.md) (`/admin/system-health`) · [Audit Log](admin.md) (`/admin/audit-log`) · [System Logs](admin.md) (`/logs`) |
 
+### Density modes — simple and full
+
+The sidebar has two density modes, remembered per device:
+
+- **Simple** — a short rail of the daily essentials (**Home · My Day · Library · Ask · Cards**), with everything else one click away under a **More** disclosure at the bottom of the nav. This is the default the first time you use JARVIS, so the app isn't overwhelming. (Pulse lives inside My Day, so the Pulse Deck link sits under More.)
+- **Full** — the complete grouped layout shown above. This is the default for returning users.
+
+Switch modes any time with the **"Show all features" / "Simple view"** toggle in the sidebar footer. Your choice is stored on your device and survives logout; it does not change which pages exist — every destination is always reachable (in simple mode, via **More**).
+
 ### Sidebar footer
 
 Below a separator, the sidebar footer is visible to **all users**:
 
+- **Density toggle** (**"Show all features" / "Simple view"**) — switches the sidebar between simple and full modes (see above).
 - **Settings** link (`/settings`) — navigates to the Settings page.
 - **HealthDots pill** — shows live service health indicators. Admin users can click the pill to navigate to `/admin/system-health`; non-admin users see an in-place popover.
 - **Logout** button — ends the current session.

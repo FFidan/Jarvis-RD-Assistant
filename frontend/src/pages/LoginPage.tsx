@@ -1,25 +1,67 @@
-import { useState, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
+import { QUERY_KEYS } from '@/lib/query-keys';
 import { useAuthStore } from '@/stores/auth-store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requestMagicLink, ApiError } from '@/lib/api';
+import type { FirstRunStatus } from '@/lib/api';
 
 /**
- * Magic-link login surface.
+ * Magic-link login surface — SMTP-aware.
  *
- * Primary: magic-link. User enters email, backend sends a one-shot link.
- * Fallback: API key. Hidden behind a "Use API key instead" toggle so existing
- * users / devs without SMTP can still log in with their JARVIS_API_KEY.
+ * Default tab: determined by SMTP availability read from the already-fetched
+ * pre-auth `/api/setup/status` (TanStack Query cache warmed by App.tsx before
+ * LoginPage is rendered).  This is a **cache-only read** — no additional
+ * network request is made.
+ *
+ * - smtp_configured=true  → magic-link tab is primary (existing behavior).
+ * - smtp_configured=false, single mode → API-key tab is primary; magic-link
+ *   tab remains available but annotated to explain that email is not configured.
+ * - smtp_configured=false, multi mode → magic-link tab stays primary with an
+ *   honest notice: links cannot be delivered until an admin configures SMTP.
+ *   The API-key tab is still reachable but API-key login is rejected by the
+ *   backend once more than one account exists (unless API_KEY_LOGIN_ENABLED=true).
+ * - smtp_configured absent (cache miss / fetch failed / older backend) →
+ *   magic-link tab stays primary (safe fallback, no behavior change for
+ *   existing installs).
+ *
+ * Anti-enumeration (D4): `request-link` always returns `{sent: true}`.  The
+ * UI must NOT infer delivery success from that response.  `smtp_configured`
+ * on the pre-auth status endpoint is the correct signal — it is a global
+ * server-side probe, never a per-request delivery receipt.
  */
 export function LoginPage() {
   const { login } = useAuthStore();
   const [searchParams] = useSearchParams();
   const initialError = searchParams.get('error');
 
+  // Cache-only read: a second useQuery subscription here would refetch an
+  // errored first-run query and re-enter App's loading gate.
+  const queryClient = useQueryClient();
+  const cachedFirstRun = queryClient.getQueryData<FirstRunStatus>(
+    QUERY_KEYS.setup.firstRun(),
+  );
+
+  const smtpConfigured = cachedFirstRun?.smtp_configured;
+  const isMultiMode = cachedFirstRun?.setup_mode === 'multi';
+
   const [mode, setMode] = useState<'magic-link' | 'api-key'>('magic-link');
+  const [userChoseSide, setUserChoseSide] = useState(false);
+
+  useEffect(() => {
+    // In multi-user mode without SMTP, stay on magic-link so the honest notice
+    // is visible. The API-key tab is reachable but the backend rejects it once
+    // more than one account exists (unless API_KEY_LOGIN_ENABLED=true).
+    // In single-user mode without SMTP, default to API-key (the working path).
+    if (!userChoseSide && smtpConfigured === false && !isMultiMode) {
+      setMode('api-key');
+    }
+  }, [smtpConfigured, isMultiMode, userChoseSide]);
+
   const [email, setEmail] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState(initialError ?? '');
@@ -73,6 +115,23 @@ export function LoginPage() {
     }
   }
 
+  const smtpNotConfiguredNotice =
+    smtpConfigured === false ? (
+      isMultiMode ? (
+        <p className="text-sm text-amber-600" role="status">
+          Email is not configured on this server — magic links cannot be delivered.
+          Ask your admin to configure SMTP so sign-in links can be sent.
+          API-key sign-in works only while a single account exists or when the
+          operator has enabled it explicitly.
+        </p>
+      ) : (
+        <p className="text-sm text-amber-600" role="status">
+          Email is not configured on this server. Magic links will not be delivered.
+          Use the API key tab to sign in.
+        </p>
+      )
+    ) : null;
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
@@ -104,6 +163,7 @@ export function LoginPage() {
                   disabled={loading}
                 />
               </div>
+              {smtpNotConfiguredNotice}
               {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
               {info && <p className="text-sm text-emerald-600" aria-live="polite">{info}</p>}
               <Button type="submit" className="w-full" disabled={loading}>
@@ -114,6 +174,7 @@ export function LoginPage() {
                 className="block w-full text-center text-xs text-muted-foreground hover:underline"
                 onClick={() => {
                   setMode('api-key');
+                  setUserChoseSide(true);
                   setError('');
                   setInfo('');
                 }}
@@ -148,6 +209,7 @@ export function LoginPage() {
                 className="block w-full text-center text-xs text-muted-foreground hover:underline"
                 onClick={() => {
                   setMode('magic-link');
+                  setUserChoseSide(true);
                   setError('');
                 }}
               >

@@ -28,6 +28,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Minimum cosine similarity score for hybrid search's semantic leg.
+# Tuned independently of streaming._SEARCH_SCORE_THRESHOLD — same value today,
+# but the two thresholds serve different retrieval paths and may diverge.
+_HYBRID_SEARCH_SCORE_THRESHOLD = 0.05
+
 
 class EmbeddingSearchMixin:
     """Vector search, hybrid (BM25+RRF) search, reranking, and recommendations."""
@@ -46,6 +51,7 @@ class EmbeddingSearchMixin:
         paper_id_filter: int | None = None,
         score_threshold: float = 0.5,
         user_id: int | None = None,
+        library_paper_ids: list[int] | None = None,
     ) -> list[dict]:
         """Search Qdrant for chunks similar to query text.
 
@@ -61,7 +67,11 @@ class EmbeddingSearchMixin:
             Minimum cosine similarity score.
         user_id : int | None
             If set, restrict to chunks owned by ``user_id`` or marked
-            canonical (NULL payload).
+            canonical (NULL payload).  ``None`` preserves the unscoped path.
+        library_paper_ids : list[int] | None
+            The CALLER'S OWN ``user_library`` paper ids (PI-RAG-001 widening)
+            so shared-corpus papers embedded by another user stay retrievable
+            — see ``_user_scope_filter``.
 
         Returns
         -------
@@ -80,11 +90,18 @@ class EmbeddingSearchMixin:
             must_not_clauses.append(
                 FieldCondition(key="paper_id", match=MatchValue(value=paper_id_filter))
             )
-        user_filter = _user_scope_filter(user_id)
-        if must_not_clauses or user_filter:
+        # M7: nest the user scope as ONE sub-Filter element of the outer `must`
+        # list so it is AND-combined (restrictive).  A `should` list sitting
+        # beside `must_not` is advisory (scoring-only) in Qdrant, not
+        # restrictive — the M6 trap that leaked cross-tenant chunks.
+        must_clauses: list = []
+        user_scope = _user_scope_filter(user_id, library_paper_ids)
+        if user_scope is not None:
+            must_clauses.append(user_scope)
+        if must_clauses or must_not_clauses:
             query_filter = Filter(
+                must=must_clauses or None,
                 must_not=must_not_clauses or None,
-                should=user_filter.should if user_filter else None,
             )
         else:
             query_filter = None
@@ -471,7 +488,10 @@ class EmbeddingSearchMixin:
         # PI-CORE-006: match the same candidate_limit so both legs see the full
         # pool needed to produce correct RRF rankings before offset is applied.
         chunks = await self.search_chunks_global(
-            query, limit=candidate_limit, score_threshold=0.05, user_id=user_id
+            query,
+            limit=candidate_limit,
+            score_threshold=_HYBRID_SEARCH_SCORE_THRESHOLD,
+            user_id=user_id,
         )
 
         # Aggregate: max chunk score per paper

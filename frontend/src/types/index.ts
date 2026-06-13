@@ -70,6 +70,8 @@ export interface Summary {
   llm_model: string | null;
   summary_verified: boolean;
   created_at: string;
+  coverage?: number | null;
+  passes?: number | null;
 }
 
 export interface Chunk {
@@ -236,6 +238,7 @@ export interface DashboardMetrics {
   active_projects: number;
   topic_count: number;
   nudge_count: number;
+  chunked_papers?: number;
   onboarding_stage?: string;
 }
 

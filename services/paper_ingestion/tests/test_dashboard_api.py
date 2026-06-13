@@ -173,6 +173,7 @@ async def test_cors_headers_present(_app):
         active_projects=0,
         topic_count=0,
         nudge_count=0,
+        chunked_papers=0,
     )
 
     # CORSMiddleware is configured at app import time from CORS_ORIGINS env,

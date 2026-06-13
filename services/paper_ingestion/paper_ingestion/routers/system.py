@@ -21,7 +21,7 @@ from jarvis_common.hardware_fit import recommend_models
 from jarvis_common.model_catalog import Role
 from jarvis_common.serialization import _coerce_bool
 from jarvis_common.settings import get_core_settings, get_secrets_settings
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
@@ -76,6 +76,33 @@ class _OllamaProbeCache:
 
 _ollama_probe_cache = _OllamaProbeCache()
 
+_MODEL_WARNINGS_TTL = 30  # seconds
+
+
+class _ModelWarningsCache:
+    """TTL cache for the setup-status model-warnings probe.
+
+    ``_compute_model_warnings`` fires uncached litellm ``/v1/model/info`` +
+    ollama ``/api/tags`` calls on every setup-status poll; this caches the
+    computed warning list (~30 s) mirroring ``_OllamaProbeCache`` above.
+    """
+
+    def __init__(self) -> None:
+        self._ts: float = 0.0
+        self._result: list[str] = []
+
+    def get_cached(self, now: float) -> list[str] | None:
+        if self._ts > 0 and now - self._ts < _MODEL_WARNINGS_TTL:
+            return self._result
+        return None
+
+    def set(self, now: float, result: list[str]) -> None:
+        self._ts = now
+        self._result = result
+
+
+_model_warnings_cache = _ModelWarningsCache()
+
 
 class SetupStatus(BaseModel):
     setup_completed: bool
@@ -84,6 +111,7 @@ class SetupStatus(BaseModel):
     topics_count: int
     telegram_configured: bool
     telegram_paired: bool
+    model_warnings: list[str] = Field(default_factory=list)
 
 
 def _record_get(row: Any, key: str) -> Any:
@@ -93,6 +121,16 @@ def _record_get(row: Any, key: str) -> Any:
         return row[key]
     except Exception:
         return None
+
+
+def _strip_latest(model: str) -> str:
+    """Ollama's implicit default tag (``qwen3:8b`` vs ``qwen3:8b:latest``) must
+    never cause a false divergence — applied to BOTH sides of every
+    intent ↔ routing compare and to the installed-model set.
+    """
+    if model.endswith(":latest"):
+        return model[:-7]
+    return model
 
 
 def _models_match(installed_names: list[str]) -> bool:
@@ -159,6 +197,85 @@ async def _probe_ollama() -> tuple[bool, list[str]]:
     return result
 
 
+async def _compute_model_warnings() -> list[str]:
+    """Return per-role routing warnings for GET /api/system/setup-status.
+
+    Compares the roles LiteLLM is *currently* routing against the set of models
+    Ollama has pulled, using the same ``:latest``-tolerant normalization as the
+    routing-truth consistency check.  Always returns ``[]`` when LiteLLM or
+    Ollama is unreachable — the endpoint must never fail because of this probe.
+
+    Result is cached ~30 s (``_model_warnings_cache``) so setup-status polling
+    does not re-hit litellm + ollama on every request.
+    """
+    now = time.monotonic()
+    cached = _model_warnings_cache.get_cached(now)
+    if cached is not None:
+        return cached
+
+    warnings: list[str] = []
+    try:
+        from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
+            get_litellm_deployments,
+        )
+
+        deployments = await get_litellm_deployments()
+    except Exception:
+        logger.debug("model_warnings: LiteLLM probe failed — skipping", exc_info=True)
+        _model_warnings_cache.set(now, [])
+        return []
+
+    # Build role → routed-model map (ollama/ prefix stripped + :latest stripped).
+    role_to_routed: dict[str, str] = {}
+    for dep in deployments:
+        alias = dep.get("model_name", "")
+        if alias not in _MODEL_ROLES:
+            continue
+        params = dep.get("litellm_params") or {}
+        routed_full = str(params.get("model", ""))
+        if not routed_full:
+            continue
+        if routed_full.startswith("ollama/"):
+            routed_full = routed_full[len("ollama/") :]
+        role_to_routed[alias] = _strip_latest(routed_full)
+
+    if not role_to_routed:
+        _model_warnings_cache.set(now, [])
+        return []
+
+    # Fetch installed Ollama models.
+    ollama_url = get_paper_ingestion_settings().ollama_base_url
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{ollama_url}/api/tags")
+        if resp.status_code != 200:
+            # Reachable-but-erroring Ollama (e.g. 503 during startup): log the
+            # status so it is greppable, then degrade to no warnings.
+            logger.debug(
+                "model_warnings: Ollama /api/tags returned %s — skipping", resp.status_code
+            )
+            _model_warnings_cache.set(now, [])
+            return []
+        data = resp.json()
+        installed: set[str] = {_strip_latest(m.get("name", "")) for m in data.get("models", [])}
+    except Exception:
+        logger.debug("model_warnings: Ollama probe failed — skipping", exc_info=True)
+        _model_warnings_cache.set(now, [])
+        return []
+
+    # Emit a warning for each Ollama role that routes a model not yet pulled.
+    # Cloud models (containing "/") are skipped — pulled check is Ollama-specific.
+    for role in ("smart", "fast"):
+        routed = role_to_routed.get(role)
+        if routed is None or "/" in routed:
+            continue
+        if routed not in installed:
+            warnings.append(f"{role} routes to {routed} which is not pulled")
+
+    _model_warnings_cache.set(now, warnings)
+    return warnings
+
+
 async def _cloud_key_presence(pool: asyncpg.Pool) -> dict[str, bool]:
     """Return whether each cloud provider has a stored API key without decrypting it."""
     keys = {
@@ -215,6 +332,8 @@ async def get_setup_status(
 
     models_ready, models_downloading = await _probe_ollama()
 
+    model_warnings = await _compute_model_warnings()
+
     return SetupStatus(
         setup_completed=setup_completed,
         models_ready=models_ready,
@@ -222,6 +341,7 @@ async def get_setup_status(
         topics_count=topics_count,
         telegram_configured=telegram_configured,
         telegram_paired=telegram_paired,
+        model_warnings=model_warnings,
     )
 
 
@@ -229,8 +349,35 @@ async def get_setup_status(
 # GET /api/system/models
 # ---------------------------------------------------------------------------
 
+_MODEL_ROLES = ("smart", "fast", "embed")
 
-async def _get_system_models_data(request: Request) -> SystemModelsResponse:
+
+class SystemModelsWithDeliveryResponse(SystemModelsResponse):
+    """``SystemModelsResponse`` plus per-role LiteLLM routing truth.
+
+    ``delivery`` maps each role (smart/fast/embed) to ``"applied"`` (LiteLLM
+    routes the committed model) or ``"pending_restart"`` (the config row is
+    committed but LiteLLM has not yet accepted the update — the reconciler
+    keeps retrying until it succeeds). Empty when the delivery state could not
+    be read. Additive field; existing consumers of the base shape are unaffected.
+
+    ``routing`` maps each role to the model LiteLLM is *currently* routing
+    (the ``litellm_params.model`` string, normalized to strip the provider
+    prefix so it compares directly to ``current`` values). Absent / empty when
+    LiteLLM is unreachable. Additive; degrades honestly.
+
+    ``consistent`` is True when every role that has a stored ``current`` intent
+    also has a matching ``routing`` entry. Roles without a stored intent are
+    not considered. False when LiteLLM is unreachable and there is stored
+    intent that cannot be verified.
+    """
+
+    delivery: dict[str, str] = Field(default_factory=dict)
+    routing: dict[str, str] = Field(default_factory=dict)
+    consistent: bool = True
+
+
+async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryResponse:
     """Inner logic for /models — no auth check; callers must enforce admin gate."""
     ollama_url = get_paper_ingestion_settings().ollama_base_url
     http = request.app.state.http_client
@@ -262,6 +409,85 @@ async def _get_system_models_data(request: Request) -> SystemModelsResponse:
     except Exception:
         logger.warning("Could not load current model assignments", exc_info=True)
         result["issues"]["current"] = "Could not load current model assignments."
+
+    # Per-role delivery state (CRIT-1): roles listed in llm.delivery_pending have
+    # a committed config row that LiteLLM has not accepted yet. On read failure
+    # delivery stays empty — absence of a claim, never a phantom "applied".
+    from paper_ingestion.services.config_write import (  # noqa: PLC0415
+        _DELIVERY_PENDING_KEY,
+        _fetch_system_config_values,
+    )
+
+    result["delivery"] = {}
+    try:
+        pending_values = await _fetch_system_config_values(
+            request.app.state.db_pool, [_DELIVERY_PENDING_KEY]
+        )
+        raw_pending = pending_values.get(_DELIVERY_PENDING_KEY)
+        pending_roles = {str(r) for r in raw_pending} if isinstance(raw_pending, list) else set()
+        result["delivery"] = {
+            role: "pending_restart" if role in pending_roles else "applied" for role in _MODEL_ROLES
+        }
+    except Exception:
+        logger.warning("Could not load model delivery state", exc_info=True)
+
+    # Routing truth (T1.3): read what LiteLLM is *actually* routing right now
+    # and compare against the committed DB intent in `current`.  Normalize the
+    # provider prefix (e.g. "ollama/qwen3:8b" → "qwen3:8b") so the comparison
+    # is apples-to-apples with how `current` stores model names.
+    result["routing"] = {}
+    result["consistent"] = True
+    try:
+        from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
+            get_litellm_deployments,
+        )
+
+        deployments = await get_litellm_deployments()
+        # Build a role → routed-model map from the deployment list.
+        # Each deployment entry has model_name == alias (smart/fast/embed) and
+        # litellm_params.model == the full routed model string (e.g. "ollama/qwen3:8b").
+        for dep in deployments:
+            alias = dep.get("model_name", "")
+            if alias not in _MODEL_ROLES:
+                continue
+            params = dep.get("litellm_params") or {}
+            routed_full = str(params.get("model", ""))
+            if not routed_full:
+                continue
+            # Normalize: strip provider prefix so "ollama/qwen3:8b" → "qwen3:8b".
+            # Cloud models (anthropic/…, openai/…) keep the prefix because that
+            # is how `current` stores cloud model assignments too.
+            if routed_full.startswith("ollama/"):
+                routed_normalized = routed_full[len("ollama/") :]
+            else:
+                routed_normalized = routed_full
+            # Normalize :latest so "qwen3:8b:latest" and "qwen3:8b" compare equal.
+            routed_normalized = _strip_latest(routed_normalized)
+            # Multiple deployments per alias can exist mid-replace; the
+            # reconciler removes stale duplicates on its next pass.
+            result["routing"][alias] = routed_normalized
+
+        # Consistency check: every role that has a stored intent must be routing
+        # that exact model.  Roles with no stored intent are skipped — no intent
+        # means no expectation to violate.  Both sides are :latest-normalized so
+        # a direct-API-created row never shows false divergence.
+        stored_current: dict[str, str] = result.get("current") or {}
+        all_consistent = True
+        for role in _MODEL_ROLES:
+            role_key = f"{role}_model"
+            intent = stored_current.get(role_key)
+            if not intent:
+                continue
+            routed = result["routing"].get(role)
+            if _strip_latest(routed or "") != _strip_latest(intent):
+                all_consistent = False
+        result["consistent"] = all_consistent
+    except Exception:
+        logger.warning("Could not load LiteLLM routing state", exc_info=True)
+        result["routing"] = {}
+        # If there is stored intent we cannot verify → not consistent.
+        stored_current = result.get("current") or {}
+        result["consistent"] = not any(stored_current.get(f"{role}_model") for role in _MODEL_ROLES)
 
     cloud_api_keys = await _cloud_key_presence(request.app.state.db_pool)
 
@@ -365,16 +591,16 @@ async def _get_system_models_data(request: Request) -> SystemModelsResponse:
         ],
     }
     result["status"] = "ok" if not result["issues"] else "degraded"
-    return SystemModelsResponse.model_validate(result)
+    return SystemModelsWithDeliveryResponse.model_validate(result)
 
 
 @router.get(
     "/models",
-    response_model=SystemModelsResponse,
+    response_model=SystemModelsWithDeliveryResponse,
     dependencies=[Depends(require_admin_or_api_key)],
 )
 @limiter.limit("30/minute")
-async def get_system_models(request: Request) -> SystemModelsResponse:
+async def get_system_models(request: Request) -> SystemModelsWithDeliveryResponse:
     """Return installed Ollama models + hardware info + current assignments."""
     return await _get_system_models_data(request)
 

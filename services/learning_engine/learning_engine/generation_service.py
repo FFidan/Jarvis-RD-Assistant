@@ -12,11 +12,12 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common import get_smart_model
+import openai
+from jarvis_common import effective_num_ctx, get_smart_model
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.jobs import JobError, ProgressContext
 
-from learning_engine.card_generator import CardGenerator
+from learning_engine.card_generator import CardGenerator, _empty_result
 from learning_engine.card_store import insert_card
 from learning_engine.converters import row_to_card_response
 from learning_engine.fsrs_manager import FSRSManager
@@ -109,6 +110,13 @@ async def generate_cards_core(
             paper_id,
         )
 
+        summary_row = await conn.fetchrow(
+            "SELECT summary_detailed, methodology, limitations"
+            " FROM paper_summaries WHERE paper_id = $1"
+            " ORDER BY created_at DESC LIMIT 1",
+            paper_id,
+        )
+
     if not chunk_rows:
         raise JobError(
             "Paper has no processed chunks",
@@ -123,6 +131,20 @@ async def generate_cards_core(
 
     chunks = [dict(row) for row in chunk_rows]
     smart_model = get_smart_model()
+
+    summary_text: str | None = None
+    if summary_row:
+        parts = [
+            p
+            for p in [
+                summary_row["summary_detailed"],
+                summary_row["methodology"],
+                summary_row["limitations"],
+            ]
+            if p
+        ]
+        if parts:
+            summary_text = "\n\n".join(parts)
 
     if ctx:
         await ctx.update_progress(0.4, "Streaming generation")
@@ -142,7 +164,12 @@ async def generate_cards_core(
             abstract=paper.get("abstract"),
             max_cards=max_cards,
             model=smart_model,
+            summary_text=summary_text,
+            num_ctx=await effective_num_ctx(pool, "smart"),
         )
+    except openai.APIStatusError as exc:
+        logger.error("Provider HTTP error during card generation for paper %s: %s", paper_id, exc)
+        result = _empty_result(reason="llm_error")
     except (httpx.HTTPError, asyncpg.PostgresError, ValueError, RuntimeError) as exc:
         logger.exception("Card generation failed for paper %s", paper_id)
         raise RuntimeError("Card generation failed") from exc

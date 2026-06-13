@@ -432,3 +432,48 @@ async def teststream_rag_events_confidence_event_emitted_before_done():
     assert conf_event["confidence"] in valid_confidence
     assert isinstance(conf_event["verified_fraction"], float)
     assert isinstance(conf_event["per_sentence"], list)
+
+
+async def teststream_rag_events_no_confidence_event_for_uncheckable_answer():
+    """An answer with no checkable sentences emits NO confidence event at all.
+
+    The frontend renders no badge when the event is absent; emitting
+    ``confidence: null`` would put an untyped value on the wire instead.
+    """
+    import json
+    from unittest.mock import MagicMock
+
+    from paper_ingestion.rag.streaming import stream_rag_events
+
+    sse_lines = [
+        'data: {"choices": [{"delta": {"content": "MNIST and CIFAR-10."}}]}',
+        "data: [DONE]",
+    ]
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream.return_value = FakeStreamResponse(sse_lines)
+
+    sources = [{"content": "Datasets include MNIST and CIFAR-10.", "page_number": 1}]
+
+    stub_verifier = MagicMock()
+    stub_pool = MagicMock()
+
+    events: list[str] = []
+    async for event in stream_rag_events(
+        mock_client,
+        [{"role": "user", "content": "Which datasets?"}],
+        sources,
+        verifier=stub_verifier,
+        db_pool=stub_pool,
+    ):
+        events.append(event)
+
+    parsed = [
+        json.loads(ev.replace("data: ", "", 1).strip())
+        for ev in events
+        if ev.replace("data: ", "", 1).strip() != "[DONE]"
+    ]
+    event_types = [e["type"] for e in parsed]
+
+    assert "confidence" not in event_types
+    assert events[-1].strip() == "data: [DONE]"

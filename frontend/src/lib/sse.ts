@@ -155,9 +155,22 @@ async function* _postSSEStream<T>(
       // 403 is permission-denied for an authenticated user — no logout.
       throw new Error('Forbidden — you do not have permission to access this resource');
     }
-    throw new Error(
-      `${errorLabel}${res.status}: ${res.status >= 500 ? 'Server error' : 'Request failed'}`,
-    );
+    // 5xx stays generic — the backend deliberately scrubs server-error bodies.
+    if (res.status >= 500) {
+      throw new Error(`${errorLabel}${res.status}: Server error`);
+    }
+    let detail = '';
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      if (typeof body.detail === 'string') {
+        detail = body.detail;
+      } else if (body.detail != null) {
+        detail = JSON.stringify(body.detail);
+      }
+    } catch {
+      /* keep the generic message */
+    }
+    throw new Error(`${errorLabel}${res.status}: Request failed${detail ? ` — ${detail}` : ''}`);
   }
 
   for await (const data of parseSSEFrames(res)) {

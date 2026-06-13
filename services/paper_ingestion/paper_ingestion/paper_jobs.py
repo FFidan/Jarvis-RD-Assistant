@@ -265,7 +265,10 @@ async def _paper_summarize_job(
     ctx: ProgressContext,
 ) -> dict[str, Any]:
     """Generate a quote-verified summary for a single paper."""
-    from paper_ingestion.services.summarization import generate_paper_summary
+    from paper_ingestion.services.summarization import (
+        SummaryGenerationResult,
+        generate_paper_summary,
+    )
 
     paper_id: int = int(payload["paper_id"])
     user_id: int | None = payload.get("user_id")
@@ -282,11 +285,20 @@ async def _paper_summarize_job(
         raise RuntimeError("embedder not initialized")
 
     await ctx.update_progress(0.1, "Summarizing")
-    summary = await generate_paper_summary(
+    result: SummaryGenerationResult = await generate_paper_summary(
         paper_id, pool, http_client, verifier, embedder, user_id=user_id, force=force
     )
     await ctx.update_progress(1.0, "Done")
-    return {"paper_id": paper_id, "summary_id": summary.id, "status": "summarized"}
+    job_result: dict[str, Any] = {
+        "paper_id": paper_id,
+        "summary_id": result.summary.id,
+        "status": "summarized",
+    }
+    if result.coverage < 1.0:
+        job_result["coverage"] = result.coverage
+    if result.passes > 1:
+        job_result["passes"] = result.passes
+    return job_result
 
 
 # ---------------------------------------------------------------------------

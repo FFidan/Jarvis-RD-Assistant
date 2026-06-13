@@ -65,4 +65,23 @@ describe('ConfigEntryCard', () => {
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /edit setting/i })).toBeInTheDocument();
   });
+
+  it('renders saveError alongside customElement (model cards surface failures)', () => {
+    render(
+      <ConfigEntryCard
+        {...baseProps}
+        customElement={<div data-testid="cu">CUSTOM</div>}
+        saveError="Failed to save: HTTP 400"
+      />,
+    );
+    expect(screen.getByTestId('cu')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Failed to save: HTTP 400');
+    // Keyed testid lets section tests assert the error paints under ONE card.
+    expect(screen.getByTestId('config-save-error-sample.key')).toBeInTheDocument();
+  });
+
+  it('does NOT render an error element for customElement when saveError is null', () => {
+    render(<ConfigEntryCard {...baseProps} customElement={<div data-testid="cu">CUSTOM</div>} />);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

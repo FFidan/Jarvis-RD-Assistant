@@ -99,6 +99,19 @@ async def _write_config_row(
     )
 
 
+async def _upsert_system_num_ctx(conn: Any, role: str, value: int) -> None:
+    """Write the system ``llm.{role}_num_ctx`` row that prompt budgets read.
+
+    The effective-context readers (``jarvis_common.effective_num_ctx``) resolve
+    every prompt input budget against this system-scoped row. LiteLLM
+    deployments are deployment-global, so the row must follow the value actually
+    delivered to the proxy regardless of which machine wrote it — kept in lock-
+    step here, on every delivery that attached a num_ctx, not only on the
+    Settings PUT path. ``role`` is ``"smart"`` or ``"fast"`` (the LiteLLM alias).
+    """
+    await _write_config_row(conn, user_id=None, key=f"llm.{role}_num_ctx", value=value)
+
+
 def _resolve_config_value(key: str, row: Any) -> Any:
     """Return the display value for a config row, applying masking / decryption."""
     if key in _ENCRYPTED_KEYS:

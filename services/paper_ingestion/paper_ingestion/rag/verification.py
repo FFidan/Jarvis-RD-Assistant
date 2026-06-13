@@ -65,7 +65,7 @@ class RagVerificationReport:
     total: int
     verified_count: int
     pass_rate: float  # in [0.0, 1.0]; 0.0 when total == 0
-    confidence: RagConfidence
+    confidence: RagConfidence | None
     per_sentence: list[VerifiedSentence] = field(default_factory=list)
 
 
@@ -85,9 +85,9 @@ def _split_sentences(answer: str) -> list[str]:
     return [s for s in raw if s and _ALPHANUM_RE.search(s)]
 
 
-def _build_confidence(pass_rate: float, total: int) -> RagConfidence:
+def _build_confidence(pass_rate: float, total: int) -> RagConfidence | None:
     if total == 0:
-        return RagConfidence.UNVERIFIED
+        return None
     if pass_rate == 1.0:
         return RagConfidence.HIGH
     if pass_rate >= 0.5:
@@ -209,7 +209,7 @@ async def verify_answer_sentences(
             total=0,
             verified_count=0,
             pass_rate=0.0,
-            confidence=RagConfidence.UNVERIFIED,
+            confidence=None,
             per_sentence=[],
         )
 
@@ -288,7 +288,7 @@ async def verify_answer_summary(
     """
     report = await verify_answer_sentences(answer, sources, verifier, db_pool)
     return {
-        "confidence": report.confidence.value,
+        "confidence": report.confidence.value if report.confidence is not None else None,
         "verified_fraction": report.pass_rate,
         "per_sentence": [{"text": s.text, "verified": s.verified} for s in report.per_sentence],
     }

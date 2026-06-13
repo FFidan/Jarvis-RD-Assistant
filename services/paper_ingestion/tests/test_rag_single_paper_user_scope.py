@@ -202,6 +202,92 @@ async def test_search_chunks_in_paper_default_none_filter_unchanged() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_similar_nests_user_scope_as_must_subfilter() -> None:
+    """User scope must be ONE nested sub-Filter inside the outer ``must`` list.
+
+    Revert-proof for the M6 trap: ``search_similar`` previously flat-merged the
+    scope's ``should`` branches beside ``must_not``, where they are advisory
+    (scoring-only) in real Qdrant — a silent cross-tenant leak.  The paper
+    exclusion stays in ``must_not``; the scope must be restrictive (``must``).
+    """
+    from qdrant_client.models import FieldCondition, Filter, IsNullCondition, MatchAny, MatchValue
+
+    embedder, mock_qdrant = _make_embedder_with_captured_qdrant()
+
+    await embedder.search_similar(
+        query_text="q",
+        paper_id_filter=42,
+        user_id=7,
+        library_paper_ids=[42, 99],
+    )
+
+    assert mock_qdrant.query_points.await_count == 1
+    query_filter = mock_qdrant.query_points.await_args.kwargs["query_filter"]
+
+    # M6 guard: nothing may sit in the outer `should` slot.
+    assert query_filter.should is None, (
+        "user-scope branches must NOT be flat-merged as outer `should` — beside a "
+        "`must_not` list they are advisory (scoring-only) in Qdrant, not restrictive"
+    )
+
+    # Paper exclusion stays restrictive in must_not.
+    assert query_filter.must_not is not None and len(query_filter.must_not) == 1
+    (excluded,) = query_filter.must_not
+    assert isinstance(excluded, FieldCondition) and excluded.key == "paper_id"
+    assert excluded.match == MatchValue(value=42)
+
+    # User scope is the sole nested sub-Filter in the restrictive `must` list.
+    assert query_filter.must is not None and len(query_filter.must) == 1, (
+        f"outer must = [nested scope Filter]; got {query_filter.must!r}"
+    )
+    (nested,) = query_filter.must
+    assert isinstance(nested, Filter), "user scope must be a nested sub-Filter"
+    branches = nested.should or []
+    assert any(
+        isinstance(c, FieldCondition)
+        and c.key == "user_id"
+        and getattr(c.match, "value", None) == 7
+        for c in branches
+    ), "nested scope must keep the caller's user_id branch"
+    assert any(isinstance(c, IsNullCondition) for c in branches), (
+        "nested scope must keep the canonical (user_id IS NULL) branch"
+    )
+    widened = [
+        c
+        for c in branches
+        if isinstance(c, FieldCondition)
+        and c.key == "paper_id"
+        and isinstance(getattr(c, "match", None), MatchAny)
+    ]
+    assert len(widened) == 1 and set(widened[0].match.any) == {42, 99}, (
+        "nested scope must keep the PI-RAG-001 library widening branch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_similar_default_none_filter_unscoped() -> None:
+    """Without user params the filter stays paper-exclusion-only (system path).
+
+    ``user_id is None`` must preserve the pre-fix unscoped behaviour: no scope
+    is AND-combined, only the optional paper exclusion lands in ``must_not``.
+    """
+    from qdrant_client.models import FieldCondition, MatchValue
+
+    embedder, mock_qdrant = _make_embedder_with_captured_qdrant()
+
+    await embedder.search_similar(query_text="q", paper_id_filter=42)
+
+    assert mock_qdrant.query_points.await_count == 1
+    query_filter = mock_qdrant.query_points.await_args.kwargs["query_filter"]
+    assert query_filter.should is None
+    assert query_filter.must is None
+    assert query_filter.must_not is not None and len(query_filter.must_not) == 1
+    (excluded,) = query_filter.must_not
+    assert isinstance(excluded, FieldCondition) and excluded.key == "paper_id"
+    assert excluded.match == MatchValue(value=42)
+
+
+@pytest.mark.asyncio
 async def test_prepare_single_paper_rag_threads_user_scope_to_search() -> None:
     """prepare_single_paper_rag fetches the caller's library and threads scope down."""
     from unittest.mock import MagicMock

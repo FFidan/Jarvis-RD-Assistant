@@ -254,6 +254,34 @@ describe('PaperResearchLog — summary sections', () => {
   });
 });
 
+describe('PaperResearchLog — coverage transparency', () => {
+  it('shows "full paper covered" note when passes > 1 and coverage is clean', () => {
+    renderLog({ summary: { ...SUMMARY, coverage: 1.0, passes: 3 } });
+    expect(screen.getByTestId('coverage-note')).toBeInTheDocument();
+    expect(screen.getByText(/Read in 3 passes — full paper covered/)).toBeInTheDocument();
+  });
+
+  it('shows abstract-fallback warning when coverage is 0', () => {
+    renderLog({ summary: { ...SUMMARY, coverage: 0, passes: 1 } });
+    const banner = screen.getByTestId('coverage-warning');
+    expect(banner).toBeInTheDocument();
+    expect(banner).toHaveTextContent(/abstract-based fallback/);
+  });
+
+  it('shows percentage warning when 0 < coverage < 1', () => {
+    renderLog({ summary: { ...SUMMARY, coverage: 0.6, passes: 2 } });
+    const banner = screen.getByTestId('coverage-warning');
+    expect(banner).toBeInTheDocument();
+    expect(banner).toHaveTextContent(/first ~60%/);
+  });
+
+  it('shows no coverage note or warning for single-pass short paper', () => {
+    renderLog({ summary: { ...SUMMARY, coverage: undefined, passes: undefined } });
+    expect(screen.queryByTestId('coverage-note')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('coverage-warning')).not.toBeInTheDocument();
+  });
+});
+
 describe('PaperResearchLog — cross-references', () => {
   it('renders cross-reference data', () => {
     renderLog();

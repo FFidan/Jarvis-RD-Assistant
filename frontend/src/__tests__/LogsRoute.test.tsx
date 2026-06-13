@@ -1,0 +1,70 @@
+import { describe, it, expect } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { LogsRoute } from '@/components/auth/LogsRoute';
+import { useAuthStore } from '@/stores/auth-store';
+
+function renderGuard(children = <div>logs content</div>) {
+  return render(
+    <MemoryRouter>
+      <LogsRoute>{children}</LogsRoute>
+    </MemoryRouter>,
+  );
+}
+
+describe('LogsRoute', () => {
+  it('renders children for an admin user', () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      user: { id: 1, email: 'admin@example.com', role: 'admin' },
+      apiKey: null,
+    });
+    renderGuard();
+    expect(screen.getByText('logs content')).toBeInTheDocument();
+  });
+
+  it('renders children for a legacy api-key session (user === null, apiKey set)', () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      user: null,
+      apiKey: 'secret-api-key',
+    });
+    renderGuard();
+    expect(screen.getByText('logs content')).toBeInTheDocument();
+  });
+
+  it('redirects a member user (role !== admin, no apiKey) to /', () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      user: { id: 2, email: 'member@example.com', role: 'user' },
+      apiKey: null,
+    });
+    renderGuard();
+    expect(screen.queryByText('logs content')).not.toBeInTheDocument();
+  });
+
+  it('redirects when not authenticated', () => {
+    useAuthStore.setState({
+      isAuthenticated: false,
+      authTime: null,
+      user: null,
+      apiKey: null,
+    });
+    renderGuard();
+    expect(screen.queryByText('logs content')).not.toBeInTheDocument();
+  });
+
+  it('redirects a member user even when an api key is present in the store', () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      user: { id: 2, email: 'member@example.com', role: 'user' },
+      apiKey: 'secret-api-key',
+    });
+    renderGuard();
+    expect(screen.queryByText('logs content')).not.toBeInTheDocument();
+  });
+});

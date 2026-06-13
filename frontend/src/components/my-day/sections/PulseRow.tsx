@@ -8,6 +8,7 @@ import type { PulseCardItem, PulseRating } from '@/types';
 import { ScoreStack } from './ScoreStack';
 import { HashtagChips } from '@/components/my-day/primitives/HashtagChips';
 import { toScoreParts } from '@/lib/score-utils';
+import { displayReasoning } from '@/components/pulse/reasoning-display';
 
 export interface PulseRowProps {
   card: PulseCardItem;
@@ -60,9 +61,9 @@ export function PulseRow({ card, rank }: PulseRowProps) {
           </p>
         )}
 
-        {card.reasoning && (
+        {displayReasoning(card.reasoning) && (
           <p className="text-[12.5px] text-soft mt-1 line-clamp-2 leading-relaxed">
-            {card.reasoning}
+            {displayReasoning(card.reasoning)}
           </p>
         )}
 

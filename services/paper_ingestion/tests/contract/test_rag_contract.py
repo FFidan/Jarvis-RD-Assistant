@@ -1089,14 +1089,14 @@ async def test_rag_w2_summarize_happy_path_via_faux_litellm(
         openai_client=app.state.openai_client,
     )
 
-    assert result.tldr, "tldr must be populated from LLM response"
-    assert result.summary_brief, "summary_brief must be populated"
+    assert result.summary.tldr, "tldr must be populated from LLM response"
+    assert result.summary.summary_brief, "summary_brief must be populated"
 
     row = await contract_conn.fetchrow(
         "SELECT tldr, summary_brief FROM paper_summaries WHERE paper_id = $1", paper_id
     )
     assert row is not None, "generate_paper_summary must persist a summary row"
-    assert row["tldr"] == result.tldr
+    assert row["tldr"] == result.summary.tldr
 
 
 async def test_rag_w2_summarize_http_error_degrades_gracefully(

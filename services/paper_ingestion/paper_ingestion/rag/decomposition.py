@@ -98,5 +98,5 @@ async def decompose_query(
                 break
         return result if result else [question]
     except Exception:
-        logger.debug("Query decomposition failed; using original question", exc_info=True)
+        logger.warning("Query decomposition failed; using original question", exc_info=True)
         return [question]

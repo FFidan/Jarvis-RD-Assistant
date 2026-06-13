@@ -234,8 +234,21 @@ export function AIPanel() {
           data-testid="candidate-issues"
           className="rounded-md border border-blue-400 bg-blue-50 dark:bg-blue-950/20 px-4 py-3 text-sm text-blue-900 dark:text-blue-300"
         >
-          Some empirical candidates were omitted because they are not in the curated model
-          catalog. {data?.candidate_issues[0]}
+          <details>
+            <summary className="cursor-pointer font-medium">
+              Some models were excluded from your hardware-tier suggestions
+            </summary>
+            <p className="mt-2 text-xs opacity-80">
+              {data?.candidate_issues?.length} configuration detail
+              {data?.candidate_issues?.length === 1 ? '' : 's'} — the recommended model is
+              unaffected.
+              {(data?.candidate_issues?.length ?? 0) > 0 && (
+                <code className="mt-1 block whitespace-normal break-words rounded bg-blue-100 p-1 text-xs dark:bg-blue-900/50">
+                  {data?.candidate_issues[0]}
+                </code>
+              )}
+            </p>
+          </details>
         </div>
       )}
 

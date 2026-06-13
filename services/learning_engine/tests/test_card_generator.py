@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 from jarvis_common.llm_client import LiteLLMConfig
 from learning_engine.card_generator import CardGenerator, _empty_result
@@ -410,3 +411,212 @@ async def test_card_generation_succeeds_with_brace_in_paper_text() -> None:
     # LLM returned None → _empty_result()
     assert isinstance(result, dict)
     assert "cards" in result
+
+
+# ---------------------------------------------------------------------------
+# Digest-based input for long papers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_long_paper_uses_digest_and_single_llm_call(monkeypatch):
+    """An over-budget paper's card prompt is built from the digest with exactly one LLM call."""
+    from jarvis_common.prompt_safety import max_input_chars
+    from jarvis_common.settings import get_core_settings
+
+    generator, _ = _make_generator()
+
+    captured_prompts: list[str] = []
+
+    async def _fake_call_llm(prompt: str, model: str, openai_client: object) -> None:
+        captured_prompts.append(prompt)
+        return None
+
+    generator._call_llm_for_cards = _fake_call_llm  # type: ignore[method-assign]
+
+    budget = max_input_chars(get_core_settings().llm_smart_num_ctx, reserved_output_tokens=2048)
+
+    tail_marker = "TAIL_SECTION_UNIQUE_MARKER_XYZ"
+    filler_chunk = "A " * ((budget // 2) + 1)
+    chunks = [
+        {"id": 1, "content": filler_chunk, "page_number": 1},
+        {"id": 2, "content": filler_chunk, "page_number": 2},
+        {"id": 3, "content": tail_marker, "page_number": 3},
+    ]
+
+    digest_marker = "DIGEST_TAIL_CONTENT_UNIQUE_MARKER_ABC"
+    summary_text = f"Detailed summary covering all sections.\n\n{digest_marker}"
+
+    await generator.generate_cards(
+        title="Long Paper",
+        authors=["Author A"],
+        chunks=chunks,
+        openai_client=_make_openai_client(),
+        paper_id=99,
+        abstract="Short abstract.",
+        summary_text=summary_text,
+    )
+
+    assert len(captured_prompts) == 1, f"Expected exactly one LLM call; got {len(captured_prompts)}"
+    prompt = captured_prompts[0]
+    assert digest_marker in prompt, (
+        "Prompt must contain the digest marker — digest not used for long paper"
+    )
+    assert tail_marker not in prompt, (
+        "Prompt must not contain the raw chunk tail marker — raw chunks should not appear"
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_no_summary_row_uses_truncation_fallback():
+    """With no reduce-stage digest (summary_row absent) and a tight context, the
+    raw-chunk-join input is truncated to fit the budget and cards are still
+    produced — the fallback path must not crash or return empty."""
+    generator, _ = _make_generator()
+    # A long head chunk carries the verifiable quote; trailing filler overflows
+    # the tiny budget so the truncation branch fires.
+    head = "The method improves retrieval quality substantially. "
+    chunks = [
+        {"id": 11, "content": head + ("padding sentence. " * 4000), "page_number": 3},
+    ]
+    generator._call_llm_for_cards = AsyncMock(
+        return_value=CardGenerationOutput(
+            cards=[
+                CardOutput(
+                    card_type="concept",
+                    front="How does the method affect retrieval?",
+                    back="It improves retrieval quality substantially.",
+                    evidence_quote="improves retrieval quality substantially",
+                    page_number=3,
+                ),
+            ]
+        )
+    )
+
+    result = await generator.generate_cards(
+        title="Paper",
+        authors=["Ada"],
+        chunks=chunks,
+        openai_client=_make_openai_client(),
+        paper_id=5,
+        abstract="Abstract",
+        summary_text=None,  # no reduce-stage digest available
+        num_ctx=2048,  # tiny window forces the truncation fallback
+    )
+
+    # The fallback produced a verified card without crashing.
+    assert result["total_count"] == 1
+    assert result["verified_count"] == 1
+    assert len(result["cards"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Provider HTTP error (e.g. 500) degrades to empty result, not raw crash
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_degrades_on_provider_500():
+    """A provider HTTP 500 (openai.APIStatusError) returns a degraded empty result.
+
+    The job must not crash; reason discriminator must equal 'llm_error'.
+    """
+    generator, _ = _make_generator()
+
+    request = httpx.Request("POST", "http://litellm:4000/v1/chat/completions")
+    response = httpx.Response(status_code=500, request=request)
+    exc = openai.APIStatusError("Internal Server Error", response=response, body=None)
+
+    with patch(
+        "learning_engine.card_generator.call_llm_structured",
+        side_effect=exc,
+    ):
+        result = await generator.generate_cards(
+            title="Paper",
+            authors=["Ada"],
+            chunks=_make_chunks(),
+            openai_client=_make_openai_client(),
+            paper_id=5,
+            abstract="Abstract",
+        )
+
+    assert result["cards"] == [], f"Expected empty cards on provider error; got {result['cards']}"
+    assert result["confidence"] == "LOW"
+    assert result["reason"] == "llm_error", (
+        f"Expected reason='llm_error'; got {result.get('reason')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_no_cards_reason_distinguishes_from_llm_error():
+    """A normal parse failure (None from _call_llm_for_cards) sets reason='no_cards'."""
+    generator, _ = _make_generator()
+    generator._call_llm_for_cards = AsyncMock(return_value=None)
+
+    result = await generator.generate_cards(
+        title="Paper",
+        authors=["Ada"],
+        chunks=_make_chunks(),
+        openai_client=_make_openai_client(),
+        paper_id=5,
+        abstract="Abstract",
+    )
+
+    assert result["cards"] == []
+    assert result["reason"] == "no_cards"
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_core_degrades_on_provider_500(mock_db):
+    """The job-layer wrapper also degrades on a provider 500 instead of crashing.
+
+    A provider HTTP error from the card generator must yield a degraded result
+    (cards_created=0), not propagate and fail the whole job.
+    """
+    from types import SimpleNamespace
+
+    from learning_engine.generation_service import generate_cards_core
+
+    pool, conn = mock_db
+    conn.fetchval.return_value = 1
+    paper = {"id": 5, "title": "Paper", "authors": ["Ada"], "abstract": "Abstract"}
+    conn.fetchrow.side_effect = [paper, None]
+    conn.fetch.return_value = [{"id": 11, "content": "chunk text", "page_number": 1}]
+
+    request = httpx.Request("POST", "http://litellm:4000/v1/chat/completions")
+    exc = openai.APIStatusError(
+        "Internal Server Error",
+        response=httpx.Response(status_code=500, request=request),
+        body=None,
+    )
+    card_gen = AsyncMock()
+    card_gen.generate_cards.side_effect = exc
+
+    with (
+        patch(
+            "learning_engine._state.get_services",
+            return_value=SimpleNamespace(openai_client=object()),
+        ),
+        patch("learning_engine.generation_service.get_smart_model", return_value="smart"),
+        patch(
+            "learning_engine.generation_service.effective_num_ctx",
+            AsyncMock(return_value=8192),
+        ),
+        patch(
+            "learning_engine.generation_service.assert_paper_ownership",
+            AsyncMock(return_value=None),
+        ),
+    ):
+        result = await generate_cards_core(
+            pool=pool,
+            http_client=AsyncMock(),
+            paper_id=5,
+            deck_id=1,
+            max_cards=3,
+            card_generator=card_gen,
+            user_id=None,
+        )
+
+    assert result["cards_created"] == 0
+    assert result["cards"] == []
+    assert result["confidence"] == "LOW"

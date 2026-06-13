@@ -130,9 +130,9 @@ export function ProvidersSection() {
     <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
         <p className="text-sm text-muted-foreground">
-          Configure cloud LLM keys to route the <code className="text-xs">smart</code>/
-          <code className="text-xs">fast</code> aliases to Claude, GPT, or Gemini. Keys are
-          encrypted at rest. Leave all blank to keep using local Ollama models.
+          Configure cloud LLM keys to route the Main model and Quick model aliases to Claude,
+          GPT, or Gemini. Keys are encrypted at rest. Leave all blank to keep using local Ollama
+          models.
         </p>
       </CardHeader>
       <CardContent className="space-y-6">

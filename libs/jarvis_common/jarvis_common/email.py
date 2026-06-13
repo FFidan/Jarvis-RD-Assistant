@@ -1,11 +1,15 @@
 """SMTP delivery for transactional emails (magic-link, future invites).
 
-Ships only ``send_magic_link``. Plain-text only by design (better
-deliverability, simpler debugging, no template engine dependency).
+Ships ``send_magic_link`` and the public ``smtp_configured`` probe.
+Plain-text only by design (better deliverability, simpler debugging,
+no template engine dependency).
 
-Dev-mode fallback: when any required SMTP env var is unset OR ``DEV_MODE=true``,
-the link is logged to stdout AND written to ``system_events`` (category=auth,
-message='magic_link_dev_mode') so the Logs Live tab catches it.
+Dev-mode fallback: when SMTP is unconfigured (``smtp_configured`` returns
+``False``) OR ``DEV_MODE=true``, the magic-link is NOT delivered anywhere
+visible to end users.  It is NOT logged to stdout — only a SHA-256 hash of
+the recipient email is recorded in ``system_events`` (category=auth,
+message='magic_link_dev_mode') so the Logs Live tab can surface it.
+The raw link (a bearer token) is never written to any log.
 """
 
 from __future__ import annotations
@@ -152,7 +156,7 @@ async def send_magic_link(
     *,
     pool: asyncpg.Pool | None = None,
 ) -> None:
-    """Deliver a magic-link email, or log it to stdout in dev mode.
+    """Deliver a magic-link email, or silently drop it when SMTP is unconfigured.
 
     Parameters
     ----------
@@ -163,15 +167,16 @@ async def send_magic_link(
         ``https://localhost:3001/auth/verify?token=...``). Constructed by the
         caller to avoid this module knowing about the front-end origin.
     pool:
-        Optional asyncpg pool. When supplied AND we're in dev-mode fallback,
-        the link is also persisted as a ``system_events`` row so the Logs
-        Live tab surfaces it. Pass ``app.state.db_pool`` from the request
-        handler.
+        Optional asyncpg pool. When supplied and SMTP is unconfigured or
+        ``DEV_SMTP_LOG_ONLY=true``, the event is persisted as a
+        ``system_events`` row (category=auth, message='magic_link_dev_mode')
+        so the Logs Live tab can surface it. Pass ``app.state.db_pool``
+        from the request handler.
 
     Security note: the raw ``link`` (and the embedded token) is **never**
-    logged.  Only a SHA-256 hash of the recipient email is recorded so
-    operators can correlate events without the log becoming a bearer-token
-    store.
+    logged.  When SMTP is unconfigured the link is silently dropped — only
+    a SHA-256 hash of the recipient email is recorded so operators can
+    correlate events without the log becoming a bearer-token store.
 
     """
     # Resolve the effective relay once: wizard-written user_config layered
@@ -241,4 +246,20 @@ async def send_magic_link(
     logger.info("magic_link_sent email_hash=%s", _hash_email(email))
 
 
-__all__ = ["send_magic_link"]
+async def smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
+    """Return ``True`` iff SMTP is configured via the DB OR process env.
+
+    SMTP_USER and SMTP_PASS are intentionally NOT required (some relays use
+    IP-allowlist auth). HOST and FROM are the minimum to compose and deliver an
+    envelope. Wizard-written ``user_config`` rows are weighted the same as env.
+
+    This is the public wrapper around the private ``_smtp_configured`` probe,
+    exported for callers (e.g. ``/api/setup/status``) that need to surface
+    SMTP readiness without coupling to internal helpers.  The function is
+    always safe to call: a DB failure falls back to env, and ``None`` pool
+    skips the DB entirely.
+    """
+    return await _smtp_configured(pool)
+
+
+__all__ = ["send_magic_link", "smtp_configured"]

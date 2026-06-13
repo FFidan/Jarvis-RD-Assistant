@@ -3,7 +3,8 @@
 import json
 import logging
 import re
-from typing import Any
+import time
+from typing import Any, Literal
 
 import asyncpg
 from fastapi import HTTPException
@@ -115,6 +116,139 @@ def validated_model_with_reason(model: str) -> tuple[str, str | None]:
     reason = f"model {model!r} is not a valid LiteLLM alias; fell back to 'smart'"
     logger.warning("Ignoring invalid model %r; falling back to 'smart'", model)
     return "smart", reason
+
+
+_CLOUD_MODEL_PREFIXES = ("anthropic/", "openai/", "gemini/")
+
+# Cloud providers accept huge contexts, but budgeting prompt input beyond this
+# is cost-unbounded and unnecessary for per-paper prompts. This is a COST
+# CEILING, not a model limit: a cloud model whose catalog context exceeds 32768
+# is capped here so a single paper prompt cannot silently bill for a 200k-token
+# input. Per-paper text rarely approaches even this; raising it trades money for
+# marginal coverage on outlier papers.
+_CLOUD_INPUT_TOKEN_CEILING = 32768
+
+# Staleness window for the per-role effective-context cache. The budget callers
+# query this once per LLM call, so without a cache a multi-stage summary would
+# hit the DB on every window. 30s trades a brief staleness window after a
+# num_ctx delivery (a in-flight generation may use the prior value for up to one
+# TTL) against the per-call query cost; deliveries also call
+# invalidate_effective_num_ctx_cache() to collapse that window to zero on the
+# happy path, so the TTL only matters for cross-process / missed-invalidation
+# cases.
+_EFFECTIVE_NUM_CTX_TTL_SECONDS = 30.0
+
+_catalog_context_tokens_by_id: dict[str, int] | None = None
+
+
+def _catalog_context_tokens(model_id: str) -> int | None:
+    global _catalog_context_tokens_by_id
+    if _catalog_context_tokens_by_id is None:
+        from jarvis_common.model_catalog import load_model_catalog  # noqa: PLC0415
+
+        _catalog_context_tokens_by_id = {
+            entry.id: entry.context_tokens for entry in load_model_catalog()
+        }
+    return _catalog_context_tokens_by_id.get(model_id)
+
+
+class _EffectiveNumCtxCache:
+    """Short-TTL per-role cache so budget callers don't query per LLM call."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, tuple[float, int]] = {}
+
+    def get_cached(self, role: str, now: float) -> int | None:
+        entry = self._entries.get(role)
+        if entry is not None and now - entry[0] < _EFFECTIVE_NUM_CTX_TTL_SECONDS:
+            return entry[1]
+        return None
+
+    def set(self, role: str, now: float, value: int) -> None:
+        self._entries[role] = (now, value)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+_effective_num_ctx_cache = _EffectiveNumCtxCache()
+
+
+def invalidate_effective_num_ctx_cache() -> None:
+    """Drop cached effective-context values (call after a num_ctx delivery)."""
+    _effective_num_ctx_cache.clear()
+
+
+def _fallback_num_ctx(role: str) -> int:
+    from jarvis_common.settings import get_core_settings  # noqa: PLC0415
+
+    settings = get_core_settings()
+    return settings.llm_smart_num_ctx if role == "smart" else settings.llm_fast_num_ctx
+
+
+async def effective_num_ctx(db: Any, role: Literal["smart", "fast"]) -> int:
+    """Context window the prompt-input budget for *role* should be computed against.
+
+    Resolution order (system scope — LiteLLM deployments are deployment-global,
+    so the budget follows the last delivered value regardless of which machine
+    wrote it):
+
+    1. Cloud model assigned (``llm.{role}_model`` has a cloud prefix) — the
+       catalog ``context_tokens`` capped at ``_CLOUD_INPUT_TOKEN_CEILING``.
+    2. Delivered local context — the system ``llm.{role}_num_ctx`` row written
+       on successful LiteLLM num_ctx delivery.
+    3. ``CoreSettings.llm_{role}_num_ctx`` (env/boot default). This is also the
+       vLLM path: ``--max-model-len`` lives only in compose env with no
+       readable in-app surface, so vLLM deployments configure the matching
+       ``LLM_{ROLE}_NUM_CTX`` env instead.
+
+    Parameters
+    ----------
+    db:
+        An ``asyncpg.Pool`` or ``asyncpg.Connection`` — anything exposing
+        ``.fetch()``. Any read failure falls back to CoreSettings (uncached).
+    role:
+        ``"smart"`` or ``"fast"``.
+
+    """
+    now = time.monotonic()
+    cached = _effective_num_ctx_cache.get_cached(role, now)
+    if cached is not None:
+        logger.debug("effective_num_ctx cache hit (role=%s, value=%d)", role, cached)
+        return cached
+
+    model_key = f"llm.{role}_model"
+    num_ctx_key = f"llm.{role}_num_ctx"
+    try:
+        rows = await db.fetch(
+            "SELECT key, value FROM user_config WHERE key = ANY($1::text[]) AND user_id IS NULL",
+            [model_key, num_ctx_key],
+        )
+        values = {str(row["key"]): row["value"] for row in rows}
+    except Exception:
+        logger.warning("Could not read effective num_ctx for role %r", role, exc_info=True)
+        return _fallback_num_ctx(role)
+
+    model_id = values.get(model_key)
+    if isinstance(model_id, str) and model_id.startswith(_CLOUD_MODEL_PREFIXES):
+        tokens = _catalog_context_tokens(model_id) or _CLOUD_INPUT_TOKEN_CEILING
+        result = min(tokens, _CLOUD_INPUT_TOKEN_CEILING)
+        source = "cloud"
+    else:
+        delivered = values.get(num_ctx_key)
+        if isinstance(delivered, int) and not isinstance(delivered, bool) and delivered > 0:
+            result = delivered
+            source = "delivered"
+        else:
+            fallback = _fallback_num_ctx(role)
+            logger.debug(
+                "effective_num_ctx resolved (role=%s, value=%d, source=fallback)", role, fallback
+            )
+            return fallback
+
+    logger.debug("effective_num_ctx resolved (role=%s, value=%d, source=%s)", role, result, source)
+    _effective_num_ctx_cache.set(role, now, result)
+    return result
 
 
 def get_smart_model() -> str:

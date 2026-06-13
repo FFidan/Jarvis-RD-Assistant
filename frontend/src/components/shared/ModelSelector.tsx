@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { Cpu, Download, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Cpu, Download, Trash2 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Button } from '@/components/ui/button';
@@ -285,6 +285,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
     onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.config.systemModels() }),
   });
   const [pullingIds, setPullingIds] = useState<Set<string>>(new Set());
+  const [manageOpen, setManageOpen] = useState(false);
   const canDeleteSelected =
     selectedEntry !== undefined &&
     isLocalModel(selectedEntry) &&
@@ -329,6 +330,16 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
     (selectedEntry.status === 'downloadable' || selectedEntry.status === 'unfit');
   const recommendedEntry = setupNeeded ? (pullableModels[0] ?? null) : null;
   const hardwareLabel = detectedHardware ? detectedHardware.join(' · ') : null;
+
+  // Routing divergence: what LiteLLM actually serves vs what is saved.
+  const routingMap = data?.routing as Record<string, string> | undefined;
+  const savedModel = currentRole ? systemDefault : undefined;
+  const routedModel = currentRole ? routingMap?.[currentRole] : undefined;
+  const isDiverged =
+    savedModel != null &&
+    savedModel !== '' &&
+    routedModel != null &&
+    routedModel !== savedModel;
 
   return (
     <div className="space-y-2">
@@ -489,7 +500,15 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
           )}
         </SelectContent>
       </Select>
-      {(pullableModels.length > 0 || (canDeleteSelected && selectedEntry) || deletableModels.length > 0) && (
+      {isDiverged && (
+        <p
+          className="text-xs text-amber-700 dark:text-amber-400"
+          data-testid={`routing-diverged-${currentRole}`}
+        >
+          Saved: {savedModel} · currently serving: {routedModel}
+        </p>
+      )}
+      {pullableModels.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {pullableModels.map((entry) => (
             <Button
@@ -505,33 +524,54 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
               Pull {entry.name}
             </Button>
           ))}
-          {canDeleteSelected && selectedEntry && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => handleDelete(selectedEntry)}
-              disabled={deleteMutation.isPending || !!deleteTarget}
-              aria-label={`Delete model ${selectedEntry.name}`}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
-            </Button>
+        </div>
+      )}
+      {((canDeleteSelected && selectedEntry) || deletableModels.length > 0) && (
+        <div className="border-t pt-2">
+          <button
+            type="button"
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => setManageOpen((prev) => !prev)}
+            aria-expanded={manageOpen}
+          >
+            {manageOpen ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            Manage installed models
+          </button>
+          {manageOpen && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {canDeleteSelected && selectedEntry && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleDelete(selectedEntry)}
+                  disabled={deleteMutation.isPending || !!deleteTarget}
+                  aria-label={`Delete model ${selectedEntry.name}`}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete {selectedEntry.name}
+                </Button>
+              )}
+              {deletableModels.map((entry) => (
+                <Button
+                  key={`delete-${entry.id}`}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleDelete(entry)}
+                  disabled={deleteMutation.isPending || !!deleteTarget}
+                  aria-label={`Delete model ${entry.name}`}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete {entry.name}
+                </Button>
+              ))}
+            </div>
           )}
-          {deletableModels.map((entry) => (
-            <Button
-              key={`delete-${entry.id}`}
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => handleDelete(entry)}
-              disabled={deleteMutation.isPending || !!deleteTarget}
-              aria-label={`Delete model ${entry.name}`}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete {entry.name}
-            </Button>
-          ))}
         </div>
       )}
       <ConfirmDialog

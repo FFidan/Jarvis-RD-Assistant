@@ -18,11 +18,11 @@ from typing import TYPE_CHECKING, Any
 import asyncpg
 import httpx
 from jarvis_common import get_smart_model
+from jarvis_common.advisory_lock import AdvisoryLock, _kind_lock_key
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
     call_llm_structured,
-    get_litellm_config,
     observe,
 )
 
@@ -273,7 +273,6 @@ async def _classify_candidate(
             timeout=LLM_TIMEOUT_DEFAULT,
             system=_SYSTEM_CONTRADICTIONS,
         ),
-        config=get_litellm_config(),
     )
     if not result.is_contradiction:
         return None
@@ -296,6 +295,34 @@ async def scan_contradictions(
     Returns counts and persisted IDs. LLM or verification failures for one
     candidate do not abort the whole scan; those candidates are skipped.
     """
+    async with AdvisoryLock(
+        db_pool,
+        key1=_kind_lock_key("contradictions.scan"),
+        key2=user_id or 0,
+    ) as locked:
+        if not locked:
+            return {"scan_already_in_progress": True}
+        return await _do_scan_contradictions(
+            db_pool,
+            http_client,
+            verifier,
+            openai_client=openai_client,
+            paper_id=paper_id,
+            limit=limit,
+            user_id=user_id,
+        )
+
+
+async def _do_scan_contradictions(
+    db_pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    verifier: QuoteVerifier,
+    *,
+    openai_client: openai.AsyncOpenAI,
+    paper_id: int | None = None,
+    limit: int = 25,
+    user_id: int | None = None,
+) -> dict[str, Any]:
     model = get_smart_model()
     async with db_pool.acquire() as conn:
         findings = await _load_verified_findings(conn, paper_id=paper_id, user_id=user_id)

@@ -82,7 +82,7 @@ PAPER_INGESTION_HOST_PORT=8010 make profile
 Outputs:
 
 - `frontend-bundle-sizes.txt` — `ls -lh dist/assets/*.js | sort -k5 -h`
-- `frontend/dist/bundle-stats.html` — optional Vite/Rollup treemap when
+- `frontend/dist/bundle-stats.html` — optional Vite bundle treemap when
   `ANALYZE_BUNDLE=true`
 - `backend-timings.csv` — per-endpoint wall-clock (3 runs)
 - `flamegraph.svg` — py-spy 30s record (when granted ptrace)

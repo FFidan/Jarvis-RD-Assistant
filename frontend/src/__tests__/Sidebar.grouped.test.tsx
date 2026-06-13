@@ -15,10 +15,17 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from '@/components/layout/Sidebar';
+import {
+  useNavPrefsStore,
+  NAV_PREFS_STORE_KEY,
+  ONBOARDING_DISMISSED_KEY,
+  initialNavMode,
+  type NavMode,
+} from '@/stores/nav-prefs-store';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -68,11 +75,16 @@ function renderSidebar({
   role = 'user' as 'user' | 'admin',
   collapsed = false,
   initialPath = '/',
+  navMode = 'full' as NavMode,
 } = {}) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mockUseAuthStore.mockReturnValue(makeAuthStore(role) as any);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mockUseUIStore.mockReturnValue(makeUIStore(collapsed) as any);
+  // The grouped/admin/collapsed suites assert the full nav; pin the real
+  // nav-prefs store to the requested mode (default full) so they don't depend
+  // on jsdom's localStorage carry-over.
+  useNavPrefsStore.setState({ navMode });
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -138,6 +150,13 @@ describe('Sidebar — grouped nav (non-admin)', () => {
     expect(screen.getByRole('link', { name: 'Discover' })).toBeInTheDocument();
   });
 
+  it('Library link points to /feed?surface=library', () => {
+    renderSidebar({ role: 'user' });
+
+    const libraryLink = screen.getByRole('link', { name: 'Library' });
+    expect(libraryLink).toHaveAttribute('href', '/feed?surface=library');
+  });
+
   it('Discover link points to /feed?surface=search', () => {
     renderSidebar({ role: 'user' });
 
@@ -198,6 +217,50 @@ describe('Sidebar — grouped nav (non-admin)', () => {
 
     const homeLink = screen.getByRole('link', { name: 'Home' });
     expect(homeLink).not.toHaveAttribute('aria-current', 'page');
+  });
+
+  it('Library nav link is active on /feed?surface=library', () => {
+    renderSidebar({ role: 'user', initialPath: '/feed?surface=library' });
+
+    const libraryLink = screen.getByRole('link', { name: 'Library' });
+    expect(libraryLink).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('Discover nav link is active on /feed?surface=search', () => {
+    renderSidebar({ role: 'user', initialPath: '/feed?surface=search' });
+
+    const discoverLink = screen.getByRole('link', { name: 'Discover' });
+    expect(discoverLink).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('Library is not active when Discover is the current surface', () => {
+    renderSidebar({ role: 'user', initialPath: '/feed?surface=search' });
+
+    const libraryLink = screen.getByRole('link', { name: 'Library' });
+    expect(libraryLink).not.toHaveAttribute('aria-current', 'page');
+  });
+
+  it('Discover is not active when Library is the current surface', () => {
+    renderSidebar({ role: 'user', initialPath: '/feed?surface=library' });
+
+    const discoverLink = screen.getByRole('link', { name: 'Discover' });
+    expect(discoverLink).not.toHaveAttribute('aria-current', 'page');
+  });
+
+  it('Library nav link is active on bare /feed (counts toward Library)', () => {
+    renderSidebar({ role: 'user', initialPath: '/feed' });
+
+    const libraryLink = screen.getByRole('link', { name: 'Library' });
+    expect(libraryLink).toHaveAttribute('aria-current', 'page');
+    const discoverLink = screen.getByRole('link', { name: 'Discover' });
+    expect(discoverLink).not.toHaveAttribute('aria-current', 'page');
+  });
+
+  it('Library nav link is active on /feed?surface=inbox (Inbox is Library’s first tab)', () => {
+    renderSidebar({ role: 'user', initialPath: '/feed?surface=inbox' });
+
+    const libraryLink = screen.getByRole('link', { name: 'Library' });
+    expect(libraryLink).toHaveAttribute('aria-current', 'page');
   });
 });
 
@@ -309,5 +372,120 @@ describe('Sidebar — collapsed mode', () => {
     // Admin links still present in collapsed (icon-only) mode
     const userMgmtLink = screen.getByRole('link', { name: /user management/i });
     expect(userMgmtLink).toBeInTheDocument();
+  });
+});
+
+describe('Sidebar — simple mode (progressive disclosure)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it('fresh profile (no navMode key, tour not dismissed) defaults to simple mode', () => {
+    // No persisted navMode + no onboarding-dismissed flag = first-time researcher.
+    // Exercise the real production initializer, not a re-implementation.
+    expect(localStorage.getItem(NAV_PREFS_STORE_KEY)).toBeNull();
+    expect(localStorage.getItem(ONBOARDING_DISMISSED_KEY)).toBeNull();
+    expect(initialNavMode()).toBe('simple');
+  });
+
+  it('existing user (tour dismissed, no navMode key) does NOT get a reduced nav (no rug-pull)', () => {
+    localStorage.setItem(ONBOARDING_DISMISSED_KEY, 'true');
+    expect(initialNavMode()).toBe('full');
+  });
+
+  it('initialNavMode falls back to full (no crash) when localStorage throws', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError: localStorage blocked');
+    });
+    expect(initialNavMode()).toBe('full');
+    spy.mockRestore();
+  });
+
+  it('shows only the 5 essentials and the toggle — no in-rail "More" disclosure', () => {
+    renderSidebar({ role: 'user', navMode: 'simple' });
+
+    expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'My Day' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Library' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Ask$/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Learning Cards' })).toBeInTheDocument();
+
+    // The rest are revealed only by switching to full mode — there is no
+    // in-rail "More" disclosure (it would duplicate the footer toggle).
+    expect(screen.queryByTestId('nav-more')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'More' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Discover' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Projects' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Pulse Deck' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Analytics' })).not.toBeInTheDocument();
+
+    // ≤7 visible nav links total (5 essentials + footer Settings).
+    expect(screen.getAllByRole('link').length).toBeLessThanOrEqual(7);
+
+    // The full nav is one toggle away.
+    expect(screen.getByTestId('nav-mode-toggle')).toBeInTheDocument();
+  });
+
+  it('non-essential and admin destinations are absent from the simple rail (reachable in full)', () => {
+    renderSidebar({ role: 'admin', navMode: 'simple' });
+    // Even an admin sees only the essentials in simple mode; everything else —
+    // including admin destinations — lives in the full grouped view.
+    expect(screen.queryByRole('link', { name: 'User Management' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'System Logs' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Knowledge Graph' })).not.toBeInTheDocument();
+  });
+
+  it('query-aware highlight still works in simple mode (bare /feed → Library)', () => {
+    renderSidebar({ role: 'user', navMode: 'simple', initialPath: '/feed' });
+    const libraryLink = screen.getByRole('link', { name: 'Library' });
+    expect(libraryLink).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('toggle switches simple → full and reveals all groups; route untouched', () => {
+    renderSidebar({ role: 'user', navMode: 'simple' });
+    expect(screen.queryByText('Today')).not.toBeInTheDocument();
+    expect(screen.getByTestId('nav-mode-toggle')).toHaveTextContent('Show all features');
+
+    fireEvent.click(screen.getByTestId('nav-mode-toggle'));
+
+    expect(useNavPrefsStore.getState().navMode).toBe('full');
+    expect(screen.getByTestId('nav-mode-toggle')).toHaveTextContent('Simple view');
+    expect(screen.getByText('Today')).toBeInTheDocument();
+    expect(screen.getByText('Read')).toBeInTheDocument();
+    expect(screen.getByText('Learn')).toBeInTheDocument();
+    // Previously-hidden destinations are now directly visible.
+    expect(screen.getByRole('link', { name: 'Projects' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Analytics' })).toBeInTheDocument();
+    expect(screen.queryByTestId('nav-more')).not.toBeInTheDocument();
+  });
+});
+
+describe('Sidebar — navMode persistence (survives logout)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it('is persisted under its OWN key, not inside the UI store key', () => {
+    useNavPrefsStore.getState().setNavMode('simple');
+    const raw = localStorage.getItem(NAV_PREFS_STORE_KEY);
+    expect(raw).not.toBeNull();
+    expect(JSON.parse(raw!).state.navMode).toBe('simple');
+    // Not co-located with the logout-wiped UI store.
+    expect(localStorage.getItem('jarvis-ui')).toBeNull();
+  });
+
+  it('survives a simulated logout (UI store key removed + session resets run)', () => {
+    useNavPrefsStore.getState().setNavMode('simple');
+
+    // Mirror auth-store.logout()'s localStorage side effect: it removes the UI
+    // store key and runs the session-reset registry — nav-prefs registers
+    // neither, so its value must remain intact.
+    localStorage.removeItem('jarvis-ui');
+
+    expect(useNavPrefsStore.getState().navMode).toBe('simple');
+    const raw = localStorage.getItem(NAV_PREFS_STORE_KEY);
+    expect(JSON.parse(raw!).state.navMode).toBe('simple');
   });
 });

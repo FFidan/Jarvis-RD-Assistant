@@ -36,13 +36,21 @@ const confidenceLabels: Record<ConfidenceLevel, string> = {
   UNVERIFIED: 'Unverified',
 };
 
+const confidenceDefinitions: Record<ConfidenceLevel, string> = {
+  HIGH: 'Verified — every checkable sentence matched a source',
+  MEDIUM: 'Mostly verified — at least half of the checkable sentences matched',
+  LOW: 'Partially verified — some checkable sentences matched',
+  UNVERIFIED: 'Unverified — none of the checkable sentences matched',
+};
+
 export function ConfidenceBadge({ confidence, verified_fraction: _, per_sentence }: ConfidenceBadgeProps) {
   const verifiedCount = per_sentence.filter((s) => s.verified).length;
   const totalCount = per_sentence.length;
+  const definition = confidenceDefinitions[confidence];
   const tooltipText =
     totalCount > 0
-      ? `${verifiedCount} of ${totalCount} sentences verified against sources`
-      : 'Answer verification confidence';
+      ? `${verifiedCount} of ${totalCount} sentences verified against sources — ${definition}`
+      : definition;
 
   const badge = (
     <Badge variant="outline" className={cn('shrink-0 text-xs', confidenceStyles[confidence])}>

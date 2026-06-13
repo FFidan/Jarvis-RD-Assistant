@@ -79,19 +79,13 @@ Setup is complete. `setup_completed` is set to `true`. The wizard does not appea
 
 ## Signing in — `/auth/verify` (user)
 
-<!-- screenshot: LoginPage showing the email input and "Send sign-in link" button -->
+<!-- screenshot: LoginPage showing the email input and "Send magic link" button -->
 
-### Magic-link login (primary)
+**Signing in** depends on how the server is configured.
 
-1. Navigate to the JARVIS RD Assistant URL. If you are not signed in you will see the **Login** page.
-2. Enter your email address and click **Send sign-in link**.
-3. Open the email and click the one-shot link. It lands on `/auth/verify`, which creates your session and redirects you to the application.
-
-The magic-link is single-use and expires after a short window. If it has expired, return to the login page and request a new one.
-
-### API-key fallback
-
-If SMTP is not configured, or if you prefer direct key-based access, click **Use API key instead** on the login page and enter your API key. This method does not require email delivery.
+- **If SMTP is configured** (your admin set up an email relay in Settings → System → Email / SMTP), the login page defaults to the magic-link tab: enter your email address, click **Send magic link**, and click the link in the email you receive. The link is single-use and expires after a short window; return to the login page and request a new one if it has expired.
+- **Single-user mode without SMTP:** the login page defaults to the API-key tab. Enter the `JARVIS_API_KEY` value set in your server's environment and click **Sign In**.
+- **Multi-user mode without SMTP:** the login page stays on the magic-link tab with a notice that links cannot be delivered. Ask your admin to configure SMTP in Settings → System → Email / SMTP. The API-key tab is still reachable, but the backend rejects API-key sign-in once more than one account exists — unless the operator has explicitly set `API_KEY_LOGIN_ENABLED=true`.
 
 ---
 
@@ -110,6 +104,32 @@ You can dismiss the tour at any step. It does not repeat once dismissed.
 
 ---
 
+## Your first paper (user)
+
+Once you are signed in and the onboarding wizard is complete, here is the fastest path to a working research session.
+
+### Save a paper
+
+Open **Discover** from the sidebar to browse the Pulse recommendation deck, or go to **Library → Add paper** and paste an arXiv URL, DOI, or title. Saving a paper adds it to your library with metadata (title, authors, abstract) but does not yet extract findings.
+
+> **Single-user mode note:** if you are the only user on this instance, do not expose the dashboard to the open internet without first reviewing the access mode and authentication settings. Single-user installs with API-key login are designed for loopback or VPN access.
+
+### Analyze the paper
+
+Click the paper card in your Library and then click **Analyze**. JARVIS runs the full analysis pipeline: it fetches the PDF, chunks and embeds the text, extracts findings with exact-quote backing, generates flashcards, and builds the knowledge graph for that paper.
+
+On a GPU this typically takes a few minutes. On CPU-only hardware it can take 30 minutes or more — the progress indicator in the paper detail view shows each stage as it completes.
+
+### What you see after analysis
+
+- **Summary tab** — a verified summary of the paper's main contributions, with each claim linked to a source quote and page number.
+- **Cards tab** — FSRS flashcards generated from the paper's key findings. Open **Learning → Cards** to start a review session.
+- **Ask** — once your first paper is analyzed you can ask questions about it (and any other analyzed papers in your library). Open **Ask** from the sidebar, type a question, and JARVIS retrieves relevant passages and synthesises a cited answer.
+
+The **Knowledge Graph** in the sidebar shows entities and relationships extracted from your analyzed papers.
+
+---
+
 ## What comes next
 
-Once you are signed in and the wizard is complete, continue to [Navigation](navigation.md) for a tour of the AppShell and sidebar, or jump directly to [Research Feed & Library](research-feed.md) to start adding papers.
+Continue to [Navigation](navigation.md) for a tour of the AppShell and sidebar, or jump directly to [Research Feed & Library](research-feed.md) to start adding more papers.

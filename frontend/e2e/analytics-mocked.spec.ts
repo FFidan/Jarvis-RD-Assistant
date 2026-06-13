@@ -85,7 +85,7 @@ async function mockAnalyticsRoutes(page: import('@playwright/test').Page) {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-test.describe('Analytics Reflect IA (mocked)', () => {
+test.describe('Analytics IA (mocked)', () => {
   test.beforeEach(async ({ page }) => {
     await seedAuthedSession(page);
     await mockAnalyticsRoutes(page);
@@ -101,14 +101,14 @@ test.describe('Analytics Reflect IA (mocked)', () => {
     await page.waitForLoadState('networkidle', { timeout: 15_000 });
   });
 
-  test('renders Reflect hero heading', async ({ page }) => {
-    await expect(page.getByRole('heading', { name: 'Reflect' })).toBeVisible();
+  test('renders Analytics hero heading', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: 'Analytics' })).toBeVisible();
   });
 
-  test('breadcrumb shows Reflect / Analytics', async ({ page }) => {
-    // "Reflect" appears in both breadcrumb span and h1 — use heading role for h1,
-    // check breadcrumb nav contains "Reflect" text
-    await expect(page.getByRole('heading', { name: 'Reflect' })).toBeVisible();
+  test('breadcrumb shows Learn / Analytics', async ({ page }) => {
+    // h1 is the page name "Analytics"; the breadcrumb group is the real sidebar group "Learn".
+    await expect(page.getByRole('heading', { name: 'Analytics' })).toBeVisible();
+    await expect(page.locator('main nav')).toContainText('Learn');
     // The breadcrumb link "Analytics" is in the main content area nav
     await expect(page.locator('main nav').getByRole('link', { name: 'Analytics' })).toBeVisible();
   });

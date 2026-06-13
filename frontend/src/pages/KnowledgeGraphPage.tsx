@@ -144,7 +144,7 @@ export function KnowledgeGraphPage() {
           )}
           <div className="mt-4 flex gap-2">
             <Button asChild variant="outline" size="sm">
-              <Link to="/feed">Go to Feed</Link>
+              <Link to="/feed?surface=library">Open Library</Link>
             </Button>
             <Button
               variant="default"

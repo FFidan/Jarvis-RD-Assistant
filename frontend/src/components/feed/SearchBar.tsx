@@ -19,6 +19,8 @@ interface SearchBarProps {
   isLoading: boolean;
   /** Currently selected source types (controlled externally). */
   sourceTypes: string[];
+  /** Prefill the search input (e.g. query carried from the command palette). */
+  initialQuery?: string;
 }
 
 const DEFAULT_FILTERS: SearchFilters = {
@@ -37,8 +39,8 @@ function countActiveFilters(filters: SearchFilters): number {
   return count;
 }
 
-export function SearchBar({ onSearch, isLoading, sourceTypes }: SearchBarProps) {
-  const [query, setQuery] = useState('');
+export function SearchBar({ onSearch, isLoading, sourceTypes, initialQuery = '' }: SearchBarProps) {
+  const [query, setQuery] = useState(initialQuery);
   const [maxResults, setMaxResults] = useState(10);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);

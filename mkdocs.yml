@@ -113,6 +113,8 @@ nav:
       - Extraction Table: manual/extraction-table.md
       - Analytics: manual/analytics.md
       - Settings: manual/settings.md
+      - What your hardware gets you: manual/hardware-and-models.md
+      - Context window: manual/context-window.md
       - Telegram: manual/telegram.md
       - Admin & Multi-tenant: manual/admin.md
   - Install & Operate:

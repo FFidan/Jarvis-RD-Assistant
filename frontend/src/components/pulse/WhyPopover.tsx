@@ -5,6 +5,7 @@ import { explainPulseCard } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { displayReasoning } from '@/components/pulse/reasoning-display';
 
 export interface WhyPopoverProps {
   cardId: number;
@@ -53,9 +54,9 @@ export function WhyPopover({ cardId, trigger }: WhyPopoverProps) {
           </div>
         ) : (
           <div className="space-y-3">
-            {data.reasoning && (
+            {displayReasoning(data.reasoning) && (
               <p className="text-xs italic text-muted-foreground">
-                {data.reasoning}
+                {displayReasoning(data.reasoning)}
               </p>
             )}
             {signalEntries.length > 0 && (

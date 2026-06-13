@@ -73,7 +73,7 @@ OpenAlex requires `OPENALEX_EMAIL` or `OPENALEX_API_KEY`. PubMed works without a
 
 ## GPU acceleration (optional)
 
-The default stack is CPU-safe. Ollama runs on CPU out of the box — slower for large models, but fully functional.
+The default stack is CPU-safe. Ollama runs on CPU out of the box. On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported, just slower. The first run also pulls 7–11 GB of model data; allow 20–60 minutes on a typical connection. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop.
 
 ### Standard GPU overlay (auto-engaged by `setup.sh`)
 
@@ -403,6 +403,10 @@ docker compose up -d dashboard
 ```
 
 Read-only and idempotent. Verifies Docker Engine, Docker Compose v2, `openssl`, GPU toolkit (informational), and `.env` presence. Exit 0 = PASS, exit 1 = FAIL.
+
+`setup.sh` verifies the Docker *daemon* is reachable (`docker info`), not just that the `docker` binary is installed — both in `./setup.sh --check` and at the start of a real install, before any prompt. If the daemon is down (Docker Desktop not started, `DOCKER_HOST` misconfigured, or missing group permissions), the installer exits immediately with a fix hint instead of crashing mid-wizard.
+
+Re-runs: running `./setup.sh` with an existing `.env` and declining the overwrite prompt no longer exits with services stopped — it keeps your `.env` (secrets, database, and model selection untouched) and starts the stack with it via `docker compose up -d`, honouring the `COMPOSE_FILE` and `COMPOSE_PROFILES` values persisted in `.env`. New installs write `COMPOSE_PROFILES=<selection>` (for example `telegram`, `tunnel`) into `.env`; for older `.env` files without it, setup derives the telegram profile from a non-empty `TELEGRAM_BOT_TOKEN` and prints a notice.
 
 Key flags: `--mode <single|multi>`, `--domain <host>`, `--admin-email <email>`, `--profile <dev|local-https|letsencrypt>` (default `dev`; `letsencrypt` requires `--domain` + `--admin-email`), `--smtp-host/--smtp-user/--smtp-pass-file`. Run `./setup.sh --help` for the full reference. `TELEGRAM_BOT_TOKEN` in the environment enables Telegram automatically.
 

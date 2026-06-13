@@ -223,16 +223,17 @@ describe('ResearchFeedPage — F4 discoverable upload', () => {
     expect(screen.getByTestId('upload-pdf-button')).toHaveTextContent('Upload PDF');
   });
 
-  it('clicking Upload PDF on Inbox navigates to search surface', async () => {
+  it('clicking Upload PDF on Inbox navigates to search surface and hoists the upload zone', async () => {
     renderPage('?surface=inbox');
     await waitFor(() => {
       expect(screen.getByTestId('upload-pdf-button')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByTestId('upload-pdf-button'));
-    // After click, Discover/search surface content should appear
+    // After click, search surface content and the hoisted upload zone appear.
     await waitFor(() => {
       expect(screen.getByText(/search external databases/i)).toBeInTheDocument();
     });
+    expect(screen.getByTestId('upload-zone-hoisted')).toBeInTheDocument();
   });
 
   it('does NOT render Upload PDF button on Trash surface', async () => {

@@ -65,6 +65,66 @@ describe('ConfidenceBadge', () => {
     expect(tooltipMatches.length).toBeGreaterThan(0);
   });
 
+  it('tooltip includes level definition for HIGH confidence', async () => {
+    const user = userEvent.setup();
+    const perSentence = [
+      { text: 'All good.', verified: true },
+      { text: 'Also good.', verified: true },
+    ];
+    render(
+      <ConfidenceBadge
+        confidence="HIGH"
+        verified_fraction={1}
+        per_sentence={perSentence}
+      />,
+    );
+    await user.hover(screen.getByText('Verified'));
+    const tooltipMatches = await screen.findAllByText(/every checkable sentence matched/);
+    expect(tooltipMatches.length).toBeGreaterThan(0);
+  });
+
+  it('tooltip includes level definition for LOW confidence', async () => {
+    const user = userEvent.setup();
+    render(
+      <ConfidenceBadge
+        confidence="LOW"
+        verified_fraction={0.2}
+        per_sentence={[{ text: 'Only sentence.', verified: false }]}
+      />,
+    );
+    await user.hover(screen.getByText('Partially verified'));
+    const tooltipMatches = await screen.findAllByText(/some checkable sentences matched/);
+    expect(tooltipMatches.length).toBeGreaterThan(0);
+  });
+
+  it('tooltip includes level definition for UNVERIFIED confidence', async () => {
+    const user = userEvent.setup();
+    render(
+      <ConfidenceBadge
+        confidence="UNVERIFIED"
+        verified_fraction={0}
+        per_sentence={[{ text: 'No source.', verified: false }]}
+      />,
+    );
+    await user.hover(screen.getByText('Unverified'));
+    const tooltipMatches = await screen.findAllByText(/none of the checkable sentences matched/);
+    expect(tooltipMatches.length).toBeGreaterThan(0);
+  });
+
+  it('tooltip shows definition (not "nothing checkable") when totalCount is zero', async () => {
+    const user = userEvent.setup();
+    render(
+      <ConfidenceBadge
+        confidence="HIGH"
+        verified_fraction={1}
+        per_sentence={[]}
+      />,
+    );
+    await user.hover(screen.getByText('Verified'));
+    const tooltipMatches = await screen.findAllByText(/every checkable sentence matched/);
+    expect(tooltipMatches.length).toBeGreaterThan(0);
+  });
+
   it('renders "Partially verified" with orange styling for LOW confidence', () => {
     render(
       <ConfidenceBadge

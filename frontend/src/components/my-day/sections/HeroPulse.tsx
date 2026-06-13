@@ -28,7 +28,7 @@ function PulseEmptyState({ message }: { message: string }) {
       <Sparkles className="h-7 w-7 text-faint" aria-hidden />
       <p className="font-serif italic text-faint max-w-[34ch]">{message}</p>
       <Button asChild size="sm" variant="outline">
-        <Link to="/feed">Open Research Feed</Link>
+        <Link to="/feed?surface=library">Open Library</Link>
       </Button>
     </div>
   );
@@ -90,13 +90,13 @@ export function HeroPulse() {
   // Cleared (rated all) — only when deck exists and we've advanced past last card
   if (deck && currentIndex >= deck.cards.length) {
     return (
-      <PulseEmptyState message="All caught up — pulse cleared. Generate a fresh one from the Research Feed." />
+      <PulseEmptyState message="All caught up — pulse cleared. Generate a fresh one from the Library." />
     );
   }
 
   if (!card) {
     return (
-      <PulseEmptyState message="No Pulse for today yet — generate one from the Research Feed." />
+      <PulseEmptyState message="No Pulse for today yet — generate one from the Library." />
     );
   }
 

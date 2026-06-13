@@ -88,6 +88,13 @@ export interface FirstRunStatus {
   current_backend?: string | null;
   observed_backend?: string | null;
   observed_recent_share?: number;
+  /**
+   * True iff SMTP is configured (DB or env). When false, magic-links cannot be
+   * delivered and the login page defaults to the API-key tab. Optional so older
+   * backends (before Task T0.4) degrade gracefully — absence is treated as
+   * unknown (no default-override applied).
+   */
+  smtp_configured?: boolean;
 }
 export interface FirstRunServiceStatus { name: string; ok: boolean; detail: string | null }
 export interface FirstRunSystemCheck { services: FirstRunServiceStatus[]; all_ok: boolean }

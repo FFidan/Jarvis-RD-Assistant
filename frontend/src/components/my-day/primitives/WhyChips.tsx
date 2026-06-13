@@ -1,3 +1,5 @@
+import { displayReasoning } from '@/components/pulse/reasoning-display';
+
 const SIGNAL_LABELS: Record<string, string> = {
   embedding: 'Embedding match',
   emb: 'Embedding match',
@@ -24,16 +26,17 @@ interface WhyChipsProps {
 }
 
 export function WhyChips({ signals, reasoning, max = 3 }: WhyChipsProps) {
+  const displayedReasoning = displayReasoning(reasoning);
   const ranked: WhySignal[] = Object.entries(signals)
     .filter(([, w]) => w > 0.1)
     .map(([k, w]) => ({ label: SIGNAL_LABELS[k] ?? k, weight: w }))
     .sort((a, b) => b.weight - a.weight)
     .slice(0, max);
 
-  if (ranked.length === 0 && !reasoning) return null;
+  if (ranked.length === 0 && !displayedReasoning) return null;
 
   if (ranked.length === 0) {
-    return <p className="font-serif italic text-[13.5px] text-soft mt-1">{reasoning}</p>;
+    return <p className="font-serif italic text-[13.5px] text-soft mt-1">{displayedReasoning}</p>;
   }
 
   return (
@@ -51,7 +54,7 @@ export function WhyChips({ signals, reasoning, max = 3 }: WhyChipsProps) {
           ))}
         </div>
       </div>
-      {reasoning && <p className="font-serif italic text-[13.5px] text-soft mt-1">{reasoning}</p>}
+      {displayedReasoning && <p className="font-serif italic text-[13.5px] text-soft mt-1">{displayedReasoning}</p>}
     </div>
   );
 }

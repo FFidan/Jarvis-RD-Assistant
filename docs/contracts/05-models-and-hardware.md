@@ -6,6 +6,8 @@
   `recommendations_for_role()` / `build_model_statuses()` in [model_lifecycle.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py)
 - The `GET /api/system/models`, `GET /api/system/hardware`, or pull/delete endpoints
 - The per-machine `num_ctx` / thinking-mode key handling
+- The LiteLLM model-delivery plane (`litellm_config.py` delivery helpers, the boot reconciler in
+  `paper_ingestion/main.py`, or `litellm/config.yaml`'s alias seeding)
 
 This contract covers two adjacent concerns that share the same data model and
 API surface: the **model lifecycle** (curated catalog, hardware-aware
@@ -145,6 +147,23 @@ Returns `HardwareInfo.to_dict()` — `vram_gb`, `vram_source`, `tier`, `detected
 
 ## 3. Hardware tiers and recommendations
 
+### 3.0 VRAM probe — host override
+
+`JARVIS_HOST_VRAM_MB` (integer MiB) is written into `.env` by `setup.sh` when
+`nvidia-smi` finds a GPU at install time.  It is passed through `docker-compose.yml`
+via the `x-shared-env` block and read by `detect_hardware()` inside the container.
+
+When set and valid (positive integer):
+- `HardwareInfo.vram_source` becomes `"host-env"`; `vram_gb` reflects the host GPU.
+- The in-container `nvidia-smi` probe **still runs** to populate `host_gpu_divergence`.
+- `host_gpu_divergence=True` signals the GPU compose overlay is not active.
+
+`JARVIS_HOST_VRAM_MB` is a VRAM quantity (MiB integer).  It is distinct from
+`JARVIS_HW_TIER` (a string tier name used for model-default selection in `setup.sh`
+and `prompt_ai_backend()`).  Both may be set simultaneously without conflict.
+
+Garbage / zero / negative values are silently ignored and the normal probe runs instead.
+
 ### 3.1 Tier table
 
 `hardware_tier(vram_gb)` ([model_lifecycle.py:172-192](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_lifecycle.py#L172-L192))
@@ -240,9 +259,13 @@ DELETE /api/system/models/{ollama_tag}
 ### 5.3 Assign (change role mapping)
 
 Assignment goes through the existing `PUT /api/config/{key}` path for `llm.smart_model` /
-`llm.fast_model` / `llm.embed_model`, which runs `update_litellm_model()` + `reload_litellm()`.
-The Settings dropdown sends the catalog entry `id`; the backend maps it to the Ollama tag →
-LiteLLM `ollama/<tag>` or to a cloud alias `anthropic/<model>` / `openai/<model>`.
+`llm.fast_model`, which runs `update_litellm_model()` (delivery mechanism in §5.5; no reload step —
+`/model/new` registers the deployment with the router immediately). The Settings dropdown sends the
+catalog entry `id`; the backend maps it to the Ollama tag → LiteLLM `ollama/<tag>` or to a cloud
+alias `anthropic/<model>` / `openai/<model>`. `llm.embed_model` is the exception: the embed alias is
+dimension-locked to the Qdrant collection and stays YAML-seeded — re-selecting the routed model is a
+no-op; re-routing it is refused with an explicit error (switching embedders = edit
+`litellm/config.yaml` + re-embed).
 
 If the selected model is `downloadable` (not yet pulled), the write is rejected and the frontend
 guides the user to the Pull CTA.
@@ -252,8 +275,43 @@ guides the user to the Pull CTA.
 `llm.anthropic.api_key`, `llm.openai.api_key`, and `llm.google.api_key` are stored encrypted in
 `user_config` (see [01-settings.md §2.2](01-settings.md#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write)).
 `POST /api/providers/{provider}/test` validates connectivity. When the user picks a cloud entry in
-a role dropdown, `update_litellm_model` runs the cloud path (`get_provider_api_key` decrypt + key
-injection into LiteLLM). The supported providers are `{"anthropic", "openai", "google"}`.
+a role dropdown, `update_litellm_model` runs the cloud path: `get_provider_api_key` decrypts the
+key in memory and carries it in the `/model/new` payload; LiteLLM persists it in its admin database
+encrypted under `LITELLM_SALT_KEY` (see `docs/SECURITY.md`). The key is never written to
+`litellm/config.yaml` or any other file. The supported providers are
+`{"anthropic", "openai", "google"}`.
+
+### 5.5 Delivery mechanism — LiteLLM admin DB
+
+The switchable aliases (`smart`, `fast`, `smart-fallback`) live ONLY in LiteLLM's admin database
+(`LiteLLM_ProxyModelTable`, in the `litellm` DB of the bundled Postgres); `litellm/config.yaml`
+keeps the dimension-locked `embed` entries plus router/general settings. Rationale: YAML-seeded
+deployments can never be removed at runtime (`/model/delete` only deletes DB rows), so a YAML
+`smart` would STACK with its DB replacement and latency-based routing could keep preferring the
+stale model — a switch would not be a switch. `scripts/render-litellm-config.sh` scrubs legacy YAML
+aliases on install/upgrade as a guard.
+
+A delivery (`update_litellm_model`) is: `GET /v1/model/info` to resolve the alias's current
+deployments → `POST /model/new` with the replacement (merged `num_ctx` / `think` / `temperature` /
+`api_base`, plus the decrypted key for cloud models) → `POST /model/delete` for each superseded DB
+deployment. Create-first ordering keeps old routing intact if the create fails; a failed delete
+rolls back the just-created deployment (no silent stacking). LiteLLM loads DB deployments at boot
+and re-syncs them on its own ~30 s background job, so deliveries survive LiteLLM restarts.
+
+**Boot reconciler.** A persistent lifespan background task in `paper_ingestion/main.py` runs one
+reconcile pass ~every 30 s for the process lifetime: it resolves each role's desired model
+(one-way precedence: `user_config` row → `JARVIS_SMART_MODEL` / `JARVIS_FAST_MODEL` from `.env` →
+static pulled default `qwen3:8b` / `qwen3:4b`), delivers via `update_litellm_model`, and ensures
+the `smart-fallback` deployment group (the fast-tier model with timeout 120) behind
+`router_settings.fallbacks: smart → ["smart-fallback"]`. While a role is undelivered (e.g. LiteLLM
+degraded to DB-less mode because prisma migrate failed), the role is recorded in
+`llm.delivery_pending` and `GET /api/system/models` reports `delivery: "pending_restart"` — the UI
+shows "pending — applying automatically" and the loop keeps retrying until LiteLLM recovers.
+
+**Multi-machine semantics: deployment-global, last writer wins.** LiteLLM deployments are global to
+the deployment, not per-machine. A delivery carries the *delivering* machine's stored `num_ctx` /
+thinking preferences (`machine_id = socket.gethostname()`); when several backends share one LiteLLM,
+the most recent writer's parameters apply to everyone until the next delivery.
 
 ---
 
@@ -286,8 +344,9 @@ a single shared key would force one tier to be wrong. The allow-list classifier
 [config_metadata.py:103-127](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_metadata.py#L103-L127))
 accepts the prefix patterns `llm.*.{smart,fast,embed}_num_ctx` and
 `llm.*.thinking_disabled.{model_id}`. Runtime LiteLLM writes are applied *before* the `user_config`
-row is persisted; if the LiteLLM update or reload fails, the write aborts and the DB value is not
-advanced.
+row is persisted; if the delivery fails, the write aborts and the DB value is not advanced
+(fail-closed — except the "No DB Connected" carve-out, where the row commits and the role goes
+`delivery_pending`, see §5.5).
 
 ### 6.2 Catalog fit fields
 
@@ -385,11 +444,12 @@ fetched by `IngestionSection` — no new endpoint.
 ### 6.6 Thinking-mode toggle
 
 Rendered only for catalog entries with `supports_thinking: true`, inside the same expander as the
-slider. When checked, the backend includes `extra_body: {think: false}` in the LiteLLM
-`/config/update` payload through `update_litellm_model`. This generalizes the hand-tuned default in
-`litellm/config.yaml`, which still ships `think: false` for the Qwen3 smart/fast aliases as the
-first-boot fallback. Persisted as `llm.{machine_id}.thinking_disabled.{model_id}` (boolean);
-first-boot default is `true` for thinking-capable entries, `false` for everything else.
+slider. When checked, the backend includes a TOP-LEVEL `think: false` in the `/model/new`
+`litellm_params` through `update_litellm_model` (top-level is the only placement Ollama honours —
+a nested `extra_body` is silently ignored). The first-boot default for fresh deployments comes from
+`ALIAS_BOOTSTRAP_PARAMS` in `litellm_config.py` (`think: false` for the Qwen3 smart/fast aliases).
+Persisted as `llm.{machine_id}.thinking_disabled.{model_id}` (boolean); first-boot default is
+`true` for thinking-capable entries, `false` for everything else.
 
 ---
 
@@ -415,20 +475,23 @@ Existing endpoints unchanged:
 
 ## 8. Active runtime defaults
 
-The runtime authority for model assignment is the LiteLLM config (`litellm/config.yaml`); the
-`user_config` rows exist for UI read-back (see [01-settings.md §2.2](01-settings.md#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write)
+The runtime authority for `smart` / `fast` / `smart-fallback` assignment is LiteLLM's admin DB
+(delivered per §5.5); for `embed` it is `litellm/config.yaml`. The `user_config` rows exist for UI
+read-back and as the reconciler's desired state (see [01-settings.md §2.2](01-settings.md#22-partial-keys-consulted-only-at-startup-only-on-a-non-core-endpoint-or-pushed-elsewhere-on-write)
 and [03-llm.md §1](03-llm.md)). Current active aliases:
 
 | Alias | Default model | Notes |
 |---|---|---|
-| `smart` | `ollama/qwen3:8b` | `num_ctx: 8192`, `extra_body.think: false`. 8b (not 14b) is the default because 14b starved the GPU-resident embedder on 16 GB cards; admins restore 14b via Settings → `llm.smart_model`. |
-| `fast` | `ollama/qwen3:4b` | `num_ctx: 4096`, `extra_body.think: false`. |
-| `embed` | `ollama/qwen3-embedding:4b` | `EMBEDDING_DIMENSION=2560`; `qwen3-embedding:0.6b` (1024d) is the documented smaller-machine fallback. |
+| `smart` | `ollama/qwen3:8b` | `num_ctx: 8192`, top-level `think: false`, timeout 300 (from `ALIAS_BOOTSTRAP_PARAMS`). 8b (not 14b) is the default because 14b starved the GPU-resident embedder on 16 GB cards; admins restore 14b via Settings → `llm.smart_model`. |
+| `fast` | `ollama/qwen3:4b` | `num_ctx: 4096`, top-level `think: false`. |
+| `smart-fallback` | `ollama/qwen3:4b` | The fast-tier model with timeout 120; the real deployment group behind `router_settings.fallbacks: smart → ["smart-fallback"]`. |
+| `embed` | `ollama/qwen3-embedding:4b` | YAML-seeded (dimension-locked). `EMBEDDING_DIMENSION=2560`; `qwen3-embedding:0.6b` (1024d) is the documented smaller-machine fallback. |
 
-Cloud aliases ship commented-out in `litellm/config.yaml` as templates. Changing the embed model to
-a different dimension requires a matching Qdrant collection and a re-embed checkpoint (see
-`scripts/reembed.py`, which defaults to `qwen3-embedding:4b` / `2560` and gates collection recreation
-behind explicit snapshot-confirmation flags).
+Cloud models are assigned through the Settings role dropdowns (§5.4) — `litellm/config.yaml` carries
+no cloud templates. Changing the embed model to a different dimension requires a matching Qdrant
+collection and a re-embed checkpoint (see `scripts/reembed.py`, which defaults to
+`qwen3-embedding:4b` / `2560` and gates collection recreation behind explicit snapshot-confirmation
+flags).
 
 ### Setup system-check — models-ready condition
 
@@ -483,11 +546,13 @@ Implementation: `_models_match()` in `services/paper_ingestion/paper_ingestion/r
 | `_probe_nvidia_smi()` | services/paper_ingestion/paper_ingestion/services/model_lifecycle.py:196-220 | Fixed-arg `subprocess.run`; no shell expansion. |
 | `_classify_litellm_runtime_key` | services/paper_ingestion/paper_ingestion/services/config_metadata.py:103-127 | Classifies model-role + per-machine `num_ctx` / `thinking_disabled` keys. |
 | `_NUM_CTX_PATTERN` / `_THINKING_DISABLED_PATTERN` | services/paper_ingestion/paper_ingestion/services/config_metadata.py:96-100 | Regex for the dynamic per-machine key patterns. |
-| `update_litellm_model(alias, model, db_pool)` | services/paper_ingestion/paper_ingestion/services/litellm_config.py | Rewrites LiteLLM config / POSTs `/config/update`; injects cloud key; applies `num_ctx` + thinking flags. |
+| `update_litellm_model(key, model, db_pool, machine_id, ...)` | services/paper_ingestion/paper_ingestion/services/litellm_config.py | Delivers via `/v1/model/info` → `/model/new` → `/model/delete` (create-first, rollback on failed delete); carries cloud key; applies top-level `num_ctx` + `think`. |
+| `ensure_smart_fallback(fast_model, ...)` | services/paper_ingestion/paper_ingestion/services/litellm_config.py | Creates/refreshes the `smart-fallback` deployment group (fast-tier model, timeout 120). |
+| `_reconcile_litellm_models_once(pool)` / `_litellm_model_reconciler_loop(pool)` | services/paper_ingestion/paper_ingestion/main.py | Persistent ~30 s boot reconciler: desired-model precedence, `llm.delivery_pending` bookkeeping, smart-fallback ensure. |
 | `get_provider_api_key(provider, db_pool)` | services/paper_ingestion/paper_ingestion/services/litellm_config.py | Decrypts a cloud-provider key from `user_config`. |
 | `model_catalog.json` (14 entries) | libs/jarvis_common/jarvis_common/data/model_catalog.json | Curated local + cloud catalog; no `mistral-nemo` / `nomic-embed-text`. |
 | `GET /api/system/models` | services/paper_ingestion/paper_ingestion/routers/system.py | Returns installed, hardware, current, issues, catalog, recommendations. |
 | `GET /api/system/hardware` | services/paper_ingestion/paper_ingestion/routers/system.py | Returns `HardwareInfo.to_dict()` incl. `machine_id`. |
 | `SystemModelsResponse` | services/paper_ingestion/paper_ingestion/models/papers.py:404-413 | Loose Pydantic response; additive `fit_detail` does not break clients. |
-| Active runtime defaults | litellm/config.yaml | smart=`ollama/qwen3:8b`, fast=`ollama/qwen3:4b`, embed=`ollama/qwen3-embedding:4b`; cloud examples commented out. |
+| Active runtime defaults | litellm_config.py `ALIAS_BOOTSTRAP_PARAMS` + litellm/config.yaml | smart=`ollama/qwen3:8b`, fast=`ollama/qwen3:4b`, smart-fallback=`ollama/qwen3:4b` (admin DB); embed=`ollama/qwen3-embedding:4b` (YAML). |
 | `PaperIngestionSettings.embedding_model_name` / `embedding_dimension` | services/paper_ingestion/paper_ingestion/config.py | Defaults `qwen3-embedding:4b` / `2560`. |

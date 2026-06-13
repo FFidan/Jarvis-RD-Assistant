@@ -5,7 +5,7 @@
 - **Docker Engine** 24+ with Docker Compose v2
 - **RAM**: 4 GB minimum, 8 GB recommended (for local LLMs via Ollama)
 - **Disk**: 20 GB+ (PDFs and page snapshots accumulate over time)
-- **GPU**: NVIDIA GPU optional (faster Ollama inference; CPU works fine). GPU acceleration is enabled via the `docker-compose.gpu.yml` overlay; `setup.sh` adds it automatically when it detects the Docker nvidia runtime.
+- **GPU**: NVIDIA GPU optional (faster Ollama inference). On GPU, the first paper analysis takes a few minutes; on CPU-only it can take 30 minutes or more — fully supported but slower. On macOS, Docker containers cannot use the Apple GPU — expect CPU-speed analysis; allocate ≥8 GB to Docker Desktop. GPU acceleration is enabled via the `docker-compose.gpu.yml` overlay; `setup.sh` adds it automatically when it detects the Docker nvidia runtime.
 - **OS**: Linux recommended. macOS supported. Windows via WSL2.
 - **Python**: 3.12+ for all services
 
@@ -22,7 +22,7 @@ bash scripts/check-python-deps.sh            # verify parity
 Groups: `jarvis-common` (shared), `paper-ingestion`, `paper-ingestion-optional`,
 `learning-engine`, `telegram-bot`. FastAPI pinned `>=0.136.1,<0.138.0`.
 
-Frontend (`frontend/package.json`): React ^19, TypeScript ^5.6, Vite ^6,
+Frontend (`frontend/package.json`): React ^19, TypeScript ^5.6, Vite ^8,
 TanStack Query ^5, Zustand ^5, React Router ^7, Recharts ^2.15,
 Cytoscape ^3.33, Lucide React, Radix UI, Playwright (dev).
 

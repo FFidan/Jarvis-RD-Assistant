@@ -58,7 +58,20 @@ export function ConfigEntryCard({
   onCancelEdit,
 }: ConfigEntryCardProps) {
   if (customElement !== undefined) {
-    return <>{customElement}</>;
+    return (
+      <>
+        {customElement}
+        {saveError && (
+          <p
+            className="text-sm text-destructive mt-1"
+            role="alert"
+            data-testid={`config-save-error-${entry.key}`}
+          >
+            {saveError}
+          </p>
+        )}
+      </>
+    );
   }
 
   if (meta?.type === 'boolean') {

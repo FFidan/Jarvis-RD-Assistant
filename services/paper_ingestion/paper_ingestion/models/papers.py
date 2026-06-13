@@ -157,6 +157,9 @@ class SummaryResponse(BaseModel):
     llm_model: str | None = None
     summary_verified: bool = False
     created_at: datetime
+    # Not persisted — set only on fresh summarize responses.
+    coverage: float | None = None
+    passes: int | None = None
 
 
 class UserStateResponse(BaseModel):

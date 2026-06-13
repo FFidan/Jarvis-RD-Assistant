@@ -10,9 +10,9 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common import get_fast_model
+from jarvis_common import effective_num_ctx, get_fast_model
 from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured, observe
-from jarvis_common.prompt_safety import wrap_delimited
+from jarvis_common.prompt_safety import max_input_chars, wrap_delimited
 from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.converters import row_to_chunk_response
@@ -34,6 +34,15 @@ from paper_ingestion.extraction.kg_models import KGExtractionOutput
 from paper_ingestion.models import EntityExtractionResponse
 
 logger = logging.getLogger(__name__)
+
+# Output budget for one KG extraction call. Sized for the structured worst case
+# of KGExtractionOutput: up to 15 entities (name + type + ~500-char description)
+# plus up to 10 relationships (source/target/type + verbatim evidence quote +
+# confidence). The SAME number reserves output room in the input char budget
+# AND caps the LLM response, so the prompt input + reserved output provably fit
+# the fast-role window — the old split (reserve 512, but the call defaulted to
+# ChatCompletionOptions' 2000) could overflow a 4096 window.
+_ENTITY_OUTPUT_TOKENS = 1200
 
 _SYSTEM_ENTITIES = """\
 You are a knowledge graph extractor for research papers.
@@ -131,8 +140,21 @@ async def extract_entities_for_paper(
     chunk_responses = [row_to_chunk_response(c) for c in chunks]
     full_text = "\n\n".join(c.content for c in chunk_responses)
     # Truncate only for the LLM prompt input; verification uses the full text
-    # so that evidence appearing beyond char 12000 is not silently dropped.
-    llm_text = full_text[:12000] if len(full_text) > 12000 else full_text
+    # so that evidence appearing beyond the prompt cap is not silently dropped.
+    _entity_text_max = max_input_chars(
+        await effective_num_ctx(db_pool, "fast"), reserved_output_tokens=_ENTITY_OUTPUT_TOKENS
+    )
+    if len(full_text) > _entity_text_max:
+        logger.warning(
+            "entity extraction: paper %d text truncated for prompt from %d to %d chars "
+            "(verification still uses full text)",
+            paper_id,
+            len(full_text),
+            _entity_text_max,
+        )
+        llm_text = full_text[:_entity_text_max]
+    else:
+        llm_text = full_text
 
     prompt = build_entity_prompt(paper["title"], llm_text)
     from paper_ingestion._state import svc  # noqa: PLC0415
@@ -147,7 +169,11 @@ async def extract_entities_for_paper(
             _openai_client,
             response_model=KGExtractionOutput,
             prompt=prompt,
-            options=ChatCompletionOptions(model=fast_model, system=_SYSTEM_ENTITIES),
+            options=ChatCompletionOptions(
+                model=fast_model,
+                system=_SYSTEM_ENTITIES,
+                max_tokens=_ENTITY_OUTPUT_TOKENS,
+            ),
         )
     except Exception:
         logger.exception("Entity extraction LLM call failed for paper %d", paper_id)

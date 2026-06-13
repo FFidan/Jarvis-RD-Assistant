@@ -1,12 +1,26 @@
-"""Regression test for render-litellm-config.sh fallback model resolution.
+"""Regression tests for scripts/render-litellm-config.sh (de-seed guard).
 
-Ensures the rendered `smart-fallback` alias always resolves to a model that is
-in OLLAMA_MODELS (always pulled), not qwen3:1.7b which was never in the pull
-set and caused every smart fallback to 404.
+The switchable model aliases (``smart`` / ``fast`` / ``smart-fallback``) live
+in LiteLLM's admin database, delivered via ``POST /model/new`` by the
+paper_ingestion boot reconciler and the Settings model picker. They must NOT
+exist in ``litellm/config.yaml``: YAML-seeded deployments cannot be removed at
+runtime (``/model/delete`` only deletes DB rows), so a YAML ``smart`` would
+STACK with its DB replacement and latency-based routing could keep preferring
+the stale model.
+
+The render script is therefore a scrub-only guard (no env inputs):
+
+1. removes any smart/fast/smart-fallback entries from ``model_list``
+   (upgrade path — older installs seeded them from env vars),
+2. keeps the dimension-locked ``embed`` entries untouched,
+3. normalizes ``router_settings.fallbacks`` to ``smart → ["smart-fallback"]``
+   (the DB-created deployment group), dropping legacy raw provider-model
+   fallback strings,
+4. is idempotent — a second run changes nothing.
 
 The script derives paths from its own location via BASH_SOURCE, so we copy the
-three required files into a temp dir preserving the scripts/litellm/config/
-layout, then run the copied script there.
+required files into a temp dir preserving the scripts/litellm/ layout, then run
+the copied script there.
 """
 
 from __future__ import annotations
@@ -14,6 +28,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -24,36 +39,84 @@ pytestmark = pytest.mark.skipif(
     shutil.which("bash") is None, reason="render-litellm-config.sh needs bash"
 )
 
+SWITCHABLE_ALIASES = {"smart", "fast", "smart-fallback"}
 
-def _render(tmp_path: Path, *, tier: str = "24-48", smart_model: str = "qwen3:8b") -> dict:
-    """Copy the three required files into tmp_path, run the render script, return parsed YAML."""
-    # Preserve scripts/litellm/config/ directory structure
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "litellm").mkdir()
-    (tmp_path / "config").mkdir()
+# A pre-de-seed config shape (what older installs / the retired env-driven
+# renderer produced) — the upgrade path the scrub must handle.
+LEGACY_SEEDED_CONFIG: dict[str, Any] = {
+    "model_list": [
+        {
+            "model_name": "smart",
+            "litellm_params": {
+                "model": "ollama/qwen3:8b",
+                "api_base": "http://ollama:11434",
+                "temperature": 0.2,
+                "num_ctx": 8192,
+                "extra_body": {"think": False},
+                "timeout": 300,
+                "num_retries": 2,
+            },
+        },
+        {
+            "model_name": "fast",
+            "litellm_params": {
+                "model": "ollama/qwen3:4b",
+                "api_base": "http://ollama:11434",
+                "temperature": 0.1,
+                "num_ctx": 4096,
+                "extra_body": {"think": False},
+            },
+        },
+        {
+            "model_name": "smart-fallback",
+            "litellm_params": {
+                "model": "ollama/qwen3:4b",
+                "api_base": "http://ollama:11434",
+                "timeout": 120,
+            },
+        },
+        {
+            "model_name": "embed",
+            "litellm_params": {
+                "model": "ollama/qwen3-embedding:4b",
+                "api_base": "http://ollama:11434",
+            },
+        },
+    ],
+    "router_settings": {
+        "fallbacks": [
+            {"smart": ["ollama/qwen3:4b"]},
+            {"fast": ["ollama/qwen3:4b"]},
+        ]
+    },
+}
 
+
+def _setup_tree(tmp_path: Path, config_text: str | None = None) -> Path:
+    """Copy the script (+ a config) into tmp_path preserving the repo layout."""
+    (tmp_path / "scripts").mkdir(exist_ok=True)
+    (tmp_path / "litellm").mkdir(exist_ok=True)
     shutil.copy(
         REPO_ROOT / "scripts" / "render-litellm-config.sh",
         tmp_path / "scripts" / "render-litellm-config.sh",
     )
-    shutil.copy(REPO_ROOT / "litellm" / "config.yaml", tmp_path / "litellm" / "config.yaml")
-    shutil.copy(
-        REPO_ROOT / "config" / "llm-tier-candidates.yaml",
-        tmp_path / "config" / "llm-tier-candidates.yaml",
-    )
+    config_path = tmp_path / "litellm" / "config.yaml"
+    if config_text is not None:
+        config_path.write_text(config_text)
+    else:
+        shutil.copy(REPO_ROOT / "litellm" / "config.yaml", config_path)
+    return config_path
 
+
+def _run(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    """Run the copied script. No env inputs — the script takes none."""
     env = {
-        "JARVIS_LLM_BACKEND": "ollama",
-        "JARVIS_SMART_MODEL": smart_model,
-        "JARVIS_HW_TIER": tier,
-        # Explicitly unset so the script resolves from the yaml
         "PATH": subprocess.run(
             ["bash", "-c", "echo $PATH"], capture_output=True, text=True
         ).stdout.strip(),
         "HOME": str(Path.home()),
     }
-
-    subprocess.run(
+    return subprocess.run(
         ["bash", str(tmp_path / "scripts" / "render-litellm-config.sh")],
         env=env,
         capture_output=True,
@@ -61,61 +124,92 @@ def _render(tmp_path: Path, *, tier: str = "24-48", smart_model: str = "qwen3:8b
         check=True,
     )
 
-    return yaml.safe_load((tmp_path / "litellm" / "config.yaml").read_text())
+
+def test_live_repo_config_is_already_deseeded(tmp_path: Path) -> None:
+    """The shipped litellm/config.yaml carries no switchable aliases; script no-ops."""
+    config_path = _setup_tree(tmp_path)
+    before = config_path.read_text()
+
+    live = yaml.safe_load(before)
+    seeded = {e["model_name"] for e in live["model_list"]}
+    assert not (seeded & SWITCHABLE_ALIASES), (
+        f"litellm/config.yaml must not seed switchable aliases; found {seeded}"
+    )
+    # The dimension-locked embed entries stay YAML-seeded.
+    assert "embed" in seeded
+    assert live["router_settings"]["fallbacks"] == [{"smart": ["smart-fallback"]}]
+
+    result = _run(tmp_path)
+
+    assert "nothing to do" in result.stdout
+    assert config_path.read_text() == before, "no-op run must not rewrite the file"
 
 
-def test_smart_fallback_is_pulled_model(tmp_path: Path) -> None:
-    """smart-fallback must resolve to qwen3:4b (always in OLLAMA_MODELS), not qwen3:1.7b."""
-    config = _render(tmp_path, tier="24-48", smart_model="qwen3:8b")
+def test_legacy_seeded_config_is_scrubbed(tmp_path: Path) -> None:
+    """Upgrade path: env-seeded smart/fast/smart-fallback entries are removed."""
+    config_path = _setup_tree(tmp_path, yaml.safe_dump(LEGACY_SEEDED_CONFIG, sort_keys=False))
 
-    model_list = config["model_list"]
-    fallback_entry = next(e for e in model_list if e["model_name"] == "smart-fallback")
+    _run(tmp_path)
 
-    assert fallback_entry["litellm_params"]["model"] == "ollama/qwen3:4b", (
-        "smart-fallback must reference qwen3:4b (always pulled) — "
-        f"got {fallback_entry['litellm_params']['model']!r}"
+    config = yaml.safe_load(config_path.read_text())
+    names = [e["model_name"] for e in config["model_list"]]
+    assert names == ["embed"], f"only the embed entries may survive the scrub; got {names}"
+    # The embed entry itself is untouched.
+    embed = config["model_list"][0]["litellm_params"]
+    assert embed["model"] == "ollama/qwen3-embedding:4b"
+    assert embed["api_base"] == "http://ollama:11434"
+
+
+def test_legacy_fallbacks_normalized_to_deployment_group(tmp_path: Path) -> None:
+    """Raw provider-model fallback strings are replaced by the smart-fallback group."""
+    config_path = _setup_tree(tmp_path, yaml.safe_dump(LEGACY_SEEDED_CONFIG, sort_keys=False))
+
+    _run(tmp_path)
+
+    config = yaml.safe_load(config_path.read_text())
+    assert config["router_settings"]["fallbacks"] == [{"smart": ["smart-fallback"]}], (
+        "fallbacks must map smart → ['smart-fallback'] (a real DB deployment group), "
+        f"got {config['router_settings']['fallbacks']!r}"
     )
 
 
-def test_smart_entry_uses_configured_model(tmp_path: Path) -> None:
-    """smart alias must reflect the JARVIS_SMART_MODEL env var."""
-    config = _render(tmp_path, tier="24-48", smart_model="qwen3:8b")
+def test_scrub_is_idempotent(tmp_path: Path) -> None:
+    """A second run after a scrub reports nothing to do and changes nothing."""
+    config_path = _setup_tree(tmp_path, yaml.safe_dump(LEGACY_SEEDED_CONFIG, sort_keys=False))
 
-    model_list = config["model_list"]
-    smart_entry = next(e for e in model_list if e["model_name"] == "smart")
+    _run(tmp_path)
+    after_first = config_path.read_text()
 
-    assert smart_entry["litellm_params"]["model"] == "ollama/qwen3:8b", (
-        f"smart alias should be ollama/qwen3:8b, got {smart_entry['litellm_params']['model']!r}"
+    result = _run(tmp_path)
+    assert "nothing to do" in result.stdout
+    assert config_path.read_text() == after_first
+
+
+def test_scrub_preserves_live_header_comment(tmp_path: Path) -> None:
+    """Scrubbing a stale alias from the REAL config keeps its leading comment block.
+
+    Simulates an upgrade where an older renderer re-seeded a smart entry into
+    the shipped config: the scrub must remove the entry while preserving the
+    header documentation (where-each-alias-lives rationale).
+    """
+    live_text = (REPO_ROOT / "litellm" / "config.yaml").read_text()
+    # Inject a legacy smart entry right under model_list: (text-level, keeps comments).
+    stale_entry = (
+        "model_list:\n"
+        "  - model_name: smart\n"
+        "    litellm_params:\n"
+        "      model: ollama/qwen3:8b\n"
+        "      api_base: http://ollama:11434\n"
     )
+    assert "model_list:" in live_text
+    config_path = _setup_tree(tmp_path, live_text.replace("model_list:", stale_entry, 1))
 
+    _run(tmp_path)
 
-def test_router_fallbacks_maps_smart_to_smart_fallback(tmp_path: Path) -> None:
-    """router_settings.fallbacks must map smart → [smart-fallback] after rendering."""
-    config = _render(tmp_path, tier="24-48", smart_model="qwen3:8b")
-
-    fallbacks = config["router_settings"]["fallbacks"]
-    smart_mapping = next((f for f in fallbacks if "smart" in f), None)
-
-    assert smart_mapping is not None, "No 'smart' key found in router_settings.fallbacks"
-    assert smart_mapping["smart"] == ["smart-fallback"], (
-        f"Expected smart → ['smart-fallback'], got {smart_mapping['smart']!r}"
-    )
-
-
-@pytest.mark.parametrize("tier", ["cpu", "lt-8", "8-16", "16-24", "24-48", "ge-48"])
-def test_all_tiers_resolve_to_pulled_fallback(tmp_path: Path, tier: str) -> None:
-    """Every hardware tier's default fallback must be a model in the always-pulled set."""
-    always_pulled = {"qwen3:8b", "qwen3:4b", "qwen3-embedding:4b"}
-    # Use a fresh tmp_path per tier (parametrize gives one tmp_path per test invocation)
-    config = _render(tmp_path, tier=tier, smart_model="qwen3:8b")
-
-    model_list = config["model_list"]
-    fallback_entry = next(e for e in model_list if e["model_name"] == "smart-fallback")
-    rendered_model = fallback_entry["litellm_params"]["model"]
-
-    # Strip "ollama/" prefix for set membership check
-    model_name = rendered_model.removeprefix("ollama/")
-    assert model_name in always_pulled, (
-        f"Tier {tier!r}: fallback model {model_name!r} is not in OLLAMA_MODELS "
-        f"(always-pulled set: {always_pulled})"
-    )
+    after = config_path.read_text()
+    config = yaml.safe_load(after)
+    names = {e["model_name"] for e in config["model_list"]}
+    assert "smart" not in names
+    assert "embed" in names
+    # Header comment block survives the rewrite.
+    assert "LiteLLM Proxy Configuration" in after

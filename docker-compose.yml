@@ -11,6 +11,11 @@ x-shared-env: &shared-env
   # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
   # /run/secrets/postgres_password and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
+  # Setup-chosen model defaults; the boot reconciler falls back to these when
+  # no Settings choice is stored (empty when absent from .env).
+  JARVIS_SMART_MODEL: ${JARVIS_SMART_MODEL:-}
+  JARVIS_FAST_MODEL: ${JARVIS_FAST_MODEL:-}
+  JARVIS_HOST_VRAM_MB: ${JARVIS_HOST_VRAM_MB:-}
   # master_key for LiteLLM admin endpoints is mounted as a Docker Secret
   # (_FILE convention) at /run/secrets/litellm_master_key.  Each service that
   # calls LiteLLM declares ``- litellm_master_key`` under its ``secrets:`` list.
@@ -179,6 +184,38 @@ services:
   # JARVIS ADDITIONS
   # ==========================================================================
 
+  # Sole creator of the ``litellm`` database (fresh AND existing volumes) —
+  # init.sql cannot CREATE DATABASE (test harness applies it via asyncpg in one
+  # implicit transaction), prisma migrate does not create databases, and the
+  # litellm image ships no psql/createdb (hence the postgres image).
+  litellm-db-init:
+    image: ${POSTGRES_IMAGE:-postgres:16.8}
+    security_opt: ["no-new-privileges:true"]
+    # No cap_drop: reading the 0600 host-owned secret file requires
+    # CAP_DAC_OVERRIDE (same posture as the litellm service's secret shim).
+    secrets:
+      - postgres_password
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        export PGPASSWORD="$(cat /run/secrets/postgres_password)"
+        psql -h postgres -U "${POSTGRES_USER:-jarvis}" -d "${POSTGRES_DB:-jarvis}" -v ON_ERROR_STOP=1 \
+          -tc "SELECT 1 FROM pg_database WHERE datname = 'litellm'" | grep -q 1 \
+          || createdb -h postgres -U "${POSTGRES_USER:-jarvis}" litellm
+        echo "litellm database ready."
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - jarvis
+
   litellm:
     image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm@sha256:29252f25ed1b538d44f6b76ec97412c5537a180b39ede744b9f3e86ffdd278f5}
     restart: unless-stopped
@@ -188,11 +225,19 @@ services:
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
     # OPENAI_API_KEY and ANTHROPIC_API_KEY are intentionally omitted here.
-    # Cloud-key injection happens via Fernet user_config + runtime POST /config/update.
+    # Cloud-key injection happens via Fernet user_config + the LiteLLM admin DB
+    # (/model/new payloads, encrypted at rest under LITELLM_SALT_KEY).
     # The startup env vars are dead and their presence would expose keys via
     # ``docker inspect``.
+    environment:
+      # DATABASE_URL deliberately absent — the shim builds it from
+      # /run/secrets/postgres_password so the password never appears in
+      # ``docker inspect`` (SEC-002).
+      STORE_MODEL_IN_DB: "true"
     secrets:
       - litellm_master_key
+      - litellm_salt_key
+      - postgres_password
     # litellm/config.yaml uses ``master_key: os.environ/LITELLM_MASTER_KEY`` and
     # the upstream image does not honour the ``_FILE`` convention.  This shim
     # reads the secret file into LITELLM_MASTER_KEY at container start and
@@ -223,11 +268,29 @@ services:
             exit 1
           fi
         fi
+        if [ ! -s /run/secrets/litellm_salt_key ]; then
+          echo 'FATAL: /run/secrets/litellm_salt_key is empty or missing.' >&2
+          exit 1
+        fi
+        # Pinned salt key: litellm's fallback salt is the master key, so a
+        # master-key rotation would brick DB-stored encrypted model credentials.
+        # A dedicated, never-rotated salt decouples the two.
+        export LITELLM_SALT_KEY="$(cat /run/secrets/litellm_salt_key)"
+        # DATABASE_URL is built here because litellm has no _FILE convention
+        # and a compose env entry would leak the password via ``docker inspect``.
+        # RFC-3986 reserved chars (@ : / # ? & %) in the user or password would
+        # silently corrupt a bare URL; percent-encode both parts via python3.
+        PG_USER_ENC="$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=""))' "${POSTGRES_USER:-jarvis}")"
+        PG_PASS_ENC="$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=""))' "$(cat /run/secrets/postgres_password)")"
+        export DATABASE_URL="postgresql://$${PG_USER_ENC}:$${PG_PASS_ENC}@postgres:5432/litellm"
         exec litellm --config /app/config.yaml
     # Loopback binding (127.0.0.1:4000) is kept as defence-in-depth.
     mem_limit: 4g
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/readiness')\""]
+      # /health/liveliness, NOT /health/readiness: with a configured DB,
+      # readiness returns 503 whenever postgres blips, which would cascade
+      # ``service_healthy`` failures through the whole app stack.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -235,6 +298,10 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      litellm-db-init:
+        condition: service_completed_successfully
     logging:
       driver: json-file
       options:
@@ -244,7 +311,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.7.0}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.8.0}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -294,7 +361,6 @@ services:
       - ./db/migrations:/app/db/migrations:ro
       - ./config:/app/config:ro  # llm-tier-candidates.yaml for /api/settings/ai
       - hf_cache:/tmp/hf_cache  # Persist HuggingFace cache (Docling layout/table models) across recreation
-      - ./litellm:/app/litellm_config:ro  # shared config for model updates (SEC-002: ro)
     mem_limit: 6g
     # Base compose is CPU-safe — no GPU device reservation here so CPU-only hosts
     # can `docker compose up`. setup.sh layers docker-compose.gpu.yml when the
@@ -323,7 +389,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.7.0}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-0.8.0}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -357,6 +423,11 @@ services:
         condition: service_healthy
       litellm:
         condition: service_healthy
+      # ``smart``/``fast`` aliases exist only after paper_ingestion's model
+      # bootstrap has seeded litellm's DB — starting earlier would 404 any
+      # queued LLM jobs.
+      paper_ingestion:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -366,7 +437,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.7.0}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.8.0}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -413,7 +484,7 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.7.0}
+    image: jarvis/dashboard:${JARVIS_VERSION:-0.8.0}
     build:
       context: ./frontend
       args:
@@ -532,7 +603,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.7.0}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.8.0}
     build:
       context: ./langfuse
       dockerfile: Dockerfile.langfuse
@@ -745,6 +816,8 @@ secrets:
     file: ./secrets/qdrant_api_key.txt
   litellm_master_key:
     file: ./secrets/litellm_master_key.txt
+  litellm_salt_key:
+    file: ./secrets/litellm_salt_key.txt
   jarvis_config_key:
     file: ./secrets/jarvis_config_key.txt
   langfuse_pg_password:

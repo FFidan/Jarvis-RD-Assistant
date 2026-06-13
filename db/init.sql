@@ -2020,3 +2020,8 @@ INSERT INTO schema_migrations (version) VALUES
     (81), (82), (83), (84), (85), (86), (87), (88),
     (89), (90), (91)
 ON CONFLICT (version) DO NOTHING;
+
+-- The dedicated ``litellm`` admin database is created by the litellm-db-init
+-- one-shot in docker-compose.yml (fresh AND existing volumes), never here:
+-- CREATE DATABASE cannot run in this file — the test harness applies it via
+-- asyncpg in one implicit transaction, and psql meta-commands don't parse.

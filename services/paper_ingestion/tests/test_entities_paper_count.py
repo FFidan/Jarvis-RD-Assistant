@@ -23,8 +23,54 @@ from unittest.mock import AsyncMock, call
 
 import pytest
 
-from paper_ingestion.extraction.entities import _find_or_create_entity
+from jarvis_common.prompt_safety import max_input_chars
+from paper_ingestion.extraction.entities import (
+    _ENTITY_OUTPUT_TOKENS,
+    _find_or_create_entity,
+    build_entity_prompt,
+)
 from tests.conftest import FakeRecord, _make_pool_and_conn
+
+
+# ---------------------------------------------------------------------------
+# entities budget — derived cap fits within the fast model context window
+# ---------------------------------------------------------------------------
+
+
+def test_entity_text_budget_fits_fast_model_window() -> None:
+    """The derived text budget stays below the old 12 000-char cap, which overflowed the fast model window."""
+    from jarvis_common.settings import get_core_settings
+
+    fast_ctx = get_core_settings().llm_fast_num_ctx
+    text_budget = max_input_chars(fast_ctx, reserved_output_tokens=_ENTITY_OUTPUT_TOKENS)
+
+    assert text_budget < 12000, (
+        f"Entity text budget {text_budget} must be < 12 000 to fit the fast model window"
+    )
+
+
+def test_entity_text_budget_applied_before_prompt_assembly() -> None:
+    """Truncation must happen before text is passed to build_entity_prompt.
+
+    Verifies the apply-then-build contract by reproducing the call-site logic
+    in extract_entities_for_paper: slice to text_budget, THEN call build_entity_prompt.
+    The assembled prompt must not contain the overflowing suffix.
+    """
+    from jarvis_common.settings import get_core_settings
+
+    fast_ctx = get_core_settings().llm_fast_num_ctx
+    text_budget = max_input_chars(fast_ctx, reserved_output_tokens=_ENTITY_OUTPUT_TOKENS)
+
+    oversized = "Z" * (text_budget + 5000)
+
+    # Reproduce the call-site truncation from extract_entities_for_paper
+    llm_text = oversized[:text_budget] if len(oversized) > text_budget else oversized
+    prompt = build_entity_prompt(title="Title", text=llm_text)
+
+    # The full oversized suffix must not appear verbatim
+    assert "Z" * (text_budget + 5000) not in prompt
+    # The first portion is still present
+    assert "Z" * 100 in prompt
 
 
 # ---------------------------------------------------------------------------

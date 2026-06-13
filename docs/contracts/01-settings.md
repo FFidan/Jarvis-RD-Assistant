@@ -108,9 +108,9 @@ validation and is an intentional non-regression: the omission is by design, not 
 
 | Key | Default | How / where consumed | Why it is Partial |
 |---|---|---|---|
-| `llm.smart_model` | `"smart"` (init.sql seed) | On write: calls `update_litellm_model` ([litellm_config.py:178](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/litellm_config.py#L178)) which rewrites `litellm/config.yaml` (or POSTs `/config/update` for cloud) | Runtime authority is LiteLLM's config file, not `user_config`. The `user_config` row exists for the UI's read-back display. If the YAML mount is `:ro` (SEC-002) the write raises `RuntimeError` and 400 propagates. See §9. |
-| `llm.fast_model` | `"fast"` | Same as above | Same |
-| `llm.embed_model` | `"embed"` | Same as above | Same |
+| `llm.smart_model` | (no seed — first boot auto-configures a best-fit model id; the reconciler falls back to `JARVIS_SMART_MODEL` env, then `qwen3:8b`) | On write: calls `update_litellm_model` ([litellm_config.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/litellm_config.py)) which delivers via LiteLLM's admin DB — `GET /v1/model/info`, `POST /model/new`, `POST /model/delete` (the YAML carries no smart/fast aliases and is never written) | Runtime authority is LiteLLM's admin DB, not `user_config`. The `user_config` row is the desired state the persistent ~30 s reconciler converges LiteLLM onto (plus the UI's read-back display). On delivery failure the role is marked in `llm.delivery_pending` and the reconciler keeps retrying. See §9. |
+| `llm.fast_model` | (no seed — same auto-configure; env fallback `JARVIS_FAST_MODEL`, then `qwen3:4b`) | Same as above | Same |
+| `llm.embed_model` | (no seed) | Dimension-locked: the `embed` alias stays YAML-seeded; `update_litellm_model` refuses any runtime re-route (re-selecting the routed model is a no-op). Switching embedders = edit `litellm/config.yaml` + re-embed | Runtime authority for `embed` is the YAML, by design (a DB copy would stack with the YAML deployment). See §9. |
 | `llm.anthropic.api_key` | (none) | Encrypted per-user credential. Read by [litellm_config.py:get_provider_api_key](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/litellm_config.py#L52-L83) when a cloud model alias is selected; also read by `POST /api/providers/anthropic/test` ([routers/settings.py:429](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L429)) | Preferred BYO-provider path. Only consumed if the model alias is set to `anthropic/...` AND a cloud-provider POST is in flight; otherwise dormant. `.env` provider keys are bootstrap/legacy only, not the request-time Settings authority. |
 | `llm.openai.api_key` | (none) | Same encrypted per-user pattern | Same preferred BYO-provider path; `.env` `OPENAI_API_KEY` is bootstrap/legacy only |
 | `llm.google.api_key` | (none) | Same encrypted per-user pattern | Same preferred BYO-provider path; `.env` Google provider keys are bootstrap/legacy only |
@@ -234,7 +234,7 @@ Some keys trigger work beyond the row write:
 
 | Key(s) | Side effect on PUT |
 |---|---|
-| `llm.{smart,fast,embed}_model` | `update_litellm_model` rewrites `litellm/config.yaml` or POSTs `/config/update`; then `reload_litellm()` ([litellm_config.py:178](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/litellm_config.py#L178), [litellm_config.py:483](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/litellm_config.py#L483)). Fails 400 if mount is read-only (SEC-002) |
+| `llm.{smart,fast,embed}_model` | `update_litellm_model` delivers via the LiteLLM admin DB: `GET /v1/model/info` to resolve the current deployment, `POST /model/new` for the replacement (tuned params carried), then `POST /model/delete` for the old DB row (`litellm_config.py`; YAML is never written — SEC-002). The `embed` alias is dimension-locked and refused at runtime. While LiteLLM runs DB-less the write commits with `delivery: "pending_restart"` and the boot reconciler re-delivers (see contract 05 §5.5) |
 | `pulse.cron` | `scheduler.reschedule_job("pulse_overnight", trigger=...)` + bounds check + DB rollback if `next_run_time` is invalid (`apply_pulse_cron`, [scheduler_effects.py:53](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L53)) |
 | `zotero.poll_cron` | `scheduler.reschedule_job("zotero_library_sync", trigger=...)` (best-effort; if job not yet registered, warning only) (`apply_zotero_cron`, [scheduler_effects.py:113](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L113)) |
 | `user.timezone` | Best-effort `POST /internal/reload-nudges` to telegram_bot (`reload_telegram_nudges`, [model_assignment.py:21](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_assignment.py#L21)) |
@@ -251,7 +251,7 @@ GET responses for `_ENCRYPTED_KEYS` return `mask_secret(plaintext)`; GET for `_S
 |---|---|---|
 | Unknown key on PUT | HTTP 400, `"Unknown config key: '<key>'"` | [routers/settings.py:210](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L210) |
 | Validator raises `ValueError` | HTTP 400 with message | `write_config` ([config_write.py:132](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/config_write.py#L132)) |
-| LiteLLM YAML read-only (SEC-002) | HTTP 400 — write rejected; user_config row NOT updated | `update_litellm_model` → `RuntimeError` → caught in `write_config` |
+| LiteLLM delivery fails on PUT | HTTP 400 — write rejected, user_config row NOT updated (fail-closed). Carve-out: the "No DB Connected" degraded state commits the row, marks the role in `llm.delivery_pending`, and the ~30 s reconciler retries until LiteLLM recovers | `update_litellm_model` → `RuntimeError` → mapped in `write_config` |
 | Pulse cron produces invalid `next_run_time` | HTTP 400; DB row rolled back to old value; live trigger reverted | `apply_pulse_cron` ([scheduler_effects.py:53](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/scheduler_effects.py#L53)) |
 | Encrypted-secret decrypt fails on GET | NULL returned (read fails closed) | `_resolve_config_value` |
 | Unknown nudge id / source id | HTTP 404 | [routers/settings.py:293](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L293), [routers/settings.py:376](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/routers/settings.py#L376) |
@@ -293,9 +293,9 @@ The implementation MUST satisfy these. Testable.
 | `zotero.library_type` | Active |
 | `zotero.poll_enabled` | Active |
 | `zotero.poll_cron` | Active |
-| `llm.smart_model` | Partial (LiteLLM YAML is the runtime authority) |
+| `llm.smart_model` | Partial (LiteLLM's admin DB is the runtime authority; the row is the reconciler's desired state) |
 | `llm.fast_model` | Partial (same) |
-| `llm.embed_model` | Partial (same) |
+| `llm.embed_model` | Partial (dimension-locked; the YAML-seeded `embed` alias is the runtime authority) |
 | `zotero.group_id` | Active (consumed when `library_type="group"`) |
 | `zotero.auto_push_on_star` | Active |
 | `fsrs.desired_retention` | Active (per-review DB read) |
@@ -313,7 +313,7 @@ The implementation MUST satisfy these. Testable.
 
 | Item | Why accepted |
 |---|---|
-| `llm.{smart,fast,embed}_model` Partial | LiteLLM YAML is the deliberate runtime authority. The `user_config` row exists for UI read-back display only. See [03-llm.md §1](03-llm.md). |
+| `llm.{smart,fast,embed}_model` Partial | LiteLLM's admin DB is the deliberate runtime authority for smart/fast (deployments delivered via `/model/new` + `/model/delete` and re-verified by the ~30 s reconciler); the YAML-seeded `embed` alias is dimension-locked. The `user_config` row is the desired state the reconciler converges on, plus UI read-back. See [03-llm.md §1](03-llm.md). |
 | `llm.{anthropic,openai,google}.api_key` Partial | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. **Per-user encrypted BYO credentials are preferred** (not shared ops secrets): `write_config` sets `row_user_id = caller_user_id`, and reads are scoped to the caller's row with no cross-user fallback. The onboarding wizard and the Settings wizard surface these keys for convenience but they remain per-user. `.env` provider-key variables are bootstrap/legacy only and must not become the request-time authority for user-controllable provider credentials. |
 
 ---
@@ -347,8 +347,8 @@ The implementation MUST satisfy these. Testable.
 | `apply_pulse_cron` | services/paper_ingestion/paper_ingestion/services/scheduler_effects.py:53 | Reschedules live `pulse_overnight` job; bounds-checks; DB+scheduler rollback on invalid next_run_time |
 | `apply_zotero_cron` | services/paper_ingestion/paper_ingestion/services/scheduler_effects.py:113 | Best-effort `zotero_library_sync` reschedule on poll_cron PUT |
 | `reload_telegram_nudges` | services/paper_ingestion/paper_ingestion/services/model_assignment.py:21 | POST `/internal/reload-nudges` to telegram_bot |
-| `update_litellm_model` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:178 | Rewrites litellm/config.yaml OR POSTs /config/update; raises RuntimeError if mount :ro |
-| `get_provider_api_key` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:52 | Decrypts cloud-provider key from user_config |
+| `update_litellm_model` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:477 | Delivers a role→model change via LiteLLM's admin DB (`GET /v1/model/info` + `POST /model/new` + `POST /model/delete`); no-ops when the alias already routes the requested signature; refuses re-routing the dimension-locked `embed` alias; raises RuntimeError on delivery failure (reconciler retries) |
+| `get_provider_api_key` | services/paper_ingestion/paper_ingestion/services/litellm_config.py:149 | Decrypts cloud-provider key from user_config |
 | `pulse.weights` / lookback / grace load | services/paper_ingestion/paper_ingestion/pulse/profile.py:221-242 | Loads from user_config, merges with `_DEFAULT_WEIGHTS`, clamps to [0,1]; reads `pulse.lookback_days` (default 7) + `pulse.startup_grace_seconds` (default 0.0) |
 | `_build_fsrs_manager_from_db` | services/learning_engine/learning_engine/routers/review.py | Per-review fetch of `fsrs.desired_retention` + `fsrs.learning_steps`; constructs a fresh `FSRSManager` inside the review transaction |
 | `setup_completed` resolution | services/paper_ingestion/paper_ingestion/routers/setup.py (get_status) | Reads `setup.completed` from `user_config`; returned in pre-auth `/api/setup/status`; unified `OnboardingGate` keys on this field |

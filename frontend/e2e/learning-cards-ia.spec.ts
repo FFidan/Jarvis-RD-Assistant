@@ -97,8 +97,8 @@ test.describe('Learning Cards IA — review session', () => {
     await page.goto('/cards');
   });
 
-  test('shows breadcrumb with Reflect / Flashcards / All decks · session', async ({ page }) => {
-    await expect(page.getByText('Reflect')).toBeVisible({ timeout: 8000 });
+  test('shows breadcrumb with Learn / Flashcards / All decks · session', async ({ page }) => {
+    await expect(page.getByText('Learn')).toBeVisible({ timeout: 8000 });
     await expect(page.getByRole('button', { name: /flashcards/i })).toBeVisible();
     await expect(page.getByText(/all decks · session/i)).toBeVisible();
   });

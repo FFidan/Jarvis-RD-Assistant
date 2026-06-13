@@ -1,19 +1,26 @@
 /**
  * Sidebar — grouped roman-numeral navigation per the Shell/Sidebar+Admin IA spec.
  *
- * Groups:
- *   Ⅰ Today    — Home · My Day · Pulse Deck · Library · Discover
+ * Density modes (device-scoped, `useNavPrefsStore`):
+ *   - simple  — short essentials rail (Home · My Day · Library · Ask · Cards)
+ *               with the rest one click away under a "More" disclosure. The
+ *               default for first-time researchers so the app isn't overwhelming.
+ *   - full    — the grouped layout below; the default for returning users.
+ *
+ * Groups (full mode):
+ *   Ⅰ Today    — Home · My Day · Pulse Deck · Library (/feed?surface=library) · Discover
  *   Ⅱ Read     — Projects · Knowledge Graph · Citation Graph · Extraction Table
  *   Ⅲ Learn    — Learning Cards · Analytics
  *   Ⅳ Ask      — Ask
  *   Ⅴ Admin    — User Management · System Health · Audit Log · System Logs
  *               (conditionally rendered for role === 'admin')
  *
- * Footer: Settings link · HealthDots pill (navigates to /admin/system-health
- *         for admins; expands in-place for non-admins) · Logout button.
+ * Footer: nav-mode toggle · Settings link · HealthDots pill (navigates to
+ *         /admin/system-health for admins; expands in-place for non-admins) ·
+ *         Logout button.
  */
 
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
   Home,
   Sun,
@@ -34,12 +41,14 @@ import {
   Activity,
   ChevronLeft,
   ChevronRight,
+  Sliders,
   LogOut,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/ui-store';
 import { useAuthStore } from '@/stores/auth-store';
+import { useNavPrefsStore } from '@/stores/nav-prefs-store';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -74,7 +83,7 @@ const navGroups: NavGroup[] = [
       { path: '/', label: 'Home', icon: Home },
       { path: '/my-day', label: 'My Day', icon: Sun },
       { path: '/pulse', label: 'Pulse Deck', icon: Sparkles },
-      { path: '/feed', label: 'Library', icon: Newspaper },
+      { path: '/feed?surface=library', label: 'Library', icon: Newspaper },
       { path: '/feed?surface=search', label: 'Discover', icon: Search, testid: 'nav-discover' },
     ],
   },
@@ -119,6 +128,17 @@ const navGroups: NavGroup[] = [
     ],
   },
 ];
+
+// Simple-mode rail: the daily-essential destinations a first-time researcher
+// needs (Pulse lives inside My Day, so the Pulse Deck item drops to "More").
+// Everything else stays one click away under the "More" disclosure.
+const SIMPLE_NAV_PATHS = new Set([
+  '/',
+  '/my-day',
+  '/feed?surface=library',
+  '/ask',
+  '/cards',
+]);
 
 // ---------------------------------------------------------------------------
 // NavLink atom
@@ -202,11 +222,111 @@ function GroupHeader({ numeral, label, subLabel, collapsed }: GroupHeaderProps) 
 // Sidebar (exported)
 // ---------------------------------------------------------------------------
 
+function isNavItemActive(item: NavItem, pathname: string, searchParams: URLSearchParams): boolean {
+  if (!item.path.includes('?')) {
+    return pathname === item.path;
+  }
+  const [itemPathname, itemSearch] = item.path.split('?');
+  if (pathname !== itemPathname) return false;
+  // Query-aware /feed matching (R9): Discover owns surface=search; Library owns
+  // every other /feed state (bare /feed, surface=library, surface=inbox) — Inbox
+  // is Library's first tab, and bare /feed lands there before the redirect.
+  const itemSurface = new URLSearchParams(itemSearch).get('surface');
+  if (itemSurface !== null) {
+    const currentSurface = searchParams.get('surface');
+    return itemSurface === 'search'
+      ? currentSurface === 'search'
+      : currentSurface !== 'search';
+  }
+  const itemParams = new URLSearchParams(itemSearch);
+  for (const [key, value] of itemParams) {
+    if (searchParams.get(key) !== value) return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Grouped (full) nav body
+// ---------------------------------------------------------------------------
+
+interface NavBodyProps {
+  groups: NavGroup[];
+  isAdmin: boolean;
+  collapsed: boolean;
+  pathname: string;
+  searchParams: URLSearchParams;
+}
+
+function GroupedNav({ groups, isAdmin, collapsed, pathname, searchParams }: NavBodyProps) {
+  return (
+    <>
+      {groups.map((group) => {
+        // Admin-only groups are hidden for non-admin users
+        if (group.adminOnly && !isAdmin) return null;
+
+        const isAdminGroup = group.adminOnly;
+
+        return (
+          <div key={group.numeral} data-testid={`nav-group-${group.label.toLowerCase()}`}>
+            <GroupHeader
+              numeral={group.numeral}
+              label={group.label}
+              subLabel={group.subLabel}
+              collapsed={collapsed}
+            />
+            <div className={cn('space-y-0.5', !collapsed && 'mt-1')}>
+              {group.items.map((item) => (
+                <NavLinkItem
+                  key={item.path}
+                  item={item}
+                  isActive={isNavItemActive(item, pathname, searchParams)}
+                  collapsed={collapsed}
+                />
+              ))}
+            </div>
+            {/* Extra spacing after admin group header to visually separate */}
+            {isAdminGroup && !collapsed && <div className="pb-2" />}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Simple nav body — short essentials rail. The full grouped nav is one
+// "Show all features" toggle away; there is no separate in-rail disclosure
+// (it would duplicate the toggle and render the items ungrouped).
+// ---------------------------------------------------------------------------
+
+function SimpleNav({ groups, isAdmin, collapsed, pathname, searchParams }: NavBodyProps) {
+  const essentials = groups
+    .filter((g) => !g.adminOnly || isAdmin)
+    .flatMap((g) => g.items)
+    .filter((item) => SIMPLE_NAV_PATHS.has(item.path));
+
+  return (
+    <div className="space-y-0.5">
+      {essentials.map((item) => (
+        <NavLinkItem
+          key={item.path}
+          item={item}
+          isActive={isNavItemActive(item, pathname, searchParams)}
+          collapsed={collapsed}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function Sidebar() {
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { sidebarCollapsed, toggleSidebar } = useUIStore();
   const { logout, user } = useAuthStore();
+  const { navMode, toggleNavMode } = useNavPrefsStore();
   const isAdmin = user?.role === 'admin';
+  const isSimple = navMode === 'simple';
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -237,48 +357,55 @@ export function Sidebar() {
 
         <Separator />
 
-        {/* Grouped Nav */}
+        {/* Nav — full grouped layout, or the short simple-mode rail */}
         <nav className="flex-1 overflow-y-auto p-2" aria-label="Main navigation">
-          {navGroups.map((group) => {
-            // Admin-only groups are hidden for non-admin users
-            if (group.adminOnly && !isAdmin) return null;
-
-            const isAdminGroup = group.adminOnly;
-
-            return (
-              <div key={group.numeral} data-testid={`nav-group-${group.label.toLowerCase()}`}>
-                <GroupHeader
-                  numeral={group.numeral}
-                  label={group.label}
-                  subLabel={group.subLabel}
-                  collapsed={sidebarCollapsed}
-                />
-                <div className={cn('space-y-0.5', !sidebarCollapsed && 'mt-1')}>
-                  {group.items.map((item) => {
-                    const isActive = location.pathname === item.path;
-                    return (
-                      <NavLinkItem
-                        key={item.path}
-                        item={item}
-                        isActive={isActive}
-                        collapsed={sidebarCollapsed}
-                      />
-                    );
-                  })}
-                </div>
-                {/* Extra spacing after admin group header to visually separate */}
-                {isAdminGroup && !sidebarCollapsed && (
-                  <div className="pb-2" />
-                )}
-              </div>
-            );
-          })}
+          {isSimple ? (
+            <SimpleNav
+              groups={navGroups}
+              isAdmin={isAdmin}
+              collapsed={sidebarCollapsed}
+              pathname={location.pathname}
+              searchParams={searchParams}
+            />
+          ) : (
+            <GroupedNav
+              groups={navGroups}
+              isAdmin={isAdmin}
+              collapsed={sidebarCollapsed}
+              pathname={location.pathname}
+              searchParams={searchParams}
+            />
+          )}
         </nav>
 
         <Separator />
 
-        {/* Footer: Settings · HealthDots · Logout */}
+        {/* Footer: Nav-mode toggle · Settings · HealthDots · Logout */}
         <div className="p-3 space-y-2">
+          {/* Nav-mode toggle — simple ⇄ full nav density (device-scoped) */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size={sidebarCollapsed ? 'icon' : 'sm'}
+                onClick={toggleNavMode}
+                className="w-full"
+                data-testid="nav-mode-toggle"
+                aria-label={isSimple ? 'Show all features' : 'Show simple nav'}
+              >
+                <Sliders className="h-4 w-4 shrink-0" aria-hidden="true" />
+                {!sidebarCollapsed && (
+                  <span className="ml-2">{isSimple ? 'Show all features' : 'Simple view'}</span>
+                )}
+              </Button>
+            </TooltipTrigger>
+            {sidebarCollapsed && (
+              <TooltipContent side="right">
+                {isSimple ? 'Show all features' : 'Simple view'}
+              </TooltipContent>
+            )}
+          </Tooltip>
+
           {/* Settings — footer utility link (not in any numbered group) */}
           {sidebarCollapsed ? (
             <Tooltip>

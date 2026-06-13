@@ -104,9 +104,9 @@ describe('SessionBreadcrumb', () => {
     );
   }
 
-  it('shows Reflect and Flashcards nodes', () => {
+  it('shows Learn and Flashcards nodes', () => {
     renderCrumb(null);
-    expect(screen.getByText('Reflect')).toBeInTheDocument();
+    expect(screen.getByText('Learn')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /flashcards/i })).toBeInTheDocument();
   });
 

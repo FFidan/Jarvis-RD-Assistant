@@ -20,13 +20,11 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 const ASK_CHAT_ID = 'global-ask';
 
 export function AskPage() {
-  // Ask needs at least one analyzed paper to retrieve over; reuse the dashboard
-  // metric the app already caches (stage 'complete' === topics+papers+analyzed).
   const { data: metrics } = useQuery({
     queryKey: QUERY_KEYS.dashboard.metrics(),
     queryFn: fetchDashboardMetrics,
   });
-  const hasAnalyzedPapers = metrics?.onboarding_stage === 'complete';
+  const hasAnalyzedPapers = (metrics?.chunked_papers ?? 0) > 0;
 
   return (
     <div className="flex flex-col h-full" data-testid="ask-page">

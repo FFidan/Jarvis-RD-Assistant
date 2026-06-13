@@ -1352,4 +1352,75 @@ describe('JobStore', () => {
     }
     expect(ourCalls()).toBe(2); // backoff ran to completion; resubscribed
   });
+
+  // ----- paper.summarize coverage/passes -> paper-detail cache -----
+
+  function seedPaperDetail(paperId: number) {
+    queryClient.setQueryData(QUERY_KEYS.papers.detail(paperId), {
+      paper: { id: paperId, title: 'P' },
+      summary: { id: 1, paper_id: paperId, summary_brief: 'b', summary_detailed: 'd' },
+      chunks: [],
+      user_state: null,
+    });
+  }
+
+  it('paper.summarize: merges coverage 0 from the job result into the cached summary', async () => {
+    const paperId = 88;
+    seedPaperDetail(paperId);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"running","progress":50,"progress_message":"Summarizing"}\n\n',
+          'data: {"status":"succeeded","progress":100,"progress_message":"Done","result":{"paper_id":88,"coverage":0,"passes":1}}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-sum-cov',
+      kind: 'paper.summarize',
+      payload: { paper_id: paperId },
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const cached = queryClient.getQueryData(QUERY_KEYS.papers.detail(paperId)) as {
+      summary: { coverage?: number; summary_brief: string };
+    };
+    expect(cached.summary.coverage).toBe(0); // banner state merged from job result
+    expect(cached.summary.summary_brief).toBe('b'); // merge, not replace
+  });
+
+  it('paper.summarize: a clean job (no coverage/passes) leaves the cached summary untouched', async () => {
+    const paperId = 89;
+    seedPaperDetail(paperId);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"succeeded","progress":100,"progress_message":"Done","result":{"paper_id":89,"summary_id":5,"status":"summarized"}}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-sum-clean',
+      kind: 'paper.summarize',
+      payload: { paper_id: paperId },
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const cached = queryClient.getQueryData(QUERY_KEYS.papers.detail(paperId)) as {
+      summary: { coverage?: number };
+    };
+    expect(cached.summary.coverage).toBeUndefined(); // no keys -> cache untouched
+  });
 });

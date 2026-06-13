@@ -20,7 +20,7 @@ If the onboarding wizard has not been fully completed, a **SetupBanner** may app
 
 ### Onboarding checklist
 
-Alongside the SetupBanner, an **onboarding checklist** ("Get started in 3 steps") tracks three first-use milestones: **Add a research topic**, **Fetch your first papers**, and **Analyze a paper**. Each step has a shortcut button (Go to Settings, Go to Feed) and is checked off automatically as you complete it. The checklist disappears once all three are done, or you can dismiss it with the × button.
+Alongside the SetupBanner, an **onboarding checklist** ("Get started in 3 steps") tracks three first-use milestones: **Add a research topic**, **Fetch your first papers**, and **Analyze a paper**. Each step has a shortcut button (Go to Settings, Open Library) and is checked off automatically as you complete it. The checklist disappears once all three are done, or you can dismiss it with the × button.
 
 ### Batch Operations
 

@@ -80,7 +80,7 @@ describe('LearningCardsPage — mode routing', () => {
   it('shows review mode (breadcrumb) when due_now > 0', async () => {
     mockGetStats.mockResolvedValue(STATS_WITH_DUE);
     renderPage();
-    await waitFor(() => expect(screen.getByText('Reflect')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Learn')).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /flashcards/i })).toBeInTheDocument();
     expect(screen.getByText(/all decks · session/i)).toBeInTheDocument();
   });

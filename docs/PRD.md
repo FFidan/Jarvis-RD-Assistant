@@ -163,8 +163,14 @@ Each summary includes: title / authors / date / venue from source API (never LLM
 
 ### 5.3 4-Layer Verification Pipeline
 1. **Grounded Generation** — LLM receives only paper chunks; metadata from API only.
-2. **Quote Verification** — every claimed quote verified (fuzzy ≥92%);
-   `paper_ingestion/verification.py` and `rag/verification.py`.
+2. **Quote Verification** — two complementary bars apply. Verbatim quotes
+   (summaries, flashcards, extraction) require a 97% fuzzy match
+   (`jarvis_common/verify.py` `FUZZY_THRESHOLD`). Synthesized RAG answers
+   use a sentence-level grounded-support bar of 70%, calibrated against the
+   live corpus where grounded synthesis scores ~75–77 and domain-plausible
+   fabrications top out ~57 (`rag/verification.py` `RAG_SUPPORT_FUZZY`).
+   The two bars serve different semantics: 97 is a verbatim-quote check;
+   70 is a paraphrase-grounding check. Do not unify them.
 3. **PDF Page Snapshots** — 150 DPI PyMuPDF; `GET /api/snapshots/{paper_id}/{page}`.
 4. **Cross-Reference Check** — semantic consistency checking across ingested papers.
 

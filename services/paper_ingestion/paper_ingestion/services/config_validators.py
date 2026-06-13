@@ -1,9 +1,11 @@
 """Value validators for each config key type."""
 
+import asyncio
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.triggers.cron import CronTrigger
 
@@ -12,6 +14,7 @@ __all__ = [
     "_PULSE_REQUIRED_WEIGHT_KEYS",
     "_CONFIG_VALIDATORS",
     "_validate_cron",
+    "_validate_num_ctx_bounds",
     "_validate_pulse_weights",
     "_validate_positive_int",
     "_validate_bool",
@@ -26,6 +29,7 @@ __all__ = [
     "_validate_langfuse_dashboard_url",
     "_validate_fsrs_retention",
     "_validate_fsrs_learning_steps",
+    "_validate_timezone",
 ]
 
 _PULSE_WEIGHT_KEYS = frozenset(
@@ -97,6 +101,50 @@ def _validate_pulse_weights(v: Any) -> None:
 def _validate_positive_int(v: Any) -> None:
     if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
         raise ValueError("value must be a positive integer")
+
+
+# Must stay >= the largest caller reserved_output (card generation reserves 2048
+# out of num_ctx for the response). A minimum slider stop below that would let a
+# user zero out the prompt-input budget — max_input_chars floors at _MIN_INPUT_TOKENS
+# but the intent is a usable input window, so the slider minimum is pinned here.
+_NUM_CTX_MIN = 2048
+_NUM_CTX_HARD_CEILING = 262144
+
+
+async def _validate_num_ctx_bounds(v: int, *, model_id: str | None) -> None:
+    """Bound a num_ctx WRITE to what the assigned model can actually use.
+
+    Upper bound: the largest VRAM-safe slider stop for *model_id* on this
+    hardware (KV-cache-aware) when resolvable; else the catalog max context;
+    else a hard ceiling. Applies only on the write path — oversized rows
+    already stored must keep rehydrating at boot, so callers must not run
+    this against existing rows.
+    """
+    from paper_ingestion.ingestion.embedding_config import EMBEDDING_MODEL_NAME  # noqa: PLC0415
+    from paper_ingestion.services.model_lifecycle import (  # noqa: PLC0415
+        catalog_entry_for_model,
+        detect_hardware,
+        safe_num_ctx,
+    )
+
+    if v < _NUM_CTX_MIN:
+        raise ValueError(f"num_ctx must be at least {_NUM_CTX_MIN}")
+
+    entry = catalog_entry_for_model(model_id) if model_id else None
+    if entry is None:
+        upper = _NUM_CTX_HARD_CEILING
+    else:
+        upper = entry.max_num_ctx if entry.max_num_ctx is not None else entry.context_tokens
+        if entry.provider == "ollama":
+            hardware = await asyncio.to_thread(detect_hardware)
+            # CPU / failed probe (vram_gb == 0.0): RAM, not VRAM, is the limit
+            # there — keep the catalog bound instead of clamping to the default.
+            if hardware.vram_gb > 0.0:
+                embed_entry = catalog_entry_for_model(EMBEDDING_MODEL_NAME)
+                embed_reserve_gb = embed_entry.vram_gb if embed_entry is not None else 0.0
+                upper = min(upper, safe_num_ctx(entry, hardware, embed_reserve_gb))
+    if v > upper:
+        raise ValueError(f"num_ctx must be at most {upper} for the assigned model on this hardware")
 
 
 def _validate_bool(v: Any) -> None:
@@ -228,6 +276,20 @@ def _validate_fsrs_learning_steps(v: Any) -> None:
             raise ValueError(f"fsrs.learning_steps[{i}] must be a positive integer (minutes)")
 
 
+def _validate_timezone(v: Any) -> None:
+    """Validate user.timezone — must be a known IANA timezone string.
+
+    Only fires on write; already-stored invalid values survive at read time
+    (the scheduler falls back to UTC for unrecognised zones).
+    """
+    if not isinstance(v, str):
+        raise ValueError("user.timezone must be a string")
+    try:
+        ZoneInfo(v)
+    except (ZoneInfoNotFoundError, KeyError):
+        raise ValueError(f"unknown timezone: {v!r}")
+
+
 _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     # FSRS
     "fsrs.desired_retention": _validate_fsrs_retention,
@@ -240,7 +302,9 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.lookback_days": _validate_lookback_days,
     "pulse.startup_grace_seconds": _validate_startup_grace_seconds,
     "pulse.enabled": _validate_bool,
+    "recommendation.enabled": _validate_bool,
     "setup.completed": _validate_bool,
+    "user.timezone": _validate_timezone,
     "telegram.owner_chat_id": _validate_optional_int,
     # LLM model role assignments
     "llm.smart_model": _validate_nonempty_str,

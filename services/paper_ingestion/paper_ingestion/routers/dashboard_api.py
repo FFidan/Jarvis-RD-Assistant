@@ -65,7 +65,13 @@ async def get_dashboard_metrics(
                      WHERE status = 'active'
                        AND user_id IS NOT DISTINCT FROM $1) AS active_projects,
                     (SELECT COUNT(*) FROM topics) AS topic_count,
-                    (SELECT COUNT(*) FROM scheduled_nudges) AS nudge_count
+                    (SELECT COUNT(*) FROM scheduled_nudges) AS nudge_count,
+                    (SELECT COUNT(DISTINCT ul.paper_id) FROM user_library ul
+                     WHERE ul.user_id = $1
+                       AND EXISTS (
+                         SELECT 1 FROM paper_chunks pc
+                          WHERE pc.paper_id = ul.paper_id
+                       )) AS chunked_papers
                 """,
                 user_id,
             )
@@ -91,7 +97,8 @@ async def get_dashboard_metrics(
                      WHERE status = 'active'
                        AND user_id IS NULL) AS active_projects,
                     (SELECT COUNT(*) FROM topics) AS topic_count,
-                    (SELECT COUNT(*) FROM scheduled_nudges) AS nudge_count
+                    (SELECT COUNT(*) FROM scheduled_nudges) AS nudge_count,
+                    (SELECT COUNT(DISTINCT paper_id) FROM paper_chunks) AS chunked_papers
                 """,
             )
 
@@ -104,6 +111,7 @@ async def get_dashboard_metrics(
             active_projects=0,
             topic_count=0,
             nudge_count=0,
+            chunked_papers=0,
             onboarding_stage="needs_topics",
         )
 
@@ -125,5 +133,6 @@ async def get_dashboard_metrics(
         active_projects=row["active_projects"],
         topic_count=row["topic_count"],
         nudge_count=row["nudge_count"],
+        chunked_papers=row["chunked_papers"],
         onboarding_stage=onboarding_stage,
     )

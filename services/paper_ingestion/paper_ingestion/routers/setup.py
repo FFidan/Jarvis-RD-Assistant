@@ -36,12 +36,14 @@ import asyncio
 import logging
 import os
 import re
+import socket
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.crypto import encrypt_secret
+from jarvis_common.email import smtp_configured as _smtp_configured_probe
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.serialization import _coerce_bool
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
@@ -91,6 +93,10 @@ class SetupStatusResponse(BaseModel):
     current_backend: str | None = None
     observed_backend: str | None = None
     observed_recent_share: float = 0.0
+    # True iff SMTP is fully configured (DB or env). Consumed pre-auth by
+    # LoginPage to default to the API-key tab when no mail relay is configured,
+    # avoiding a lockout for non-owner users in multi-user deployments.
+    smtp_configured: bool = False
 
 
 class ServiceStatus(BaseModel):
@@ -296,6 +302,12 @@ async def get_status(request: Request) -> SetupStatusResponse:
         ) from exc
     configured = admins > 0
     setup_completed = _coerce_bool(row["value"] if row else None, default=False)
+
+    # smtp_configured is computed OUTSIDE the fail-closed try above so a DB
+    # hiccup here never converts a successful status response into a 503.
+    # _smtp_configured_probe has its own DB-failure fallback (returns env value).
+    smtp_ok = await _smtp_configured_probe(pool)
+
     return SetupStatusResponse(
         configured=configured,
         setup_completed=setup_completed,
@@ -307,6 +319,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
         current_backend=backend,
         observed_backend=served,
         observed_recent_share=share,
+        smtp_configured=smtp_ok,
     )
 
 
@@ -691,17 +704,16 @@ async def configure_cloud_llm_keys(
         await _persist_config(pool, _CLOUD_LLM_KEY_MAP[provider], value.strip(), encrypted=True)
         saved.append(provider)
 
-    # Re-push live: boot rehydration (_rehydrate_litellm_aliases) only re-routes
-    # at startup, so a key edited while a cloud alias is ALREADY the active model
-    # would otherwise need a restart. For each saved provider, if an active alias
-    # routes to a model whose LiteLLM prefix is that provider, re-apply it now so
-    # update_litellm_model picks up the fresh key via /config/update.
+    # Re-push live: for each saved provider, if an active alias routes to a
+    # model whose LiteLLM prefix is that provider, re-apply it now so the fresh
+    # key takes effect immediately — update_litellm_model replaces the
+    # deployment (/model/new + /model/delete) carrying the new key. The 30 s
+    # reconciler retries any push that fails here, so no restart is required.
     applied_now: list[str] = []
-    restart_required = False
     if saved:
         from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
             ROLE_TO_ALIAS,
-            reload_litellm,
+            _config_lock,
             update_litellm_model,
         )
 
@@ -718,41 +730,30 @@ async def configure_cloud_llm_keys(
             if row is not None and row["value"]:
                 active[alias_key] = str(row["value"])
 
-        pushed_any = False
-        for alias_key, model_id in active.items():
-            prefix = model_id.split("/", 1)[0] if "/" in model_id else ""
-            if prefix not in saved:
-                continue
-            try:
-                await update_litellm_model(alias_key, model_id, db_pool=pool)
-                pushed_any = True
-                if prefix not in applied_now:
-                    applied_now.append(prefix)
-            except RuntimeError:
-                logger.warning(
-                    "cloud-llm-keys: live LiteLLM push failed for alias %s "
-                    "(provider %s); key persisted, applies on next boot",
-                    alias_key,
-                    prefix,
-                    exc_info=True,
-                )
-                restart_required = True
-
-        if pushed_any:
-            try:
-                await reload_litellm()
-            except RuntimeError:
-                logger.warning(
-                    "cloud-llm-keys: LiteLLM reload signal failed; "
-                    "config applies on next LiteLLM restart",
-                    exc_info=True,
-                )
-                restart_required = True
+        async with _config_lock:
+            for alias_key, model_id in active.items():
+                prefix = model_id.split("/", 1)[0] if "/" in model_id else ""
+                if prefix not in saved:
+                    continue
+                try:
+                    await update_litellm_model(
+                        alias_key, model_id, db_pool=pool, machine_id=socket.gethostname()
+                    )
+                    if prefix not in applied_now:
+                        applied_now.append(prefix)
+                except RuntimeError:
+                    logger.warning(
+                        "cloud-llm-keys: live LiteLLM push failed for alias %s "
+                        "(provider %s); key persisted, reconciler will retry",
+                        alias_key,
+                        prefix,
+                        exc_info=True,
+                    )
 
     return CloudLlmKeysResponse(
         saved_providers=saved,
         applied_now=applied_now,
-        restart_required=restart_required,
+        restart_required=False,
     )
 
 

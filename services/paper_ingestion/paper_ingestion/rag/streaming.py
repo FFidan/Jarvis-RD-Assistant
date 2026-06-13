@@ -8,20 +8,21 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import asyncpg
 import httpx
-from jarvis_common import get_fast_model
+from jarvis_common import effective_num_ctx, get_fast_model
 from jarvis_common.llm_client import (
     build_litellm_headers,
     get_litellm_config,
     observe,
     strip_think_streaming,
 )
-from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
-from jarvis_common.settings import get_reranker_settings
+from jarvis_common.prompt_safety import max_input_chars, safe_for_prompt, wrap_delimited
+from jarvis_common.settings import get_core_settings, get_reranker_settings
 from jarvis_common.sse import SSE_DONE, sse_event
 
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
@@ -51,6 +52,8 @@ __all__ = [
 ]
 
 _SEARCH_SCORE_THRESHOLD = 0.05
+
+_ANSWER_MAX_TOKENS = 700
 
 _SYSTEM_SINGLE_PAPER_RAG = "Answer using ONLY the excerpts provided. If not covered, say so."
 
@@ -153,6 +156,37 @@ def _build_history_messages(history: "list[HistoryTurn]") -> list[dict[str, str]
     return msgs
 
 
+def _fit_chunks_to_budget(
+    chunks: list[dict],
+    build_user_content: Callable[[list[dict]], str],
+    system_prompt: str,
+    history_msgs: list[dict[str, str]],
+    num_ctx: int | None = None,
+) -> tuple[list[dict], str]:
+    """Preconditions: ``chunks`` is in priority order with selection
+    semantics already applied; at least one chunk is always kept; callers
+    must build their sources list from the returned chunk list.
+    """
+    budget = max_input_chars(
+        num_ctx if num_ctx is not None else get_core_settings().llm_smart_num_ctx,
+        reserved_output_tokens=_ANSWER_MAX_TOKENS,
+    )
+    fixed = len(system_prompt) + sum(len(m["content"]) for m in history_msgs)
+    user_content = build_user_content(chunks)
+    kept = list(chunks)
+    while len(kept) > 1 and fixed + len(user_content) > budget:
+        kept.pop()
+        user_content = build_user_content(kept)
+    if len(kept) < len(chunks):
+        logger.info(
+            "RAG prompt over char budget %d: dropped %d of %d chunks",
+            budget,
+            len(chunks) - len(kept),
+            len(chunks),
+        )
+    return kept, user_content
+
+
 # ---------------------------------------------------------------------------
 # SSE error helper
 # ---------------------------------------------------------------------------
@@ -222,8 +256,8 @@ async def prepare_single_paper_rag(
     chunks = await embedder.rerank_chunks(body.question, chunks, top_k=body.max_chunks)
     if not chunks:
         raise NoRelevantChunksError(
-            "No relevant passages found. Has this paper been processed? "
-            "Run 'Process PDF' first to extract and embed the paper text."
+            "No relevant passages found. "
+            "Analyze this paper first to extract and embed the paper text."
         )
 
     # Layer 2 relevance gate (reranker-enabled installs only): drop chunks the
@@ -242,21 +276,32 @@ async def prepare_single_paper_rag(
     # C-10: Wrap question and title in XML-style delimiters to prevent prompt injection.
     # Content between XML tags is DATA — never instructions.
     safe_question = safe_for_prompt(body.question, mode="escape")
-    context_blocks = "\n\n".join(
-        f'<excerpt page="{c["page_number"] or "?"}">'
-        f"{safe_for_prompt(c['content'], mode='escape')}</excerpt>"
-        for c in chunks
-    )
     safe_title, _ = wrap_delimited("title", paper["title"])
-    user_content = (
-        f"Paper: {safe_title}\n\n"
-        f"EXCERPTS:\n{context_blocks}\n\n"
-        f"<question>{safe_question}</question>\n\nANSWER:"
+
+    def build_user_content(kept: list[dict]) -> str:
+        context_blocks = "\n\n".join(
+            f'<excerpt page="{c["page_number"] or "?"}">'
+            f"{safe_for_prompt(c['content'], mode='escape')}</excerpt>"
+            for c in kept
+        )
+        return (
+            f"Paper: {safe_title}\n\n"
+            f"EXCERPTS:\n{context_blocks}\n\n"
+            f"<question>{safe_question}</question>\n\nANSWER:"
+        )
+
+    history_msgs = _build_history_messages(body.history)
+    chunks, user_content = _fit_chunks_to_budget(
+        chunks,
+        build_user_content,
+        _SYSTEM_SINGLE_PAPER_RAG,
+        history_msgs,
+        num_ctx=await effective_num_ctx(db_pool, "smart"),
     )
 
     messages = [
         {"role": "system", "content": _SYSTEM_SINGLE_PAPER_RAG},
-        *_build_history_messages(body.history),
+        *history_msgs,
         {"role": "user", "content": user_content},
     ]
     sources_list = [
@@ -454,34 +499,37 @@ async def prepare_cross_paper_rag(
         # 5. Build prompt with per-paper sections
         safe_question = safe_for_prompt(body.question, mode="escape")
 
-        # Group selected chunks by paper for the prompt
-        prompt_chunks_by_paper: dict[int, list[dict]] = {}
-        for chunk in selected_chunks:
-            pid = chunk["paper_id"]
-            if pid not in prompt_chunks_by_paper:
-                prompt_chunks_by_paper[pid] = []
-            prompt_chunks_by_paper[pid].append(chunk)
+        def build_user_content(kept: list[dict]) -> str:
+            chunks_for_prompt: dict[int, list[dict]] = {}
+            for c in kept:
+                chunks_for_prompt.setdefault(c["paper_id"], []).append(c)
 
-        context_sections: list[str] = []
-        paper_number_map: dict[int, int] = {}
-        for i, pid in enumerate(prompt_chunks_by_paper.keys(), start=1):
-            meta = paper_meta.get(pid)
-            title = wrap_delimited("title", meta["title"])[0] if meta else f"Paper ID {pid}"
-            paper_number_map[pid] = i
+            context_sections: list[str] = []
+            for i, pid in enumerate(chunks_for_prompt, start=1):
+                meta = paper_meta.get(pid)
+                title = wrap_delimited("title", meta["title"])[0] if meta else f"Paper ID {pid}"
+                excerpts = "\n".join(
+                    f'<excerpt page="{c["page_number"] or "?"}">'
+                    f"{safe_for_prompt(c['content'], mode='escape')}</excerpt>"
+                    for c in chunks_for_prompt[pid]
+                )
+                context_sections.append(f"--- Paper {i}: {title} ---\n{excerpts}")
 
-            excerpts = "\n".join(
-                f'<excerpt page="{c["page_number"] or "?"}">'
-                f"{safe_for_prompt(c['content'], mode='escape')}</excerpt>"
-                for c in prompt_chunks_by_paper[pid]
-            )
-            context_sections.append(f"--- Paper {i}: {title} ---\n{excerpts}")
+            context_block = "\n\n".join(context_sections)
+            return f"{context_block}\n\n<question>{safe_question}</question>\n\nANSWER:"
 
-        context_block = "\n\n".join(context_sections)
-        user_content = f"{context_block}\n\n<question>{safe_question}</question>\n\nANSWER:"
+        history_msgs = _build_history_messages(body.history)
+        selected_chunks, user_content = _fit_chunks_to_budget(
+            selected_chunks,
+            build_user_content,
+            _SYSTEM_CROSS_PAPER_RAG,
+            history_msgs,
+            num_ctx=await effective_num_ctx(db_pool, "smart"),
+        )
 
         messages = [
             {"role": "system", "content": _SYSTEM_CROSS_PAPER_RAG},
-            *_build_history_messages(body.history),
+            *history_msgs,
             {"role": "user", "content": user_content},
         ]
         sources_list = [
@@ -529,7 +577,7 @@ async def stream_rag_events(
                 "messages": messages,
                 "stream": True,
                 "temperature": 0.1,
-                "max_tokens": 700,
+                "max_tokens": _ANSWER_MAX_TOKENS,
             },
             headers=build_litellm_headers(litellm_config),
             timeout=300.0,  # RAG prompts with many chunks need longer prefill
@@ -585,7 +633,9 @@ async def stream_rag_events(
             from paper_ingestion.rag.verification import verify_answer_summary
 
             summary = await verify_answer_summary(full_answer, sources_list, verifier, db_pool)
-            yield sse_event({"type": "confidence", **summary})
+            # Nothing checkable → no confidence event at all; the FE renders no badge.
+            if summary.get("confidence") is not None:
+                yield sse_event({"type": "confidence", **summary})
         except Exception as exc:  # noqa: BLE001 — don't break the stream if verification errors
             logger.warning("RAG verification failed: %s", exc, exc_info=True)
     yield SSE_DONE

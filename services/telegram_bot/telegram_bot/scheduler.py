@@ -68,19 +68,10 @@ class JarvisScheduler:
     async def reload_nudges(self) -> None:
         """Re-read enabled nudges from DB and re-register all nudge_* jobs.
 
-        Reads ``user.timezone`` from ``user_config`` (defaults to ``"UTC"``),
-        removes every job whose id starts with ``nudge_``, then re-adds jobs
-        using ``CronTrigger`` with the resolved timezone.
-
-        **Timezone is deployment-global by design.**  The query uses
-        ``WHERE user_id IS NULL``, which reads the operator-level timezone
-        rather than any per-user row.  This is intentional: JARVIS uses a
-        single-owner / single-pairing model where cron nudges fire on the
-        *operator's* local clock.  The ``user.timezone`` column name is shared
-        between the operator-level ``user_config`` row and per-user rows; the
-        ``IS NULL`` predicate selects only the deployment-global setting.
-        Changing this query to a per-user lookup would require a nudge-ownership
-        model that does not currently exist.
+        Reads ``user.timezone`` from the personal row of the Telegram-paired
+        owner user (resolved via ``telegram.owner_chat_id`` → ``telegram_user_pairings``),
+        falling back to the operator-level ``user_id IS NULL`` seed row, then
+        to ``"UTC"`` when neither is present.
 
         The reload is atomic: all DB rows are parsed into trigger objects first.
         Rows that fail (bad timezone or invalid cron expression) are WARN-logged
@@ -88,16 +79,14 @@ class JarvisScheduler:
         removed and new ones registered — leaving the scheduler in a consistent
         state even if individual rows are malformed.
         """
-        # Resolve user timezone
-        tz_row = await self.db_pool.fetchrow(
-            "SELECT value FROM user_config WHERE key = 'user.timezone' AND user_id IS NULL"
-        )
-        tz_str: str = (tz_row["value"] if tz_row else None) or "UTC"
+        # Resolve timezone: owner's personal row wins; operator-level seed is fallback.
+        tz_str: str = await self._resolve_owner_timezone()
         try:
             tz = ZoneInfo(tz_str)
         except ZoneInfoNotFoundError:
             logger.warning("Unknown timezone %r, falling back to UTC", tz_str)
             tz = UTC  # type: ignore[assignment]
+            tz_str = "UTC"
 
         # Re-read from DB
         rows = await self.db_pool.fetch(
@@ -169,6 +158,46 @@ class JarvisScheduler:
             )
 
         logger.info("reload_nudges: registered %d jobs (tz=%s)", registered, tz_str)
+
+    async def _resolve_owner_timezone(self) -> str:
+        """Return the timezone string for the Telegram-paired owner user.
+
+        Resolution order:
+        1. Personal ``user.timezone`` row for the user whose chat_id matches
+           ``telegram.owner_chat_id`` (the deployment's Telegram owner).
+        2. Operator-level ``user.timezone`` seed row (``user_id IS NULL``).
+        3. Hardcoded ``"UTC"`` when neither row exists.
+        """
+        owner_chat_id_row = await self.db_pool.fetchrow(
+            "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
+        )
+        owner_chat_id = owner_chat_id_row["value"] if owner_chat_id_row else None
+        owner_chat_id_int: int | None = None
+        if owner_chat_id is not None:
+            try:
+                owner_chat_id_int = int(owner_chat_id)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Ignoring non-numeric telegram.owner_chat_id %r for timezone resolution",
+                    owner_chat_id,
+                )
+        if owner_chat_id_int is not None:
+            pairing_row = await self.db_pool.fetchrow(
+                "SELECT user_id FROM telegram_user_pairings WHERE chat_id = $1",
+                owner_chat_id_int,
+            )
+            if pairing_row is not None:
+                owner_user_id = pairing_row["user_id"]
+                tz_row = await self.db_pool.fetchrow(
+                    "SELECT value FROM user_config WHERE key = 'user.timezone' AND user_id = $1",
+                    owner_user_id,
+                )
+                if tz_row and tz_row["value"]:
+                    return str(tz_row["value"])
+        fallback_row = await self.db_pool.fetchrow(
+            "SELECT value FROM user_config WHERE key = 'user.timezone' AND user_id IS NULL"
+        )
+        return str(fallback_row["value"]) if fallback_row and fallback_row["value"] else "UTC"
 
     async def _run_job(self, nudge_type: str, nudge_id: int) -> None:
         """Execute a scheduled job and update last_fired_at.

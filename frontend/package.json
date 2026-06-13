@@ -1,7 +1,7 @@
 {
   "name": "jarvis-frontend",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "author": "Ferhat Fidan <jarvis-rd@limitcycle.dev>",
   "license": "MIT",
   "type": "module",
@@ -80,7 +80,7 @@
     "@types/react-dom": "^19.0.0",
     "@typescript-eslint/eslint-plugin": "^8.61.0",
     "@typescript-eslint/parser": "^8.61.0",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^6.0.0",
     "autoprefixer": "^10.5.0",
     "eslint": "^9.7.0",
     "eslint-plugin-jsx-a11y": "^6.10.0",
@@ -94,7 +94,7 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.61.0",
-    "vite": "^6.0.0",
+    "vite": "^8.0.5",
     "vitest": "^4.1.8"
   },
   "overrides": {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import platform
 import re
 import socket
@@ -128,20 +129,28 @@ class HardwareInfo:
     vram_gb : float
         Total available VRAM in gigabytes (0.0 for CPU-only machines).
     vram_source : str
-        Detection method: ``"nvidia-smi"``, ``"macos-approx"``, or ``"cpu"``.
+        Detection method: ``"nvidia-smi"``, ``"macos-approx"``, ``"cpu"``,
+        or ``"host-env"``.
     tier : int
         Hardware capability tier (0=CPU, 1=4–10 GB, 2=10–20 GB, 3=20–40 GB, 4=40+ GB).
     detected_at : str
         ISO 8601 UTC timestamp of when the hardware was probed.
     machine_id : str
         Hostname of the machine, for diagnostics.
+    vram_source_detail : str
+        Human-readable explanation of how VRAM was detected.
+    host_gpu_divergence : bool
+        True when JARVIS_HOST_VRAM_MB is set but the in-container GPU probe
+        finds no GPU — signals that the GPU compose overlay is not active.
     """
 
     vram_gb: float
-    vram_source: Literal["nvidia-smi", "macos-approx", "cpu"]
+    vram_source: Literal["nvidia-smi", "macos-approx", "cpu", "host-env"]
     tier: int
     detected_at: str
     machine_id: str = ""
+    vram_source_detail: str = ""
+    host_gpu_divergence: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain dict representation of this hardware snapshot."""
@@ -245,16 +254,62 @@ def _probe_macos_vram() -> float | None:
     return None
 
 
+_SOURCE_DETAIL: dict[str, str] = {
+    "host-env": "GPU detected on the host at install time",
+    "nvidia-smi": "GPU detected inside the container",
+    "macos-approx": "estimated from Apple Silicon unified memory",
+    "cpu": "no GPU detected — running on CPU",
+}
+
+
 def detect_hardware() -> HardwareInfo:
-    """Probe local accelerator memory without shell expansion."""
-    vram = _probe_nvidia_smi()
-    source: Literal["nvidia-smi", "macos-approx", "cpu"] = "nvidia-smi"
-    if vram is None:
-        vram = _probe_macos_vram()
-        source = "macos-approx"
-    if vram is None:
-        vram = 0.0
-        source = "cpu"
+    """Probe local accelerator memory without shell expansion.
+
+    When JARVIS_HOST_VRAM_MB is set to a positive integer, it overrides the
+    probe result so the in-container hardware report reflects the host GPU even
+    when the GPU compose overlay is not active.  The in-container probe still
+    runs to detect whether the overlay is missing (host_gpu_divergence=True).
+    """
+    # In-container probe always runs (needed for divergence detection).
+    container_vram = _probe_nvidia_smi()
+
+    # Try JARVIS_HOST_VRAM_MB env override.
+    host_env_gb: float | None = None
+    raw_env = os.environ.get("JARVIS_HOST_VRAM_MB", "")
+    if raw_env:
+        try:
+            mb = int(raw_env)
+            if mb > 0:
+                host_env_gb = mb / 1024.0
+            else:
+                # Parses but non-positive — an operator fat-finger; trace it so
+                # the resulting CPU-tier behavior is not silent.
+                logger.warning(
+                    "JARVIS_HOST_VRAM_MB=%r is not a positive integer — ignored", raw_env
+                )
+        except ValueError:
+            # Garbage value — ignore, fall through to normal probe, but trace it.
+            logger.warning("JARVIS_HOST_VRAM_MB=%r is not a positive integer — ignored", raw_env)
+
+    if host_env_gb is not None:
+        source: Literal["nvidia-smi", "macos-approx", "cpu", "host-env"] = "host-env"
+        vram = host_env_gb
+        # Divergence: host claims GPU but container probe found none.
+        divergence = container_vram is None
+    else:
+        divergence = False
+        if container_vram is not None:
+            vram = container_vram
+            source = "nvidia-smi"
+        else:
+            macos_vram = _probe_macos_vram()
+            if macos_vram is not None:
+                vram = macos_vram
+                source = "macos-approx"
+            else:
+                vram = 0.0
+                source = "cpu"
+
     rounded = round(float(vram), 1)
     return HardwareInfo(
         vram_gb=rounded,
@@ -262,6 +317,8 @@ def detect_hardware() -> HardwareInfo:
         tier=hardware_tier(rounded),
         detected_at=datetime.now(UTC).isoformat(),
         machine_id=socket.gethostname(),
+        vram_source_detail=_SOURCE_DETAIL[source],
+        host_gpu_divergence=divergence,
     )
 
 
@@ -389,6 +446,15 @@ _DEFAULT_KV_CACHE_BYTES_PER_TOKEN = 1024
 # Default context window when catalog entry has no default_num_ctx set.
 _DEFAULT_NUM_CTX_FALLBACK = 8192
 
+# Co-residency headroom for the embed-reserve fit check
+# (``fits_with_embed_reserve``): model + always-resident embedder must fit in
+# 80% of VRAM. Stricter than ``compute_vram_fit``'s single-model 85%/120%
+# thresholds because the catalog numbers don't model two-model overhead
+# (CUDA contexts, allocator fragmentation): qwen3:14b + the 4b embedder on a
+# 16 GB card sat at 81% nominal and still starved the embedder in practice —
+# that incident is this constant's calibration point.
+_CORESIDENCY_HEADROOM_FRACTION = 0.80
+
 
 def compute_vram_fit(
     entry: ModelCatalogEntry,
@@ -475,6 +541,104 @@ def compute_vram_fit(
         "max_num_ctx": resolved_max_ctx,
         "kv_cache_bytes_per_token": entry.kv_cache_bytes_per_token,
     }
+
+
+# Must mirror the frontend slider stops (IngestionSection.tsx NUM_CTX_STOPS) —
+# auto-seeded values have to land on a position the UI can render.
+NUM_CTX_LADDER: tuple[int, ...] = (2048, 4096, 8192, 16384, 32768, 65536)
+
+
+def _resolved_default_num_ctx(entry: ModelCatalogEntry) -> int:
+    """Catalog default context length (same resolution as compute_vram_fit)."""
+    if entry.default_num_ctx is not None:
+        return entry.default_num_ctx
+    return min(_DEFAULT_NUM_CTX_FALLBACK, entry.context_tokens)
+
+
+def fits_with_embed_reserve(
+    entry: ModelCatalogEntry,
+    hardware: HardwareInfo,
+    embed_reserve_gb: float,
+    num_ctx: int | None = None,
+) -> bool:
+    """Return True when *entry* at *num_ctx* fits on this GPU beside the embed model.
+
+    Parameters
+    ----------
+    entry : ModelCatalogEntry
+        Catalog entry to evaluate; non-Ollama (cloud) entries always return False.
+    hardware : HardwareInfo
+        Probed hardware. ``vram_gb == 0.0`` (CPU / probe failed) returns False —
+        callers handle that case with their own carve-out.
+    embed_reserve_gb : float
+        Catalog ``vram_gb`` of the active embed model, reserved up front.
+    num_ctx : int | None
+        Context length the KV cache is costed at; ``None`` uses the catalog default.
+
+    Returns
+    -------
+    bool
+        Whether base residency + beyond-default KV + embed reserve stay within
+        the co-residency headroom.
+    """
+    if hardware.vram_gb <= 0.0 or entry.provider != "ollama":
+        return False
+    ctx = num_ctx if num_ctx is not None else _resolved_default_num_ctx(entry)
+    base_vram = (
+        entry.min_vram_gb_at_default_ctx
+        if entry.min_vram_gb_at_default_ctx is not None
+        else entry.vram_gb
+    )
+    kv_bytes = (
+        entry.kv_cache_bytes_per_token
+        if entry.kv_cache_bytes_per_token is not None
+        else _DEFAULT_KV_CACHE_BYTES_PER_TOKEN
+    )
+    # Same marginal-KV model as compute_vram_fit: base residency already
+    # includes the default-context KV cache; only tokens beyond it cost extra.
+    extra_tokens = max(0, ctx - _resolved_default_num_ctx(entry))
+    required_gb = base_vram + extra_tokens * kv_bytes / 1e9 + embed_reserve_gb
+    return required_gb <= hardware.vram_gb * _CORESIDENCY_HEADROOM_FRACTION
+
+
+def safe_num_ctx(
+    entry: ModelCatalogEntry,
+    hardware: HardwareInfo,
+    embed_reserve_gb: float,
+) -> int:
+    """Largest slider stop that fits in VRAM beside the embed model.
+
+    Walks the frontend slider ladder (``NUM_CTX_LADDER``) up to the catalog
+    ``max_num_ctx`` and returns the largest stop whose weights + KV cache +
+    embed reserve stay within 85% of VRAM.
+
+    Parameters
+    ----------
+    entry : ModelCatalogEntry
+        Local Ollama catalog entry the context is being chosen for.
+    hardware : HardwareInfo
+        Probed hardware; ``vram_gb == 0.0`` returns the catalog default.
+    embed_reserve_gb : float
+        Catalog ``vram_gb`` of the active embed model.
+
+    Returns
+    -------
+    int
+        A ladder stop (or the catalog default on CPU), never above ``max_num_ctx``;
+        the smallest stop when even that does not fit.
+    """
+    resolved_max_ctx = entry.max_num_ctx if entry.max_num_ctx is not None else entry.context_tokens
+    if hardware.vram_gb == 0.0:
+        return min(_resolved_default_num_ctx(entry), resolved_max_ctx)
+    best: int | None = None
+    for stop in NUM_CTX_LADDER:
+        if stop > resolved_max_ctx:
+            break
+        if fits_with_embed_reserve(entry, hardware, embed_reserve_gb, num_ctx=stop):
+            best = stop
+    if best is None:
+        best = min(NUM_CTX_LADDER[0], resolved_max_ctx)
+    return best
 
 
 def build_model_statuses(

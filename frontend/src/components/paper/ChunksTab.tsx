@@ -41,7 +41,7 @@ export function ChunksTab({ chunks }: ChunksTabProps) {
       <EmptyState
         icon={FileStack}
         title="No chunks available"
-        description="Process the PDF first to extract text chunks."
+        description="Analyze the paper first to extract text chunks."
       />
     );
   }

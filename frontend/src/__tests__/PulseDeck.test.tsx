@@ -175,6 +175,17 @@ describe('PulseDeck', () => {
     expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
   });
 
+  it('offers a regenerate CTA when the deck has no cards and no degraded reason', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(
+      makeDeck({ card_count: 0, cards: [] }),
+    );
+    renderDeck();
+    expect(await screen.findByText(/no cards yet/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /regenerate deck/i }),
+    ).toBeInTheDocument();
+  });
+
   it('bounds source diagnostics and shows the hidden warning count', async () => {
     vi.mocked(fetchPulseToday).mockResolvedValue(
       makeDeck({
@@ -221,6 +232,114 @@ describe('PulseDeck', () => {
     await waitFor(() => {
       expect(screen.getByTestId('paper-detail')).toBeInTheDocument();
     });
+  });
+
+  it('shows regenerate button in header when deck has cards', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(makeDeck());
+    renderDeck();
+    await screen.findByText('Paper One');
+    expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
+  });
+
+  it('disables header regenerate button and shows spinner while generating', async () => {
+    mockHasRunning.mockReturnValue(true);
+    vi.mocked(fetchPulseToday).mockResolvedValue(makeDeck());
+    renderDeck();
+    await screen.findByText('Paper One');
+    const buttons = screen.getAllByRole('button', { name: /generating/i });
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(buttons[0]).toBeDisabled();
+    mockHasRunning.mockReturnValue(false);
+  });
+
+  it('shows regenerate CTA when all cards have AI scoring unavailable', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(
+      makeDeck({
+        cards: [
+          {
+            card_id: 1,
+            paper_id: 101,
+            paper_title: 'Paper One',
+            paper_authors: ['Alice'],
+            paper_url: null,
+            rank: 1,
+            score: 0.9,
+            llm_relevance: null,
+            llm_novelty: null,
+            reasoning: 'LLM scoring failed',
+            reasoning_verified: null,
+            reasoning_confidence: null,
+            signals: {},
+          },
+          {
+            card_id: 2,
+            paper_id: 202,
+            paper_title: 'Paper Two',
+            paper_authors: ['Bob'],
+            paper_url: null,
+            rank: 2,
+            score: 0.8,
+            llm_relevance: null,
+            llm_novelty: null,
+            reasoning: 'LLM scoring failed',
+            reasoning_verified: null,
+            reasoning_confidence: null,
+            signals: {},
+          },
+        ],
+      }),
+    );
+    renderDeck();
+    await screen.findByText('Paper One');
+    expect(
+      screen.getByText(/AI scoring is unavailable for all cards/i),
+    ).toBeInTheDocument();
+    const regenerateButtons = screen.getAllByRole('button', { name: /regenerate/i });
+    expect(regenerateButtons.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does not show all-scoring-unavailable banner when only some cards lack scoring', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(
+      makeDeck({
+        cards: [
+          {
+            card_id: 1,
+            paper_id: 101,
+            paper_title: 'Paper One',
+            paper_authors: ['Alice'],
+            paper_url: null,
+            rank: 1,
+            score: 0.9,
+            llm_relevance: 8,
+            llm_novelty: 7,
+            reasoning: 'LLM scoring failed',
+            reasoning_verified: null,
+            reasoning_confidence: null,
+            signals: {},
+          },
+          {
+            card_id: 2,
+            paper_id: 202,
+            paper_title: 'Paper Two',
+            paper_authors: ['Bob'],
+            paper_url: null,
+            rank: 2,
+            score: 0.8,
+            llm_relevance: 7,
+            llm_novelty: 6,
+            reasoning: 'valid reasoning',
+            reasoning_verified: null,
+            reasoning_confidence: null,
+            signals: {},
+          },
+        ],
+      }),
+    );
+    renderDeck();
+    await screen.findByText('Paper One');
+    expect(
+      screen.queryByText(/AI scoring is unavailable for all cards/i),
+    ).not.toBeInTheDocument();
   });
 
   it('only passes savePending=true to the targeted card while a mutation is in flight (M-13)', async () => {

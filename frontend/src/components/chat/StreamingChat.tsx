@@ -168,7 +168,7 @@ export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true
             </TooltipTrigger>
             {!hasAnalyzedPapers && (
               <TooltipContent side="top" className="text-xs">
-                Process at least one paper first
+                Analyze at least one paper first
               </TooltipContent>
             )}
           </Tooltip>

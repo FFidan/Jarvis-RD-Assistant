@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /ask -->
+<!-- verified-against-UI: 2026-06-12 | routes: /ask -->
 
 # Ask — Cross-paper RAG
 
@@ -26,7 +26,18 @@ Answers stream token-by-token via SSE (server-sent events). A **loading indicato
 
 Each answer message contains:
 
-**ConfidenceBadge** — an indicator of how well the retrieved chunks support the answer. A high-confidence answer is grounded in several closely matching chunks; a low-confidence answer means the library may not contain strong evidence for the question.
+**ConfidenceBadge** — an indicator of how well the retrieved source passages support the answer, measured by sentence-level matching. There are four levels:
+
+| Badge | Meaning |
+|---|---|
+| **Verified** | Every checkable sentence in the answer matched a source passage |
+| **Mostly verified** | At least half of the checkable sentences matched |
+| **Partially verified** | Some checkable sentences matched |
+| **Unverified** | None of the checkable sentences matched |
+
+> **Unverified ≠ wrong.** It means the system could not match the answer's sentences to the retrieved source passages — the answer may still be accurate, but it could not be verified against what was retrieved from your library.
+
+Click the badge to see which sentences could not be matched to a source.
 
 **SourcesAccordion** — collapsed by default; click to expand. Lists the **Source Passages** retrieved and used to construct the answer. Each entry shows the paper title, the passage excerpt, and a link to the [Paper Detail](paper-detail.md) page for that paper.
 

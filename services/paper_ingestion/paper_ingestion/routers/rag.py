@@ -20,7 +20,6 @@ from jarvis_common.llm_client import (
     ChatCompletionOptions,
     EmptyVisibleLLMContentError,
     call_llm_structured,
-    get_litellm_config,
     observe,
     strip_think_blocks,
 )
@@ -141,7 +140,6 @@ async def _call_rag_llm(
             temperature=0.1,
             timeout=LLM_TIMEOUT_DEFAULT,
         ),
-        config=get_litellm_config(),
     )
 
 
@@ -518,6 +516,7 @@ async def ask_cross_paper_stream(
             embedder, db_pool, body, http_client, user_id=user_id
         )
     except HTTPException:
+        # Re-raise FastAPI HTTPExceptions unchanged so they aren't swallowed by the generic handler.
         raise
     except Exception as exc:
         logger.error("Streaming cross-paper RAG preparation failed: %r", exc, exc_info=True)

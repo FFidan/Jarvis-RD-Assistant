@@ -44,14 +44,12 @@ vi.mock('@/stores/auth-store', () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
-function renderAskPage(onboardingStage: string = 'complete') {
+function renderAskPage(chunkedPapers: number = 1) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  // Seed the dashboard-metrics query so AskPage's Ask-gating reflects whether
-  // the library has analyzed papers (stage 'complete') without a network call.
   queryClient.setQueryData(QUERY_KEYS.dashboard.metrics(), {
-    onboarding_stage: onboardingStage,
+    chunked_papers: chunkedPapers,
   });
 
   return render(
@@ -130,7 +128,7 @@ describe('AskPage', () => {
   });
 
   it('gates the input when the library has no analyzed papers', () => {
-    renderAskPage('needs_papers');
+    renderAskPage(0);
     const textarea = screen.getByPlaceholderText(/Ask a question/);
     expect(textarea).toBeDisabled();
   });

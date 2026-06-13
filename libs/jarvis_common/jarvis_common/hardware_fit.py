@@ -15,8 +15,8 @@ Rationale for each threshold (all values in MiB):
   - VRAM_TIER3_MB (20 480 MiB = 20 GB): 20–40 GB cards (e.g. A10, RTX 3090).
     Headroom for a 14B smart model while keeping qwen3:4b fast + embedder.
   - VRAM_TIER4_MB (40 960 MiB = 40 GB): large workstation / server GPU
-    (e.g. RTX 5880 Ada 48 GB, A40 48 GB).  Recommend a 32B smart model — actual
-    bench not yet done on the RTX 5880 Ada target, so confirm_on_target=True.
+    (e.g. RTX 5880 Ada 48 GB, A40 48 GB).  Recommend qwen3:30b-a3b — validated
+    on a 48 GB RTX 5880 Ada deployment at 16k context (v0.7).
 
 The 16 GB dev-box defaults (qwen3:8b / qwen3:4b / qwen3-embedding:4b) are the
 active litellm/config.yaml entries and the OLLAMA_MODELS bootstrap default as
@@ -48,9 +48,8 @@ VRAM_TIER2_MB: int = 10_240  # 10 GB
 VRAM_TIER3_MB: int = 20_480  # 20 GB
 
 # Large workstation: RTX 5880 Ada 48 GB / A40 48 GB / H100 80 GB (etc.).
-# qwen3:32b (~20 GB AWQ) + qwen3:4b + embedder all fit with ample headroom.
-# NOTE: qwen3:32b on the RTX 5880 Ada target is flagged confirm_on_target=True
-# until a live bench confirms it (the FP16 variant may need offloading).
+# qwen3:30b-a3b + qwen3:4b + embedder all fit with ample headroom.
+# Validated on a 48 GB RTX 5880 Ada deployment at 16k context (v0.7).
 VRAM_TIER4_MB: int = 40_960  # 40 GB
 
 
@@ -146,16 +145,15 @@ _BUCKET_TABLE: dict[VramBucket, list[AliasRecommendation]] = {
         AliasRecommendation(alias="fast", model="qwen3:4b"),
         AliasRecommendation(alias="embed", model="qwen3-embedding:4b"),
     ],
-    # High (≥ 40 GB): workstation class.  qwen3:32b is the recommended smart
-    # model, but the RTX 5880 Ada bench has not been run yet.
+    # High (≥ 40 GB): workstation class.  qwen3:30b-a3b validated on a
+    # 48 GB RTX 5880 Ada deployment at 16k context (v0.7).
     VramBucket.HIGH: [
         AliasRecommendation(
             alias="smart",
-            model="qwen3:32b",
-            confirm_on_target=True,
+            model="qwen3:30b-a3b",
             notes=(
                 "≥40 GB GPU (e.g. RTX 5880 Ada 48 GB / A40 48 GB); "
-                "confirm_on_target=True — not yet benchmarked on target hardware"
+                "validated on a 48 GB RTX 5880 Ada deployment at 16k context (v0.7)"
             ),
         ),
         AliasRecommendation(alias="fast", model="qwen3:4b"),
@@ -183,7 +181,8 @@ _BUCKET_SUMMARIES: dict[VramBucket, str] = {
     ),
     VramBucket.HIGH: (
         "High-end GPU (≥40 GB) detected. "
-        "Recommend qwen3:32b for smart (advisory — confirm on target before production use)."
+        "Recommend qwen3:30b-a3b for smart (validated on a 48 GB RTX 5880 Ada deployment "
+        "at 16k context, v0.7)."
     ),
 }
 

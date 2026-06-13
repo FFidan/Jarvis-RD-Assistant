@@ -121,7 +121,7 @@ export function AnalyticsPage() {
     <div className="space-y-6 p-6">
       {/* ── Breadcrumb ─────────────────────────────────────────────────── */}
       <nav className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-faint">
-        <span>Reflect</span>
+        <span>Learn</span>
         <span>/</span>
         <Link to="/analytics" className="text-meta hover:text-strong transition-colors">
           Analytics
@@ -146,7 +146,7 @@ export function AnalyticsPage() {
       {/* ── Hero ───────────────────────────────────────────────────────── */}
       <div className="space-y-1">
         <h1 className="font-serif text-[2.5rem] leading-none tracking-tight text-strong">
-          Reflect
+          Analytics
         </h1>
         <p className="font-serif italic text-base text-muted-foreground">
           What you learned, and how you spent your time, since {sinceLabel}.

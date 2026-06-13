@@ -654,3 +654,69 @@ async def test_a1_setup_status_setup_completed_true_when_seeded(setup_client, co
         await contract_conn.execute(
             "DELETE FROM user_config WHERE key = 'setup.completed' AND user_id IS NULL",
         )
+
+
+# ---------------------------------------------------------------------------
+# §T04 — GET /api/setup/status: smtp_configured field (Task T0.4)
+# ---------------------------------------------------------------------------
+
+
+async def test_t04_status_smtp_configured_false_on_fresh_db(setup_client):
+    """GET /api/setup/status includes smtp_configured=False when no SMTP env or DB rows.
+
+    Fresh contract DB has no smtp.host/smtp.from rows, and the test environment
+    has no SMTP env vars → smtp_configured() returns False → the field is False.
+
+    This field drives LoginPage's default tab: when False, the API-key tab is
+    shown by default to avoid presenting a magic-link form that cannot deliver.
+
+    Verified: setup.py get_status, jarvis_common.email.smtp_configured at HEAD.
+    """
+    resp = await setup_client.get("/api/setup/status")
+
+    assert resp.status_code == 200, (
+        f"Expected 200 from setup/status; got {resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert "smtp_configured" in body, (
+        f"GET /api/setup/status must include 'smtp_configured' field; got keys={list(body.keys())}"
+    )
+    # On a fresh DB with no SMTP env, this must be False.
+    assert body["smtp_configured"] is False, (
+        f"Expected smtp_configured=False on fresh DB with no SMTP env; got: {body['smtp_configured']!r}"
+    )
+
+
+async def test_t04_status_smtp_configured_true_when_db_rows_seeded(setup_client, contract_conn):
+    """GET /api/setup/status returns smtp_configured=True when smtp.host + smtp.from are in user_config.
+
+    Inserts the minimum SMTP rows (host + from) directly, then verifies the
+    endpoint reflects smtp_configured=True.  User and password rows are NOT
+    required — some relays use IP-allowlist auth.
+
+    Verified: setup.py get_status + jarvis_common.email._smtp_configured at HEAD
+    (deliverable = bool(host) and bool(sender)).
+    """
+    for key, value in (("smtp.host", "mail.example.test"), ("smtp.from", "jarvis@example.test")):
+        await contract_conn.execute(
+            """INSERT INTO user_config (user_id, key, value)
+               VALUES (NULL, $1, $2::jsonb)
+               ON CONFLICT (user_id, key) DO UPDATE SET value = $2::jsonb""",
+            key,
+            value,
+        )
+    try:
+        resp = await setup_client.get("/api/setup/status")
+
+        assert resp.status_code == 200, (
+            f"Expected 200 from setup/status; got {resp.status_code}: {resp.text[:300]}"
+        )
+        body = resp.json()
+        assert body["smtp_configured"] is True, (
+            f"Expected smtp_configured=True after seeding smtp.host + smtp.from; "
+            f"got: {body['smtp_configured']!r}"
+        )
+    finally:
+        await contract_conn.execute(
+            "DELETE FROM user_config WHERE key IN ('smtp.host', 'smtp.from') AND user_id IS NULL",
+        )

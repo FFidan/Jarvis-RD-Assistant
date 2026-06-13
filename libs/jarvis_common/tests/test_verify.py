@@ -88,3 +88,46 @@ def test_chunk_response_satisfies_chunk_like():
     assert isinstance(chunk, ChunkLike), (
         "ChunkResponse should satisfy ChunkLike runtime_checkable Protocol"
     )
+
+
+def test_verify_findings_medium_boundary_pin():
+    """DELIBERATE: Summary path uses pass_rate > 0.5 → MEDIUM (exclusive lower boundary).
+
+    This diverges from rag/verification.py's Ask path (pass_rate >= 0.5).
+    Both boundaries are intentional and independently pinned in their respective
+    test files.  Do NOT unify them without updating both tests and both docstrings.
+    """
+    from jarvis_common.verify import Confidence  # noqa: PLC0415
+
+    verifier = QuoteVerifier()
+    source = "Neural networks achieve state-of-the-art results on many benchmarks."
+
+    # Build two findings: one verified, one not — 50% pass rate
+    class _Finding:
+        def __init__(self, quote: str) -> None:
+            self.quote = quote
+            self.verified = False
+            self.chunk_id = None
+            self.page_number = None
+
+    findings_50 = [
+        _Finding("neural networks achieve state-of-the-art"),
+        _Finding("completely fabricated claim xyz123"),
+    ]
+    chunks = [DictChunk({"id": 0, "content": source, "page_number": None})]
+    report_50 = verifier.verify_findings(findings_50, source, chunks)
+    assert report_50.pass_rate == 0.5
+    # Exactly 0.5 → LOW (exclusive: >0.5 required for MEDIUM)
+    assert report_50.confidence == Confidence.LOW, (
+        f"pass_rate==0.5 must be LOW in the summary path; got {report_50.confidence!r}"
+    )
+
+    # 3 findings, 2 verified → pass_rate ≈ 0.667 → MEDIUM
+    findings_67 = [
+        _Finding("neural networks achieve state-of-the-art"),
+        _Finding("neural networks achieve state-of-the-art results"),
+        _Finding("completely fabricated claim xyz123"),
+    ]
+    report_67 = verifier.verify_findings(findings_67, source, chunks)
+    assert report_67.pass_rate > 0.5
+    assert report_67.confidence == Confidence.MEDIUM

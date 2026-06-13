@@ -189,7 +189,12 @@ async def _read_weights(conn: asyncpg.Connection, user_id: int) -> tuple[float, 
         _DEFAULT_PROJECT_WEIGHT,
     )
     enabled_val = _cfg_raw.get("recommendation.enabled", True)
-    enabled = bool(enabled_val) if not isinstance(enabled_val, bool) else enabled_val
+    if isinstance(enabled_val, bool):
+        enabled = enabled_val
+    elif isinstance(enabled_val, str) and enabled_val.lower() in ("true", "false"):
+        enabled = enabled_val.lower() == "true"
+    else:
+        enabled = bool(enabled_val)
     return liked, project, enabled
 
 

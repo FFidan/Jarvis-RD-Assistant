@@ -42,7 +42,24 @@ Enable and configure the paper data sources the system uses to discover new pape
 
 ### LLM Models
 
-Configure which model aliases (**smart**, **fast**, **embed**) are mapped to which local or cloud models. The smart model is used for summarisation and reasoning; the fast model is used for lower-latency tasks; the embed model is used for generating embeddings.
+Choose the models JARVIS uses. Each control is labelled in plain language with its technical alias in parentheses, so you don't need to know the jargon:
+
+- **Main model (smart)** — writes your summaries, cards, and Ask answers.
+- **Quick model (fast)** — scores and triages papers.
+- **Embedding model (embed)** — powers search; it is fixed, and changing it requires re-indexing your library.
+- **Reading window (num_ctx)** — how much of each paper the AI reads at once.
+
+Your choice applies automatically — there is no separate "save and restart" step. Operator-level tuning knobs (such as the reading window and the thinking toggle) sit behind a per-model **Configure** disclosure so the everyday controls stay uncluttered.
+
+**First-run pick banner.** After setup completes, a green banner shows the model JARVIS selected for your GPU — for example, "We picked qwen3:8b for your 15.9 GB GPU — change anytime in Settings → Models." This is just a confirmation; use the dropdowns below to change the selection at any time.
+
+**Advisory recommendation banner.** Below the first-run confirmation, an advisory banner lists the per-alias recommendations for your hardware tier. This is informational only — it does not change your active model automatically.
+
+**Hardware source line.** JARVIS shows a short detail line below the hardware strip explaining how VRAM was detected — for example, "GPU detected inside the container" (or "GPU detected on the host at install time", "estimated from Apple Silicon unified memory", or "no GPU detected — running on CPU").
+
+**GPU overlay divergence warning.** If an amber warning reads "{N} GB detected on host — GPU overlay not active", JARVIS detected GPU VRAM from the host but the Docker GPU overlay is not active for this container. Re-run `setup.sh` with GPU support enabled to activate the overlay and use the detected VRAM for model inference.
+
+If a model card shows a **pending — applying automatically** badge, your choice was saved but the model service is temporarily unavailable (for example, it is still starting up or its database is unreachable). JARVIS keeps your selection and retries delivery automatically — roughly every 30 seconds — and applies it the moment the model service recovers, with no restart or further action needed from you. In the meantime, summaries and answers continue to use the previously active model, so nothing silently breaks. A badge that persists for many minutes means the model service is stuck unhealthy; check the Health indicators.
 
 ### Cloud Providers
 
@@ -81,7 +98,7 @@ Configure the outbound email relay for magic-link sign-in emails. Fields: SMTP h
 Configure Pulse-specific settings. The panel is divided into two cards:
 
 - **Schedule card** — toggle Pulse on/off, set the daily run time, and adjust the **deck size** (5–30 papers; slider), ranking candidates, lookback window, and startup grace period.
-- **Advanced tuning card** (collapsible) — fine-tune how candidates are ranked: signal-weight sliders for relevance, recency, and citation count, plus discovery balance and negative-feedback controls. Weight presets cover common configurations.
+- **Advanced tuning card** (collapsible) — fine-tune how candidates are ranked: signal-weight sliders for relevance, recency, and citation count, plus discovery balance and negative-feedback controls. Weight presets cover common configurations. Includes a **Recommendations enabled** toggle that controls whether personalised paper recommendations are computed at all.
 
 ### Timer
 

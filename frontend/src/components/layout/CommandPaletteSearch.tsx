@@ -33,14 +33,16 @@ export function CommandPaletteSearch() {
 
   function handleSelect(result: SearchPreviewResult) {
     const paperId = result.library_match?.paper_id;
+    const q = query.trim();
     close();
     if (paperId != null) {
       navigate(`/paper/${paperId}`);
     } else {
       // Not in the library yet — open the Discover/search surface so the user
-      // can search external sources and add it (matches the in-app "Discover
-      // papers" CTA; the search surface does not accept a prefilled query).
-      navigate('/feed?surface=search');
+      // can search external sources and add it. Carry the typed query so the
+      // SearchBar is prefilled and the user doesn't have to retype it.
+      const dest = q ? `/feed?surface=search&q=${encodeURIComponent(q)}` : '/feed?surface=search';
+      navigate(dest);
     }
   }
 
@@ -52,12 +54,12 @@ export function CommandPaletteSearch() {
       <button
         type="button"
         onClick={open}
-        aria-label="Search papers, notes and cards — press Command K"
+        aria-label="Search your papers — press Command K"
         className="relative h-9 w-full max-w-[440px] rounded-md border border-hair bg-card hover:bg-paper transition-colors flex items-center px-3 gap-2 text-left"
       >
         <Search className="h-3.5 w-3.5 text-faint shrink-0" />
         <span className="flex-1 text-[13px] text-faint select-none">
-          Search papers, notes, cards…
+          Search your papers…
         </span>
         <span className="flex items-center gap-0.5 shrink-0">
           <kbd className="font-mono text-[10px] px-1.5 py-0.5 rounded border border-hair bg-paper text-meta">
@@ -71,13 +73,13 @@ export function CommandPaletteSearch() {
 
       <Dialog open={isOpen} onOpenChange={(next) => (next ? open() : close())}>
         <DialogContent className="max-w-xl p-0 gap-0 overflow-hidden">
-          <DialogTitle className="sr-only">Search papers, notes and cards</DialogTitle>
+          <DialogTitle className="sr-only">Search your papers</DialogTitle>
           <DialogDescription className="sr-only">
             Search your library and discover new papers. Press Enter to open a paper or navigate to Discover.
           </DialogDescription>
           <Command
             shouldFilter={false}
-            label="Search papers, notes and cards"
+            label="Search your papers"
             className="flex flex-col"
           >
             <div className="flex items-center gap-2 border-b border-hair px-3">
@@ -90,7 +92,7 @@ export function CommandPaletteSearch() {
               <Command.Input autoFocus
                 value={query}
                 onValueChange={setQuery}
-                placeholder="Search your papers by title or author…"
+                placeholder="Search your papers…"
                 className="flex-1 h-12 bg-transparent text-sm outline-none placeholder:text-faint"
               />
             </div>

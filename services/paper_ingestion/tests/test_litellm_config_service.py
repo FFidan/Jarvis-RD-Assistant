@@ -1,15 +1,77 @@
-"""Tests for LiteLLM config update and reload."""
+"""Tests for LiteLLM model delivery via the admin DB (/model/new + /model/delete).
 
-from pathlib import Path
+Pins the delivery contract of ``update_litellm_model`` / ``ensure_smart_fallback``:
 
+- replacement deployments are created with POST /model/new and superseded DB
+  deployments removed with POST /model/delete (create-first, delete-after)
+- num_ctx / think ride TOP-LEVEL in litellm_params (the only placement Ollama
+  honours through LiteLLM); legacy extra_body values are lifted on carry
+- no-op detection: an alias already routing the requested model with the same
+  effective params is left alone (False return, zero admin calls)
+- cloud no-op: /v1/model/info pops api_key, so the cloud signature's key leg
+  is the process-local fingerprint of the last delivery — repeats no-op, a
+  rotated key re-delivers, and a restart re-delivers once (empty cache)
+- decrypted cloud keys never appear in raised error text (redacted to ***)
+- the embed alias is dimension-locked: re-selecting its routed model is a
+  no-op, re-routing it is refused
+- a failed stale-deployment delete rolls back the just-created deployment
+- smart-fallback mirrors cloud semantics for cloud fast models and pins to
+  the static pulled default when the provider key is missing
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import httpx
 import pytest
-import yaml
-from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS, update_litellm_model
+import respx
+from paper_ingestion.services import litellm_config as litellm_config_module
+from paper_ingestion.services.litellm_config import (
+    ROLE_TO_ALIAS,
+    ensure_smart_fallback,
+    update_litellm_model,
+)
+from tests.conftest import _make_pool_and_conn
+
+LITELLM = "http://litellm:4000"
 
 
-def _write_config(path: Path, model_list: list[dict]) -> None:
-    """Write a minimal litellm config.yaml."""
-    path.write_text(yaml.dump({"model_list": model_list}, default_flow_style=False))
+@pytest.fixture(autouse=True)
+def _reset_cloud_delivery_state():
+    """The cloud no-op fingerprint cache and warn-once sets are process-local
+    module state — clear them so tests don't see each other's deliveries."""
+    litellm_config_module._CLOUD_DELIVERED_FINGERPRINTS.clear()
+    litellm_config_module._FALLBACK_KEYLESS_WARNED.clear()
+    yield
+    litellm_config_module._CLOUD_DELIVERED_FINGERPRINTS.clear()
+    litellm_config_module._FALLBACK_KEYLESS_WARNED.clear()
+
+
+def _entry(
+    alias: str,
+    params: dict[str, Any],
+    *,
+    dep_id: str = "dep-1",
+    db_model: bool = True,
+) -> dict[str, Any]:
+    return {
+        "model_name": alias,
+        "litellm_params": params,
+        "model_info": {"id": dep_id, "db_model": db_model},
+    }
+
+
+def _mock_model_info(entries: list[dict[str, Any]]) -> None:
+    respx.get(f"{LITELLM}/v1/model/info").mock(
+        return_value=httpx.Response(200, json={"data": entries})
+    )
+
+
+def _last_payload(route) -> dict[str, Any]:
+    return json.loads(route.calls.last.request.content)
 
 
 def test_role_to_alias_covers_all_llm_keys():
@@ -20,231 +82,703 @@ def test_role_to_alias_covers_all_llm_keys():
 
 
 @pytest.mark.asyncio
-async def test_update_known_role_rewrites_yaml(tmp_path, monkeypatch):
-    """Updating a known role should rewrite the YAML with the new model."""
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        [
-            {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
-        ],
+async def test_update_unknown_role_returns_false():
+    """A config key not in ROLE_TO_ALIAS returns False without any admin call."""
+    with respx.mock:  # no routes mocked — any HTTP call would error the test
+        assert await update_litellm_model("ui.page_size", "10") is False
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_invalid_model_name():
+    """Shell metacharacters / path traversal never reach the admin API."""
+    with pytest.raises(ValueError, match="disallowed characters"):
+        await update_litellm_model("llm.smart_model", "bad;rm -rf /")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_replaces_db_deployment(monkeypatch):
+    """Model switch = POST /model/new (replacement) + POST /model/delete (old id)."""
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    _mock_model_info(
+        [_entry("smart", {"model": "ollama/mistral-nemo", "api_base": "http://ollama:11434"})]
     )
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    delete_route = respx.post(f"{LITELLM}/model/delete").mock(
+        return_value=httpx.Response(200, json={"message": "deleted"})
+    )
 
     result = await update_litellm_model("llm.smart_model", "qwen3:4b")
+
     assert result is True
+    payload = _last_payload(new_route)
+    assert payload["model_name"] == "smart"
+    assert payload["litellm_params"]["model"] == "ollama/qwen3:4b"
+    assert payload["litellm_params"]["api_base"] == "http://ollama:11434"
+    assert _last_payload(delete_route) == {"id": "dep-1"}
 
-    updated = yaml.safe_load(config_path.read_text())
-    assert updated["model_list"][0]["litellm_params"]["model"] == "ollama/qwen3:4b"
 
-
+@respx.mock
 @pytest.mark.asyncio
-async def test_update_unknown_role_returns_false(tmp_path, monkeypatch):
-    """A config key not in ROLE_TO_ALIAS should return False without touching the file."""
-    config_path = tmp_path / "config.yaml"
-    _write_config(config_path, [])
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+async def test_update_same_model_is_noop():
+    """Alias already routing the requested model → False, zero admin writes."""
+    _mock_model_info(
+        [_entry("smart", {"model": "ollama/mistral-nemo", "api_base": "http://ollama:11434"})]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+    delete_route = respx.post(f"{LITELLM}/model/delete").mock(
+        return_value=httpx.Response(200, json={})
+    )
 
-    assert await update_litellm_model("ui.page_size", "10") is False
+    result = await update_litellm_model("llm.smart_model", "mistral-nemo")
+
+    assert result is False
+    assert not new_route.called
+    assert not delete_route.called
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_update_missing_config_returns_false(tmp_path, monkeypatch):
-    """If the config file does not exist, return False gracefully."""
+async def test_update_strips_latest_tag_before_compare():
+    """'mistral-nemo:latest' equals 'mistral-nemo' (Ollama implicit tag)."""
+    _mock_model_info([_entry("smart", {"model": "ollama/mistral-nemo"})])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+
+    assert await update_litellm_model("llm.smart_model", "mistral-nemo:latest") is False
+    assert not new_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_preserves_non_ollama_prefix_and_api_base():
+    """Bare model name inherits the existing non-cloud prefix (vLLM spike, A6)."""
+    _mock_model_info(
+        [
+            _entry(
+                "smart",
+                {"model": "openai/Qwen/Qwen3-8B-AWQ", "api_base": "http://vllm:8080/v1"},
+            )
+        ]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    result = await update_litellm_model("llm.smart_model", "gpt-4-turbo")
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "openai/gpt-4-turbo"
+    # The vLLM transport api_base is carried, NOT overwritten with the Ollama URL.
+    assert params["api_base"] == "http://vllm:8080/v1"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_preserves_existing_num_ctx_when_disabling_think():
+    """think=False merges with the deployment's num_ctx — both TOP-LEVEL."""
+    _mock_model_info(
+        [_entry("smart", {"model": "ollama/qwen3:14b", "num_ctx": 8192}, dep_id="old-14b")]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-14b"})
+    )
+    delete_route = respx.post(f"{LITELLM}/model/delete").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    result = await update_litellm_model(
+        "llm.smart_model",
+        "qwen3:14b",
+        machine_id="host-rtx5060",
+        thinking_disabled=True,
+    )
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["num_ctx"] == 8192
+    assert params["think"] is False
+    # Top-level placement is the contract: nested extra_body is ignored by Ollama.
+    assert "extra_body" not in params
+    assert _last_payload(delete_route) == {"id": "old-14b"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_lifts_legacy_extra_body_values():
+    """Deployments created by the old delivery path carried extra_body — lift on carry."""
+    _mock_model_info(
+        [
+            _entry(
+                "smart",
+                {"model": "ollama/qwen3:14b", "extra_body": {"num_ctx": 8192, "think": False}},
+            )
+        ]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    result = await update_litellm_model("llm.smart_model", "qwen3:8b")
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "ollama/qwen3:8b"
+    assert params["num_ctx"] == 8192
+    assert params["think"] is False
+    assert "extra_body" not in params
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_explicit_reenable_removes_think():
+    """thinking_disabled=False removes only the think flag, keeping num_ctx."""
+    _mock_model_info(
+        [_entry("smart", {"model": "ollama/qwen3:14b", "num_ctx": 8192, "think": False})]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    result = await update_litellm_model(
+        "llm.smart_model",
+        "qwen3:14b",
+        machine_id="host-rtx5060",
+        thinking_disabled=False,
+    )
+
+    assert result is True
+    params = _last_payload(new_route)["litellm_params"]
+    assert "think" not in params
+    assert params["num_ctx"] == 8192
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_pending_num_ctx_override_wins():
+    """An explicit num_ctx kwarg (pending settings write) overrides the carried value."""
+    _mock_model_info([_entry("smart", {"model": "ollama/qwen3:8b", "num_ctx": 8192})])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    result = await update_litellm_model(
+        "llm.smart_model", "qwen3:8b", machine_id="host-a", num_ctx=16384
+    )
+
+    assert result is True
+    assert _last_payload(new_route)["litellm_params"]["num_ctx"] == 16384
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_local_delivery_syncs_system_num_ctx_row_and_invalidates_cache(monkeypatch):
+    """A successful Ollama delivery that carried a num_ctx writes the system
+    ``llm.{role}_num_ctx`` row (the prompt-budget source of truth) AND drops the
+    effective-context cache — so a reconciler / model-change delivery cannot
+    leave the budget reading a stale window across a fleet."""
+    from tests.conftest import _make_pool_and_conn
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    _mock_model_info([_entry("smart", {"model": "ollama/qwen3:8b", "num_ctx": 8192})])
+    respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    pool, conn = _make_pool_and_conn(fetchrow_return=None)
+    invalidated: list[bool] = []
     monkeypatch.setattr(
-        "paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", tmp_path / "nope.yaml"
+        litellm_config_module,
+        "invalidate_effective_num_ctx_cache",
+        lambda: invalidated.append(True),
     )
-    assert await update_litellm_model("llm.smart_model", "test") is False
 
-
-@pytest.mark.asyncio
-async def test_update_preserves_provider_prefix(tmp_path, monkeypatch):
-    """If the existing model uses a non-ollama provider prefix, preserve it."""
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        [
-            {"model_name": "smart", "litellm_params": {"model": "openai/gpt-4"}},
-        ],
+    result = await update_litellm_model(
+        "llm.smart_model", "qwen3:8b", db_pool=pool, machine_id="host-a", num_ctx=4096
     )
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
-    await update_litellm_model("llm.smart_model", "gpt-4-turbo")
-    updated = yaml.safe_load(config_path.read_text())
-    assert updated["model_list"][0]["litellm_params"]["model"] == "openai/gpt-4-turbo"
-
-
-@pytest.mark.asyncio
-async def test_update_null_litellm_params(tmp_path, monkeypatch):
-    """If litellm_params is None/null in the YAML, create it and set the model."""
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        [
-            {"model_name": "smart", "litellm_params": None},
-        ],
-    )
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
-
-    result = await update_litellm_model("llm.smart_model", "mistral-nemo")
     assert result is True
-    updated = yaml.safe_load(config_path.read_text())
-    assert updated["model_list"][0]["litellm_params"]["model"] == "ollama/mistral-nemo"
+    # The system row was upserted with the DELIVERED value (4096), not the
+    # carried 8192, keyed by role (smart).
+    upserts = [
+        c
+        for c in conn.execute.await_args_list
+        if "user_config" in c.args[0] and "llm.smart_num_ctx" in c.args
+    ]
+    assert len(upserts) == 1
+    assert 4096 in upserts[0].args
+    assert invalidated == [True]
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_same_model_no_update(tmp_path, monkeypatch):
-    """If the model is already set to the same value, no write should happen."""
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        [
-            {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
-        ],
+async def test_local_noop_delivery_does_not_touch_system_num_ctx_row(monkeypatch):
+    """When the alias already routes the requested model with the same window,
+    no delivery happens — and the system row / cache are left untouched."""
+    from tests.conftest import _make_pool_and_conn
+
+    _mock_model_info([_entry("smart", {"model": "ollama/qwen3:8b", "num_ctx": 4096})])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+
+    # fetchrow_return=None: the per-machine thinking_disabled read resolves to
+    # False so the routing signature matches the carried deployment exactly.
+    pool, conn = _make_pool_and_conn(fetchrow_return=None)
+    invalidated: list[bool] = []
+    monkeypatch.setattr(
+        litellm_config_module,
+        "invalidate_effective_num_ctx_cache",
+        lambda: invalidated.append(True),
     )
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
-    mtime_before = config_path.stat().st_mtime
 
-    result = await update_litellm_model("llm.smart_model", "mistral-nemo")
-    assert result is False  # No change needed
-    # File should not have been rewritten
-    assert config_path.stat().st_mtime == mtime_before
+    result = await update_litellm_model(
+        "llm.smart_model", "qwen3:8b", db_pool=pool, machine_id="host-a", num_ctx=4096
+    )
+
+    assert result is False
+    assert not new_route.called
+    upserts = [c for c in conn.execute.await_args_list if "llm.smart_num_ctx" in c.args]
+    assert not upserts
+    assert invalidated == []
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_update_no_provider_prefix_defaults_to_ollama(tmp_path, monkeypatch):
-    """If the existing model has no provider prefix, default to ollama/."""
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        [
-            {"model_name": "fast", "litellm_params": {"model": "qwen3:4b"}},
-        ],
+async def test_fresh_creation_seeds_bootstrap_defaults(monkeypatch):
+    """No existing deployment (post-de-seed bootstrap) → tuned defaults are seeded."""
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    _mock_model_info([_entry("embed", {"model": "ollama/qwen3-embedding:4b"}, db_model=False)])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-smart"})
     )
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    delete_route = respx.post(f"{LITELLM}/model/delete").mock(
+        return_value=httpx.Response(200, json={})
+    )
 
-    result = await update_litellm_model("llm.fast_model", "phi3:mini")
+    result = await update_litellm_model("llm.smart_model", "qwen3:8b")
+
     assert result is True
-    updated = yaml.safe_load(config_path.read_text())
-    assert updated["model_list"][0]["litellm_params"]["model"] == "ollama/phi3:mini"
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "ollama/qwen3:8b"
+    assert params["api_base"] == "http://ollama:11434"
+    assert params["temperature"] == 0.2
+    assert params["num_ctx"] == 8192
+    assert params["think"] is False
+    assert params["timeout"] == 300
+    assert not delete_route.called  # nothing to supersede
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_update_embed_model(tmp_path, monkeypatch):
-    """Embed model alias should also be updatable."""
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        [
-            {"model_name": "embed", "litellm_params": {"model": "ollama/qwen3-embedding:0.6b"}},
-        ],
-    )
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+async def test_embed_same_model_is_noop():
+    """Re-selecting the YAML-routed embed model is truthfully 'nothing to change'."""
+    _mock_model_info([_entry("embed", {"model": "ollama/qwen3-embedding:4b"}, db_model=False)])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
 
-    result = await update_litellm_model("llm.embed_model", "mxbai-embed-large")
+    assert await update_litellm_model("llm.embed_model", "qwen3-embedding:4b") is False
+    assert not new_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_embed_reroute_refused():
+    """The embed alias is dimension-locked; re-routing it is an explicit error."""
+    _mock_model_info([_entry("embed", {"model": "ollama/qwen3-embedding:4b"}, db_model=False)])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+
+    with pytest.raises(RuntimeError, match="dimension-locked"):
+        await update_litellm_model("llm.embed_model", "mxbai-embed-large")
+    assert not new_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_yaml_stacked_alias_warns_but_delivers(caplog):
+    """A stale YAML smart (upgrade path) cannot be deleted — warn loudly, deliver anyway."""
+    import logging
+
+    _mock_model_info(
+        [_entry("smart", {"model": "ollama/qwen3:8b"}, db_model=False, dep_id="yaml-1")]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
+    )
+    delete_route = respx.post(f"{LITELLM}/model/delete").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.litellm_config"):
+        result = await update_litellm_model("llm.smart_model", "qwen3:14b")
+
     assert result is True
-    updated = yaml.safe_load(config_path.read_text())
-    assert updated["model_list"][0]["litellm_params"]["model"] == "ollama/mxbai-embed-large"
+    assert new_route.called
+    assert not delete_route.called  # YAML deployments are not deletable
+    assert any("STACK" in r.message for r in caplog.records)
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_update_leaves_other_entries_untouched(tmp_path, monkeypatch):
-    """Updating one model alias should not affect other entries in model_list."""
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        [
-            {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
-            {"model_name": "fast", "litellm_params": {"model": "ollama/qwen3:4b"}},
-            {"model_name": "embed", "litellm_params": {"model": "ollama/qwen3-embedding:0.6b"}},
-        ],
+async def test_delete_failure_rolls_back_new_deployment():
+    """Failed stale-deployment cleanup rolls the just-created deployment back."""
+    _mock_model_info([_entry("smart", {"model": "ollama/qwen3:8b"}, dep_id="old-1")])
+    respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "new-1"})
     )
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    delete_route = respx.post(f"{LITELLM}/model/delete").mock(
+        side_effect=[
+            httpx.Response(500, json={"error": "boom"}),  # delete old-1 fails
+            httpx.Response(200, json={}),  # rollback delete new-1 succeeds
+        ]
+    )
 
-    await update_litellm_model("llm.fast_model", "phi3:mini")
-    updated = yaml.safe_load(config_path.read_text())
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await update_litellm_model("llm.smart_model", "qwen3:14b")
 
-    # fast should be updated
-    assert updated["model_list"][1]["litellm_params"]["model"] == "ollama/phi3:mini"
-    # smart and embed should be unchanged
-    assert updated["model_list"][0]["litellm_params"]["model"] == "ollama/mistral-nemo"
-    assert updated["model_list"][2]["litellm_params"]["model"] == "ollama/qwen3-embedding:0.6b"
+    deleted_ids = [json.loads(c.request.content)["id"] for c in delete_route.calls]
+    assert deleted_ids == ["old-1", "new-1"]
 
 
+@respx.mock
 @pytest.mark.asyncio
-async def test_update_litellm_model_falls_back_to_in_memory_on_ro_config(tmp_path, monkeypatch):
-    """When YAML write raises OSError (:ro mount), falls back to /config/update."""
-    import httpx as _httpx
-    import respx
-
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        [{"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}}],
+async def test_model_info_failure_raises():
+    """Routing-state read failures surface as RuntimeError (fail-closed upstream)."""
+    respx.get(f"{LITELLM}/v1/model/info").mock(
+        return_value=httpx.Response(500, json={"error": "router not loaded"})
     )
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
-    write_calls = {"n": 0}
+    with pytest.raises(RuntimeError, match="/v1/model/info failed"):
+        await update_litellm_model("llm.smart_model", "qwen3:8b")
 
-    def _fail_write(self, content, **kwargs):
-        write_calls["n"] += 1
-        raise OSError("Read-only file system")
 
-    monkeypatch.setattr(config_path.__class__, "write_text", _fail_write)
+# ---------------------------------------------------------------------------
+# Cloud path: fingerprinted no-op + key redaction
+# ---------------------------------------------------------------------------
 
-    with respx.mock:
-        respx.post("http://litellm:4000/config/update").mock(
-            return_value=_httpx.Response(200, json={"message": "ok"})
+_CLOUD_MODEL = "anthropic/claude-haiku-4-5"
+_KEY_PATCH_TARGET = "paper_ingestion.services.litellm_config.get_provider_api_key"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_cloud_update_delivers_then_noops():
+    """Reconciler-shaped repeat: the first cloud delivery goes out, the repeat no-ops.
+
+    Without the fingerprinted no-op the 30 s reconciler would re-deliver the
+    cloud alias forever — deployment-id churn, router cooldown resets, and the
+    plaintext key re-transmitted on every pass.
+    """
+    _mock_model_info([_entry("smart", {"model": _CLOUD_MODEL}, dep_id="dep-cloud")])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "cloud-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    with patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value="sk-ant-test")):
+        first = await update_litellm_model("llm.smart_model", _CLOUD_MODEL, db_pool=object())
+        second = await update_litellm_model("llm.smart_model", _CLOUD_MODEL, db_pool=object())
+
+    assert first is True  # boot redelivery: cache is empty after restart
+    assert second is False  # same (model, think, key fingerprint) → no-op
+    assert new_route.call_count == 1
+    params = json.loads(new_route.calls[0].request.content)["litellm_params"]
+    assert params["api_key"] == "sk-ant-test"
+    # Ollama-only / local-transport params never leak onto a cloud deployment.
+    assert "api_base" not in params
+    assert "num_ctx" not in params
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_cloud_key_rotation_redelivers():
+    """A rotated provider key changes the fingerprint → the next call delivers it."""
+    _mock_model_info([_entry("smart", {"model": _CLOUD_MODEL}, dep_id="dep-cloud")])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "cloud-1"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    with patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value="sk-ant-old")):
+        assert await update_litellm_model("llm.smart_model", _CLOUD_MODEL, db_pool=object()) is True
+    with patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value="sk-ant-new")):
+        rotated = await update_litellm_model("llm.smart_model", _CLOUD_MODEL, db_pool=object())
+
+    assert rotated is True
+    assert new_route.call_count == 2
+    params = json.loads(new_route.calls[1].request.content)["litellm_params"]
+    assert params["api_key"] == "sk-ant-new"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_cloud_error_text_redacts_api_key():
+    """FastAPI 422s echo the submitted body — the raised error must not carry the key."""
+    secret = "sk-ant-secret-1234567890"
+    _mock_model_info([])
+    respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(
+            422,
+            json={"detail": [{"loc": ["body"], "input": {"api_key": secret}}]},
         )
-        result = await update_litellm_model("llm.smart_model", "qwen3:4b")
+    )
 
-        assert result is True
-        assert write_calls["n"] == 1  # write was attempted once
-        assert respx.calls.call_count == 1  # fallback was invoked
+    with (
+        patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value=secret)),
+        pytest.raises(RuntimeError, match="model/new failed") as exc_info,
+    ):
+        await update_litellm_model("llm.smart_model", _CLOUD_MODEL, db_pool=object())
+
+    message = str(exc_info.value)
+    assert secret not in message
+    assert "***" in message
+
+
+# ---------------------------------------------------------------------------
+# ensure_smart_fallback
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_smart_fallback_creates_deployment():
+    """Missing smart-fallback → created with the fast-tier params + timeout 120."""
+    _mock_model_info([_entry("embed", {"model": "ollama/qwen3-embedding:4b"}, db_model=False)])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-1"})
+    )
+
+    result = await ensure_smart_fallback("qwen3:4b")
+
+    assert result is True
+    payload = _last_payload(new_route)
+    assert payload["model_name"] == "smart-fallback"
+    params = payload["litellm_params"]
+    assert params["model"] == "ollama/qwen3:4b"
+    assert params["timeout"] == 120
+    assert params["num_ctx"] == 4096
+    assert params["think"] is False
+    assert params["temperature"] == 0.1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_smart_fallback_existing_is_noop():
+    """smart-fallback already routing the fast model → False, no admin writes."""
+    _mock_model_info([_entry("smart-fallback", {"model": "ollama/qwen3:4b", "timeout": 120})])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+
+    assert await ensure_smart_fallback("qwen3:4b") is False
+    assert not new_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_smart_fallback_cloud_fast_model_carries_key():
+    """A cloud fast model mirrors the cloud delivery semantics for the fallback group:
+    provider key carried, no api_base/num_ctx/think, fallback timeout kept."""
+    _mock_model_info([])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-cloud"})
+    )
+
+    with patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value="sk-ant-test")):
+        result = await ensure_smart_fallback(_CLOUD_MODEL, db_pool=object())
+
+    assert result is True
+    payload = _last_payload(new_route)
+    assert payload["model_name"] == "smart-fallback"
+    params = payload["litellm_params"]
+    assert params["model"] == _CLOUD_MODEL
+    assert params["api_key"] == "sk-ant-test"
+    assert params["timeout"] == 120
+    assert params["temperature"] == 0.1
+    # Ollama-only params would break (or be junk on) a cloud deployment.
+    assert "api_base" not in params
+    assert "num_ctx" not in params
+    assert "think" not in params
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_smart_fallback_cloud_noop_and_key_rotation():
+    """Cloud fallback no-ops on repeat (fingerprint match) but re-delivers a rotated key."""
+    _mock_model_info(
+        [_entry("smart-fallback", {"model": _CLOUD_MODEL, "timeout": 120}, dep_id="fb-1")]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-2"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    with patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value="sk-ant-old")):
+        assert await ensure_smart_fallback(_CLOUD_MODEL, db_pool=object()) is True
+        assert await ensure_smart_fallback(_CLOUD_MODEL, db_pool=object()) is False
+    assert new_route.call_count == 1
+
+    with patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value="sk-ant-new")):
+        assert await ensure_smart_fallback(_CLOUD_MODEL, db_pool=object()) is True
+    assert new_route.call_count == 2
+    assert json.loads(new_route.calls[1].request.content)["litellm_params"]["api_key"] == (
+        "sk-ant-new"
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_smart_fallback_cloud_missing_key_pins_static_default(monkeypatch, caplog):
+    """No provider key → the fallback pins to the static pulled default (with the
+    full ollama bootstrap params) instead of a deployment guaranteed to fail
+    exactly when smart fails; the warning fires once, not every 30 s pass."""
+    import logging
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    _mock_model_info([])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-pinned"})
+    )
+
+    with (
+        caplog.at_level(logging.WARNING, logger="paper_ingestion.services.litellm_config"),
+        patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value=None)),
+    ):
+        first = await ensure_smart_fallback(_CLOUD_MODEL, db_pool=object())
+        second = await ensure_smart_fallback(_CLOUD_MODEL, db_pool=object())
+
+    assert first is True
+    assert second is True  # model_info mock never shows the pinned deployment
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "ollama/qwen3:4b"
+    assert params["api_base"] == "http://ollama:11434"
+    assert params["num_ctx"] == 4096
+    assert params["think"] is False
+    assert "api_key" not in params
+    pin_warnings = [r for r in caplog.records if "pinning" in r.message]
+    assert len(pin_warnings) == 1  # warn-once: this runs every reconciler pass
+
+
+# ---------------------------------------------------------------------------
+# LiteLLM delivery-failure detail hygiene
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_ro_config_fallback_preserves_existing_num_ctx_when_adding_think(
-    tmp_path, monkeypatch
-):
-    """Read-only fallback sends the merged extra_body, not only the pending flag."""
-    import json
+async def test_apply_litellm_runtime_update_strips_upstream_body_from_detail(monkeypatch, caplog):
+    """A delivery RuntimeError exposes alias+status in the 400 detail, not the raw body.
 
-    import httpx as _httpx
-    import respx
+    The full error (including upstream body) must appear in the server ERROR log
+    while the HTTP detail returned to the client is truncated to alias + HTTP status
+    so raw LiteLLM internals never leak over the API boundary.
 
-    config_path = tmp_path / "config.yaml"
-    _write_config(
-        config_path,
-        [
-            {
-                "model_name": "smart",
-                "litellm_params": {
-                    "model": "ollama/qwen3:14b",
-                    "extra_body": {"num_ctx": 8192},
-                },
-            }
-        ],
+    The No-DB carve-out path (pending_restart → 200) is unaffected by this change.
+    """
+    import logging
+
+    from fastapi import HTTPException
+
+    from paper_ingestion.services.config_write import _apply_litellm_runtime_update
+
+    raw_body = '{"error": "invalid key", "secret": "sk-abc123"}'
+    full_error = f"LiteLLM /model/new failed for alias 'smart': HTTP 400 {raw_body}"
+
+    async def _failing_update_fn(*args, **kwargs):
+        raise RuntimeError(full_error)
+
+    monkeypatch.setenv("LITELLM_BASE_URL", LITELLM)
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"value": "ollama/qwen3:8b", "encrypted_value": None}
+
+    with caplog.at_level(logging.ERROR, logger="paper_ingestion.services.config_write"):
+        with pytest.raises(HTTPException) as exc_info:
+            await _apply_litellm_runtime_update(
+                db_pool=pool,
+                key="llm.smart_model",
+                value="ollama/qwen3:8b",
+                update_litellm_model_fn=_failing_update_fn,
+            )
+
+    exc = exc_info.value
+    assert exc.status_code == 400
+
+    detail = str(exc.detail)
+    assert "alias 'smart'" in detail
+    assert "HTTP 400" in detail
+    assert raw_body not in detail, "raw upstream body must not appear in HTTP detail"
+    assert "secret" not in detail, "secrets in upstream body must not leak via HTTP detail"
+
+    assert any(raw_body in r.message for r in caplog.records if r.levelno == logging.ERROR), (
+        "full error including upstream body must appear in server ERROR log"
     )
-    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
-    def _fail_write(self, content, **kwargs):
-        raise OSError("Read-only file system")
 
-    monkeypatch.setattr(config_path.__class__, "write_text", _fail_write)
+# ---------------------------------------------------------------------------
+# ensure_smart_fallback — stale-sibling deletion when a matching deployment already exists
+# ---------------------------------------------------------------------------
 
-    with respx.mock:
-        respx.post("http://litellm:4000/config/update").mock(
-            return_value=_httpx.Response(200, json={"message": "ok"})
-        )
-        result = await update_litellm_model(
-            "llm.smart_model",
-            "qwen3:14b",
-            machine_id="host-rtx5060",
-            thinking_disabled=True,
-        )
-        payload = json.loads(respx.calls.last.request.content)
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_smart_fallback_deletes_stale_sibling_when_match_exists():
+    """A matching smart-fallback PLUS a stale non-matching sibling → sibling deleted,
+    matching deployment survives, returns False (no new delivery needed)."""
+    _mock_model_info(
+        [
+            _entry(
+                "smart-fallback", {"model": "ollama/qwen3:4b", "timeout": 120}, dep_id="match-1"
+            ),
+            _entry("smart-fallback", {"model": "ollama/old-model:7b"}, dep_id="stale-1"),
+        ]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+    delete_route = respx.post(f"{LITELLM}/model/delete").mock(
+        return_value=httpx.Response(200, json={"message": "deleted"})
+    )
+
+    result = await ensure_smart_fallback("qwen3:4b")
+
+    assert result is False
+    assert not new_route.called
+    assert delete_route.call_count == 1
+    deleted_id = json.loads(delete_route.calls.last.request.content)["id"]
+    assert deleted_id == "stale-1"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_smart_fallback_match_only_no_delete():
+    """A single matching deployment with no stale siblings → no delete, no new delivery."""
+    _mock_model_info(
+        [_entry("smart-fallback", {"model": "ollama/qwen3:4b", "timeout": 120}, dep_id="match-1")]
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
+    delete_route = respx.post(f"{LITELLM}/model/delete").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    result = await ensure_smart_fallback("qwen3:4b")
+
+    assert result is False
+    assert not new_route.called
+    assert not delete_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_smart_fallback_missing_key_guard_intact():
+    """Missing cloud key still pins to the static default — the keyless guard is unaffected."""
+    _mock_model_info([])
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "fb-1"})
+    )
+
+    with patch(_KEY_PATCH_TARGET, new=AsyncMock(return_value=None)):
+        result = await ensure_smart_fallback(_CLOUD_MODEL, db_pool=object())
 
     assert result is True
-    params = payload["model_list"][0]["litellm_params"]
-    assert params["extra_body"] == {"num_ctx": 8192, "think": False}
+    params = _last_payload(new_route)["litellm_params"]
+    assert params["model"] == "ollama/qwen3:4b"
+    assert "api_key" not in params

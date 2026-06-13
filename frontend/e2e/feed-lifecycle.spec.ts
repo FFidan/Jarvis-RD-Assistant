@@ -293,7 +293,9 @@ test.describe('Feed — full lifecycle smoke', () => {
     await expect(page.getByText('Inbox is empty')).toBeVisible({ timeout: 10_000 });
 
     await page.goto('/feed?surface=library');
-    await expect(page.getByText('No papers in your library')).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page.getByRole('heading', { name: 'No papers in your library' }),
+    ).toBeVisible({ timeout: 10_000 });
 
     await page.goto('/feed?surface=trash');
     await expect(page.getByText('Trash is empty')).toBeVisible({ timeout: 10_000 });

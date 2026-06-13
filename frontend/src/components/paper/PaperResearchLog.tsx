@@ -212,6 +212,26 @@ export function PaperResearchLog({
           </div>
         )}
 
+        {summary?.coverage != null && summary.coverage < 1 && (
+          <div
+            data-testid="coverage-warning"
+            className="flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-[var(--status-warn)] dark:border-amber-900 dark:bg-amber-950"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            {summary.coverage === 0
+              ? 'Summary could not be verified — showing abstract-based fallback'
+              : `This summary read the first ~${Math.round(summary.coverage * 100)}% of the paper`}
+          </div>
+        )}
+        {summary?.passes != null && summary.passes > 1 && (summary.coverage == null || summary.coverage >= 1) && (
+          <div
+            data-testid="coverage-note"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground"
+          >
+            Read in {summary.passes} passes — full paper covered
+          </div>
+        )}
+
         {/* Serif title */}
         <h1 className="font-serif text-2xl font-bold leading-tight tracking-tight text-strong lg:text-3xl">
           {paper.title}

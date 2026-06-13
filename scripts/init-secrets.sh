@@ -80,6 +80,7 @@ sync_secret() {
     case "$key" in
       JARVIS_API_KEY)              value=$(openssl rand -hex 32) ;;
       LITELLM_MASTER_KEY)          value=$(openssl rand -hex 32) ;;
+      LITELLM_SALT_KEY)            value=$(openssl rand -hex 32) ;;
       POSTGRES_PASSWORD)           value=$(openssl rand -hex 24) ;;
       QDRANT_API_KEY)              value=$(openssl rand -hex 24) ;;
       INFRA_INGEST_KEY)            value=$(openssl rand -hex 32) ;;
@@ -124,6 +125,11 @@ sync_secret() {
 # ---------------------------------------------------------------------------
 sync_secret JARVIS_API_KEY     jarvis_api_key.txt     "openssl rand -hex 32"
 sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
+# LITELLM_SALT_KEY encrypts model credentials LiteLLM stores in its database.
+# Without it litellm falls back to the master key as salt, so a master-key
+# rotation would brick every encrypted DB row — pin a dedicated salt instead;
+# never rotate this key manually.
+sync_secret LITELLM_SALT_KEY   litellm_salt_key.txt   "openssl rand -hex 32"
 sync_secret POSTGRES_PASSWORD  postgres_password.txt  "openssl rand -hex 24"
 sync_secret QDRANT_API_KEY     qdrant_api_key.txt     "openssl rand -hex 24"
 # INFRA_INGEST_KEY authenticates the Vector log-shipper sidecar to POST /infra-events.

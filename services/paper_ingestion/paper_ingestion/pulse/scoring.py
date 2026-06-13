@@ -254,6 +254,7 @@ async def stage2_llm_rerank(
     profile: UserProfile,
     verifier: QuoteVerifier,
     openai_client: "openai.AsyncOpenAI | None" = None,
+    num_ctx: int | None = None,
 ) -> list[ScoredCandidate]:
     """Score each candidate via LLM with bounded concurrency.
 
@@ -271,6 +272,9 @@ async def stage2_llm_rerank(
         Instructor-patched ``openai.AsyncOpenAI`` client for structured calls via
         ``call_llm_structured``.  Pass ``app.state.openai_client`` from the service
         lifespan.
+    num_ctx:
+        Effective fast-role context window for the scoring-prompt budget;
+        ``None`` falls back to ``CoreSettings.llm_fast_num_ctx``.
 
     Returns
     -------
@@ -298,6 +302,7 @@ async def stage2_llm_rerank(
                     negative_topics=profile.negative_topics,
                     negative_authors=profile.negative_authors,
                     candidate=sc.paper,
+                    num_ctx=num_ctx,
                 )
                 options = ChatCompletionOptions(
                     model=_llm_model(),

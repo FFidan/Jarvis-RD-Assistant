@@ -65,6 +65,18 @@ export interface SystemModelsResponse {
   recommendations?: Record<string, unknown>;
   /** Advisory per-VRAM model recommendation. Optional — absent on older backends. */
   hardware_recommendation?: HardwareRecommendation;
+  /**
+   * Per-role model LiteLLM is currently routing, normalized (provider prefix stripped for
+   * ollama/ models so it compares directly to `current` values). Absent when LiteLLM is
+   * unreachable. Additive — absent on older backends.
+   */
+  routing?: Record<string, string>;
+  /**
+   * True when every role with a stored `current` intent is also reflected in `routing`.
+   * False when LiteLLM is unreachable and there is stored intent that cannot be verified.
+   * Defaults to true when absent (older backends without T1.3).
+   */
+  consistent?: boolean;
 }
 
 /**

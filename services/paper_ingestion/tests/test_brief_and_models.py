@@ -246,6 +246,9 @@ async def test_system_models_full_response(_app):
     assert any(item["status"] == "active" for item in body.catalog)
     assert "embed" in body.recommendations
 
+    # Delivery state (additive field): no llm.delivery_pending row → all applied
+    assert body.delivery == {"smart": "applied", "fast": "applied", "embed": "applied"}
+
 
 @pytest.mark.asyncio
 async def test_system_models_ollama_unreachable(_app):
@@ -369,6 +372,47 @@ async def test_system_models_db_failure_still_returns_ollama_data(_app):
     assert body.issues == {
         "current": "Could not load current model assignments.",
     }
+
+
+@pytest.mark.asyncio
+async def test_system_models_surfaces_pending_delivery(_app):
+    """GET /api/system/models maps llm.delivery_pending roles to pending_restart."""
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    async def fetch_side_effect(sql, *args):
+        keys = args[0] if args else []
+        if "llm.delivery_pending" in keys:
+            return [FakeRecord(key="llm.delivery_pending", value=["smart"])]
+        return [FakeRecord(key="llm.smart_model", value="qwen3:4b")]
+
+    conn.fetch.side_effect = fetch_side_effect
+    mock_http.get.side_effect = httpx.ConnectError("Connection refused")
+
+    body = await get_system_models(request)
+
+    assert body.delivery == {
+        "smart": "pending_restart",
+        "fast": "applied",
+        "embed": "applied",
+    }
+
+
+@pytest.mark.asyncio
+async def test_system_models_delivery_empty_when_config_read_fails(_app):
+    """Delivery state read failure leaves delivery empty — never a phantom applied."""
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.side_effect = RuntimeError("db unavailable")
+    mock_http.get.side_effect = httpx.ConnectError("Connection refused")
+
+    body = await get_system_models(request)
+
+    assert body.delivery == {}
 
 
 @pytest.mark.asyncio
@@ -653,8 +697,8 @@ async def test_system_models_hardware_recommendation_cpu_only_when_no_gpu(_app, 
 
 
 @pytest.mark.asyncio
-async def test_system_models_hardware_recommendation_48gb_confirm_on_target(_app, monkeypatch):
-    """hardware_recommendation for 48 GB GPU flags smart as confirm_on_target=True."""
+async def test_system_models_hardware_recommendation_48gb_no_confirm_flag(_app, monkeypatch):
+    """hardware_recommendation for 48 GB GPU: smart is live-validated, no confirm flag."""
     app, conn, mock_http = _app
     from paper_ingestion.main import get_system_models
     from paper_ingestion.services import model_lifecycle as ml
@@ -694,6 +738,165 @@ async def test_system_models_hardware_recommendation_48gb_confirm_on_target(_app
     assert hw_rec["bucket"] == "HIGH"
 
     aliases_by_name = {a["alias"]: a for a in hw_rec["aliases"]}
-    assert aliases_by_name["smart"]["model"] == "qwen3:32b"
-    # ≈48 GB tier (RTX 5880 Ada) bench not yet run — must be flagged
-    assert aliases_by_name["smart"]["confirm_on_target"] is True
+    assert aliases_by_name["smart"]["model"] == "qwen3:30b-a3b"
+    # ≥40 GB recommendation is live-validated (48 GB RTX 5880 Ada, 16k ctx, v0.7)
+    assert aliases_by_name["smart"]["confirm_on_target"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: routing truth (T1.3) — GET /api/system/models routing + consistent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_system_models_routing_mismatch_surfaces_inconsistency(_app, monkeypatch):
+    """When LiteLLM routes a different model than stored intent, consistent=False + routing surfaced.
+
+    Staged: llm.smart_model = "qwen3:4b" in DB; LiteLLM routes "qwen3:8b" for
+    the smart alias. Expects routing["smart"] == "qwen3:8b" and consistent=False.
+    """
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+    import paper_ingestion.services.litellm_config as _lc
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    conn.fetch.return_value = [
+        FakeRecord(key="llm.smart_model", value="qwen3:4b"),
+    ]
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    # LiteLLM routes smart → "ollama/qwen3:8b" (normalized: "qwen3:8b")
+    async def _fake_deployments():
+        return [
+            {
+                "model_name": "smart",
+                "litellm_params": {"model": "ollama/qwen3:8b"},
+                "model_info": {"id": "dep-1", "db_model": True},
+            }
+        ]
+
+    monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
+
+    body = await get_system_models(request)
+
+    assert body.routing == {"smart": "qwen3:8b"}, f"unexpected routing: {body.routing}"
+    assert body.consistent is False, "mismatch must set consistent=False"
+
+
+@pytest.mark.asyncio
+async def test_system_models_litellm_down_endpoint_stays_200(_app, monkeypatch):
+    """When LiteLLM is unreachable, /models still returns 200 and degrades routing honestly.
+
+    routing must be empty; consistent=False only when there is stored intent.
+    """
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+    import paper_ingestion.services.litellm_config as _lc
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    conn.fetch.return_value = [
+        FakeRecord(key="llm.smart_model", value="qwen3:8b"),
+        FakeRecord(key="llm.fast_model", value="qwen3:4b"),
+    ]
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    async def _deployments_fail():
+        raise RuntimeError("LiteLLM /v1/model/info unreachable: connection refused")
+
+    monkeypatch.setattr(_lc, "get_litellm_deployments", _deployments_fail)
+
+    body = await get_system_models(request)
+
+    # Endpoint must not crash
+    assert body.routing == {}, f"routing must be empty when LiteLLM is down: {body.routing}"
+    # There IS stored intent → cannot verify → not consistent
+    assert body.consistent is False, (
+        "consistent must be False when there is stored intent but LiteLLM is unreachable"
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_models_routing_consistent_when_litellm_matches(_app, monkeypatch):
+    """When LiteLLM routes the same model as stored intent, consistent=True."""
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+    import paper_ingestion.services.litellm_config as _lc
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    conn.fetch.return_value = [
+        FakeRecord(key="llm.smart_model", value="qwen3:8b"),
+        FakeRecord(key="llm.fast_model", value="qwen3:4b"),
+    ]
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    async def _fake_deployments():
+        return [
+            {
+                "model_name": "smart",
+                "litellm_params": {"model": "ollama/qwen3:8b"},
+                "model_info": {"id": "dep-smart", "db_model": True},
+            },
+            {
+                "model_name": "fast",
+                "litellm_params": {"model": "ollama/qwen3:4b"},
+                "model_info": {"id": "dep-fast", "db_model": True},
+            },
+        ]
+
+    monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
+
+    body = await get_system_models(request)
+
+    assert body.routing.get("smart") == "qwen3:8b"
+    assert body.routing.get("fast") == "qwen3:4b"
+    assert body.consistent is True, (
+        f"consistent must be True when routing matches; routing={body.routing}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_models_routing_consistent_with_latest_suffix(_app, monkeypatch):
+    """:latest suffix on either side must not cause false divergence (consistent=True).
+
+    Staged: DB stores "qwen3:8b"; LiteLLM reports "ollama/qwen3:8b:latest".
+    The :latest-tolerant normalization must treat these as equal and set
+    consistent=True.  Without the fix a direct-API-created row shows permanent
+    false divergence.
+    """
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+    import paper_ingestion.services.litellm_config as _lc
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    # DB intent: bare tag (no :latest)
+    conn.fetch.return_value = [
+        FakeRecord(key="llm.smart_model", value="qwen3:8b"),
+    ]
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    # LiteLLM reports with :latest appended (common when created via direct API)
+    async def _fake_deployments():
+        return [
+            {
+                "model_name": "smart",
+                "litellm_params": {"model": "ollama/qwen3:8b:latest"},
+                "model_info": {"id": "dep-smart", "db_model": True},
+            }
+        ]
+
+    monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
+
+    body = await get_system_models(request)
+
+    # routing must strip :latest before storing
+    assert body.routing.get("smart") == "qwen3:8b", (
+        f"routing must normalize :latest away; got {body.routing.get('smart')!r}"
+    )
+    # consistent must be True — no false divergence
+    assert body.consistent is True, (
+        f"consistent must be True when :latest is the only difference; routing={body.routing}"
+    )

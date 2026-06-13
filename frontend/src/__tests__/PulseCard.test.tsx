@@ -315,6 +315,25 @@ describe('PulseCard', () => {
     });
   });
 
+  describe('sentinel reasoning mapping', () => {
+    it('never renders the raw LLM scoring failed sentinel', () => {
+      renderCard({}, { reasoning: 'LLM scoring failed' });
+      expect(screen.queryByText('LLM scoring failed')).not.toBeInTheDocument();
+    });
+
+    it('renders user-facing message in place of the sentinel', () => {
+      renderCard({}, { reasoning: 'LLM scoring failed' });
+      expect(screen.getByText('AI scoring unavailable for this card')).toBeInTheDocument();
+    });
+
+    it('passes normal reasoning through unchanged', () => {
+      renderCard({}, { reasoning: 'Highly relevant to your interest in diffusion models.' });
+      expect(
+        screen.getByText('Highly relevant to your interest in diffusion models.'),
+      ).toBeInTheDocument();
+    });
+  });
+
   describe('reasoning verification badge', () => {
     it('renders green check icon when reasoning_verified is true', () => {
       renderCard({}, { reasoning_verified: true, reasoning_confidence: 'HIGH' });
