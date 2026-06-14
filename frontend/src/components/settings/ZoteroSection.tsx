@@ -257,6 +257,10 @@ export function ZoteroSection() {
               Group library
             </label>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Personal library = your own Zotero account (most people). Group library = a shared
+            Zotero group — you&apos;ll also need its numeric Group ID.
+          </p>
         </div>
 
         {/* Group ID — visible only when library type is "group" */}

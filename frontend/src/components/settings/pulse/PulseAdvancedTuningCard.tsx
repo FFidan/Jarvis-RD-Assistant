@@ -3,7 +3,7 @@
  * and L2 negative-feedback penalty.
  */
 import { useState, useMemo } from 'react';
-import type { UseMutationResult } from '@tanstack/react-query';
+import { useQuery, type UseMutationResult } from '@tanstack/react-query';
 import {
   Card,
   CardContent,
@@ -21,7 +21,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Link as LinkIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   DEFAULT_PULSE_WEIGHTS,
@@ -38,6 +38,9 @@ import { useSyncedState } from './use-synced-state';
 import { useDebouncedConfig } from './use-debounced-config';
 import { getConfigValue } from './pulse-utils';
 import { errorMessage } from '@/lib/errors';
+import { fetchPulseDebug } from '@/lib/api';
+import { QUERY_KEYS } from '@/lib/query-keys';
+import { Link } from 'react-router-dom';
 import type { ConfigEntry } from '@/types';
 
 function coerceWeights(raw: unknown): Record<PulseWeightKey, number> {
@@ -63,6 +66,8 @@ interface WeightSliderRowProps {
   disabled: boolean;
   capabilityPresent: boolean;
   onChange: (key: PulseWeightKey, value: number) => void;
+  /** Optional status note rendered beside the label (e.g. classifier rating count). */
+  statusNote?: string;
 }
 
 function WeightSliderRow({
@@ -71,6 +76,7 @@ function WeightSliderRow({
   disabled,
   capabilityPresent,
   onChange,
+  statusNote,
 }: WeightSliderRowProps) {
   const gate = CONDITIONAL_SIGNAL_GATES[weightKey];
   const sliderInput = (
@@ -83,8 +89,8 @@ function WeightSliderRow({
       step={0.05}
       value={value}
       onChange={(e) => onChange(weightKey, Number(e.target.value))}
-      disabled={disabled}
-      className="w-full accent-primary"
+      disabled={disabled || !capabilityPresent}
+      className="w-full accent-primary disabled:opacity-40"
     />
   );
 
@@ -110,8 +116,21 @@ function WeightSliderRow({
         <span className="flex items-center gap-1">
           {PULSE_WEIGHT_LABELS[weightKey]}
           <InfoTooltip content={PULSE_WEIGHT_TOOLTIPS[weightKey]} />
+          {!capabilityPresent && gate && (
+            <span
+              data-testid={`inactive-chip-${weightKey}`}
+              className="inline-flex items-center rounded px-1 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground leading-none"
+            >
+              Inactive — missing dependency
+            </span>
+          )}
         </span>
-        <span className="font-mono text-muted-foreground">{value.toFixed(2)}</span>
+        <span className="flex items-center gap-1.5 font-mono text-muted-foreground">
+          {statusNote && (
+            <span className="text-[10px] font-normal normal-case">{statusNote}</span>
+          )}
+          {value.toFixed(2)}
+        </span>
       </Label>
       {sliderWithGate}
     </div>
@@ -138,6 +157,13 @@ export function PulseAdvancedTuningCard({
   hasSklearn,
 }: PulseAdvancedTuningCardProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  const { data: debugInfo } = useQuery({
+    queryKey: QUERY_KEYS.pulse.debug(),
+    queryFn: fetchPulseDebug,
+    enabled: advancedOpen,
+    staleTime: 30_000,
+  });
 
   const recommendationEnabled = getConfigValue<boolean>(configs, 'recommendation.enabled', true);
   const likedWeightConfig = getConfigValue<number>(configs, 'recommendation.liked_weight', 0.6);
@@ -286,6 +312,28 @@ export function PulseAdvancedTuningCard({
                   These signals are inactive by default. Enable them once the prerequisites are in
                   place.
                 </p>
+                <ul className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
+                  <li>
+                    <span className="font-medium">Citation signals</span> (Citation PageRank,
+                    Citation count, Shared citation neighbourhood) — need the{' '}
+                    <code className="rounded bg-muted px-0.5">networkx</code> package on the server.
+                  </li>
+                  <li>
+                    <span className="font-medium">Personal classifier</span> — needs the{' '}
+                    <code className="rounded bg-muted px-0.5">scikit-learn</code> package on the
+                    server, plus ~30 Pulse ratings.
+                  </li>
+                </ul>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  Need citation data?{' '}
+                  <Link
+                    to="/citations"
+                    className="inline-flex items-center gap-0.5 text-primary underline-offset-2 hover:underline"
+                  >
+                    Open the Citation Graph
+                    <LinkIcon className="h-2.5 w-2.5" />
+                  </Link>
+                </p>
               </div>
               {OPTIONAL_SIGNAL_KEYS.map((key) => (
                 <WeightSliderRow
@@ -295,6 +343,11 @@ export function PulseAdvancedTuningCard({
                   disabled={settingsControlsDisabled}
                   capabilityPresent={capabilityForKey(key)}
                   onChange={updatePulseWeight}
+                  statusNote={
+                    key === 'classifier' && debugInfo?.classifier_sample_count != null
+                      ? `${debugInfo.classifier_sample_count}/30 ratings`
+                      : undefined
+                  }
                 />
               ))}
             </div>

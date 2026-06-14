@@ -678,7 +678,7 @@ describe('JobStore', () => {
     await expect(useJobStore.getState().hydrate()).resolves.not.toThrow();
   });
 
-  // ----- action_link open-redirect guard (FE-004) -----
+  // ----- action_link open-redirect guard -----
 
   /**
    * Helper: fire a 'failed' SSE event with an action_link and return
@@ -1087,7 +1087,7 @@ describe('JobStore', () => {
     );
   });
 
-  // ----- eviction-timer + logout-scoped backoff hygiene (M13c / W4-T8) -----
+  // ----- eviction-timer + logout-scoped backoff hygiene -----
   //
   // NOTE: these tests deliberately avoid asserting on vi.getTimerCount() —
   // unfinished reconnect chains from earlier tests in this file ("zombies")
@@ -1133,7 +1133,7 @@ describe('JobStore', () => {
     }
   });
 
-  it('_reset: cancels both terminal-eviction and cancel-eviction timers (M13c)', async () => {
+  it('_reset: cancels both terminal-eviction and cancel-eviction timers', async () => {
     vi.useFakeTimers();
     const { cancelJob: apiCancelJob } = await import('@/lib/api');
     vi.mocked(apiCancelJob).mockResolvedValue(undefined);
@@ -1181,7 +1181,7 @@ describe('JobStore', () => {
     }
   });
 
-  it('removeJob: clears a pending eviction timer for an early-dismissed job (M13c)', async () => {
+  it('removeJob: clears a pending eviction timer for an early-dismissed job', async () => {
     vi.useFakeTimers();
     const { cancelJob: apiCancelJob } = await import('@/lib/api');
     vi.mocked(apiCancelJob).mockResolvedValue(undefined);

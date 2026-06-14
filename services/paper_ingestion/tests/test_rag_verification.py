@@ -1,7 +1,7 @@
-"""Unit tests for rag/verification.py — PI-10 sentence splitter coverage.
+"""Unit tests for rag/verification.py — sentence splitter coverage.
 
-PI-10: _SENTENCE_RE must NOT split on lowercase-continuation (e.g. "one. and this").
-       Also verifies digit and quote boundaries ARE split correctly.
+_SENTENCE_RE must NOT split on lowercase-continuation (e.g. "one. and this").
+Also verifies digit and quote boundaries ARE split correctly.
 
 Also covers RAG verification calibration (v0.7):
 - the trailing "Citations:" block is stripped before sentence splitting,
@@ -40,12 +40,12 @@ def _unused_pool() -> asyncpg.Pool:
 
 
 # ---------------------------------------------------------------------------
-# PI-10: sentence regex behaviour
+# sentence regex behaviour
 # ---------------------------------------------------------------------------
 
 
 def test_sentence_re_does_not_split_lowercase_continuation():
-    """PI-10: 'This is one. and this should be a continuation.' must yield 1 sentence, not 2."""
+    """'This is one. and this should be a continuation.' must yield 1 sentence, not 2."""
     text = "This is one. and this should be a continuation of one."
     parts = _SENTENCE_RE.split(text)
     assert len(parts) == 1, (
@@ -61,7 +61,7 @@ def test_sentence_re_splits_on_uppercase():
 
 
 def test_sentence_re_splits_on_digit():
-    """Sentence boundary followed by a digit must be split (PI-10 extension)."""
+    """Sentence boundary followed by a digit must be split."""
     text = "There are two results. 3 of them are significant."
     parts = _SENTENCE_RE.split(text)
     assert len(parts) == 2, (

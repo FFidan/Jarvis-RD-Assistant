@@ -81,24 +81,25 @@ _read_secret() {
   fi
 }
 
-# Resolve LITELLM_MASTER_KEY and POSTGRES_PASSWORD.
-# Docker Compose secrets land at /run/secrets/<name>; check those paths when
-# the env vars are unset so the script works inside and outside of containers.
-LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
-if [ -z "$LITELLM_MASTER_KEY" ] && [ -f /run/secrets/litellm_master_key ]; then
-  LITELLM_MASTER_KEY="$(cat /run/secrets/litellm_master_key)"
-fi
-if [ -z "$LITELLM_MASTER_KEY" ] && [ -f "${SCRIPT_DIR}/../secrets/litellm_master_key.txt" ]; then
-  LITELLM_MASTER_KEY="$(cat "${SCRIPT_DIR}/../secrets/litellm_master_key.txt")"
-fi
+# Resolve secrets from env → Docker Compose /run/secrets/<name> → local
+# secrets/<basename>.txt (works inside and outside of containers).
+resolve_secret() {
+  local name="$1"
+  local basename="$2"
+  local val="${!name:-}"
+  if [ -z "$val" ] && [ -f "/run/secrets/${basename}" ]; then
+    val="$(cat "/run/secrets/${basename}")"
+  fi
+  if [ -z "$val" ] && [ -f "${SCRIPT_DIR}/../secrets/${basename}.txt" ]; then
+    val="$(cat "${SCRIPT_DIR}/../secrets/${basename}.txt")"
+  fi
+  printf '%s' "$val"
+}
 
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
-if [ -z "$POSTGRES_PASSWORD" ] && [ -f /run/secrets/postgres_password ]; then
-  POSTGRES_PASSWORD="$(cat /run/secrets/postgres_password)"
-fi
-if [ -z "$POSTGRES_PASSWORD" ] && [ -f "${SCRIPT_DIR}/../secrets/postgres_password.txt" ]; then
-  POSTGRES_PASSWORD="$(cat "${SCRIPT_DIR}/../secrets/postgres_password.txt")"
-fi
+LITELLM_MASTER_KEY="$(resolve_secret LITELLM_MASTER_KEY litellm_master_key)"
+POSTGRES_PASSWORD="$(resolve_secret POSTGRES_PASSWORD postgres_password)"
+QDRANT_API_KEY="$(resolve_secret QDRANT_API_KEY qdrant_api_key)"
+JARVIS_CONFIG_KEY="$(resolve_secret JARVIS_CONFIG_KEY jarvis_config_key)"
 
 # ---------------------------------------------------------------------------
 # Check helpers.
@@ -226,6 +227,8 @@ _check_secret() {
 
 _check_secret "LITELLM_MASTER_KEY" "$LITELLM_MASTER_KEY" 16
 _check_secret "POSTGRES_PASSWORD"  "$POSTGRES_PASSWORD"  12
+_check_secret "QDRANT_API_KEY"     "$QDRANT_API_KEY"     16
+_check_secret "JARVIS_CONFIG_KEY"  "$JARVIS_CONFIG_KEY"  16
 
 # Check: SMTP configured (magic links go to stdout if not).
 if [ -z "$SMTP_HOST" ]; then

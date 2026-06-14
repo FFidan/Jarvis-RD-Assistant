@@ -88,7 +88,7 @@ def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
     This function returns only the data payload wrapped via ``wrap_delimited``
     so untrusted paper text cannot escape into the instruction layer.
     ``wrap_delimited`` applies ``max_chars=15000`` truncation; do NOT pre-truncate
-    ``text`` before calling this function (PI-09).
+    ``text`` before calling this function.
     """
     field_specs = "\n".join(
         f'- "{_escape_field_attr(f["name"])}" '

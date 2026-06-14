@@ -1,5 +1,5 @@
 /**
- * FE-004: Unit tests for the AbortSignal.any polyfill.
+ * Unit tests for the AbortSignal.any polyfill.
  *
  * Verifies that applyAbortSignalAnyPolyfill installs AbortSignal.any when
  * the native implementation is absent, and that the installed shim behaves
@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { applyAbortSignalAnyPolyfill } from '@/lib/abort-signal-polyfill';
 
-describe('AbortSignal.any polyfill (FE-004)', () => {
+describe('AbortSignal.any polyfill', () => {
   // Save the original before each test so we can restore / re-delete it.
   let originalAny: typeof AbortSignal.any | undefined;
 

@@ -1,22 +1,20 @@
 """Service layer for paper lifecycle business logic.
 
-C3 extraction (design doc 2026-05-19-c3-extraction-design.md §3 step 3): the
-state-mutation / data-aggregation logic that previously lived inline in
-``routers/papers.py`` moves here so the router retains only the HTTP boundary
-(decorators, DI, request/response shaping, ``HTTPException``).
+State-mutation and data-aggregation logic extracted from ``routers/papers.py``
+so the router retains only the HTTP boundary (decorators, DI, request/response
+shaping, ``HTTPException``).
 
 The two seam collaborators ``delete_paper_vectors`` and
-``assert_paper_ownership`` are imported at *module level here* on purpose: the
-Phase-2 tests patch ``paper_ingestion.papers_service.delete_paper_vectors`` /
+``assert_paper_ownership`` are imported at *module level here* on purpose: tests
+patch ``paper_ingestion.papers_service.delete_paper_vectors`` /
 ``paper_ingestion.papers_service.assert_paper_ownership`` and call through the
 router. The patched name must be the one actually invoked, so every call site
 that the router used to own is dispatched from this module instead.
 
 Behaviour is preserved verbatim from the pre-extraction router — same SQL, same
 ordering, same error handling, same return shapes. In particular the
-load-bearing DELETE→Qdrant ordering (NEW-H2) is unchanged: the DB DELETE
-commits inside the transaction, then ``delete_paper_vectors`` runs OUTSIDE the
-transaction.
+load-bearing DELETE→Qdrant ordering is unchanged: the DB DELETE commits inside
+the transaction, then ``delete_paper_vectors`` runs OUTSIDE the transaction.
 """
 
 import logging

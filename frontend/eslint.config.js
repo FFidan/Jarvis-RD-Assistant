@@ -15,7 +15,7 @@ export default tseslint.config(
   jsxA11y.flatConfigs.recommended,
   {
     settings: {
-      react: { version: 'detect' },
+      react: { version: '19.2' },
     },
   },
   // Global rule overrides — downgrade noisy rules to warnings so CI can

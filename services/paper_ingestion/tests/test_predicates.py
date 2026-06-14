@@ -2,7 +2,7 @@
 
 These guard the hoisted, behavior-preserving fragments:
 * ``EXCLUDED_STATE_SQL`` — collapsed recommender/pulse exclusion constant.
-* ``paper_visible_sql`` — KG/citation visibility fragment (C3-2 hoist).
+* ``paper_visible_sql`` — KG/citation visibility fragment.
 """
 
 from __future__ import annotations

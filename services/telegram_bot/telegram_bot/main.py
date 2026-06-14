@@ -151,7 +151,7 @@ def main() -> None:
 
     application = (
         Application.builder()
-        .token(config.telegram_token)
+        .token(config.telegram_token.get_secret_value())
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()

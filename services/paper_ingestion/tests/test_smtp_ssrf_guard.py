@@ -92,6 +92,47 @@ async def test_public_host_send_succeeds(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 # ---------------------------------------------------------------------------
+# a') TLS mode is chosen by port: 465 implicit TLS, 587 STARTTLS, 25 plaintext
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("port", "expected_use_tls", "expected_start_tls"),
+    [
+        (25, False, False),  # plain relay — must NOT force STARTTLS
+        (587, False, True),  # submission — STARTTLS upgrade
+        (465, True, False),  # SMTPS — implicit TLS on connect
+    ],
+)
+@pytest.mark.asyncio
+async def test_send_test_email_tls_flags_by_port(
+    monkeypatch: pytest.MonkeyPatch,
+    port: int,
+    expected_use_tls: bool,
+    expected_start_tls: bool,
+) -> None:
+    """_send_test_email maps the port to the right aiosmtplib TLS flags.
+
+    Port 25 must leave both flags False (a previous ``start_tls = not use_tls``
+    forced STARTTLS on plain relays, which they reject).
+    """
+    _patch_getaddrinfo(monkeypatch, _addrinfo("8.8.8.8"))
+
+    import aiosmtplib
+
+    mock_send = AsyncMock(name="aiosmtplib.send")
+    monkeypatch.setattr(aiosmtplib, "send", mock_send)
+
+    body = SmtpBody(host="smtp.example.com", port=port, from_email="a@b.com")
+    result = await _send_test_email(body, "a@b.com")
+
+    assert result is None
+    kwargs = mock_send.call_args.kwargs
+    assert kwargs["use_tls"] is expected_use_tls
+    assert kwargs["start_tls"] is expected_start_tls
+
+
+# ---------------------------------------------------------------------------
 # b) multi-IP — any private/loopback record causes rejection
 # ---------------------------------------------------------------------------
 

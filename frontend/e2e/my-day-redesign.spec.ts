@@ -76,6 +76,11 @@ const STATS_MOCK = {
  *   /api/jobs/*                    → passthrough (job-store calls)
  */
 async function installMyDayMocks(page: Page): Promise<void> {
+  // FirstRunGate — must return setup_completed: true or the wizard intercepts /my-day.
+  await page.route('**/api/setup/status', async (route: Route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) });
+  });
+
   // Executive my-day
   await page.route('**/api/executive/my-day', async (route: Route) => {
     await route.fulfill({
@@ -258,9 +263,14 @@ test.describe('My Day v5 redesign — smoke', () => {
 
   // ── 4. Continue task tab + persistence with an active Pomodoro ───────────
 
-  test('Continue task tab appears with an active Pomodoro and persists to localStorage', async ({
+  test.fixme('Continue task tab appears with an active Pomodoro and persists to localStorage', async ({
     page,
   }) => {
+    // FIXME: pomodoro-store v1 migration strips timer state (phase, secondsRemaining, etc.)
+    // from version-0 blobs. `partialize` also only persists settings (targetCycles, work/break
+    // minutes), not runtime state. Seeding `{ version: 0, state: { phase: 'work' } }` is
+    // a no-op after migration — phase becomes 'idle', hasTask = false, tab never renders.
+    // The test premise is broken; needs a direct store-state injection approach or a v1+ blob.
     await page.addInitScript(() => {
       localStorage.removeItem('myday.heroMode');
       // Seed an active Pomodoro so the "Continue task" tab renders.

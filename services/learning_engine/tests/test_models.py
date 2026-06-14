@@ -8,11 +8,17 @@ from learning_engine.models import (  # noqa: E402
     CardType,
     DeckCreate,
     Evidence,
+    MilestoneCreate,
+    MilestoneUpdate,
     ProjectCreate,
+    ProjectUpdate,
     Rating,
     ReviewRequest,
+    TaskCreate,
+    TaskUpdate,
 )
 from pydantic import ValidationError
+from datetime import UTC
 
 # ---------------------------------------------------------------------------
 # Evidence — _migrate_snapshot model_validator
@@ -86,3 +92,37 @@ def test_card_create_rejects_empty_front():
 def test_deck_create_rejects_empty_name():
     with pytest.raises(ValidationError):
         DeckCreate(name="")
+
+
+# ---------------------------------------------------------------------------
+# min_length=1 on ProjectCreate / TaskCreate / MilestoneCreate
+# ---------------------------------------------------------------------------
+
+
+def test_project_create_rejects_empty_name():
+    with pytest.raises(ValidationError):
+        ProjectCreate(name="")
+
+
+def test_task_create_rejects_empty_title():
+    with pytest.raises(ValidationError):
+        TaskCreate(title="")
+
+
+def test_milestone_create_rejects_empty_name():
+    from datetime import datetime
+
+    with pytest.raises(ValidationError):
+        MilestoneCreate(name="", deadline=datetime.now(UTC))
+
+
+def test_update_models_reject_empty_but_accept_omitted_names():
+    """An empty rename is rejected; omitting the field (None) stays valid."""
+    for ctor, field in (
+        (ProjectUpdate, "name"),
+        (TaskUpdate, "title"),
+        (MilestoneUpdate, "name"),
+    ):
+        with pytest.raises(ValidationError):
+            ctor(**{field: ""})
+        assert getattr(ctor(), field) is None

@@ -417,7 +417,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
                   // Tooltip for unfit via fit_detail
                   const vramGb = data?.hardware?.vram_gb ?? 0;
                   const unfitTooltip = isUnfitByDetail && m.fit_detail && vramGb > 0
-                    ? `Won't fit at current num_ctx — try ${largestFittingCtxForEntry(m.fit_detail, vramGb).toLocaleString()} tokens`
+                    ? `Won't fit in GPU memory at the current context length — try ${largestFittingCtxForEntry(m.fit_detail, vramGb).toLocaleString()} tokens instead`
                     : undefined;
 
                   const itemContent = (
@@ -450,9 +450,6 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
                               {formatGb(m.vram_gb)} VRAM
                             </span>
                           )}
-                          <span className="text-xs text-muted-foreground">
-                            Requires Tier {m.tier}
-                          </span>
                           {badge && (
                             <span className="text-xs font-medium text-green-600">
                               {badge}
@@ -505,7 +502,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
           className="text-xs text-amber-700 dark:text-amber-400"
           data-testid={`routing-diverged-${currentRole}`}
         >
-          Saved: {savedModel} · currently serving: {routedModel}
+          You selected &quot;{savedModel}&quot; but the system is currently using &quot;{routedModel}&quot;.
         </p>
       )}
       {pullableModels.length > 0 && (

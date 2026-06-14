@@ -1,4 +1,4 @@
-"""Tests for scheduler.py bug fixes (C-1: http_client arg, C-2: path traversal guard)."""
+"""Tests for scheduler.py bug fixes (http_client arg, path traversal guard)."""
 
 import logging
 import sys
@@ -124,7 +124,7 @@ def _make_app_state(
 
 
 # ---------------------------------------------------------------------------
-# C-1: source is instantiated with http_client
+# source is instantiated with http_client
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +169,7 @@ async def test_source_instantiated_with_http_client() -> None:
 
 
 # ---------------------------------------------------------------------------
-# C-2: path traversal is rejected
+# path traversal is rejected
 # ---------------------------------------------------------------------------
 
 

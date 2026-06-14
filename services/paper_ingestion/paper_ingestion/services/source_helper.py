@@ -41,7 +41,7 @@ async def get_source_for_type(
 ) -> PaperSource:
     """Return a PaperSource for the given type.
 
-    C-8: Returns the pre-initialized singleton from paper_ingestion.state.sources when
+    Returns the pre-initialized singleton from paper_ingestion.state.sources when
     available so the per-instance rate limiter persists across requests.
     Falls back to creating a new instance (e.g. for sources not pre-loaded).
 

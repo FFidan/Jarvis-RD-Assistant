@@ -196,6 +196,10 @@ test.describe('Feed — full lifecycle smoke', () => {
   test.beforeEach(async ({ page }) => {
     await skipIfUnreachable(page);
     await seedAuthedSession(page);
+    // FirstRunGate — must return setup_completed: true or the wizard intercepts all routes.
+    await page.route('**/api/setup/status', async (route: Route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) });
+    });
   });
 
   // ── Step 0 (sanity): Inbox surface loads with at least one paper ─────────
@@ -224,7 +228,12 @@ test.describe('Feed — full lifecycle smoke', () => {
 
   // ── Step 1: Surface navigation (Inbox → Library → Trash) ────────────────
 
-  test('1. Surface chip navigation works', async ({ page }) => {
+  test.fixme('1. Surface chip navigation works', async ({ page }) => {
+    // FIXME: Surface navigation (Inbox/Library/Trash) was redesigned from tab chips
+    // to FacetRail status facets in the v0.8 IA. `getByRole('tab', { name: /Library/ })`
+    // no longer matches — the only tablist on the feed page is the Library corpus scope
+    // (personal vs shared), not the surface switcher. Updated coverage lives in
+    // feed/feed-ia-v3.spec.ts which uses facet-status-library data-testid.
     await routeFeedAndCounts(
       page,
       () => feedResponse([makePaper()]),

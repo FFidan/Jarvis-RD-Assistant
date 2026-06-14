@@ -60,6 +60,11 @@ const MOCK_BY_STATUS = [
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 async function mockAnalyticsRoutes(page: import('@playwright/test').Page) {
+  // FirstRunGate — must return setup_completed: true or the wizard intercepts the page.
+  await page.route('**/api/setup/status', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) }),
+  );
+
   await page.route('**/api/analytics/summary**', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_SUMMARY) }),
   );

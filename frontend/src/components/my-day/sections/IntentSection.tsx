@@ -23,7 +23,7 @@ function CompletedRow({ task }: { task: MyDayTask }) {
       <button
         onClick={() => reopenMutation.mutate()}
         disabled={reopenMutation.isPending}
-        className="font-mono text-[10px] text-zinc-400 dark:text-zinc-500 w-5 flex-shrink-0 hover:text-[var(--ink-blue)] transition-colors"
+        className="font-mono text-[10px] text-zinc-400 dark:text-zinc-500 w-5 shrink-0 hover:text-[var(--ink-blue)] transition-colors"
         title="Reopen task"
         aria-label="Reopen task"
       >
@@ -33,7 +33,7 @@ function CompletedRow({ task }: { task: MyDayTask }) {
         {task.title}
       </span>
       {task.project_name && (
-        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0 text-meta border-hair">
+        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 text-meta border-hair">
           {task.project_name}
         </span>
       )}
@@ -171,10 +171,10 @@ export function IntentSection() {
             onSubmit={handleAddSubmit}
             className="flex items-center gap-2 py-1.5 -mx-2 px-2"
           >
-            <span className="font-mono text-[10px] text-faint tabular-nums w-5 flex-shrink-0">
+            <span className="font-mono text-[10px] text-faint tabular-nums w-5 shrink-0">
               {(pendingTasks.length + 1).toString().padStart(2, '0')}
             </span>
-            <div className="h-3.5 w-3.5 rounded-full border-[1.5px] border-hair flex-shrink-0" />
+            <div className="h-3.5 w-3.5 rounded-full border-[1.5px] border-hair shrink-0" />
             <input
               autoFocus
               aria-label="Task title"
@@ -193,7 +193,7 @@ export function IntentSection() {
             <select
               value={addPriority}
               onChange={(e) => setAddPriority(Number(e.target.value))}
-              className="text-[11px] font-mono text-faint bg-transparent border border-hair rounded px-1 py-0.5 flex-shrink-0"
+              className="text-[11px] font-mono text-faint bg-transparent border border-hair rounded px-1 py-0.5 shrink-0"
               disabled={addMutation.isPending}
             >
               <option value={1}>P1</option>
@@ -204,14 +204,14 @@ export function IntentSection() {
             <button
               type="submit"
               disabled={addMutation.isPending || !addTitle.trim()}
-              className="text-[11px] font-mono text-[var(--ink-blue)] hover:opacity-70 disabled:opacity-30 flex-shrink-0"
+              className="text-[11px] font-mono text-[var(--ink-blue)] hover:opacity-70 disabled:opacity-30 shrink-0"
             >
               add
             </button>
             <button
               type="button"
               onClick={() => { setShowAddForm(false); setAddTitle(''); }}
-              className="text-[11px] font-mono text-faint hover:text-soft flex-shrink-0"
+              className="text-[11px] font-mono text-faint hover:text-soft shrink-0"
             >
               cancel
             </button>

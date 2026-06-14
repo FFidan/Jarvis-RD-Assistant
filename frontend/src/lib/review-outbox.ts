@@ -325,7 +325,7 @@ export const REVIEW_SYNC_PATH = '/api/review/sync';
  * `{ reviews: QueuedReview[] }`.
  */
 async function defaultPostBatch(batch: QueuedReview[]): Promise<ReviewSyncResult> {
-  let apiKey = '';
+  let apiKey: string;
   try {
     apiKey = useAuthStore.getState().getApiKey() ?? '';
   } catch {

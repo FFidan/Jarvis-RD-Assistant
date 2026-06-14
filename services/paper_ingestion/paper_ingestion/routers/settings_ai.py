@@ -170,7 +170,7 @@ async def apply_ai_settings(
         _APPLIER.apply(backend=req.backend, model=req.model, tier=tier)
     except Exception as exc:
         # str(exc) would reflect provider/admin-push internals to the API
-        # consumer; log server-side and surface a generic 502 (MED-PI-04).
+        # consumer; log server-side and surface a generic 502.
         logger.exception(
             "settings_ai apply failed", extra={"backend": req.backend, "model": req.model}
         )

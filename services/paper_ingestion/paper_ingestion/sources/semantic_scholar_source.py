@@ -61,12 +61,7 @@ class SemanticScholarSource(PaperSource):
         from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
         _cfg = get_paper_ingestion_settings()
-        cfg_key = config.config.get("api_key") if config.config else None
-        self._api_key: str | None = cfg_key or (
-            _cfg.semantic_scholar_api_key.get_secret_value()
-            if _cfg.semantic_scholar_api_key
-            else None
-        )
+        self._api_key: str | None = self._resolve_api_key(_cfg.semantic_scholar_api_key)
         # rate: 1/RATE_LIMIT_DELAY req/s (S2 free-tier 1 req/s)
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / RATE_LIMIT_DELAY)
 

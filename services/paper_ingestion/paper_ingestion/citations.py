@@ -145,7 +145,7 @@ async def sync_citations_for_paper(
 
     Accepts either an ``asyncpg.Pool`` (preferred) or a bare connection.
     When a pool is passed, S2 API calls happen **outside** any DB connection
-    scope so that long-running HTTP requests do not hold a connection (PI-014).
+    scope so that long-running HTTP requests do not hold a connection.
 
     For each citation/reference the function creates a stub paper via
     :func:`get_or_create_stub_paper` and inserts a ``paper_citations`` row

@@ -1,4 +1,4 @@
-"""Pulse domain contract tests — D2 collapse + B1-09 followup.
+"""Pulse domain contract tests.
 
 Exercises real SQL against the contract DB (session-scoped Postgres +
 per-test asyncpg transaction rollback).  Replaces:
@@ -15,7 +15,7 @@ per-test asyncpg transaction rollback).  Replaces:
   DROP; no new contract test needed (discovery is purely unit-level pipeline,
   not a DB-interaction boundary).
 
-B1-09 followup (W4 D2 residuals):
+Followup contract tests for residual SQL-substring assertions:
 
 - test_pulse_deck.py::test_persist_deck_upsert_replaces_old_cards — SQL-substring
   "DELETE FROM pulse_cards" replaced by real schema idempotency check.
@@ -209,7 +209,7 @@ async def test_rate_card_paper_not_in_any_deck_returns_404(
 
 
 # ---------------------------------------------------------------------------
-# §B1-09 followup — persist_deck idempotency against real schema
+# persist_deck idempotency against real schema
 # ---------------------------------------------------------------------------
 
 
@@ -295,7 +295,7 @@ async def test_persist_deck_idempotent_replaces_cards(contract_conn, contract_tw
 
 
 # ---------------------------------------------------------------------------
-# §B1-09 followup — load_today trash exclusion against real schema
+# load_today trash exclusion against real schema
 # ---------------------------------------------------------------------------
 
 
@@ -381,7 +381,7 @@ async def test_load_today_excludes_trashed_cards(contract_conn, contract_two_use
 
 
 # ---------------------------------------------------------------------------
-# §B1-09 followup — load_profile user_id isolation against real schema
+# load_profile user_id isolation against real schema
 # ---------------------------------------------------------------------------
 
 

@@ -34,7 +34,7 @@ export interface HardwareRecommendationAlias {
 }
 
 /**
- * Hardware-fit advisory returned by GET /api/system/models (B3-1 contract).
+ * Hardware-fit advisory returned by GET /api/system/models.
  * Optional — older backends omit this field; UI degrades gracefully.
  */
 export interface HardwareRecommendation {

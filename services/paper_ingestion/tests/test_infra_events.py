@@ -360,27 +360,57 @@ def test_over_limit_batch_is_capped_not_413(app_and_pool):
     )
 
 
-def test_oversize_content_length_returns_413(app_and_pool):
-    """SEC-NG-01: a Content-Length header exceeding _MAX_BODY_BYTES must yield 413
-    before the body is read — prevents unbounded memory consumption via DoS.
+def test_oversize_body_returns_413(app_and_pool):
+    """An oversized body yields 413 once the streamed bytes exceed _MAX_BODY_BYTES,
+    bounding memory consumption regardless of the declared Content-Length.
     """
     from paper_ingestion.routers import infra_events as m
 
     app, _pool, _conn = app_and_pool
     client = TestClient(app)
 
-    oversize = m._MAX_BODY_BYTES + 1
+    oversize_body = b"[" + b" " * (m._MAX_BODY_BYTES + 1) + b"]"
     resp = client.post(
         "/infra-events",
-        content=b"[]",  # tiny actual body — only the header matters
+        content=oversize_body,
         headers={
             "Content-Type": "application/json",
-            "Content-Length": str(oversize),
+            "X-Infra-Key": "test-infra-secret",
+        },
+    )
+    assert resp.status_code == 413, f"expected 413 for oversize body; got {resp.status_code}"
+
+
+def test_oversize_chunked_body_returns_413(app_and_pool):
+    """A chunked transfer (no Content-Length) cannot bypass the cap: the bounded
+    streamed read still raises 413 once the accumulated body exceeds the limit.
+    """
+    from paper_ingestion.routers import infra_events as m
+
+    app, _pool, _conn = app_and_pool
+    client = TestClient(app)
+
+    chunk = b" " * (256 * 1024)
+    over = (m._MAX_BODY_BYTES // len(chunk)) + 2
+
+    def _chunked():
+        # An iterable body makes httpx use Transfer-Encoding: chunked (no
+        # Content-Length header), the path the old guard could not see.
+        yield b"["
+        for _ in range(over):
+            yield chunk
+        yield b"]"
+
+    resp = client.post(
+        "/infra-events",
+        content=_chunked(),
+        headers={
+            "Content-Type": "application/json",
             "X-Infra-Key": "test-infra-secret",
         },
     )
     assert resp.status_code == 413, (
-        f"expected 413 for oversize Content-Length; got {resp.status_code}"
+        f"expected 413 for oversize chunked body; got {resp.status_code}"
     )
 
 

@@ -1,6 +1,6 @@
 """Recommendations eligibility-filter contract tests.
 
-Replaces the B1-09 SQL-substring cluster in test_recommender.py lines 186-223
+Replaces the SQL-substring cluster in test_recommender.py lines 186-223
 (TestFilterUnread) with real asyncpg assertions against the live schema.
 
 Survivor-of:
@@ -509,11 +509,11 @@ async def test_filter_unread_empty_candidate_list_returns_empty(contract_conn):
 
 
 # ---------------------------------------------------------------------------
-# Cluster 9 — Recommender weights precedence (C9-03)
+# Recommender weights precedence
 # Survivor-of test_recommender.py::TestReadWeightsPrecedence::* (4 mock-units).
-# C9-01/C9-02/C9-04 require full _refresh_recommendations_for_user with embedder
-# carve-out wiring — deferred to rot-on-touch (existing TestComputeScore +
-# TestAggregateToPapers pure-unit tests cover the scoring math).
+# Full _refresh_recommendations_for_user with embedder carve-out wiring deferred
+# to rot-on-touch (existing TestComputeScore + TestAggregateToPapers pure-unit
+# tests cover the scoring math).
 # ---------------------------------------------------------------------------
 
 

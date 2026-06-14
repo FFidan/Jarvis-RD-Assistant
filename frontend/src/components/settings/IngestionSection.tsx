@@ -242,7 +242,7 @@ function FirstBootModelBanner({ smartModel, vramGb }: FirstBootModelBannerProps)
 }
 
 // ---------------------------------------------------------------------------
-// HardwareRecommendationBanner — B3-2 (per-VRAM advisory)
+// HardwareRecommendationBanner — per-VRAM advisory
 // ---------------------------------------------------------------------------
 
 interface HardwareRecommendationBannerProps {
@@ -300,55 +300,46 @@ function HardwareRecommendationBanner({ recommendation }: HardwareRecommendation
 // FitBadge — §6.1
 // ---------------------------------------------------------------------------
 
+type FitStatus = 'fits' | 'partial' | 'unfit' | 'cloud' | 'unknown';
+
+/** Plain-language label + colour for each fit status (single source of truth). */
+const FIT_BADGE: Record<FitStatus, { label: string; colorClass: string }> = {
+  fits: { label: 'Fits', colorClass: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' },
+  partial: {
+    label: 'Runs, but slower',
+    colorClass: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
+  },
+  unfit: { label: "Won't fit", colorClass: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' },
+  cloud: { label: 'Cloud', colorClass: 'bg-muted text-muted-foreground' },
+  unknown: { label: 'GPU not detected', colorClass: 'bg-muted text-muted-foreground' },
+};
+
 interface FitBadgeProps {
-  status: 'fits' | 'partial' | 'unfit' | 'cloud' | 'unknown';
+  status: FitStatus;
+  /** Available VRAM — used only for the GB/GB detail tooltip, not the pill copy. */
   requiredVramGb?: number | null;
   availableVramGb?: number;
   largestFitting?: number;
 }
 
 function FitBadge({ status, requiredVramGb, availableVramGb, largestFitting }: FitBadgeProps) {
-  const fmt = (n: number) => n.toFixed(1);
-  const colorClass =
-    status === 'fits'
-      ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-      : status === 'partial'
-        ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
-        : status === 'unfit'
-          ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-          : 'bg-muted text-muted-foreground';
-
-  let copy: string;
-  switch (status) {
-    case 'fits':
-      copy =
-        requiredVramGb !== null && requiredVramGb !== undefined && availableVramGb !== undefined
-          ? `Fits — ${fmt(requiredVramGb)} GB / ${fmt(availableVramGb)} GB`
-          : 'Fits';
-      break;
-    case 'partial':
-      copy =
-        requiredVramGb !== null && requiredVramGb !== undefined && availableVramGb !== undefined
-          ? `Partial offload — ${fmt(requiredVramGb)} GB / ${fmt(availableVramGb)} GB · slower`
-          : 'Partial offload · slower';
-      break;
-    case 'unfit':
-      copy =
-        largestFitting !== undefined
-          ? `Won't fit · try ${largestFitting.toLocaleString()} tokens`
-          : "Won't fit";
-      break;
-    case 'cloud':
-      copy = 'Cloud';
-      break;
-    default:
-      copy = 'Unknown VRAM';
-  }
+  const { label, colorClass } = FIT_BADGE[status];
+  // 'unfit' is actionable — append the largest context length that fits.
+  const copy =
+    status === 'unfit' && largestFitting !== undefined
+      ? `${label} · try ${largestFitting.toLocaleString()} tokens`
+      : label;
+  // The raw GB / GB ratio is kept off the pill but available on hover.
+  const detail =
+    requiredVramGb != null && availableVramGb !== undefined
+      ? `${requiredVramGb.toFixed(1)} GB / ${availableVramGb.toFixed(1)} GB`
+      : undefined;
 
   return (
     <span
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${colorClass}`}
       data-testid={`fit-badge-${status}`}
+      title={detail}
     >
       {copy}
     </span>
@@ -506,13 +497,19 @@ function NumCtxSlider({
           </Label>
           {badgeStatus !== 'unknown' && (
             <FitBadge
-              status={badgeStatus as 'fits' | 'partial' | 'unfit' | 'cloud' | 'unknown'}
+              status={badgeStatus as FitStatus}
               requiredVramGb={req}
               availableVramGb={vramGb > 0 ? vramGb : undefined}
               largestFitting={largestFitting}
             />
           )}
         </div>
+        {/* GB / GB detail — kept off the badge pill, surfaced here behind the expander. */}
+        {req != null && vramGb > 0 && (
+          <p className="text-xs text-muted-foreground" data-testid={`fit-detail-${role}`}>
+            {req.toFixed(1)} GB / {vramGb.toFixed(1)} GB VRAM
+          </p>
+        )}
         <Slider
           min={0}
           max={stops.length - 1}
@@ -765,7 +762,7 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   // taking the custom-element path (all three model cards).
   const [saveError, setSaveError] = useState<{ key: string; message: string } | null>(null);
 
-  const { data: configs = [], isLoading } = useQuery({
+  const { data: configs = [], isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.config.all(),
     queryFn: fetchConfig,
   });
@@ -781,11 +778,15 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   const catalog = systemModels?.catalog ?? [];
   // machine_id from hardware response (Contract 06 §3)
   const machineId = hardware?.machine_id ?? 'local';
-  // B3-2: per-VRAM advisory recommendation (optional — absent on older backends)
+  // per-VRAM advisory recommendation (optional — absent on older backends)
   const hardwareRecommendation = systemModels?.hardware_recommendation;
   // First-boot banner shows the CURRENT smart model autoconfigure actually
   // seeded (current.smart_model), not the static bucket recommendation.
   const currentSmartModel = systemModels?.current?.smart_model;
+  // The concise "we picked X" banner only renders for a seeded model on a GPU
+  // (mirrors FirstBootModelBanner's own guard). When it can't render, the
+  // per-VRAM recommendation is the single advisory instead — never both.
+  const showFirstBootBanner = Boolean(currentSmartModel) && (hardware?.vram_gb ?? 0) > 0;
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
@@ -818,6 +819,14 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
 
   if (isLoading) {
     return <div className="py-8 text-center text-muted-foreground">Loading config...</div>;
+  }
+
+  if (isError) {
+    return (
+      <p className="py-8 text-center text-sm text-destructive" role="alert" data-testid="config-load-error">
+        Failed to load configuration. Check service health and try again.
+      </p>
+    );
   }
 
   if (configs.length === 0) {
@@ -885,12 +894,14 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
           {group === 'LLM Models' && hardware && (
             <HardwareStrip hardware={hardware} />
           )}
-          {group === 'LLM Models' && currentSmartModel && (
+          {/* ONE advisory only — the concise "we picked X" line when a model is
+              already seeded on a GPU, otherwise the per-VRAM recommendation. */}
+          {group === 'LLM Models' && showFirstBootBanner ? (
             <FirstBootModelBanner smartModel={currentSmartModel} vramGb={hardware?.vram_gb} />
-          )}
-          {/* B3-2: Per-VRAM advisory recommendation banner */}
-          {group === 'LLM Models' && hardwareRecommendation && (
-            <HardwareRecommendationBanner recommendation={hardwareRecommendation} />
+          ) : (
+            group === 'LLM Models' && hardwareRecommendation && (
+              <HardwareRecommendationBanner recommendation={hardwareRecommendation} />
+            )
           )}
           <div className="space-y-2">
             {(grouped[group] ?? []).map((entry) => {
@@ -939,11 +950,12 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
       {!llmGroup && hardware && (
         <HardwareStrip hardware={hardware} />
       )}
-      {!llmGroup && currentSmartModel && (
+      {!llmGroup && showFirstBootBanner ? (
         <FirstBootModelBanner smartModel={currentSmartModel} vramGb={hardware?.vram_gb} />
-      )}
-      {!llmGroup && hardwareRecommendation && (
-        <HardwareRecommendationBanner recommendation={hardwareRecommendation} />
+      ) : (
+        !llmGroup && hardwareRecommendation && (
+          <HardwareRecommendationBanner recommendation={hardwareRecommendation} />
+        )
       )}
     </div>
   );

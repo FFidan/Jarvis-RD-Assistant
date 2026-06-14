@@ -612,3 +612,74 @@ async def test_post_0094_backfill_rows_visible_to_owning_user(
         f"Backfill row user_id mismatch: expected {contract_two_users.user_a_id}, "
         f"got {db_row['user_id']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-user surface isolation: paper_summaries
+#
+# paper_summaries is keyed UNIQUE NULLS NOT DISTINCT (paper_id, user_id) — each
+# user gets their own summary for a shared canonical paper. GET /api/papers/{id}
+# must serve the CALLER's summary row, never another user's, even when both own
+# the (globally shared) paper. No existing test covers the summary read scope.
+# ---------------------------------------------------------------------------
+
+_A_SUMMARY_MARKER = "ZZZ-ISOLATION-A-SUMMARY-CONTENT"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_summary_read_scoped_to_calling_user(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+) -> None:
+    """User B must not see user A's paper_summaries row via GET /api/papers/{id}.
+
+    Seed: shared paper (discovered_by NULL, in both libraries) + a summary owned
+    by user A only. Asserts user B's paper detail returns summary=None (A's row
+    excluded) with 200, while user A's detail returns A's summary marker.
+    """
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('iso-ext-shared-summary', 'arxiv', 'shared-paper-summary-isolation',
+                   ARRAY['D. Author'], 'https://example.test/shared-summary', NULL)
+           RETURNING id"""
+    )
+    await contract_conn.executemany(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        [
+            (contract_two_users.user_a_id, paper_id),
+            (contract_two_users.user_b_id, paper_id),
+        ],
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries (paper_id, summary_brief, summary_detailed, user_id)
+           VALUES ($1, $2, $2, $3)""",
+        paper_id,
+        _A_SUMMARY_MARKER,
+        contract_two_users.user_a_id,
+    )
+
+    async with _make_contract_client(_pi_app_with_pool, contract_two_users.cookie_b) as client_b:
+        resp_b = await client_b.get(f"/api/papers/{paper_id}")
+    async with _make_contract_client(_pi_app_with_pool, contract_two_users.cookie_a) as client_a:
+        resp_a = await client_a.get(f"/api/papers/{paper_id}")
+
+    assert resp_b.status_code == 200, (
+        f"GET /api/papers/{{id}} as B returned {resp_b.status_code}: {resp_b.text[:300]}"
+    )
+    assert resp_b.json()["summary"] is None, (
+        f"LEAK: user B saw user A's summary row: {resp_b.text[:300]}"
+    )
+    assert _A_SUMMARY_MARKER not in resp_b.text, (
+        f"LEAK: A's summary marker visible to B: {resp_b.text[:300]}"
+    )
+
+    assert resp_a.status_code == 200, (
+        f"GET /api/papers/{{id}} as A returned {resp_a.status_code}: {resp_a.text[:300]}"
+    )
+    summary_a = resp_a.json()["summary"]
+    assert summary_a is not None and summary_a["summary_brief"] == _A_SUMMARY_MARKER, (
+        f"owner read regression: user A did not get their own summary: {resp_a.text[:300]}"
+    )

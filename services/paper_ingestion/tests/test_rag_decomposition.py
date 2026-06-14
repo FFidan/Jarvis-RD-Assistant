@@ -1,6 +1,6 @@
-"""Unit tests for rag/decomposition.py — PI-05 prompt-shape coverage.
+"""Unit tests for rag/decomposition.py — prompt-shape coverage.
 
-PI-05: decompose_query must use Shape A: system carries the decomposition rubric,
+decompose_query must use Shape A: system carries the decomposition rubric,
 user message wraps the question via wrap_delimited("user_question", ...).
 """
 
@@ -12,13 +12,13 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# PI-05: decompose_query — Shape A prompt split
+# decompose_query — Shape A prompt split
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_decompose_query_passes_system_prompt_in_options():
-    """PI-05: call_llm_structured must receive ChatCompletionOptions(system=...) non-empty."""
+    """call_llm_structured must receive ChatCompletionOptions(system=...) non-empty."""
     from pydantic import RootModel
 
     captured_calls: list[dict] = []
@@ -45,7 +45,7 @@ async def test_decompose_query_passes_system_prompt_in_options():
     assert captured_calls, "call_llm_structured was never called"
 
     opts = captured_calls[0]["options"]
-    assert opts.system, "ChatCompletionOptions.system must be non-empty (Shape A / PI-05)"
+    assert opts.system, "ChatCompletionOptions.system must be non-empty (Shape A)"
 
     prompt_text = captured_calls[0]["prompt"]
     assert "user_question" in prompt_text, (
@@ -55,7 +55,7 @@ async def test_decompose_query_passes_system_prompt_in_options():
 
 @pytest.mark.asyncio
 async def test_decompose_query_user_message_contains_question():
-    """PI-05: the user-role prompt must contain the raw question text."""
+    """The user-role prompt must contain the raw question text."""
     from pydantic import RootModel
 
     captured_calls: list[dict] = []

@@ -55,13 +55,13 @@ tiers:
         rank: 1
         score: 67
         evidence: bench
-        reasoning: "Bench-validated winner for the ≈16 GB tier (validated on RTX 5060 Ti). Stable non-thinking model; no streaming-strip dependency. Strong citation quality."
+        reasoning: "Bench-validated winner for the ≈16 GB tier (validated on ≈16 GB GPU). Stable non-thinking model; no streaming-strip dependency. Strong citation quality."
       - backend: ollama
         model: deepseek-r1:7b
         rank: 2
         score: 79
         evidence: bench
-        reasoning: "DeepSeek-R1 distill on qwen-7b, thinking-mode. Bench-validated on the ≈16 GB tier (RTX 5060 Ti) at ~5 GB Q4 native. Scores above qwen2.5 baseline on reasoning prompts but shows weaker citation grounding (uses internal Paper N labels instead of arxiv IDs). Thinking-model option for users who want chain-of-thought reasoning; non-thinking qwen2.5 stays #1 for citation quality."
+        reasoning: "DeepSeek-R1 distill on qwen-7b, thinking-mode. Bench-validated on the ≈16 GB tier (≈16 GB GPU) at ~5 GB Q4 native. Scores above qwen2.5 baseline on reasoning prompts but shows weaker citation grounding (uses internal Paper N labels instead of arxiv IDs). Thinking-model option for users who want chain-of-thought reasoning; non-thinking qwen2.5 stays #1 for citation quality."
 
   16-24:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
@@ -73,7 +73,7 @@ tiers:
         evidence: sim-bench
         sim_vram_mb: 19320
         sim_or_native: sim
-        reasoning: "Sim-bench candidate for the 16-24 GB tier (simulated on the ≈48 GB tier, RTX 5880 Ada, at constrained util). Non-thinking model, no think-strip dependency. Strong on focused single-paper tasks; relative ranking valid across cards in this VRAM range."
+        reasoning: "Sim-bench candidate for the 16-24 GB tier (simulated on the ≈48 GB tier at constrained util). Non-thinking model, no think-strip dependency. Strong on focused single-paper tasks; relative ranking valid across cards in this VRAM range."
       - backend: ollama
         model: qwen2.5:7b-instruct
         rank: 2
@@ -91,7 +91,7 @@ tiers:
         evidence: sim-bench
         sim_vram_mb: 24576
         sim_or_native: sim
-        reasoning: "Highest-scoring sim-tier candidate for the 24-48 GB tier (simulated on the ≈48 GB tier, RTX 5880 Ada). Non-thinking model, no think-strip dependency. Leads among sim-tier candidates on methodology, critique, synthesis, and math prompts."
+        reasoning: "Highest-scoring sim-tier candidate for the 24-48 GB tier (simulated on the ≈48 GB tier). Non-thinking model, no think-strip dependency. Leads among sim-tier candidates on methodology, critique, synthesis, and math prompts."
       - backend: ollama
         model: qwen2.5:7b-instruct
         rank: 2
@@ -107,19 +107,19 @@ tiers:
         rank: 1
         score: 92
         evidence: bench
-        reasoning: "Bench-validated winner for the ≥48 GB tier (validated on RTX 5880 Ada). Think-strip confirmed working — zero tag leakage across all prompts. Known caveat: a low max_tokens cap can fire inside a <think> block, leaving full_answer empty; production fix is to raise max_tokens for thinking models or detect in_think=True at stream end and retry."
+        reasoning: "Bench-validated winner for the ≥48 GB tier (validated on ≥40 GB / 48 GB-class GPU). Think-strip confirmed working — zero tag leakage across all prompts. Known caveat: a low max_tokens cap can fire inside a <think> block, leaving full_answer empty; production fix is to raise max_tokens for thinking models or detect in_think=True at stream end and retry."
       - backend: vllm
         model: Qwen/Qwen3-8B-AWQ
         rank: 2
         score: 84
         evidence: bench
-        reasoning: "Bench-validated on the ≥48 GB tier (RTX 5880 Ada). Thinking-mode model; think-strip improvement visible vs earlier baselines. Same empty-answer-on-truncation caveat as the 14B (see known issues below). Recommended when the 14B is too slow or memory-constrained."
+        reasoning: "Bench-validated on the ≥48 GB tier (≥40 GB / 48 GB-class GPU). Thinking-mode model; think-strip improvement visible vs earlier baselines. Same empty-answer-on-truncation caveat as the 14B (see known issues below). Recommended when the 14B is too slow or memory-constrained."
       - backend: ollama
         model: qwen3:30b-a3b
         rank: 3
         score: null
         evidence: live-deployment
-        reasoning: "Live-deployment validated on a 48 GB RTX 5880 Ada at 16k context (v0.7). Catalog-verified and assignable via the UI. Recommended Ollama default for ≥40 GB hardware; does not require vLLM."
+        reasoning: "Live-deployment validated on a 48 GB deployment at 16k context (v0.7). Catalog-verified and assignable via the UI. Recommended Ollama default for ≥40 GB hardware; does not require vLLM."
 
 # Known issues + future candidates:
 #

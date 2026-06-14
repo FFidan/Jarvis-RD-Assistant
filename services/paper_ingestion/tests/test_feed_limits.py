@@ -104,7 +104,7 @@ def _setup_conn(mock_pool: MagicMock, n: int = 3):
 
 
 # ---------------------------------------------------------------------------
-# Parametrized status-code regression (B1-04)
+# Parametrized status-code regression
 # ---------------------------------------------------------------------------
 
 _LIMIT_CASES = [

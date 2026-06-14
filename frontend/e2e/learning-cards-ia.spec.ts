@@ -63,6 +63,38 @@ const REVIEW_RESPONSE = {
 async function seedRoutes(page: Page, { dueNow = 5 }: { dueNow?: number } = {}) {
   const stats = dueNow > 0 ? STATS_WITH_DUE : STATS_ALL_DONE;
 
+  // Dismiss the onboarding tour so it doesn't intercept the page or crash the shell.
+  await page.addInitScript(() => {
+    localStorage.setItem('jarvis-onboarding-dismissed', 'true');
+  });
+
+  // Register catch-all FIRST so specific handlers added below take priority (LIFO).
+  await page.route('/api/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
+  );
+
+  // Specific handlers (registered after catch-all = checked first due to LIFO):
+
+  // Auth verify — AppShell checks auth state on mount.
+  await page.route('/api/auth/verify', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 1, email: 'test@example.com', role: 'user' }) }),
+  );
+
+  // FirstRunGate — must return setup_completed: true or the wizard intercepts the page.
+  await page.route('/api/setup/status', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) }),
+  );
+
+  // OnboardingTour (in AppShell) fetches feed + topics on every render.
+  // Without correct shapes it crashes: feedQuery.data.papers.length throws.
+  await page.route('**/api/papers/feed**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: [], total: 0 }) }),
+  );
+  await page.route('/api/topics', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+  );
+
+  // Page-specific mocks:
   await page.route('**/api/stats', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(stats) }),
   );
@@ -71,7 +103,7 @@ async function seedRoutes(page: Page, { dueNow = 5 }: { dueNow?: number } = {}) 
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(DECKS) }),
   );
 
-  // First call returns the due card; subsequent calls return empty (session end)
+  // First call returns the due card; subsequent calls return empty (session end).
   let reviewCallCount = 0;
   await page.route('**/api/review/next**', (route) => {
     reviewCallCount++;
@@ -83,7 +115,10 @@ async function seedRoutes(page: Page, { dueNow = 5 }: { dueNow?: number } = {}) 
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(REVIEW_RESPONSE) }),
   );
 
-  await page.route('**/api/cards**', (route) =>
+  // Use /api/cards* (not **/api/cards**) — the ** prefix would also match Vite's
+  // source module URL /src/lib/api/cards.ts, returning JSON for a JS module request
+  // and crashing the page with a MIME-type error.
+  await page.route('/api/cards*', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
   );
 }
@@ -98,9 +133,13 @@ test.describe('Learning Cards IA — review session', () => {
   });
 
   test('shows breadcrumb with Learn / Flashcards / All decks · session', async ({ page }) => {
-    await expect(page.getByText('Learn')).toBeVisible({ timeout: 8000 });
-    await expect(page.getByRole('button', { name: /flashcards/i })).toBeVisible();
-    await expect(page.getByText(/all decks · session/i)).toBeVisible();
+    // Scope to the breadcrumb nav — "Learn" also appears as a sidebar section
+    // header and "Learning Cards" nav link (both contain "Learn"), so an
+    // unscoped getByText('Learn') is a strict-mode violation.
+    const breadcrumb = page.getByRole('navigation', { name: 'Breadcrumb' });
+    await expect(breadcrumb.getByText('Learn', { exact: true })).toBeVisible({ timeout: 8000 });
+    await expect(breadcrumb.getByRole('button', { name: /flashcards/i })).toBeVisible();
+    await expect(breadcrumb.getByText(/all decks · session/i)).toBeVisible();
   });
 
   test('shows PROGRESS bar on review entry', async ({ page }) => {

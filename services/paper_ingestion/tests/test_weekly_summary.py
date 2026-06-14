@@ -187,12 +187,12 @@ async def test_generate_weekly_summary_no_dict_get_on_theme_text() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SEC-HIGH-06 / PI-04: prompt-injection hardening
+# Prompt-injection hardening
 # ---------------------------------------------------------------------------
 
 
 def test_weekly_summary_topic_injection() -> None:
-    """SEC-HIGH-06a: a topic with injection chars is safely delimited in the prompt.
+    """A topic with injection chars is safely delimited in the prompt.
 
     Verifies that wrap_delimited("topic", ...) — the path now used by
     generate_weekly_summary — neutralises ``"``, ``<``, and CR in the topic name
@@ -218,7 +218,7 @@ def test_weekly_summary_topic_injection() -> None:
 
 @pytest.mark.asyncio
 async def test_weekly_summary_fallback_escapes_topic() -> None:
-    """PI-04: the fallback summary (< 2 papers) uses safe_for_prompt on topic_name.
+    """The fallback summary (< 2 papers) uses safe_for_prompt on topic_name.
 
     When only one paper matches a topic, the LLM path is skipped and the fallback
     summary string is used instead.  That string must not embed raw injection chars.

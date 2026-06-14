@@ -78,7 +78,7 @@ async function setupMocks(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ configured: true }),
+      body: JSON.stringify({ configured: true, setup_completed: true }),
     });
   });
 
@@ -178,16 +178,15 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
     await expect(page.getByText('§I', { exact: true })).toBeVisible({ timeout: 8000 });
   });
 
-  test('§II Sources rail items appear from mocked GET /api/sources', async ({ page }) => {
+  test('§II Sources rail item appears (single Sources entry — not per-source-type)', async ({ page }) => {
     await setupMocks(page);
     await page.goto('/settings');
 
-    // Wait for rail to render — admin session so §II should appear
+    // Wait for rail to render — admin session so §II should appear.
+    // §II Sources is now a single "Sources" rail item (SettingsRail ALL_SECTIONS).
+    // Individual per-source-type items were removed in the v0.8 IA redesign.
     await expect(page.getByText('§II', { exact: true })).toBeVisible({ timeout: 8000 });
-    // ArXiv source should appear as a rail item
-    await expect(page.getByRole('button', { name: 'ArXiv' })).toBeVisible({ timeout: 8000 });
-    await expect(page.getByRole('button', { name: 'Semantic Scholar' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'OpenAlex' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sources' })).toBeVisible({ timeout: 8000 });
   });
 
   test('clicking §I Account / Profile & Email shows Account detail pane', async ({ page }) => {
@@ -224,7 +223,7 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_SETUP_STATUS) });
     });
     await page.route('**/api/setup/status', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true }) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) });
     });
     await page.route('**/api/account', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...MOCK_ACCOUNT, role: 'user' }) });
@@ -272,7 +271,7 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_SETUP_STATUS) });
     });
     await page.route('**/api/setup/status', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true }) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) });
     });
     await page.route('**/api/sources', async (route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });

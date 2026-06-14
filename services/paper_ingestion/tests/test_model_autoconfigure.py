@@ -139,16 +139,17 @@ def test_chooser_single_installed_model() -> None:
 
 
 def test_chooser_cpu_carveout_keeps_smallest_first() -> None:
-    """vram_gb == 0.0 → today's smallest-first pick. qwen3:4b is the smallest
-    catalog LLM (qwen3:1.7b is NOT a model_catalog.json entry)."""
+    """vram_gb == 0.0 → smallest-first pick among the installed set; with only
+    qwen3:4b and qwen3:8b installed, qwen3:4b is the smallest available."""
     best = _choose("smart", ("qwen3:4b", "qwen3:8b"), _hw(0.0, 0))
     assert best is not None and best["id"] == "qwen3:4b"
 
 
 def test_chooser_empty_installed_falls_back_smallest_first() -> None:
-    """installed=[] (tags fetch failed) → today's catalog-only smallest-first pick."""
+    """installed=[] (tags fetch failed) → catalog-only smallest-first pick.
+    qwen3:1.7b is the smallest smart catalog entry, so it leads the ascending sort."""
     best = _choose("smart", (), _hw(16.0, 2))
-    assert best is not None and best["id"] == "qwen3:4b"
+    assert best is not None and best["id"] == "qwen3:1.7b"
 
 
 # ---------------------------------------------------------------------------
@@ -283,8 +284,8 @@ async def test_first_boot_autoconfigure_seeds_real_pulled_model(contract_conn, m
 @pytest.mark.contract
 @pytest.mark.asyncio(loop_scope="session")
 async def test_autoconfigure_tags_fetch_failure_keeps_legacy_fallback(contract_conn, monkeypatch):
-    """Ollama unreachable at hook time → installed=[] → today's smallest-first
-    seeding (qwen3:4b for smart) instead of crashing boot."""
+    """Ollama unreachable at hook time → installed=[] → catalog-only smallest-first
+    seeding (qwen3:1.7b, the smallest smart entry) instead of crashing boot."""
     pool = SharedConnPool(contract_conn)
     app = SimpleNamespace(
         state=SimpleNamespace(
@@ -296,7 +297,7 @@ async def test_autoconfigure_tags_fetch_failure_keeps_legacy_fallback(contract_c
 
     await _autoconfigure_models_hook(app)
 
-    assert await _read_config_value(contract_conn, "llm.smart_model") == "qwen3:4b"
+    assert await _read_config_value(contract_conn, "llm.smart_model") == "qwen3:1.7b"
     assert await _read_config_value(contract_conn, "system.models_autoconfigured") is True
 
 

@@ -417,7 +417,7 @@ async def test_analytics_summary_user_b_excludes_user_a_data(
 
 
 # ---------------------------------------------------------------------------
-# §A190 — B4-01 fix: HTTP review increments daily_log.cards_reviewed
+# HTTP review increments daily_log.cards_reviewed
 # ---------------------------------------------------------------------------
 
 
@@ -426,7 +426,7 @@ async def test_http_review_increments_cards_reviewed_total(
 ):
     """POST /api/review/{card_id} increments daily_log so analytics/summary reflects it.
 
-    Before B4-01 fix, submit_review never wrote daily_log, so cards_reviewed_total
+    Before the fix, submit_review never wrote daily_log, so cards_reviewed_total
     and cards_review_streak_days were always 0 for HTTP/PWA reviewers.
 
     cards_reviewed_total is windowed to [today-days, today) — it excludes today
@@ -470,11 +470,11 @@ async def test_http_review_increments_cards_reviewed_total(
     body = summary_resp.json()
     assert body["cards_reviewed_total"] >= 2, (
         f"Expected cards_reviewed_total >= 2 (prior-day daily_log row inside the "
-        f"window); got {body['cards_reviewed_total']} (B4-01 fix not applied?)"
+        f"window); got {body['cards_reviewed_total']}"
     )
     assert body["cards_review_streak_days"] >= 2, (
         f"Expected cards_review_streak_days >= 2 (prior day + today); "
-        f"got {body['cards_review_streak_days']} (B4-01 fix not applied?)"
+        f"got {body['cards_review_streak_days']}"
     )
 
 

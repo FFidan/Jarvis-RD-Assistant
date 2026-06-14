@@ -32,6 +32,11 @@ from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 
+
+class _CardFetchError(Exception):
+    """Raised when the learning engine request fails (distinct from an empty queue)."""
+
+
 # Conversation states
 SHOWING_FRONT = 0
 SHOWING_BACK = 1
@@ -49,7 +54,12 @@ _RATING_RE = re.compile(r"^rate_([1-4])$")
 
 
 async def _fetch_next_card(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
-    """Fetch the next due card from the learning engine; returns None when none are due."""
+    """Fetch the next due card from the learning engine.
+
+    Returns the next card dict, or ``None`` when the queue is empty.
+    Raises ``_CardFetchError`` on network / API errors so callers can
+    distinguish a real failure from a genuinely empty queue.
+    """
     http = get_http(context)
     config = get_config(context)
     jarvis_user_id = get_jarvis_user_id(context)
@@ -65,9 +75,9 @@ async def _fetch_next_card(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
         if isinstance(cards, list) and cards:
             return cards[0]
         return None
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to fetch next review card")
-        return None
+        raise _CardFetchError() from exc
 
 
 def _show_answer_keyboard() -> InlineKeyboardMarkup:
@@ -145,7 +155,11 @@ async def review_start(
     context.user_data["cards_reviewed"] = 0
     context.user_data["review_start_time"] = utc_now_iso()
 
-    card = await _fetch_next_card(context)
+    try:
+        card = await _fetch_next_card(context)
+    except _CardFetchError:
+        await msg.reply_text("Couldn't load cards — try /review again.", parse_mode="HTML")
+        return ConversationHandler.END
     if card is None:
         await msg.reply_text("No cards due! You're all caught up.", parse_mode="HTML")
         return ConversationHandler.END
@@ -266,7 +280,15 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["cards_reviewed"] = context.user_data.get("cards_reviewed", 0) + 1
 
     # Fetch next card
-    next_card = await _fetch_next_card(context)
+    try:
+        next_card = await _fetch_next_card(context)
+    except _CardFetchError:
+        await query.edit_message_text(
+            f"Rated: <b>{label}</b>. Next review: {next_review_str}\n\n"
+            "Couldn't load cards — try /review again.",
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
     if next_card is None:
         reviewed = context.user_data.get("cards_reviewed", 0)
         await query.edit_message_text(

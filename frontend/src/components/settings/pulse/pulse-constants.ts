@@ -59,11 +59,12 @@ export const PULSE_WEIGHT_KEYS: PulseWeightKey[] = [
   'classifier',
 ];
 
+/** Canonical plain-language label for each signal key — single source of truth for signal labels. */
 export const PULSE_WEIGHT_LABELS: Record<PulseWeightKey, string> = {
-  embedding: 'Embedding similarity',
+  embedding: 'Semantic similarity',
   topic: 'Topic match',
-  llm_relevance: 'LLM relevance',
-  llm_novelty: 'LLM novelty',
+  llm_relevance: 'Relevance score',
+  llm_novelty: 'Novelty score',
   author_bonus: 'Tracked-author bonus',
   recency: 'Recency',
   citation_pagerank: 'Citation PageRank',
@@ -78,19 +79,19 @@ export const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
   topic:
     "Match between the paper's content and your configured research Topics. High weight = stay close to your declared research interests.",
   llm_relevance:
-    'An LLM judges how relevant this paper is to your research focus. Slower but more accurate than keyword matching. High weight = quality over speed.',
+    'How relevant this paper is to your research focus, scored by a language model. Slower but more accurate than keyword matching. High weight = quality over speed.',
   llm_novelty:
-    "An LLM judges how novel or surprising this paper is given your reading history. High weight = prioritise papers you're unlikely to have already seen.",
+    "How novel or surprising this paper is given your reading history, scored by a language model. High weight = prioritise papers you're unlikely to have already seen.",
   author_bonus:
     'Additive bonus for papers co-authored by anyone in your tracked Authors list. High weight = always surface papers by your followed researchers.',
   recency:
     'Prefer papers published more recently. High weight = always surface the newest work, even if it scores lower on relevance.',
   citation_pagerank:
-    'Boosts papers that are highly influential in the citation network near your interests. Also needs citation data — fetch citations for some papers first.',
+    'Boosts papers that are highly influential in the citation network near your interests. Needs citation data — fetch citations for some papers first.',
   citation_count:
-    'Boosts papers with more citations from source metadata. Also needs citation data — fetch citations for some papers first.',
+    'Boosts papers with more citations from source metadata. Needs citation data — fetch citations for some papers first.',
   citation_adamic_adar:
-    'Boosts candidates that share specific citation neighbours with papers you liked, without computing the full graph. Also needs citation data.',
+    'Boosts candidates that share specific citation neighbours with papers you liked, without computing the full graph. Needs citation data — fetch citations for some papers first.',
   classifier:
     'Probability from a personal classifier trained on your Pulse ratings. Gets better as you rate more papers — best after about 30 ratings.',
 };
@@ -105,22 +106,22 @@ export const CONDITIONAL_SIGNAL_GATES: Partial<
   citation_pagerank: {
     capability: 'networkx',
     message:
-      'Citation signals need the networkx library on the server. Ask your administrator to install it.',
+      'Citation graph signals need the `networkx` Python package on the server. Install it (`pip install networkx`) and restart the backend to enable this signal.',
   },
   citation_count: {
     capability: 'networkx',
     message:
-      'Citation signals need the networkx library on the server. Ask your administrator to install it.',
+      'Citation graph signals need the `networkx` Python package on the server. Install it (`pip install networkx`) and restart the backend to enable this signal.',
   },
   citation_adamic_adar: {
     capability: 'networkx',
     message:
-      'Citation signals need the networkx library on the server. Ask your administrator to install it.',
+      'Citation graph signals need the `networkx` Python package on the server. Install it (`pip install networkx`) and restart the backend to enable this signal.',
   },
   classifier: {
     capability: 'scikit_learn',
     message:
-      'The personal classifier needs scikit-learn on the server. Ask your administrator to install it.',
+      'The personal classifier needs the `scikit-learn` Python package on the server. Install it (`pip install scikit-learn`) and restart the backend to enable this signal.',
   },
 };
 

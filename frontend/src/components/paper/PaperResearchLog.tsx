@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { type Paper, type Summary, type Chunk, type UserState } from '@/types';
 import { Badge } from '@/components/ui/badge';
+import { SOURCE_LABELS } from '@/components/feed/source-labels';
 import { Button } from '@/components/ui/button';
 import { EvidenceTab } from './EvidenceTab';
 import { ChunksTab } from './ChunksTab';
@@ -21,6 +22,14 @@ import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { formatDate, formatAuthors, cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, ExternalLink, AlertTriangle, ShieldCheck, Wand2 } from 'lucide-react';
 import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
+
+// Reuse the canonical discovery-source labels; add the paper-only source types.
+const PAPER_SOURCE_LABELS: Record<string, string> = {
+  ...SOURCE_LABELS,
+  upload: 'Upload',
+  doi: 'DOI',
+  web: 'Web',
+};
 
 // ---- Section wrapper ------------------------------------------------------
 
@@ -242,7 +251,7 @@ export function PaperResearchLog({
         )}
 
         <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-          <Badge variant="outline">{paper.source_type}</Badge>
+          <Badge variant="outline">{PAPER_SOURCE_LABELS[paper.source_type] ?? paper.source_type}</Badge>
           <span>Published: {formatDate(paper.published_date ?? paper.created_at)}</span>
           {paper.citation_count > 0 && (
             <Badge variant="secondary">{paper.citation_count} citations</Badge>
@@ -361,13 +370,13 @@ export function PaperResearchLog({
           <LazyChunksSection chunks={chunks} />
         ) : (
           <p className="text-sm text-muted-foreground">
-            Process the PDF first to extract text chunks.
+            Analyze this paper to enable search and Q&amp;A.
           </p>
         )}
       </ResearchSection>
 
       {/* ── Ask this paper ───────────────────────────────────────────── */}
-      {/* RAG chat is an explicit offline NON-GOAL — show online-only indicator. */}
+      {/* Asking questions about a paper is an explicit offline NON-GOAL — show online-only indicator. */}
       <ResearchSection id="section-ask" title="Ask This Paper">
         {!isOnline ? (
           <div
@@ -377,7 +386,7 @@ export function PaperResearchLog({
             <div className="mb-2 flex justify-center">
               <OfflineIndicator variant="online-only" label="Ask This Paper" />
             </div>
-            <p>RAG chat requires an internet connection and a running model.</p>
+            <p>Asking questions about this paper requires an internet connection and a running model.</p>
           </div>
         ) : chunks.length === 0 ? (
           <AnalyzeCTA />

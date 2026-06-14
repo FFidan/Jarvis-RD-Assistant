@@ -88,9 +88,9 @@ describe('LoginPage', () => {
     renderLoginPage({ configured: true, smtp_configured: false, setup_mode: 'single' });
     // useEffect fires after render to flip mode.
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Enter JARVIS_API_KEY/i)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/Your API key/i)).toBeInTheDocument();
     });
-    const input = screen.getByPlaceholderText(/Enter JARVIS_API_KEY/i);
+    const input = screen.getByPlaceholderText(/Your API key/i);
     expect(input).toHaveAttribute('type', 'password');
   });
 
@@ -105,7 +105,7 @@ describe('LoginPage', () => {
     renderLoginPage({ configured: true, smtp_configured: false, setup_mode: 'single' });
     // Wait for the effect to flip to api-key, then switch back.
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Enter JARVIS_API_KEY/i)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/Your API key/i)).toBeInTheDocument();
     });
     await userEvent.click(screen.getByRole('button', { name: /use magic link instead/i }));
     await waitFor(() => {
@@ -154,7 +154,7 @@ describe('LoginPage', () => {
     renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'single' });
 
     await user.click(screen.getByRole('button', { name: /use api key instead/i }));
-    const input = screen.getByPlaceholderText(/Enter JARVIS_API_KEY/i);
+    const input = screen.getByPlaceholderText(/Your API key/i);
     expect(input).toBeInTheDocument();
     expect(input).toHaveAttribute('type', 'password');
   });
@@ -171,7 +171,7 @@ describe('LoginPage', () => {
     renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'multi' });
 
     await user.click(screen.getByRole('button', { name: /use api key instead/i }));
-    const input = screen.getByPlaceholderText(/Enter JARVIS_API_KEY/i);
+    const input = screen.getByPlaceholderText(/Your API key/i);
     await user.type(input, 'some-api-key-value');
     await user.click(screen.getByRole('button', { name: /^sign in$/i }));
 
@@ -186,7 +186,7 @@ describe('LoginPage', () => {
     const user = userEvent.setup();
     renderLoginPage({ configured: true, smtp_configured: true, setup_mode: 'single' });
     await user.click(screen.getByRole('button', { name: /use api key instead/i }));
-    const input = screen.getByPlaceholderText(/Enter JARVIS_API_KEY/i);
+    const input = screen.getByPlaceholderText(/Your API key/i);
     expect(input).toHaveAttribute('autocomplete', 'off');
   });
 

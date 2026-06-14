@@ -7,8 +7,32 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { PulseAdvancedTuningCard } from '@/components/settings/pulse/PulseAdvancedTuningCard';
 import type { ConfigEntry } from '@/types';
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@/lib/api')>();
+  return {
+    ...orig,
+    fetchPulseDebug: vi.fn().mockResolvedValue({
+      deck_date: '2026-01-01',
+      card_count: 0,
+      degraded_reason: null,
+      source_counts: {},
+      source_diagnostics: {},
+      topic_embeddings: [],
+      top_cards: [],
+      classifier_available: false,
+      classifier_sample_count: null,
+      classifier_feature_names: [],
+      classifier_auc: null,
+      classifier_auc_degradation_reason: null,
+      classifier_degradation_reason: null,
+    }),
+  };
+});
 
 function makeMut(mutate = vi.fn()) {
   return {
@@ -44,20 +68,31 @@ function makeConfigs(extra: ConfigEntry[] = []): ConfigEntry[] {
   ];
 }
 
+function renderCard(
+  props: Parameters<typeof PulseAdvancedTuningCard>[0],
+) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <PulseAdvancedTuningCard {...props} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
 describe('PulseAdvancedTuningCard — recommendation.enabled toggle', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('renders toggle as checked when recommendation.enabled is true', () => {
     const configs = makeConfigs([{ key: 'recommendation.enabled', value: true }]);
-    render(
-      <PulseAdvancedTuningCard
-        configs={configs}
-        setMut={makeMut()}
-        settingsControlsDisabled={false}
-        hasNetworkx={false}
-        hasSklearn={false}
-      />,
-    );
+    renderCard({
+      configs,
+      setMut: makeMut(),
+      settingsControlsDisabled: false,
+      hasNetworkx: false,
+      hasSklearn: false,
+    });
     // Open the collapsible
     fireEvent.click(screen.getByRole('button', { name: /advanced tuning/i }));
     const toggle = screen.getByTestId('recommendation-enabled-toggle');
@@ -66,15 +101,13 @@ describe('PulseAdvancedTuningCard — recommendation.enabled toggle', () => {
 
   it('renders toggle as unchecked when recommendation.enabled is false', () => {
     const configs = makeConfigs([{ key: 'recommendation.enabled', value: false }]);
-    render(
-      <PulseAdvancedTuningCard
-        configs={configs}
-        setMut={makeMut()}
-        settingsControlsDisabled={false}
-        hasNetworkx={false}
-        hasSklearn={false}
-      />,
-    );
+    renderCard({
+      configs,
+      setMut: makeMut(),
+      settingsControlsDisabled: false,
+      hasNetworkx: false,
+      hasSklearn: false,
+    });
     fireEvent.click(screen.getByRole('button', { name: /advanced tuning/i }));
     const toggle = screen.getByTestId('recommendation-enabled-toggle');
     expect(toggle).toHaveAttribute('aria-checked', 'false');
@@ -83,15 +116,13 @@ describe('PulseAdvancedTuningCard — recommendation.enabled toggle', () => {
   it('calls setMut.mutate with negated value when clicked', () => {
     const mutate = vi.fn();
     const configs = makeConfigs([{ key: 'recommendation.enabled', value: true }]);
-    render(
-      <PulseAdvancedTuningCard
-        configs={configs}
-        setMut={makeMut(mutate)}
-        settingsControlsDisabled={false}
-        hasNetworkx={false}
-        hasSklearn={false}
-      />,
-    );
+    renderCard({
+      configs,
+      setMut: makeMut(mutate),
+      settingsControlsDisabled: false,
+      hasNetworkx: false,
+      hasSklearn: false,
+    });
     fireEvent.click(screen.getByRole('button', { name: /advanced tuning/i }));
     fireEvent.click(screen.getByTestId('recommendation-enabled-toggle'));
     expect(mutate).toHaveBeenCalledWith({ key: 'recommendation.enabled', value: false });
@@ -100,15 +131,13 @@ describe('PulseAdvancedTuningCard — recommendation.enabled toggle', () => {
   it('does not call mutate when controls are disabled', () => {
     const mutate = vi.fn();
     const configs = makeConfigs([{ key: 'recommendation.enabled', value: true }]);
-    render(
-      <PulseAdvancedTuningCard
-        configs={configs}
-        setMut={makeMut(mutate)}
-        settingsControlsDisabled={true}
-        hasNetworkx={false}
-        hasSklearn={false}
-      />,
-    );
+    renderCard({
+      configs,
+      setMut: makeMut(mutate),
+      settingsControlsDisabled: true,
+      hasNetworkx: false,
+      hasSklearn: false,
+    });
     fireEvent.click(screen.getByRole('button', { name: /advanced tuning/i }));
     fireEvent.click(screen.getByTestId('recommendation-enabled-toggle'));
     expect(mutate).not.toHaveBeenCalled();

@@ -696,7 +696,7 @@ async def test_settings_ai_post_rejects_non_candidate_model(_ai_settings_client,
 
 # ---------------------------------------------------------------------------
 # test_settings_ai_apply_failure_returns_generic_502
-# Verified: routers/settings_ai.py:94-102 (apply_ai_settings 502 branch — MED-PI-04)
+# Verified: routers/settings_ai.py:94-102 (apply_ai_settings 502 branch)
 # regression guard — exc message must NOT appear in response body
 # ---------------------------------------------------------------------------
 
@@ -704,7 +704,7 @@ async def test_settings_ai_post_rejects_non_candidate_model(_ai_settings_client,
 async def test_settings_ai_apply_failure_returns_generic_502(_ai_settings_client, monkeypatch):
     """POST /api/settings/ai returns 502 with a generic detail when _APPLIER.apply raises.
 
-    Regression guard for MED-PI-04: the exception message must NOT be reflected
+    Regression guard: the exception message must NOT be reflected
     in the response body (no f-string leak of str(exc)).
 
     # Verified: routers/settings_ai.py:94-102 (try/except → HTTPException 502)
@@ -734,9 +734,7 @@ async def test_settings_ai_apply_failure_returns_generic_502(_ai_settings_client
     assert resp.json()["detail"] == "apply failed; previous config restored", (
         f"502 detail must be generic; got: {resp.json().get('detail')!r}"
     )
-    assert sentinel not in resp.text, (
-        "Exception message must NOT appear in the response body (MED-PI-04 regression)"
-    )
+    assert sentinel not in resp.text, "Exception message must NOT appear in the response body"
 
 
 # ---------------------------------------------------------------------------

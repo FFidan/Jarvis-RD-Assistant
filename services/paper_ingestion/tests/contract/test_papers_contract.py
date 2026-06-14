@@ -1,4 +1,4 @@
-"""papers domain contract tests (wave 4.4.D1).
+"""papers domain contract tests.
 
 Covers endpoints NOT included in the shared IDOR quadruples at
 libs/jarvis_common/tests/contract/test_idor_contract.py:
@@ -151,7 +151,7 @@ async def test_annotations_owner_gets_200_with_correct_shape(
 
 
 # ---------------------------------------------------------------------------
-# B1-09 collapse wave 4.4 — behavioral replacements for SQL-substring/param-binding tests
+# behavioral replacements for SQL-substring/param-binding tests
 #
 # Each test below replaces 1-N deleted _make_pool_and_conn tests whose primary
 # assertion was a SQL-text substring or positional-parameter index check.
@@ -202,7 +202,7 @@ async def test_list_papers_view_inbox_returns_real_inbox_papers(
     # Seed a paper owned by user A with no paper_user_state row (defaults to inbox)
     inbox_paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
-           VALUES ($1, 'arxiv', 'B1-09 Inbox Test Paper', ARRAY['Author'], 'https://b1-09.test/inbox', $2)
+           VALUES ($1, 'arxiv', 'Inbox Test Paper', ARRAY['Author'], 'https://inbox.test/inbox', $2)
            RETURNING id""",
         "b109-inbox-test-ext",
         contract_two_users.user_a_id,
@@ -329,7 +329,7 @@ async def test_trash_paper_state_transition(
     # Seed a fresh paper so this test doesn't clobber the shared fixture paper
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
-           VALUES ($1, 'arxiv', 'B1-09 Trash Test Paper', ARRAY['Author'], 'https://b1-09.test/trash', $2)
+           VALUES ($1, 'arxiv', 'Trash Test Paper', ARRAY['Author'], 'https://inbox.test/trash', $2)
            RETURNING id""",
         "b109-trash-test-ext",
         contract_two_users.user_a_id,
@@ -375,7 +375,7 @@ async def test_restore_paper_state_transition(
     """
     paper_id = await contract_conn.fetchval(
         """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
-           VALUES ($1, 'arxiv', 'B1-09 Restore Test Paper', ARRAY['Author'], 'https://b1-09.test/restore', $2)
+           VALUES ($1, 'arxiv', 'Restore Test Paper', ARRAY['Author'], 'https://inbox.test/restore', $2)
            RETURNING id""",
         "b109-restore-test-ext",
         contract_two_users.user_a_id,

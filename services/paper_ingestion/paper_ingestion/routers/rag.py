@@ -128,7 +128,7 @@ async def _call_rag_llm(
             "openai_client not initialized — check _init_langfuse_hook ran during lifespan"
         )
     # messages is built by prepare_single_paper_rag / prepare_cross_paper_rag, both of which
-    # emit [system, user] Shape-A pairs (PI-02/PI-03); the static checker cannot follow a variable.
+    # emit [system, user] Shape-A pairs; the static checker cannot follow a variable.
     # llm-prompt-shape: SINGLE-USER
     return await call_llm_structured(
         _openai_client,

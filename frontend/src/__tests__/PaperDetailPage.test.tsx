@@ -231,7 +231,7 @@ describe('PaperDetailPage', () => {
       expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
     });
     expect(screen.getByText('Vaswani, A., Shazeer, N., Parmar, N.')).toBeInTheDocument();
-    expect(screen.getByText('arxiv')).toBeInTheDocument();
+    expect(screen.getByText('arXiv')).toBeInTheDocument();
     expect(screen.getByText('95000 citations')).toBeInTheDocument();
   });
 

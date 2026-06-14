@@ -1,4 +1,4 @@
-"""Tests for the tasks router — focused on DOM-C-07 paper-ownership guard."""
+"""Tests for the tasks router — focused on the paper-ownership guard."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def _app():
 
 
 # ---------------------------------------------------------------------------
-# DOM-C-07 — link_paper_to_task paper-ownership guard
+# link_paper_to_task paper-ownership guard
 # ---------------------------------------------------------------------------
 
 
@@ -119,7 +119,7 @@ async def test_unlink_paper_from_task_link_not_found(_app_with_txn):
 
 
 async def test_link_paper_to_task_rejects_unowned_paper(_app, monkeypatch):
-    """DOM-C-07: link_paper_to_task enforces paper ownership before the FK insert.
+    """link_paper_to_task enforces paper ownership before the FK insert.
 
     Setup:
     - Task belongs to user 10 (task ownership check passes).

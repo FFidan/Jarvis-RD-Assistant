@@ -3,6 +3,38 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## v0.8.5 (2026-06-14) — Trustworthy, Comprehensible & Credible
+
+A polish release focused on trust, plain language, and a clean, public-ready
+codebase. Researcher-facing screens no longer surface implementation jargon,
+real settings dead-ends and false-failure states are fixed, and the project's
+toolchain is brought up to date.
+
+### Fixed
+- Zotero "Test connection" reports success correctly (was a false "Failed" on a valid key).
+- Access-mode status reflects the saved value and shows the exact restart command; a "restart pending" indicator persists across reloads.
+- The SMTP test and magic-link delivery work on plain port-25 relays, not only STARTTLS/implicit-TLS ports.
+- Pulse scoring uses a capable model and records an honest "ranked heuristically" reason when LLM scoring is unavailable.
+- Project updates return real paper and open-question counts; empty project, task, and milestone names are rejected.
+- Telegram review distinguishes a load error from "all caught up" instead of falsely reporting completion.
+- No settings dead-ends: every hardware tier has a selectable model, and the AI-backend page guides you instead of showing a bare "no candidates".
+
+### Clarified (plain language)
+- System Health reads in plain language — labels, a verdict word, per-service consequences, and an overall summary.
+- Logs filters distinguish Severity from Area, with visually distinct chips.
+- A single authoritative model-settings page (advanced backend/hardware controls move behind a disclosure); plain model names, fit badges, and selector copy.
+- Pulse optional signals are locked when unavailable, with each prerequisite named.
+- Onboarding, login, My Day, and paper surfaces use researcher language (no internal terms like context-window internals, "RAG", routing tiers, raw cron, or env-var names on screen).
+
+### Hardened
+- The Telegram bot token is stored as a secret; the self-hoster setup scripts generate and validate every required secret through one generator.
+- Infra-event uploads are bounded by streamed size; paper-summary reads are scoped to the owner.
+
+### Docs & internal
+- Replaced developer-rig GPU names with hardware-tier descriptors; removed internal tracking identifiers from comments and tests; neutralized key-rotation guard wording.
+- Re-baselined the database schema into a single clean baseline; localized de-duplication across source plugins, the request layer, and lifecycle responses.
+- Upgraded the frontend toolchain (ESLint 10, Tailwind CSS 4) and wired the end-to-end test suite into CI.
+
 ## v0.8.0 (2026-06-13) — Trustworthy & Frictionless
 
 A reliability- and trust-focused release. The goal: a researcher with no CS

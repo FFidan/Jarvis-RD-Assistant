@@ -178,7 +178,7 @@ async def _init_qdrant_and_pdf_pipeline(app: FastAPI) -> None:
 
 
 async def _init_source_singletons(app: FastAPI) -> None:
-    """C-8: Initialize source singletons so rate-limiter state persists across requests."""
+    """Initialize source singletons so rate-limiter state persists across requests."""
     app.state.sources = {}
     preloaded_sources = [
         SourceType.ARXIV,

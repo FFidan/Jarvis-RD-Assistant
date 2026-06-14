@@ -1,4 +1,4 @@
-"""Page-number accuracy guard for the Docling extraction path (W19).
+"""Page-number accuracy guard for the Docling extraction path.
 
 ``page_number`` is a trust surface: it drives RAG citation pages
 (``rag/streaming.py``), the note-verification window (``routers/notes.py``),

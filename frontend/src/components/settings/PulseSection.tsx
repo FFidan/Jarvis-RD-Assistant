@@ -94,8 +94,8 @@ export function PulseSection() {
     staleTime: 5 * 60_000,
   });
 
-  const hasNetworkx = capabilities?.networkx !== false;
-  const hasSklearn = capabilities?.scikit_learn !== false;
+  const hasNetworkx = capabilities?.networkx === true;
+  const hasSklearn = capabilities?.scikit_learn === true;
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),

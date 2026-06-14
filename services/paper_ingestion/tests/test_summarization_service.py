@@ -586,7 +586,7 @@ async def test_generate_paper_summary_raises_runtime_error_when_client_none(monk
 
 
 # ---------------------------------------------------------------------------
-# PI-07 — prompt-shape split: system carries rules, user carries data only
+# Prompt-shape split: system carries rules, user carries data only
 # ---------------------------------------------------------------------------
 
 

@@ -739,7 +739,7 @@ async def test_system_models_hardware_recommendation_48gb_no_confirm_flag(_app, 
 
     aliases_by_name = {a["alias"]: a for a in hw_rec["aliases"]}
     assert aliases_by_name["smart"]["model"] == "qwen3:30b-a3b"
-    # ≥40 GB recommendation is live-validated (48 GB RTX 5880 Ada, 16k ctx, v0.7)
+    # ≥40 GB recommendation is live-validated (48 GB deployment, 16k ctx, v0.7)
     assert aliases_by_name["smart"]["confirm_on_target"] is False
 
 

@@ -101,7 +101,7 @@ export function isCacheableApiRequest(method: string, url: string): boolean {
   }
 
   let pathname: string;
-  let search = '';
+  let search: string;
   try {
     const u = new URL(url, 'http://localhost');
     pathname = u.pathname;

@@ -462,7 +462,7 @@ async def test_a25_tracked_authors_per_user_unique_constraint(
     _configure_api_key,
     contract_conn,
 ):
-    """Covers HIGH-PI-01: tracked_authors unique constraint is per-user.
+    """Covers the tracked_authors unique constraint being per-user.
 
     User A and user B both track "Alice Smith" (s2_author_id=None).
     Each must get their own row — cross-user conflict must NOT fire.

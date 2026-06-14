@@ -4,15 +4,15 @@ Covers GET /api/analytics/missing-foundational, POST /api/analytics/fetch-and-pr
 and GET /api/analytics/feedback-summary. Replaces the 9 mock-unit tests in
 services/paper_ingestion/tests/test_analytics_router.py with survivor citations:
 
-  test_missing_foundational_returns_ranked_stub_rows  → C7-01
-  test_missing_foundational_filters_by_user_library   → C7-01
-  test_fetch_and_process_local_pdf_promotes_stub_and_enqueues_process → C7-02
-  test_fetch_and_process_pdf_url_promotes_stub_and_enqueues_analyze   → C7-02 (URL branch)
-  test_fetch_and_process_without_pdf_promotes_stub_but_does_not_enqueue → C7-05
-  test_fetch_and_process_missing_or_non_stub_row_returns_404 → C7-03
-  test_feedback_summary_returns_correct_shape         → C7-04
-  test_feedback_summary_empty_table                   → C7-04
-  test_feedback_summary_filters_by_user_id            → C7-04
+  test_missing_foundational_returns_ranked_stub_rows
+  test_missing_foundational_filters_by_user_library
+  test_fetch_and_process_local_pdf_promotes_stub_and_enqueues_process
+  test_fetch_and_process_pdf_url_promotes_stub_and_enqueues_analyze
+  test_fetch_and_process_without_pdf_promotes_stub_but_does_not_enqueue
+  test_fetch_and_process_missing_or_non_stub_row_returns_404
+  test_feedback_summary_returns_correct_shape
+  test_feedback_summary_empty_table
+  test_feedback_summary_filters_by_user_id
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ async def _seed_stub_cited_by(conn, user_paper_id: int, *, cited_by_count: int =
 
 
 # ---------------------------------------------------------------------------
-# C7-01: GET /api/analytics/missing-foundational — ranked + scoped to user_library
+# GET /api/analytics/missing-foundational — ranked + scoped to user_library
 # ---------------------------------------------------------------------------
 
 
@@ -107,7 +107,7 @@ async def test_c7_01_missing_foundational_ranked_scoped_to_user_library(
 
 
 # ---------------------------------------------------------------------------
-# C7-02: POST /api/analytics/fetch-and-process — local PDF → queued
+# POST /api/analytics/fetch-and-process — local PDF → queued
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +169,7 @@ async def test_c7_02_fetch_and_process_local_pdf_returns_queued(
 
 
 # ---------------------------------------------------------------------------
-# C7-03: POST /api/analytics/fetch-and-process — missing or non-stub → 404
+# POST /api/analytics/fetch-and-process — missing or non-stub → 404
 # ---------------------------------------------------------------------------
 
 
@@ -193,7 +193,7 @@ async def test_c7_03_fetch_and_process_missing_stub_returns_404(
 
 
 # ---------------------------------------------------------------------------
-# C7-04: GET /api/analytics/feedback-summary — shape + user isolation
+# GET /api/analytics/feedback-summary — shape + user isolation
 # ---------------------------------------------------------------------------
 
 
@@ -234,7 +234,7 @@ async def test_c7_04_feedback_summary_shape_and_user_isolation(
 
 
 # ---------------------------------------------------------------------------
-# C7-05: POST /api/analytics/fetch-and-process — no PDF → status="no_pdf"
+# POST /api/analytics/fetch-and-process — no PDF → status="no_pdf"
 # ---------------------------------------------------------------------------
 
 

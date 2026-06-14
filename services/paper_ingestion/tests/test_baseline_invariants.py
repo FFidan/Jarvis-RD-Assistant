@@ -941,7 +941,7 @@ async def test_author_alert_log_user_id_fk_set_null(baseline_conn: asyncpg.Conne
 
 
 # ---------------------------------------------------------------------------
-# HIGH-PI-01 — tracked_authors unique constraint is (user_id, author_name,
+# tracked_authors unique constraint is (user_id, author_name,
 # s2_author_id), NOT the old 2-col (author_name, s2_author_id).
 # Multi-tenant isolation: two users may track the same author name independently.
 # ---------------------------------------------------------------------------
@@ -958,7 +958,7 @@ async def test_baseline_papers_zotero_columns_present(baseline_conn: asyncpg.Con
     sync_from_zotero reads it to skip already-pushed papers) and the
     project_papers link path (services/learning_engine/.../project_papers.py
     reads ``p.zotero_item_key`` to decide whether to fire a Zotero push job).
-    The W14 audit surfaced that the columns were dropped by the squash; this
+    A past squash dropped these columns; this
     invariant guards against a regression that would break every Zotero
     operation with `column "zotero_item_key" does not exist`.
     """

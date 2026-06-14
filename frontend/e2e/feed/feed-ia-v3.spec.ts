@@ -97,12 +97,27 @@ const LIBRARY_PAPER = {
 // ── route stubs ───────────────────────────────────────────────────────────
 
 async function stubFeedRoutes(page: import('@playwright/test').Page) {
-  // Feed counts (same endpoint, typed as FeedCountsWithFacets by frontend)
-  await page.route('**/api/papers/feed/counts**', async (route) => {
+  // Dismiss the onboarding tour so it doesn't intercept or crash the shell.
+  await page.addInitScript(() => {
+    localStorage.setItem('jarvis-onboarding-dismissed', 'true');
+  });
+
+  // Register catch-all FIRST so specific handlers added below take priority (LIFO).
+  await page.route('/api/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
+  );
+
+  // Auth verify — AppShell checks auth state on mount.
+  await page.route('/api/auth/verify', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 1, email: 'test@example.com', role: 'user' }) }),
+  );
+
+  // FirstRunGate — must return setup_completed: true or the wizard intercepts the page.
+  await page.route('**/api/setup/status', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(RICH_COUNTS),
+      body: JSON.stringify({ configured: true, setup_completed: true }),
     });
   });
 
@@ -120,7 +135,8 @@ async function stubFeedRoutes(page: import('@playwright/test').Page) {
     });
   });
 
-  // Feed list (serves both inbox and library papers based on ?view=)
+  // Feed list (serves both inbox and library papers based on ?view=).
+  // Registered BEFORE feed/counts so feed/counts (registered after) takes priority (LIFO).
   await page.route('**/api/papers/feed**', async (route) => {
     const url = new URL(route.request().url());
     const view = url.searchParams.get('view');
@@ -129,6 +145,16 @@ async function stubFeedRoutes(page: import('@playwright/test').Page) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ papers, total: papers.length }),
+    });
+  });
+
+  // Feed counts — registered AFTER feed-list so it takes priority over the broader
+  // **/api/papers/feed** pattern (LIFO: last registered = first matched).
+  await page.route('**/api/papers/feed/counts**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(RICH_COUNTS),
     });
   });
 }
@@ -148,13 +174,16 @@ test.describe('F1 Feed IA v3 — mocked walk', () => {
     await page.waitForLoadState('networkidle');
 
     // Rail is present
-    await expect(page.getByRole('navigation', { name: /feed facets/i })).toBeVisible();
+    const facetNav = page.getByRole('navigation', { name: /feed facets/i });
+    await expect(facetNav).toBeVisible();
 
-    // Section headers
-    await expect(page.getByText('Status')).toBeVisible();
-    await expect(page.getByText('Star')).toBeVisible();
-    await expect(page.getByText('Source')).toBeVisible();
-    await expect(page.getByText('Topic')).toBeVisible();
+    // Section headers — scoped to the desktop facet rail to avoid strict-mode
+    // violations from the mobile Sheet, which renders a second FacetListContent.
+    await expect(facetNav.getByText('Status')).toBeVisible();
+    // Use exact:true to match only the section header <p>Star</p>, not the "Starred" facet item.
+    await expect(facetNav.getByText('Star', { exact: true })).toBeVisible();
+    await expect(facetNav.getByText('Source')).toBeVisible();
+    await expect(facetNav.getByText('Topic')).toBeVisible();
   });
 
   test('Inbox-led: §Source facet counts from API render in rail', async ({ page }) => {

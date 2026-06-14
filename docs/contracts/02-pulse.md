@@ -83,7 +83,7 @@ Defined at [profile.py:35-60](https://github.com/FFidan/Jarvis-RD-Assistant/blob
 | `liked_paper_ids` | starred papers |
 
 The HTTP call to embed library abstracts is intentionally outside any DB
-connection scope (PI-006) — the connection is acquired twice in `load_profile`,
+connection scope — the connection is acquired twice in `load_profile`,
 embedding round-trips happen between acquisitions.
 
 ---

@@ -79,6 +79,12 @@ async function seedAdminSession(page: Page) {
  * Mock all common backend endpoints so the spec runs without Docker.
  */
 async function mockCommonEndpoints(page: Page) {
+  // Seed full nav mode so group labels (Today/Read/Learn/Ask) are visible.
+  // nav-prefs-store defaults to 'simple' when this key is absent from localStorage.
+  await page.addInitScript(() => {
+    localStorage.setItem('jarvis-onboarding-dismissed', 'true');
+  });
+
   // Stack health — required for HealthDots
   await page.route('/api/health/stack', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(HEALTH_RESPONSE) }),
@@ -89,13 +95,41 @@ async function mockCommonEndpoints(page: Page) {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 1, email: 'test@example.com', role: 'user' }) }),
   );
 
-  // Catch-all API — return empty to prevent 404 console noise
+  // FirstRunGate — must return setup_completed: true or the onboarding wizard renders.
+  await page.route('/api/setup/status', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) }),
+  );
+
+  // Feed — OnboardingTour (rendered inside AppShell) calls fetchFeed({ limit: 1 })
+  // which hits /api/papers/feed. Without a proper FeedResponse shape the component
+  // does `feedQuery.data.papers.length` on an empty object and throws, causing the
+  // top-level ErrorBoundary to replace the entire app with "Something went wrong".
+  await page.route('/api/papers/feed**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: [], total: 0 }) }),
+  );
+
+  // Topics — OnboardingTour also calls fetchTopics (/api/topics) to check zeroTopics.
+  // Returning an empty array matches the Topic[] type and avoids any length check issues.
+  await page.route('/api/topics', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+  );
+
+  // Catch-all API — return {} for everything except the routes handled above.
+  // NOTE: page.route() uses LIFO order (last registered = first matched), so this
+  // catch-all is checked first. Calling route.continue() for the already-handled
+  // routes lets Playwright fall through to the specific handlers registered above.
   await page.route('/api/**', (route) => {
-    if (!route.request().url().includes('/api/health/stack') &&
-        !route.request().url().includes('/api/auth/verify')) {
-      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
-    } else {
+    const url = route.request().url();
+    if (
+      url.includes('/api/health/stack') ||
+      url.includes('/api/auth/verify') ||
+      url.includes('/api/setup/status') ||
+      url.includes('/api/papers/feed') ||
+      url.includes('/api/topics')
+    ) {
       route.continue();
+    } else {
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     }
   });
 }
@@ -112,9 +146,10 @@ test.describe('Sidebar — non-admin user', () => {
   });
 
   test('groups Ⅰ–Ⅳ are visible', async ({ page }) => {
-    await expect(page.getByText('Today')).toBeVisible();
-    await expect(page.getByText('Read')).toBeVisible();
-    await expect(page.getByText('Learn')).toBeVisible();
+    // Use exact: true to avoid substring matches ('Learn' inside 'Learning Cards').
+    await expect(page.getByText('Today', { exact: true })).toBeVisible();
+    await expect(page.getByText('Read', { exact: true })).toBeVisible();
+    await expect(page.getByText('Learn', { exact: true })).toBeVisible();
     // "Ask" appears as both group label and nav link — just check at least one
     await expect(page.locator('nav').getByText('Ask').first()).toBeVisible();
   });
@@ -142,7 +177,9 @@ test.describe('Sidebar — non-admin user', () => {
   });
 
   test('Settings link is in footer (not in numbered groups)', async ({ page }) => {
-    const settingsLink = page.getByRole('link', { name: 'Settings' });
+    // Scope to the sidebar data-testid to avoid matching onboarding checklist's
+    // "Go to Settings" link which also resolves to 'Settings' by accessible name.
+    const settingsLink = page.getByTestId('sidebar').getByRole('link', { name: 'Settings' });
     await expect(settingsLink).toBeVisible();
     await settingsLink.click();
     await expect(page).toHaveURL(/\/settings/);
@@ -157,6 +194,11 @@ test.describe('Sidebar — admin user', () => {
   test.beforeEach(async ({ page }) => {
     await seedAdminSession(page);
 
+    // Seed full nav mode so group labels are visible.
+    await page.addInitScript(() => {
+      localStorage.setItem('jarvis-onboarding-dismissed', 'true');
+    });
+
     // Override auth verify to return admin role
     await page.route('/api/auth/verify', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 1, email: 'admin@example.com', role: 'admin' }) }),
@@ -164,9 +206,32 @@ test.describe('Sidebar — admin user', () => {
     await page.route('/api/health/stack', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(HEALTH_RESPONSE) }),
     );
-    await page.route('/api/**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
+    // FirstRunGate — must return setup_completed: true.
+    await page.route('/api/setup/status', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) }),
     );
+    // Feed — OnboardingTour crashes if /api/papers/feed returns {} (reads .papers.length).
+    await page.route('/api/papers/feed**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: [], total: 0 }) }),
+    );
+    await page.route('/api/topics', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+    );
+    // Catch-all: continue for specifically-handled routes, {} for everything else.
+    await page.route('/api/**', (route) => {
+      const url = route.request().url();
+      if (
+        url.includes('/api/health/stack') ||
+        url.includes('/api/auth/verify') ||
+        url.includes('/api/setup/status') ||
+        url.includes('/api/papers/feed') ||
+        url.includes('/api/topics')
+      ) {
+        route.continue();
+      } else {
+        route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      }
+    });
 
     await page.goto('/');
   });
@@ -196,10 +261,15 @@ test.describe('Sidebar — admin user', () => {
   });
 
   test('HealthDots pill navigates to /admin/system-health for admin', async ({ page }) => {
-    // The admin link pill should be present (data-testid="health-pill-admin-link")
+    // The admin health pill opens a popover (not direct navigation).
+    // Click the pill to open the popover, then click the "full report" link inside.
     const adminPill = page.locator('[data-testid="health-pill-admin-link"]');
     await expect(adminPill).toBeVisible({ timeout: 5000 });
     await adminPill.click();
+    // The popover contains a footer link to the full system health page.
+    const fullReportLink = page.locator('[data-testid="health-popover-full-report"]');
+    await expect(fullReportLink).toBeVisible({ timeout: 3000 });
+    await fullReportLink.click();
     await expect(page).toHaveURL(/\/admin\/system-health/);
   });
 });
@@ -212,11 +282,34 @@ test.describe('Ask page (group Ⅳ)', () => {
   test.beforeEach(async ({ page }) => {
     await seedRegularSession(page);
 
+    // Register catch-all FIRST so that specific handlers registered below take
+    // priority (page.route uses LIFO — last registered = first checked).
+    await page.route('/api/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
+    );
+
+    // Specific handlers registered AFTER the catch-all take priority over it:
     await page.route('/api/health/stack', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(HEALTH_RESPONSE) }),
     );
-
-    // Mock the cross-paper Ask streaming endpoint
+    // FirstRunGate — must return setup_completed: true.
+    await page.route('/api/setup/status', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) }),
+    );
+    // Feed — OnboardingTour (in AppShell) calls fetchFeed({ limit: 1 }).
+    // Without a proper FeedResponse the component crashes reading .papers.length.
+    await page.route('**/api/papers/feed**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: [], total: 0 }) }),
+    );
+    await page.route('/api/topics', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+    );
+    // Dashboard metrics — AskPage disables the textarea when chunked_papers = 0.
+    // Return at least one chunked paper so the input is enabled for submit tests.
+    await page.route('/api/dashboard/metrics', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ chunked_papers: 1 }) }),
+    );
+    // Mock the cross-paper Ask streaming endpoint.
     await page.route('/api/ask/stream', (route) => {
       route.fulfill({
         status: 200,
@@ -224,10 +317,6 @@ test.describe('Ask page (group Ⅳ)', () => {
         body: ASK_STREAM_CHUNKS.join(''),
       });
     });
-
-    await page.route('/api/**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
-    );
 
     await page.goto('/ask');
   });
@@ -268,9 +357,33 @@ test.describe('Ask page (group Ⅳ)', () => {
 test.describe('Regression — all routes still reachable', () => {
   test.beforeEach(async ({ page }) => {
     await seedRegularSession(page);
-    await page.route('/api/**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
+    // FirstRunGate — must return setup_completed: true or the wizard intercepts all routes.
+    await page.route('/api/setup/status', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) }),
     );
+    // Feed — OnboardingTour (in AppShell) crashes if /api/papers/feed returns {}.
+    await page.route('/api/papers/feed**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: [], total: 0 }) }),
+    );
+    await page.route('/api/topics', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+    );
+    // Catch-all: continue for specifically-handled routes (and health/stack
+    // which has no specific handler here — letting it network-error keeps
+    // HealthDots in its safe isError branch rather than crashing on {}).
+    await page.route('/api/**', (route) => {
+      const url = route.request().url();
+      if (
+        url.includes('/api/setup/status') ||
+        url.includes('/api/papers/feed') ||
+        url.includes('/api/topics') ||
+        url.includes('/api/health/stack')
+      ) {
+        route.continue();
+      } else {
+        route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      }
+    });
   });
 
   const routes = [

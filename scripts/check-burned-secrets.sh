@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# scripts/check-burned-secrets.sh — CI tripwire for the publicly-burned
-# Langfuse init keypair (OBS-1-RESIDUAL).
+# scripts/check-burned-secrets.sh — Langfuse init keypair rotation guard.
+# Fails CI if a known-leaked key value is still present on disk.
 #
 # The secret files are git-untracked, so in CI they are normally ABSENT —
 # that is the GREEN path (nothing to rotate).  If a file IS present and still

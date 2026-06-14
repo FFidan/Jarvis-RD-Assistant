@@ -96,7 +96,7 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 const EVICT_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Pending eviction timers keyed by job id (M13c). Handles are tracked so an
+ * Pending eviction timers keyed by job id. Handles are tracked so an
  * early removeJob — or a logout `_reset` — cancels them instead of leaving
  * orphaned timers firing against cleared state.
  */
@@ -456,7 +456,7 @@ export const useJobStore = create<JobStore>()(
         const job = get().jobs[jobId];
         if (job) {
           get()._upsertJob({ ...job, status: 'cancelled' });
-          // Schedule eviction (handle tracked so removeJob/_reset can cancel it — M13c)
+          // Schedule eviction (handle tracked so removeJob/_reset can cancel it)
           scheduleEviction(jobId, () => get().removeJob(jobId));
         }
       },
@@ -514,7 +514,7 @@ export const useJobStore = create<JobStore>()(
         // logout signal so the next login starts un-aborted.
         logoutAbort.abort();
         logoutAbort = new AbortController();
-        // M13c: cancel all pending eviction timers so none fire post-logout.
+        // Cancel all pending eviction timers so none fire post-logout.
         cancelAllEvictions();
         set(JOB_INITIAL_STATE);
       },

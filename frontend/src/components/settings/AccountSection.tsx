@@ -350,6 +350,10 @@ export function AccountSection() {
 
   return (
     <div className="space-y-6">
+      <p className="text-sm text-muted-foreground">
+        Manage your display name, email address, and account details.
+      </p>
+
       {/* Confirm-email banner (shown only when ?confirm_email_token= was in URL) */}
       <ConfirmBanner state={confirmState} />
 

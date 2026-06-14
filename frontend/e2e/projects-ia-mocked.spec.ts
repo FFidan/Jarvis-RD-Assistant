@@ -99,6 +99,11 @@ const NEW_QUESTION = {
 // ── Route helpers ──────────────────────────────────────────────────────────────
 
 async function mockProjectsRoutes(page: import('@playwright/test').Page) {
+  // FirstRunGate — must return setup_completed: true or the wizard intercepts the page.
+  await page.route('**/api/setup/status', (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) });
+  });
+
   // List projects
   await page.route('**/api/projects', (route) => {
     if (route.request().method() === 'GET') {
@@ -218,7 +223,9 @@ test.describe('Projects IA Redesign (mocked)', () => {
   });
 
   test('roman numeral I is shown for the first chapter', async ({ page }) => {
-    await expect(page.getByText('I')).toBeVisible();
+    // Scope to the font-mono span that ChapterRail renders for roman numerals.
+    // getByText('I') matches 28+ elements (letter 'I' appears in many words).
+    await expect(page.locator('span.font-mono').getByText('I', { exact: true }).first()).toBeVisible();
   });
 
   test('project name appears in the chapter rail', async ({ page }) => {
@@ -244,8 +251,9 @@ test.describe('Projects IA Redesign (mocked)', () => {
   // ── 3.7 Auto-select ────────────────────────────────────────────────────────────
 
   test('first chapter is auto-selected on load (pane shows breadcrumb)', async ({ page }) => {
-    // Breadcrumb shows "Projects" and the project name
-    await expect(page.getByText('Projects')).toBeVisible({ timeout: 8_000 });
+    // Breadcrumb shows "Projects" — scope to breadcrumb nav to avoid strict-mode
+    // (title also appears in the page heading and sidebar label).
+    await expect(page.getByLabel('breadcrumb').getByText('Projects')).toBeVisible({ timeout: 8_000 });
     await expect(page.getByText('RGS Thesis').first()).toBeVisible();
   });
 
@@ -302,8 +310,10 @@ test.describe('Projects IA Redesign (mocked)', () => {
   });
 
   test('recent activity item shows paper title label', async ({ page }) => {
+    // Scope to § RECENT ACTIVITY section to avoid strict-mode: the same title also
+    // appears in the § PAPERS section below.
     await expect(
-      page.getByText('Test-time scaling of diffusion LMs'),
+      page.getByLabel('§ RECENT ACTIVITY').getByText('Test-time scaling of diffusion LMs'),
     ).toBeVisible({ timeout: 8_000 });
   });
 
@@ -325,8 +335,10 @@ test.describe('Projects IA Redesign (mocked)', () => {
   });
 
   test('seeded paper appears in § PAPERS section', async ({ page }) => {
+    // Scope to § PAPERS section to avoid strict-mode: the same title also
+    // appears in the § RECENT ACTIVITY section above.
     await expect(
-      page.getByText('Test-time scaling of diffusion LMs'),
+      page.getByLabel(/§ PAPERS/).getByText('Test-time scaling of diffusion LMs'),
     ).toBeVisible({ timeout: 8_000 });
   });
 

@@ -729,7 +729,7 @@ async def test_contradiction_job_extracts_user_id_from_payload_str_or_absent(
 
 
 # ---------------------------------------------------------------------------
-# PI-06 — prompt-shape split: system carries rubric, user carries data only
+# Prompt-shape split: system carries rubric, user carries data only
 # ---------------------------------------------------------------------------
 
 
@@ -876,7 +876,7 @@ async def test_scan_contradictions_dedup_proceeds_when_lock_acquired(monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# PI-12 — _quotes_verify rejects empty-string quotes
+# _quotes_verify rejects empty-string quotes
 # ---------------------------------------------------------------------------
 
 

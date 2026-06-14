@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-06-06 | routes: /, /my-day, /pulse, /feed, /feed?surface=search, /projects, /knowledge, /citations, /extractions, /cards, /analytics, /ask, /admin/users, /admin/system-health, /admin/audit-log, /logs, /settings -->
+<!-- verified-against-UI: 2026-06-13 | routes: /, /my-day, /pulse, /feed, /feed?surface=search, /projects, /knowledge, /citations, /extractions, /cards, /analytics, /ask, /admin/users, /admin/system-health, /admin/audit-log, /logs, /settings -->
 
 # Navigation
 
@@ -36,10 +36,10 @@ The sidebar is divided into five labelled groups identified by Roman numerals. E
 
 The sidebar has two density modes, remembered per device:
 
-- **Simple** — a short rail of the daily essentials (**Home · My Day · Library · Ask · Cards**), with everything else one click away under a **More** disclosure at the bottom of the nav. This is the default the first time you use JARVIS, so the app isn't overwhelming. (Pulse lives inside My Day, so the Pulse Deck link sits under More.)
+- **Simple** — a short rail of the daily essentials (**Home · My Day · Library · Ask · Cards**). Everything else is one **"Show all features"** toggle away in the sidebar footer. This is the default the first time you use JARVIS, so the app isn't overwhelming.
 - **Full** — the complete grouped layout shown above. This is the default for returning users.
 
-Switch modes any time with the **"Show all features" / "Simple view"** toggle in the sidebar footer. Your choice is stored on your device and survives logout; it does not change which pages exist — every destination is always reachable (in simple mode, via **More**).
+Switch modes any time with the **"Show all features" / "Simple view"** toggle in the sidebar footer. Your choice is stored on your device and survives logout; it does not change which pages exist — every destination is always reachable.
 
 ### Sidebar footer
 

@@ -126,7 +126,7 @@ def _cm(conn):
 
 async def test_push_paper_not_configured():
     """push_paper_to_zotero returns early when Zotero credentials are absent."""
-    # PI-010: _get_zotero_config now uses acquire() — config conn is first acquire().
+    # _get_zotero_config now uses acquire() — config conn is first acquire().
     config_conn = _make_conn(fetch=_zotero_disabled_config_rows())
     pool = MagicMock()
     pool.acquire = MagicMock(return_value=_cm(config_conn))
@@ -460,7 +460,7 @@ def _zotero_item(
 def _make_poll_pool(*conn_returns, config_rows=None):
     """Pool mock where config is fetched via acquire() and subsequent acquire() uses conn_returns.
 
-    PI-010: _get_zotero_config now uses acquire() — config conn is prepended automatically.
+    _get_zotero_config now uses acquire() — config conn is prepended automatically.
     """
     config_conn = _make_conn(fetch=config_rows or _zotero_poll_enabled_config_rows())
 
@@ -541,7 +541,7 @@ async def test_poll_library_skips_jarvis_origin():
 async def test_poll_library_enqueues_new_items():
     """New items without jarvis origin are upserted and enqueued as paper.analyze jobs.
 
-    PI-002: poll now calls upsert_paper → enqueues paper.analyze with paper_id.
+    poll now calls upsert_paper → enqueues paper.analyze with paper_id.
     """
     new_item = _zotero_item(key="NEWITEM1", title="New Paper", doi="")
     # No DOI → no DOI-lookup conn needed.
@@ -567,7 +567,7 @@ async def test_poll_library_enqueues_new_items():
     mock_analyze_defer.assert_awaited_once()
     assert mock_analyze_defer.await_args is not None
     call_kwargs = mock_analyze_defer.await_args.kwargs
-    # PI-002: job deferred via paper_analyze task with paper_id kwarg
+    # Job deferred via paper_analyze task with paper_id kwarg
     assert call_kwargs["paper_id"] == 99
     assert call_kwargs["user_id"] is None
     assert "job_id" in call_kwargs
@@ -578,7 +578,7 @@ async def test_poll_library_enqueues_new_items():
 async def test_poll_library_updates_version():
     """zotero.last_library_version updated in user_config after poll.
 
-    HIGH-PI-14: polling_user_id must be non-None for the upsert to fire.
+    polling_user_id must be non-None for the upsert to fire.
     """
     item = _zotero_item(key="VER0001", doi="")
     # upsert conn for the item
@@ -598,7 +598,7 @@ async def test_poll_library_updates_version():
         mock_analyze_task = MagicMock()
         mock_analyze_task.defer_async = AsyncMock()
         with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
-            # Pass a real user_id so the version upsert runs (HIGH-PI-14 guard).
+            # Pass a real user_id so the version upsert runs (polling_user_id guard).
             result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=7)
 
     # The version-persist connection should have had execute called
@@ -1217,13 +1217,13 @@ async def test_poll_zotero_library_handles_decrypt_error(caplog):
 
 
 # ---------------------------------------------------------------------------
-# HIGH-PI-13: non-critical decrypt failure → partial config returned, no raise
-# HIGH-PI-13: critical decrypt failure (api_key) → ZoteroConfigDecryptError raised
+# non-critical decrypt failure → partial config returned, no raise
+# critical decrypt failure (api_key) → ZoteroConfigDecryptError raised
 # ---------------------------------------------------------------------------
 
 
 async def test_get_zotero_config_non_critical_decrypt_failure_does_not_raise(caplog):
-    """HIGH-PI-13: decrypt failure on a non-critical key (last_library_version) must not raise.
+    """Decrypt failure on a non-critical key (last_library_version) must not raise.
 
     The function should log a warning, skip the failed key, and return the
     remaining config (api_key and user_id from plaintext rows).
@@ -1277,7 +1277,7 @@ async def test_get_zotero_config_non_critical_decrypt_failure_does_not_raise(cap
 
 
 async def test_get_zotero_config_critical_decrypt_failure_raises(caplog):
-    """HIGH-PI-13: decrypt failure on api_key (a critical key) must raise ZoteroConfigDecryptError.
+    """Decrypt failure on api_key (a critical key) must raise ZoteroConfigDecryptError.
 
     Also verifies that a WARNING log is emitted with the expected text about
     the api_key and operator responsibility to re-save in Settings.
@@ -1330,12 +1330,12 @@ async def test_get_zotero_config_critical_decrypt_failure_raises(caplog):
 
 
 # ---------------------------------------------------------------------------
-# HIGH-PI-14: poll_zotero_library with polling_user_id=None must not upsert version
+# poll_zotero_library with polling_user_id=None must not upsert version
 # ---------------------------------------------------------------------------
 
 
 async def test_poll_library_skips_version_upsert_when_polling_user_id_is_none(caplog):
-    """HIGH-PI-14: when polling_user_id is None, last_library_version must not be upserted.
+    """When polling_user_id is None, last_library_version must not be upserted.
 
     A ghost row with user_id=NULL would be inserted into user_config on every
     anonymous cron poll. The fix gates the upsert on polling_user_id is not None.

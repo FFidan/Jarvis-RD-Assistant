@@ -239,6 +239,11 @@ async def upload_pdf(
     # Validate filename
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF (.pdf)")
+    if file.content_type is not None and file.content_type not in (
+        "application/pdf",
+        "application/octet-stream",
+    ):
+        raise HTTPException(status_code=400, detail="File must be a PDF (.pdf)")
 
     # Stream file to temp path, validating as we go
     from uuid import uuid4 as _uuid4

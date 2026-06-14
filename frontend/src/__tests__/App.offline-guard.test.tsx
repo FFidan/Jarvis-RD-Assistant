@@ -1,6 +1,6 @@
 /**
  * P1c — offline last-known-good route-guard tests.
- * FE-1 — session-expiry side-effect out of render body.
+ * Session-expiry side-effect must run out of the render body (not during render).
  *
  * Canonical contract: internal design spec (archived)
  * "Offline / PWA contract — CANONICAL" §4 (last-known-good read mode).
@@ -109,7 +109,7 @@ describe('App offline route-guard (P1c)', () => {
 
   // -------------------------------------------------------------------------
   // (a) ONLINE + expired session → still redirects to /login (no regression)
-  //     FE-1: state cleared by expireSession() called from useEffect, not
+  //     state cleared by expireSession() called from useEffect, not
   //     during render — no "update during render" risk in React 19 concurrent.
   // -------------------------------------------------------------------------
   it('(a) ONLINE + expired session: redirects to /login and clears state via effect', async () => {
@@ -129,7 +129,7 @@ describe('App offline route-guard (P1c)', () => {
     // The Email field is the magic-link login form.
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
     // Auth state must be cleared by expireSession() called from useEffect
-    // (post-render side-effect, FE-1). waitFor ensures the effect has flushed.
+    // (post-render side-effect). waitFor ensures the effect has flushed.
     await waitFor(() => {
       expect(useAuthStore.getState().isAuthenticated).toBe(false);
     });
@@ -200,7 +200,7 @@ describe('App offline route-guard (P1c)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // (e) FE-1: isSessionValid() is pure — calling it on an expired session must
+  // (e) isSessionValid() is pure — calling it on an expired session must
   //     NOT mutate store state (no "update during render" side-effect).
   // -------------------------------------------------------------------------
   it('(e) isSessionValid() returns false for expired session without mutating store', () => {

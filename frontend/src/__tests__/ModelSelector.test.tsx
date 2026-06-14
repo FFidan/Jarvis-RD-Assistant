@@ -309,7 +309,6 @@ describe('ModelSelector', () => {
     });
     expect(screen.getByText('16GB VRAM')).toBeInTheDocument();
     expect(screen.getByText('Tier 2')).toBeInTheDocument();
-    expect(screen.getByText('Requires Tier 2')).toBeInTheDocument();
     expect(screen.getByText('9.5GB VRAM')).toBeInTheDocument();
   });
 
@@ -750,7 +749,7 @@ describe('ModelSelector', () => {
       expect(screen.getByTestId('routing-diverged-smart')).toBeInTheDocument();
     });
     const line = screen.getByTestId('routing-diverged-smart');
-    expect(line).toHaveTextContent('Saved: qwen3:14b · currently serving: qwen3:8b');
+    expect(line).toHaveTextContent('You selected "qwen3:14b" but the system is currently using "qwen3:8b".');
   });
 
   it('does not show routing divergence line when routing matches saved model', async () => {

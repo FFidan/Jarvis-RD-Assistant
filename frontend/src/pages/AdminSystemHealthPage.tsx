@@ -42,6 +42,23 @@ const SERVICE_STATUS_CLASSES: Record<ServiceHealthStatus, string> = {
 };
 
 /**
+ * Human-readable labels for each backend check name (snake_case → plain text).
+ * Must stay in sync with CHECK_EXPLANATIONS below.
+ */
+const DISPLAY_LABELS: Record<string, string> = {
+  dev_auth_bypass: 'Auth bypass (dev)',
+  dev_error_detail: 'Error detail (dev)',
+  dev_cors_open: 'Open CORS (dev)',
+  dev_smtp_log_only: 'SMTP log-only (dev)',
+  dev_crypto_relaxed: 'Relaxed crypto (dev)',
+  environment: 'Environment',
+  api_key: 'API key',
+  smtp: 'Email delivery (SMTP)',
+  https: 'HTTPS / TLS',
+  audit_log: 'Audit log',
+};
+
+/**
  * Static per-check explanations keyed by the exact backend check name.
  * Values describe: what the check measures, why it may be red/amber, and
  * what to do before a public production deployment.
@@ -69,12 +86,18 @@ const CHECK_EXPLANATIONS: Record<string, string> = {
     'Security event logging.',
 };
 
+const STATUS_VERDICT: Record<StatusLevel, string> = {
+  green: 'Ready',
+  amber: 'Review needed',
+  red: 'Action required',
+};
+
 function StatusBadge({ status }: { status: StatusLevel }) {
   return (
     <span
       className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_CLASSES[status]}`}
     >
-      {status}
+      {STATUS_VERDICT[status]}
     </span>
   );
 }
@@ -96,16 +119,33 @@ function ServiceStatusBadge({ status }: { status: ServiceHealthStatus }) {
   );
 }
 
-/** Display label for a service — renames "Vector" to the self-hoster-friendly label. */
+const SERVICE_DISPLAY_LABELS: Record<string, string> = {
+  qdrant: 'Search index (Qdrant)',
+  litellm: 'AI model router (LiteLLM)',
+  vector: 'Log collector (optional)',
+};
+
+/** Display label for a service — maps technical names to self-hoster-friendly labels. */
 function serviceDisplayLabel(svc: ServiceHealth): string {
-  if (svc.name === 'vector') return 'Log collector (optional)';
-  return svc.label;
+  return SERVICE_DISPLAY_LABELS[svc.name] ?? svc.label;
 }
 
-/** Plain-language note shown in the detail column for special services. */
+const SERVICE_CONSEQUENCE: Record<string, string> = {
+  qdrant: 'Semantic search and citation graph are unavailable.',
+  litellm: 'AI-powered features (Ask, Pulse, summaries) are unavailable.',
+  ollama: 'Local model inference is unavailable.',
+  postgres: 'The database is unreachable — the app cannot function.',
+  paper_ingestion: 'New papers cannot be ingested.',
+  learning_engine: 'Learning-card generation is unavailable.',
+};
+
+/** Plain-language note shown in the detail column for a service. */
 function serviceDetailNote(svc: ServiceHealth): string | null {
   if (svc.name === 'vector' && svc.status === 'unknown') {
     return 'Optional log shipper — not running; this is normal unless you enabled the observability profile.';
+  }
+  if (svc.status === 'down' || svc.status === 'degraded') {
+    return SERVICE_CONSEQUENCE[svc.name] ?? null;
   }
   return null;
 }
@@ -167,6 +207,26 @@ export function AdminSystemHealthPage() {
         )}
 
         {!stackLoading && !stackError && stackData && (
+          <>
+          {(stackData.downCount > 0 || stackData.degradedCount > 0) ? (
+            <p className="text-sm mb-3" data-testid="stack-summary">
+              {stackData.downCount > 0 && (
+                <span className="text-red-600 dark:text-red-400 font-medium">
+                  {stackData.downCount} service{stackData.downCount !== 1 ? 's' : ''} down
+                  {stackData.degradedCount > 0 ? ', ' : '.'}
+                </span>
+              )}
+              {stackData.degradedCount > 0 && (
+                <span className="text-yellow-600 dark:text-yellow-400 font-medium">
+                  {stackData.degradedCount} degraded.
+                </span>
+              )}
+            </p>
+          ) : (
+            <p className="text-sm text-green-600 dark:text-green-400 mb-3" data-testid="stack-summary">
+              All services running.
+            </p>
+          )}
           <div className="rounded-md border overflow-x-auto" data-testid="live-services-table">
             <table className="w-full text-sm">
               <thead>
@@ -194,6 +254,7 @@ export function AdminSystemHealthPage() {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </section>
 
@@ -224,7 +285,16 @@ export function AdminSystemHealthPage() {
               >
                 This instance is running in development mode. The red checks below are expected
                 for local development — they flag settings that must be changed before a public
-                production deployment. See the User Guide → Production Checklist.
+                production deployment. See the{' '}
+                <a
+                  href="/docs/DEPLOYMENT/#production-readiness-check"
+                  className="underline"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Deployment Guide → Production Readiness Check
+                </a>
+                .
               </div>
             )}
 
@@ -247,7 +317,9 @@ export function AdminSystemHealthPage() {
                     <tr key={check.name} className="border-b last:border-0">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-medium">{check.name}</span>
+                          <span className="font-medium">
+                            {DISPLAY_LABELS[check.name] ?? check.name}
+                          </span>
                           {CHECK_EXPLANATIONS[check.name] && (
                             <InfoTooltip
                               content={CHECK_EXPLANATIONS[check.name]}

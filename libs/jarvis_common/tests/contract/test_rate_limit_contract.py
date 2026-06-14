@@ -168,7 +168,7 @@ async def test_pulse_generate_rate_limit_semantics_3_per_hour() -> None:
     After 3 allowed calls the 4th returns 429 with the canonical body.
     This is the cooldown semantics documented in:
       - pulse.py:76  ``@limiter.limit("3/hour")``
-      - reference_pulse_generate_429_by_design.md (vault memory)
+      - reference_pulse_generate_429_by_design.md
 
     A fresh isolated app is used so this test does not pollute the
     per-service limiter state shared by other tests.

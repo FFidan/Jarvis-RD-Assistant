@@ -330,7 +330,7 @@ class TestValidateProductionConfigLitellmMasterKey:
         with pytest.raises(RuntimeError, match="LITELLM_MASTER_KEY"):
             validate_production_config()
 
-    # B2-12: test_non_production_unaffected (LITELLM class copy) removed — merged into
+    # test_non_production_unaffected (LITELLM class copy) removed — merged into
     #   parametrized test_non_production_unaffected_parametrized below.
 
 
@@ -375,7 +375,7 @@ class TestValidateProductionConfigPostgresPassword:
         with pytest.raises(RuntimeError, match="POSTGRES_PASSWORD"):
             validate_production_config()
 
-    # B2-12: test_non_production_unaffected (POSTGRES class copy) removed — merged into
+    # test_non_production_unaffected (POSTGRES class copy) removed — merged into
     #   parametrized test_non_production_unaffected_parametrized below.
 
 
@@ -403,23 +403,23 @@ class TestValidateProductionConfigAppBaseUrl:
 
         validate_production_config()
 
-    # B2-12: test_non_production_unaffected (APP_BASE_URL class copy) removed — merged into
+    # test_non_production_unaffected (APP_BASE_URL class copy) removed — merged into
     #   parametrized test_non_production_unaffected_parametrized below.
 
 
 # ---------------------------------------------------------------------------
-# B2-12: three test_non_production_unaffected triplicates → one parametrized test
+# three test_non_production_unaffected triplicates → one parametrized test
 # (originally one copy per class: LITELLM gate, POSTGRES gate, APP_BASE_URL gate)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# validate_production_config — SEC-HIGH-07: dev_cors_open gate
+# validate_production_config — dev_cors_open gate
 # ---------------------------------------------------------------------------
 
 
 class TestValidateProductionConfigDevCorsOpen:
-    """SEC-HIGH-07 — dev_cors_open=true must be rejected in ENVIRONMENT=production."""
+    """dev_cors_open=true must be rejected in ENVIRONMENT=production."""
 
     def test_dev_cors_open_in_production_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """dev_cors_open=true with ENVIRONMENT=production must raise RuntimeError."""

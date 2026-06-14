@@ -52,7 +52,8 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
   models: {
     llm: 'LLM Models',
     providers: 'Cloud Providers',
-    ai: 'AI Backend',
+    // Stale ?item=ai deep-links now land on the consolidated LLM Models page.
+    ai: 'LLM Models',
   },
   system: {
     automation: 'Automation',
@@ -123,7 +124,24 @@ function DetailContent({
   }
 
   if (section === 'models') {
-    if (item === 'llm') return <IngestionSection filterGroups={['LLM Models']} />;
+    // LLM Models is the single authoritative model plane. Backend & hardware
+    // controls live behind an "Advanced" disclosure here rather than as a peer
+    // rail item, so the two planes can't drift or contradict each other.
+    if (item === 'llm' || item === 'ai') {
+      return (
+        <div className="space-y-6">
+          <IngestionSection filterGroups={['LLM Models']} />
+          <details className="rounded-md border border-hair" data-testid="advanced-backend-disclosure">
+            <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+              Advanced: backend &amp; hardware
+            </summary>
+            <div className="border-t border-hair p-4">
+              <AIPanel />
+            </div>
+          </details>
+        </div>
+      );
+    }
     if (item === 'providers') {
       return (
         <div className="space-y-6">
@@ -131,7 +149,6 @@ function DetailContent({
         </div>
       );
     }
-    if (item === 'ai') return <AIPanel />;
   }
 
   if (section === 'system') {

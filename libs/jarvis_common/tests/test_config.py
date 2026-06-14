@@ -147,7 +147,7 @@ class TestPaperIngestionSettings:
         assert s.bbt_base_url == "http://host.docker.internal:23119"
         assert s.app_base_url is None
         assert s.auto_fetch_interval_hours == 0.0
-        assert s.pulse_stage2_model == "fast"
+        assert s.pulse_stage2_model == "smart"
         assert s.pulse_stage2_max_retries == 1
         assert s.semantic_scholar_api_key is None
         assert s.pubmed_api_key is None

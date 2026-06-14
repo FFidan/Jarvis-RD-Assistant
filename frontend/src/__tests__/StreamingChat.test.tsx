@@ -125,7 +125,7 @@ describe('StreamingChat — FE-SSE-1 error banner', () => {
   });
 });
 
-describe('StreamingChat — HIGH-FE-01 key stability', () => {
+describe('StreamingChat — key stability', () => {
   beforeEach(() => {
     mockUseStreamingChat.mockReturnValue(baseHookReturn());
   });

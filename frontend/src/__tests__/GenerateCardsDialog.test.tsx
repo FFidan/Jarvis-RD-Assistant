@@ -148,9 +148,9 @@ describe('GenerateCardsDialog', () => {
     expect(res.confidence).toBe('HIGH');
   });
 
-  // FE-001: Generate button must stay disabled while jobId is set but job record
+  // Generate button must stay disabled while jobId is set but job record
   // has not yet arrived (first-fetch in flight — job === null).
-  it('FE-001: Generate button is disabled while jobId is set and job record is still null (first-fetch pending)', async () => {
+  it('Generate button is disabled while jobId is set and job record is still null (first-fetch pending)', async () => {
     // After mutation succeeds, jobId is set and polling starts, but job is null
     // until the first getJob response arrives. The Generate button must stay
     // disabled during this window.
@@ -194,7 +194,7 @@ describe('GenerateCardsDialog', () => {
     expect(isGeneratingAfterTerminal).toBe(false);
   });
 
-  // FE-013: console.info must NOT be called in production (or at all, since it was deleted).
+  // console.info must NOT be called in production (or at all, since it was deleted).
   it('test_create_card_form_no_console_in_production_build: console.info is never called when a job succeeds', async () => {
     // The console.info('[GenerateCardsDialog] generation succeeded', ...) line was deleted.
     // This test verifies it is not called during the succeeded-job polling path.

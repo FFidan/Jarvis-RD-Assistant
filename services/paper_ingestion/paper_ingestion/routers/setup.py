@@ -44,6 +44,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.crypto import encrypt_secret
 from jarvis_common.email import smtp_configured as _smtp_configured_probe
+from jarvis_common.email import smtp_tls_flags
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.serialization import _coerce_bool
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
@@ -272,7 +273,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
     from jarvis_common.litellm_observer import observed_share  # noqa: PLC0415
 
     pool = request.app.state.db_pool
-    mode = get_core_settings().jarvis_setup_mode
+    env_mode = get_core_settings().jarvis_setup_mode
 
     baseline = os.getenv("JARVIS_HW_TIER") or None
     current = detect_tier()
@@ -291,10 +292,14 @@ async def get_status(request: Request) -> SetupStatusResponse:
                 "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
                 "setup.completed",
             )
+            mode_row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+                "setup.mode",
+            )
     except Exception as exc:
         # Fail-closed: a DB failure must NOT report configured=False, because
         # that would let the setup wizard re-open and a second admin could be
-        # created when one already exists (MED-PI-02).
+        # created when one already exists.
         logger.exception("setup status: admin count query failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -302,6 +307,12 @@ async def get_status(request: Request) -> SetupStatusResponse:
         ) from exc
     configured = admins > 0
     setup_completed = _coerce_bool(row["value"] if row else None, default=False)
+
+    # Report the SAVED mode (user_config, layered over env) so the wizard
+    # reflects a /mode write immediately. Running enforcement still reads env at
+    # startup, hence the persistent "restart required" hint in the UI.
+    saved_mode = mode_row["value"] if mode_row else None
+    mode = saved_mode if saved_mode in ("single", "multi") else env_mode
 
     # smtp_configured is computed OUTSIDE the fail-closed try above so a DB
     # hiccup here never converts a successful status response into a 503.
@@ -513,8 +524,7 @@ async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
         "If you received this, your SMTP relay is working.\n"
     )
 
-    use_tls = body.port == 465
-    start_tls = not use_tls
+    use_tls, start_tls = smtp_tls_flags(body.port)
     try:
         await aiosmtplib.send(
             message,

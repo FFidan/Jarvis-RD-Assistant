@@ -26,7 +26,7 @@ def test_config_from_env_happy_path():
     with patch.dict(os.environ, env, clear=True):
         config = BotConfig.from_env()
 
-    assert config.telegram_token == "test-token"
+    assert config.telegram_token.get_secret_value() == "test-token"
     assert config.telegram_chat_id == 99999
     assert config.database_url == "postgres://localhost/test"
 
@@ -101,7 +101,7 @@ def test_config_reads_token_from_secret_file_when_env_unset(tmp_path):
     with patch.dict(os.environ, env, clear=True):
         config = BotConfig.from_env()
 
-    assert config.telegram_token == "123456:secret-token-from-file"
+    assert config.telegram_token.get_secret_value() == "123456:secret-token-from-file"
 
 
 def test_config_reads_jarvis_api_key_from_secret_file(tmp_path):

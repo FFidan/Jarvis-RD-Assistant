@@ -87,7 +87,7 @@ async def test_require_admin_rejects_missing_state() -> None:
 
 # Collapsed: test_invite_user_happy_path
 # Survivor: test_admin_contract.py::test_a5_invite_user_creates_db_row
-# SQL-text assertion ("INSERT INTO magic_link_tokens" in sql) — B1-09 class.
+# SQL-text assertion ("INSERT INTO magic_link_tokens" in sql) — SQL-substring class.
 # Contract A5 verifies users row + magic_link_tokens row in real DB; both mock send_magic_link.
 
 # Collapsed: test_invite_user_conflict_raises_409
@@ -132,7 +132,7 @@ async def test_update_role_demote_self_last_admin_blocked() -> None:
 
 # Collapsed: test_soft_delete_happy_path
 # Survivor: test_admin_contract.py::test_a7_soft_delete_sets_deleted_at
-# SQL assertion ("deleted_at = NOW()" in sql) — B1-09 class. Contract A7 verifies deleted_at
+# SQL assertion ("deleted_at = NOW()" in sql) — SQL-substring class. Contract A7 verifies deleted_at
 # is non-NULL in DB + 204 response after soft-delete.
 
 

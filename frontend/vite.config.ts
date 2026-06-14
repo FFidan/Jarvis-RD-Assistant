@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 import { visualizer } from 'rollup-plugin-visualizer';
 
@@ -13,6 +14,7 @@ const analyzeBundle = process.env.ANALYZE_BUNDLE === 'true';
 export default defineConfig({
   plugins: [
     react(),
+    tailwindcss(),
     analyzeBundle
       ? visualizer({
           filename: 'dist/bundle-stats.html',

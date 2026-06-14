@@ -528,8 +528,11 @@ describe('IngestionSection — fit badge color', () => {
     fireEvent.click(screen.getByTestId('configure-toggle-smart'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('fit-badge-partial')).toHaveTextContent('14.9 GB / 15.9 GB');
+      // Plain label on the pill; the GB ratio lives on the subordinate detail line.
+      expect(screen.getByTestId('fit-badge-partial')).toHaveTextContent('Runs, but slower');
     });
+    expect(screen.getByTestId('fit-detail-smart')).toHaveTextContent('14.9 GB / 15.9 GB');
+    expect(screen.getByTestId('fit-badge-partial')).not.toHaveTextContent('14.9 GB / 15.9 GB');
     expect(screen.queryByTestId('fit-badge-unfit')).not.toBeInTheDocument();
   });
 
@@ -564,9 +567,11 @@ describe('IngestionSection — fit badge color', () => {
     fireEvent.click(screen.getByTestId('configure-toggle-smart'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('fit-badge-partial')).toHaveTextContent('Partial offload · slower');
+      expect(screen.getByTestId('fit-badge-partial')).toHaveTextContent('Runs, but slower');
     });
+    // No additive baseline → no computed required VRAM → no GB/GB detail line.
     expect(screen.queryByText(/14\.9 GB \/ 15\.9 GB/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('fit-detail-smart')).not.toBeInTheDocument();
   });
 
   it('shows red badge and clamps slider when required VRAM exceeds 120%', async () => {
@@ -673,7 +678,7 @@ describe('IngestionSection — thinking-mode toggle', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Hardware Recommendation Banner (B3-2 — per-VRAM advisory)
+// Hardware Recommendation Banner (per-VRAM advisory)
 // ---------------------------------------------------------------------------
 
 const hwRecommendationMid = {
@@ -726,6 +731,8 @@ describe('IngestionSection — hardware recommendation banner', () => {
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
     vi.mocked(apiFetch).mockResolvedValue({
       ...systemModelsWithFitDetail,
+      // No seeded model → the per-VRAM recommendation is the single advisory.
+      current: {},
       hardware_recommendation: hwRecommendationMid,
     });
 
@@ -756,6 +763,7 @@ describe('IngestionSection — hardware recommendation banner', () => {
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
     vi.mocked(apiFetch).mockResolvedValue({
       ...systemModelsWithFitDetail,
+      current: {},
       hardware_recommendation: hwRecommendationMidHigh,
     });
 
@@ -785,6 +793,7 @@ describe('IngestionSection — hardware recommendation banner', () => {
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
     vi.mocked(apiFetch).mockResolvedValue({
       ...systemModelsWithFitDetail,
+      current: {},
       hardware_recommendation: hwRecommendationMid,
     });
 
@@ -804,6 +813,7 @@ describe('IngestionSection — hardware recommendation banner', () => {
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
     vi.mocked(apiFetch).mockResolvedValue({
       ...systemModelsWithFitDetail,
+      current: {},
       hardware_recommendation: hwRecommendationHigh,
     });
 
@@ -826,6 +836,7 @@ describe('IngestionSection — hardware recommendation banner', () => {
     vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
     vi.mocked(apiFetch).mockResolvedValue({
       ...systemModelsWithFitDetail,
+      current: {},
       hardware_recommendation: hwRecommendationNullVram,
     });
 
@@ -1106,5 +1117,32 @@ describe('IngestionSection — researcher-language model labels', () => {
     expect(screen.getByText(/Powers search across your library/i)).toBeInTheDocument();
     // Post-W1/2/3 truth: model choices apply automatically (not "pending restart").
     expect(screen.getAllByText(/applies automatically/i).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Config load failure — must render an error state, never the empty state.
+// No existing test forces the config query to error; the empty-state branch
+// previously absorbed failures (an invariant break).
+// ---------------------------------------------------------------------------
+
+describe('IngestionSection — config load failure', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders an error state (not EmptyState) when the config query fails', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockRejectedValue(new Error('HTTP 500: boom'));
+    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('config-load-error')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('config-load-error')).toHaveTextContent(/Failed to load configuration/i);
+    // The empty-state copy must NOT appear on failure.
+    expect(screen.queryByText('No config entries')).not.toBeInTheDocument();
   });
 });

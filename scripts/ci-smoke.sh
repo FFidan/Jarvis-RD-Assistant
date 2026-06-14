@@ -26,6 +26,7 @@ printf '%s\n' "smoke-jarvis-api-key" > "$TMP_DIR/jarvis_api_key.txt"
 printf '%s\n' "smoke-telegram-token" > "$TMP_DIR/telegram_bot_token.txt"
 printf '%s\n' "smoke-qdrant-api-key" > "$TMP_DIR/qdrant_api_key.txt"
 printf '%s\n' "test-litellm-master-key" > "$TMP_DIR/litellm_master_key.txt"
+printf '%s\n' "$(openssl rand -hex 32)" > "$TMP_DIR/litellm_salt_key.txt"
 printf '%s\n' "$(openssl rand -base64 32)" > "$TMP_DIR/jarvis_config_key.txt"
 # Optional-profile secrets — must be declared so compose does not reject them
 # when observability / tunnel / backup profiles are activated in CI.
@@ -51,6 +52,8 @@ secrets:
     file: $TMP_DIR/qdrant_api_key.txt
   litellm_master_key:
     file: $TMP_DIR/litellm_master_key.txt
+  litellm_salt_key:
+    file: $TMP_DIR/litellm_salt_key.txt
   jarvis_config_key:
     file: $TMP_DIR/jarvis_config_key.txt
   langfuse_pg_password:

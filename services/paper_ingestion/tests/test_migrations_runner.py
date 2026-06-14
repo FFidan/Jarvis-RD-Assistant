@@ -39,15 +39,17 @@ def test_no_duplicate_migration_versions() -> None:
 
 
 _BOOTSTRAP_SEED_LO = 1
-_BOOTSTRAP_SEED_HI = 92  # next runner-owned migration; init.sql owns 1..(HI-1)
+_BOOTSTRAP_SEED_HI = 96  # next runner-owned migration; init.sql owns 1..(HI-1)
 
 
 def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     """init.sql bootstrap must use an explicit version list, not generate_series.
 
     Post-squash (2026-05-19) + fold-ins (89=pdf_resolutions drop;
-    90=audit_log append-only; 91=author_alert_log per-user dedupe; all
-    folded into init.sql per db/migrations/README.md):
+    90=audit_log append-only; 91=author_alert_log per-user dedupe;
+    92=NULL-owner backfill; 93=papers.zotero_citation_key;
+    94=per-user extractions/entities/zotero notes; 95=user-FK CASCADE;
+    all folded into init.sql per db/migrations/README.md):
     the seeded set must be exactly set(range(_BOOTSTRAP_SEED_LO,
     _BOOTSTRAP_SEED_HI)) — contiguous, no gaps. The runner owns
     _BOOTSTRAP_SEED_HI+.

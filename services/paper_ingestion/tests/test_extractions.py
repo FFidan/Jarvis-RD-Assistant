@@ -219,8 +219,8 @@ async def test_extraction_templates_are_global_not_per_user(live_pg_dsn: str) ->
 
 
 # ---------------------------------------------------------------------------
-# PI-09 — build_extraction_prompt: no pre-truncation; wrap_delimited handles it
-# PI-09 + prompt-shape: system carries rules, user carries data only
+# build_extraction_prompt: no pre-truncation; wrap_delimited handles it
+# Prompt-shape: system carries rules, user carries data only
 # ---------------------------------------------------------------------------
 
 
@@ -258,7 +258,7 @@ def test_system_extraction_contains_rules():
 def test_build_extraction_prompt_accepts_long_text_without_pre_truncation():
     """build_extraction_prompt truncates via wrap_delimited, not pre-truncation.
 
-    PI-09: passing text longer than 15000 chars must not raise and the returned
+    Passing text longer than 15000 chars must not raise and the returned
     prompt must contain the wrapped tag (truncation done inside wrap_delimited).
     """
     from paper_ingestion.extraction.core import build_extraction_prompt

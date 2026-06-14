@@ -79,33 +79,10 @@ else
     err ".env.example missing; cannot bootstrap. Are you in the repo root?"
     exit 1
   fi
-  info "Generating .env from .env.example with strong random secrets"
-
-  # Required secrets (mirrors setup.sh behaviour).
-  POSTGRES_PASSWORD="$(openssl rand -hex 32)"
-  JARVIS_API_KEY="$(openssl rand -hex 32)"
-  LITELLM_MASTER_KEY="$(openssl rand -hex 32)"
-  # Fernet key — 32 bytes urlsafe-base64. cryptography.Fernet wants exactly
-  # this shape; `openssl rand -base64 32 | tr '+/' '-_'` produces a compatible
-  # key without needing Python.
-  JARVIS_CONFIG_KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' )="
-
+  info "Generating .env from .env.example"
   cp .env.example .env
-  # macOS-safe in-place sed: write through a tempfile.
-  TMP="$(mktemp)"
-  awk -v pgp="${POSTGRES_PASSWORD}" \
-      -v jak="${JARVIS_API_KEY}" \
-      -v lmk="${LITELLM_MASTER_KEY}" \
-      -v jck="${JARVIS_CONFIG_KEY}" '
-    /^POSTGRES_PASSWORD=$/ { print "POSTGRES_PASSWORD=" pgp; next }
-    /^JARVIS_API_KEY=$/ { print "JARVIS_API_KEY=" jak; next }
-    /^LITELLM_MASTER_KEY=$/ { print "LITELLM_MASTER_KEY=" lmk; next }
-    /^JARVIS_CONFIG_KEY=$/ { print "JARVIS_CONFIG_KEY=" jck; next }
-    { print }
-  ' .env > "${TMP}"
-  mv "${TMP}" .env
   chmod 600 .env
-  ok "Generated .env with random secrets (chmod 600)"
+  ok "Created .env from .env.example (chmod 600) — secrets will be generated next"
 fi
 
 # ---------------------------------------------------------------------------

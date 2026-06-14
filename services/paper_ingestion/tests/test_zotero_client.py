@@ -131,7 +131,7 @@ async def test_ensure_collection_reuses_existing(client):
 
 
 # ---------------------------------------------------------------------------
-# ensure_collection — PI-012 pagination
+# ensure_collection — pagination
 # ---------------------------------------------------------------------------
 
 

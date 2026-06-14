@@ -22,6 +22,13 @@ from paper_ingestion.models import (
 from paper_ingestion.services.paper_state_helpers import _upsert_state_and_starred
 
 logger = logging.getLogger(__name__)
+
+
+def _ok(paper_id: int) -> dict[str, object]:
+    """Standard success body for the per-paper state-transition endpoints."""
+    return {"status": "ok", "paper_id": paper_id}
+
+
 router = APIRouter(
     prefix="/api/papers",
     tags=["papers"],
@@ -66,7 +73,7 @@ async def save_paper(
             )
         except Exception:
             logger.exception("paper.analyze enqueue failed for paper %d", paper_id)
-    return {"status": "ok", "paper_id": paper_id}
+    return _ok(paper_id)
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +94,7 @@ async def unsave_paper(
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("to_read",))
         await _upsert_state_and_starred(conn, paper_id, user_id, state="inbox")
-    return {"status": "ok", "paper_id": paper_id}
+    return _ok(paper_id)
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +115,7 @@ async def skip_paper(
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("inbox",))
         await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
-    return {"status": "ok", "paper_id": paper_id}
+    return _ok(paper_id)
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +138,7 @@ async def reading_paper(
             conn, paper_id, user_id, allowed=("to_read", "reading", "done")
         )
         await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
-    return {"status": "ok", "paper_id": paper_id}
+    return _ok(paper_id)
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +158,7 @@ async def done_paper(
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
-    return {"status": "ok", "paper_id": paper_id}
+    return _ok(paper_id)
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +229,7 @@ async def star_paper(
             )
         except Exception:
             logger.exception("zotero.push enqueue failed for paper %d", paper_id)
-    return {"status": "ok", "paper_id": paper_id}
+    return _ok(paper_id)
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +249,7 @@ async def unstar_paper(
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _upsert_state_and_starred(conn, paper_id, user_id, starred=False)
-    return {"status": "ok", "paper_id": paper_id}
+    return _ok(paper_id)
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +269,7 @@ async def trash_paper(
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _trash_paper(conn, paper_id, user_id)
-    return {"status": "ok", "paper_id": paper_id}
+    return _ok(paper_id)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +290,7 @@ async def restore_paper(
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
         await _restore_paper(conn, paper_id, user_id)
-    return {"status": "ok", "paper_id": paper_id}
+    return _ok(paper_id)
 
 
 # ---------------------------------------------------------------------------

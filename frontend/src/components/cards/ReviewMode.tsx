@@ -63,7 +63,12 @@ export function ReviewMode({
   const [revealed, setRevealed] = useState(false);
   const startTime = useRef<number>(Date.now());
   const isMountedRef = useRef(true);
-  useEffect(() => () => { isMountedRef.current = false; }, []);
+  useEffect(() => {
+    isMountedRef.current = true; // re-arm on (re)mount so the guard survives a StrictMode remount
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const reviewQueryKey = deckId != null
     ? ['review-next', { deckId }]

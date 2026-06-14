@@ -274,7 +274,7 @@ async def test_project_papers_attach_idempotent_envelope(
     """POST /api/projects/{id}/papers/{paper_id} twice → identical
     {project_id, paper_id} envelope on both calls.
 
-    Pins the W14 MED-XC-02 envelope-consistency contract: the already-linked
+    Pins the envelope-consistency contract: the already-linked
     early-return path returns the same two-key shape as the freshly-linked
     path and no longer carries a ``message`` field. Exercises the link_paper
     success path, which queries ``papers.zotero_item_key`` (schema

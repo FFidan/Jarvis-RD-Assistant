@@ -1,7 +1,7 @@
 """Zotero router tests.
 
 Covers:
-- PI-005: POST /api/zotero/poll enqueues a zotero.sync_from_zotero job and
+- POST /api/zotero/poll enqueues a zotero.sync_from_zotero job and
   returns 200 with {job_id, status}.
 - Import smoke-tests for zotero modules.
 """
@@ -151,7 +151,7 @@ async def test_get_paper_zotero_state_checks_ownership(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# PI-005: POST /api/zotero/poll
+# POST /api/zotero/poll
 # ---------------------------------------------------------------------------
 
 

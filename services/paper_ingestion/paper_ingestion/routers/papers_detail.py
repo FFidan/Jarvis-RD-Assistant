@@ -60,8 +60,14 @@ async def get_paper_detail(
         if not paper_row:
             raise HTTPException(status_code=404, detail="Paper not found")
 
+        # paper_summaries is per-user workspace content (UNIQUE NULLS NOT
+        # DISTINCT (paper_id, user_id)); scope the read to the caller so a
+        # shared canonical paper never serves another user's summary. IS NOT
+        # DISTINCT FROM keeps single-user mode (user_id IS NULL) matching.
         summary_row = await conn.fetchrow(
-            "SELECT * FROM paper_summaries WHERE paper_id = $1", paper_id
+            "SELECT * FROM paper_summaries WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            paper_id,
+            user_id,
         )
         chunk_rows = await conn.fetch(
             "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index", paper_id

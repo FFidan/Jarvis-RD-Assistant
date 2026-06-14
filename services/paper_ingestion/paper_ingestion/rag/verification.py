@@ -98,7 +98,7 @@ def _build_confidence(pass_rate: float, total: int) -> RagConfidence | None:
 
 
 def _make_chunk_responses(
-    chunks: list[dict], *, skip_paper_id: int | None = None
+    chunks: list[dict], *, keep_paper_id: int | None = None
 ) -> list[ChunkResponse]:
     """Build ChunkResponse objects from source dicts.
 
@@ -106,7 +106,7 @@ def _make_chunk_responses(
     ----------
     chunks:
         Source dicts, each with at least a ``"content"`` key.
-    skip_paper_id:
+    keep_paper_id:
         When *None* (default), no paper-id filtering is applied and
         the synthetic ``paper_id=-1`` is used (single-paper / no-pid path).
         When set, only chunks whose ``paper_id`` matches this value are
@@ -117,13 +117,13 @@ def _make_chunk_responses(
     verifier only reads ``content`` and ``page_number`` from the chunk
     list for fuzzy matching.
     """
-    assigned_paper_id = skip_paper_id if skip_paper_id is not None else -1
+    assigned_paper_id = keep_paper_id if keep_paper_id is not None else -1
     out: list[ChunkResponse] = []
     for i, src in enumerate(chunks):
         if "content" not in src:
             continue
-        if skip_paper_id is not None:
-            if src.get("paper_id") is not None and src["paper_id"] != skip_paper_id:
+        if keep_paper_id is not None:
+            if src.get("paper_id") is not None and src["paper_id"] != keep_paper_id:
                 continue
         out.append(
             ChunkResponse(
@@ -239,7 +239,7 @@ async def verify_answer_sentences(
             # Synthetic path: one ChunkResponse per source entry
             chunks_by_paper[-1] = _make_chunk_responses(sources)
         else:
-            chunks_by_paper[pid] = _make_chunk_responses(sources, skip_paper_id=pid)
+            chunks_by_paper[pid] = _make_chunk_responses(sources, keep_paper_id=pid)
 
     # Per-sentence verification
     _batch_size = 10

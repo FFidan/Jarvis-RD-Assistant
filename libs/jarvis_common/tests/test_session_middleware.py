@@ -51,7 +51,7 @@ def mock_pool(mock_request):
 
 
 # ---------------------------------------------------------------------------
-# SEC-MED-28 — expires_at IS NOT NULL defense-in-depth
+# expires_at IS NOT NULL defense-in-depth
 # ---------------------------------------------------------------------------
 
 

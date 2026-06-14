@@ -45,7 +45,7 @@ describe('auth-store — sessionStorage persistence', () => {
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw!);
     expect(parsed.state.user).toEqual({ id: 7, email: 'owner@example.com', role: 'admin' });
-    // MED-FE-02: apiKey must not be persisted to sessionStorage at all.
+    // apiKey must not be persisted to sessionStorage at all.
     expect('apiKey' in (parsed.state as Record<string, unknown>)).toBe(false);
 
     // localStorage must NOT contain the auth entry.
@@ -103,9 +103,9 @@ describe('auth-store — sessionStorage persistence', () => {
   });
 
   // -------------------------------------------------------------------------
-  // MED-FE-02: partialize must never include apiKey (in-memory only)
+  // partialize must never include apiKey (in-memory only)
   // -------------------------------------------------------------------------
-  it('MED-FE-02: apiKey is absent from the partialized state even when set in-memory', () => {
+  it('apiKey is absent from the partialized state even when set in-memory', () => {
     // Force an apiKey into in-memory state (simulates a legacy/edge-case path).
     useAuthStore.setState({
       isAuthenticated: true,

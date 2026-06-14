@@ -74,8 +74,8 @@ class BotConfig(JarvisCommonSettings):
     """
 
     # --- Telegram bot token ---------------------------------------------
-    telegram_token: str = Field(
-        default="",
+    telegram_token: SecretStr = Field(
+        default=SecretStr(""),
         alias="TELEGRAM_BOT_TOKEN",
         description="Telegram bot token (TELEGRAM_BOT_TOKEN).  Required at runtime.",
     )
@@ -159,7 +159,7 @@ class BotConfig(JarvisCommonSettings):
         # (user_config.telegram.bot_token) wins over the env/Docker-secret
         # value, so changing it is a UI save + container restart, never an
         # .env edit. Falls back to the env token when the DB has none.
-        token = cfg.telegram_token
+        token = cfg.telegram_token.get_secret_value()
         if not token:
             # BotConfig (JarvisCommonSettings) does not apply the `_FILE` secret
             # indirection, so the bare TELEGRAM_BOT_TOKEN env is empty when only
@@ -205,7 +205,7 @@ class BotConfig(JarvisCommonSettings):
         return cfg.model_copy(
             update={
                 "database_url": resolved_url,
-                "telegram_token": token,
+                "telegram_token": SecretStr(token),
                 "jarvis_api_key": api_key,
             }
         )

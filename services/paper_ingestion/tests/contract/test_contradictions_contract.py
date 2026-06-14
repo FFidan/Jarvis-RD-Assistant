@@ -6,13 +6,13 @@ services/paper_ingestion/tests/test_contradictions_router.py (3 tests) and the
 service-router-shaped mock-units in test_contradictions_service.py with
 survivor citations.
 
-  test_get_contradictions_returns_verified_rows           → C5-01 + C5-02
-  test_list_contradictions_maps_rows                      → C5-05 (paper_id filter)
-  test_scan_contradictions_endpoint_enqueues_job          → C5-03
-  test_scan_paper_contradictions_endpoint_enqueues_scoped_job → C5-04
-  test_pair_construction_uses_cross_ref_index_for_library_scan → C5-03 (indirect)
-  test_pair_construction_full_scan_when_paper_id_provided → C5-04 (indirect)
-  test_persist_contradiction_dedup_uses_direct_equality   → C5-01 (DB-substrate)
+  test_get_contradictions_returns_verified_rows
+  test_list_contradictions_maps_rows
+  test_scan_contradictions_endpoint_enqueues_job
+  test_scan_paper_contradictions_endpoint_enqueues_scoped_job
+  test_pair_construction_uses_cross_ref_index_for_library_scan
+  test_pair_construction_full_scan_when_paper_id_provided
+  test_persist_contradiction_dedup_uses_direct_equality
 
 Carve-out:
   - task_registry._TASK_MAP for contradictions.scan (§5.2)
@@ -62,7 +62,7 @@ async def _seed_contradiction(
 
 
 # ---------------------------------------------------------------------------
-# C5-01: GET /api/contradictions — list scoped to caller
+# GET /api/contradictions — list scoped to caller
 # ---------------------------------------------------------------------------
 
 
@@ -102,8 +102,8 @@ async def test_c5_01_list_contradictions_returns_rows_scoped_to_user(
 
 
 # ---------------------------------------------------------------------------
-# C5-02: GET /api/contradictions — user B sees empty when A seeded rows
-# (sub-assertion of C5-01 — kept separate per coverage-map for clarity)
+# GET /api/contradictions — user B sees empty when A seeded rows
+# (sub-assertion of the list-scoped-to-caller test — kept separate for clarity)
 # ---------------------------------------------------------------------------
 
 
@@ -139,7 +139,7 @@ async def test_c5_02_list_contradictions_user_b_returns_empty(
 
 
 # ---------------------------------------------------------------------------
-# C5-03: POST /api/contradictions/scan — enqueues 202 + job_id
+# POST /api/contradictions/scan — enqueues 202 + job_id
 # ---------------------------------------------------------------------------
 
 
@@ -167,7 +167,7 @@ async def test_c5_03_scan_enqueues_202_with_job_id(
 
 
 # ---------------------------------------------------------------------------
-# C5-04: POST /api/papers/{paper_id}/contradictions/scan — ownership-scoped
+# POST /api/papers/{paper_id}/contradictions/scan — ownership-scoped
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +208,7 @@ async def test_c5_04_scan_paper_scoped_enqueues_with_ownership_check(
 
 
 # ---------------------------------------------------------------------------
-# C5-05: GET /api/contradictions?paper_id=X — filter by paper
+# GET /api/contradictions?paper_id=X — filter by paper
 # ---------------------------------------------------------------------------
 
 

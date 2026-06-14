@@ -183,6 +183,9 @@ export function AutomationSection() {
 
   return (
     <div className="space-y-6">
+      <p className="text-sm text-muted-foreground">
+        Control when JARVIS runs background tasks and sends you notifications. Enable or disable each job and set its schedule here.
+      </p>
       {isLoading ? (
         <div className="py-8 text-center text-muted-foreground">Loading automation...</div>
       ) : nudges.length === 0 ? (

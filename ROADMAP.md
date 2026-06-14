@@ -8,7 +8,7 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v0.6.0**.
+Current release: **v0.8.5**.
 
 - **Multi-tenant, self-hostable.** Magic-link sessions and an API-key session
   path for single-operator installs; admin role separation; Telegram account
@@ -26,6 +26,11 @@ Current release: **v0.6.0**.
 - **Shared canonical corpus + private workspace.** The bibliographic corpus is
   shared across users on an instance; all user activity and intellectual
   output is strictly private (see the SECURITY.md "Data Sharing Boundary").
+- **Researcher-grade model plane + trust polish.** Per-hardware model selection
+  that actually takes effect, full-coverage summaries with verified quotes, and a
+  reliability/comprehensibility pass: plain-language settings (no implementation
+  jargon on screen), honest degraded states with a cause and a next step, and no
+  silent settings dead-ends.
 - **Documentation site + user guide.** A published companion site with
   operator/developer docs and an end-user manual covering install through every
   capability (ingestion, hybrid RAG, citation & knowledge graph, contradiction

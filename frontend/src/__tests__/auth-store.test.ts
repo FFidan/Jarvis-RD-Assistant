@@ -133,7 +133,7 @@ describe('auth-store', () => {
   });
 
   // -----------------------------------------------------------------------
-  // FE-1: isSessionValid() pure predicate + expireSession() side-effect
+  // isSessionValid() pure predicate + expireSession() side-effect
   // -----------------------------------------------------------------------
   it('isSessionValid returns true for a fresh session without mutating state', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => OWNER });

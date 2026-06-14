@@ -1,4 +1,4 @@
-"""notes domain contract tests (wave 4.4.D1).
+"""notes domain contract tests.
 
 The shared IDOR contract (test_idor_contract.py) already covers the key
 ownership quadruples for notes:

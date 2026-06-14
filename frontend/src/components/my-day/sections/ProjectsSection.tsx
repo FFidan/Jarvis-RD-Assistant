@@ -75,7 +75,7 @@ export function ProjectsSection() {
             <div key={project.id} className="space-y-1.5">
               <div className="grid grid-cols-[16px_1fr_auto] gap-3 items-center">
                 {/* Status dot */}
-                <div className="flex-shrink-0">
+                <div className="shrink-0">
                   <div className={`h-2 w-2 rounded-full ${dotClass}`} />
                 </div>
 
@@ -87,7 +87,7 @@ export function ProjectsSection() {
                 >
                   {project.color && (
                     <span
-                      className="w-2 h-2 rounded-full inline-block flex-shrink-0"
+                      className="w-2 h-2 rounded-full inline-block shrink-0"
                       style={{ backgroundColor: project.color }}
                     />
                   )}
@@ -95,7 +95,7 @@ export function ProjectsSection() {
                 </button>
 
                 {/* Progress % */}
-                <span className="font-mono tabular-nums text-[10.5px] text-meta flex-shrink-0">
+                <span className="font-mono tabular-nums text-[10.5px] text-meta shrink-0">
                   {pct}%
                 </span>
               </div>

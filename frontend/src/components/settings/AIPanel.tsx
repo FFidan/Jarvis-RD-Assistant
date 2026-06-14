@@ -25,6 +25,11 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 import { errorMessage } from '@/lib/errors';
 
+const BACKEND_LABELS: Record<'vllm' | 'ollama', string> = {
+  vllm: 'High-Performance (vLLM)',
+  ollama: 'Local (Ollama)',
+};
+
 export function AIPanel() {
   const qc = useQueryClient();
 
@@ -67,6 +72,14 @@ export function AIPanel() {
   const candidateBackends = new Set((data?.candidates_for_tier ?? []).map((c) => c.backend));
   const recommendedBackend: 'ollama' | 'vllm' =
     data?.recommended_backend === 'vllm' ? 'vllm' : 'ollama';
+
+  // Only surface a recommendation the catalog plane can actually assign — the
+  // LLM Models page is authoritative, so a recommendation it can't honour would
+  // contradict it. A recommended (backend, model) counts only if it appears in
+  // candidates_for_tier.
+  const recommendationIsAssignable = (data?.candidates_for_tier ?? []).some(
+    (c) => c.backend === data?.recommended_backend && c.model === data?.recommended_model,
+  );
 
   // Derive the initial selection from configured state only when it is selectable.
   const rawBackend = data?.configured_backend ?? data?.recommended_backend ?? 'ollama';
@@ -274,8 +287,10 @@ export function AIPanel() {
           </div>
           <div className="flex gap-2">
             <dt className="w-36 text-muted-foreground">Recommended</dt>
-            <dd className="font-mono">
-              {data?.recommended_backend} / {data?.recommended_model}
+            <dd className="font-mono" data-testid="recommended-value">
+              {recommendationIsAssignable
+                ? `${data?.recommended_backend} / ${data?.recommended_model}`
+                : '—'}
             </dd>
           </div>
         </dl>
@@ -300,7 +315,7 @@ export function AIPanel() {
                     : 'border-input bg-background text-muted-foreground hover:border-foreground hover:text-foreground',
                 ].join(' ')}
               >
-                {b}
+                {BACKEND_LABELS[b]}
                 {isRecommended && (
                   <span className="text-xs bg-primary text-primary-foreground rounded px-1.5 py-0.5 leading-none">
                     Recommended
@@ -316,7 +331,12 @@ export function AIPanel() {
       <section className="space-y-2">
         <h3 className="text-sm font-medium">Model</h3>
         {modelsForBackend.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No candidates for this backend and tier.</p>
+          <p className="text-sm text-muted-foreground" data-testid="no-candidates-guidance">
+            {BACKEND_LABELS[activeBackend]} has no curated model for your hardware tier. Switch to
+            the {BACKEND_LABELS[recommendedBackend]} backend
+            {recommendedBackend === activeBackend ? '' : ' (marked Recommended above)'}, or pick a
+            model on the LLM Models page.
+          </p>
         ) : (
           <select
             value={activeModel}

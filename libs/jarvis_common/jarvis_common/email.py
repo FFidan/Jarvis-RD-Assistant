@@ -28,6 +28,11 @@ from jarvis_common.settings import get_core_settings, get_secrets_settings
 logger = logging.getLogger(__name__)
 
 
+def smtp_tls_flags(port: int) -> tuple[bool, bool]:
+    """(use_tls, start_tls) by port: 465 implicit TLS; 587 STARTTLS; else plaintext."""
+    return port == 465, port == 587
+
+
 @dataclass(frozen=True)
 class _EffectiveSmtp:
     """Resolved SMTP relay config: DB (``user_config``) layered over env."""
@@ -218,9 +223,7 @@ async def send_magic_link(
     message["Subject"] = "Sign in to JARVIS"
     message.set_content(_PLAIN_BODY_TEMPLATE.replace("{link}", link))
 
-    # Port 465 → implicit TLS; everything else → STARTTLS where supported.
-    use_tls = smtp.port == 465
-    start_tls = not use_tls
+    use_tls, start_tls = smtp_tls_flags(smtp.port)
 
     # SSRF guard: reject non-public SMTP hosts on the live send path unless the
     # operator has explicitly opted in (e.g. an internal corporate relay).

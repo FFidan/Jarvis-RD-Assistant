@@ -69,6 +69,7 @@ async function renderSection() {
 describe('AccessModeSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     mockSave.mockResolvedValue(fixtures.saveResponse);
   });
 
@@ -115,13 +116,24 @@ describe('AccessModeSection', () => {
     });
   });
 
-  it('shows the persistent restart note', async () => {
+  it('shows the actionable restart command only once a restart is pending', async () => {
     mockGetStatus.mockResolvedValue(fixtures.statusSingle);
+    const user = userEvent.setup();
     await renderSection();
+
+    expect(
+      screen.queryByText(/docker compose restart paper_ingestion learning_engine/i),
+    ).not.toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: /multi-user/i })).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole('radio', { name: /multi-user/i }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
       expect(
-        screen.getByText(/changing access mode requires an application restart/i),
+        screen.getByText(/docker compose restart paper_ingestion learning_engine/i),
       ).toBeInTheDocument(),
     );
   });
@@ -139,7 +151,51 @@ describe('AccessModeSection', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(screen.getByText(/restart required/i)).toBeInTheDocument(),
+      expect(
+        screen.getByText(/saved — restart required for the change to take effect/i),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it('shows the pending pill after a restart-required save and persists it', async () => {
+    mockGetStatus.mockResolvedValue(fixtures.statusSingle);
+    const user = userEvent.setup();
+    await renderSection();
+
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: /multi-user/i })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole('radio', { name: /multi-user/i }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/mode change pending — restart required/i)).toBeInTheDocument(),
+    );
+    expect(localStorage.getItem('jarvis-access-mode-pending')).toBe('multi');
+  });
+
+  it('restores the pending pill from localStorage and clears it once the API reports the mode', async () => {
+    localStorage.setItem('jarvis-access-mode-pending', 'multi');
+    // API still reports the old mode → pill should be visible.
+    mockGetStatus.mockResolvedValue(fixtures.statusSingle);
+    const { unmount } = await renderSection();
+
+    await waitFor(() =>
+      expect(screen.getByText(/mode change pending — restart required/i)).toBeInTheDocument(),
+    );
+    unmount();
+
+    // After a restart the API now reports the saved mode → pill clears.
+    mockGetStatus.mockResolvedValue(fixtures.statusMulti);
+    await renderSection();
+
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: /multi-user/i })).toBeChecked(),
+    );
+    expect(screen.queryByText(/mode change pending/i)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(localStorage.getItem('jarvis-access-mode-pending')).toBeNull(),
     );
   });
 

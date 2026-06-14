@@ -86,7 +86,6 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
     The function intentionally uses two separate connection acquisitions with
     the HTTP calls to embed_texts() running in between (no connection held), so
     that potentially slow embedding round-trips do not block pool slots
-    (BE-001 / PI-006).
     """
     # ------------------------------------------------------------------
     # Fetch centroid-feed data (topics, authors, engaged papers).
@@ -162,7 +161,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
     # Connection released — centroid-feed fetch complete.
 
     # ------------------------------------------------------------------
-    # HTTP call for library centroid (no DB connection held, PI-006)
+    # HTTP call for library centroid (no DB connection held)
     # ------------------------------------------------------------------
     library_centroid: list[float] | None = None
     if abstracts:

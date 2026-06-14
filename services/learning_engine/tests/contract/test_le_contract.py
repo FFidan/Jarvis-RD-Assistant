@@ -1,4 +1,4 @@
-"""Learning Engine domain contract tests — D6 collapse.
+"""Learning Engine domain contract tests.
 
 Exercises real SQL against the contract DB (session-scoped Postgres +
 per-test asyncpg transaction rollback via ``contract_conn``).
@@ -532,14 +532,14 @@ async def test_create_deck_row_has_caller_user_id(
 
 
 # ---------------------------------------------------------------------------
-# Cluster 12 — Card behaviors (LE-C-01..LE-C-04)
+# Cluster 12 — Card behaviors
 # Survivor-of mock-units in test_cards_router.py:
-#   test_create_card_success_uses_evidence_payload   → LE-C-01
-#   test_update_card_returns_existing_row_when_body_is_empty → LE-C-03
-#   test_update_card_uses_dynamic_update             → LE-C-03 (behavioral)
-#   test_create_card_raises_404_on_fk_violation_deck → LE-C-02
-#   test_create_card_skips_ownership_check_when_no_paper → LE-C-01 (no-paper happy path)
-#   test_card_create_front_over_cap_is_rejected      → LE-C-04 (HTTP layer)
+#   test_create_card_success_uses_evidence_payload
+#   test_update_card_returns_existing_row_when_body_is_empty
+#   test_update_card_uses_dynamic_update             (behavioral)
+#   test_create_card_raises_404_on_fk_violation_deck
+#   test_create_card_skips_ownership_check_when_no_paper (no-paper happy path)
+#   test_card_create_front_over_cap_is_rejected      (HTTP layer)
 # Pre-existing survivors cover:
 #   test_update_card_raises_404_when_missing         → test_update_card_user_b_gets_404 (line 161)
 #   test_delete_card_raises_404_when_row_missing     → test_delete_card_user_b_gets_404 (line 204)
@@ -682,7 +682,7 @@ async def test_create_card_front_over_cap_returns_422(
 
 
 # ---------------------------------------------------------------------------
-# §MED-LE-04 — GET /api/export/anki/{deck_id} — user B cannot see user A's cards
+# GET /api/export/anki/{deck_id} — user B cannot see user A's cards
 # ---------------------------------------------------------------------------
 
 

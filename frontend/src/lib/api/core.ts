@@ -85,7 +85,16 @@ function _handleFetchError(
   throw err;
 }
 
-export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+/**
+ * Shared fetch core for apiFetch and apiFetchRaw.
+ *
+ * Owns the 5-min timeout controller, caller-signal combination, cookie
+ * credentials, auth headers, the !res.ok error path (auto-logout + ApiError),
+ * and the abort/error translation. Returns the raw ok Response; callers decide
+ * whether to parse JSON. The Content-Type default is supplied by the caller via
+ * `init.headers` so blob/raw callers can omit it.
+ */
+async function _doFetch(url: string, init?: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 300_000); // 5 min
   // Combine caller signal with the 5-min timeout: abort on whichever fires first
@@ -101,40 +110,6 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
       // :5173 hitting backend on :3001) still carry the cookie.
       credentials: init?.credentials ?? 'include',
       headers: {
-        ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-        ...authHeaders(),
-        ...init?.headers,
-      },
-    });
-    if (!res.ok) {
-      handleAuthFailure(res.status);
-      throw new ApiError(res.status, await res.text());
-    }
-    if (res.status === 204) {
-      return undefined as T;
-    }
-    return res.json();
-  } catch (err) {
-    _handleFetchError(err, controller, init?.signal);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-/** Fetch that returns the raw Response (for blob downloads). */
-export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 300_000);
-  // Combine caller signal with the 5-min timeout: abort on whichever fires first
-  const signals = [controller.signal, init?.signal].filter(Boolean) as AbortSignal[];
-  const combinedSignal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
-  try {
-    const res = await fetch(url, {
-      ...init,
-      signal: combinedSignal,
-      // Same rationale as apiFetch — carry the jarvis_session cookie.
-      credentials: init?.credentials ?? 'include',
-      headers: {
         ...authHeaders(),
         ...init?.headers,
       },
@@ -147,8 +122,27 @@ export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Resp
   } catch (err) {
     _handleFetchError(err, controller, init?.signal);
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timeoutId);
   }
+}
+
+export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await _doFetch(url, {
+    ...init,
+    headers: {
+      ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...init?.headers,
+    },
+  });
+  if (res.status === 204) {
+    return undefined as T;
+  }
+  return res.json();
+}
+
+/** Fetch that returns the raw Response (for blob downloads). */
+export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Response> {
+  return _doFetch(url, init);
 }
 
 /** Health check helper — returns true if service responds ok. */

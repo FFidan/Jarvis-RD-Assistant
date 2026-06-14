@@ -35,7 +35,7 @@ def test_telegram_bot_has_langfuse_init_secrets():
 
 
 def test_langfuse_service_secrets_mounted_and_not_in_env():
-    """SEC-HIGH-02 invariant: langfuse service must mount the 3 secrets at
+    """Invariant: langfuse service must mount the 3 secrets at
     /run/secrets/ AND must NOT carry DATABASE_URL/NEXTAUTH_SECRET/SALT as
     plaintext env vars (which would be visible via `docker inspect`).
     """
@@ -51,6 +51,6 @@ def test_langfuse_service_secrets_mounted_and_not_in_env():
     forbidden = {"DATABASE_URL", "NEXTAUTH_SECRET", "SALT"}
     leaked = forbidden & set(env.keys())
     assert not leaked, (
-        f"SEC-HIGH-02 regression: {leaked} re-introduced as plaintext env vars "
+        f"Regression: {leaked} re-introduced as plaintext env vars "
         f"on langfuse service — `docker inspect` would expose them."
     )

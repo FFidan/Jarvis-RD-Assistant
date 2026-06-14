@@ -273,7 +273,7 @@ async def prepare_single_paper_rag(
         raise NoRelevantChunksError("No relevant passages found for this question in the paper.")
 
     # Build RAG prompt — full chunk text flows through to the prompt.
-    # C-10: Wrap question and title in XML-style delimiters to prevent prompt injection.
+    # Wrap question and title in XML-style delimiters to prevent prompt injection.
     # Content between XML tags is DATA — never instructions.
     safe_question = safe_for_prompt(body.question, mode="escape")
     safe_title, _ = wrap_delimited("title", paper["title"])

@@ -1,6 +1,6 @@
 """Tests for LG-B3: all three source types emit category='source' log_event rows.
 
-B1-05: Consolidated from test_source_arxiv_events.py, test_source_openalex_events.py,
+Consolidated from test_source_arxiv_events.py, test_source_openalex_events.py,
 and test_source_s2_events.py — 3 files × 4 behaviors → parametrized over sources.
 The sibling files (openalex / s2) import nothing; this module is the sole container.
 

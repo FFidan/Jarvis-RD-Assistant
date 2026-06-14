@@ -132,7 +132,7 @@ def test_compute_streak_inner_gap():
     assert _compute_streak(rows) == 2
 
 
-# test_summary_sql_param_contract deleted — B1-09 positional-arg binding assertions
+# test_summary_sql_param_contract deleted — positional-arg binding assertions
 # (user_id=$1, days=$2 for all DB calls); survivor: test_analytics_contract.py
 # (A185) exercises the same scoping guarantee against real PostgreSQL.
 
@@ -142,7 +142,7 @@ def test_compute_streak_inner_gap():
 # ---------------------------------------------------------------------------
 
 
-# test_summary_per_user_isolation deleted — mock-unit with B1-09 positional-arg
+# test_summary_per_user_isolation deleted — mock-unit with positional-arg
 # assertions (cur_args[1]==user_id); survivor:
 # test_analytics_contract.py::test_analytics_summary_user_b_excludes_user_a_data (A189).
 
@@ -205,7 +205,7 @@ async def test_summary_streaks_are_independent():
     assert result.cards_review_streak_days == 2
 
 
-# B2-13: test_analytics_summary_response_fields deleted — characterization test of a
+# test_analytics_summary_response_fields deleted — characterization test of a
 #   settled Pydantic model; AnalyticsSummaryResponse construction + field access is
 #   already exercised by test_summary_per_user_isolation, test_summary_period_delta_correctness,
 #   test_summary_streaks_are_independent, and test_summary_empty_daily_log_returns_zeros above.

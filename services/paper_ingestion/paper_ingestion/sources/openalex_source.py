@@ -130,10 +130,7 @@ class OpenAlexSource(PaperSource):
         from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
         _cfg = get_paper_ingestion_settings()
-        cfg_key = config.config.get("api_key") if config.config else None
-        self._api_key: str | None = cfg_key or (
-            _cfg.openalex_api_key.get_secret_value() if _cfg.openalex_api_key else None
-        )
+        self._api_key: str | None = self._resolve_api_key(_cfg.openalex_api_key)
         self._email: str = _cfg.openalex_email
         self._missing_key_warned = False
         # rate: ~9 req/s (polite-pool target ≤10 req/s)

@@ -302,7 +302,7 @@ async def link_paper_to_task(
             )
             if not task:
                 raise HTTPException(status_code=404, detail="Task not found")
-            # DOM-C-07: assert caller owns (or has library access to) the paper before linking.
+            # Assert caller owns (or has library access to) the paper before linking.
             await assert_paper_ownership(conn, body.paper_id, user_id)
             try:
                 row = await conn.fetchrow(

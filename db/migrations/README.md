@@ -2,11 +2,10 @@
 
 This directory is the ledger for incremental schema migrations applied on top of `db/init.sql`.
 
-The repo's pre-launch schema is fully captured in `db/init.sql`. There are
-no pre-launch migrations on disk: 0089 / 0090 / 0091 were folded into
-`init.sql` on 2026-05-26 as part of the 2026-05 schema consolidation,
-since the repo had never been publicly deployed at that point.
+The repo's pre-launch schema is fully captured in `db/init.sql`. The schema is
+created on first boot from `init.sql` alone — there are no pre-launch migrations
+on disk and no manual migration steps to run.
 
-Migrations 0092–0095 are on disk; new ones land here numbered sequentially (`0096_<descriptive>.sql` and up) and are
-applied via `run_migrations` (libs/jarvis_common/jarvis_common/migrations.py)
-on top of `init.sql`.
+New migrations land here numbered sequentially (`0096_<descriptive>.sql` and up)
+and are applied via `run_migrations`
+(libs/jarvis_common/jarvis_common/migrations.py) on top of `init.sql`.

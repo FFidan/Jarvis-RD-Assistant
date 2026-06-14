@@ -1,10 +1,10 @@
+import { PULSE_WEIGHT_LABELS } from '@/components/settings/pulse/pulse-constants';
 import { displayReasoning } from '@/components/pulse/reasoning-display';
 
-const SIGNAL_LABELS: Record<string, string> = {
-  embedding: 'Embedding match',
-  emb: 'Embedding match',
-  llm: 'LLM relevance',
-  llm_relevance: 'LLM relevance',
+// Keys not in the canonical map (WhyChips-only signals / short aliases)
+const SIGNAL_LABELS_EXT: Record<string, string> = {
+  emb: 'Semantic similarity',
+  llm: 'Relevance score',
   rec: 'Recommendation',
   recommendation: 'Recommendation',
   graph: 'Citation graph',
@@ -13,6 +13,8 @@ const SIGNAL_LABELS: Record<string, string> = {
   topic_match: 'Topic match',
   library_overlap: 'In your library',
 };
+
+const SIGNAL_LABELS: Record<string, string> = { ...PULSE_WEIGHT_LABELS, ...SIGNAL_LABELS_EXT };
 
 interface WhySignal {
   label: string;

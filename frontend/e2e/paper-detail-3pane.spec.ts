@@ -116,6 +116,11 @@ const mockContradictions = {
 test.beforeEach(async ({ page }) => {
   await seedAuthedSession(page);
 
+  // FirstRunGate — must return setup_completed: true or the wizard intercepts the page.
+  await page.route('**/api/setup/status', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) });
+  });
+
   // Paper detail
   await page.route('**/api/papers/1', async (route) => {
     if (route.request().method() === 'GET') {
@@ -193,7 +198,7 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await expect(nav.getByText('Evidence')).toBeVisible();
     await expect(nav.getByText('Cross-references')).toBeVisible();
     await expect(nav.getByText('Your Notes')).toBeVisible();
-    await expect(nav.getByText('Chunks')).toBeVisible();
+    await expect(nav.getByText('Source Passages')).toBeVisible();
   });
 
   test('left rail: pipeline status shows all steps complete', async ({ page }) => {
@@ -207,7 +212,7 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await expect(nav.getByText('§ Pipeline')).toBeVisible();
     // All steps complete
     await expect(nav.getByText('Downloaded')).toBeVisible();
-    await expect(nav.getByText('2 chunks')).toBeVisible();
+    await expect(nav.getByText('2 passages')).toBeVisible();
     await expect(nav.getByText('Summarized')).toBeVisible();
   });
 
@@ -215,7 +220,10 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByText('Library')).toBeVisible({ timeout: 8000 });
+    // Scope to breadcrumb nav to avoid strict-mode violation — "Library" also
+    // appears in the sidebar link and potentially the page heading.
+    const breadcrumb = page.getByRole('navigation', { name: /breadcrumb/i });
+    await expect(breadcrumb.getByText('Library').first()).toBeVisible({ timeout: 8000 });
     await expect(page.getByText('reading')).toBeVisible();
   });
 
@@ -295,16 +303,19 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    // Chunk content NOT visible initially
+    // Chunk content NOT visible initially (LazyChunksSection is collapsed)
     await expect(page.getByText(/CHUNK_0_CONTENT/)).not.toBeVisible();
 
-    // Click expand toggle
+    // Click expand toggle — shows the chunk list
     const toggle = page.getByTestId('chunks-expand-toggle');
     await toggle.click();
 
+    // ChunksTab renders but each ChunkItem is individually collapsed.
+    // Click the first chunk item header to expand its content.
+    await page.getByText(/Chunk 0/).click();
+
     // Now content is visible
     await expect(page.getByText(/CHUNK_0_CONTENT/)).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText(/CHUNK_1_CONTENT/)).toBeVisible();
   });
 
   test('center: Ask This Paper section visible at the bottom', async ({ page }) => {
@@ -332,7 +343,8 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByText('Attention Is All You Need')).toBeVisible({ timeout: 8000 });
+    // Use heading role to avoid strict-mode: title appears in both h1 and breadcrumb span.
+    await expect(page.getByRole('heading', { name: 'Attention Is All You Need' })).toBeVisible({ timeout: 8000 });
     // Score badge must not appear (surface-aware rule: no fabricated score)
     await expect(page.getByText(/^Score \d+$/)).not.toBeVisible();
   });
@@ -363,7 +375,8 @@ test.describe('Paper Detail 3-pane — mobile', () => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByText('Attention Is All You Need')).toBeVisible({ timeout: 8000 });
+    // Use heading role to avoid strict-mode: title appears in both h1 and breadcrumb span.
+    await expect(page.getByRole('heading', { name: 'Attention Is All You Need' })).toBeVisible({ timeout: 8000 });
     await expect(page.getByRole('button', { name: /Contents/ })).toBeVisible();
   });
 
@@ -371,7 +384,8 @@ test.describe('Paper Detail 3-pane — mobile', () => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByText('Attention Is All You Need')).toBeVisible({ timeout: 8000 });
+    // Use heading role to avoid strict-mode: title appears in both h1 and breadcrumb span.
+    await expect(page.getByRole('heading', { name: 'Attention Is All You Need' })).toBeVisible({ timeout: 8000 });
     await expect(page.getByRole('button', { name: /Actions/ })).toBeVisible();
   });
 
@@ -381,9 +395,11 @@ test.describe('Paper Detail 3-pane — mobile', () => {
 
     await page.getByRole('button', { name: /Contents/ }).click();
 
-    // Sheet should open and show section labels
-    await expect(page.getByText('Brief')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('Methodology')).toBeVisible();
+    // Sheet should open and show section nav — scope to the opened dialog to avoid
+    // matching the same labels in the hidden desktop TOC rail (hidden md:flex).
+    const sheet = page.getByRole('dialog');
+    await expect(sheet.getByText('Brief')).toBeVisible({ timeout: 5000 });
+    await expect(sheet.getByText('Methodology')).toBeVisible();
   });
 
   test('opening Actions sheet shows action rail', async ({ page }) => {

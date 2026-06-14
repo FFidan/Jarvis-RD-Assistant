@@ -25,7 +25,7 @@ import { Pencil, Trash2, Plus, Check, X, Tag } from 'lucide-react';
 import type { Topic } from '@/types';
 
 const DESCRIPTION_TOOLTIP =
-  'Free-text context that the Pulse scoring LLM uses when ranking candidate papers.';
+  'Free-text context that helps Pulse find and rank relevant papers for this topic.';
 
 const TOPIC_FIELD_TOOLTIPS = {
   name: "A short name for this research area, e.g. 'Transformers' or 'Climate ML'.",
@@ -148,6 +148,9 @@ export function TopicSection() {
 
   return (
     <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Research topics drive paper discovery — JARVIS searches for new papers matching each enabled topic&apos;s query terms and surfaces them in your daily Pulse deck.
+      </p>
       {topics.length === 0 && !showAdd ? (
         <EmptyState title="No topics" description="Add a research topic to get started." icon={Tag} />
       ) : (
@@ -212,7 +215,7 @@ export function TopicSection() {
                         id={`topic-edit-description-${topic.id}`}
                         value={editForm.description}
                         onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                        placeholder="Optional context for the Pulse scoring LLM"
+                        placeholder="Optional: what this topic is about (helps Pulse rank papers)"
                         rows={2}
                         maxLength={1000}
                         className="flex-1 text-sm"
@@ -323,7 +326,7 @@ export function TopicSection() {
                 id="topic-description"
                 value={addForm.description}
                 onChange={(e) => setAddForm({ ...addForm, description: e.target.value })}
-                placeholder="Optional context for the Pulse scoring LLM"
+                placeholder="Optional: what this topic is about (helps Pulse rank papers)"
                 rows={2}
                 maxLength={1000}
               />

@@ -74,6 +74,7 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
             <Send className="h-3 w-3 mr-1" />
             {pushMutation.isPending ? 'Sending…' : 'Send to Zotero'}
           </Button>
+          <p className="text-xs text-muted-foreground">Pushes citation metadata (PDF not attached).</p>
           {pushMutation.isError && <p className="text-xs text-destructive">Push failed. Try again.</p>}
         </div>
       ) : (

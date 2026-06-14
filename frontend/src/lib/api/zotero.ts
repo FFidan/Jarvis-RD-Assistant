@@ -2,7 +2,8 @@
 import { apiFetch } from './core';
 
 export async function zoteroTest(): Promise<{ success: boolean; error?: string }> {
-  return apiFetch('/api/zotero/test', { method: 'POST' });
+  const r = await apiFetch<{ ok: boolean; detail?: string }>('/api/zotero/test', { method: 'POST' });
+  return { success: r.ok, error: r.detail };
 }
 
 export async function zoteroPushPaper(paperId: number): Promise<{ job_id: string; status: string }> {

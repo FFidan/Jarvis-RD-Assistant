@@ -444,6 +444,8 @@ def test_llm_constants_read_from_cfg_at_call_time(monkeypatch):
     monkeypatch.setattr(_scoring_mod, "_get_cfg", lambda: next(calls))
 
     assert _llm_concurrency() == 2
-    assert _llm_model() == "smart"
+    assert _llm_model() == "smart"  # explicit operator value is honoured
     assert _llm_concurrency() == 4
-    assert _llm_model() == "fast"
+    # Empty / unset PULSE_STAGE2_MODEL defaults to the capable "smart" role:
+    # the "fast" role echoes the JSON schema and cannot produce structured output.
+    assert _llm_model() == "smart"

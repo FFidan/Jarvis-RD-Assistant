@@ -92,7 +92,7 @@ def test_16gb_summary_non_empty():
 
 
 # ---------------------------------------------------------------------------
-# 48 GB workstation path (RTX 5880 Ada target — confirm_on_target)
+# 48 GB workstation path (≥40 GB / 48 GB-class GPU — confirm_on_target)
 # ---------------------------------------------------------------------------
 
 
@@ -103,7 +103,7 @@ def test_48gb_bucket_is_high():
 
 
 def test_48gb_smart_is_qwen3_30b_a3b():
-    """48 GB → smart alias = qwen3:30b-a3b (live-validated on RTX 5880 Ada, v0.7)."""
+    """48 GB → smart alias = qwen3:30b-a3b (live-validated on ≥40 GB / 48 GB-class GPU, v0.7)."""
     rec = recommend_models(49_152)
     assert _alias(rec, "smart") == "qwen3:30b-a3b"
 

@@ -1,4 +1,4 @@
-"""Regression tests for LocalSource registry-factory construction (HIGH-PI-11).
+"""Regression tests for LocalSource registry-factory construction.
 
 LocalSource.__init__ was missing the db_pool 3rd positional that PaperSource
 declares, causing TypeError when the registry factory passed db_pool positionally.

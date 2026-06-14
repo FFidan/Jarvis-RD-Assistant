@@ -1,4 +1,4 @@
-"""Tests for PI-006: zotero.* config keys are allowlisted and validated.
+"""Tests for zotero.* config keys being allowlisted and validated.
 
 Covers:
 - Each zotero.* key accepts a valid value (round-trip save returns 200 + correct body)
@@ -211,13 +211,13 @@ async def _get_config(app, key: str):
 
 
 # ---------------------------------------------------------------------------
-# Tests: PI-017 — GET /api/config/{key} secret masking
+# Tests: GET /api/config/{key} secret masking
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_get_zotero_api_key_returns_masked(_app):
-    """GET zotero.api_key returns masked preview, not the real value (PI-017).
+    """GET zotero.api_key returns masked preview, not the real value.
 
     zotero.api_key is in _ENCRYPTED_KEYS. When the row has only a legacy plaintext
     value (encrypted_value = NULL), _resolve_config_value falls back to masking the
@@ -251,7 +251,7 @@ async def test_get_zotero_user_id_not_masked(_app):
 
 @pytest.mark.asyncio
 async def test_get_unknown_config_key_returns_404(_app):
-    """GET /api/config/{key} rejects unknown keys with 404 (PI-017 allowlist check)."""
+    """GET /api/config/{key} rejects unknown keys with 404 (allowlist check)."""
     app, conn = _app
     resp = await _get_config(app, "unknown.secret.key")
     assert resp.status_code == 404

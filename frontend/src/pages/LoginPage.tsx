@@ -194,7 +194,7 @@ export function LoginPage() {
                     setApiKey(e.target.value);
                     setError('');
                   }}
-                  placeholder="Enter JARVIS_API_KEY"
+                  placeholder="Your API key"
                   autoComplete="off"
                   autoFocus
                   disabled={loading}

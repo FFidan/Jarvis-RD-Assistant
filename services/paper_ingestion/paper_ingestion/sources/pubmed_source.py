@@ -235,10 +235,7 @@ class PubMedSource(PaperSource):
         from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
         _cfg = get_paper_ingestion_settings()
-        cfg_key = config.config.get("api_key") if config.config else None
-        self._api_key: str | None = cfg_key or (
-            _cfg.pubmed_api_key.get_secret_value() if _cfg.pubmed_api_key else None
-        )
+        self._api_key: str | None = self._resolve_api_key(_cfg.pubmed_api_key)
         # rate: 10 req/s with API key, ~3 req/s otherwise
         self._rate_interval = 0.1 if self._api_key else 0.34
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / self._rate_interval)

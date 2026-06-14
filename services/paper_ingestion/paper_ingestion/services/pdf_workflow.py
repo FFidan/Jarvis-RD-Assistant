@@ -165,7 +165,7 @@ async def advisory_lock(conn: ConnLike, lock_key: int, paper_id: int):
     Notes
     -----
     Uses ``pg_advisory_lock`` (blocking) rather than ``pg_try_advisory_lock``.
-    Callers must not hold this lock across async I/O (see C-6): acquire it for
+    Callers must not hold this lock across async I/O: acquire it for
     the DB idempotency check only, then release before calling embedder or LLM.
     """
     await conn.execute("SELECT pg_advisory_lock($1, $2)", lock_key, paper_id)
@@ -247,7 +247,7 @@ async def run_process_pdf(
     """Core PDF processing logic: idempotency check, embed, store.
 
     Splits work into three phases so the advisory lock is never held during
-    the long-running embedding I/O (C-6):
+    the long-running embedding I/O:
 
     Under lock:    DB idempotency check + optional force cleanup.
     No lock:       Extract text, chunk, and embed (60 s+ I/O).

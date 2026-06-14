@@ -15,10 +15,10 @@ Rationale for each threshold (all values in MiB):
   - VRAM_TIER3_MB (20 480 MiB = 20 GB): 20–40 GB cards (e.g. A10, RTX 3090).
     Headroom for a 14B smart model while keeping qwen3:4b fast + embedder.
   - VRAM_TIER4_MB (40 960 MiB = 40 GB): large workstation / server GPU
-    (e.g. RTX 5880 Ada 48 GB, A40 48 GB).  Recommend qwen3:30b-a3b — validated
-    on a 48 GB RTX 5880 Ada deployment at 16k context (v0.7).
+    (e.g. ≥40 GB / 48 GB-class GPU, A40 48 GB).  Recommend qwen3:30b-a3b —
+    validated on a 48 GB deployment at 16k context (v0.7).
 
-The 16 GB dev-box defaults (qwen3:8b / qwen3:4b / qwen3-embedding:4b) are the
+The ≈16 GB mid-tier defaults (qwen3:8b / qwen3:4b / qwen3-embedding:4b) are the
 active litellm/config.yaml entries and the OLLAMA_MODELS bootstrap default as
 of 2026-05-18 and are therefore the reference point for tier-2 recommendations.
 """
@@ -47,9 +47,9 @@ VRAM_TIER2_MB: int = 10_240  # 10 GB
 # embedder.  qwen3:4b remains fast; embedder unchanged.
 VRAM_TIER3_MB: int = 20_480  # 20 GB
 
-# Large workstation: RTX 5880 Ada 48 GB / A40 48 GB / H100 80 GB (etc.).
+# Large workstation: ≥40 GB / 48 GB-class GPU (A40 48 GB, H100 80 GB, etc.).
 # qwen3:30b-a3b + qwen3:4b + embedder all fit with ample headroom.
-# Validated on a 48 GB RTX 5880 Ada deployment at 16k context (v0.7).
+# Validated on a 48 GB deployment at 16k context (v0.7).
 VRAM_TIER4_MB: int = 40_960  # 40 GB
 
 
@@ -64,7 +64,7 @@ class VramBucket(IntEnum):
     ENTRY = 1  # 4–9 GB — too small for the current default stack
     MID = 2  # 10–19 GB — 16 GB dev box (current defaults)
     MID_HIGH = 3  # 20–39 GB — RTX 3090 / A10 class
-    HIGH = 4  # ≥ 40 GB  — RTX 5880 Ada / A40 / H100 class
+    HIGH = 4  # ≥ 40 GB  — 48 GB-class GPU / A40 / H100 class
 
 
 @dataclass(frozen=True)
@@ -93,6 +93,12 @@ class HardwareRecommendation:
     # Human-readable context string safe to print in setup.sh --check output.
     summary: str = ""
 
+
+# Validation note reused for the ≥40 GB tier recommendation (AliasRecommendation
+# notes + bucket summary both cite the same validated deployment).
+_HIGH_TIER_VALIDATED_NOTE: str = (
+    "≥40 GB GPU (A40 48 GB or larger); validated on a 48 GB deployment at 16k context (v0.7)"
+)
 
 # ---------------------------------------------------------------------------
 # Bucket table: maps each VramBucket to its recommended alias assignments.
@@ -130,7 +136,7 @@ _BUCKET_TABLE: dict[VramBucket, list[AliasRecommendation]] = {
         AliasRecommendation(
             alias="smart",
             model="qwen3:8b",
-            notes="Default for 10–19 GB GPU; measured on RTX 5060 Ti 16 GB",
+            notes="Default for 10–19 GB GPU; measured on ≈16 GB GPU",
         ),
         AliasRecommendation(alias="fast", model="qwen3:4b"),
         AliasRecommendation(alias="embed", model="qwen3-embedding:4b"),
@@ -146,15 +152,12 @@ _BUCKET_TABLE: dict[VramBucket, list[AliasRecommendation]] = {
         AliasRecommendation(alias="embed", model="qwen3-embedding:4b"),
     ],
     # High (≥ 40 GB): workstation class.  qwen3:30b-a3b validated on a
-    # 48 GB RTX 5880 Ada deployment at 16k context (v0.7).
+    # 48 GB deployment at 16k context (v0.7).
     VramBucket.HIGH: [
         AliasRecommendation(
             alias="smart",
             model="qwen3:30b-a3b",
-            notes=(
-                "≥40 GB GPU (e.g. RTX 5880 Ada 48 GB / A40 48 GB); "
-                "validated on a 48 GB RTX 5880 Ada deployment at 16k context (v0.7)"
-            ),
+            notes=_HIGH_TIER_VALIDATED_NOTE,
         ),
         AliasRecommendation(alias="fast", model="qwen3:4b"),
         AliasRecommendation(alias="embed", model="qwen3-embedding:4b"),
@@ -181,7 +184,7 @@ _BUCKET_SUMMARIES: dict[VramBucket, str] = {
     ),
     VramBucket.HIGH: (
         "High-end GPU (≥40 GB) detected. "
-        "Recommend qwen3:30b-a3b for smart (validated on a 48 GB RTX 5880 Ada deployment "
+        "Recommend qwen3:30b-a3b for smart (validated on a 48 GB deployment "
         "at 16k context, v0.7)."
     ),
 }

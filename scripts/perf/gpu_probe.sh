@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/perf/gpu_probe.sh — Track-B Phase-1: GPU/VRAM + run-metadata capture.
+# scripts/perf/gpu_probe.sh — GPU/VRAM + run-metadata probe.
 #
 # PURPOSE
 #   During a perf load window, polls nvidia-smi + Ollama /api/tags and appends
@@ -235,7 +235,7 @@ sample_nvidia_smi() {
     return
   fi
 
-  # Parse CSV: "NVIDIA GeForce RTX 5060 Ti, 16376, 4096, 37"
+  # Parse CSV: "NVIDIA GeForce <GPU name>, <vram_total>, <vram_used>, <util>"
   SAMPLE_GPU_NAME=$(printf '%s' "${raw}" | awk -F',' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1}')
   SAMPLE_VRAM_TOTAL=$(printf '%s' "${raw}" | awk -F',' '{gsub(/[[:space:]]/, "", $2); print $2}')
   SAMPLE_VRAM_USED=$(printf '%s' "${raw}" | awk -F',' '{gsub(/[[:space:]]/, "", $3); print $3}')

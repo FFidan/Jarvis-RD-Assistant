@@ -1,4 +1,4 @@
-"""Unit tests for paper_ingestion.routers.auth — SEC-MED-27 magic-link cooldown.
+"""Unit tests for paper_ingestion.routers.auth — magic-link cooldown.
 
 Tests that a second call to request_link within MAGIC_LINK_COOLDOWN (2 minutes)
 skips the INSERT and still returns sent=True, so exactly one row is inserted
@@ -48,7 +48,7 @@ def _build_request(pool: MagicMock, url_path: str = "/api/auth/request-link") ->
 
 
 # ---------------------------------------------------------------------------
-# SEC-MED-27 — magic-link cooldown
+# magic-link cooldown
 # ---------------------------------------------------------------------------
 
 

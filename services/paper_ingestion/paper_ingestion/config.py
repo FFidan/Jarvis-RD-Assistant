@@ -194,7 +194,7 @@ class PaperIngestionSettings(JarvisCommonSettings):
 
     # --- Pulse ----------------------------------------------------------
     pulse_stage2_model: str = Field(
-        default="fast",
+        default="smart",
         description=(
             "LiteLLM alias for the Pulse Stage-2 LLM scorer (PULSE_STAGE2_MODEL). "
             "Follow-up suggestion: rename to PULSE_LLM_MODEL for clarity."

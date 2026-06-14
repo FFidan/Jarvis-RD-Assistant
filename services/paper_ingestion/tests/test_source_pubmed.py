@@ -679,7 +679,7 @@ async def test_fetch_new_since_records_run_history_status_error_on_exception():
             user_id=7,
         )
 
-    # HIGH-PI-09: exception is caught and partial results returned; no re-raise.
+    # Exception is caught and partial results returned; no re-raise.
     assert result == []
 
     all_calls = mock_conn.execute.call_args_list
@@ -693,13 +693,13 @@ async def test_fetch_new_since_records_run_history_status_error_on_exception():
 
 
 # ---------------------------------------------------------------------------
-# HIGH-PI-09: per-term failure returns partial results, no exception propagated
+# per-term failure returns partial results, no exception propagated
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 async def test_fetch_new_since_partial_results_on_per_term_failure():
-    """HIGH-PI-09: second term raising must not abort; term-1 results are returned."""
+    """Second term raising must not abort; term-1 results are returned."""
     term1_esearch = b"""<?xml version="1.0"?>
 <eSearchResult>
   <Count>1</Count>
@@ -801,13 +801,13 @@ async def test_fetch_new_since_error_path_forwards_retry_after_s():
 
 
 # ---------------------------------------------------------------------------
-# HIGH-PI-10: rate limiter acquire called once per term in the loop
+# rate limiter acquire called once per term in the loop
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 async def test_fetch_new_since_rate_limiter_acquired_per_term():
-    """HIGH-PI-10: p_limiter.acquire() must fire once per term, not once per call."""
+    """p_limiter.acquire() must fire once per term, not once per call."""
     from unittest.mock import AsyncMock, patch
 
     respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))

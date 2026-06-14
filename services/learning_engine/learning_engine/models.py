@@ -208,7 +208,7 @@ class RetentionStats(BaseModel):
 class ProjectCreate(BaseModel):
     """Request body for POST /api/projects."""
 
-    name: str = Field(..., max_length=255)
+    name: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
     status: Literal["active", "paused", "completed", "archived"] = Field(default="active")
     deadline: date | None = None
@@ -222,7 +222,7 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     """Request body for PUT /api/projects/{project_id} (all fields optional)."""
 
-    name: str | None = Field(default=None, max_length=255)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     status: Literal["active", "paused", "completed", "archived"] | None = None
     deadline: date | None = None
@@ -283,7 +283,7 @@ class ProjectActivityItem(BaseModel):
 class TaskCreate(BaseModel):
     """Request body for POST /api/projects/{project_id}/tasks."""
 
-    title: str = Field(..., max_length=500)
+    title: str = Field(..., min_length=1, max_length=500)
     description: str | None = None
     status: Literal["todo", "in_progress", "done", "blocked"] = Field(default="todo")
     priority: int = Field(default=3, ge=1, le=4)
@@ -295,7 +295,7 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     """Request body for PUT /api/tasks/{task_id} (all fields optional)."""
 
-    title: str | None = Field(default=None, max_length=500)
+    title: str | None = Field(default=None, min_length=1, max_length=500)
     description: str | None = None
     status: Literal["todo", "in_progress", "done", "blocked"] | None = None
     priority: int | None = Field(default=None, ge=1, le=4)
@@ -337,7 +337,7 @@ class TaskResponse(BaseModel):
 class MilestoneCreate(BaseModel):
     """Request body for POST /api/projects/{project_id}/milestones."""
 
-    name: str = Field(..., max_length=255)
+    name: str = Field(..., min_length=1, max_length=255)
     deadline: datetime = Field(...)
     description: str | None = None
 
@@ -345,7 +345,7 @@ class MilestoneCreate(BaseModel):
 class MilestoneUpdate(BaseModel):
     """Request body for PUT /api/milestones/{milestone_id} (all fields optional)."""
 
-    name: str | None = Field(default=None, max_length=255)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
     deadline: datetime | None = None  # DB column is TIMESTAMPTZ
     description: str | None = None
     completed: bool | None = None

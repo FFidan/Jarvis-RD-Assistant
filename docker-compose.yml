@@ -22,8 +22,8 @@ x-shared-env: &shared-env
   LITELLM_MASTER_KEY_FILE: /run/secrets/litellm_master_key
   QDRANT_URL: http://qdrant:6333
   EMBEDDING_MODEL: ${EMBEDDING_MODEL:-embed}
-  # Context window the app budgets prompt input against — MUST track the
-  # ``smart`` num_ctx in litellm/config.yaml (raise both together).
+  # Context window the app budgets prompt input against — keep in sync with
+  # the ``smart`` num_ctx in litellm/config.yaml when changing either value.
   LLM_SMART_NUM_CTX: ${LLM_SMART_NUM_CTX:-8192}
   EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-qwen3-embedding:4b}
   EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-2560}
@@ -423,9 +423,9 @@ services:
         condition: service_healthy
       litellm:
         condition: service_healthy
-      # ``smart``/``fast`` aliases exist only after paper_ingestion's model
-      # bootstrap has seeded litellm's DB — starting earlier would 404 any
-      # queued LLM jobs.
+      # ``smart``/``fast`` aliases are registered by paper_ingestion's model
+      # bootstrap; starting this service before that completes may 404 queued
+      # LLM jobs.
       paper_ingestion:
         condition: service_healthy
     logging:
@@ -647,7 +647,7 @@ services:
     healthcheck:
       # 127.0.0.1, not localhost: busybox wget resolves localhost to ::1 first
       # but the Next.js server listens IPv4-only on 0.0.0.0:3000.
-      # SEC-MED-08 (C-08): ?failIfDatabaseUnavailable=true makes /api/public/health
+      # ?failIfDatabaseUnavailable=true makes /api/public/health
       # return 503 when the DB connection is down, not just when the HTTP layer is.
       # Verified upstream contract: https://langfuse.com/self-hosting/configuration
       test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:3000/api/public/health?failIfDatabaseUnavailable=true' || exit 1"]

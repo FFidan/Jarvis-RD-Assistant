@@ -79,8 +79,43 @@ async def test_setup_status_reports_effective_backend_when_unset(monkeypatch) ->
 
 
 @pytest.mark.asyncio
+async def test_setup_status_reports_saved_mode_over_env(monkeypatch) -> None:
+    """A persisted setup.mode in user_config wins over the env default."""
+    monkeypatch.setenv("JARVIS_SETUP_MODE", "single")
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)
+    # get_status reads setup.completed first, then setup.mode.
+    pool, _ = make_pool_and_conn(
+        conn=conn,
+        fetchrow_side_effects=[{"value": True}, {"value": "multi"}],
+    )
+    request = _build_request(pool)
+
+    res = await setup_router.get_status(request)
+
+    assert res.setup_mode == "multi"
+
+
+@pytest.mark.asyncio
+async def test_setup_status_falls_back_to_env_mode_when_unsaved(monkeypatch) -> None:
+    """With no persisted setup.mode row, get_status reports the env default."""
+    monkeypatch.setenv("JARVIS_SETUP_MODE", "multi")
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)
+    pool, _ = make_pool_and_conn(
+        conn=conn,
+        fetchrow_side_effects=[{"value": True}, None],
+    )
+    request = _build_request(pool)
+
+    res = await setup_router.get_status(request)
+
+    assert res.setup_mode == "multi"
+
+
+@pytest.mark.asyncio
 async def test_setup_status_returns_503_on_db_failure() -> None:
-    """get_status must raise HTTP 503 when the DB query fails (fail-closed; MED-PI-02)."""
+    """get_status must raise HTTP 503 when the DB query fails (fail-closed)."""
     conn = AsyncMock()
     conn.fetchval = AsyncMock(side_effect=asyncpg.PostgresError("connection lost"))
     pool, _ = make_pool_and_conn(conn=conn)

@@ -153,6 +153,88 @@ def test_injection_payload_in_abstract_is_escaped_and_schema_bounded() -> None:
     )
 
 
+def test_stage2_default_role_is_smart(monkeypatch) -> None:
+    """Stage-2 must default to a capable role that can emit structured output.
+
+    The "fast" role echoes the JSON schema instead of scoring, raising a
+    ValidationError per paper, so an unset PULSE_STAGE2_MODEL must resolve to
+    "smart". An explicit operator value is still honoured verbatim.
+    """
+    import paper_ingestion.pulse.scoring as _scoring_mod
+    from paper_ingestion.pulse.scoring import _llm_model
+
+    class _FakeCfg:
+        def __init__(self, model):
+            self.pulse_stage2_model = model
+
+    monkeypatch.setattr(_scoring_mod, "_get_cfg", lambda: _FakeCfg(""))
+    assert _llm_model() == "smart"
+
+    monkeypatch.setattr(_scoring_mod, "_get_cfg", lambda: _FakeCfg("smart"))
+    assert _llm_model() == "smart"
+
+    monkeypatch.setattr(_scoring_mod, "_get_cfg", lambda: _FakeCfg("opus"))
+    assert _llm_model() == "opus"
+
+
+async def test_stage2_structured_failure_records_truthful_degraded_reason() -> None:
+    """A structured (ValidationError) failure must degrade honestly, not silently.
+
+    When call_llm_structured raises — the failure mode the "fast" role triggers
+    by echoing the schema — the candidate must carry a non-null truthful reason
+    and an UNVERIFIED confidence, never pretending the heuristic ranking was
+    LLM-scored.
+    """
+    from unittest.mock import patch
+
+    import pydantic
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.models import TopicRef
+    from paper_ingestion.pulse.models import PulseScoringOutput
+    from paper_ingestion.pulse.profile import UserProfile
+    from paper_ingestion.pulse.scoring import ScoredCandidate, stage2_llm_rerank
+    from paper_ingestion.rag.verification import RagConfidence
+
+    candidate = ScoredCandidate(
+        paper=_make_paper(),
+        signals={"embedding": 0.7, "recency": 0.5},
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=0.6,
+    )
+    profile = UserProfile(
+        topics=[TopicRef(id=1, name="Topic", description="desc")],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
+        library_centroid=None,
+        weights={"embedding": 0.5, "llm_relevance": 0.3, "llm_novelty": 0.2},
+        deck_size=5,
+        stage2_top_k=10,
+        recent_positive_titles=[],
+        recent_negative_titles=[],
+    )
+
+    schema_echo = pydantic.ValidationError.from_exception_data("PulseScoringOutput", [])
+
+    async def _raise(*_args, **_kwargs) -> PulseScoringOutput:
+        raise schema_echo
+
+    sentinel_client = object()  # non-None so the entry guard does not raise
+    with patch("paper_ingestion.pulse.scoring.call_llm_structured", _raise):
+        result = await stage2_llm_rerank(
+            [candidate], profile, verifier=QuoteVerifier(), openai_client=sentinel_client
+        )
+
+    assert len(result) == 1
+    degraded = result[0]
+    assert degraded.llm_relevance is None
+    assert degraded.reasoning, "degraded reason must be non-null"
+    assert degraded.reasoning.strip(), "degraded reason must be truthful, not blank"
+    assert degraded.reasoning_verified is False
+    assert degraded.reasoning_confidence is RagConfidence.UNVERIFIED
+
+
 def test_pulse_scoring_shape_a_system_prompt_is_non_empty() -> None:
     """Shape A regression: stage2_llm_rerank uses a split-role prompt.
 

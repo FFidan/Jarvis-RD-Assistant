@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
     import asyncpg
+    from pydantic import SecretStr
 
 import httpx
 from jarvis_common.event_log import log_event
@@ -123,6 +124,16 @@ class PaperSource(ABC):
         self.http_client = http_client
         self.db_pool: asyncpg.Pool | None = db_pool
         self._last_poll_diagnostic: SourcePollDiagnostic | None = None
+
+    def _resolve_api_key(self, settings_key: "SecretStr | None") -> str | None:
+        """Resolve the source API key, preferring the DB config over settings.
+
+        The per-source ``config`` row may carry an ``api_key`` override; when it
+        does not, fall back to the process-level ``settings_key`` secret (the
+        env/config-file value). Returns ``None`` when neither is set.
+        """
+        cfg_key = self.config.config.get("api_key") if self.config.config else None
+        return cfg_key or (settings_key.get_secret_value() if settings_key else None)
 
     @property
     def last_poll_diagnostic(self) -> SourcePollDiagnostic | None:

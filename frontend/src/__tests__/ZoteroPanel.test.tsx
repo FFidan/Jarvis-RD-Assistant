@@ -1,5 +1,5 @@
 /**
- * Tests for ZoteroPanel — MED-FE-04: setTimeout timer cleanup.
+ * Tests for ZoteroPanel — setTimeout timer cleanup.
  *
  * Verifies:
  * - copyKey debounces: calling it twice rapidly cancels the prior timer so
@@ -41,7 +41,7 @@ function renderPanel() {
   );
 }
 
-describe('ZoteroPanel — MED-FE-04: setTimeout timer cleanup', () => {
+describe('ZoteroPanel — setTimeout timer cleanup', () => {
   afterEach(() => {
     vi.useRealTimers();
   });

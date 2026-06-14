@@ -127,6 +127,20 @@ async def test_review_start_no_cards():
 
 
 @pytest.mark.asyncio
+async def test_review_start_fetch_error_shows_error_message():
+    """/review with a fetch error shows an error message, not 'all caught up'."""
+    update, context, mock_http = _make_command_update_and_context()
+    mock_http.get.side_effect = Exception("connection refused")
+
+    result = await review_start(update, context)
+
+    assert result == ConversationHandler_END
+    text = update.message.reply_text.call_args[0][0]
+    assert "caught up" not in text.lower()
+    assert "/review" in text
+
+
+@pytest.mark.asyncio
 async def test_review_start_shows_first_card():
     """/review with a due card shows the card front."""
     update, context, mock_http = _make_command_update_and_context()
@@ -235,6 +249,28 @@ async def test_rate_card_last_card():
     assert result == ConversationHandler_END
     text = update.callback_query.edit_message_text.call_args[0][0]
     assert "complete" in text.lower() or "3" in text  # 2 + 1 = 3 reviewed
+
+
+@pytest.mark.asyncio
+async def test_rate_card_next_fetch_error_shows_error_message():
+    """A fetch error after rating shows an error message, not 'session complete'."""
+    card = _sample_card()
+    user_data = {"current_card": card, "cards_reviewed": 1}
+    update, context, mock_http = _make_callback_update_and_context("rate_3", user_data=user_data)
+
+    submit_resp = MagicMock()
+    submit_resp.raise_for_status = MagicMock()
+    submit_resp.json.return_value = {"next_due_at": "2026-03-10T00:00:00Z"}
+
+    mock_http.post.return_value = submit_resp
+    mock_http.get.side_effect = Exception("network error")
+
+    result = await rate_card(update, context)
+
+    assert result == ConversationHandler_END
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "complete" not in text.lower()
+    assert "/review" in text
 
 
 @pytest.mark.asyncio
@@ -541,7 +577,7 @@ async def test_review_start_command_path_does_not_touch_callback_query() -> None
 
 
 # ---------------------------------------------------------------------------
-# Tests: HIGH-TG-01 — query.answer() on auth-fail branches
+# Tests: query.answer() on auth-fail branches
 # ---------------------------------------------------------------------------
 
 # Separate chat_id bucket to avoid bleed from other rate-limiter quotas.
@@ -552,8 +588,8 @@ _AUTH_FAIL_CHAT_ID = 11111
 async def test_show_answer_auth_fail_calls_query_answer() -> None:
     """show_answer must call query.answer() before returning END on auth failure.
 
-    HIGH-TG-01: without this call Telegram leaves a permanent loading spinner
-    on the inline button even though the bot rejected the action.
+    Without this call Telegram leaves a permanent loading spinner on the inline
+    button even though the bot rejected the action.
     """
     from unittest.mock import patch
 
@@ -577,8 +613,8 @@ async def test_show_answer_auth_fail_calls_query_answer() -> None:
 async def test_rate_card_auth_fail_calls_query_answer() -> None:
     """rate_card must call query.answer() before returning END on auth failure.
 
-    HIGH-TG-01: without this call Telegram leaves a permanent loading spinner
-    on the inline button even though the bot rejected the action.
+    Without this call Telegram leaves a permanent loading spinner on the inline
+    button even though the bot rejected the action.
     """
     from unittest.mock import patch
 

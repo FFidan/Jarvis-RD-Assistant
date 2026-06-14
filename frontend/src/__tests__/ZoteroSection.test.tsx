@@ -1,7 +1,7 @@
 /**
  * Tests for ZoteroSection (Settings → Zotero).
  *
- * Covers FE-002: zoteroPollNow returns { job_id: string; status: string }
+ * Covers: zoteroPollNow returns { job_id: string; status: string }
  * and the "Sync now" button wires the response into the job store via
  * trackExternalJob so progress is tracked and the zotero-library query
  * is invalidated on job success.
@@ -214,6 +214,31 @@ describe('ZoteroSection', () => {
 
     expect(await screen.findByRole('button', { name: /test connection/i })).toBeDisabled();
     expect(vi.mocked(zoteroTest)).not.toHaveBeenCalled();
+  });
+
+  it('shows "Connected" when the connection test succeeds', async () => {
+    vi.mocked(zoteroTest).mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: /test connection/i }));
+
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
+  });
+
+  it('shows the error from a failed connection test', async () => {
+    vi.mocked(zoteroTest).mockResolvedValue({
+      success: false,
+      error: 'Zotero API key or user ID not configured',
+    });
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByRole('button', { name: /test connection/i }));
+
+    expect(
+      await screen.findByText('Zotero API key or user ID not configured'),
+    ).toBeInTheDocument();
   });
 
   it('shows an inline error and does NOT call setConfig when poll cron is invalid on blur', async () => {

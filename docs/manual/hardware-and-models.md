@@ -20,7 +20,7 @@ any time in **Settings → Models**.
 | 4–9 GB | GTX 1060 8 GB | `qwen3:4b` | `qwen3:4b` | `qwen3-embedding:4b` |
 | 10–19 GB | RTX 3080 10 GB · RTX 4070 · 16 GB workstation | `qwen3:8b` | `qwen3:4b` | `qwen3-embedding:4b` |
 | 20–39 GB | RTX 3090 · A10 24 GB | `qwen3:14b` | `qwen3:4b` | `qwen3-embedding:4b` |
-| ≥ 40 GB | RTX 5880 Ada 48 GB · A40 | `qwen3:30b-a3b` | `qwen3:4b` | `qwen3-embedding:4b` |
+| ≥ 40 GB | A40 · 48 GB-class GPU | `qwen3:30b-a3b` | `qwen3:4b` | `qwen3-embedding:4b` |
 
 **Main model (smart)** — writes summaries, cards, and Ask answers.  
 **Quick model (fast)** — scores and triages incoming papers.  
@@ -37,7 +37,7 @@ your Qdrant collection and changing it requires re-indexing your library.
 - **20–39 GB (mid-high GPU):** `qwen3:14b` fits alongside the embedder, giving noticeably
   richer summaries at similar latency.
 - **≥ 40 GB (large GPU):** `qwen3:30b-a3b` — a 30B mixture-of-experts model — fits with
-  ample headroom. Validated on a 48 GB RTX 5880 Ada at a 16k context window.
+  ample headroom. Validated on a 48 GB deployment at a 16k context window.
 
 ---
 

@@ -21,15 +21,18 @@ function Chip({
   active,
   onClick,
   className,
+  tooltip,
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
   className?: string;
+  tooltip?: string;
 }) {
   return (
     <button
       onClick={onClick}
+      title={tooltip}
       className={cn(
         'rounded-full px-2.5 py-0.5 text-xs font-medium border transition-all',
         active
@@ -220,9 +223,9 @@ export function EventsTab() {
 
       {/* Filters */}
       <div className="space-y-3">
-        {/* Level chips */}
+        {/* Severity chips */}
         <div className="flex flex-wrap gap-1.5 items-center">
-          <span className="text-xs text-muted-foreground mr-1">Level:</span>
+          <span className="text-xs text-muted-foreground mr-1">Severity:</span>
           {ALL_LEVELS.map((lv) => (
             <Chip
               key={lv}
@@ -234,9 +237,9 @@ export function EventsTab() {
           ))}
         </div>
 
-        {/* Category chips */}
+        {/* Area chips */}
         <div className="flex flex-wrap gap-1.5 items-center">
-          <span className="text-xs text-muted-foreground mr-1">Category:</span>
+          <span className="text-xs text-muted-foreground mr-1">Area:</span>
           {ALL_CATEGORIES.map((cat) => (
             <Chip
               key={cat}
@@ -244,6 +247,7 @@ export function EventsTab() {
               active={categoryFilter === cat}
               onClick={() => toggleCategory(cat)}
               className={CATEGORY_BADGE_CLASSES[cat]}
+              tooltip={cat === 'infra' ? 'Infrastructure events forwarded by the log pipeline; may be empty if not configured' : undefined}
             />
           ))}
         </div>

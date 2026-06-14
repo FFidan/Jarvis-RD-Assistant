@@ -200,7 +200,7 @@ async def extract_entities_for_paper(
         valid_entities.append({"name": name, "type": etype, "description": ent.description})
 
     # Pre-compute embeddings and similarity matches outside DB connection scope
-    # so that long-running HTTP calls do not hold a database connection (PI-006).
+    # so that long-running HTTP calls do not hold a database connection.
     precomputed: list[dict] = []
     for ve in valid_entities:
         embedding: list[float] | None = None

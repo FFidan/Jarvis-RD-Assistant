@@ -86,6 +86,21 @@ vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
   getTelegramBotToken: vi.fn().mockResolvedValue({ has_token: false }),
   saveTelegramBotToken: vi.fn().mockResolvedValue(undefined),
+  fetchSystemModels: vi.fn().mockResolvedValue({ hardware: undefined, catalog: [] }),
+  // AIPanel is now mounted as the advanced disclosure inside the LLM Models page.
+  getAISettings: vi.fn().mockResolvedValue({
+    hw_tier: 'cpu',
+    recommended_backend: 'ollama',
+    recommended_model: 'qwen3:1.7b',
+    configured_backend: 'ollama',
+    configured_model: 'qwen3:1.7b',
+    candidates_for_tier: [{ backend: 'ollama', model: 'qwen3:1.7b', rank: 1 }],
+    candidate_issues: [],
+  }),
+  postAISettings: vi.fn(),
+  redetectHW: vi.fn(),
+  getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true, hw_tier_changed: false }),
+  dismissBanner: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------
@@ -261,11 +276,20 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
     );
   }
 
-  it('§III Models → LLM renders the LLM Models group', async () => {
+  it('§III Models → LLM renders the LLM Models group with the advanced backend disclosure', async () => {
     renderDetail('models', 'llm');
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'LLM Models', level: 4 })).toBeInTheDocument(),
     );
+    expect(screen.getByTestId('advanced-backend-disclosure')).toBeInTheDocument();
+  });
+
+  it('§III Models → stale ?item=ai deep-link resolves to the consolidated LLM Models page', async () => {
+    renderDetail('models', 'ai');
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'LLM Models', level: 4 })).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('advanced-backend-disclosure')).toBeInTheDocument();
   });
 
   it('§VI Research → Spaced Repetition renders ONLY the Spaced Repetition group', async () => {

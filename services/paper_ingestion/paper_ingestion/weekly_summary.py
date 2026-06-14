@@ -139,7 +139,7 @@ async def generate_weekly_summary(
 
     cutoff = datetime.now(UTC) - timedelta(days=days)
 
-    # asyncpg.Pool has no .fetch() method — must acquire a connection first (PI-013).
+    # asyncpg.Pool has no .fetch() method — must acquire a connection first.
     async with db_pool.acquire() as conn:
         smart_model = get_smart_model()
         rows = await conn.fetch(

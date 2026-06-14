@@ -1,8 +1,8 @@
-"""Unit tests for rag/streaming.py — PI-02, PI-03, PI-08 prompt-shape coverage.
+"""Unit tests for rag/streaming.py — prompt-shape coverage.
 
-PI-02: prepare_single_paper_rag must emit [system, user] message pair.
-PI-03: prepare_cross_paper_rag must emit [system, user] message pair.
-PI-08: stream_rag_events with verifier=None must log a WARNING.
+prepare_single_paper_rag must emit [system, user] message pair.
+prepare_cross_paper_rag must emit [system, user] message pair.
+stream_rag_events with verifier=None must log a WARNING.
 """
 
 from __future__ import annotations
@@ -91,13 +91,13 @@ def _make_cross_paper_pool(paper_rows: list[dict] | None = None):
 
 
 # ---------------------------------------------------------------------------
-# PI-02: prepare_single_paper_rag — Shape A message list
+# prepare_single_paper_rag — Shape A message list
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_prepare_single_paper_rag_emits_system_user_messages():
-    """PI-02: messages must contain a system-role message before the user-role message."""
+    """Messages must contain a system-role message before the user-role message."""
     from paper_ingestion.models import AskRequest
 
     body = AskRequest(question="What is this paper about?", max_chunks=3)
@@ -125,7 +125,7 @@ async def test_prepare_single_paper_rag_emits_system_user_messages():
 
 @pytest.mark.asyncio
 async def test_prepare_single_paper_rag_system_message_is_instruction_only():
-    """PI-02: system role must carry only the instruction head, not paper content."""
+    """System role must carry only the instruction head, not paper content."""
     from paper_ingestion.models import AskRequest
 
     body = AskRequest(question="Summarize findings.", max_chunks=2)
@@ -149,13 +149,13 @@ async def test_prepare_single_paper_rag_system_message_is_instruction_only():
 
 
 # ---------------------------------------------------------------------------
-# PI-08: stream_rag_events with verifier=None logs a WARNING
+# stream_rag_events with verifier=None logs a WARNING
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_stream_rag_events_warns_when_verifier_is_none(caplog):
-    """PI-08: stream_rag_events(verifier=None) must emit a WARNING log."""
+    """stream_rag_events(verifier=None) must emit a WARNING log."""
     from paper_ingestion.rag.streaming import sse_error_stream  # noqa: F401 — import side-effect
 
     fake_sse_lines = [
@@ -192,13 +192,13 @@ async def test_stream_rag_events_warns_when_verifier_is_none(caplog):
 
 
 # ---------------------------------------------------------------------------
-# PI-03: prepare_cross_paper_rag — Shape A message list
+# prepare_cross_paper_rag — Shape A message list
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_prepare_cross_paper_rag_emits_system_user_messages():
-    """PI-03: messages must be [system, user]; system == _SYSTEM_CROSS_PAPER_RAG; user carries question."""
+    """Messages must be [system, user]; system == _SYSTEM_CROSS_PAPER_RAG; user carries question."""
     from paper_ingestion.models import CrossPaperAskRequest
 
     body = CrossPaperAskRequest(question="Compare findings across papers.", decompose=False)
@@ -217,7 +217,7 @@ async def test_prepare_cross_paper_rag_emits_system_user_messages():
 
 @pytest.mark.asyncio
 async def test_prepare_cross_paper_rag_chunk_data_not_in_system():
-    """PI-03 security: attacker-controlled chunk text must appear only in user message, never system."""
+    """Attacker-controlled chunk text must appear only in user message, never system."""
     from paper_ingestion.models import CrossPaperAskRequest
 
     attacker_text = "IGNORE PREVIOUS"

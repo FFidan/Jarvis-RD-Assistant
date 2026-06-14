@@ -133,7 +133,22 @@ Available to **all users**. Pair your personal account with the configured Teleg
 
 ### Zotero
 
-Available to **all users**. Connect your Zotero account to enable Zotero sync from the [Paper Detail](paper-detail.md) page and the ZoteroPanel.
+Available to **all users**. Connect your Zotero account to push papers and copy citation keys from the [Paper Detail](paper-detail.md) page.
+
+Fill in:
+
+- **API Key** and **User ID** — both are on [zotero.org/settings/keys](https://www.zotero.org/settings/keys). Create the key with read/write library access.
+- **Library Type** — choose one:
+  - **Personal library** — your own Zotero account. Most people want this.
+  - **Group library** — a shared Zotero group. You will also need the group's **numeric Group ID** (the number in the group URL, e.g. `zotero.org/groups/987654/...`).
+
+Sending a paper to Zotero pushes its **citation metadata** (title, authors, DOI, abstract). The PDF file itself is **not attached**.
+
+#### Verify Zotero works
+
+1. Enter your **API Key** and **User ID** (and **Group ID** for a group library).
+2. Click **Test connection**. A green "Connected" message confirms the credentials are valid; a red message names the problem (wrong key, missing user ID, or unreachable Group ID).
+3. Open any paper's [Paper Detail](paper-detail.md) page and click **Send to Zotero**. The item then appears in your Zotero library, and the panel offers a **View in Zotero** link.
 
 ---
 

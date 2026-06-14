@@ -69,7 +69,6 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
-.worktrees/
 
 # Raw pdfs and images
 *.pdf
@@ -116,6 +115,7 @@ codeboarding_*.log
 # Internal dev-process artifacts (operator-only)
 docs/audit/
 docs/archive/
+docs/exec/
 
 # Local-only tooling & operator notes (not shipped publicly)
 AGENTS.md
@@ -124,3 +124,6 @@ CLAUDE.md
 docs/agents-shim.md
 docs/AGENTIC_WORKFLOW.md
 scripts/verify-edits.sh
+
+# Parallel task worktrees
+.worktrees/

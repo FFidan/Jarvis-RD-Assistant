@@ -320,16 +320,17 @@ describe('PulseSection', () => {
     });
   });
 
-  // ── Fail-safe: capability loading/error treats signals as available ────────
+  // ── Fail-safe: capability loading/error treats signals as unavailable (fail closed) ──
 
-  it('treats optional signals as available when getSystemCapabilities returns error', async () => {
+  it('shows gate triggers for optional signals when getSystemCapabilities returns error', async () => {
     vi.mocked(getSystemCapabilities).mockRejectedValue(new Error('network error'));
     renderSection();
     await openAdvancedTuning();
-    // Wait for sliders to render; no gate triggers should appear
-    await screen.findByTestId('weight-slider-classifier');
-    expect(screen.queryByTestId('gate-tooltip-trigger-classifier')).toBeNull();
-    expect(screen.queryByTestId('gate-tooltip-trigger-citation_pagerank')).toBeNull();
+    // Fail closed: a failed capabilities query surfaces the gate rather than hiding it
+    await waitFor(() => {
+      expect(screen.getByTestId('gate-tooltip-trigger-classifier')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('gate-tooltip-trigger-citation_pagerank')).toBeInTheDocument();
   });
 
   // ── Presets ───────────────────────────────────────────────────────────────
@@ -409,15 +410,15 @@ describe('PulseSection', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /advanced tuning/i })).toBeInTheDocument();
     });
-    expect(screen.queryByLabelText(/embedding similarity weight/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/semantic similarity weight/i)).not.toBeInTheDocument();
   });
 
   it('renders scoring weight sliders after Advanced tuning is expanded', async () => {
     renderSection();
     await openAdvancedTuning();
-    expect(screen.getByLabelText(/embedding similarity weight/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/semantic similarity weight/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/topic match weight/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/llm relevance weight/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/relevance score weight/i)).toBeInTheDocument();
     expect(screen.getAllByLabelText(/liked papers weight/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/l2 negative-feedback penalty/i)).toBeInTheDocument();
   });

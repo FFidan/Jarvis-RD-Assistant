@@ -24,6 +24,10 @@ export function AppearanceSection() {
 
   return (
     <div className="space-y-8">
+      <p className="text-sm text-muted-foreground">
+        Personalise the look of JARVIS — choose an accent colour, type pairing, and information density.
+      </p>
+
       {/* Accent colour */}
       <div>
         <MarkerLabel as="h3" className="mb-3">

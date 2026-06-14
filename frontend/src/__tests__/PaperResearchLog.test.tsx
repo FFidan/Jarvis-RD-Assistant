@@ -329,9 +329,9 @@ describe('PaperResearchLog — chunks (lazy)', () => {
     });
   });
 
-  it('shows "Process the PDF first" when chunks array is empty', () => {
+  it('shows analyze prompt when chunks array is empty', () => {
     renderLog({ chunks: [] });
-    expect(screen.getByText(/Process the PDF first/)).toBeInTheDocument();
+    expect(screen.getByText(/Analyze this paper to enable search and Q&A/)).toBeInTheDocument();
   });
 });
 

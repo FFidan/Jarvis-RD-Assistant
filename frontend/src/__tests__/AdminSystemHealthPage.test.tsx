@@ -231,20 +231,34 @@ describe('AdminSystemHealthPage', () => {
     fetchStackHealthMock.mockResolvedValue(makeStackHealth());
   });
 
-  it('renders all checks from the API in the table', async () => {
+  it('renders all checks from the API in the table using display labels', async () => {
     getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
     renderPage();
 
+    // Display labels (not raw snake_case names) should be visible
     await waitFor(() => {
-      expect(screen.getByText('dev_auth_bypass')).toBeInTheDocument();
+      expect(screen.getByText('Auth bypass (dev)')).toBeInTheDocument();
     });
 
-    // All 10 check names must be present in the table (use getAllByText because
-    // Radix tooltip portals may render hidden a11y copies of some strings).
-    for (const check of allGreenResponse.checks) {
-      const matches = screen.getAllByText(check.name);
+    const expectedLabels = [
+      'Auth bypass (dev)',
+      'Error detail (dev)',
+      'Open CORS (dev)',
+      'SMTP log-only (dev)',
+      'Relaxed crypto (dev)',
+      'Environment',
+      'API key',
+      'Email delivery (SMTP)',
+      'HTTPS / TLS',
+      'Audit log',
+    ];
+    for (const label of expectedLabels) {
+      const matches = screen.getAllByText(label);
       expect(matches.length).toBeGreaterThan(0);
     }
+
+    // Raw snake_case names must NOT be primary visible text
+    expect(screen.queryByText('dev_auth_bypass')).not.toBeInTheDocument();
   });
 
   it('shows loading state initially', () => {
@@ -266,17 +280,16 @@ describe('AdminSystemHealthPage', () => {
   // Tooltip tests
   // -------------------------------------------------------------------------
 
-  it('renders an info tooltip for dev_auth_bypass containing the explanation copy', async () => {
+  it('renders an info tooltip for auth-bypass check containing the explanation copy', async () => {
     const user = userEvent.setup();
     getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
     renderPage();
 
-    await waitFor(() => screen.getByText('dev_auth_bypass'));
+    await waitFor(() => screen.getByText('Auth bypass (dev)'));
 
     // The InfoTooltip renders a button with aria-label "More info".
-    // Multiple tooltips exist (one per known check); hover the first one that
-    // is a sibling of dev_auth_bypass. We find it via the table row.
-    const authBypassCell = screen.getByText('dev_auth_bypass').closest('td')!;
+    // Multiple tooltips exist (one per known check); hover the one in the auth bypass row.
+    const authBypassCell = screen.getByText('Auth bypass (dev)').closest('td')!;
     const tooltipTrigger = authBypassCell.querySelector('[aria-label="More info"]')!;
     expect(tooltipTrigger).toBeInTheDocument();
 
@@ -288,14 +301,14 @@ describe('AdminSystemHealthPage', () => {
     });
   });
 
-  it('renders an info tooltip for smtp containing the explanation copy', async () => {
+  it('renders an info tooltip for SMTP check containing the explanation copy', async () => {
     const user = userEvent.setup();
     getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
     renderPage();
 
-    await waitFor(() => screen.getByText('smtp'));
+    await waitFor(() => screen.getByText('Email delivery (SMTP)'));
 
-    const smtpCell = screen.getByText('smtp').closest('td')!;
+    const smtpCell = screen.getByText('Email delivery (SMTP)').closest('td')!;
     const tooltipTrigger = smtpCell.querySelector('[aria-label="More info"]')!;
     expect(tooltipTrigger).toBeInTheDocument();
 
@@ -317,6 +330,7 @@ describe('AdminSystemHealthPage', () => {
     getSystemReadinessMock.mockResolvedValueOnce(responseWithUnknown);
     renderPage();
 
+    // Unknown check name has no display label, so the raw name is shown
     await waitFor(() => screen.getByText('future_unknown_check'));
 
     const cell = screen.getByText('future_unknown_check').closest('td')!;
@@ -362,7 +376,7 @@ describe('AdminSystemHealthPage', () => {
     getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
     renderPage();
 
-    await waitFor(() => screen.getByText('dev_auth_bypass'));
+    await waitFor(() => screen.getByText('Auth bypass (dev)'));
 
     expect(
       screen.queryByText(/This instance is running in development mode/i),
@@ -416,7 +430,7 @@ describe('AdminSystemHealthPage', () => {
       expect(screen.getByTestId('live-services-table')).toBeInTheDocument();
     });
     await waitFor(() => {
-      expect(screen.getByText('dev_auth_bypass')).toBeInTheDocument();
+      expect(screen.getByText('Auth bypass (dev)')).toBeInTheDocument();
     });
     expect(screen.getByTestId('live-services-section')).toBeInTheDocument();
   });
@@ -525,18 +539,147 @@ describe('AdminSystemHealthPage', () => {
     getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
     renderPage();
 
+    // api_key renders as "API key" display label
     await waitFor(() => {
-      expect(screen.getByText('api_key')).toBeInTheDocument();
+      expect(screen.getByText('API key')).toBeInTheDocument();
     });
 
-    // api_key has empty remediation; should not appear in that row's detail section
+    // API key check has empty remediation; should not appear in that row's detail section
     const apiKeyRow = screen
-      .getByText('api_key')
+      .getByText('API key')
       .closest('tr');
     // The detail cell should show only "configured (>=32 chars)"
     const detailCell = apiKeyRow?.querySelector('td:nth-child(3)');
     expect(detailCell?.textContent).toContain('configured (>=32 chars)');
     // No remediation text should be present (would be in orange-600 color if rendered)
     expect(detailCell?.querySelector('.text-orange-600')).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // StatusBadge verdict words (H1)
+  // -------------------------------------------------------------------------
+
+  it('overall status badge shows "Ready" when status is green', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Ready').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText('green')).not.toBeInTheDocument();
+  });
+
+  it('overall status badge shows "Action required" when status is red', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
+    renderPage();
+
+    await waitFor(() => {
+      // devModeResponse status is 'red' — multiple per-check badges also show "Action required"
+      expect(screen.getAllByText('Action required').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText('red')).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Service display labels (H2)
+  // -------------------------------------------------------------------------
+
+  it('Qdrant service shows "Search index (Qdrant)" label', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('live-services-table')).toBeInTheDocument();
+    });
+
+    const qdrantRow = screen.getByTestId('live-svc-row-qdrant');
+    expect(qdrantRow.querySelector('td')?.textContent).toBe('Search index (Qdrant)');
+  });
+
+  it('LiteLLM service shows "AI model router (LiteLLM)" label', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('live-services-table')).toBeInTheDocument();
+    });
+
+    const litellmRow = screen.getByTestId('live-svc-row-litellm');
+    expect(litellmRow.querySelector('td')?.textContent).toBe('AI model router (LiteLLM)');
+  });
+
+  // -------------------------------------------------------------------------
+  // Consequence notes for down/degraded services (H2)
+  // -------------------------------------------------------------------------
+
+  it('shows consequence note for Qdrant when down', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    fetchStackHealthMock.mockResolvedValue({
+      ...makeStackHealth(),
+      services: makeStackHealth().services.map((s) =>
+        s.name === 'qdrant' ? { ...s, status: 'down' as const } : s,
+      ),
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('live-svc-row-qdrant')).toBeInTheDocument();
+    });
+
+    const qdrantRow = screen.getByTestId('live-svc-row-qdrant');
+    expect(qdrantRow).toHaveTextContent(/Semantic search and citation graph are unavailable/i);
+  });
+
+  it('shows consequence note for LiteLLM when degraded', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    fetchStackHealthMock.mockResolvedValue({
+      ...makeStackHealth(),
+      services: makeStackHealth().services.map((s) =>
+        s.name === 'litellm' ? { ...s, status: 'degraded' as const } : s,
+      ),
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('live-svc-row-litellm')).toBeInTheDocument();
+    });
+
+    const litellmRow = screen.getByTestId('live-svc-row-litellm');
+    expect(litellmRow).toHaveTextContent(/AI-powered features.*unavailable/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Overall stack summary (H2)
+  // -------------------------------------------------------------------------
+
+  it('shows "All services running" summary when all services are ok', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    fetchStackHealthMock.mockResolvedValue(makeStackHealth(/* vectorOk= */ true));
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('stack-summary')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('stack-summary')).toHaveTextContent('All services running.');
+  });
+
+  it('shows down count in summary when a service is down', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    fetchStackHealthMock.mockResolvedValue({
+      overall: 'down' as const,
+      downCount: 1,
+      degradedCount: 0,
+      services: makeStackHealth().services.map((s) =>
+        s.name === 'postgres' ? { ...s, status: 'down' as const } : s,
+      ),
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('stack-summary')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('stack-summary')).toHaveTextContent(/1 service down/i);
   });
 });

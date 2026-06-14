@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AIPanel } from '@/components/settings/AIPanel';
 import * as api from '@/lib/api';
@@ -70,6 +70,40 @@ describe('AIPanel', () => {
     render(wrap(<AIPanel />));
     expect(await screen.findByText(/ge-48/)).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Qwen3-14B-AWQ/ })).toBeInTheDocument();
+  });
+
+  it('renders plain backend names on the toggle buttons', async () => {
+    vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
+    render(wrap(<AIPanel />));
+    await screen.findByText(/ge-48/);
+    expect(screen.getByRole('button', { name: /High-Performance \(vLLM\)/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Local \(Ollama\)/ })).toBeInTheDocument();
+  });
+
+  it('guides the user instead of dead-ending when a backend has no candidates for the tier', async () => {
+    // Recommended backend is ollama; only ollama has a candidate, so selecting
+    // the vllm backend yields an empty model list → guidance, not a dead-end.
+    vi.mocked(api.getAISettings).mockResolvedValue({
+      ...baseSettings,
+      recommended_backend: 'ollama',
+      recommended_model: 'qwen3:1.7b',
+      configured_backend: 'vllm',
+      configured_model: 'Qwen/Qwen3-14B-AWQ',
+      candidates_for_tier: [
+        { backend: 'ollama', model: 'qwen3:1.7b', rank: 1, reasoning: 'Catalog fallback.' },
+      ],
+    } as any);
+    render(wrap(<AIPanel />));
+
+    // configured_backend=vllm is not selectable (no vllm candidate) so the panel
+    // opens on the recommended ollama backend; click vllm to reach the empty state.
+    const vllmButton = await screen.findByRole('button', { name: /High-Performance \(vLLM\)/ });
+    fireEvent.click(vllmButton);
+
+    const guidance = await screen.findByTestId('no-candidates-guidance');
+    expect(guidance).toHaveTextContent(/no curated model for your hardware tier/i);
+    expect(guidance).toHaveTextContent(/Local \(Ollama\)/);
+    expect(guidance).toHaveTextContent(/LLM Models page/i);
   });
 
   it('shows offline banner when observed != configured', async () => {

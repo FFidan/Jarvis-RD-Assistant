@@ -502,7 +502,7 @@ class TestProcrastinateLookupBroadExcept:
 
 
 class TestStatusCaseSql:
-    """B1-1: _STATUS_CASE_SQL must be consistent with PROCRASTINATE_STATUS_MAP.
+    """_STATUS_CASE_SQL must be consistent with PROCRASTINATE_STATUS_MAP.
 
     The SQL fragment is derived from PROCRASTINATE_STATUS_MAP at module load;
     these tests verify the derivation is correct and complete so that adding

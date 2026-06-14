@@ -83,7 +83,7 @@ async def fetch_citations_for_paper(
     """Trigger citation fetch from S2 for a single paper."""
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-    # Pass pool so S2 API calls happen outside DB connection scope (PI-014)
+    # Pass pool so S2 API calls happen outside DB connection scope
     return await sync_citations_for_paper(db_pool, s2_source, paper_id)
 
 

@@ -10,8 +10,8 @@
 # Idempotency contract:
 #   - A non-empty file whose value is NOT a burned prefix is NEVER overwritten
 #     (no churn for healthy deployments — `make up` stays a no-op).
-#   - A burned value is self-rotated on the next provision (make up /
-#     observability-up / setup.sh), closing OBS-1-RESIDUAL without any
+#   - A known-leaked value is self-rotated on the next provision (make up /
+#     observability-up / setup.sh), without any
 #     destructive on-disk step.
 #   - On (re)generation of EITHER key, BOTH .env lines are rewritten in place so
 #     .env can never shadow a freshly rotated file (the old append-if-absent
@@ -24,7 +24,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Prefixes of the publicly-burned keypair (prior-audit incident). Any on-disk
+# Prefixes of the known-leaked keypair. Any on-disk
 # file still starting with these is treated as absent and force-rotated.
 BURNED_PK_PREFIX='pk-lf-35d525'
 BURNED_SK_PREFIX='sk-lf-031360'

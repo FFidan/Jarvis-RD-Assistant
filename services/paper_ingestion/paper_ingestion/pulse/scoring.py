@@ -47,7 +47,10 @@ def _llm_concurrency() -> int:
 
 
 def _llm_model() -> str:
-    return _get_cfg().pulse_stage2_model or "fast"
+    # Stage-2 must emit structured JSON (PulseScoringOutput); the "fast" role echoes
+    # the schema rather than scoring, so default to "smart". Cost stays bounded —
+    # only stage-1 survivors reach stage-2. Operators may override via PULSE_STAGE2_MODEL.
+    return _get_cfg().pulse_stage2_model or "smart"
 
 
 _LLM_MAX_TOKENS = 512  # enough for reasoning + JSON; was 256 (too small for thinking models)

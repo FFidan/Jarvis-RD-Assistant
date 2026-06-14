@@ -96,7 +96,7 @@ async def test_pulse_profile_w2_centroid_computation_via_faux_ollama_embeddings(
 async def test_pulse_profile_w2_connection_release_ordering_under_load(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
-    """DB connection is released BEFORE embed_texts is called (BE-001 / PI-006).
+    """DB connection is released BEFORE embed_texts is called.
 
     Instruments acquire/release and embed_texts calls to assert the ordering
     invariant using a real SharedConnPool backed by the contract connection.
@@ -152,7 +152,7 @@ async def test_pulse_profile_w2_connection_release_ordering_under_load(
     embed_idx = events.index("embed_texts")
     assert first_release_idx < embed_idx, (
         f"embed_texts at position {embed_idx} but first release at {first_release_idx}; "
-        f"events={events}. BE-001 / PI-006 violated: connection held during embed."
+        f"events={events}. Connection pool invariant violated: connection held during embed."
     )
 
 

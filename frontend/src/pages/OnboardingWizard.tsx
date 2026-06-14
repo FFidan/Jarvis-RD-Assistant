@@ -267,8 +267,8 @@ function WelcomeSystemCheckStep({
         <Sparkles className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
         <div className="space-y-1 text-sm">
           <p>
-            JARVIS is a self-hosted research assistant: paper discovery, RAG chat over your
-            library, spaced-repetition flashcards, and project tracking.
+            JARVIS is a self-hosted research assistant: paper discovery, chat with your saved
+            papers, spaced-repetition flashcards, and project tracking.
           </p>
           <p className="text-muted-foreground">
             This wizard checks your environment, creates your admin account, sets up a topic and
@@ -745,7 +745,7 @@ function FirstTopicStep({
             id="setup-topic-description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Context for the Pulse scoring LLM"
+            placeholder="What this topic is about (helps Pulse find relevant papers)"
             rows={3}
             maxLength={1000}
           />
@@ -856,9 +856,6 @@ function AutomationStep({
         <div>
           <Label htmlFor="setup-pulse-time">Daily run time</Label>
           <TimeSelect value={time} onChange={setTime} disabled={!pulseEnabled} />
-          <p className="mt-1 text-xs text-muted-foreground">
-            Equivalent cron: <span className="font-mono">{timeToCron(time)}</span>
-          </p>
         </div>
         <div className="flex items-center gap-3">
           <Button onClick={handleSave} disabled={saveMut.isPending}>

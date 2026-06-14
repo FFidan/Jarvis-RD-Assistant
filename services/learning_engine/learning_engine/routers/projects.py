@@ -1,5 +1,7 @@
 """Projects CRUD router."""
 
+from typing import Any
+
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import delete_or_404, dynamic_update, log_audit
@@ -20,6 +22,65 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 _PROJECT_ALLOWED_COLUMNS: set[str] = {"name", "description", "status", "deadline", "color"}
 _VALID_STATUSES = frozenset({"active", "paused", "completed", "archived"})
+
+
+async def _fetch_project_with_counts(
+    conn: Any,
+    project_id: int,
+    user_id: int,
+) -> ProjectDetailResponse | None:
+    """Fetch a project row plus aggregated counts; returns None when not found."""
+    row = await conn.fetchrow(
+        "SELECT * FROM projects WHERE id = $1 AND user_id = $2",
+        project_id,
+        user_id,
+    )
+    if row is None:
+        return None
+
+    counts = await conn.fetchrow(
+        """
+        SELECT COALESCE(t.total, 0) AS total_tasks,
+               COALESCE(t.done, 0)  AS done_tasks,
+               COALESCE(m.total, 0) AS total_milestones,
+               COALESCE(m.done, 0)  AS completed_milestones,
+               COALESCE(pp.c, 0)    AS paper_count,
+               COALESCE(pq.c, 0)    AS open_question_count
+        FROM (SELECT 1) AS _
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE status = 'done') AS done
+            FROM tasks WHERE project_id = $1 AND user_id = $2
+        ) t ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE completed = TRUE) AS done
+            FROM milestones WHERE project_id = $1 AND user_id = $2
+        ) m ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS c
+            FROM project_papers WHERE project_id = $1
+        ) pp ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS c
+            FROM project_questions WHERE project_id = $1 AND user_id = $2
+        ) pq ON TRUE
+        """,
+        project_id,
+        user_id,
+    )
+
+    assert counts is not None  # the counts query (FROM (SELECT 1)) always returns one row
+    return ProjectDetailResponse(
+        **dict(row),
+        total_tasks=counts["total_tasks"],
+        done_tasks=counts["done_tasks"],
+        total_milestones=counts["total_milestones"],
+        completed_milestones=counts["completed_milestones"],
+        paper_count=counts["paper_count"],
+        open_question_count=counts["open_question_count"],
+    )
+
 
 # §3.6/§4c: chapter-rail rows need paper_count + open_question_count.
 # LEFT JOIN LATERAL aggregations keep this single-round-trip and yield 0
@@ -128,55 +189,10 @@ async def get_project(
 ) -> ProjectDetailResponse:
     """Get a project with task and milestone counts."""
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM projects WHERE id = $1 AND user_id = $2",
-            project_id,
-            user_id,
-        )
-        if not row:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        counts = await conn.fetchrow(
-            """
-            SELECT COALESCE(t.total, 0) AS total_tasks,
-                   COALESCE(t.done, 0)  AS done_tasks,
-                   COALESCE(m.total, 0) AS total_milestones,
-                   COALESCE(m.done, 0)  AS completed_milestones,
-                   COALESCE(pp.c, 0)    AS paper_count,
-                   COALESCE(pq.c, 0)    AS open_question_count
-            FROM (SELECT 1) AS _
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS total,
-                       COUNT(*) FILTER (WHERE status = 'done') AS done
-                FROM tasks WHERE project_id = $1 AND user_id = $2
-            ) t ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS total,
-                       COUNT(*) FILTER (WHERE completed = TRUE) AS done
-                FROM milestones WHERE project_id = $1 AND user_id = $2
-            ) m ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS c
-                FROM project_papers WHERE project_id = $1
-            ) pp ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS c
-                FROM project_questions WHERE project_id = $1 AND user_id = $2
-            ) pq ON TRUE
-            """,
-            project_id,
-            user_id,
-        )
-
-    return ProjectDetailResponse(
-        **dict(row),
-        total_tasks=counts["total_tasks"],
-        done_tasks=counts["done_tasks"],
-        total_milestones=counts["total_milestones"],
-        completed_milestones=counts["completed_milestones"],
-        paper_count=counts["paper_count"],
-        open_question_count=counts["open_question_count"],
-    )
+        project = await _fetch_project_with_counts(conn, project_id, user_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
 
 
 # ---------------------------------------------------------------------------
@@ -205,20 +221,22 @@ async def update_project(
                 raise HTTPException(status_code=404, detail="Project not found")
 
             updates_dict = body.model_dump(exclude_unset=True, include=_PROJECT_ALLOWED_COLUMNS)
-            if not updates_dict:
-                return ProjectResponse(**dict(existing))
+            if updates_dict:
+                row = await dynamic_update(
+                    conn,
+                    "projects",
+                    project_id,
+                    updates_dict,
+                    _PROJECT_ALLOWED_COLUMNS,
+                    extra_sets=["updated_at = NOW()"],
+                )
+                if row is None:
+                    raise HTTPException(status_code=404, detail="Record deleted during update")
 
-            row = await dynamic_update(
-                conn,
-                "projects",
-                project_id,
-                updates_dict,
-                _PROJECT_ALLOWED_COLUMNS,
-                extra_sets=["updated_at = NOW()"],
-            )
-            if row is None:
-                raise HTTPException(status_code=404, detail="Record deleted during update")
-    return ProjectResponse(**dict(row))
+        project = await _fetch_project_with_counts(conn, project_id, user_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return ProjectResponse(**project.model_dump())
 
 
 # ---------------------------------------------------------------------------
