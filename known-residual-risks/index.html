@@ -1377,10 +1377,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#c5-3-cross-user-isolation-gate-excludes-ragsearch-paths" class="md-nav__link">
+  <a href="#cross-user-isolation-gate-excludes-ragsearch-paths" class="md-nav__link">
     <span class="md-ellipsis">
       
-        C5-3 — Cross-user isolation gate excludes RAG/search paths
+        Cross-user isolation gate excludes RAG/search paths
       
     </span>
   </a>
@@ -1388,10 +1388,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#b3-006-apipapersprocess_batch-uses-an-underscore-in-the-path" class="md-nav__link">
+  <a href="#apipapersprocess_batch-uses-an-underscore-in-the-path" class="md-nav__link">
     <span class="md-ellipsis">
       
-        B3-006 — /api/papers/process_batch uses an underscore in the path
+        /api/papers/process_batch uses an underscore in the path
       
     </span>
   </a>
@@ -1399,10 +1399,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#b3-009-loosely-typed-dictstr-any-fields-in-two-response-models" class="md-nav__link">
+  <a href="#loosely-typed-dictstr-any-fields-in-two-response-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        B3-009 — Loosely-typed dict[str, Any] fields in two response models
+        Loosely-typed dict[str, Any] fields in two response models
       
     </span>
   </a>
@@ -1872,10 +1872,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#c5-3-cross-user-isolation-gate-excludes-ragsearch-paths" class="md-nav__link">
+  <a href="#cross-user-isolation-gate-excludes-ragsearch-paths" class="md-nav__link">
     <span class="md-ellipsis">
       
-        C5-3 — Cross-user isolation gate excludes RAG/search paths
+        Cross-user isolation gate excludes RAG/search paths
       
     </span>
   </a>
@@ -1883,10 +1883,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#b3-006-apipapersprocess_batch-uses-an-underscore-in-the-path" class="md-nav__link">
+  <a href="#apipapersprocess_batch-uses-an-underscore-in-the-path" class="md-nav__link">
     <span class="md-ellipsis">
       
-        B3-006 — /api/papers/process_batch uses an underscore in the path
+        /api/papers/process_batch uses an underscore in the path
       
     </span>
   </a>
@@ -1894,10 +1894,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#b3-009-loosely-typed-dictstr-any-fields-in-two-response-models" class="md-nav__link">
+  <a href="#loosely-typed-dictstr-any-fields-in-two-response-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        B3-009 — Loosely-typed dict[str, Any] fields in two response models
+        Loosely-typed dict[str, Any] fields in two response models
       
     </span>
   </a>
@@ -2060,25 +2060,25 @@ toolchain is updated to a version with a known CVE.</p>
 <h2 id="container-hardening-exceptions">Container Hardening Exceptions<a class="headerlink" href="#container-hardening-exceptions" title="Permanent link">&para;</a></h2>
 <p>These document intentional deviations from the container-hardening sweep, each with an accepted-risk rationale.</p>
 <ul>
-<li><strong>C-09 — <code>ollama/ollama</code> runs as root</strong> (<code>docker-compose.yml</code> → <code>ollama</code> service). The upstream image requires uid 0 for GPU device-node access: <code>/dev/nvidia*</code> device nodes are owned by root and require either a privileged container or root to open. Switching to a non-root user breaks the NVIDIA device mount. No non-root upstream variant exists (confirmed 2026-05-26). <code>security_opt: ["no-new-privileges:true"]</code> is already set as a partial mitigation. Reopen when the upstream image ships a non-root GPU-capable variant.</li>
-<li><strong>C-05 — vLLM user <code>1000:1000</code> write access to the HF cache</strong> (<code>docker-compose.vllm.yml</code>). The vLLM service runs as <code>user: "1000:1000"</code> with <code>HF_HOME</code> on a named volume. If that volume was previously populated as root, the first non-root startup may fail with a permissions error; remove the volume before the first non-root run so Docker re-creates it owned by uid 1000. One-time operator action; document in the setup runbook if vLLM is promoted to production.</li>
-<li><strong>SC-09 — <code>requirements-optional.txt</code> floor-pins are informational only.</strong> The hashed security boundary lives in <code>constraints-optional.txt</code>, pinned with sha256 hashes verified at install (<code>pip install --require-hashes</code>). <code>requirements-optional.txt</code> is auto-generated from <code>pyproject.toml</code> and may not be hand-edited (the <code>check-python-deps</code> pre-commit hook enforces parity).</li>
-<li><strong>C-06 — vector <code>docker.sock</code> access; <code>cap_drop: [ALL]</code> is defense-in-depth only.</strong> The vector log shipper mounts <code>/var/run/docker.sock:ro</code>; <code>cap_drop: [ALL]</code> removes Linux capabilities but socket access is governed by uid/gid, so vector can still <code>docker inspect</code> other containers. The proper fix is structural (swap <code>docker.sock</code> for a syslog/fluent-bit forwarder, or run vector outside the docker network) — deferred as it would touch the logging architecture. Reopen when a log-routing redesign is in scope.</li>
+<li><strong><code>ollama/ollama</code> runs as root</strong> (<code>docker-compose.yml</code> → <code>ollama</code> service). The upstream image requires uid 0 for GPU device-node access: <code>/dev/nvidia*</code> device nodes are owned by root and require either a privileged container or root to open. Switching to a non-root user breaks the NVIDIA device mount. No non-root upstream variant exists (confirmed 2026-05-26). <code>security_opt: ["no-new-privileges:true"]</code> is already set as a partial mitigation. Reopen when the upstream image ships a non-root GPU-capable variant.</li>
+<li><strong>vLLM user <code>1000:1000</code> write access to the HF cache</strong> (<code>docker-compose.vllm.yml</code>). The vLLM service runs as <code>user: "1000:1000"</code> with <code>HF_HOME</code> on a named volume. If that volume was previously populated as root, the first non-root startup may fail with a permissions error; remove the volume before the first non-root run so Docker re-creates it owned by uid 1000. One-time operator action; document in the setup runbook if vLLM is promoted to production.</li>
+<li><strong><code>requirements-optional.txt</code> floor-pins are informational only.</strong> The hashed security boundary lives in <code>constraints-optional.txt</code>, pinned with sha256 hashes verified at install (<code>pip install --require-hashes</code>). <code>requirements-optional.txt</code> is auto-generated from <code>pyproject.toml</code> and may not be hand-edited (the <code>check-python-deps</code> pre-commit hook enforces parity).</li>
+<li><strong>Vector <code>docker.sock</code> access; <code>cap_drop: [ALL]</code> is defense-in-depth only.</strong> The vector log shipper mounts <code>/var/run/docker.sock:ro</code>; <code>cap_drop: [ALL]</code> removes Linux capabilities but socket access is governed by uid/gid, so vector can still <code>docker inspect</code> other containers. The proper fix is structural (swap <code>docker.sock</code> for a syslog/fluent-bit forwarder, or run vector outside the docker network) — deferred as it would touch the logging architecture. Reopen when a log-routing redesign is in scope.</li>
 </ul>
 <hr />
 <h2 id="further-known-residual-risks">Further known residual risks<a class="headerlink" href="#further-known-residual-risks" title="Permanent link">&para;</a></h2>
-<h3 id="c5-3-cross-user-isolation-gate-excludes-ragsearch-paths">C5-3 — Cross-user isolation gate excludes RAG/search paths<a class="headerlink" href="#c5-3-cross-user-isolation-gate-excludes-ragsearch-paths" title="Permanent link">&para;</a></h3>
+<h3 id="cross-user-isolation-gate-excludes-ragsearch-paths">Cross-user isolation gate excludes RAG/search paths<a class="headerlink" href="#cross-user-isolation-gate-excludes-ragsearch-paths" title="Permanent link">&para;</a></h3>
 <p><strong>Finding:</strong> the 52-scenario cross-user isolation release gate covers the core task/project/paper/user data paths but excludes the RAG and search endpoints (<code>/api/ask*</code>, <code>/api/search*</code>, <code>/api/similar</code>, and the generation pipeline) because those require a live Ollama and Qdrant instance.</p>
 <p><strong>Current coverage:</strong> <code>test_rag_contract.py</code> exercises these paths at unit/contract granularity with mocked backends. Ownership isolation at the HTTP boundary (auth headers, user-scoped Qdrant collections) is enforced by the same middleware that the gate exercises on the covered paths, giving reasonable indirect assurance.</p>
 <p><strong>Why deferred:</strong> a full live two-user RAG-path isolation test needs both inference and vector services healthy in CI, which adds significant environment complexity.</p>
 <p><strong>Reopen criteria:</strong> when a multi-user deployment scenario is targeted, or when the Qdrant collection-isolation logic changes.</p>
 <hr />
-<h3 id="b3-006-apipapersprocess_batch-uses-an-underscore-in-the-path">B3-006 — <code>/api/papers/process_batch</code> uses an underscore in the path<a class="headerlink" href="#b3-006-apipapersprocess_batch-uses-an-underscore-in-the-path" title="Permanent link">&para;</a></h3>
+<h3 id="apipapersprocess_batch-uses-an-underscore-in-the-path"><code>/api/papers/process_batch</code> uses an underscore in the path<a class="headerlink" href="#apipapersprocess_batch-uses-an-underscore-in-the-path" title="Permanent link">&para;</a></h3>
 <p><strong>Finding:</strong> <code>/api/papers/process_batch</code> uses an underscore separator while peer routes use hyphens.</p>
 <p><strong>Why deferred:</strong> renaming would be a breaking change for existing clients. The frontend API client (<code>api.ts</code>) is deliberately frozen, so no functional benefit justifies the churn.</p>
 <p><strong>Reopen criteria:</strong> if the frontend client is regenerated or a breaking-change API version is introduced.</p>
 <hr />
-<h3 id="b3-009-loosely-typed-dictstr-any-fields-in-two-response-models">B3-009 — Loosely-typed <code>dict[str, Any]</code> fields in two response models<a class="headerlink" href="#b3-009-loosely-typed-dictstr-any-fields-in-two-response-models" title="Permanent link">&para;</a></h3>
+<h3 id="loosely-typed-dictstr-any-fields-in-two-response-models">Loosely-typed <code>dict[str, Any]</code> fields in two response models<a class="headerlink" href="#loosely-typed-dictstr-any-fields-in-two-response-models" title="Permanent link">&para;</a></h3>
 <p><strong>Finding:</strong> <code>SystemModelsResponse</code> and <code>WeeklyDigestResponse.topics</code> use <code>dict[str, Any]</code> fields, which reduces OpenAPI schema fidelity and weakens static analysis on callers.</p>
 <p><strong>Why deferred:</strong> the shapes are stable and internally consistent; tightening requires adding new typed models with no user-visible change.</p>
 <p><strong>Reopen criteria:</strong> when the response shapes are consumed by a typed client or documentation that benefits from a precise schema.</p>

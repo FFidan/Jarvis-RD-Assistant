@@ -1988,7 +1988,7 @@
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>./setup.sh<span class="w"> </span>--check<span class="w">   </span><span class="c1"># preflight (read-only, exits 0 on pass)</span>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>./setup.sh
 </code></pre></div>
-<p><code>setup.sh</code> generates strong random secrets, configures TLS, brings the Docker Compose stack up, waits for the dashboard, and opens <strong>http://localhost:3001</strong> — the first-run wizard creates the admin account. Pass <code>--mode single</code> (API-key login, no SMTP) or <code>--mode multi</code> (magic-link email). See <a href="../DEPLOYMENT/#single-user-vs-multi-user-mode">docs/DEPLOYMENT.md</a> for the trade-off.</p>
+<p><code>setup.sh</code> generates strong random secrets, brings the Docker Compose stack up, waits for the dashboard, and opens <strong>http://localhost:3001</strong> — the first-run wizard creates the admin account. Pass <code>--mode single</code> (API-key login, no SMTP) or <code>--mode multi</code> (magic-link email). See <a href="../DEPLOYMENT/#single-user-vs-multi-user-mode">docs/DEPLOYMENT.md</a> for the trade-off.</p>
 <p>Re-running <code>./setup.sh</code> keeps your data: answering <code>N</code> (the default) at the <code>Overwrite?</code> prompt preserves your existing <code>.env</code> — secrets, database, and model choices — and simply starts the stack with that configuration. On first install the model download (7–11 GB; 20–60 min on a typical connection) streams its progress directly to your terminal before the services start, so the initial pull shows visible progress instead of a silent wait.</p>
 <p>In single-user mode (<code>JARVIS_SETUP_MODE=single</code>), SMTP is optional: if unconfigured the login page defaults to the API-key tab and magic-link delivery is skipped.</p>
 <p><strong>Non-interactive (CI / cloud-init):</strong></p>
@@ -1999,7 +1999,7 @@
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--smtp-host<span class="o">=</span>smtp.resend.com<span class="w"> </span>--smtp-user<span class="o">=</span>resend<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--smtp-pass-file<span class="o">=</span>/run/secrets/smtp_pass
 </code></pre></div>
-<p>See <code>./setup.sh --help</code> for all flags (including <code>--profile=local-https</code> for self-signed TLS). After the first admin exists, invite teammates at <strong>Settings → Admin → Users</strong>.</p>
+<p>See <code>./setup.sh --help</code> for all flags (including <code>--profile=local-https</code> for self-signed TLS). After the first admin exists, invite teammates at <strong>Admin → User Management</strong>.</p>
 <h2 id="what-it-does">What it does<a class="headerlink" href="#what-it-does" title="Permanent link">&para;</a></h2>
 <p>Runs on your own hardware via Ollama (or cloud providers through LiteLLM). Designed for researchers tracking multiple topics who want an assistant that does not hallucinate.</p>
 <p><strong>Core subsystems:</strong></p>

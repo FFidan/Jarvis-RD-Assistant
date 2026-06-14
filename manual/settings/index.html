@@ -1141,6 +1141,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Zotero">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#verify-zotero-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify Zotero works
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
       </ul>
@@ -1987,6 +2004,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Zotero">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#verify-zotero-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify Zotero works
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
       </ul>
@@ -2158,7 +2192,21 @@
 <h3 id="bot-token">Bot Token<a class="headerlink" href="#bot-token" title="Permanent link">&para;</a></h3>
 <p><strong>ADMIN only.</strong> Configure the Telegram bot token that the system uses to send messages. This is a server-level setting; each user pairs to the bot configured here. See <a href="../telegram/">Telegram</a> for more context.</p>
 <h3 id="zotero">Zotero<a class="headerlink" href="#zotero" title="Permanent link">&para;</a></h3>
-<p>Available to <strong>all users</strong>. Connect your Zotero account to enable Zotero sync from the <a href="../paper-detail/">Paper Detail</a> page and the ZoteroPanel.</p>
+<p>Available to <strong>all users</strong>. Connect your Zotero account to push papers and copy citation keys from the <a href="../paper-detail/">Paper Detail</a> page.</p>
+<p>Fill in:</p>
+<ul>
+<li><strong>API Key</strong> and <strong>User ID</strong> — both are on <a href="https://www.zotero.org/settings/keys">zotero.org/settings/keys</a>. Create the key with read/write library access.</li>
+<li><strong>Library Type</strong> — choose one:</li>
+<li><strong>Personal library</strong> — your own Zotero account. Most people want this.</li>
+<li><strong>Group library</strong> — a shared Zotero group. You will also need the group's <strong>numeric Group ID</strong> (the number in the group URL, e.g. <code>zotero.org/groups/987654/...</code>).</li>
+</ul>
+<p>Sending a paper to Zotero pushes its <strong>citation metadata</strong> (title, authors, DOI, abstract). The PDF file itself is <strong>not attached</strong>.</p>
+<h4 id="verify-zotero-works">Verify Zotero works<a class="headerlink" href="#verify-zotero-works" title="Permanent link">&para;</a></h4>
+<ol>
+<li>Enter your <strong>API Key</strong> and <strong>User ID</strong> (and <strong>Group ID</strong> for a group library).</li>
+<li>Click <strong>Test connection</strong>. A green "Connected" message confirms the credentials are valid; a red message names the problem (wrong key, missing user ID, or unreachable Group ID).</li>
+<li>Open any paper's <a href="../paper-detail/">Paper Detail</a> page and click <strong>Send to Zotero</strong>. The item then appears in your Zotero library, and the panel offers a <strong>View in Zotero</strong> link.</li>
+</ol>
 <hr />
 <h2 id="vi-research">§VI — Research<a class="headerlink" href="#vi-research" title="Permanent link">&para;</a></h2>
 <p>Available to <strong>all users</strong>.</p>
