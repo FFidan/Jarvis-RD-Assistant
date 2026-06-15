@@ -104,6 +104,9 @@ export interface FirstRunSmtpBody {
   user?: string | null;
   pass?: string | null;
   from_email: string;
+  /** Optional sender identity. Omit to keep; '' to clear. snake_case (no alias). */
+  reply_to?: string | null;
+  from_name?: string | null;
   test_send?: boolean;
   test_recipient?: string | null;
 }

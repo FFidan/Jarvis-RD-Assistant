@@ -25,6 +25,18 @@ vi.mock('@/lib/api', () => ({
     all_ok: true,
   }),
   saveFirstRunSmtp: vi.fn().mockResolvedValue({ saved: true, test_sent: null, test_error: null }),
+  getSmtpConfig: vi.fn().mockResolvedValue({
+    host: null,
+    port: null,
+    user: null,
+    from_email: null,
+    reply_to: null,
+    from_name: null,
+    has_password: false,
+    restart_required: false,
+    deliverable: true,
+    issues: [],
+  }),
   createFirstRunAdmin: vi.fn().mockResolvedValue({ id: 1, email: 'admin@example.com', role: 'admin' }),
   saveFirstRunCloudKeys: vi.fn().mockResolvedValue({ saved_providers: [], applied_now: [], restart_required: false }),
   getSetupStatus: vi.fn().mockResolvedValue({

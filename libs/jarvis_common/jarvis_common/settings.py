@@ -280,6 +280,8 @@ class SecretsSettings(BaseSettings):
     smtp_user: SecretStr | None = None
     smtp_pass: SecretStr | None = None
     smtp_from: SecretStr | None = None
+    smtp_reply_to: SecretStr | None = None
+    smtp_from_name: SecretStr | None = None
     langfuse_public_key: SecretStr | None = None
     langfuse_secret_key: SecretStr | None = None
 

@@ -227,6 +227,404 @@ async def test_configure_cloud_llm_keys_uses_config_lock_and_machine_id(monkeypa
     assert all(lock_held_during), "_config_lock must be held during update_litellm_model"
 
 
+# ---------------------------------------------------------------------------
+# SmtpBody field validators
+# ---------------------------------------------------------------------------
+
+
+def test_smtp_body_reply_to_valid_email() -> None:
+    """reply_to with a valid email passes validation."""
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        reply_to="support@example.com",
+    )
+    assert body.reply_to == "support@example.com"
+
+
+def test_smtp_body_reply_to_none_passes() -> None:
+    """reply_to=None (keep existing) is accepted."""
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        reply_to=None,
+    )
+    assert body.reply_to is None
+
+
+def test_smtp_body_reply_to_empty_string_passes() -> None:
+    """reply_to='' (clear) is accepted."""
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        reply_to="",
+    )
+    assert body.reply_to == ""
+
+
+def test_smtp_body_reply_to_invalid_raises_422() -> None:
+    """reply_to that is not a valid email raises ValidationError (→ 422)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        setup_router.SmtpBody(
+            host="smtp.example.com",
+            port=587,
+            from_email="bot@example.com",
+            reply_to="not-an-email",
+        )
+
+
+def test_smtp_body_from_name_none_passes() -> None:
+    """from_name=None (keep existing) is accepted."""
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        from_name=None,
+    )
+    assert body.from_name is None
+
+
+def test_smtp_body_from_name_whitespace_becomes_empty() -> None:
+    """Whitespace-only from_name is coerced to '' (clear)."""
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        from_name="   ",
+    )
+    assert body.from_name == ""
+
+
+def test_smtp_body_from_name_with_newline_raises_422() -> None:
+    """from_name containing a newline raises ValidationError (→ 422)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        setup_router.SmtpBody(
+            host="smtp.example.com",
+            port=587,
+            from_email="bot@example.com",
+            from_name="Evil\nHeader: injected",
+        )
+
+
+def test_smtp_body_from_name_with_carriage_return_raises_422() -> None:
+    """from_name containing \\r raises ValidationError (→ 422)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        setup_router.SmtpBody(
+            host="smtp.example.com",
+            port=587,
+            from_email="bot@example.com",
+            from_name="JARVIS\rBot",
+        )
+
+
+def test_smtp_body_host_required() -> None:
+    """host is required (min_length=1); empty string raises ValidationError."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        setup_router.SmtpBody(
+            host="",
+            port=587,
+            from_email="bot@example.com",
+        )
+
+
+# ---------------------------------------------------------------------------
+# SmtpConfigResponse fields
+# ---------------------------------------------------------------------------
+
+
+def test_smtp_config_response_has_reply_to_and_from_name() -> None:
+    """SmtpConfigResponse must expose reply_to, from_name, deliverable, issues fields."""
+    resp = setup_router.SmtpConfigResponse(
+        host="mail.example.com",
+        port=587,
+        reply_to="support@example.com",
+        from_name="JARVIS Bot",
+        deliverable=True,
+        issues=[],
+    )
+    assert resp.reply_to == "support@example.com"
+    assert resp.from_name == "JARVIS Bot"
+    assert resp.deliverable is True
+    assert resp.issues == []
+
+
+# ---------------------------------------------------------------------------
+# configure_smtp: persists reply_to and from_name
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_configure_smtp_persists_reply_to_and_from_name(monkeypatch) -> None:
+    """configure_smtp writes smtp.reply_to and smtp.from_name when body values are not None."""
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+
+    persisted: dict[str, object] = {}
+
+    async def fake_persist(pool, key, value, *, encrypted):
+        persisted[key] = value
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)  # no admin → bootstrap
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        reply_to="support@example.com",
+        from_name="JARVIS Bot",
+        test_send=False,
+    )
+    result = await setup_router.configure_smtp(body, request)
+
+    assert result.saved is True
+    assert persisted.get("smtp.reply_to") == "support@example.com"
+    assert persisted.get("smtp.from_name") == "JARVIS Bot"
+
+
+@pytest.mark.asyncio
+async def test_configure_smtp_reply_to_none_not_persisted(monkeypatch) -> None:
+    """configure_smtp must NOT write smtp.reply_to when body.reply_to is None (keep)."""
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+
+    persisted: dict[str, object] = {}
+
+    async def fake_persist(pool, key, value, *, encrypted):
+        persisted[key] = value
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        reply_to=None,  # None → keep existing, do not write
+        from_name=None,
+        test_send=False,
+    )
+    await setup_router.configure_smtp(body, request)
+
+    assert "smtp.reply_to" not in persisted, (
+        "smtp.reply_to must not be persisted when body.reply_to is None"
+    )
+    assert "smtp.from_name" not in persisted, (
+        "smtp.from_name must not be persisted when body.from_name is None"
+    )
+
+
+@pytest.mark.asyncio
+async def test_configure_smtp_empty_reply_to_persisted_as_clear(monkeypatch) -> None:
+    """configure_smtp writes '' for smtp.reply_to when body.reply_to is '' (clear)."""
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+
+    persisted: dict[str, object] = {}
+
+    async def fake_persist(pool, key, value, *, encrypted):
+        persisted[key] = value
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        reply_to="",  # '' → clear (write it)
+        test_send=False,
+    )
+    await setup_router.configure_smtp(body, request)
+
+    assert "smtp.reply_to" in persisted, "smtp.reply_to must be written when body.reply_to is ''"
+    assert persisted["smtp.reply_to"] == ""
+
+
+# ---------------------------------------------------------------------------
+# bootstrap test_send: recipient forced to from_email when no admin exists
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_configure_smtp_bootstrap_test_send_forces_recipient(monkeypatch) -> None:
+    """When no admin exists and test_send=True, recipient is forced to from_email."""
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+
+    async def fake_persist(pool, key, value, *, encrypted):
+        pass
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+
+    captured_recipient: list[str] = []
+
+    async def fake_send_test(body, recipient):
+        captured_recipient.append(recipient)
+        return None  # success
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._send_test_email", fake_send_test)
+
+    conn = AsyncMock()
+    # fetchval is called twice: once in require_unconfigured_or_admin, once in the
+    # _admin_count check before choosing recipient.
+    conn.fetchval = AsyncMock(return_value=0)  # no admin
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        test_send=True,
+        test_recipient="different-recipient@example.com",  # must be IGNORED in bootstrap
+    )
+    result = await setup_router.configure_smtp(body, request)
+
+    assert result.test_sent is True
+    assert len(captured_recipient) == 1
+    assert captured_recipient[0] == "bot@example.com", (
+        f"Bootstrap mode must force recipient=from_email; got {captured_recipient[0]!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# _classify_config_key and _SECRET_KEYS
+# ---------------------------------------------------------------------------
+
+
+def test_classify_config_key_smtp_reply_to_is_system() -> None:
+    from paper_ingestion.services.config_metadata import _classify_config_key
+
+    assert _classify_config_key("smtp.reply_to") == "system"
+
+
+def test_classify_config_key_smtp_from_name_is_system() -> None:
+    from paper_ingestion.services.config_metadata import _classify_config_key
+
+    assert _classify_config_key("smtp.from_name") == "system"
+
+
+def test_smtp_reply_to_not_in_secret_keys() -> None:
+    from paper_ingestion.services.config_metadata import _SECRET_KEYS
+
+    assert "smtp.reply_to" not in _SECRET_KEYS
+
+
+def test_smtp_from_name_not_in_secret_keys() -> None:
+    from paper_ingestion.services.config_metadata import _SECRET_KEYS
+
+    assert "smtp.from_name" not in _SECRET_KEYS
+
+
+# ---------------------------------------------------------------------------
+# _validate_optional_email and _validate_optional_header_str
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_validate_optional_email_allows_none_and_empty(value) -> None:
+    from paper_ingestion.services.config_validators import _validate_optional_email
+
+    # Must not raise
+    _validate_optional_email(value)
+
+
+@pytest.mark.parametrize("value", ["support@example.com", "a@b.io"])
+def test_validate_optional_email_valid_email(value) -> None:
+    from paper_ingestion.services.config_validators import _validate_optional_email
+
+    _validate_optional_email(value)  # must not raise
+
+
+def test_validate_optional_email_rejects_invalid() -> None:
+    from paper_ingestion.services.config_validators import _validate_optional_email
+
+    with pytest.raises(ValueError):
+        _validate_optional_email("not-an-email")
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_validate_optional_header_str_allows_none_and_empty(value) -> None:
+    from paper_ingestion.services.config_validators import _validate_optional_header_str
+
+    _validate_optional_header_str(value)  # must not raise
+
+
+def test_validate_optional_header_str_valid_string() -> None:
+    from paper_ingestion.services.config_validators import _validate_optional_header_str
+
+    _validate_optional_header_str("JARVIS Bot")  # must not raise
+
+
+@pytest.mark.parametrize("value", ["Evil\r\nBcc: x@y.com", "has\nnewline", "has\x00null"])
+def test_validate_optional_header_str_rejects_control_chars(value) -> None:
+    from paper_ingestion.services.config_validators import _validate_optional_header_str
+
+    with pytest.raises(ValueError):
+        _validate_optional_header_str(value)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/setup/smtp returns reply_to, from_name, deliverable, issues
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_smtp_config_returns_reply_to_and_from_name(monkeypatch) -> None:
+    """GET /api/setup/smtp returns reply_to, from_name, deliverable, issues fields."""
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+
+    from jarvis_common.settings import get_secrets_settings
+
+    get_secrets_settings.cache_clear()
+
+    conn = AsyncMock()
+    # _admin_count (require_unconfigured_or_admin) → 0 (bootstrap)
+    conn.fetchval = AsyncMock(return_value=0)
+    # _read_smtp_config fetches all smtp.* rows
+    conn.fetch = AsyncMock(
+        return_value=[
+            {"key": "smtp.host", "value": "mail.example.com", "encrypted_value": None},
+            {"key": "smtp.port", "value": "587", "encrypted_value": None},
+            {"key": "smtp.from", "value": "bot@example.com", "encrypted_value": None},
+            {"key": "smtp.reply_to", "value": "support@example.com", "encrypted_value": None},
+            {"key": "smtp.from_name", "value": "JARVIS Bot", "encrypted_value": None},
+        ]
+    )
+    # _effective_smtp inside effective_smtp_status also calls pool.acquire/conn.fetch
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    result = await setup_router.get_smtp_config(request)
+
+    get_secrets_settings.cache_clear()
+    assert result.reply_to == "support@example.com", f"reply_to mismatch: {result.reply_to!r}"
+    assert result.from_name == "JARVIS Bot", f"from_name mismatch: {result.from_name!r}"
+    assert hasattr(result, "deliverable"), "SmtpConfigResponse must have 'deliverable' field"
+    assert hasattr(result, "issues"), "SmtpConfigResponse must have 'issues' field"
+
+
 @pytest.mark.asyncio
 async def test_configure_cloud_llm_keys_push_failure_no_restart_required(monkeypatch):
     """A failed live push must NOT set restart_required — reconciler retries in ≤30 s."""

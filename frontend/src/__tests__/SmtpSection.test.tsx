@@ -26,32 +26,76 @@ const fixtures = vi.hoisted(() => ({
     port: 587,
     user: 'relay',
     from_email: 'no-reply@example.com',
+    reply_to: null,
+    from_name: null,
     has_password: true,
     restart_required: false,
+    deliverable: true,
+    issues: [],
   },
   smtpConfigNoRestart: {
     host: 'smtp.example.com',
     port: 587,
     user: 'relay',
     from_email: 'no-reply@example.com',
+    reply_to: null,
+    from_name: null,
     has_password: true,
     restart_required: false,
+    deliverable: true,
+    issues: [],
   },
   smtpConfigRestartRequired: {
     host: 'smtp.example.com',
     port: 587,
     user: 'relay',
     from_email: 'no-reply@example.com',
+    reply_to: null,
+    from_name: null,
     has_password: true,
     restart_required: true,
+    deliverable: true,
+    issues: [],
   },
   smtpConfigNoPassword: {
     host: null,
     port: null,
     user: null,
     from_email: null,
+    reply_to: null,
+    from_name: null,
     has_password: false,
     restart_required: false,
+    deliverable: false,
+    issues: [
+      'No mail relay is configured — sign-in links are written to the server log, not emailed.',
+    ],
+  },
+  // host set but From missing → not deliverable (partial config)
+  smtpConfigMisconfigured: {
+    host: 'smtp.example.com',
+    port: 587,
+    user: 'relay',
+    from_email: null,
+    reply_to: null,
+    from_name: null,
+    has_password: true,
+    restart_required: false,
+    deliverable: false,
+    issues: ['The mail server is set but the From address is missing.'],
+  },
+  // deliverable config carrying reply-to + display name
+  smtpConfigWithReplyTo: {
+    host: 'smtp.example.com',
+    port: 587,
+    user: 'relay',
+    from_email: 'no-reply@example.com',
+    reply_to: 'replies@example.com',
+    from_name: 'JARVIS RD',
+    has_password: true,
+    restart_required: false,
+    deliverable: true,
+    issues: [],
   },
   saveResponse: { saved: true, test_sent: null, test_error: null },
 }));
@@ -383,5 +427,97 @@ describe('SmtpSection — config fetch error', () => {
 
     // The form must not render — no Save button visible
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SmtpSection — misconfig banner + sender identity (reply-to / display name)
+// ---------------------------------------------------------------------------
+
+describe('SmtpSection — misconfig banner & sender identity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSaveSmtpConfig.mockResolvedValue(fixtures.saveResponse);
+  });
+
+  it('renders the misconfig banner ALONGSIDE the editable form when not deliverable', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigMisconfigured);
+
+    await renderSmtp();
+
+    // Banner is shown...
+    expect(await screen.findByTestId('smtp-misconfig-banner')).toHaveTextContent(
+      /from address is missing/i,
+    );
+    // ...and the form stays editable (this is a degraded state, NOT an empty state)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/host/i)).toBeInTheDocument();
+  });
+
+  it('does NOT render the misconfig banner when the relay is deliverable', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+
+    await renderSmtp();
+    await screen.findByLabelText(/host/i);
+
+    expect(screen.queryByTestId('smtp-misconfig-banner')).not.toBeInTheDocument();
+  });
+
+  it('hydrates reply-to and sender display name from config', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithReplyTo);
+
+    await renderSmtp();
+
+    expect(await screen.findByLabelText(/reply-to/i)).toHaveValue('replies@example.com');
+    expect(screen.getByLabelText(/sender display name/i)).toHaveValue('JARVIS RD');
+  });
+
+  it('disables Save and shows an error when reply-to is not a valid email', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+
+    const user = userEvent.setup();
+    await renderSmtp();
+    await screen.findByLabelText(/host/i);
+
+    await user.type(screen.getByLabelText(/reply-to/i), 'not-an-email');
+
+    expect(screen.getByText(/valid email address or leave blank/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('sends reply_to and from_name on save (snake_case, no alias)', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithReplyTo);
+
+    const user = userEvent.setup();
+    await renderSmtp();
+    await waitFor(() =>
+      expect(screen.getByLabelText(/host/i)).toHaveValue('smtp.example.com'),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(mockSaveSmtpConfig).toHaveBeenCalled());
+    const [firstArg] = mockSaveSmtpConfig.mock.calls[0]!;
+    expect(firstArg).toMatchObject({
+      reply_to: 'replies@example.com',
+      from_name: 'JARVIS RD',
+    });
+  });
+
+  it('Save & send test email submits test_send=true and reports success', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+    mockSaveSmtpConfig.mockResolvedValue({ saved: true, test_sent: true, test_error: null });
+
+    const user = userEvent.setup();
+    await renderSmtp();
+    await waitFor(() =>
+      expect(screen.getByLabelText(/host/i)).toHaveValue('smtp.example.com'),
+    );
+
+    await user.click(screen.getByRole('button', { name: /send test email/i }));
+
+    await waitFor(() => expect(mockSaveSmtpConfig).toHaveBeenCalled());
+    expect(mockSaveSmtpConfig.mock.calls[0]![0]).toMatchObject({ test_send: true });
+    expect(await screen.findByText(/test email sent successfully/i)).toBeInTheDocument();
   });
 });

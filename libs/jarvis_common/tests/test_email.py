@@ -138,6 +138,410 @@ async def test_smtp_configured_public_fn_returns_false_without_smtp(monkeypatch)
     get_secrets_settings.cache_clear()
 
 
+# ---------------------------------------------------------------------------
+# sanitize_header_value
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_header_value_normal_string() -> None:
+    from jarvis_common.email import sanitize_header_value
+
+    assert sanitize_header_value("JARVIS Bot") == "JARVIS Bot"
+
+
+def test_sanitize_header_value_strips_whitespace() -> None:
+    from jarvis_common.email import sanitize_header_value
+
+    assert sanitize_header_value("  hello  ") == "hello"
+
+
+def test_sanitize_header_value_none_returns_none() -> None:
+    from jarvis_common.email import sanitize_header_value
+
+    assert sanitize_header_value(None) is None
+
+
+def test_sanitize_header_value_empty_string_returns_none() -> None:
+    from jarvis_common.email import sanitize_header_value
+
+    assert sanitize_header_value("") is None
+
+
+def test_sanitize_header_value_whitespace_only_returns_none() -> None:
+    from jarvis_common.email import sanitize_header_value
+
+    assert sanitize_header_value("   ") is None
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "Name\r\nBcc: evil@x.com",
+        "Name\nBcc: evil@x.com",
+        # \r in the middle (not stripped by .strip()) — injection risk
+        "Name\rMiddle",
+        "has\x00null",
+    ],
+)
+def test_sanitize_header_value_control_chars_returns_none(bad_value: str) -> None:
+    from jarvis_common.email import sanitize_header_value
+
+    assert sanitize_header_value(bad_value) is None
+
+
+# ---------------------------------------------------------------------------
+# _EffectiveSmtp.from_header
+# ---------------------------------------------------------------------------
+
+
+def test_effective_smtp_from_header_with_from_name() -> None:
+    from email.utils import formataddr
+
+    from jarvis_common.email import _EffectiveSmtp
+
+    smtp = _EffectiveSmtp(
+        host="mail.example.com",
+        port=587,
+        user=None,
+        password=None,
+        sender="bot@example.com",
+        from_name="JARVIS Bot",
+    )
+    assert smtp.from_header == formataddr(("JARVIS Bot", "bot@example.com"))
+    assert "JARVIS Bot" in smtp.from_header
+    assert "bot@example.com" in smtp.from_header
+
+
+def test_effective_smtp_from_header_bare_when_no_from_name() -> None:
+    from jarvis_common.email import _EffectiveSmtp
+
+    smtp = _EffectiveSmtp(
+        host="mail.example.com",
+        port=587,
+        user=None,
+        password=None,
+        sender="bot@example.com",
+    )
+    assert smtp.from_header == "bot@example.com"
+
+
+def test_effective_smtp_from_header_bare_when_from_name_empty() -> None:
+    from jarvis_common.email import _EffectiveSmtp
+
+    # from_name='' is falsy; from_header must return bare sender
+    smtp = _EffectiveSmtp(
+        host="mail.example.com",
+        port=587,
+        user=None,
+        password=None,
+        sender="bot@example.com",
+        from_name="",
+    )
+    assert smtp.from_header == "bot@example.com"
+
+
+# ---------------------------------------------------------------------------
+# send_magic_link — Reply-To and From header
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_sets_reply_to_when_configured(monkeypatch) -> None:
+    """When smtp.reply_to is set, Reply-To header must be present in the sent message."""
+    from email.message import EmailMessage
+    from unittest.mock import patch
+
+    import aiosmtplib
+    from jarvis_common.email import send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("SMTP_REPLY_TO", "support@example.com")
+    monkeypatch.delenv("SMTP_FROM_NAME", raising=False)
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+
+    captured: list[EmailMessage] = []
+
+    async def fake_send(message, **kwargs):
+        captured.append(message)
+
+    with patch.object(aiosmtplib, "send", side_effect=fake_send):
+        await send_magic_link("user@example.com", "https://example.com/verify?token=abc", pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert captured, "aiosmtplib.send was not called"
+    msg = captured[0]
+    assert msg["Reply-To"] == "support@example.com", (
+        f"Expected Reply-To='support@example.com'; got {msg['Reply-To']!r}"
+    )
+    assert msg["From"] == "bot@example.com", (
+        f"Expected bare From when no from_name; got {msg['From']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_no_reply_to_when_not_configured(monkeypatch) -> None:
+    """When smtp.reply_to is not set, the sent message must have no Reply-To header."""
+    from email.message import EmailMessage
+    from unittest.mock import patch
+
+    import aiosmtplib
+    from jarvis_common.email import send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.delenv("SMTP_REPLY_TO", raising=False)
+    monkeypatch.delenv("SMTP_FROM_NAME", raising=False)
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+
+    captured: list[EmailMessage] = []
+
+    async def fake_send(message, **kwargs):
+        captured.append(message)
+
+    with patch.object(aiosmtplib, "send", side_effect=fake_send):
+        await send_magic_link("user@example.com", "https://example.com/verify?token=abc", pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert captured, "aiosmtplib.send was not called"
+    msg = captured[0]
+    assert msg["Reply-To"] is None, (
+        f"Expected no Reply-To when not configured; got {msg['Reply-To']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_from_header_with_display_name(monkeypatch) -> None:
+    """When smtp.from_name is set, From header must be 'Name <addr>' (formataddr)."""
+    from email.message import EmailMessage
+    from email.utils import formataddr
+    from unittest.mock import patch
+
+    import aiosmtplib
+    from jarvis_common.email import send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("SMTP_FROM_NAME", "JARVIS Bot")
+    monkeypatch.delenv("SMTP_REPLY_TO", raising=False)
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+
+    captured: list[EmailMessage] = []
+
+    async def fake_send(message, **kwargs):
+        captured.append(message)
+
+    with patch.object(aiosmtplib, "send", side_effect=fake_send):
+        await send_magic_link("user@example.com", "https://example.com/verify?token=abc", pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert captured, "aiosmtplib.send was not called"
+    msg = captured[0]
+    expected_from = formataddr(("JARVIS Bot", "bot@example.com"))
+    assert msg["From"] == expected_from, (
+        f"Expected From={expected_from!r} with display name; got {msg['From']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_header_injection_sanitized(monkeypatch) -> None:
+    """A from_name with CR/LF injection must not produce injected headers.
+
+    The send path uses sanitize_header_value which drops malicious values before
+    they reach the EmailMessage — so From degrades to the bare sender and no
+    extra headers appear.
+    """
+    from email.message import EmailMessage
+    from unittest.mock import patch
+
+    import aiosmtplib
+    from jarvis_common.email import send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    # Injection attempt in from_name
+    monkeypatch.setenv("SMTP_FROM_NAME", "Evil\r\nBcc: attacker@evil.com")
+    monkeypatch.setenv("SMTP_REPLY_TO", "legit@example.com\nX-Injected: yes")
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+
+    captured: list[EmailMessage] = []
+
+    async def fake_send(message, **kwargs):
+        captured.append(message)
+
+    with patch.object(aiosmtplib, "send", side_effect=fake_send):
+        await send_magic_link("user@example.com", "https://example.com/verify?token=abc", pool=None)
+
+    get_secrets_settings.cache_clear()
+    # The send must still succeed (sanitization degrades, never crashes)
+    assert captured, "aiosmtplib.send was not called — send must still succeed after sanitization"
+    msg = captured[0]
+    # Bad from_name sanitized → From must be bare sender (not contain the injection)
+    from_header = msg["From"] or ""
+    assert "Bcc:" not in from_header, (
+        f"Injected Bcc must not appear in From header; got {from_header!r}"
+    )
+    assert "Evil" not in from_header, (
+        f"Injected from_name must not appear in From header; got {from_header!r}"
+    )
+    # Bad reply_to sanitized → Reply-To must be absent
+    reply_to = msg["Reply-To"]
+    assert reply_to is None or "X-Injected" not in (reply_to or ""), (
+        f"Injected Reply-To must not carry extra headers; got {reply_to!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_whitespace_from_name_bare_sender(monkeypatch) -> None:
+    """A whitespace-only from_name must result in a bare From address (no display name)."""
+    from email.message import EmailMessage
+    from unittest.mock import patch
+
+    import aiosmtplib
+    from jarvis_common.email import send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("SMTP_FROM_NAME", "   ")  # whitespace only
+    monkeypatch.delenv("SMTP_REPLY_TO", raising=False)
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+
+    captured: list[EmailMessage] = []
+
+    async def fake_send(message, **kwargs):
+        captured.append(message)
+
+    with patch.object(aiosmtplib, "send", side_effect=fake_send):
+        await send_magic_link("user@example.com", "https://example.com/verify?token=abc", pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert captured, "aiosmtplib.send was not called"
+    msg = captured[0]
+    # Whitespace-only from_name → sanitize_header_value returns None → bare sender
+    assert msg["From"] == "bot@example.com", (
+        f"Expected bare From for whitespace from_name; got {msg['From']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# effective_smtp_status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_effective_smtp_status_env_only_deliverable(monkeypatch) -> None:
+    """env-only SMTP with host+from set: (True, [])."""
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    get_secrets_settings.cache_clear()
+
+    deliverable, issues = await effective_smtp_status(pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert deliverable is True
+    assert issues == []
+
+
+@pytest.mark.asyncio
+async def test_effective_smtp_status_nothing_set(monkeypatch) -> None:
+    """No SMTP configured: (False, [message about no relay])."""
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    monkeypatch.delenv("SMTP_USER", raising=False)
+    monkeypatch.delenv("SMTP_PASS", raising=False)
+    get_secrets_settings.cache_clear()
+
+    deliverable, issues = await effective_smtp_status(pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert deliverable is False
+    assert len(issues) == 1
+    # Issue must be value-free — must not contain any configured value
+    assert "mail.example.com" not in issues[0]
+    assert "bot@example.com" not in issues[0]
+    # Must mention relay/log concept
+    assert "relay" in issues[0].lower() or "log" in issues[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_effective_smtp_status_host_only_no_from(monkeypatch) -> None:
+    """Host set but no From address: (False, [partial message])."""
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    get_secrets_settings.cache_clear()
+
+    deliverable, issues = await effective_smtp_status(pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert deliverable is False
+    assert len(issues) == 1
+    # Value-free: must not echo the configured host
+    assert "mail.example.com" not in issues[0]
+
+
+@pytest.mark.asyncio
+async def test_effective_smtp_status_from_only_no_host(monkeypatch) -> None:
+    """From set but no host: (False, [partial message])."""
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    get_secrets_settings.cache_clear()
+
+    deliverable, issues = await effective_smtp_status(pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert deliverable is False
+    assert len(issues) == 1
+    assert "bot@example.com" not in issues[0]
+
+
+@pytest.mark.asyncio
+async def test_effective_smtp_status_empty_string_required_field(monkeypatch) -> None:
+    """Empty-string required env field triggers the empty-value issue message."""
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "")  # present but empty — silent-fail case
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    get_secrets_settings.cache_clear()
+
+    deliverable, issues = await effective_smtp_status(pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert deliverable is False
+    assert len(issues) == 1
+    # Must mention "empty" in some form and be value-free
+    assert "empty" in issues[0].lower()
+    assert "bot@example.com" not in issues[0]
+    assert "SMTP_HOST" not in issues[0]
+
+
+# ---------------------------------------------------------------------------
+# Brace-URL tests (existing)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.parametrize(
     "link",
     [

@@ -78,6 +78,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "smtp.user",
         "smtp.from",
         "smtp.pass",
+        "smtp.reply_to",
+        "smtp.from_name",
         # Observability — deployment-wide Langfuse dashboard link (admin-only).
         "observability.langfuse_dashboard_url",
         # Automation — auto-fetch pipeline interval (system-wide scheduler).
@@ -197,6 +199,8 @@ SYSTEM_KEYS: frozenset[str] = frozenset(
         "smtp.user",
         "smtp.from",
         "smtp.pass",
+        "smtp.reply_to",
+        "smtp.from_name",
         # Observability — one deployment-wide Langfuse dashboard link; admin-only.
         "observability.langfuse_dashboard_url",
         # Automation — pipeline interval; system-wide, admin-only.

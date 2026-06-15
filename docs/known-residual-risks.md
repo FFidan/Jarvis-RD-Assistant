@@ -85,7 +85,11 @@ Service `requirements.txt` files use `>=` floors (some with ceilings); the hashe
 
 **Impact:** HIGH (operator-facing silent failure, not data loss). Affects any deployment where SMTP env vars are mis-set to `""` rather than left unset — `""` and unset have different semantics, and only unset is correctly handled.
 
-**Mitigation:** Add a `@field_validator` to `SecretsSettings.smtp_host/from/user/pass` rejecting empty-string values, OR add a startup-time health check that asserts the SMTP configuration is internally consistent. Four `xfail(strict=False)` tests in `libs/jarvis_common/tests/test_secrets_settings.py` document the gap and will auto-green when validators are added.
+**Partial mitigation (UI):** Settings → System → Email / SMTP now shows an amber warning banner whenever the effective mail relay is not deliverable — covering the empty-string case, a partial configuration (e.g. host set but From missing), or no relay configured at all. The form remains editable so the admin can correct the problem in place. A **Save & send test email** button with an optional test recipient allows immediate delivery verification and surfaces the real SMTP error inline. This makes the failure visible at configuration time rather than only at sign-in time.
+
+**Bootstrap-window note:** during the first-run wizard (before any admin account exists), the SMTP test-send endpoint is unauthenticated; the test recipient is forced to the From address so an operator can only mail themselves. Once an admin account exists, an arbitrary test recipient is accepted.
+
+**Remaining gap:** no startup-level or save-time validator rejects empty-string values in the env-var path (`SecretsSettings`). Four `xfail(strict=False)` tests in `libs/jarvis_common/tests/test_secrets_settings.py` document the gap and will auto-green when validators are added.
 
 ---
 

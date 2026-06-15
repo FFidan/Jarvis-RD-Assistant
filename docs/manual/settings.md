@@ -91,7 +91,14 @@ Create and manage templates used on the [Extraction Table](extraction-table.md) 
 
 ### Email / SMTP
 
-Configure the outbound email relay for magic-link sign-in emails. Fields: SMTP host, port, username, password, sender address. A test-send button is available.
+Configure the outbound email relay for magic-link sign-in emails. Fields: SMTP host, port, username, password, and sender (From) address. Two optional fields are also available:
+
+- **Reply-To address** — when set, email clients route replies here instead of the From address. Leave blank to clear.
+- **Sender display name** — when set, the From header shows a friendly name, e.g. `JARVIS RD <login@your-domain.dev>`. Leave blank to clear.
+
+**Misconfiguration warning.** If the saved SMTP configuration is not deliverable — for example, a host is set but the From address is missing, a required field was saved as an empty string, or no relay is configured at all — the card displays an amber warning banner describing the issue. The form remains editable so you can correct the problem in place without navigating away.
+
+**Save & send test email.** In addition to the **Save** button, a **Save & send test email** button saves the settings and immediately attempts a test delivery. An optional **Test recipient** field (defaults to the From address) lets you direct the test message to a specific address. The result — success or the exact SMTP error — is shown inline. This matches the test-send available during the onboarding wizard.
 
 ### Pulse
 

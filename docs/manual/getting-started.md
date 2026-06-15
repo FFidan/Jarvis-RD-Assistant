@@ -37,7 +37,12 @@ If any service is unreachable, fix it in your Docker Compose environment and cli
 
 ### Step 2 — SMTP relay (skippable)
 
-Configure the outbound email relay that JARVIS uses to send magic-link sign-in emails. Fields: SMTP host, port, username, password, sender address, and a test recipient address. Use the **Save & test send** button to save the settings and verify delivery in one step before continuing. This step is skippable — you can configure email later in Settings if the instance will use API-key login only.
+Configure the outbound email relay that JARVIS uses to send magic-link sign-in emails. Fields: SMTP host, port, username, password, sender (From) address, and a test recipient address. Two additional optional fields are available:
+
+- **Reply-To address** — when set, email clients route replies here instead of the From address. Leave blank to omit.
+- **Sender display name** — when set, the From header shows a friendly name, e.g. `JARVIS RD <login@your-domain.dev>`. Leave blank to omit.
+
+Use the **Save & test send** button to save the settings and verify delivery in one step before continuing. During the wizard (before any admin account exists), the test email is always sent to the From address — an admin can only mail themselves at this stage. This step is skippable — you can configure email later in Settings → System → Email / SMTP if the instance will use API-key login only.
 
 ### Step 3 — Create admin & sign in
 

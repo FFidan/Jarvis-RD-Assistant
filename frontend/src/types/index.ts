@@ -1236,9 +1236,15 @@ export interface SmtpConfig {
   port: number | null;
   user: string | null;
   from_email: string | null;
+  reply_to: string | null;
+  from_name: string | null;
   has_password: boolean;
   /** Backend now always returns false; field may be absent in older responses. */
   restart_required?: boolean;
+  /** Effective-config (DB-over-env) deliverability; drives the misconfig banner. */
+  deliverable?: boolean;
+  /** Operator-facing, value-free explanations when not deliverable. */
+  issues?: string[];
 }
 
 // --- Settings: cloud LLM keys (POST /api/setup/cloud-llm-keys) ---
@@ -1275,6 +1281,9 @@ export interface SmtpConfigInput {
   user: string;
   password: string;
   from_email: string;
+  /** Optional sender identity. Omit to keep existing; '' to clear. snake_case (no alias). */
+  reply_to?: string;
+  from_name?: string;
   test_send?: boolean;
   test_recipient?: string;
 }

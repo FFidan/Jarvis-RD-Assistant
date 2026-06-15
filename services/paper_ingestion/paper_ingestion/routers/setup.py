@@ -39,12 +39,13 @@ import re
 import socket
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.crypto import encrypt_secret
+from jarvis_common.email import effective_smtp_status, sanitize_header_value, smtp_tls_flags
 from jarvis_common.email import smtp_configured as _smtp_configured_probe
-from jarvis_common.email import smtp_tls_flags
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.serialization import _coerce_bool
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
@@ -69,7 +70,14 @@ SMTP_TEST_TIMEOUT_SECONDS = 10.0
 # allow-list maintained in routers/settings.py — these keys are intentionally
 # duplicated here rather than imported because settings.py is not on the
 # setup write scope (and an import would create a circular surface).
-_SMTP_PLAINTEXT_KEYS = ("smtp.host", "smtp.port", "smtp.user", "smtp.from")
+_SMTP_PLAINTEXT_KEYS = (
+    "smtp.host",
+    "smtp.port",
+    "smtp.user",
+    "smtp.from",
+    "smtp.reply_to",
+    "smtp.from_name",
+)
 _SMTP_ENCRYPTED_KEYS = ("smtp.pass",)
 _CLOUD_LLM_KEY_MAP = {
     "openai": "llm.openai.api_key",
@@ -117,10 +125,37 @@ class SmtpBody(BaseModel):
     user: Annotated[str | None, Field(default=None, max_length=255)] = None
     password: Annotated[str | None, Field(default=None, max_length=512, alias="pass")] = None
     from_email: Annotated[EmailStr, Field(max_length=MAX_EMAIL_LEN)]
+    # Optional sender identity. None = keep existing, "" = clear. Not secrets.
+    reply_to: Annotated[str | None, Field(default=None, max_length=MAX_EMAIL_LEN)] = None
+    from_name: Annotated[str | None, Field(default=None, max_length=255)] = None
     test_send: bool = False
     test_recipient: Annotated[EmailStr | None, Field(default=None, max_length=MAX_EMAIL_LEN)] = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("reply_to")
+    @classmethod
+    def _validate_reply_to(cls, v: str | None) -> str | None:
+        """Allow None (keep) and "" (clear); otherwise require a valid email."""
+        if v is None or v == "":
+            return v
+        v = v.strip()
+        if not re.match(r"^\S+@\S+\.\S+$", v):
+            raise ValueError("reply_to must be a valid email address")
+        return v
+
+    @field_validator("from_name")
+    @classmethod
+    def _validate_from_name(cls, v: str | None) -> str | None:
+        """Allow None (keep); whitespace-only → "" (clear); reject control chars."""
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return ""
+        if any(c in v for c in ("\r", "\n", "\x00")) or not v.isprintable():
+            raise ValueError("from_name must not contain control characters")
+        return v
 
 
 class SmtpResponse(BaseModel):
@@ -143,8 +178,13 @@ class SmtpConfigResponse(BaseModel):
     port: int | None = None
     user: str | None = None
     from_email: str | None = None
+    reply_to: str | None = None
+    from_name: str | None = None
     has_password: bool = False
     restart_required: bool = False
+    # Effective-config (DB-over-env) health for the settings UI warning banner.
+    deliverable: bool = False
+    issues: list[str] = Field(default_factory=list)
 
 
 class AdminBody(BaseModel):
@@ -492,12 +532,19 @@ async def _read_smtp_config(pool: Any) -> SmtpConfigResponse:
     pass_row = by_key.get("smtp.pass")
     has_password = pass_row is not None and pass_row["encrypted_value"] is not None
 
+    # Deliverability verdict reflects the EFFECTIVE relay (DB layered over env),
+    # so an env-only deployment is not falsely reported as misconfigured.
+    deliverable, issues = await effective_smtp_status(pool)
     return SmtpConfigResponse(
         host=_plain("smtp.host"),
         port=port,
         user=_plain("smtp.user"),
         from_email=_plain("smtp.from"),
+        reply_to=_plain("smtp.reply_to"),
+        from_name=_plain("smtp.from_name"),
         has_password=has_password,
+        deliverable=deliverable,
+        issues=issues,
     )
 
 
@@ -516,9 +563,19 @@ async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
         return "aiosmtplib not installed in this image"
 
     message = EmailMessage()
-    message["From"] = body.from_email
+    from_name = sanitize_header_value(body.from_name)
+    try:
+        message["From"] = formataddr((from_name, body.from_email)) if from_name else body.from_email
+    except (TypeError, ValueError):
+        message["From"] = body.from_email
     message["To"] = recipient
     message["Subject"] = "JARVIS SMTP test"
+    reply_to = sanitize_header_value(body.reply_to)
+    if reply_to:
+        try:
+            message["Reply-To"] = reply_to
+        except (TypeError, ValueError):
+            pass
     message.set_content(
         "This is a test email from the JARVIS first-run setup wizard.\n"
         "If you received this, your SMTP relay is working.\n"
@@ -587,11 +644,24 @@ async def configure_smtp(body: SmtpBody, request: Request) -> SmtpResponse:
     await _persist_config(pool, "smtp.from", body.from_email, encrypted=False)
     if body.password:
         await _persist_config(pool, "smtp.pass", body.password, encrypted=True)
+    # Optional sender identity: None = keep, "" = clear (stored empty, which the
+    # sender treats as absent). Validated + not secrets.
+    if body.reply_to is not None:
+        await _persist_config(pool, "smtp.reply_to", body.reply_to, encrypted=False)
+    if body.from_name is not None:
+        await _persist_config(pool, "smtp.from_name", body.from_name, encrypted=False)
 
     test_sent: bool | None = None
     test_error: str | None = None
     if body.test_send:
-        recipient = body.test_recipient or body.from_email
+        # During first-run bootstrap (no admin yet) this endpoint is
+        # unauthenticated; force the test recipient to the sender so it cannot be
+        # abused to mail arbitrary third parties. Once an admin exists the
+        # endpoint is admin-gated and an arbitrary recipient is allowed.
+        if await _admin_count(pool) == 0:
+            recipient = body.from_email
+        else:
+            recipient = body.test_recipient or body.from_email
         err = await _send_test_email(body, recipient)
         test_sent = err is None
         test_error = err

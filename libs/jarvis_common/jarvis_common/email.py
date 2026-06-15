@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
+from email.utils import formataddr
 
 import asyncpg
 
@@ -33,6 +34,26 @@ def smtp_tls_flags(port: int) -> tuple[bool, bool]:
     return port == 465, port == 587
 
 
+def sanitize_header_value(value: str | None) -> str | None:
+    """Strip a header-bound value and drop it if it carries control characters.
+
+    Reply-To / From display-name are admin config; the API validates them, but
+    the DB system row or env var could be written via another surface. A CR/LF/
+    NUL (or any non-printable) in a header value would break header construction
+    or enable header injection, so such values are rejected defensively here —
+    callers fall back to the bare sender. Empty/whitespace-only → ``None``.
+    """
+    if value is None:
+        return None
+    v = value.strip()
+    if not v:
+        return None
+    if any(c in v for c in ("\r", "\n", "\x00")) or not v.isprintable():
+        logger.warning("dropping SMTP header value containing control characters")
+        return None
+    return v
+
+
 @dataclass(frozen=True)
 class _EffectiveSmtp:
     """Resolved SMTP relay config: DB (``user_config``) layered over env."""
@@ -42,11 +63,27 @@ class _EffectiveSmtp:
     user: str | None
     password: str | None
     sender: str
+    reply_to: str | None = None
+    from_name: str | None = None
 
     @property
     def deliverable(self) -> bool:
         """True iff host + sender are present (the minimum to send an envelope)."""
         return bool(self.host) and bool(self.sender)
+
+    @property
+    def from_header(self) -> str:
+        """RFC-safe ``From`` value: ``"Name" <addr>`` when a display name is set.
+
+        ``from_name`` is sanitized at read time, but compose defensively: a bad
+        value degrades to the bare sender rather than breaking the send.
+        """
+        if self.from_name:
+            try:
+                return formataddr((self.from_name, self.sender))
+            except (TypeError, ValueError):
+                logger.warning("invalid SMTP from_name; using bare sender", exc_info=True)
+        return self.sender
 
 
 def _env_smtp() -> _EffectiveSmtp:
@@ -58,6 +95,12 @@ def _env_smtp() -> _EffectiveSmtp:
         user=s.smtp_user.get_secret_value() if s.smtp_user else None,
         password=s.smtp_pass.get_secret_value() if s.smtp_pass else None,
         sender=s.smtp_from.get_secret_value() if s.smtp_from else "",
+        reply_to=sanitize_header_value(
+            s.smtp_reply_to.get_secret_value() if s.smtp_reply_to else None
+        ),
+        from_name=sanitize_header_value(
+            s.smtp_from_name.get_secret_value() if s.smtp_from_name else None
+        ),
     )
 
 
@@ -75,7 +118,15 @@ async def _effective_smtp(pool: asyncpg.Pool | None) -> _EffectiveSmtp:
     if pool is None:
         return env
 
-    keys = ("smtp.host", "smtp.port", "smtp.user", "smtp.from", "smtp.pass")
+    keys = (
+        "smtp.host",
+        "smtp.port",
+        "smtp.user",
+        "smtp.from",
+        "smtp.pass",
+        "smtp.reply_to",
+        "smtp.from_name",
+    )
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -108,6 +159,8 @@ async def _effective_smtp(pool: asyncpg.Pool | None) -> _EffectiveSmtp:
             port = env.port
     user = _plain("smtp.user") or env.user
     sender = _plain("smtp.from") or env.sender
+    reply_to = sanitize_header_value(_plain("smtp.reply_to")) or env.reply_to
+    from_name = sanitize_header_value(_plain("smtp.from_name")) or env.from_name
 
     password = env.password
     pass_row = by_key.get("smtp.pass")
@@ -120,7 +173,15 @@ async def _effective_smtp(pool: asyncpg.Pool | None) -> _EffectiveSmtp:
             if decrypted:
                 password = decrypted
 
-    return _EffectiveSmtp(host=host, port=port, user=user, password=password, sender=sender)
+    return _EffectiveSmtp(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        sender=sender,
+        reply_to=reply_to,
+        from_name=from_name,
+    )
 
 
 async def _smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
@@ -131,6 +192,61 @@ async def _smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
     envelope. The wizard-written ``user_config`` rows count the same as env.
     """
     return (await _effective_smtp(pool)).deliverable
+
+
+async def _required_smtp_empty_string(pool: asyncpg.Pool | None) -> bool:
+    """True iff a REQUIRED field (host/from) is present but an empty string.
+
+    This is the ``SMTP-EMPTY-STRING-1`` silent-fail case: ``_effective_smtp``
+    coerces empty DB values to absent, and an empty env var is accepted as-is,
+    so neither shows up as 'configured'. We inspect the RAW DB system rows and
+    raw env values for host/from to surface it as an explicit warning.
+    """
+    s = get_secrets_settings()
+    for env_val in (s.smtp_host, s.smtp_from):
+        if env_val is not None and env_val.get_secret_value() == "":
+            return True
+    if pool is None:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT value FROM user_config WHERE key = ANY($1::text[]) AND user_id IS NULL",
+                ["smtp.host", "smtp.from"],
+            )
+    except Exception:  # noqa: BLE001 — DB unreachable → cannot assert empty
+        logger.debug("smtp empty-string probe DB read failed", exc_info=True)
+        return False
+    return any(r["value"] is not None and str(r["value"]) == "" for r in rows)
+
+
+async def effective_smtp_status(pool: asyncpg.Pool | None = None) -> tuple[bool, list[str]]:
+    """Return ``(deliverable, issues)`` for the EFFECTIVE relay (DB over env).
+
+    ``deliverable`` mirrors ``_EffectiveSmtp.deliverable`` of the resolved
+    config, so an env-only deployment reports healthy (no false warning).
+    ``issues`` are value-free, operator-facing strings for the settings UI;
+    they never embed a configured value.
+    """
+    eff = await _effective_smtp(pool)
+    if eff.deliverable:
+        return True, []
+
+    issues: list[str] = []
+    if await _required_smtp_empty_string(pool):
+        issues.append(
+            "A required SMTP field is set to an empty value — sign-in links will not be delivered."
+        )
+    elif eff.host and not eff.sender:
+        issues.append("The mail server is set but the From address is missing.")
+    elif eff.sender and not eff.host:
+        issues.append("The From address is set but the mail server (host) is missing.")
+    else:
+        issues.append(
+            "No mail relay is configured — sign-in links are written to the server log, "
+            "not emailed."
+        )
+    return False, issues
 
 
 def _dev_mode() -> bool:
@@ -218,9 +334,18 @@ async def send_magic_link(
     import aiosmtplib  # noqa: PLC0415
 
     message = EmailMessage()
-    message["From"] = smtp.sender
+    try:
+        message["From"] = smtp.from_header
+    except (TypeError, ValueError):
+        logger.warning("invalid From header; using bare sender", exc_info=True)
+        message["From"] = smtp.sender
     message["To"] = email
     message["Subject"] = "Sign in to JARVIS"
+    if smtp.reply_to:
+        try:
+            message["Reply-To"] = smtp.reply_to
+        except (TypeError, ValueError):
+            logger.warning("invalid Reply-To header; omitting", exc_info=True)
     message.set_content(_PLAIN_BODY_TEMPLATE.replace("{link}", link))
 
     use_tls, start_tls = smtp_tls_flags(smtp.port)

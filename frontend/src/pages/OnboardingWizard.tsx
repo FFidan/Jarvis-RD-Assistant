@@ -48,6 +48,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { TimeSelect } from '@/components/ui/time-select';
 import { SetupStep } from '@/components/setup/SetupStep';
 import { TelegramPairingSection } from '@/components/settings/TelegramPairingSection';
+import { SmtpMisconfigBanner } from '@/components/settings/SmtpMisconfigBanner';
 import { getConfigValue } from '@/components/settings/pulse/pulse-utils';
 import {
   createFirstRunAdmin,
@@ -55,6 +56,7 @@ import {
   fetchConfig,
   fetchSources,
   getSetupStatus,
+  getSmtpConfig,
   getTelegramPairing,
   markSetupCompleted,
   runFirstRunSystemCheck,
@@ -338,13 +340,26 @@ function SmtpStep({
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
   const [fromEmail, setFromEmail] = useState('');
+  const [replyTo, setReplyTo] = useState('');
+  const [fromName, setFromName] = useState('');
   const [testRecipient, setTestRecipient] = useState('');
   const [savedOk, setSavedOk] = useState(false);
+  const queryClient = useQueryClient();
+
+  // Effective-relay health (DB layered over env) — drives the misconfig banner,
+  // e.g. an env-preconfigured-but-partial relay is flagged at the wizard step.
+  const smtpStatus = useQuery({
+    queryKey: QUERY_KEYS.account.smtp(),
+    queryFn: getSmtpConfig,
+    staleTime: 60_000,
+  });
 
   const saveMut = useMutation({
     mutationFn: saveFirstRunSmtp,
     onSuccess: (res) => {
       setSavedOk(res.saved);
+      // Refresh so the banner reflects what was just persisted.
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.account.smtp() });
     },
   });
 
@@ -353,6 +368,8 @@ function SmtpStep({
   // Continue stays disabled until these hold so a half-filled form can't be
   // advanced — Skip is the intentional optional-out.
   const emailValid = /^\S+@\S+\.\S+$/.test(fromEmail);
+  // Reply-To is optional: blank is valid; otherwise it must be a valid email.
+  const replyToValid = replyTo === '' || /^\S+@\S+\.\S+$/.test(replyTo);
   // Empty port → use default 587. Non-empty port must be an integer in 1–65535.
   const portNum = port === '' ? null : parseInt(port, 10);
   const portError =
@@ -360,7 +377,7 @@ function SmtpStep({
       ? 'Port must be a number between 1 and 65535'
       : null;
   const portValid = portError === null;
-  const canSave = !!host && emailValid && portValid;
+  const canSave = !!host && emailValid && portValid && replyToValid;
   const buildBody = (testSend: boolean) => {
     return {
       host,
@@ -368,6 +385,8 @@ function SmtpStep({
       user: user || null,
       pass: password || null,
       from_email: fromEmail,
+      reply_to: replyTo,
+      from_name: fromName,
       test_send: testSend,
       test_recipient: testRecipient || null,
     };
@@ -422,6 +441,11 @@ function SmtpStep({
         </>
       }
     >
+      <SmtpMisconfigBanner
+        deliverable={smtpStatus.data?.deliverable}
+        issues={smtpStatus.data?.issues}
+        className="mb-4"
+      />
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
           <Label htmlFor="smtp-host">Host</Label>
@@ -473,6 +497,38 @@ function SmtpStep({
               setSavedOk(false);
             }}
             placeholder="jarvis@your-domain.dev"
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <Label htmlFor="smtp-reply-to">Reply-To address (optional)</Label>
+          <Input
+            id="smtp-reply-to"
+            type="email"
+            value={replyTo}
+            onChange={(e) => {
+              setReplyTo(e.target.value);
+              setSavedOk(false);
+            }}
+            placeholder="replies-go-here@your-domain.dev"
+            aria-invalid={!replyToValid}
+            aria-describedby={!replyToValid ? 'smtp-reply-to-error' : undefined}
+          />
+          {!replyToValid && (
+            <p id="smtp-reply-to-error" className="mt-1 text-xs text-destructive">
+              Enter a valid email address or leave blank.
+            </p>
+          )}
+        </div>
+        <div className="sm:col-span-2">
+          <Label htmlFor="smtp-from-name">Sender display name (optional)</Label>
+          <Input
+            id="smtp-from-name"
+            value={fromName}
+            onChange={(e) => {
+              setFromName(e.target.value);
+              setSavedOk(false);
+            }}
+            placeholder="JARVIS RD"
           />
         </div>
         <div className="sm:col-span-2">

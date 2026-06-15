@@ -1,6 +1,7 @@
 """Value validators for each config key type."""
 
 import asyncio
+import re
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
@@ -23,6 +24,8 @@ __all__ = [
     "_validate_lookback_days",
     "_validate_startup_grace_seconds",
     "_validate_nonempty_str",
+    "_validate_optional_email",
+    "_validate_optional_header_str",
     "_validate_library_type",
     "_validate_group_id",
     "_validate_zotero_cron",
@@ -213,6 +216,34 @@ def _validate_nonempty_str(v: Any) -> None:
         raise ValueError("value must be a non-empty string")
 
 
+def _validate_optional_email(v: Any) -> None:
+    """Optional email — empty string clears it; otherwise validate shape.
+
+    Mirrors the dedicated /api/setup/smtp regex and rejects control characters so
+    the generic /api/config write path is as strict as the wizard/settings path.
+    """
+    if v in (None, ""):
+        return
+    if not isinstance(v, str):
+        raise ValueError("smtp.reply_to must be a string")
+    s = v.strip()
+    if not s.isprintable() or not re.match(r"^\S+@\S+\.\S+$", s):
+        raise ValueError("smtp.reply_to must be a valid email address")
+
+
+def _validate_optional_header_str(v: Any) -> None:
+    """Optional single-line header value — empty clears it; reject control chars."""
+    if v in (None, ""):
+        return
+    if not isinstance(v, str):
+        raise ValueError("value must be a string")
+    s = v.strip()
+    if len(s) > 255:
+        raise ValueError("value must be at most 255 characters")
+    if any(c in s for c in ("\r", "\n", "\x00")) or not s.isprintable():
+        raise ValueError("value must not contain control characters")
+
+
 def _validate_library_type(v: Any) -> None:
     if v not in ("user", "group"):
         raise ValueError("zotero.library_type must be 'user' or 'group'")
@@ -332,4 +363,7 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "smtp.user": _validate_nonempty_str,
     "smtp.from": _validate_nonempty_str,
     "smtp.pass": _validate_nonempty_str,
+    # Optional sender identity (admin-set): empty string clears.
+    "smtp.reply_to": _validate_optional_email,
+    "smtp.from_name": _validate_optional_header_str,
 }
