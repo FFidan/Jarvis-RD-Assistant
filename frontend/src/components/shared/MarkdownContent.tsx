@@ -108,48 +108,49 @@ function highlightChildren(
 export function MarkdownContent({ children, className, unverifiedSentences }: MarkdownContentProps) {
   const hasUnverified = unverifiedSentences && unverifiedSentences.length > 0;
 
+  // react-markdown v10 removed the `className` prop; apply styling on a wrapping element.
   return (
-    <ReactMarkdown
-      className={className ?? 'prose prose-sm dark:prose-invert max-w-none break-words'}
-      remarkPlugins={[remarkMath]}
-      rehypePlugins={[rehypeKatex, [rehypeSanitize, sanitizeSchema]]}
-      urlTransform={urlTransform}
-      components={{
-        a: ({ node: _node, href, children, ...props }) => {
-          const hrefLower = (href ?? '').toLowerCase().trimStart();
-          const isDangerous =
-            hrefLower.startsWith('javascript:') ||
-            (hrefLower.startsWith('data:') && !hrefLower.startsWith('data:image/'));
-          if (isDangerous) {
-            return <span {...props}>{children}</span>;
-          }
-          return (
-             
-            <a href={href} {...props} target="_blank" rel="noopener noreferrer">
-              {children}
-            </a>
-          );
-        },
-        img: ({ node: _node, src, alt, ...props }) => {
-          // Allow only http/https and safe data:image/* URIs; reject everything else.
-          const safe =
-            typeof src === 'string' &&
-            /^(https?:|data:image\/(png|jpe?g|gif|webp|svg\+xml);)/i.test(src);
-          if (!safe) return null;
-          return <img src={src} alt={alt ?? ''} loading="lazy" {...props} />;
-        },
-        ...(hasUnverified
-          ? {
-              p: ({ node: _node, children: pChildren, ...props }) => (
-                <p {...props}>
-                  {highlightChildren(pChildren as ReactNode, unverifiedSentences, 'mark')}
-                </p>
-              ),
+    <div className={className ?? 'prose prose-sm dark:prose-invert max-w-none break-words'}>
+      <ReactMarkdown
+        remarkPlugins={[remarkMath]}
+        rehypePlugins={[rehypeKatex, [rehypeSanitize, sanitizeSchema]]}
+        urlTransform={urlTransform}
+        components={{
+          a: ({ node: _node, href, children, ...props }) => {
+            const hrefLower = (href ?? '').toLowerCase().trimStart();
+            const isDangerous =
+              hrefLower.startsWith('javascript:') ||
+              (hrefLower.startsWith('data:') && !hrefLower.startsWith('data:image/'));
+            if (isDangerous) {
+              return <span {...props}>{children}</span>;
             }
-          : {}),
-      }}
-    >
-      {children}
-    </ReactMarkdown>
+            return (
+              <a href={href} {...props} target="_blank" rel="noopener noreferrer">
+                {children}
+              </a>
+            );
+          },
+          img: ({ node: _node, src, alt, ...props }) => {
+            // Allow only http/https and safe data:image/* URIs; reject everything else.
+            const safe =
+              typeof src === 'string' &&
+              /^(https?:|data:image\/(png|jpe?g|gif|webp|svg\+xml);)/i.test(src);
+            if (!safe) return null;
+            return <img src={src} alt={alt ?? ''} loading="lazy" {...props} />;
+          },
+          ...(hasUnverified
+            ? {
+                p: ({ node: _node, children: pChildren, ...props }) => (
+                  <p {...props}>
+                    {highlightChildren(pChildren as ReactNode, unverifiedSentences, 'mark')}
+                  </p>
+                ),
+              }
+            : {}),
+        }}
+      >
+        {children}
+      </ReactMarkdown>
+    </div>
   );
 }
