@@ -1,7 +1,7 @@
 {
   "name": "jarvis-frontend",
   "private": true,
-  "version": "0.8.5",
+  "version": "0.8.6",
   "author": "Ferhat Fidan <jarvis-rd@limitcycle.dev>",
   "license": "MIT",
   "type": "module",
@@ -97,6 +97,7 @@
     "vitest": "^4.1.9"
   },
   "overrides": {
-    "@tanstack/query-core": "5.101.0"
+    "@tanstack/query-core": "5.101.0",
+    "js-yaml": "^4.2.0"
   }
 }

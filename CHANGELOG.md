@@ -3,11 +3,17 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## v0.8.6 (2026-06-15) — SMTP sender identity & dependency security
 
 ### Added
 - **SMTP Reply-To and sender display name.** Two optional SMTP fields are now available in both the first-run wizard and Settings → System → Email / SMTP: a **Reply-To address** (routes user replies away from the From address) and a **Sender display name** (sets the friendly name in the From header, e.g. `JARVIS RD <login@your-domain.dev>`). Both can be set via the UI or the new `SMTP_REPLY_TO` / `SMTP_FROM_NAME` environment variables; leaving a field blank clears the stored value.
 - **SMTP misconfiguration warning and in-place test send.** Settings → System → Email / SMTP now shows an amber warning banner when the effective mail relay is not deliverable (partial configuration, empty-string env vars, or no relay set). The **Save & send test email** button — previously only in the wizard — is now also available in Settings, with an optional test recipient and inline error reporting.
+
+### Security
+- Patched known CVEs in dependencies: aiohttp (3.14.1), cryptography (≥48.0.1), python-multipart (≥0.0.31), and starlette (1.3.1), raising the corresponding floors. The js-yaml dev-toolchain transitive is pinned to 4.2.0 via an npm override (GHSA-h67p-54hq-rp68).
+
+### Changed
+- Updated the project contact email to `jarvis-rd@limitcycle.dev`.
 
 ## v0.8.5 (2026-06-14) — Trustworthy, Comprehensible & Credible
 
