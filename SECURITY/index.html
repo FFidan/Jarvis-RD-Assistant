@@ -2110,6 +2110,16 @@ explicitly set in the environment. An explicit env var always wins.</p>
 <td>Strongly recommended</td>
 </tr>
 <tr>
+<td><code>SMTP_REPLY_TO</code></td>
+<td>Optional Reply-To address for sign-in emails. When set, email clients route replies here instead of the From address. Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP.</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>SMTP_FROM_NAME</code></td>
+<td>Optional sender display name shown in the From header (e.g. <code>JARVIS RD</code>). Not a secret — this value appears in outgoing email headers. Configurable via the wizard or Settings → System → Email / SMTP.</td>
+<td>No</td>
+</tr>
+<tr>
 <td><code>OWNER_OVERRIDE_ALLOWED_CIDRS</code></td>
 <td>Comma-separated CIDR allowlist for the <code>X-Owner-User-Id</code> header (Telegram bot per-user orchestration). The compose stack sets this to loopback + the jarvis bridge subnet (tracks <code>JARVIS_NET_SUBNET</code>, default <code>10.137.241.0/24</code>) so the bot is trusted. The bare code default (<code>127.0.0.0/8</code>) is loopback-only (deny-by-default); non-loopback callers must opt in explicitly.</td>
 <td>No (compose default is correct)</td>

@@ -2166,7 +2166,13 @@
 <h3 id="extraction-templates">Extraction Templates<a class="headerlink" href="#extraction-templates" title="Permanent link">&para;</a></h3>
 <p>Create and manage templates used on the <a href="../extraction-table/">Extraction Table</a> page. Each template defines a set of fields to extract from papers. Templates can be named, edited, and deleted here.</p>
 <h3 id="email-smtp">Email / SMTP<a class="headerlink" href="#email-smtp" title="Permanent link">&para;</a></h3>
-<p>Configure the outbound email relay for magic-link sign-in emails. Fields: SMTP host, port, username, password, sender address. A test-send button is available.</p>
+<p>Configure the outbound email relay for magic-link sign-in emails. Fields: SMTP host, port, username, password, and sender (From) address. Two optional fields are also available:</p>
+<ul>
+<li><strong>Reply-To address</strong> — when set, email clients route replies here instead of the From address. Leave blank to clear.</li>
+<li><strong>Sender display name</strong> — when set, the From header shows a friendly name, e.g. <code>JARVIS RD &lt;login@your-domain.dev&gt;</code>. Leave blank to clear.</li>
+</ul>
+<p><strong>Misconfiguration warning.</strong> If the saved SMTP configuration is not deliverable — for example, a host is set but the From address is missing, a required field was saved as an empty string, or no relay is configured at all — the card displays an amber warning banner describing the issue. The form remains editable so you can correct the problem in place without navigating away.</p>
+<p><strong>Save &amp; send test email.</strong> In addition to the <strong>Save</strong> button, a <strong>Save &amp; send test email</strong> button saves the settings and immediately attempts a test delivery. An optional <strong>Test recipient</strong> field (defaults to the From address) lets you direct the test message to a specific address. The result — success or the exact SMTP error — is shown inline. This matches the test-send available during the onboarding wizard.</p>
 <h3 id="pulse">Pulse<a class="headerlink" href="#pulse" title="Permanent link">&para;</a></h3>
 <p>Configure Pulse-specific settings. The panel is divided into two cards:</p>
 <ul>
