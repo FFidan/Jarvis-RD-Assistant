@@ -2713,6 +2713,11 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <td>Fernet key for encrypted config values</td>
 </tr>
 <tr>
+<td><code>litellm_salt_key</code></td>
+<td><code>LITELLM_SALT_KEY</code></td>
+<td>Encrypts provider/model keys stored in LiteLLM's admin DB — <strong>never rotate</strong>: rotating orphans all stored model keys and requires re-entering them</td>
+</tr>
+<tr>
 <td><code>telegram_bot_token</code></td>
 <td><code>TELEGRAM_BOT_TOKEN_FILE</code></td>
 <td>Telegram bot token (<code>telegram</code> profile only)</td>
@@ -2894,6 +2899,38 @@ admin user exists (the normal single-tenant state).</p>
 <h2 id="backup-restore">Backup + Restore<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h2>
 <h3 id="backup">Backup<a class="headerlink" href="#backup" title="Permanent link">&para;</a></h3>
 <p><code>scripts/backup.sh</code> is scheduled by the <code>backup</code> compose profile (<code>docker compose --profile backup up -d</code>).</p>
+<p>JARVIS state lives in more than one place, so each run captures <strong>all four</strong> of the durable stores (per-store files are timestamped together so a single run is internally consistent):</p>
+<table>
+<thead>
+<tr>
+<th>Store</th>
+<th>Output (in <code>/backups</code>)</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jarvis</code> Postgres DB</td>
+<td><code>jarvis_&lt;ts&gt;.sql.gz[.enc]</code></td>
+<td>Papers, users, config, jobs</td>
+</tr>
+<tr>
+<td><code>litellm</code> Postgres DB</td>
+<td><code>litellm_&lt;ts&gt;.sql.gz[.enc]</code></td>
+<td>API keys, virtual keys, spend ledger</td>
+</tr>
+<tr>
+<td>Qdrant vectors</td>
+<td><code>qdrant_&lt;collection&gt;_&lt;ts&gt;.snapshot</code></td>
+<td>One per collection via Qdrant's snapshot REST API; <strong>best-effort</strong> — if Qdrant is unreachable this is skipped and the Postgres/secrets backups still succeed</td>
+</tr>
+<tr>
+<td><code>secrets/</code> directory</td>
+<td><code>secrets_&lt;ts&gt;.tar.gz[.enc]</code></td>
+<td>The Docker-secret source files — without these an encrypted DB backup cannot be decrypted</td>
+</tr>
+</tbody>
+</table>
 <table>
 <thead>
 <tr>
@@ -2906,38 +2943,94 @@ admin user exists (the normal single-tenant state).</p>
 <tr>
 <td><code>BACKUP_DIR</code></td>
 <td><code>/backups</code></td>
-<td>Where <code>.sql.gz</code> files are written inside the container</td>
+<td>Where archives are written inside the container</td>
 </tr>
 <tr>
 <td><code>BACKUP_RETENTION_DAYS</code></td>
 <td><code>7</code></td>
-<td>Prune interval</td>
+<td>Prune interval (applies to every store above)</td>
 </tr>
 <tr>
 <td><code>BACKUP_S3_BUCKET</code></td>
 <td>empty</td>
-<td>Optional S3 destination (skipped if unset)</td>
+<td>Optional S3 destination (skipped if unset; uploads every archive)</td>
 </tr>
 <tr>
 <td><code>BACKUP_INTERVAL_SECONDS</code></td>
 <td><code>86400</code></td>
 <td>Sleep between backup runs</td>
 </tr>
+<tr>
+<td><code>BACKUP_ENCRYPT_KEYFILE</code></td>
+<td><code>/run/secrets/backup_encrypt_key</code></td>
+<td>When the file is non-empty, DB dumps and the secrets archive are encrypted at rest (<code>.enc</code> suffix)</td>
+</tr>
+<tr>
+<td><code>LITELLM_DATABASE</code></td>
+<td><code>litellm</code></td>
+<td>Name of the LiteLLM DB to dump</td>
+</tr>
+<tr>
+<td><code>QDRANT_URL</code></td>
+<td><code>http://qdrant:6333</code></td>
+<td>Qdrant base URL for the snapshot API</td>
+</tr>
+<tr>
+<td><code>QDRANT_API_KEYFILE</code></td>
+<td><code>/run/secrets/qdrant_api_key</code></td>
+<td>Qdrant API key (sent as the <code>api-key</code> header)</td>
+</tr>
+<tr>
+<td><code>SECRETS_DIR</code></td>
+<td><code>/secrets</code></td>
+<td>Read-only mount of the host <code>./secrets</code> dir to archive</td>
+</tr>
 </tbody>
 </table>
-<p>Runs <code>pg_dump --no-owner --no-acl | gzip</code>, uploads to S3 if configured, prunes old files. S3 credentials: <code>AWS_ACCESS_KEY_ID</code> + <code>AWS_SECRET_ACCESS_KEY</code> (or IAM instance role) scoped to <code>s3:PutObject</code>.</p>
+<p>The <code>litellm</code> DB is owned by the same superuser (<code>POSTGRES_USER</code>) that created it, so the same credentials dump both DBs. A failed <code>pg_dump</code> aborts the run (non-zero exit) rather than leaving a tiny but well-formed empty archive. The encryption key, Qdrant API key, and <code>./secrets</code> source are already wired into the <code>postgres-backup</code> sidecar in <code>docker-compose.yml</code>. S3 credentials: <code>AWS_ACCESS_KEY_ID</code> + <code>AWS_SECRET_ACCESS_KEY</code> (or IAM instance role) scoped to <code>s3:PutObject</code>.</p>
+<blockquote>
+<p><strong>Without an encryption key the secrets archive is written in the clear</strong> and the script logs a warning — set <code>BACKUP_ENCRYPT_KEYFILE</code> (default already points at the <code>backup_encrypt_key</code> Docker Secret) for production.</p>
+</blockquote>
 <h3 id="restore">Restore<a class="headerlink" href="#restore" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
-<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE jarvis;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE jarvis OWNER jarvis;&#39;</span>
-<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>jarvis
-<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+<p><strong>Step 0 — decrypt</strong> (if the archive ends in <code>.enc</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">  </span>-kfile<span class="w"> </span>./secrets/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">  </span>-in<span class="w"> </span>&lt;archive&gt;.enc<span class="w"> </span>-out<span class="w"> </span>&lt;archive&gt;<span class="w">   </span><span class="c1"># then use the plain file below</span>
 </code></pre></div>
-<p>Qdrant is <strong>not</strong> backed up by <code>backup.sh</code>. For durable vector backups, use Qdrant's snapshot API at <code>:6333/collections/&lt;name&gt;/snapshots</code>.</p>
+<p>The decryption flags match what <code>scripts/backup.sh</code> uses (<code>-aes-256-cbc -pbkdf2 -iter 600000</code>). Repeat for each <code>.enc</code> archive before using it.</p>
+<blockquote>
+<p><strong>Key dependency warning:</strong> the <code>jarvis</code> DB stores provider/model credentials encrypted with <code>JARVIS_CONFIG_KEY</code>; the LiteLLM DB stores its model keys encrypted with <code>LITELLM_SALT_KEY</code>. Restoring a DB dump without the <strong>same key that encrypted it</strong> leaves those secrets undecryptable. Always restore the matching <code>secrets/</code> archive (or confirm the keys are already in place) before starting the stack.</p>
+</blockquote>
+<p><strong>Step 1 — <code>secrets/</code></strong> (restore before starting the stack, so the right keys are in place):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># Review the contents first — this overwrites live key files.</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>tar<span class="w"> </span>-tzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>secrets_YYYYMMDD_HHMMSS.tar.gz<span class="w"> </span>-C<span class="w"> </span>./secrets
+</code></pre></div>
+<p><strong>Step 2 — Postgres (<code>jarvis</code> and <code>litellm</code>)</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE jarvis;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE jarvis OWNER jarvis;&#39;</span>
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>jarvis
+<a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>postgres<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="w">  </span>-c<span class="w"> </span><span class="s1">&#39;DROP DATABASE litellm;&#39;</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;CREATE DATABASE litellm OWNER jarvis;&#39;</span>
+<a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a>gunzip<span class="w"> </span>-c<span class="w"> </span>/path/to/litellm_YYYYMMDD_HHMMSS.sql.gz<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-9" name="__codelineno-26-9" href="#__codelineno-26-9"></a><span class="w">  </span>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-T<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>jarvis<span class="w"> </span>-d<span class="w"> </span>litellm
+<a id="__codelineno-26-10" name="__codelineno-26-10" href="#__codelineno-26-10"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
+</code></pre></div>
+<p><strong>Step 3 — Qdrant</strong> — stop the container first so the snapshot restore doesn't race an active index write:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>qdrant
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_papers_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/restore.snapshot
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>qdrant
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="s1">  &quot;http://localhost:6333/collections/papers/snapshots/recover&quot; \</span>
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/restore.snapshot\&quot;}&quot;&#39;</span>
+</code></pre></div>
 <hr />
 <h2 id="production-readiness-check">Production Readiness Check<a class="headerlink" href="#production-readiness-check" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
 </code></pre></div>
 <p><code>setup.sh</code> runs this at install end. It checks <code>DEV_*</code> flags, <code>JARVIS_API_KEY</code> length, SMTP presence, and HTTPS config. Exit non-zero on any HIGH finding; <code>--profile=letsencrypt</code> treats that as fatal.</p>
 <hr />

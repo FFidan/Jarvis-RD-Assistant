@@ -1182,10 +1182,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2" class="md-nav__link">
+  <a href="#prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2-uv" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2.
+        Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2, uv.
       
     </span>
   </a>
@@ -1750,10 +1750,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2" class="md-nav__link">
+  <a href="#prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2-uv" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2.
+        Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2, uv.
       
     </span>
   </a>
@@ -2034,18 +2034,22 @@
 <p>JARVIS is multi-tenant: every user's research data is isolated at the query layer. The ops API key (<code>JARVIS_API_KEY</code>) is a service credential, not a user login. Admins manage users but cannot read other users' research data.</p>
 <p>See <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/SECURITY.md">SECURITY.md</a> for vulnerability disclosure and <a href="../SECURITY/">docs/SECURITY.md</a> for the full threat model, dev-flag behaviour, secret environment-variable reference, audit-log coverage, and operational hardening checklist.</p>
 <h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
-<h3 id="prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2">Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2.<a class="headerlink" href="#prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2" title="Permanent link">&para;</a></h3>
+<h3 id="prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2-uv">Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2, <a href="https://docs.astral.sh/uv/"><code>uv</code></a>.<a class="headerlink" href="#prerequisites-python-312-nodejs-20-docker-engine-24-with-compose-v2-uv" title="Permanent link">&para;</a></h3>
+<p>Install <code>uv</code> (Python package manager used for all backend tooling):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>curl<span class="w"> </span>-LsSf<span class="w"> </span>https://astral.sh/uv/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>sh
+</code></pre></div>
 <h3 id="local-setup">Local setup<a class="headerlink" href="#local-setup" title="Permanent link">&para;</a></h3>
 <p>We strictly use Docker Compose for local development to avoid polluting the host with heavy ML dependencies.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">                    </span><span class="c1"># Start all services</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>paper_ingestion<span class="w">  </span><span class="c1"># Follow logs</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>pytest<span class="w"> </span>tests/<span class="w">  </span><span class="c1"># Run a service&#39;s tests</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>ruff<span class="w"> </span>check<span class="w"> </span>.<span class="w">   </span><span class="c1"># Lint one service</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">                    </span><span class="c1"># Start all services</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>paper_ingestion<span class="w">  </span><span class="c1"># Follow logs</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>pytest<span class="w"> </span>tests/<span class="w">  </span><span class="c1"># Run a service&#39;s tests</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>ruff<span class="w"> </span>check<span class="w"> </span>.<span class="w">   </span><span class="c1"># Lint one service</span>
 </code></pre></div>
-<p>The canonical pre-push gate is <strong><code>make check</code></strong> (runs <code>tach</code>, type-checking,
-test-shape and burned-secret guards, the full <code>pytest</code> suite, and the frontend
-checks) — the same set CI runs. The <code>docker compose exec</code> commands above are for
-quick, scoped iteration on a single service.</p>
+<p>Install Python dev dependencies, then run the full quality gate:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>dev-env<span class="w">   </span><span class="c1"># uv sync --group dev</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>make<span class="w"> </span>check<span class="w">     </span><span class="c1"># runs tach, pyright, test-shape, burned-secret guards, pytest, and frontend checks</span>
+</code></pre></div>
+<p>The canonical pre-push gate is <strong><code>make check</code></strong> — the same set CI runs. The <code>docker compose exec</code> commands above are for quick, scoped iteration on a single service.</p>
 <h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -2098,19 +2102,19 @@ quick, scoped iteration on a single service.</p>
 <li>Add a row to the <code>paper_sources</code> table via the Settings UI.</li>
 </ol>
 <h3 id="project-structure">Project structure<a class="headerlink" href="#project-structure" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>├── services/
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>│   ├── paper_ingestion/   # FastAPI: paper fetch, PDF parse, chunk, embed, RAG
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>│   ├── learning_engine/   # FastAPI: FSRS cards, review scheduling, projects
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>│   └── telegram_bot/      # python-telegram-bot (optional profile)
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>├── frontend/              # React 19 + TypeScript + Vite + Shadcn/ui
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>├── libs/jarvis_common/    # Shared Python library (auth, DB helpers, LLM client)
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>├── db/
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>│   ├── init.sql           # PostgreSQL bedrock schema
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>│   └── migrations/        # Versioned schema changes (0092+; 0089–0091 folded into init.sql)
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>├── litellm/config.yaml    # LLM gateway routing (smart/fast/embed aliases)
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>├── docker-compose.yml     # All services
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>├── .env.example           # Configuration template
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>└── Makefile               # Dev convenience commands
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>├── services/
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>│   ├── paper_ingestion/   # FastAPI: paper fetch, PDF parse, chunk, embed, RAG
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>│   ├── learning_engine/   # FastAPI: FSRS cards, review scheduling, projects
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>│   └── telegram_bot/      # python-telegram-bot (optional profile)
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>├── frontend/              # React 19 + TypeScript + Vite + Shadcn/ui
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>├── libs/jarvis_common/    # Shared Python library (auth, DB helpers, LLM client)
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>├── db/
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>│   ├── init.sql           # PostgreSQL bedrock schema
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>│   └── migrations/        # Versioned schema changes (0092+; 0089–0091 folded into init.sql)
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>├── litellm/config.yaml    # LLM gateway routing (smart/fast/embed aliases)
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>├── docker-compose.yml     # All services
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>├── .env.example           # Configuration template
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>└── Makefile               # Dev convenience commands
 </code></pre></div>
 <h3 id="optional-integrations">Optional integrations<a class="headerlink" href="#optional-integrations" title="Permanent link">&para;</a></h3>
 <p><strong>Telegram bot</strong> — daily digests, Pulse rating buttons, RAG Q&amp;A from your phone, FSRS review in chat. Enable with <code>docker compose --profile telegram up -d</code>; full setup + command list in the <strong><a href="https://ffidan.github.io/Jarvis-RD-Assistant/manual/telegram/">User Guide → Telegram</a></strong>.</p>
