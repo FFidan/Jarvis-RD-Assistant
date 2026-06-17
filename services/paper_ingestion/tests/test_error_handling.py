@@ -1,10 +1,12 @@
 """Tests for error handling in embedder and search chunks."""
 
-from unittest.mock import AsyncMock
+import json
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from paper_ingestion.ingestion.embedder import Embedder
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 
 # ---------------------------------------------------------------------------
@@ -37,48 +39,51 @@ async def test_embed_texts_connection_error():
 
 
 # ---------------------------------------------------------------------------
-# search_chunks error handling
+# search_chunks error handling — QdrantUnavailableError (not silent swallow)
 # ---------------------------------------------------------------------------
 
 
-async def test_search_chunks_qdrant_failure_returns_empty():
-    """search_chunks_in_paper returns [] when Qdrant raises an exception."""
-    mock_http = AsyncMock(spec=httpx.AsyncClient)
-    mock_qdrant = AsyncMock()
-    embedder = Embedder(mock_http, mock_qdrant)
+async def test_search_chunks_in_paper_qdrant_transport_error_raises():
+    """search_chunks_in_paper raises QdrantUnavailableError on qdrant transport errors."""
+    from paper_ingestion.rag.exceptions import QdrantUnavailableError
 
-    # embed_texts succeeds
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
-
-    # Qdrant query_points fails with a connection error
-    mock_qdrant.query_points.side_effect = ConnectionError("Qdrant connection lost")
-
-    result = await embedder.search_chunks_in_paper(
-        query_text="test query",
-        paper_id=1,
-        limit=5,
-        score_threshold=0.3,
-    )
-
-    assert result == []
-
-
-async def test_search_chunks_global_qdrant_failure_returns_empty():
-    """search_chunks_global returns [] when Qdrant raises an exception."""
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
 
     embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
-    mock_qdrant.query_points.side_effect = ConnectionError("Qdrant connection lost")
-
-    result = await embedder.search_chunks_global(
-        query_text="test query",
-        limit=10,
-        score_threshold=0.2,
+    mock_qdrant.query_points.side_effect = ResponseHandlingException(
+        ConnectionError("Qdrant connection lost")
     )
 
-    assert result == []
+    with pytest.raises(QdrantUnavailableError):
+        await embedder.search_chunks_in_paper(
+            query_text="test query",
+            paper_id=1,
+            limit=5,
+            score_threshold=0.3,
+        )
+
+
+async def test_search_chunks_global_qdrant_transport_error_raises():
+    """search_chunks_global raises QdrantUnavailableError on qdrant transport errors."""
+    from paper_ingestion.rag.exceptions import QdrantUnavailableError
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_qdrant = AsyncMock()
+    embedder = Embedder(mock_http, mock_qdrant)
+
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
+    mock_qdrant.query_points.side_effect = ResponseHandlingException(
+        ConnectionError("Qdrant connection lost")
+    )
+
+    with pytest.raises(QdrantUnavailableError):
+        await embedder.search_chunks_global(
+            query_text="test query",
+            limit=10,
+            score_threshold=0.2,
+        )
 
 
 async def test_search_chunks_runtime_error_propagates():
@@ -97,6 +102,257 @@ async def test_search_chunks_runtime_error_propagates():
         )
 
 
-# test_health_check_degraded and test_health_check_all_ok deleted —
-# covered by libs/jarvis_common/tests/contract/test_health_contract.py
-# (test_health_internal_503_when_db_down, test_health_internal_200_full_payload).
+# ---------------------------------------------------------------------------
+# Route-level: Ask endpoints return 503 / degraded SSE on Qdrant transport error
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def _qdrant_error_env(monkeypatch):
+    """Patch prepare_single_paper_rag and prepare_cross_paper_rag to raise QdrantUnavailableError."""
+    from paper_ingestion.rag.exceptions import QdrantUnavailableError
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.rag.prepare_single_paper_rag",
+        AsyncMock(side_effect=QdrantUnavailableError("Qdrant down")),
+    )
+    monkeypatch.setattr(
+        "paper_ingestion.routers.rag.prepare_cross_paper_rag",
+        AsyncMock(side_effect=QdrantUnavailableError("Qdrant down")),
+    )
+
+
+@pytest.fixture()
+def _qdrant_error_env_cross(monkeypatch):
+    """Patch only prepare_cross_paper_rag to raise QdrantUnavailableError."""
+    from paper_ingestion.rag.exceptions import QdrantUnavailableError
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.rag.prepare_cross_paper_rag",
+        AsyncMock(side_effect=QdrantUnavailableError("Qdrant down")),
+    )
+
+
+@pytest.fixture()
+def _empty_chunks_env(monkeypatch):
+    """Patch prepare_single_paper_rag to raise NoRelevantChunksError (genuine empty hit)."""
+    from paper_ingestion.rag.exceptions import NoRelevantChunksError
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.rag.prepare_single_paper_rag",
+        AsyncMock(side_effect=NoRelevantChunksError("No relevant passages found.")),
+    )
+
+
+@pytest.fixture()
+def _patched_app_ownership(monkeypatch):
+    """Skip ownership assertion so we can test ask routes without DB."""
+    monkeypatch.setattr(
+        "paper_ingestion.routers.rag.assert_paper_ownership",
+        AsyncMock(return_value=None),
+    )
+
+
+def _make_fake_pool():
+    """Return an asyncpg.Pool stand-in whose acquire() is an async context manager."""
+    fake_conn = AsyncMock()
+    fake_pool = MagicMock()
+    # acquire() must return an object that supports `async with`
+    fake_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=fake_conn)
+    fake_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+    return fake_pool
+
+
+@pytest.fixture()
+def _stub_rag_deps():
+    """Override FastAPI deps that read from app.state so route tests work without lifespan."""
+    from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client
+    from paper_ingestion.main import app
+
+    fake_embedder = AsyncMock()
+    fake_http = AsyncMock(spec=httpx.AsyncClient)
+    fake_pool = _make_fake_pool()
+
+    app.dependency_overrides[get_embedder] = lambda: fake_embedder
+    app.dependency_overrides[get_http_client] = lambda: fake_http
+    app.dependency_overrides[get_db_pool] = lambda: fake_pool
+    yield
+    app.dependency_overrides.pop(get_embedder, None)
+    app.dependency_overrides.pop(get_http_client, None)
+    app.dependency_overrides.pop(get_db_pool, None)
+
+
+# ---- ask_paper (non-stream): Qdrant error → 503 ----
+
+
+async def test_ask_paper_qdrant_error_returns_503(
+    _configure_api_key,
+    _patched_app_ownership,
+    _qdrant_error_env,
+    _stub_rag_deps,
+):
+    """ask_paper returns 503 when Qdrant raises a transport error."""
+    from httpx import ASGITransport, AsyncClient
+
+    from paper_ingestion.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/papers/1/ask",
+            json={"question": "What is this about?"},
+            headers={"X-Api-Key": _configure_api_key},
+        )
+    assert resp.status_code == 503, f"Expected 503, got {resp.status_code}: {resp.text}"
+
+
+# ---- ask_paper_stream (stream): Qdrant error → degraded SSE frame ----
+
+
+async def test_ask_paper_stream_qdrant_error_returns_degraded_sse(
+    _configure_api_key,
+    _patched_app_ownership,
+    _qdrant_error_env,
+    _stub_rag_deps,
+):
+    """ask_paper_stream emits a degraded SSE error frame (retriable:true) on Qdrant error."""
+    from httpx import ASGITransport, AsyncClient
+
+    from paper_ingestion.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/papers/1/ask/stream",
+            json={"question": "What is this about?"},
+            headers={"X-Api-Key": _configure_api_key},
+        )
+    assert resp.status_code == 200
+    body = resp.text
+    found_retriable = False
+    for line in body.splitlines():
+        if line.startswith("data:"):
+            try:
+                payload = json.loads(line[5:].strip())
+                if payload.get("type") == "error" and payload.get("retriable") is True:
+                    found_retriable = True
+                    break
+            except json.JSONDecodeError:
+                pass
+    assert found_retriable, f"No retriable error SSE event found in: {body!r}"
+
+
+# ---- ask_cross_paper (non-stream): Qdrant error → 503 ----
+
+
+async def test_ask_cross_paper_qdrant_error_returns_503(
+    _configure_api_key,
+    _qdrant_error_env_cross,
+    _stub_rag_deps,
+):
+    """ask_cross_paper returns 503 when Qdrant raises a transport error."""
+    from httpx import ASGITransport, AsyncClient
+
+    from paper_ingestion.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/ask",
+            json={"question": "What is this about?"},
+            headers={"X-Api-Key": _configure_api_key},
+        )
+    assert resp.status_code == 503, f"Expected 503, got {resp.status_code}: {resp.text}"
+
+
+# ---- ask_cross_paper_stream (stream): Qdrant error → degraded SSE frame ----
+
+
+async def test_ask_cross_paper_stream_qdrant_error_returns_degraded_sse(
+    _configure_api_key,
+    _qdrant_error_env_cross,
+    _stub_rag_deps,
+):
+    """ask_cross_paper_stream emits a degraded SSE error frame (retriable:true) on Qdrant error."""
+    from httpx import ASGITransport, AsyncClient
+
+    from paper_ingestion.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/ask/stream",
+            json={"question": "What is this about?"},
+            headers={"X-Api-Key": _configure_api_key},
+        )
+    assert resp.status_code == 200
+    body = resp.text
+    found_retriable = False
+    for line in body.splitlines():
+        if line.startswith("data:"):
+            try:
+                payload = json.loads(line[5:].strip())
+                if payload.get("type") == "error" and payload.get("retriable") is True:
+                    found_retriable = True
+                    break
+            except json.JSONDecodeError:
+                pass
+    assert found_retriable, f"No retriable error SSE event found in: {body!r}"
+
+
+# ---------------------------------------------------------------------------
+# Regression: genuinely empty Qdrant hits still yield 422 (not 503)
+# ---------------------------------------------------------------------------
+
+
+async def test_ask_paper_empty_hits_still_returns_422(
+    _configure_api_key,
+    _patched_app_ownership,
+    _empty_chunks_env,
+    _stub_rag_deps,
+):
+    """ask_paper returns 422 (NoRelevantChunksError) for a genuinely empty hit list."""
+    from httpx import ASGITransport, AsyncClient
+
+    from paper_ingestion.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/papers/1/ask",
+            json={"question": "What is this about?"},
+            headers={"X-Api-Key": _configure_api_key},
+        )
+    assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+
+
+@pytest.fixture()
+def _cross_paper_empty_env(monkeypatch):
+    """Patch prepare_cross_paper_rag to short-circuit with CrossPaperRagNoResults (healthy Qdrant, no hits)."""
+    from paper_ingestion.rag.streaming import CrossPaperRagNoResults
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.rag.prepare_cross_paper_rag",
+        AsyncMock(
+            return_value=CrossPaperRagNoResults(
+                answer="No relevant information found in the paper collection."
+            )
+        ),
+    )
+
+
+async def test_ask_cross_paper_empty_hits_returns_canned_answer(
+    _configure_api_key,
+    _cross_paper_empty_env,
+    _stub_rag_deps,
+):
+    """ask_cross_paper returns the 200 canned answer (not 503/500) for genuinely empty hits on a healthy Qdrant."""
+    from httpx import ASGITransport, AsyncClient
+
+    from paper_ingestion.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/ask",
+            json={"question": "What is this about?"},
+            headers={"X-Api-Key": _configure_api_key},
+        )
+    assert resp.status_code == 200, (
+        f"Expected 200 canned answer, got {resp.status_code}: {resp.text}"
+    )
+    assert "No relevant information" in resp.json()["answer"]

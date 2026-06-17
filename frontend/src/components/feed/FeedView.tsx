@@ -42,6 +42,8 @@ interface FeedViewProps {
   sourceTypes?: string | null;
   /** §Topic facet — restrict the feed to papers tagged with this topic id. */
   topicId?: number | null;
+  /** §Topic facet "Untagged" sentinel — restrict to papers with no topic. */
+  untagged?: boolean;
   /**
    * Scoped list-filter (spec §3.4): client-side title/author text filter
    * applied to the currently loaded page. Not sent to the backend.
@@ -88,7 +90,7 @@ function getEmptyState(surface: SurfaceView): EmptyStateCopy {
 
 const DEFAULT_LIMIT: PageSize = 30;
 
-export function FeedView({ surface, filter, scope = 'library', sourceTypes, topicId, listFilter }: FeedViewProps) {
+export function FeedView({ surface, filter, scope = 'library', sourceTypes, topicId, untagged, listFilter }: FeedViewProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -127,14 +129,14 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
     return () => clearTimeout(id);
   }, [listFilter, serverSearchSurface]);
 
-  const lastSurfaceFilterRef = useRef<string>(`${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}|`);
+  const lastSurfaceFilterRef = useRef<string>(`${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}|${untagged ? '1' : ''}|${sourceTypes ?? ''}|`);
   useEffect(() => {
-    const key = `${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}|${serverQuery}`;
+    const key = `${surface}|${filter ?? ''}|${scope}|${topicId ?? ''}|${untagged ? '1' : ''}|${sourceTypes ?? ''}|${serverQuery}`;
     if (lastSurfaceFilterRef.current !== key) {
       lastSurfaceFilterRef.current = key;
       if (offset !== 0) setPagination(0, limit);
     }
-  }, [surface, filter, scope, topicId, serverQuery, offset, limit, setPagination]);
+  }, [surface, filter, scope, topicId, untagged, sourceTypes, serverQuery, offset, limit, setPagination]);
 
   // Keyboard-navigation focused row index (j/k)
   const [focusedIdx, setFocusedIdx] = useState<number>(0);
@@ -146,9 +148,9 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
   const selectedIds = useBulkSelection((s) => s.selectedIds);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: [...QUERY_KEYS.papers.feed(surface, filter ?? '', scope, limit, offset, sourceTypes ? [sourceTypes] : null, topicId ?? null), serverQuery],
+    queryKey: [...QUERY_KEYS.papers.feed(surface, filter ?? '', scope, limit, offset, sourceTypes ? [sourceTypes] : null, topicId ?? null, untagged ?? false), serverQuery],
     // fetchFeed accepts SurfaceView string
-    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes, topicId, q: serverQuery || undefined }),
+    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes, topicId, untagged, q: serverQuery || undefined }),
     placeholderData: keepPreviousData,
   });
 

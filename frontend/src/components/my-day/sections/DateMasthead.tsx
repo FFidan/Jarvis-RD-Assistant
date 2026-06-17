@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
-import { fetchMyDay, fetchPulseToday, fetchFeedPapers } from '@/lib/api';
+import { fetchMyDay, fetchPulseToday, fetchFeed } from '@/lib/api';
 import type { MyDayResponse, PulseDeck } from '@/types';
 
 const ATTRIBUTED_QUOTES = [
@@ -72,7 +72,7 @@ export function DateMasthead() {
 
   const { data: unprocessedFeed } = useQuery({
     queryKey: QUERY_KEYS.actionItems.unprocessed(),
-    queryFn: () => fetchFeedPapers({ statuses: 'new', limit: 10 }),
+    queryFn: () => fetchFeed({ view: 'inbox', limit: 10 }),
     refetchInterval: 60_000,
   });
 

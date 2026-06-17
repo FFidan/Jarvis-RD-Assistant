@@ -25,8 +25,8 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { errorMessage } from '@/lib/errors';
 
 const MODE_LABELS: Record<'single' | 'multi', string> = {
-  single: 'Single-user — only the admin account can log in',
-  multi: 'Multi-user — invite additional accounts via magic-link',
+  single: 'Single-user — sign-in screen shows API-key login; admin invites remain available',
+  multi: 'Multi-user — sign-in screen offers magic-link login; invite additional accounts',
 };
 
 const PENDING_MODE_KEY = 'jarvis-access-mode-pending';
@@ -106,7 +106,8 @@ export function AccessModeSection() {
     <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
         <p className="text-sm text-muted-foreground">
-          Control whether JARVIS allows additional user accounts beyond the admin.
+          Choose which login method the sign-in screen offers. Multi-user features such as admin
+          invites are available in either mode.
         </p>
       </CardHeader>
 

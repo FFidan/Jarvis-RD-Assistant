@@ -734,6 +734,22 @@ configure_middleware_and_errors(
     trusted_proxy_hosts=get_core_settings().trusted_proxy_hosts_list,
 )
 
+# Qdrant outage on non-stream Ask routes → 503 (stream routes handle it themselves
+# via a degraded SSE frame, since a started SSE can't change its HTTP status code).
+from paper_ingestion.rag.exceptions import QdrantUnavailableError  # noqa: E402
+
+
+@app.exception_handler(QdrantUnavailableError)
+async def _qdrant_unavailable_handler(
+    request: Request, exc: QdrantUnavailableError
+) -> JSONResponse:
+    logger.warning("Qdrant unavailable: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Vector search is temporarily unavailable. Please try again later."},
+    )
+
+
 # SessionMiddleware reads the jarvis_session cookie and populates
 # request.state.user_id. Added AFTER configure_middleware_and_errors so it
 # sits OUTSIDE (i.e. runs BEFORE) RequestIDMiddleware/SlowAPI/CORS/ProxyHeaders

@@ -112,6 +112,7 @@ async def test_readiness_all_green_aggregate(_app, monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JARVIS_API_KEY", "x" * 40)
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
 
     from jarvis_common.settings import get_secrets_settings
 

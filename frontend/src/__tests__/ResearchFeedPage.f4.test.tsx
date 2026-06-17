@@ -273,6 +273,33 @@ describe('ResearchFeedPage — surface-aware H1', () => {
   });
 });
 
+describe('ResearchFeedPage — Untagged facet end-to-end', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('threads facet_topic=untagged through FeedView to fetchFeed as untagged=true', async () => {
+    const { fetchFeed } = await import('@/lib/api');
+    renderPage('?surface=inbox&facet_topic=untagged');
+
+    await waitFor(() =>
+      expect(vi.mocked(fetchFeed)).toHaveBeenCalledWith(
+        expect.objectContaining({ untagged: true }),
+      ),
+    );
+  });
+
+  it('does not set untagged when a numeric topic facet is active', async () => {
+    const { fetchFeed } = await import('@/lib/api');
+    renderPage('?surface=inbox&facet_topic=1');
+
+    await waitFor(() => expect(vi.mocked(fetchFeed)).toHaveBeenCalled());
+    for (const [params] of vi.mocked(fetchFeed).mock.calls) {
+      expect((params as { untagged?: boolean }).untagged).toBeFalsy();
+    }
+  });
+});
+
 describe('FacetRail — F4 honest facet empty-state copy', () => {
   beforeEach(() => {
     vi.clearAllMocks();

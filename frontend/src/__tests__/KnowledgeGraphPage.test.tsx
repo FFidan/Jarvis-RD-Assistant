@@ -3,6 +3,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { KnowledgeGraphPage } from '@/pages/KnowledgeGraphPage';
+import { useAuthStore } from '@/stores/auth-store';
+import * as api from '@/lib/api';
 
 // Mock cytoscape so jsdom doesn't choke on canvas
 vi.mock('cytoscape', () => {
@@ -32,8 +34,24 @@ vi.mock('@/lib/api', async (importOriginal) => {
     queryKnowledgeGraph: vi.fn().mockResolvedValue({
       results: [{ answer: 'Transformer is a method used on ImageNet' }],
     }),
+    batchExtractEntities: vi.fn().mockResolvedValue({ extracted: 0 }),
   };
 });
+
+const WITH_ENTITIES = {
+  entities: [
+    { id: 1, name: 'Transformer', canonical_name: 'transformer', entity_type: 'method', description: 'Self-attention architecture', metadata: {}, paper_count: 12, created_at: '2026-01-01T00:00:00Z', display_size: 40 },
+    { id: 2, name: 'ImageNet', canonical_name: 'imagenet', entity_type: 'dataset', description: 'Large image dataset', metadata: {}, paper_count: 8, created_at: '2026-01-01T00:00:00Z', display_size: 39 },
+    { id: 3, name: 'BLEU', canonical_name: 'bleu', entity_type: 'metric', description: 'Translation quality metric', metadata: {}, paper_count: 5, created_at: '2026-01-01T00:00:00Z', display_size: 30 },
+  ],
+  relationships: [
+    { id: 1, source_entity_id: 1, target_entity_id: 2, relationship_type: 'evaluated_on', paper_id: 1, evidence_quote: null, confidence: 0.9, created_at: '2026-01-01T00:00:00Z' },
+    { id: 2, source_entity_id: 1, target_entity_id: 3, relationship_type: 'measured_by', paper_id: 1, evidence_quote: null, confidence: 0.85, created_at: '2026-01-01T00:00:00Z' },
+  ],
+  entity_type_counts: { method: 1, dataset: 1, metric: 1 },
+};
+
+const EMPTY_GRAPH = { entities: [], relationships: [], entity_type_counts: {} };
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -50,7 +68,7 @@ function renderPage() {
 
 describe('KnowledgeGraphPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.mocked(api.getKnowledgeGraph).mockResolvedValue(WITH_ENTITIES);
   });
 
   it('renders the page title', () => {
@@ -116,6 +134,41 @@ describe('KnowledgeGraphPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Total Relationships')).toBeInTheDocument();
       expect(screen.getByText('2')).toBeInTheDocument(); // 2 relationships
+    });
+  });
+});
+
+describe('KnowledgeGraphPage — Batch Extract admin gate', () => {
+  beforeEach(() => {
+    vi.mocked(api.getKnowledgeGraph).mockResolvedValue(EMPTY_GRAPH);
+  });
+
+  function renderAsRole(role: 'user' | 'admin') {
+    useAuthStore.setState({ user: { id: 1, email: 'a@b.c', role } });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <KnowledgeGraphPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('hides "Batch Extract Entities" button from non-admin users', async () => {
+    renderAsRole('user');
+    await waitFor(() => {
+      expect(screen.getByText('No entities extracted yet')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /Batch Extract Entities/i })).not.toBeInTheDocument();
+  });
+
+  it('shows "Batch Extract Entities" button to admin users', async () => {
+    renderAsRole('admin');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Batch Extract Entities/i })).toBeInTheDocument();
     });
   });
 });

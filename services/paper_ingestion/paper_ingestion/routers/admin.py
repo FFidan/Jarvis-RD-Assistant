@@ -26,6 +26,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import require_admin
@@ -141,15 +142,21 @@ async def invite_user(body: InviteUserBody, request: Request) -> UserRecord:
                 detail="A user with that email already exists",
             )
 
-        user_row = await conn.fetchrow(
-            """
-            INSERT INTO users (email, role)
-            VALUES ($1, $2)
-            RETURNING id, email, role, created_at, last_login_at
-            """,
-            email_norm,
-            body.role,
-        )
+        try:
+            user_row = await conn.fetchrow(
+                """
+                INSERT INTO users (email, role)
+                VALUES ($1, $2)
+                RETURNING id, email, role, created_at, last_login_at
+                """,
+                email_norm,
+                body.role,
+            )
+        except asyncpg.UniqueViolationError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A removed user with that email exists — restore or purge them first.",
+            )
 
     user_id = int(user_row["id"])
 

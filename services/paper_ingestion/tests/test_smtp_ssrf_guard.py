@@ -85,7 +85,7 @@ async def test_public_host_send_succeeds(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(aiosmtplib, "send", mock_send)
 
     body = SmtpBody(host="smtp.example.com", port=587, from_email="a@b.com")
-    result = await _send_test_email(body, "a@b.com")
+    result = await _send_test_email(body, "a@b.com", None)
 
     assert result is None, f"public-host send should succeed (None); got: {result!r}"
     mock_send.assert_called_once()
@@ -124,7 +124,7 @@ async def test_send_test_email_tls_flags_by_port(
     monkeypatch.setattr(aiosmtplib, "send", mock_send)
 
     body = SmtpBody(host="smtp.example.com", port=port, from_email="a@b.com")
-    result = await _send_test_email(body, "a@b.com")
+    result = await _send_test_email(body, "a@b.com", None)
 
     assert result is None
     kwargs = mock_send.call_args.kwargs

@@ -114,7 +114,10 @@ async def get_knowledge_graph(
                     f"""SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
                               e.metadata, e.embedding_id, e.paper_count, e.created_at
                        FROM entities e
-                       WHERE e.entity_type = $1 AND e.paper_count >= $2
+                       WHERE e.entity_type = $1
+                         AND (SELECT COUNT(*) FROM paper_entities pe
+                              WHERE pe.entity_id = e.id
+                                AND pe.user_id IS NOT DISTINCT FROM $4) >= $2
                          AND {_user_scope_paper_entities_exists("e.id", 4)}
                        ORDER BY e.paper_count DESC LIMIT $3""",
                     entity_type,
@@ -138,7 +141,9 @@ async def get_knowledge_graph(
                     f"""SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
                               e.metadata, e.embedding_id, e.paper_count, e.created_at
                        FROM entities e
-                       WHERE e.paper_count >= $1
+                       WHERE (SELECT COUNT(*) FROM paper_entities pe
+                              WHERE pe.entity_id = e.id
+                                AND pe.user_id IS NOT DISTINCT FROM $3) >= $1
                          AND {_user_scope_paper_entities_exists("e.id", 3)}
                        ORDER BY e.paper_count DESC LIMIT $2""",
                     min_paper_count,

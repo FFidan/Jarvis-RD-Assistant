@@ -2059,3 +2059,117 @@ async def test_process_batch_enqueues_202_with_job_id(
     assert body.get("job_id"), f"Missing job_id: {body}"
     assert body.get("status") == "queued", f"Expected status=queued: {body}"
     mock_task.defer_async.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# F10: daily_log.papers_read incremented by PUT /reading
+# ---------------------------------------------------------------------------
+
+
+async def test_f10_reading_increments_daily_log_papers_read(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """First PUT /reading (from to_read) increments daily_log.papers_read by 1.
+
+    # Verified: paper_id_a starts in state='to_read' (testing_db.py:829-830).
+    # daily_log.papers_read column: db/init.sql:547.
+    # Conflict key: UNIQUE NULLS NOT DISTINCT (user_id, log_date) — init.sql:1477-1478.
+    """
+    paper_id = contract_two_users.paper_id_a
+    user_id = contract_two_users.user_a_id
+
+    # Baseline: capture papers_read before the call
+    before = await contract_conn.fetchval(
+        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+        user_id,
+    )
+    before = before or 0
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.put(f"/api/papers/{paper_id}/reading")
+
+    assert resp.status_code in (200, 204), resp.text[:200]
+
+    after = await contract_conn.fetchval(
+        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+        user_id,
+    )
+    assert after == before + 1, (
+        f"daily_log.papers_read should be {before + 1} after first PUT /reading; got {after}"
+    )
+
+
+async def test_f10_re_reading_does_not_double_count(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """Re-marking an already-reading paper does NOT increment papers_read again.
+
+    # Verified: allowed=('to_read','reading','done') permits re-mark; dedup must
+    # check state_before='reading' and skip the increment in that case.
+    """
+    paper_id = contract_two_users.paper_id_a
+    user_id = contract_two_users.user_a_id
+
+    # First call: to_read → reading (should increment)
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp1 = await c.put(f"/api/papers/{paper_id}/reading")
+    assert resp1.status_code in (200, 204), resp1.text[:200]
+
+    count_after_first = await contract_conn.fetchval(
+        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+        user_id,
+    )
+
+    # Second call: reading → reading (same state, must NOT increment)
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp2 = await c.put(f"/api/papers/{paper_id}/reading")
+    assert resp2.status_code in (200, 204), resp2.text[:200]
+
+    count_after_second = await contract_conn.fetchval(
+        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+        user_id,
+    )
+    assert count_after_second == count_after_first, (
+        f"Re-marking reading must not double-count papers_read: "
+        f"after first={count_after_first}, after second={count_after_second}"
+    )
+
+
+async def test_f10_papers_read_scoped_to_acting_user(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """PUT /reading for user A does not affect user B's daily_log.papers_read.
+
+    # Verified: daily_log is keyed (user_id, log_date); the upsert must bind user_a_id,
+    # not bleed into user_b's row.
+    """
+    paper_id = contract_two_users.paper_id_a
+    user_a_id = contract_two_users.user_a_id
+    user_b_id = contract_two_users.user_b_id
+
+    b_before = await contract_conn.fetchval(
+        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+        user_b_id,
+    )
+    b_before = b_before or 0
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.put(f"/api/papers/{paper_id}/reading")
+    assert resp.status_code in (200, 204), resp.text[:200]
+
+    b_after = await contract_conn.fetchval(
+        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+        user_b_id,
+    )
+    b_after = b_after or 0
+
+    assert b_after == b_before, (
+        f"User B's papers_read must be unchanged; before={b_before}, after={b_after}"
+    )
+
+    # Sanity: user A's row DID get incremented
+    a_after = await contract_conn.fetchval(
+        "SELECT COALESCE(papers_read, 0) FROM daily_log WHERE user_id=$1 AND log_date=CURRENT_DATE",
+        user_a_id,
+    )
+    assert (a_after or 0) >= 1, f"User A's papers_read must be >=1; got {a_after}"

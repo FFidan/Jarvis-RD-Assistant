@@ -15,11 +15,7 @@ Closes #
 
 ## Testing done
 
-- [ ] `uv run ruff check services/ libs/ scripts/`
-- [ ] `uv run pytest`
-- [ ] `npm --prefix frontend run lint`
-- [ ] `npm --prefix frontend run test -- --run`
-- [ ] `npm --prefix frontend run build` (tsc-strict, no errors)
+- [ ] `make check` passes locally (no-tracked-secrets, deps-check, lint, tach, pyright, test-shape, burned-secrets, pytest, frontend)
 - [ ] Manual smoke test against the relevant running workflow (describe below)
 
 <!-- Describe any manual steps, edge cases tested, or workflows exercised. -->

@@ -330,6 +330,35 @@ async def test_orchestrator_embed_store_called_when_all_gates_pass(monkeypatch) 
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Fix F11 — build_entity_prompt respects caller-supplied max_chars budget
+# ---------------------------------------------------------------------------
+
+
+def test_build_entity_prompt_respects_large_max_chars() -> None:
+    """build_entity_prompt must honour a max_chars value larger than the old 12 000 hardcode.
+
+    When the caller passes max_chars=30_000 and the text is 25 000 chars,
+    the assembled prompt must contain all 25 000 characters (none silently
+    dropped by the internal wrap_delimited cap).
+    """
+    large_text = "A" * 25_000
+    prompt = build_entity_prompt(title="T", text=large_text, max_chars=30_000)
+    assert "A" * 25_000 in prompt, (
+        "build_entity_prompt must not re-cap text when max_chars > 12 000"
+    )
+
+
+def test_build_entity_prompt_default_max_chars_unchanged() -> None:
+    """Default max_chars=12 000 must still truncate text longer than 12 000 chars (no regression)."""
+    oversized = "B" * 15_000
+    prompt = build_entity_prompt(title="T", text=oversized)
+    assert "B" * 15_000 not in prompt, (
+        "default max_chars=12 000 must still truncate text beyond 12 000 chars"
+    )
+    assert "B" * 100 in prompt, "first portion of text must still appear in the prompt"
+
+
 def test_user_scope_paper_entities_exists_fragment_shape() -> None:
     """_user_scope_paper_entities_exists returns correctly interpolated SQL fragment."""
     from paper_ingestion.extraction.entities_sql import _user_scope_paper_entities_exists

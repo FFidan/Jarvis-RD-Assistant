@@ -370,3 +370,64 @@ async def test_feed_filter_by_date_range_behavioral(
     assert out_of_window_id not in ids, (
         f"date_range filter leaked out-of-window paper {out_of_window_id}: {ids}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Untagged facet + deprecated `statuses` leniency
+# Verified: feed.py:34 (list_feed_papers untagged Query param);
+#           feed_query.py build_feed_queries untagged predicate.
+# ---------------------------------------------------------------------------
+
+
+async def test_feed_untagged_returns_only_papers_with_no_topic(
+    contract_two_users, contract_conn, _pi_app, _configure_api_key
+):
+    """GET /api/papers/feed?untagged=true returns only papers with no paper_topics row.
+
+    _seed_resources leaves paper_id_a untagged (no paper_topics link). This seeds
+    a second paper for user A and links it to user A's seeded topic, then asserts
+    the untagged filter keeps the untagged paper and drops the tagged one.
+    """
+    tagged_paper_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        VALUES ('feed-untagged-tagged', 'arxiv', 'Tagged Paper', ARRAY['T'],
+                'https://example.test/tagged', $1)
+        RETURNING id
+        """,
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        contract_two_users.user_a_id,
+        tagged_paper_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_topics (paper_id, topic_id, relevance_score) VALUES ($1, $2, 0.9)",
+        tagged_paper_id,
+        contract_two_users.topic_id_a,
+    )
+
+    async with _client(_pi_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/papers/feed?untagged=true")
+
+    assert resp.status_code == 200, resp.text[:300]
+    ids = [p["id"] for p in resp.json().get("papers", [])]
+    assert contract_two_users.paper_id_a in ids, (
+        f"untagged filter dropped the untagged paper {contract_two_users.paper_id_a}: {ids}"
+    )
+    assert tagged_paper_id not in ids, (
+        f"untagged filter leaked the tagged paper {tagged_paper_id}: {ids}"
+    )
+
+
+async def test_feed_deprecated_statuses_param_still_returns_200(
+    contract_two_users, _pi_app, _configure_api_key
+):
+    """GET /api/papers/feed?statuses=new stays 200 — accepted-but-ignored, never 4xx."""
+    async with _client(_pi_app, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/papers/feed?statuses=new")
+
+    assert resp.status_code == 200, (
+        f"deprecated statuses= must remain lenient (200); got {resp.status_code}: {resp.text}"
+    )

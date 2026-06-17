@@ -4,12 +4,15 @@ Covers three gate behaviours of :func:`jarvis_common.llm_client._langfuse_lifesp
 1. No-op when OBSERVABILITY_ENABLED is false (the default).
 2. No-op when enabled but host/keys are missing.
 3. Constructs Langfuse when all three (host, pk, sk) are present and enabled.
+4. Per-call warning flood is suppressed when Langfuse is unconfigured (F17).
 
 The hook is the FIRST task in app startup, runs before DB migrations, and must
 NEVER raise regardless of configuration state.
 """
 
 from __future__ import annotations
+
+import logging
 
 import jarvis_common.llm_client as lc
 import pytest
@@ -126,3 +129,65 @@ def test_constructs_when_enabled_and_keys_present(monkeypatch: pytest.MonkeyPatc
     assert seen.get("host") == "http://langfuse.test"
     assert seen.get("public_key") == "pk-real"
     assert seen.get("secret_key") == "sk-real"
+
+
+def test_no_per_call_warning_flood_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """After _langfuse_lifespan_hook runs without keys, @observe calls must not each emit a WARNING.
+
+    Calling a @observe-decorated function three times should produce at most one
+    warning-level log from the 'langfuse' logger — the startup notice — not one
+    per call.
+    """
+    monkeypatch.setattr(
+        "jarvis_common.llm_client.get_jarvis_common_settings",
+        lambda: _common_settings(
+            observability_enabled=True,
+            langfuse_host="http://langfuse.test",
+        ),
+    )
+    monkeypatch.setattr(
+        "jarvis_common.llm_client.get_secrets_settings",
+        lambda: _secrets_settings(
+            langfuse_public_key=None,
+            langfuse_secret_key=None,
+        ),
+    )
+
+    # Run the lifespan hook (which should suppress subsequent per-call warnings).
+    lc._langfuse_lifespan_hook()
+
+    # Capture warnings from the 'langfuse' logger after the hook ran.
+    langfuse_logger = logging.getLogger("langfuse")
+    warnings_after_hook: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.levelno >= logging.WARNING:
+                warnings_after_hook.append(record.getMessage())
+
+    handler = _Capture()
+    langfuse_logger.addHandler(handler)
+    try:
+        # Import observe — it may be the real langfuse one or the no-op fallback.
+        try:
+            from langfuse.decorators import observe as lf_observe  # type: ignore[import-not-found]
+        except ImportError:
+            from langfuse import observe as lf_observe  # type: ignore[no-redef]
+
+        @lf_observe()
+        def _dummy() -> int:
+            return 42
+
+        _dummy()
+        _dummy()
+        _dummy()
+    finally:
+        langfuse_logger.removeHandler(handler)
+
+    # At most one warning is acceptable (the startup notice already fired before
+    # the handler was attached); zero is also fine.  Multiple means the flood is
+    # not suppressed.
+    assert len(warnings_after_hook) <= 1, (
+        f"Expected at most 1 warning from langfuse logger after hook, "
+        f"got {len(warnings_after_hook)}: {warnings_after_hook}"
+    )

@@ -90,7 +90,7 @@ JSON:\
 """
 
 
-def build_entity_prompt(title: str, text: str) -> str:
+def build_entity_prompt(title: str, text: str, *, max_chars: int = 12000) -> str:
     """Build the knowledge-graph extraction user-role prompt for a single paper.
 
     The instruction head lives in ``_SYSTEM_ENTITIES`` (system role).
@@ -98,7 +98,7 @@ def build_entity_prompt(title: str, text: str) -> str:
     cannot escape into the instruction layer.
     """
     safe_title, _ = wrap_delimited("title", title)
-    safe_text, _ = wrap_delimited("paper_text", text, max_chars=12000)
+    safe_text, _ = wrap_delimited("paper_text", text, max_chars=max_chars)
     return f"{safe_title}\n\n{safe_text}\n"
 
 
@@ -156,7 +156,7 @@ async def extract_entities_for_paper(
     else:
         llm_text = full_text
 
-    prompt = build_entity_prompt(paper["title"], llm_text)
+    prompt = build_entity_prompt(paper["title"], llm_text, max_chars=_entity_text_max)
     from paper_ingestion._state import svc  # noqa: PLC0415
 
     _openai_client = openai_client if openai_client is not None else svc.openai_client

@@ -288,6 +288,7 @@ JARVIS supports Docker Secrets for sensitive credentials. Each is read from a fi
 | `jarvis_api_key` | `JARVIS_API_KEY_FILE` | JARVIS REST API key (frontend + Telegram) |
 | `jarvis_model_hmac_key` | `JARVIS_MODEL_HMAC_KEY_FILE` | HMAC-signs Pulse classifier pickle blobs (auto-generated; mandatory in production) |
 | `jarvis_config_key` | `JARVIS_CONFIG_KEY_FILE` | Fernet key for encrypted config values |
+| `litellm_salt_key` | `LITELLM_SALT_KEY` | Encrypts provider/model keys stored in LiteLLM's admin DB — **never rotate**: rotating orphans all stored model keys and requires re-entering them |
 | `telegram_bot_token` | `TELEGRAM_BOT_TOKEN_FILE` | Telegram bot token (`telegram` profile only) |
 | `qdrant_api_key` | `QDRANT_API_KEY_FILE` | Qdrant service API key |
 | `infra_ingest_key` | `INFRA_INGEST_KEY_FILE` | Shared key for the infrastructure ingestion endpoint |
@@ -489,16 +490,54 @@ make up-build            # full docker compose up -d --build
 
 `scripts/backup.sh` is scheduled by the `backup` compose profile (`docker compose --profile backup up -d`).
 
+JARVIS state lives in more than one place, so each run captures **all four** of the durable stores (per-store files are timestamped together so a single run is internally consistent):
+
+| Store | Output (in `/backups`) | Notes |
+|---|---|---|
+| `jarvis` Postgres DB | `jarvis_<ts>.sql.gz[.enc]` | Papers, users, config, jobs |
+| `litellm` Postgres DB | `litellm_<ts>.sql.gz[.enc]` | API keys, virtual keys, spend ledger |
+| Qdrant vectors | `qdrant_<collection>_<ts>.snapshot` | One per collection via Qdrant's snapshot REST API; **best-effort** — if Qdrant is unreachable this is skipped and the Postgres/secrets backups still succeed |
+| `secrets/` directory | `secrets_<ts>.tar.gz[.enc]` | The Docker-secret source files — without these an encrypted DB backup cannot be decrypted |
+
 | Env var | Default | Purpose |
 |---|---|---|
-| `BACKUP_DIR` | `/backups` | Where `.sql.gz` files are written inside the container |
-| `BACKUP_RETENTION_DAYS` | `7` | Prune interval |
-| `BACKUP_S3_BUCKET` | empty | Optional S3 destination (skipped if unset) |
+| `BACKUP_DIR` | `/backups` | Where archives are written inside the container |
+| `BACKUP_RETENTION_DAYS` | `7` | Prune interval (applies to every store above) |
+| `BACKUP_S3_BUCKET` | empty | Optional S3 destination (skipped if unset; uploads every archive) |
 | `BACKUP_INTERVAL_SECONDS` | `86400` | Sleep between backup runs |
+| `BACKUP_ENCRYPT_KEYFILE` | `/run/secrets/backup_encrypt_key` | When the file is non-empty, DB dumps and the secrets archive are encrypted at rest (`.enc` suffix) |
+| `LITELLM_DATABASE` | `litellm` | Name of the LiteLLM DB to dump |
+| `QDRANT_URL` | `http://qdrant:6333` | Qdrant base URL for the snapshot API |
+| `QDRANT_API_KEYFILE` | `/run/secrets/qdrant_api_key` | Qdrant API key (sent as the `api-key` header) |
+| `SECRETS_DIR` | `/secrets` | Read-only mount of the host `./secrets` dir to archive |
 
-Runs `pg_dump --no-owner --no-acl | gzip`, uploads to S3 if configured, prunes old files. S3 credentials: `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (or IAM instance role) scoped to `s3:PutObject`.
+The `litellm` DB is owned by the same superuser (`POSTGRES_USER`) that created it, so the same credentials dump both DBs. A failed `pg_dump` aborts the run (non-zero exit) rather than leaving a tiny but well-formed empty archive. The encryption key, Qdrant API key, and `./secrets` source are already wired into the `postgres-backup` sidecar in `docker-compose.yml`. S3 credentials: `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (or IAM instance role) scoped to `s3:PutObject`.
+
+> **Without an encryption key the secrets archive is written in the clear** and the script logs a warning — set `BACKUP_ENCRYPT_KEYFILE` (default already points at the `backup_encrypt_key` Docker Secret) for production.
 
 ### Restore
+
+**Step 0 — decrypt** (if the archive ends in `.enc`):
+
+```bash
+openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -d \
+  -kfile ./secrets/backup_encrypt_key.txt \
+  -in <archive>.enc -out <archive>   # then use the plain file below
+```
+
+The decryption flags match what `scripts/backup.sh` uses (`-aes-256-cbc -pbkdf2 -iter 600000`). Repeat for each `.enc` archive before using it.
+
+> **Key dependency warning:** the `jarvis` DB stores provider/model credentials encrypted with `JARVIS_CONFIG_KEY`; the LiteLLM DB stores its model keys encrypted with `LITELLM_SALT_KEY`. Restoring a DB dump without the **same key that encrypted it** leaves those secrets undecryptable. Always restore the matching `secrets/` archive (or confirm the keys are already in place) before starting the stack.
+
+**Step 1 — `secrets/`** (restore before starting the stack, so the right keys are in place):
+
+```bash
+# Review the contents first — this overwrites live key files.
+tar -tzf secrets_YYYYMMDD_HHMMSS.tar.gz
+tar -xzf secrets_YYYYMMDD_HHMMSS.tar.gz -C ./secrets
+```
+
+**Step 2 — Postgres (`jarvis` and `litellm`)**:
 
 ```bash
 docker compose stop paper_ingestion learning_engine
@@ -506,10 +545,25 @@ docker compose exec postgres psql -U jarvis -d postgres \
   -c 'DROP DATABASE jarvis;' -c 'CREATE DATABASE jarvis OWNER jarvis;'
 gunzip -c /path/to/jarvis_YYYYMMDD_HHMMSS.sql.gz | \
   docker compose exec -T postgres psql -U jarvis -d jarvis
+docker compose exec postgres psql -U jarvis -d postgres \
+  -c 'DROP DATABASE litellm;' -c 'CREATE DATABASE litellm OWNER jarvis;'
+gunzip -c /path/to/litellm_YYYYMMDD_HHMMSS.sql.gz | \
+  docker compose exec -T postgres psql -U jarvis -d litellm
 docker compose up -d paper_ingestion learning_engine
 ```
 
-Qdrant is **not** backed up by `backup.sh`. For durable vector backups, use Qdrant's snapshot API at `:6333/collections/<name>/snapshots`.
+**Step 3 — Qdrant** — stop the container first so the snapshot restore doesn't race an active index write:
+
+```bash
+docker compose stop qdrant
+docker compose cp qdrant_papers_YYYYMMDD_HHMMSS.snapshot qdrant:/qdrant/snapshots/restore.snapshot
+docker compose start qdrant
+docker compose exec qdrant sh -c 'curl -s -X PUT \
+  -H "api-key: $(cat /run/secrets/qdrant_api_key)" \
+  "http://localhost:6333/collections/papers/snapshots/recover" \
+  -H "Content-Type: application/json" \
+  -d "{\"location\":\"file:///qdrant/snapshots/restore.snapshot\"}"'
+```
 
 ---
 

@@ -44,7 +44,12 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.crypto import encrypt_secret
-from jarvis_common.email import effective_smtp_status, sanitize_header_value, smtp_tls_flags
+from jarvis_common.email import (
+    _effective_smtp,
+    effective_smtp_status,
+    sanitize_header_value,
+    smtp_tls_flags,
+)
 from jarvis_common.email import smtp_configured as _smtp_configured_probe
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.serialization import _coerce_bool
@@ -548,8 +553,13 @@ async def _read_smtp_config(pool: Any) -> SmtpConfigResponse:
     )
 
 
-async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
-    """Best-effort SMTP test send. Returns None on success, error string on failure."""
+async def _send_test_email(body: SmtpBody, recipient: str, password: str | None) -> str | None:
+    """Best-effort SMTP test send. Returns None on success, error string on failure.
+
+    ``password`` is resolved by the caller: ``body.password`` when the operator
+    re-typed it, otherwise the stored (effective) password so the test button
+    works against an already-saved relay without re-entering the secret.
+    """
     if not get_core_settings().allow_private_smtp_host:
         try:
             await _reject_non_public_host(body.host)
@@ -588,7 +598,7 @@ async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
             hostname=body.host,
             port=body.port,
             username=body.user or None,
-            password=body.password or None,
+            password=password or None,
             use_tls=use_tls,
             start_tls=start_tls,
             timeout=SMTP_TEST_TIMEOUT_SECONDS,
@@ -662,7 +672,14 @@ async def configure_smtp(body: SmtpBody, request: Request) -> SmtpResponse:
             recipient = body.from_email
         else:
             recipient = body.test_recipient or body.from_email
-        err = await _send_test_email(body, recipient)
+        # When the operator re-typed the password use it; otherwise fall back to
+        # the stored (effective) password so the test button works against an
+        # already-saved relay without forcing a secret re-entry.
+        if body.password:
+            test_password = body.password
+        else:
+            test_password = (await _effective_smtp(pool)).password
+        err = await _send_test_email(body, recipient, test_password)
         test_sent = err is None
         test_error = err
 

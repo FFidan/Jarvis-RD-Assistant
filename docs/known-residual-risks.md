@@ -1,6 +1,6 @@
 # Known Residual Risks
 
-_Last updated: 2026-06-06_
+_Last updated: 2026-06-17_
 
 This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Closed and falsified findings, plus internal CI/test-infra tracking, are archived separately and are not part of the published site.
 

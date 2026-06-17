@@ -157,6 +157,43 @@ describe('FeedView — state-switch button rendering', () => {
   });
 });
 
+describe('FeedView — Untagged facet', () => {
+  function renderUntagged(untagged: boolean) {
+    return render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <MemoryRouter>
+          <FeedView surface="inbox" untagged={untagged} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('passes untagged=true to fetchFeed when the untagged prop is set', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchFeed).mockClear();
+
+    renderUntagged(true);
+
+    await waitFor(() =>
+      expect(vi.mocked(api.fetchFeed)).toHaveBeenCalledWith(
+        expect.objectContaining({ untagged: true }),
+      ),
+    );
+  });
+
+  it('does not pass untagged=true when the prop is false', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchFeed).mockClear();
+
+    renderUntagged(false);
+
+    await waitFor(() => expect(vi.mocked(api.fetchFeed)).toHaveBeenCalled());
+    for (const [params] of vi.mocked(api.fetchFeed).mock.calls) {
+      expect((params as { untagged?: boolean }).untagged).toBeFalsy();
+    }
+  });
+});
+
 describe('FeedView — mutation onError toasts (NI-3)', () => {
   it('shows a toast.error when savePaper fails on the inbox surface', async () => {
     const user = userEvent.setup();

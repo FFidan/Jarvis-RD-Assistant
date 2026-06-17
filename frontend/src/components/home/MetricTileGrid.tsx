@@ -41,7 +41,7 @@ export function MetricTileGrid({ metrics, isLoading }: MetricTileGridProps) {
   const tiles = [
     {
       key: 'total_papers' as const,
-      title: 'Library',
+      title: 'Papers',
       subtitle: librarySubtitle,
       icon: BookOpen,
       href: '/feed',

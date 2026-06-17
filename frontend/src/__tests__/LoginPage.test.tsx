@@ -142,7 +142,7 @@ describe('LoginPage', () => {
     await waitFor(() => {
       expect(requestMagicLinkMock).toHaveBeenCalledWith('ferhat@example.com');
     });
-    expect(await screen.findByText(/Check your email/i)).toBeInTheDocument();
+    expect(await screen.findByText(/if an account exists for that address/i)).toBeInTheDocument();
   });
 
   // ---------------------------------------------------------------------------

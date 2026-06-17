@@ -175,9 +175,7 @@ jobs:
           exit 0
 
   # ---------------------------------------------------------------------------
-  # security-gate — Terminal job; can be added to ci.yml gate.needs once a
-  # green baseline is established.
-  # ---------------------------------------------------------------------------
+  # security-gate — Enforced as a required status check via branch protection (not via cross-workflow needs:).
   security-gate:
     name: Security gate
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}

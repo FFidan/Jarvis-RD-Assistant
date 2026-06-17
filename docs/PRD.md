@@ -1,6 +1,6 @@
 # JARVIS RD Assistant - Product Requirements Document (PRD)
 
-**Version:** 0.6.0 (Living document — see git tags for release versions.)
+**Version:** Living document — see git tags and CHANGELOG.md for release versions.
 **Status:** Active
 
 > This PRD describes the product vision, user stories, feature scope, and forward roadmap.

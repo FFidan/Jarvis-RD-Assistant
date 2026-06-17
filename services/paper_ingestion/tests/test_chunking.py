@@ -8,6 +8,29 @@ from paper_ingestion.ingestion.chunking import chunk_text
 from paper_ingestion.ingestion.embedding_config import CHUNK_TOKEN_LIMIT
 
 
+def test_chunk_text_handles_endoftext_literal() -> None:
+    """chunk_text must not raise when PDF text contains a literal '<|endoftext|>'.
+
+    tiktoken's enc.encode() raises ValueError for special tokens by default.
+    The fix is to pass disallowed_special=() at both encode() call sites in
+    chunking.py so special-token strings are tokenised as ordinary BPE bytes.
+    """
+    enc = tiktoken.get_encoding("cl100k_base")
+    text = "## Intro\n\nThe token <|endoftext|> appears verbatim in this paper.\n"
+    chunks = chunk_text(text, page_anchors=None, encoding=enc)  # must NOT raise
+    assert any("endoftext" in c.content for c in chunks)
+
+
+def test_chunk_text_token_counts_unchanged_for_normal_text() -> None:
+    """disallowed_special=() must not change token counts for ordinary text."""
+    enc = tiktoken.get_encoding("cl100k_base")
+    normal = "Hello world, this is a normal sentence without any special tokens."
+    # Counts before fix (plain encode) vs after fix (disallowed_special=()) must agree.
+    count_plain = len(enc.encode(normal))
+    count_permissive = len(enc.encode(normal, disallowed_special=()))
+    assert count_plain == count_permissive
+
+
 def _filler_paragraph(tag: str) -> str:
     return (f"{tag} lorem ipsum dolor sit amet consectetur adipiscing elit " * 25).strip()
 

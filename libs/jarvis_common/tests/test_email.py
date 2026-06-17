@@ -538,6 +538,172 @@ async def test_effective_smtp_status_empty_string_required_field(monkeypatch) ->
 
 
 # ---------------------------------------------------------------------------
+# S1 (F1): auth-consistency signal in effective_smtp_status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_effective_smtp_status_user_set_no_password_surfaces_issue(monkeypatch) -> None:
+    """host+sender+user set but no password → deliverable True but an auth issue is surfaced.
+
+    Regression guard: the auth-consistency issue must appear even though
+    ``deliverable`` is True (it previously returned ``(True, [])`` early and hid
+    a half-configured login).
+    """
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("SMTP_USER", "relay-user")
+    monkeypatch.delenv("SMTP_PASS", raising=False)
+    get_secrets_settings.cache_clear()
+
+    deliverable, issues = await effective_smtp_status(pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert deliverable is True, "host+sender present → still deliverable"
+    assert len(issues) == 1
+    assert "password" in issues[0].lower()
+    # value-free
+    assert "relay-user" not in issues[0]
+    assert "mail.example.com" not in issues[0]
+
+
+@pytest.mark.asyncio
+async def test_effective_smtp_status_ip_allowlist_relay_stays_clean(monkeypatch) -> None:
+    """host+sender, NO user, NO pass (IP-allowlist relay) → (True, []) — no false auth warning."""
+    from jarvis_common.email import effective_smtp_status
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.delenv("SMTP_USER", raising=False)
+    monkeypatch.delenv("SMTP_PASS", raising=False)
+    get_secrets_settings.cache_clear()
+
+    deliverable, issues = await effective_smtp_status(pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert deliverable is True
+    assert issues == []
+
+
+def test_effective_smtp_auth_consistent_property() -> None:
+    """auth_consistent: False only when user is set with no password."""
+    from jarvis_common.email import _EffectiveSmtp
+
+    base = dict(host="h", port=587, sender="s@example.com")
+    assert _EffectiveSmtp(user=None, password=None, **base).auth_consistent is True
+    assert _EffectiveSmtp(user="u", password="p", **base).auth_consistent is True
+    assert _EffectiveSmtp(user="u", password=None, **base).auth_consistent is False
+    assert _EffectiveSmtp(user=None, password="p", **base).auth_consistent is True
+
+
+# ---------------------------------------------------------------------------
+# S1 (F1): delivery-failure observability (magic_link_delivery_failed event)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_failure_emits_event_and_reraises(monkeypatch) -> None:
+    """A failing real send emits a magic_link_delivery_failed system event, then re-raises.
+
+    The event carries email_hash + error_class (never the raw email or the
+    bearer-token link); the exception propagates so callers' own logging fires
+    (they swallow it for anti-enumeration).
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import aiosmtplib
+    from jarvis_common.email import _hash_email, send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+
+    pool = MagicMock(name="pool")
+    raw_link = "https://example.com/auth/verify?token=supersecretbearertoken"
+
+    failing_send = AsyncMock(side_effect=aiosmtplib.SMTPConnectError("relay down"))
+
+    with patch.object(aiosmtplib, "send", failing_send):
+        with patch("jarvis_common.email.log_event", new_callable=AsyncMock) as mock_log_event:
+            with pytest.raises(aiosmtplib.SMTPConnectError):
+                await send_magic_link("user@example.com", raw_link, pool=pool)
+
+    get_secrets_settings.cache_clear()
+
+    mock_log_event.assert_awaited_once()
+    kwargs = mock_log_event.call_args.kwargs
+    assert kwargs["level"] == "error"
+    assert kwargs["message"] == "magic_link_delivery_failed"
+    context = kwargs["context"]
+    assert context["email_hash"] == _hash_email("user@example.com")
+    assert context["error_class"] == "SMTPConnectError"
+    # Never leak the raw recipient or the bearer token.
+    assert "user@example.com" not in str(context)
+    assert "supersecretbearertoken" not in str(context)
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_success_emits_sent_event(monkeypatch) -> None:
+    """A successful send emits a magic_link_sent system event (email_hash only)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import aiosmtplib
+    from jarvis_common.email import _hash_email, send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+
+    pool = MagicMock(name="pool")
+
+    with patch.object(aiosmtplib, "send", new_callable=AsyncMock):
+        with patch("jarvis_common.email.log_event", new_callable=AsyncMock) as mock_log_event:
+            await send_magic_link(
+                "user@example.com", "https://example.com/verify?token=abc", pool=pool
+            )
+
+    get_secrets_settings.cache_clear()
+
+    mock_log_event.assert_awaited_once()
+    kwargs = mock_log_event.call_args.kwargs
+    assert kwargs["level"] == "info"
+    assert kwargs["message"] == "magic_link_sent"
+    assert kwargs["context"]["email_hash"] == _hash_email("user@example.com")
+
+
+@pytest.mark.asyncio
+async def test_send_magic_link_passes_timeout(monkeypatch) -> None:
+    """The live send passes timeout=SMTP_SEND_TIMEOUT_SECONDS (>= the test-send timeout)."""
+    from unittest.mock import AsyncMock, patch
+
+    import aiosmtplib
+    from jarvis_common.email import SMTP_SEND_TIMEOUT_SECONDS, send_magic_link
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+    get_secrets_settings.cache_clear()
+
+    assert SMTP_SEND_TIMEOUT_SECONDS >= 10.0  # >= setup's SMTP_TEST_TIMEOUT_SECONDS
+
+    mock_send = AsyncMock()
+    with patch.object(aiosmtplib, "send", mock_send):
+        await send_magic_link("user@example.com", "https://example.com/verify?token=abc", pool=None)
+
+    get_secrets_settings.cache_clear()
+    assert mock_send.call_args.kwargs["timeout"] == SMTP_SEND_TIMEOUT_SECONDS
+
+
+# ---------------------------------------------------------------------------
 # Brace-URL tests (existing)
 # ---------------------------------------------------------------------------
 

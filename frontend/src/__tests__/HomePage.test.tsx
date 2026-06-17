@@ -74,7 +74,7 @@ describe('HomePage', () => {
     renderHomePage();
     // Wait for data to render
     expect(await screen.findByText('42')).toBeInTheDocument();
-    expect(screen.getByText('Library')).toBeInTheDocument();
+    expect(screen.getByText('Papers')).toBeInTheDocument();
     expect(screen.getByText('7 unread · 3 unsummarized')).toBeInTheDocument();
   });
 
@@ -99,7 +99,7 @@ describe('HomePage', () => {
   it('renders all five metric tiles when data loads', async () => {
     vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
     renderHomePage();
-    expect(await screen.findByText('Library')).toBeInTheDocument();
+    expect(await screen.findByText('Papers')).toBeInTheDocument();
     expect(screen.getByText('Due Cards')).toBeInTheDocument();
     expect(screen.getByText('Active Projects')).toBeInTheDocument();
     expect(screen.getByText('Topics')).toBeInTheDocument();
@@ -118,11 +118,11 @@ describe('HomePage', () => {
     };
     vi.mocked(fetchDashboardMetrics).mockResolvedValue(zeroMetrics);
     renderHomePage();
-    expect(await screen.findByText('Library')).toBeInTheDocument();
+    expect(await screen.findByText('Papers')).toBeInTheDocument();
     // All five tiles should show 0
     const zeros = screen.getAllByText('0');
     expect(zeros.length).toBe(5);
-    // Library subtitle shows "All caught up" when unread is 0
+    // Papers subtitle shows "All caught up" when unread is 0
     expect(screen.getByText('All caught up')).toBeInTheDocument();
   });
 
@@ -259,7 +259,7 @@ describe('HomePage', () => {
       useUIStore.setState({ onboardingCelebrated: true });
       vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
       renderHomePage();
-      expect(await screen.findByText('Library')).toBeInTheDocument();
+      expect(await screen.findByText('Papers')).toBeInTheDocument();
       expect(screen.queryByText(CELEBRATION_TEXT)).toBeNull();
     });
 

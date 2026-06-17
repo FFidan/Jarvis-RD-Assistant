@@ -26,7 +26,7 @@ describe('MetricTileGrid', () => {
   it('renders 5 metric tiles', () => {
     renderGrid(mockMetrics);
     // Each tile has a title; check all five are present
-    expect(screen.getByText('Library')).toBeInTheDocument();
+    expect(screen.getByText('Papers')).toBeInTheDocument();
     expect(screen.getByText('Due Cards')).toBeInTheDocument();
     expect(screen.getByText('Active Projects')).toBeInTheDocument();
     expect(screen.getByText('Topics')).toBeInTheDocument();
@@ -60,7 +60,7 @@ describe('MetricTileGrid', () => {
 
   it('renders 5 tiles (not 7) as confirmed by tile title count', () => {
     renderGrid(mockMetrics);
-    const tileTitles = ['Library', 'Due Cards', 'Active Projects', 'Topics', 'Scheduled Jobs'];
+    const tileTitles = ['Papers', 'Due Cards', 'Active Projects', 'Topics', 'Scheduled Jobs'];
     expect(tileTitles).toHaveLength(5);
     tileTitles.forEach((title) => {
       expect(screen.getByText(title)).toBeInTheDocument();

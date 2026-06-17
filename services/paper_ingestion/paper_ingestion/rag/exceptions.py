@@ -4,3 +4,7 @@ class PaperNotFoundError(Exception):
 
 class NoRelevantChunksError(Exception):
     pass
+
+
+class QdrantUnavailableError(Exception):
+    pass

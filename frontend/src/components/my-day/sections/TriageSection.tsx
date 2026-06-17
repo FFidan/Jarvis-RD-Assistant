@@ -7,7 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { useJobStore } from '@/stores/job-store';
 import {
-  fetchFeedPapers,
+  fetchFeed,
   fetchMissingFoundationalPapers,
   fetchAndProcessFoundationalPaper,
 } from '@/lib/api';
@@ -128,7 +128,7 @@ export function TriageSection() {
   // Query 1 — unprocessed action items (reuses existing query key for dedup)
   const { data: actionData, isError: actionError } = useQuery({
     queryKey: QUERY_KEYS.actionItems.unprocessed(),
-    queryFn: () => fetchFeedPapers({ statuses: 'new', limit: 10 }),
+    queryFn: () => fetchFeed({ view: 'inbox', limit: 10 }),
     refetchInterval: 60_000,
   });
 

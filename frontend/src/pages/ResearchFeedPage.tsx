@@ -375,10 +375,11 @@ export function ResearchFeedPage() {
 
   // ── Compute effective FeedView filter from facet state ───────────────────
   // §Source drives the `sourceTypes` param; the §Topic facet drives `topicId`.
-  // The 'untagged' sentinel is a count-only facet (no backend topic id), so it
-  // does not map to a topic_id filter here.
+  // The 'untagged' sentinel has no backend topic id, so it drives a separate
+  // `untagged` boolean rather than a topic_id filter.
   const effectiveSourceTypes: string | null = sourceFacet ?? inboxSource ?? null;
   const effectiveTopicId: number | null = typeof topicFacet === 'number' ? topicFacet : null;
+  const effectiveUntagged: boolean = topicFacet === 'untagged';
 
   // ─── render ───────────────────────────────────────────────────────────────
 
@@ -498,6 +499,7 @@ export function ResearchFeedPage() {
                 filter={filter}
                 sourceTypes={effectiveSourceTypes}
                 topicId={effectiveTopicId}
+                untagged={effectiveUntagged}
                 listFilter={listFilter || undefined}
               />
             </div>
@@ -581,7 +583,9 @@ export function ResearchFeedPage() {
                   surface="library"
                   filter={filter}
                   scope={feedScope}
+                  sourceTypes={effectiveSourceTypes}
                   topicId={effectiveTopicId}
+                  untagged={effectiveUntagged}
                   listFilter={listFilter || undefined}
                 />
               )}
@@ -605,7 +609,7 @@ export function ResearchFeedPage() {
               >
                 Papers in Trash will be kept until you delete them forever. Restore returns them to their previous location.
               </div>
-              <FeedView surface="trash" filter={filter} topicId={effectiveTopicId} listFilter={listFilter || undefined} />
+              <FeedView surface="trash" filter={filter} sourceTypes={effectiveSourceTypes} topicId={effectiveTopicId} untagged={effectiveUntagged} listFilter={listFilter || undefined} />
             </div>
           )}
 

@@ -50,7 +50,6 @@ export const fetchFeedPapers = (params: {
   limit?: number;
   offset?: number;
   q?: string;
-  statuses?: string;
   source_types?: string;
   topic_names?: string;
   date_from?: string;
@@ -299,9 +298,10 @@ export async function fetchFeed(params: {
   offset?: number;
   sourceTypes?: string | null;
   topicId?: number | null;
+  untagged?: boolean;
   q?: string;
 }): Promise<FeedResponse> {
-  const { view, filter, scope, limit = 30, offset = 0, sourceTypes, topicId, q } = params;
+  const { view, filter, scope, limit = 30, offset = 0, sourceTypes, topicId, untagged, q } = params;
 
   // Map (surface=library, filter=X) → backend view name. Otherwise the surface
   // value itself is already a valid backend view (inbox/library/trash overlap).
@@ -329,6 +329,9 @@ export async function fetchFeed(params: {
   }
   if (topicId != null) {
     searchParams.set('topic_id', String(topicId));
+  }
+  if (untagged) {
+    searchParams.set('untagged', 'true');
   }
   if (q) {
     searchParams.set('q', q);

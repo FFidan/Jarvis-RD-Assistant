@@ -116,7 +116,13 @@ See [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/SECU
 
 ## Development
 
-### Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2.
+### Prerequisites: Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2, [`uv`](https://docs.astral.sh/uv/).
+
+Install `uv` (Python package manager used for all backend tooling):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 ### Local setup
 
@@ -129,10 +135,14 @@ docker compose exec paper_ingestion pytest tests/  # Run a service's tests
 docker compose exec paper_ingestion ruff check .   # Lint one service
 ```
 
-The canonical pre-push gate is **`make check`** (runs `tach`, type-checking,
-test-shape and burned-secret guards, the full `pytest` suite, and the frontend
-checks) — the same set CI runs. The `docker compose exec` commands above are for
-quick, scoped iteration on a single service.
+Install Python dev dependencies, then run the full quality gate:
+
+```bash
+make dev-env   # uv sync --group dev
+make check     # runs tach, pyright, test-shape, burned-secret guards, pytest, and frontend checks
+```
+
+The canonical pre-push gate is **`make check`** — the same set CI runs. The `docker compose exec` commands above are for quick, scoped iteration on a single service.
 
 ### Configuration
 

@@ -79,7 +79,7 @@ export function LoginPage() {
     setInfo('');
     try {
       await requestMagicLink(email.trim());
-      setInfo('Check your email — we just sent you a sign-in link.');
+      setInfo("If an account exists for that address, we've emailed a sign-in link.");
       setEmail('');
     } catch (err) {
       // A 422 means the submitted value failed server-side email validation

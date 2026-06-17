@@ -137,7 +137,31 @@ async def reading_paper(
         await _assert_paper_in_states(
             conn, paper_id, user_id, allowed=("to_read", "reading", "done")
         )
+        state_before = (
+            await conn.fetchval(
+                """SELECT COALESCE(state, 'inbox') FROM paper_user_state
+                   WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
+                paper_id,
+                user_id,
+            )
+            or "inbox"
+        )
         await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
+        if state_before != "reading":
+            try:
+                await conn.execute(
+                    """INSERT INTO daily_log (user_id, log_date, papers_read)
+                       VALUES ($1, CURRENT_DATE, 1)
+                       ON CONFLICT (user_id, log_date)
+                       DO UPDATE SET papers_read = COALESCE(daily_log.papers_read, 0) + 1""",
+                    user_id,
+                )
+            except Exception:
+                logger.exception(
+                    "daily_log.papers_read increment failed (user=%s paper=%s); non-blocking",
+                    user_id,
+                    paper_id,
+                )
     return _ok(paper_id)
 
 

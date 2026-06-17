@@ -216,4 +216,19 @@ describe('AccessModeSection', () => {
       expect(screen.getByText(/access mode updated/i)).toBeInTheDocument(),
     );
   });
+
+  it('does not claim single-user restricts login and accurately describes what the toggle controls', async () => {
+    mockGetStatus.mockResolvedValue(fixtures.statusSingle);
+    await renderSection();
+
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: /single-user/i })).toBeInTheDocument(),
+    );
+
+    // The old false promise must be gone.
+    expect(screen.queryByText(/only the admin account can log in/i)).not.toBeInTheDocument();
+
+    // The new label must describe the sign-in screen / login method offered.
+    expect(screen.getAllByText(/sign-in screen/i).length).toBeGreaterThan(0);
+  });
 });

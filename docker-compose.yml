@@ -311,7 +311,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.8.0}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.8.7}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -389,7 +389,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.8.0}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-0.8.7}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -437,7 +437,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.8.0}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.8.7}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -484,7 +484,7 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.8.0}
+    image: jarvis/dashboard:${JARVIS_VERSION:-0.8.7}
     build:
       context: ./frontend
       args:
@@ -541,11 +541,19 @@ services:
       BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
       # Path to encryption key file (Docker Secret); backup.sh uses this to encrypt archives.
       BACKUP_ENCRYPT_KEYFILE: /run/secrets/backup_encrypt_key
+      # backup.sh also dumps the litellm DB and snapshots Qdrant (best-effort).
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEYFILE: /run/secrets/qdrant_api_key
+      # The on-disk secrets/ source is archived so an encrypted DB backup stays
+      # decryptable; mounted read-only at SECRETS_DIR below.
+      SECRETS_DIR: /secrets
     secrets:
       - postgres_password
       - backup_encrypt_key
+      - qdrant_api_key
     volumes:
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - ./secrets:/secrets:ro
       - postgres_backups:/backups
     entrypoint: >
       sh -euc "while true; do /usr/local/bin/backup.sh; sleep $${BACKUP_INTERVAL_SECONDS:-86400}; done"
@@ -603,7 +611,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.8.0}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.8.7}
     build:
       context: ./langfuse
       dockerfile: Dockerfile.langfuse

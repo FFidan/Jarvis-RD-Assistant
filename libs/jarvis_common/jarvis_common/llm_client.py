@@ -421,7 +421,13 @@ def _langfuse_lifespan_hook() -> None:
     pk = secrets.langfuse_public_key.get_secret_value() if secrets.langfuse_public_key else None
     sk = secrets.langfuse_secret_key.get_secret_value() if secrets.langfuse_secret_key else None
     if not (host and pk and sk):
-        logger.warning("OBSERVABILITY_ENABLED set but LANGFUSE_HOST/keys missing; traces no-op")
+        logger.info(
+            "OBSERVABILITY_ENABLED set but LANGFUSE_HOST/keys missing; Langfuse traces no-op"
+        )
+        # Suppress the per-call "Authentication error: … no public_key" WARNING
+        # that langfuse emits on every @observe invocation when unconfigured.
+        # Raising the threshold to ERROR silences the flood without touching app logs.
+        logging.getLogger("langfuse").setLevel(logging.ERROR)
         return
     try:
         from langfuse import (

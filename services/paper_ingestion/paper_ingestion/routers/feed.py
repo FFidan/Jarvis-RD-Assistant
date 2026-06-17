@@ -45,6 +45,7 @@ async def list_feed_papers(
     source_types: str | None = Query(default=None, max_length=500),
     topic_names: str | None = Query(default=None, max_length=500),
     topic_id: int | None = Query(default=None),
+    untagged: bool = Query(default=False),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     recommended: bool = False,
@@ -83,6 +84,8 @@ async def list_feed_papers(
         Comma-separated list of topic names.
     topic_id : int, optional
         Restrict to papers tagged with this topic id (via ``paper_topics``).
+    untagged : bool
+        When True, restrict to papers with no ``paper_topics`` row.
     date_from, date_to : date, optional
         Created-at date range boundaries.
     include_zotero_notes : bool
@@ -115,6 +118,7 @@ async def list_feed_papers(
         source_types=source_types,
         topic_names=topic_names,
         topic_id=topic_id,
+        untagged=untagged,
         date_from=date_from,
         date_to=date_to,
         recommended=recommended,

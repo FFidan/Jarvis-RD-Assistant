@@ -1,11 +1,15 @@
 /**
  * SmtpMisconfigBanner — shared warning for the SMTP settings card and the
- * first-run wizard, shown when the effective mail relay is not deliverable.
+ * first-run wizard, shown whenever the backend reports SMTP configuration
+ * issues. This includes the case where the relay looks deliverable (host +
+ * sender present) but a username is set without a resolvable password, which
+ * still 535s at send time — so the banner must surface issues even when
+ * `deliverable` is true.
  *
- * Renders nothing when the relay is deliverable or there are no issues. Kept in
- * one module so the Settings card and the wizard step never drift in copy or
- * styling. The issue strings are produced (value-free) by the backend
- * (`GET /api/setup/smtp` → `issues`) so the wording lives server-side.
+ * Renders nothing only when there are no issues. Kept in one module so the
+ * Settings card and the wizard step never drift in copy or styling. The issue
+ * strings are produced (value-free) by the backend (`GET /api/setup/smtp` →
+ * `issues`) so the wording lives server-side.
  */
 interface SmtpMisconfigBannerProps {
   /** Effective-config deliverability from GET /api/setup/smtp. */
@@ -15,9 +19,12 @@ interface SmtpMisconfigBannerProps {
   className?: string;
 }
 
-export function SmtpMisconfigBanner({ deliverable, issues, className }: SmtpMisconfigBannerProps) {
-  // Warn only when the relay is not deliverable AND we have explicit issues.
-  if (deliverable || !issues || issues.length === 0) return null;
+export function SmtpMisconfigBanner({ deliverable: _deliverable, issues, className }: SmtpMisconfigBannerProps) {
+  // Warn whenever the backend reports explicit issues — including the
+  // host+sender-set-but-no-password case, where `deliverable` stays true but
+  // sends still fail. `deliverable` is accepted for API compatibility but no
+  // longer gates the warning (the issue list is authoritative).
+  if (!issues || issues.length === 0) return null;
   return (
     <div
       role="alert"

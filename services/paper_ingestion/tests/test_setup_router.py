@@ -478,11 +478,20 @@ async def test_configure_smtp_bootstrap_test_send_forces_recipient(monkeypatch) 
 
     captured_recipient: list[str] = []
 
-    async def fake_send_test(body, recipient):
+    async def fake_send_test(body, recipient, password):
         captured_recipient.append(recipient)
         return None  # success
 
     monkeypatch.setattr("paper_ingestion.routers.setup._send_test_email", fake_send_test)
+
+    from jarvis_common.email import _EffectiveSmtp
+
+    async def fake_effective_smtp(pool):
+        return _EffectiveSmtp(
+            host="smtp.example.com", port=587, user=None, password=None, sender="bot@example.com"
+        )
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._effective_smtp", fake_effective_smtp)
 
     conn = AsyncMock()
     # fetchval is called twice: once in require_unconfigured_or_admin, once in the
@@ -505,6 +514,157 @@ async def test_configure_smtp_bootstrap_test_send_forces_recipient(monkeypatch) 
     assert captured_recipient[0] == "bot@example.com", (
         f"Bootstrap mode must force recipient=from_email; got {captured_recipient[0]!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# S1 (F1): /api/system/readiness reports SMTP via the DB-aware probe
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_system_readiness_smtp_check_present_and_db_aware(monkeypatch) -> None:
+    """get_system_readiness returns 200 with an SMTP check resolved from the effective relay.
+
+    Regression guard for the S1 fix: the readiness builder must await the
+    DB-aware ``smtp_configured`` probe (not just read the env var), and the
+    SMTP check must be present and green when a relay is configured via
+    ``user_config`` even with the env unset.
+    """
+    from types import SimpleNamespace
+
+    import paper_ingestion.routers.system as system_router
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    get_secrets_settings.cache_clear()
+
+    # _effective_smtp reads user_config rows (smtp.host/from set → deliverable);
+    # the audit_log count uses conn.fetchrow.
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(
+        return_value=[
+            {"key": "smtp.host", "value": "mail.example.com", "encrypted_value": None},
+            {"key": "smtp.from", "value": "bot@example.com", "encrypted_value": None},
+        ]
+    )
+    conn.fetchrow = AsyncMock(return_value={"n": 0})
+    pool, _ = make_pool_and_conn(conn=conn)
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)),
+        headers={"x-forwarded-proto": "https"},
+        url=SimpleNamespace(scheme="https"),
+    )
+
+    res = await system_router.get_system_readiness(request)
+
+    get_secrets_settings.cache_clear()
+
+    smtp_checks = [c for c in res.checks if c.name == "smtp"]
+    assert len(smtp_checks) == 1, "readiness must include exactly one smtp check"
+    assert smtp_checks[0].status == "green", (
+        f"DB-configured relay must report green; got {smtp_checks[0].status!r} "
+        f"({smtp_checks[0].detail!r})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# S1 (F1): test_send uses the stored password when body.password is blank
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_configure_smtp_test_send_uses_stored_password_when_blank(monkeypatch) -> None:
+    """When body.password is blank but a password is stored, the test send uses the stored one."""
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+
+    async def fake_persist(pool, key, value, *, encrypted):
+        pass
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+
+    captured_password: list[str | None] = []
+
+    async def fake_send_test(body, recipient, password):
+        captured_password.append(password)
+        return None  # success
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._send_test_email", fake_send_test)
+
+    from jarvis_common.email import _EffectiveSmtp
+
+    async def fake_effective_smtp(pool):
+        return _EffectiveSmtp(
+            host="smtp.example.com",
+            port=587,
+            user="relay-user",
+            password="STORED_SECRET",
+            sender="bot@example.com",
+        )
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._effective_smtp", fake_effective_smtp)
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)  # no admin → bootstrap
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        user="relay-user",
+        test_send=True,
+    )
+    result = await setup_router.configure_smtp(body, request)
+
+    assert result.test_sent is True
+    assert captured_password == ["STORED_SECRET"], (
+        f"blank body.password must resolve to the stored password; got {captured_password!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_configure_smtp_test_send_uses_body_password_when_provided(monkeypatch) -> None:
+    """When body.password is provided, the test send uses it (not the stored one)."""
+    monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
+
+    async def fake_persist(pool, key, value, *, encrypted):
+        pass
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
+
+    captured_password: list[str | None] = []
+
+    async def fake_send_test(body, recipient, password):
+        captured_password.append(password)
+        return None
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._send_test_email", fake_send_test)
+
+    # _effective_smtp must NOT be consulted when body.password is present.
+    async def fail_effective_smtp(pool):  # pragma: no cover
+        raise AssertionError("_effective_smtp must not be called when body.password is provided")
+
+    monkeypatch.setattr("paper_ingestion.routers.setup._effective_smtp", fail_effective_smtp)
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+
+    body = setup_router.SmtpBody(
+        host="smtp.example.com",
+        port=587,
+        from_email="bot@example.com",
+        user="relay-user",
+        password="TYPED_SECRET",
+        test_send=True,
+    )
+    await setup_router.configure_smtp(body, request)
+
+    assert captured_password == ["TYPED_SECRET"]
 
 
 # ---------------------------------------------------------------------------

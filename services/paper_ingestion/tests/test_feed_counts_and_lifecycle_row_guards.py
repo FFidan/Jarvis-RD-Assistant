@@ -7,6 +7,9 @@ Two production sites replaced (audit finding H4):
 Each test exercises the real code path with a mocked DB so the relevant
 fetchrow returns None and verifies that RuntimeError (not
 AssertionError/AttributeError) is raised.
+
+Also covers F10 best-effort behaviour: a daily_log write failure must not fail
+the PUT /reading response.
 """
 
 from __future__ import annotations
@@ -103,3 +106,58 @@ async def test_annotate_paper_raises_runtime_error_when_upsert_returns_none():
                     "/api/papers/99/annotations",
                     json={"rating": 3, "user_notes": None, "flagged": None},
                 )
+
+
+# ---------------------------------------------------------------------------
+# F10: best-effort — daily_log write failure must not fail PUT /reading
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_f10_daily_log_failure_does_not_fail_reading_mark():
+    """PUT /reading returns 200 even when the daily_log upsert raises.
+
+    Patches: ownership check → granted; assert_paper_in_states → allowed;
+    conn.fetchval → 'to_read' (state_before); _upsert_state_and_starred → no-op;
+    conn.execute → raises asyncpg.PostgresError (simulates daily_log failure).
+
+    Verified: papers_lifecycle.py — the daily_log execute is wrapped in try/except.
+    """
+    import asyncpg
+
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.routers.papers_lifecycle import router as lifecycle_router
+
+    app = FastAPI()
+    app.include_router(lifecycle_router)
+
+    pool, conn = make_pool_and_conn(fetchval_return="to_read")
+    conn.execute = AsyncMock(side_effect=asyncpg.PostgresError("simulated daily_log failure"))
+
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_current_user_id] = lambda: 7
+
+    with (
+        patch(
+            "paper_ingestion.routers.papers_lifecycle.papers_service.assert_paper_ownership",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "paper_ingestion.routers.papers_lifecycle._assert_paper_in_states",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "paper_ingestion.routers.papers_lifecycle._upsert_state_and_starred",
+            AsyncMock(return_value=None),
+        ),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.put("/api/papers/42/reading")
+
+    assert resp.status_code == 200, (
+        f"PUT /reading must succeed even when daily_log write fails; got {resp.status_code}: {resp.text[:200]}"
+    )

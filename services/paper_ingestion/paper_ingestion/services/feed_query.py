@@ -116,6 +116,7 @@ def build_feed_queries(
     source_types: str | None,
     topic_names: str | None,
     topic_id: int | None = None,
+    untagged: bool = False,
     date_from: date | None,
     date_to: date | None,
     recommended: bool = False,
@@ -234,6 +235,9 @@ def build_feed_queries(
         )
         params.append(topic_id)
         param_idx += 1
+
+    if untagged:
+        conditions.append("NOT EXISTS (SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.id)")
 
     if date_from:
         conditions.append(f"p.created_at >= ${param_idx}")

@@ -264,6 +264,146 @@ async def test_generate_paper_summary_maps_read_timeout_to_llm_error():
             )
 
 
+# ---------------------------------------------------------------------------
+# F4: LLM error cause preservation + no body leak + bounded transient retry
+# ---------------------------------------------------------------------------
+
+
+def _http_status_error(status_code: int, body: str) -> httpx.HTTPStatusError:
+    """Build an httpx.HTTPStatusError whose response carries a sentinel body."""
+    request = httpx.Request("POST", "http://litellm/v1/chat/completions")
+    response = httpx.Response(status_code, request=request, text=body)
+    return httpx.HTTPStatusError("upstream error", request=request, response=response)
+
+
+async def _drive_summary_llm_failure(side_effect):
+    """Drive generate_paper_summary down the single-window LLM path with a failing call.
+
+    Returns (raised LLMError, the patched call_llm_structured mock).
+    """
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [_paper_row(), None]
+    conn.fetch.return_value = [_chunk_row()]
+    conn.fetchval.return_value = "smart"
+    pool = _make_pool(conn)
+
+    patch_ctx, llm_mock = _patched_call_llm(side_effect=side_effect)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_RETRY_BACKOFF_SECONDS", 0.0),
+        patch_ctx,
+    ):
+        with pytest.raises(LLMError) as exc_info:
+            await summarization.generate_paper_summary(
+                paper_id=7,
+                db_pool=pool,
+                http_client=AsyncMock(),
+                verifier=MagicMock(),
+                embedder=MagicMock(),
+            )
+    return exc_info.value, llm_mock
+
+
+@pytest.mark.asyncio
+async def test_llm_error_carries_status_code_but_not_response_body(caplog):
+    """An HTTPStatusError surfaces only the status code; the upstream body never leaks.
+
+    LLMError subclasses JobError, whose str(exc) is rendered VERBATIM to the user
+    via the job-status 'error' field (task_registry._terminal_error_payload). The
+    user-facing message must therefore carry the HTTP status code ONLY — never the
+    upstream response body — while the full cause goes to logger.error(exc_info=True).
+    """
+    import logging as _logging
+
+    err = _http_status_error(502, "SECRET_BODY_LEAK from the upstream provider")
+    with caplog.at_level(_logging.ERROR, logger="paper_ingestion.services.summarization"):
+        raised, _llm_mock = await _drive_summary_llm_failure(err)
+
+    # User-facing message: status code present, body sentinel absent.
+    assert "502" in str(raised)
+    assert "SECRET_BODY_LEAK" not in str(raised)
+
+    # Server-side: the failure is logged with exc_info and correlates the paper.
+    error_records = [r for r in caplog.records if r.levelno == _logging.ERROR]
+    assert error_records, "a logger.error must be emitted for the failed LLM call"
+    assert any(r.exc_info is not None for r in error_records), "logged with exc_info"
+    assert any("7" in str(r.getMessage()) or 7 in (r.args or ()) for r in error_records), (
+        "the failed-call log must correlate the paper_id"
+    )
+
+
+@pytest.mark.asyncio
+async def test_api_status_error_does_not_leak_response_body():
+    """openai.APIStatusError carries the full upstream body in str(exc) — never surface it."""
+    import openai
+
+    request = httpx.Request("POST", "http://litellm/v1/chat/completions")
+    response = httpx.Response(500, request=request, text="SECRET_BODY_LEAK")
+    api_err = openai.APIStatusError("upstream 500: SECRET_BODY_LEAK", response=response, body=None)
+    raised, _llm_mock = await _drive_summary_llm_failure(api_err)
+
+    assert "SECRET_BODY_LEAK" not in str(raised)
+    assert "500" in str(raised)
+
+
+@pytest.mark.asyncio
+async def test_permanent_error_raises_after_a_single_attempt():
+    """A permanent error (4xx HTTPStatusError) must NOT retry — exactly one LLM call."""
+    err = _http_status_error(400, "bad request")
+    _raised, llm_mock = await _drive_summary_llm_failure(err)
+    assert llm_mock.call_count == 1, "permanent errors must raise on the first attempt"
+
+
+@pytest.mark.asyncio
+async def test_transient_5xx_retries_at_most_twice():
+    """A transient 5xx that never recovers retries up to the cap, then raises LLMError."""
+    err = _http_status_error(503, "upstream unavailable")
+    _raised, llm_mock = await _drive_summary_llm_failure(err)
+    assert llm_mock.call_count == 2, "transient errors retry at most once (2 attempts total)"
+
+
+@pytest.mark.asyncio
+async def test_transient_then_success_returns_summary():
+    """A transient 502 on the first attempt recovers on the retry and produces a summary."""
+    llm_output = SummarizationOutput(
+        tldr="A good paper",
+        summary_brief="Brief summary",
+        summary_detailed="Detailed summary",
+        key_findings=[],
+    )
+    transient = _http_status_error(502, "transient")
+
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = [_chunk_row()]
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = _stored_row()
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=1, verified_count=1, confidence=Confidence.HIGH
+    )
+
+    patch_ctx, llm_mock = _patched_call_llm(side_effect=[transient, llm_output])
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch.object(summarization, "_RETRY_BACKOFF_SECONDS", 0.0),
+        patch_ctx,
+    ):
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+        )
+
+    assert llm_mock.call_count == 2
+    assert result.summary.summary_brief == "brief"
+
+
 @pytest.mark.asyncio
 async def test_generate_paper_summary_confidence_none_roundtrips_without_validation_error():
     """Confidence.NONE (zero findings) must survive the DB round-trip without ValidationError.

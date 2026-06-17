@@ -151,7 +151,8 @@ async def generate_weekly_summary(
             FROM papers p
             JOIN paper_topics pt ON p.id = pt.paper_id
             JOIN topics t ON pt.topic_id = t.id
-            LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
+            LEFT JOIN paper_summaries ps
+                ON p.id = ps.paper_id AND ps.user_id IS NOT DISTINCT FROM $2
             WHERE p.created_at >= $1
               AND (
                   EXISTS (

@@ -15,12 +15,24 @@ import math
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
+from qdrant_client.http.exceptions import (
+    ApiException,
+    ResponseHandlingException,
+    UnexpectedResponse,
+)
+
 from paper_ingestion.ingestion.embedding_config import (
     COLLECTION_NAME,
     _point_payload,
     _user_scope_filter,
 )
 from paper_ingestion.perf_probe import probe_span
+from paper_ingestion.rag.exceptions import QdrantUnavailableError
+
+# Qdrant exception classes that indicate a transport / server-side failure.
+# UnexpectedResponse is only a transport failure when the HTTP status is 5xx;
+# 4xx responses (malformed query) are not Qdrant being unavailable.
+_QDRANT_TRANSPORT_EXCEPTIONS = (ResponseHandlingException, ApiException, UnexpectedResponse)
 
 if TYPE_CHECKING:
     import asyncpg
@@ -201,9 +213,11 @@ class EmbeddingSearchMixin:
             )
         except RuntimeError:
             raise
-        except Exception:
-            logger.exception("Qdrant search failed for paper %d", paper_id)
-            return []
+        except _QDRANT_TRANSPORT_EXCEPTIONS as exc:
+            if isinstance(exc, UnexpectedResponse) and (exc.status_code or 0) < 500:
+                raise
+            logger.exception("Qdrant transport error for paper %d", paper_id)
+            raise QdrantUnavailableError("Qdrant unavailable") from exc
 
         results: list[dict] = []
         for hit in response.points:
@@ -366,9 +380,11 @@ class EmbeddingSearchMixin:
             )
         except RuntimeError:
             raise
-        except Exception:
+        except _QDRANT_TRANSPORT_EXCEPTIONS as exc:
+            if isinstance(exc, UnexpectedResponse) and (exc.status_code or 0) < 500:
+                raise
             logger.exception("Qdrant global search failed")
-            return []
+            raise QdrantUnavailableError("Qdrant unavailable") from exc
 
         results: list[dict] = []
         for hit in response.points:

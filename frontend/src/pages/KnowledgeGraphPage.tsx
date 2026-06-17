@@ -3,6 +3,7 @@ import { errorMessage } from '@/lib/errors';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { getKnowledgeGraph, batchExtractEntities } from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
 import { CytoscapeGraph } from '@/components/graph/CytoscapeGraph';
 import { GraphControls, type LayoutType } from '@/components/graph/GraphControls';
 import { GraphStats } from '@/components/graph/GraphStats';
@@ -29,6 +30,7 @@ export function KnowledgeGraphPage() {
   const [entityType, setEntityType] = useState('All');
   const [minPaperCount, setMinPaperCount] = useState(1);
   const [layout, setLayout] = useState<LayoutType>('cose');
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
 
   const queryClient = useQueryClient();
   const filterType = entityType === 'All' ? undefined : entityType;
@@ -146,19 +148,21 @@ export function KnowledgeGraphPage() {
             <Button asChild variant="outline" size="sm">
               <Link to="/feed?surface=library">Open Library</Link>
             </Button>
-            <Button
-              variant="default"
-              size="sm"
-              disabled={extractMut.isPending}
-              onClick={() => extractMut.mutate()}
-            >
-              {extractMut.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Sparkles className="mr-2 h-4 w-4" />
-              )}
-              Batch Extract Entities
-            </Button>
+            {isAdmin && (
+              <Button
+                variant="default"
+                size="sm"
+                disabled={extractMut.isPending}
+                onClick={() => extractMut.mutate()}
+              >
+                {extractMut.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-2 h-4 w-4" />
+                )}
+                Batch Extract Entities
+              </Button>
+            )}
           </div>
         </div>
       )}

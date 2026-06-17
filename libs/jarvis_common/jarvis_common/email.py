@@ -28,6 +28,12 @@ from jarvis_common.settings import get_core_settings, get_secrets_settings
 
 logger = logging.getLogger(__name__)
 
+# Socket-operation timeout for the live magic-link send. Kept >= the setup
+# wizard's SMTP_TEST_TIMEOUT_SECONDS (10s) so a slow-but-valid relay that
+# passed the test-send is not cut off on the real send, while still bounding
+# a hung connection well under aiosmtplib's 60s default.
+SMTP_SEND_TIMEOUT_SECONDS = 30.0
+
 
 def smtp_tls_flags(port: int) -> tuple[bool, bool]:
     """(use_tls, start_tls) by port: 465 implicit TLS; 587 STARTTLS; else plaintext."""
@@ -70,6 +76,18 @@ class _EffectiveSmtp:
     def deliverable(self) -> bool:
         """True iff host + sender are present (the minimum to send an envelope)."""
         return bool(self.host) and bool(self.sender)
+
+    @property
+    def auth_consistent(self) -> bool:
+        """False iff a username is set but no password resolved.
+
+        IP-allowlist relays (no user, no pass) are consistent. A username with a
+        password is consistent. The only misconfiguration is a half-set login
+        (user without a resolvable password) — the relay will reject the AUTH.
+        This is independent of ``deliverable`` (host + sender can be fine while
+        the AUTH credentials are half-configured).
+        """
+        return not (bool(self.user) and not self.password)
 
     @property
     def from_header(self) -> str:
@@ -229,10 +247,21 @@ async def effective_smtp_status(pool: asyncpg.Pool | None = None) -> tuple[bool,
     they never embed a configured value.
     """
     eff = await _effective_smtp(pool)
-    if eff.deliverable:
-        return True, []
 
     issues: list[str] = []
+    # Auth-consistency is independent of deliverability: host + sender can be
+    # present (deliverable) while a username is set with no resolvable password,
+    # which the relay will reject at AUTH. Surface it even when deliverable, so
+    # the early-return below does not hide a half-configured login.
+    if not eff.auth_consistent:
+        issues.append(
+            "A mail-server username is set but no password is configured — "
+            "the relay will reject sign-in emails."
+        )
+
+    if eff.deliverable:
+        return True, issues
+
     if await _required_smtp_empty_string(pool):
         issues.append(
             "A required SMTP field is set to an empty value — sign-in links will not be delivered."
@@ -362,16 +391,57 @@ async def send_magic_link(
             )
             return
 
-    await aiosmtplib.send(
-        message,
-        hostname=smtp.host,
-        port=smtp.port,
-        username=smtp.user,
-        password=smtp.password,
-        use_tls=use_tls,
-        start_tls=start_tls,
-    )
+    try:
+        await aiosmtplib.send(
+            message,
+            hostname=smtp.host,
+            port=smtp.port,
+            username=smtp.user,
+            password=smtp.password,
+            use_tls=use_tls,
+            start_tls=start_tls,
+            timeout=SMTP_SEND_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        # Make delivery failures observable (the Logs Live tab surfaces this),
+        # then re-raise: callers swallow it for anti-enumeration, so the
+        # unauthenticated /request-link response is unchanged. Never log the
+        # raw recipient or the bearer-token link.
+        logger.warning(
+            "magic_link_delivery_failed email_hash=%s error_class=%s",
+            _hash_email(email),
+            type(exc).__name__,
+        )
+        if pool is not None:
+            try:
+                await log_event(
+                    pool=pool,
+                    level="error",
+                    category="auth",
+                    source="auth",
+                    message="magic_link_delivery_failed",
+                    context={
+                        "email_hash": _hash_email(email),
+                        "error_class": type(exc).__name__,
+                    },
+                )
+            except Exception:  # noqa: BLE001 — observability is best-effort
+                logger.debug("system_events emit failed (non-fatal)", exc_info=True)
+        raise
+
     logger.info("magic_link_sent email_hash=%s", _hash_email(email))
+    if pool is not None:
+        try:
+            await log_event(
+                pool=pool,
+                level="info",
+                category="auth",
+                source="auth",
+                message="magic_link_sent",
+                context={"email_hash": _hash_email(email)},
+            )
+        except Exception:  # noqa: BLE001 — observability is best-effort
+            logger.debug("system_events emit failed (non-fatal)", exc_info=True)
 
 
 async def smtp_configured(pool: asyncpg.Pool | None = None) -> bool:

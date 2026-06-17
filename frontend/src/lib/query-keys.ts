@@ -18,19 +18,34 @@ export const QUERY_KEYS = {
       offset: number,
       sourceTypes: string[] | null,
       topicId: number | null = null,
+      untagged: boolean = false,
     ) =>
       (topicId == null
-        ? (["papers-feed", surface, filter, scope, limit, offset, sourceTypes] as const)
-        : ([
-            "papers-feed",
-            surface,
-            filter,
-            scope,
-            limit,
-            offset,
-            sourceTypes,
-            topicId,
-          ] as const)),
+        ? (untagged
+            ? (["papers-feed", surface, filter, scope, limit, offset, sourceTypes, "untagged"] as const)
+            : (["papers-feed", surface, filter, scope, limit, offset, sourceTypes] as const))
+        : (untagged
+            ? ([
+                "papers-feed",
+                surface,
+                filter,
+                scope,
+                limit,
+                offset,
+                sourceTypes,
+                topicId,
+                "untagged",
+              ] as const)
+            : ([
+                "papers-feed",
+                surface,
+                filter,
+                scope,
+                limit,
+                offset,
+                sourceTypes,
+                topicId,
+              ] as const))),
     /** Bare prefix for `invalidateQueries` — matches all papers-feed cache entries. */
     feedAll: () => ["papers-feed"] as const,
     detail: (paperId: number) => ["paper-detail", paperId] as const,

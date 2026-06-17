@@ -290,9 +290,11 @@ jobs:
 
   e2e-mocked:
     name: E2E mocked smoke (non-blocking)
-    # NOT listed in gate.needs — failures are informational only.
-    # Promote to required (add "e2e-mocked" to gate.needs) once it has ≥2
-    # consecutive green runs on the default branch.
+    # NOT listed in gate.needs — failures are informational only (continue-on-error).
+    # The mocked suite is green as of 2026-06; it was previously red/cancelled due to a
+    # Service-Worker-vs-page.route bypass, fixed via serviceWorkers:'block' in playwright.config.ts.
+    # Promote to required once it has >=2 consecutive green runs on master:
+    # flip continue-on-error:false AND add "e2e-mocked" to gate.needs.
     timeout-minutes: 15
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     # Run only after the frontend build succeeds so we know the bundle is healthy.
@@ -335,11 +337,13 @@ jobs:
           # Uses the test:e2e:mocked npm script which targets the explicit mocked spec list.
           PLAYWRIGHT_BASE_URL=http://127.0.0.1:3001 npm --prefix frontend run test:e2e:mocked -- \
             --workers=1 \
-            --reporter=line || true
+            --reporter=line || rc=$?
           kill "$SERVER_PID" || true
+          exit "${rc:-0}"
         env:
           CI: "true"
 
+  # gate — Enforced as a required status check via branch protection (not via cross-workflow needs:).
   gate:
     name: CI gate (required status check)
     timeout-minutes: 5

@@ -288,6 +288,39 @@ async def test_a5_invite_user_409_on_duplicate_email(admin_client, contract_conn
     )
 
 
+async def test_a5_invite_soft_deleted_email_returns_409(admin_client, contract_conn):
+    """Covers map row A5: inviting an email that belongs to a soft-deleted user returns 409.
+
+    Before the fix this raised asyncpg.UniqueViolationError → 500 because the
+    pre-check only guards against non-deleted duplicates (deleted_at IS NULL).
+    The unique constraint on users.email covers soft-deleted rows too.
+
+    Verified: admin.py:144-152 INSERT fetchrow + fix at HEAD.
+    """
+    soft_deleted_email = "soft-deleted-invite-contract@example.com"
+    # Insert a user and then soft-delete them.
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        soft_deleted_email,
+    )
+    await contract_conn.execute(
+        "UPDATE users SET deleted_at = NOW() WHERE id = $1",
+        user_id,
+    )
+
+    resp = await admin_client.post(
+        "/api/admin/users",
+        json={"email": soft_deleted_email, "role": "user"},
+    )
+
+    assert resp.status_code == 409, (
+        f"Expected 409 for soft-deleted email invite; got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert "removed" in resp.json().get("detail", "").lower(), (
+        f"Expected detail to mention 'removed'; got: {resp.json()}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # A6: PATCH /api/admin/users/{id}/role — admin updates user role
 # ---------------------------------------------------------------------------

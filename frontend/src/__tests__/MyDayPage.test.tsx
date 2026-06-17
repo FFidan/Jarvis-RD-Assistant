@@ -15,7 +15,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchMyDay: vi.fn(),
     fetchProjects: vi.fn(),
     fetchPulseToday: vi.fn(),
-    fetchFeedPapers: vi.fn(),
+    fetchFeed: vi.fn(),
     getStats: vi.fn(),
     createQuickTask: vi.fn(),
     logFocusSession: vi.fn(),
@@ -138,7 +138,7 @@ describe('MyDayPage', () => {
     });
     vi.mocked(api.fetchIntentToday).mockResolvedValue({ intent: null, updated_at: null });
     vi.mocked(api.fetchPulseToday).mockResolvedValue(mockPulseDeck);
-    vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
+    vi.mocked(api.fetchFeed).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
     vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
     vi.mocked(api.fetchWeeklyDigest).mockResolvedValue({
@@ -349,7 +349,7 @@ describe('HeroPulse behaviour', () => {
       updated_at: '2026-05-15T00:00:00Z',
     });
     vi.mocked(api.fetchIntentToday).mockResolvedValue({ intent: null, updated_at: null });
-    vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
+    vi.mocked(api.fetchFeed).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
     vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
     vi.mocked(api.fetchWeeklyDigest).mockResolvedValue({
@@ -450,7 +450,7 @@ describe('MyDayPage hash-scroll', () => {
     });
     vi.mocked(api.fetchIntentToday).mockResolvedValue({ intent: null, updated_at: null });
     vi.mocked(api.fetchPulseToday).mockResolvedValue(mockPulseDeck);
-    vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
+    vi.mocked(api.fetchFeed).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
     vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
     vi.mocked(api.fetchWeeklyDigest).mockResolvedValue({

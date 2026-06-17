@@ -138,6 +138,8 @@ Some are collected by the onboarding wizard ([routers/setup.py](https://github.c
 | `smtp.user` | (none) | `_validate_nonempty_str` | Relay auth user. |
 | `smtp.from` | (none) | `_validate_nonempty_str` | Default From address. |
 | `smtp.pass` | (none) | `_validate_nonempty_str` | Relay auth password. **Encrypted** (`_ENCRYPTED_KEYS`): stored as Fernet ciphertext in `encrypted_value`, masked on GET. |
+| `smtp.reply_to` | (none — optional) | `_validate_optional_email` (empty string clears; valid email or absent) | Optional Reply-To address set in outgoing magic-link emails. Routes replies away from the From address. Written by the setup wizard and Settings → Email / SMTP; also readable from `SMTP_REPLY_TO` env at startup. Empty string clears the stored value. Added in v0.8.6. |
+| `smtp.from_name` | (none — optional) | `_validate_optional_header_str` (empty string clears; ≤ 255 chars, no control chars) | Optional sender display name prepended to the From header (e.g. `JARVIS RD <login@your-domain.dev>`). Written by the setup wizard and Settings → Email / SMTP; also readable from `SMTP_FROM_NAME` env at startup. Empty string clears the stored value. Added in v0.8.6. |
 | `automation.fetch_interval_hours` | (none) | `_validate_positive_int` | Interval for the system-wide auto-fetch pipeline scheduler. |
 | `observability.langfuse_dashboard_url` | (none) | `_validate_langfuse_dashboard_url` (empty / `https://` / `http://localhost` / `http://127.0.0.1`) | The "Open Langfuse dashboard" link target in Settings → Observability. See [04-observability.md §8](04-observability.md#8-settings-ui-integration). |
 
@@ -214,6 +216,8 @@ Defined in `_CONFIG_VALIDATORS` ([config_validators.py:231-271](https://github.c
 | `_validate_bool` | `pulse.enabled`, `setup.completed`, `zotero.poll_enabled`, `zotero.auto_push_on_star` | Strict bool |
 | `_validate_optional_int` | `telegram.owner_chat_id` | int or null |
 | `_validate_nonempty_str` | `llm.{smart,fast,embed}_model`, `zotero.{api_key,user_id}`, `llm.{anthropic,openai,google}.api_key`, `smtp.{host,user,from,pass}` | Non-empty trimmed string |
+| `_validate_optional_email` | `smtp.reply_to` | Empty string or `null` clears; otherwise must match `\S+@\S+\.\S+` with no control characters |
+| `_validate_optional_header_str` | `smtp.from_name` | Empty string or `null` clears; otherwise ≤ 255 printable chars, no `\r`/`\n`/`\x00` |
 | `_validate_library_type` | `zotero.library_type` | `"user"` or `"group"` |
 | `_validate_group_id` | `zotero.group_id` | Positive int or null |
 | `_validate_zotero_cron` | `zotero.poll_cron` | Must parse via `CronTrigger.from_crontab` (no sub-hourly limit, unlike Pulse) |
@@ -301,6 +305,8 @@ The implementation MUST satisfy these. Testable.
 | `fsrs.desired_retention` | Active (per-review DB read) |
 | `fsrs.learning_steps` | Active (wired into the fsrs Scheduler) |
 | `smtp.{host,port,user,from,pass}` | Active (system-wide outbound-mail relay; `smtp.pass` encrypted) |
+| `smtp.reply_to` | Active (optional Reply-To header on magic-link emails; empty value clears) |
+| `smtp.from_name` | Active (optional sender display name in From header; empty value clears) |
 | `automation.fetch_interval_hours` | Active (system-wide auto-fetch scheduler) |
 | `observability.langfuse_dashboard_url` | Active (Settings → Observability link target) |
 | `llm.anthropic.api_key` | Partial (used only when model alias is `anthropic/*` or for `/test` endpoint) |

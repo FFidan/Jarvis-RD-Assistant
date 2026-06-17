@@ -175,6 +175,24 @@ test.beforeEach(async ({ page }) => {
       body: JSON.stringify([]),
     });
   });
+
+  // Zotero linkage — ZoteroPanel fetches this on mount; left unmocked it never
+  // resolves, so waitForLoadState('networkidle') stalls and every assertion times out.
+  await page.route('**/api/papers/1/zotero', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        zotero_item_key: null,
+        zotero_citation_key: null,
+        zotero_last_pushed_at: null,
+      }),
+    });
+  });
 });
 
 // ── Desktop 3-pane tests ───────────────────────────────────────────────────

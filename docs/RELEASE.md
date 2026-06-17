@@ -81,10 +81,10 @@ commits since the last Git tag.
 
 The four main services (`paper_ingestion`, `learning_engine`, `telegram_bot`,
 `dashboard`) are tagged using the `JARVIS_VERSION` environment variable
-(defaults to `0.6.0`). Set it in `.env` or `versions.env` before building:
+(defaults to `0.8.7`). Set it in `.env` or `versions.env` before building:
 
 ```bash
-JARVIS_VERSION=0.6.0
+JARVIS_VERSION=0.8.7
 docker compose build
 docker compose up -d
 ```
@@ -97,6 +97,7 @@ The `image:` tag in `docker-compose.yml` is applied to the built result so that
 Before tagging a release:
 
 - [ ] All planned changes for the milestone have merged to `master`.
+- [ ] Version bumped in lockstep: `pyproject.toml`, `frontend/package.json` (and `package-lock.json`, via `npm version`), the `docker-compose.yml` `JARVIS_VERSION` fallback, and the `CHANGELOG.md` heading + date.
 - [ ] `uv run pytest -x` passes.
 - [ ] `npm --prefix frontend run test -- --run` passes.
 - [ ] `uv run ruff check services/ libs/ scripts/` is clean.

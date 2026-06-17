@@ -21,6 +21,9 @@ real bugs to fix at the query layer, not assertions to weaken.
 
 from __future__ import annotations
 
+import json
+from unittest.mock import MagicMock
+
 import httpx
 import pytest
 from httpx import ASGITransport
@@ -683,3 +686,170 @@ async def test_summary_read_scoped_to_calling_user(
     assert summary_a is not None and summary_a["summary_brief"] == _A_SUMMARY_MARKER, (
         f"owner read regression: user A did not get their own summary: {resp_a.text[:300]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# F12: weekly-summary digest paper_summaries join scoping
+#
+# generate_weekly_summary LEFT JOINs paper_summaries onto each engaged paper.
+# paper_summaries is per-user (UNIQUE NULLS NOT DISTINCT (paper_id, user_id)),
+# so the JOIN must be scoped to the requesting user (ps.user_id IS NOT DISTINCT
+# FROM <user>) in the ON clause — an unscoped join surfaces another user's
+# summary_brief / confidence to the requester, and a WHERE-clause predicate
+# would silently drop engaged-but-unsummarized papers (LEFT->INNER).
+# ---------------------------------------------------------------------------
+
+
+async def _seed_weekly_engaged_paper(conn, ext_id, title, user_id, topic_name):
+    """Seed a shared paper engaged (starred) by *user_id* under its own topic.
+
+    Returns the new paper id. No paper_summaries row is created here — callers
+    add per-user summaries explicitly so the JOIN-scoping behaviour is isolated.
+    """
+    paper_id = await conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ($1, 'arxiv', $2, ARRAY['W. Author'], $3, NULL)
+           RETURNING id""",
+        ext_id,
+        title,
+        f"https://example.test/{ext_id}",
+    )
+    await conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_id,
+        paper_id,
+    )
+    await conn.execute(
+        "INSERT INTO paper_user_state (paper_id, user_id, state, starred) "
+        "VALUES ($1, $2, 'to_read', TRUE)",
+        paper_id,
+        user_id,
+    )
+    topic_id = await conn.fetchval(
+        "INSERT INTO topics (name, query_terms) VALUES ($1, ARRAY['q']) RETURNING id",
+        topic_name,
+    )
+    await conn.execute(
+        "INSERT INTO paper_topics (paper_id, topic_id, relevance_score) VALUES ($1, $2, 0.9)",
+        paper_id,
+        topic_id,
+    )
+    return paper_id
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_weekly_summary_join_excludes_other_users_summary(
+    contract_two_users,
+    contract_conn,
+) -> None:
+    """User B's weekly digest must not surface user A's paper_summaries row.
+
+    Seed a single shared paper engaged by BOTH users. Only user A has a
+    paper_summaries row (a distinctive summary_brief + confidence='LOW').
+    Generating B's weekly summary must show that paper with NO summary data
+    (confidence is None and A's brief marker is absent everywhere) — proving
+    the LEFT JOIN is scoped to the requesting user.
+    """
+    from jarvis_common.testing_db import SharedConnPool
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.weekly_summary import generate_weekly_summary
+
+    paper_id = await _seed_weekly_engaged_paper(
+        contract_conn,
+        "wk-iso-shared",
+        "shared-paper-weekly-join-isolation",
+        contract_two_users.user_a_id,
+        "weekly-iso-topic-shared",
+    )
+    # B engages the SAME shared paper (own library + state row), no summary.
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        contract_two_users.user_b_id,
+        paper_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_user_state (paper_id, user_id, state, starred) "
+        "VALUES ($1, $2, 'to_read', TRUE)",
+        paper_id,
+        contract_two_users.user_b_id,
+    )
+    # Only A owns a summary for this paper (distinctive brief + confidence).
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries (paper_id, summary_brief, summary_detailed, confidence, user_id)
+           VALUES ($1, $2, $2, 'LOW', $3)""",
+        paper_id,
+        _A_SUMMARY_MARKER,
+        contract_two_users.user_a_id,
+    )
+
+    pool = SharedConnPool(contract_conn)
+    result = await generate_weekly_summary(
+        db_pool=pool,
+        verifier=QuoteVerifier(),
+        days=7,
+        user_id=contract_two_users.user_b_id,
+        openai_client=MagicMock(),
+    )
+
+    assert result["total_papers"] == 1, (
+        f"B's engaged shared paper must appear in the digest: {result}"
+    )
+    top_paper = next(
+        (tp for t in result["topics"] for tp in t["top_papers"] if tp["id"] == paper_id),
+        None,
+    )
+    assert top_paper is not None, f"B's engaged paper missing from the digest: {result}"
+    # ps.confidence is selected per-paper; A's LOW must NOT leak to B (scoped JOIN).
+    assert top_paper["confidence"] is None, (
+        f"LEAK: user A's summary confidence visible to user B: {top_paper}"
+    )
+    # A's brief marker must be absent from the entire serialized digest.
+    assert _A_SUMMARY_MARKER not in json.dumps(result), (
+        f"LEAK: user A's summary_brief visible to user B: {result}"
+    )
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_weekly_summary_preserves_engaged_paper_without_summary(
+    contract_two_users,
+    contract_conn,
+) -> None:
+    """An engaged paper with NO summary still appears in the digest (LEFT JOIN).
+
+    Regression guard for the F12 fix: the user-scoping predicate lives in the
+    JOIN ON clause, not WHERE. A WHERE predicate would convert the LEFT JOIN
+    into an inner join and drop engaged-but-unsummarized papers from B's
+    digest. B engages a paper for which NEITHER user has a summary.
+    """
+    from jarvis_common.testing_db import SharedConnPool
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.weekly_summary import generate_weekly_summary
+
+    paper_id = await _seed_weekly_engaged_paper(
+        contract_conn,
+        "wk-iso-nosummary",
+        "weekly-paper-no-summary",
+        contract_two_users.user_b_id,
+        "weekly-iso-topic-nosummary",
+    )
+
+    pool = SharedConnPool(contract_conn)
+    result = await generate_weekly_summary(
+        db_pool=pool,
+        verifier=QuoteVerifier(),
+        days=7,
+        user_id=contract_two_users.user_b_id,
+        openai_client=MagicMock(),
+    )
+
+    assert result["total_papers"] == 1, (
+        f"engaged paper with no summary must survive the LEFT JOIN: {result}"
+    )
+    top_paper = next(
+        (tp for t in result["topics"] for tp in t["top_papers"] if tp["id"] == paper_id),
+        None,
+    )
+    assert top_paper is not None, f"engaged-but-unsummarized paper dropped from digest: {result}"
+    assert top_paper["confidence"] is None

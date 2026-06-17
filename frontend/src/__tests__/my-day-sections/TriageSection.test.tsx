@@ -23,12 +23,12 @@ vi.mock('@/stores/job-store', () => ({
 }));
 
 vi.mock('@/lib/api', () => ({
-  fetchFeedPapers: vi.fn(),
+  fetchFeed: vi.fn(),
   fetchMissingFoundationalPapers: vi.fn(),
   fetchAndProcessFoundationalPaper: vi.fn(),
 }));
 
-const { fetchFeedPapers, fetchMissingFoundationalPapers } = await import('@/lib/api');
+const { fetchFeed, fetchMissingFoundationalPapers } = await import('@/lib/api');
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -104,7 +104,7 @@ describe('TriageSection', () => {
   });
 
   it('renders nothing when both action items and foundational papers are empty', async () => {
-    vi.mocked(fetchFeedPapers).mockResolvedValue({ papers: [], total: 0 });
+    vi.mocked(fetchFeed).mockResolvedValue({ papers: [], total: 0 });
     vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([]);
 
     const { container } = renderWithProviders();
@@ -118,7 +118,7 @@ describe('TriageSection', () => {
   });
 
   it('renders error sentinel when action items query fails', async () => {
-    vi.mocked(fetchFeedPapers).mockRejectedValue(new Error('500'));
+    vi.mocked(fetchFeed).mockRejectedValue(new Error('500'));
     vi.mocked(fetchMissingFoundationalPapers).mockResolvedValue([]);
 
     renderWithProviders();
@@ -127,7 +127,7 @@ describe('TriageSection', () => {
   });
 
   it('renders error sentinel when foundational papers query fails', async () => {
-    vi.mocked(fetchFeedPapers).mockResolvedValue({ papers: [], total: 0 });
+    vi.mocked(fetchFeed).mockResolvedValue({ papers: [], total: 0 });
     vi.mocked(fetchMissingFoundationalPapers).mockRejectedValue(new Error('500'));
 
     renderWithProviders();
@@ -136,7 +136,7 @@ describe('TriageSection', () => {
   });
 
   it('renders error sentinel when both queries fail', async () => {
-    vi.mocked(fetchFeedPapers).mockRejectedValue(new Error('500'));
+    vi.mocked(fetchFeed).mockRejectedValue(new Error('500'));
     vi.mocked(fetchMissingFoundationalPapers).mockRejectedValue(new Error('500'));
 
     renderWithProviders();
@@ -145,7 +145,7 @@ describe('TriageSection', () => {
   });
 
   it('renders both action item and foundational paper rows when data is present', async () => {
-    vi.mocked(fetchFeedPapers).mockResolvedValue({
+    vi.mocked(fetchFeed).mockResolvedValue({
       papers: [makeFeedPaper()],
       total: 1,
     });

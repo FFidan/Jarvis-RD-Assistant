@@ -859,15 +859,18 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
             )
         )
 
-    # SMTP — magic links fall back to stdout when unset.
-    smtp_configured = secrets.smtp_host is not None
+    # SMTP — magic links fall back to stdout when unset. Probe the EFFECTIVE
+    # relay (wizard-written user_config layered over env), not just the env var,
+    # so a relay configured only through the setup wizard reports as ready. The
+    # probe falls back to env on a DB error, so this await degrades gracefully.
+    from jarvis_common.email import smtp_configured as smtp_configured_probe  # noqa: PLC0415
+
+    smtp_ok = await smtp_configured_probe(request.app.state.db_pool)
     checks.append(
         ReadinessCheck(
             name="smtp",
-            status="green" if smtp_configured else "amber",
-            detail=(
-                "configured" if smtp_configured else "not configured — magic links go to stdout"
-            ),
+            status="green" if smtp_ok else "amber",
+            detail=("configured" if smtp_ok else "not configured — magic links go to stdout"),
             remediation=(
                 "Configure SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM "
                 "before inviting real users — otherwise sign-in emails print to logs."

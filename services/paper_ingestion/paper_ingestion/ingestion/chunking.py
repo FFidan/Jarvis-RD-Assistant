@@ -54,7 +54,7 @@ def chunk_text(
     enc = encoding
 
     def token_count(s: str) -> int:
-        return len(enc.encode(s))
+        return len(enc.encode(s, disallowed_special=()))
 
     anchor_starts = [a[0] for a in page_anchors] if page_anchors else []
 
@@ -151,7 +151,7 @@ def chunk_text(
                         chunk_index += 1
                     # Force-split oversized paragraphs by token windows
                     if token_count(para) > CHUNK_TOKEN_LIMIT:
-                        tokens = enc.encode(para)
+                        tokens = enc.encode(para, disallowed_special=())
                         # PI-CORE-005: track char advance via decoded window lengths
                         # instead of linear-interpolation which is inaccurate when
                         # token lengths vary (e.g. multibyte chars, BPE tokens).

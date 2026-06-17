@@ -39,6 +39,14 @@ This project was built with substantial AI assistance, and AI-assisted contribut
 
 ## Setting Up a Development Environment
 
+**Prerequisites:** Python 3.12+, Node.js 20+, Docker Engine 24+ with Compose v2, and [`uv`](https://docs.astral.sh/uv/) (Python package manager).
+
+Install `uv` if you don't have it:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
 **Full single-instance install** (Docker, Python, Node, secrets, etc.):
 
 ```bash
@@ -51,6 +59,7 @@ This project was built with substantial AI assistance, and AI-assisted contribut
 
 ```bash
 make dev-env          # runs: uv sync --group dev
+make check            # runs all quality gates (see below)
 ```
 
 > `make setup` is a backward-compatible alias for `make dev-env`.
@@ -79,11 +88,13 @@ This mirrors the CI `lint-test` + `frontend` jobs end-to-end:
 | Step | What it runs |
 |---|---|
 | Guard: no tracked secrets | `bash scripts/check-no-tracked-secrets.sh` |
+| Guard: secret file permissions | `find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 600 {} \;` |
 | Dependency parity | `bash scripts/check-python-deps.sh` |
 | Lint | ruff + migrations-no-tx + no-jsonb-double-encode + no-unsafe-resolver |
 | Tach | module boundary check (`uv run tach check`) |
 | Pyright | type check (`npx --yes pyright@1.1.408`) |
 | Test-shape | `uv run python3 scripts/check-test-shape.py` |
+| Agent-docs check | `uv run python3 scripts/check_agent_docs.py` |
 | Guard: burned secrets | `bash scripts/check-burned-secrets.sh` |
 | Fast pytest suite | `uv run pytest` (see below) |
 | Frontend | lint + typecheck + unit tests + build |

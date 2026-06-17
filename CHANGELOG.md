@@ -3,6 +3,34 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## v0.8.7 (2026-06-17) — Email reliability, data-scoping, error handling, and feed fixes
+
+### Security
+- The weekly summary digest scopes the paper-summaries join to the requesting user, so one user's summary text can no longer appear in another user's digest.
+- The knowledge-graph minimum-paper-count filter uses each user's own mention counts instead of a global cross-user counter.
+
+### Fixed
+- Magic-link send failures are recorded as a `magic_link_delivery_failed` system event and surface in the Logs Live tab instead of failing silently. Previously a relay with an unusable stored password returned success to the caller, so the sign-in screen reported the link was sent while no mail went out.
+- Email/SMTP status flags a username-set-but-no-password configuration, the system readiness check reports SMTP as configured when only the database-stored relay is set, and magic-link sends use an explicit send timeout. The "Save & send test email" button reuses the stored password when the field is left blank.
+- Paper text is tokenized with `disallowed_special=()`, so a PDF containing the literal `<|endoftext|>` no longer aborts chunking.
+- Summarization errors preserve the underlying cause and log diagnostics; transient (timeout / 5xx) LLM failures are retried up to twice while permanent errors fail fast.
+- Entity extraction uses the dynamic context budget instead of a fixed page cap.
+- A Qdrant outage during Ask returns HTTP 503 on the non-streaming routes and a degraded error frame on the streaming routes, instead of being masked as "no relevant passages" or a generic 500. Genuinely empty results are unchanged.
+- The Source facet filters on the Library and Trash surfaces (it previously appeared active but was ignored outside Inbox).
+- The Untagged filter is implemented end-to-end; the My-Day views were migrated off the deprecated `statuses` parameter before it was retired.
+- Inviting an email that belongs to a removed user returns 409 with a clear message instead of a 500.
+
+### Changed
+- The Knowledge Graph "Batch Extract Entities" empty-state action is hidden from non-admins.
+- The Home "Library" metric tile was relabelled so it no longer reads as the Library page's own count.
+- The sign-in screen uses neutral "if an account exists for that address" wording.
+- The access-mode setting description was corrected to match what the toggle controls.
+- The backup script also covers the LiteLLM database, Qdrant vectors, and the secrets directory (previously the jarvis Postgres database only).
+- Langfuse is disabled cleanly with a single startup line when unconfigured, instead of logging a warning on every traced call.
+
+### Documentation
+- Documented the `litellm_salt_key` operator secret and the encrypted-restore recipe, the `uv` toolchain prerequisite for contributors, and the `smtp.reply_to` / `smtp.from_name` settings; reconciled version strings and "Last updated" stamps.
+
 ## v0.8.6 (2026-06-15) — SMTP sender identity & dependency security
 
 ### Added

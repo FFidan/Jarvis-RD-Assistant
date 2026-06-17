@@ -42,7 +42,11 @@ from paper_ingestion.models import (
     CrossPaperAskRequest,
     WeeklyDigestResponse,
 )
-from paper_ingestion.rag.exceptions import NoRelevantChunksError, PaperNotFoundError
+from paper_ingestion.rag.exceptions import (
+    NoRelevantChunksError,
+    PaperNotFoundError,
+    QdrantUnavailableError,
+)
 from paper_ingestion.rag.streaming import (
     CrossPaperRagNoResults,
     prepare_cross_paper_rag,
@@ -99,6 +103,22 @@ def _strip_think_blocks(text: str) -> str:
     can resolve the symbol on import.
     """
     return strip_think_blocks(text)
+
+
+async def _qdrant_degraded_sse_stream():
+    """Yield a distinct degraded SSE error frame when Qdrant is unavailable.
+
+    A started SSE response cannot send a 503 status code, so we emit an error
+    event with retriable:true so the client knows to retry.
+    """
+    yield sse_event(
+        {
+            "type": "error",
+            "retriable": True,
+            "message": "Vector search is temporarily unavailable. Please try again.",
+        }
+    )
+    yield SSE_DONE
 
 
 @observe()
@@ -363,6 +383,11 @@ async def ask_paper_stream(
         raise HTTPException(status_code=404, detail="Paper not found") from exc
     except NoRelevantChunksError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except QdrantUnavailableError:
+        return StreamingResponse(
+            _qdrant_degraded_sse_stream(),
+            media_type="text/event-stream",
+        )
     except Exception as exc:
         logger.error(
             "Streaming RAG preparation failed for paper %d: %r", paper_id, exc, exc_info=True
@@ -518,6 +543,11 @@ async def ask_cross_paper_stream(
     except HTTPException:
         # Re-raise FastAPI HTTPExceptions unchanged so they aren't swallowed by the generic handler.
         raise
+    except QdrantUnavailableError:
+        return StreamingResponse(
+            _qdrant_degraded_sse_stream(),
+            media_type="text/event-stream",
+        )
     except Exception as exc:
         logger.error("Streaming cross-paper RAG preparation failed: %r", exc, exc_info=True)
         return StreamingResponse(

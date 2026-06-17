@@ -4,6 +4,7 @@ Extracted from main.py so that the rag and summarize routers can share
 ``generate_paper_summary`` and ``_find_cross_references``.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -189,7 +190,22 @@ async def _input_char_budget(db_pool: asyncpg.Pool, reserved_output_tokens: int)
     )
 
 
-async def _call_summarize_llm[T: pydantic.BaseModel](
+# Bounded retry for transient LLM failures (timeouts / upstream 5xx) wrapping
+# ONLY the single structured call — never a procrastinate task-level retry on the
+# composite analyze job (that would re-run download→process→embed and loop on
+# permanent errors). 2 attempts = one retry.
+_LLM_MAX_ATTEMPTS = 2
+_RETRY_BACKOFF_SECONDS = 0.5
+
+
+def _is_transient_llm_error(exc: BaseException) -> bool:
+    """True for failures worth retrying: request timeouts and upstream 5xx."""
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600
+
+
+async def _summarize_llm_attempt[T: pydantic.BaseModel](
     client: "openai.AsyncOpenAI",
     *,
     response_model: type[T],
@@ -198,7 +214,15 @@ async def _call_summarize_llm[T: pydantic.BaseModel](
     max_tokens: int,
     model: str,
 ) -> T:
-    """Structured LLM call with the summarization error contract (raises LLMError)."""
+    """One structured LLM call. Maps permanent failures to LLMError; lets transient
+    failures (timeout / 5xx) propagate UNWRAPPED so the retry loop can classify them.
+
+    The user-facing LLMError message carries only the HTTP status code or exception
+    class — never ``str(exc)``. LLMError subclasses JobError, whose ``str`` is
+    surfaced verbatim to the user as the job-status error field, and the wrapped
+    causes (``openai.APIStatusError``, the LLM-client ``RuntimeError``) embed the
+    full upstream response body. The full cause is logged server-side only.
+    """
     try:
         return await call_llm_structured(
             client,
@@ -212,27 +236,91 @@ async def _call_summarize_llm[T: pydantic.BaseModel](
                 system=system,
             ),
         )
-    except pydantic.ValidationError:
-        raise LLMError("Malformed LLM response") from None
+    except pydantic.ValidationError as exc:
+        raise LLMError("Malformed LLM response") from exc
     except RuntimeError as exc:
-        msg = str(exc)
-        if "timed out" in msg.lower():
+        if "timed out" in str(exc).lower():
             raise LLMError(
                 "LLM request timed out. Local models may need more time on first run."
-            ) from None
-        raise LLMError("LLM API error during summarization") from None
+            ) from exc
+        raise LLMError("LLM API error during summarization") from exc
     except httpx.TimeoutException:
+        raise  # transient — handled by the retry loop
+    except httpx.HTTPStatusError as exc:
+        if _is_transient_llm_error(exc):
+            raise  # transient 5xx — handled by the retry loop
         raise LLMError(
-            "LLM request timed out. Local models may need more time on first run."
-        ) from None
-    except httpx.HTTPStatusError:
-        raise LLMError("LLM API error during summarization") from None
+            f"LLM API error during summarization (HTTP {exc.response.status_code})"
+        ) from exc
     except Exception as exc:  # noqa: BLE001 — openai.APIStatusError / InstructorRetryException
         import openai  # noqa: PLC0415
 
-        if isinstance(exc, openai.APIStatusError | InstructorRetryException):
-            raise LLMError("LLM API error during summarization") from None
+        if isinstance(exc, openai.APIStatusError):
+            raise LLMError(
+                f"LLM API error during summarization (HTTP {getattr(exc, 'status_code', '?')})"
+            ) from exc
+        if isinstance(exc, InstructorRetryException):
+            raise LLMError("LLM API error during summarization") from exc
         raise
+
+
+async def _call_summarize_llm[T: pydantic.BaseModel](
+    client: "openai.AsyncOpenAI",
+    *,
+    response_model: type[T],
+    prompt: str,
+    system: str,
+    max_tokens: int,
+    model: str,
+    paper_id: int | None = None,
+) -> T:
+    """Structured LLM call with the summarization error contract (raises LLMError).
+
+    Transient failures (request timeout / upstream 5xx) are retried up to
+    ``_LLM_MAX_ATTEMPTS`` times with a short backoff; permanent failures
+    (malformed response, 4xx, APIStatusError) raise on the first occurrence.
+    Every failure is logged with ``exc_info`` for server-side diagnosis; the
+    re-raised ``LLMError`` carries only a status code / class, never the cause.
+    """
+    for attempt in range(1, _LLM_MAX_ATTEMPTS + 1):
+        try:
+            return await _summarize_llm_attempt(
+                client,
+                response_model=response_model,
+                prompt=prompt,
+                system=system,
+                max_tokens=max_tokens,
+                model=model,
+            )
+        except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+            # Only transient errors reach here unwrapped; permanent ones are
+            # already LLMError. Retry until the attempt cap, then surface.
+            logger.error(
+                "summarization LLM call failed (paper_id=%s, attempt=%d/%d): %s",
+                paper_id,
+                attempt,
+                _LLM_MAX_ATTEMPTS,
+                exc,
+                exc_info=True,
+            )
+            if attempt >= _LLM_MAX_ATTEMPTS:
+                if isinstance(exc, httpx.TimeoutException):
+                    raise LLMError(
+                        "LLM request timed out. Local models may need more time on first run."
+                    ) from exc
+                raise LLMError(
+                    f"LLM API error during summarization (HTTP {exc.response.status_code})"
+                ) from exc
+            await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+        except LLMError as exc:
+            logger.error(
+                "summarization LLM call failed (paper_id=%s): %s",
+                paper_id,
+                exc,
+                exc_info=True,
+            )
+            raise
+    raise AssertionError("unreachable: retry loop exited without return or raise")
 
 
 def _render_digest(key_points: list[str], findings: list[KeyFinding]) -> str:
@@ -315,6 +403,7 @@ async def _map_reduce_summary(
             system=_SYSTEM_DIGEST,
             max_tokens=_DIGEST_OUTPUT_TOKENS,
             model=model,
+            paper_id=paper_id,
         )
         findings = [
             KeyFinding(finding=f.finding, quote=f.quote, page_number=f.page_number)
@@ -394,6 +483,7 @@ async def _map_reduce_summary(
                 system=_SYSTEM_CONDENSE,
                 max_tokens=_DIGEST_OUTPUT_TOKENS,
                 model=model,
+                paper_id=paper_id,
             )
             condensed.append("\n".join(f"- {point}" for point in merged.key_points))
         level_texts = condensed
@@ -409,6 +499,7 @@ async def _map_reduce_summary(
         system=_SYSTEM_REDUCE,
         max_tokens=_SUMMARY_OUTPUT_TOKENS,
         model=model,
+        paper_id=paper_id,
     )
     report = VerificationReport(
         total_findings=total_findings,
@@ -591,6 +682,7 @@ async def generate_paper_summary(
             system=_SYSTEM_SUMMARIZE,
             max_tokens=_SUMMARY_OUTPUT_TOKENS,
             model=llm_model_name,
+            paper_id=paper_id,
         )
         key_findings = [
             KeyFinding(
