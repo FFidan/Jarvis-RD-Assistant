@@ -6,7 +6,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## v0.8.8 (2026-06-18) — Cross-tenant data-scoping, ingestion recovery, an admin Backups panel, and the sign-in-method reframe
 
 ### Added
-- An admin **Backups** panel (Admin → Backups) lists the disaster-recovery archives, downloads them, and triggers an on-demand backup; a read-only restore runbook surfaces the host restore commands without executing them. Requires the `backup` compose profile.
+- An admin **Backups** panel (Admin → Backups) lists the disaster-recovery archives, downloads them, and triggers an on-demand backup; a read-only restore runbook surfaces the host restore commands without executing them.
 
 ### Security
 - Deleting a paper now removes only the requesting user's library membership and that user's vectors; the shared canonical record and other users' data are preserved unless the caller is the last holder. Per-user purges likewise skip vectors still held by another user.
@@ -14,6 +14,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - The access-mode toggle is relabeled **Sign-in method** and the change applies on the next status check — the previous "restart required" prompt (which never reflected a real requirement) was removed. The login gate itself is unchanged.
+- The disaster-recovery backup sidecar (`postgres-backup`) now runs by default; it was previously opt-in via the `backup` compose profile. Archives are encrypted at rest with the auto-generated key. Stop the `postgres-backup` service to opt out (e.g. if you back up externally).
 
 ### Fixed
 - A paper whose embedding was interrupted mid-run is no longer treated as fully processed; it is re-embedded on the next pass, while papers already fully embedded are marked so they are not reprocessed.

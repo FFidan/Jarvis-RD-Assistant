@@ -530,7 +530,9 @@ services:
 
   postgres-backup:
     image: ${POSTGRES_IMAGE:-postgres:16.8}
-    profiles: [backup]
+    # Disaster-recovery backups run by default (archives are encrypted at rest with
+    # the auto-generated backup_encrypt_key). To opt out — e.g. you back up
+    # externally — stop just this service: docker compose stop postgres-backup
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     mem_limit: 256m
@@ -566,6 +568,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # backup.sh does a fatal pg_dump of the litellm DB, which litellm-db-init
+      # creates; wait for that one-shot so the first run on a fresh stack does not
+      # crash-loop dumping a not-yet-created database (mirrors the litellm service).
+      litellm-db-init:
+        condition: service_completed_successfully
     logging:
       driver: json-file
       options:

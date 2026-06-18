@@ -172,7 +172,10 @@ async def trigger_backup(request: Request) -> dict[str, str]:
         logger.error("backup trigger sentinel write failed: %r", exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Backup sidecar trigger is unavailable. Ensure the backup profile is enabled.",
+            detail=(
+                "Backup sidecar trigger is unavailable. "
+                "Ensure the postgres-backup service is running."
+            ),
         ) from exc
     await log_audit(
         request.app.state.db_pool,

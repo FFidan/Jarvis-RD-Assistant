@@ -34,7 +34,7 @@
 # Qdrant snapshot restore: copy the .snapshot file into the Qdrant snapshots
 #   dir and PUT /collections/<name>/snapshots/recover — see DEPLOYMENT.md.
 #
-# Docker Compose: run under --profile backup (service: postgres-backup).
+# Docker Compose: runs by default as the postgres-backup service (stop it to opt out).
 # Env vars: BACKUP_S3_BUCKET, BACKUP_RETENTION_DAYS, BACKUP_INTERVAL_SECONDS,
 #           BACKUP_ENCRYPT_KEYFILE, QDRANT_URL, LITELLM_DATABASE, SECRETS_DIR
 #   — see .env.example for defaults.

@@ -112,6 +112,18 @@ else
   fail=1
 fi
 
+# N+4. The backup sidecar must run BY DEFAULT — DR is core and archives are
+#      encrypted with the auto-generated key, so it must NOT be hidden behind the
+#      opt-in `backup` compose profile. Guard against a regression re-gating it in
+#      EITHER inline (`profiles: [backup]`) or block (`profiles:` / `  - backup`)
+#      form: assert the postgres-backup stanza carries no `profiles:` key at all.
+if awk '/^  postgres-backup:/{f=1; next} /^  [a-zA-Z]/{f=0} f && /^[[:space:]]*profiles:/{found=1} END{exit !found}' "$COMPOSE"; then
+  printf 'FAIL: postgres-backup has a profiles: key — backups must run by default (not profile-gated)\n' >&2
+  fail=1
+else
+  pass "backup sidecar runs by default (postgres-backup has no profiles: gate)"
+fi
+
 if [ "$fail" -ne 0 ]; then
   printf '\nbackup coverage: FAILED\n' >&2
   exit 1

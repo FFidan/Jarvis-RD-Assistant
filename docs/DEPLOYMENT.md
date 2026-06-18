@@ -488,9 +488,9 @@ make up-build            # full docker compose up -d --build
 
 ### Backup
 
-`scripts/backup.sh` is scheduled by the `backup` compose profile (`docker compose --profile backup up -d`).
+`scripts/backup.sh` runs by default in the `postgres-backup` sidecar (a daily run plus on-demand triggers). It is on out of the box and archives are encrypted with the auto-generated `backup_encrypt_key`; if you back up externally, opt out with `docker compose stop postgres-backup`.
 
-With the `backup` profile running, admins can also list, download, and trigger an on-demand backup from the WebUI at **Admin → Backups** (the on-demand button signals the sidecar to run immediately). Restore stays a manual host procedure — the page surfaces the commands below as a read-only runbook but never executes them.
+Admins can list, download, and trigger an on-demand backup from the WebUI at **Admin → Backups** (the on-demand button signals the sidecar to run immediately). Restore stays a manual host procedure — the page surfaces the commands below as a read-only runbook but never executes them.
 
 JARVIS state lives in more than one place, so each run captures **all four** of the durable stores (per-store files are timestamped together so a single run is internally consistent):
 

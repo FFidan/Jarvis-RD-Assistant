@@ -29,11 +29,12 @@ printf '%s\n' "test-litellm-master-key" > "$TMP_DIR/litellm_master_key.txt"
 printf '%s\n' "$(openssl rand -hex 32)" > "$TMP_DIR/litellm_salt_key.txt"
 printf '%s\n' "$(openssl rand -base64 32)" > "$TMP_DIR/jarvis_config_key.txt"
 # Optional-profile secrets — must be declared so compose does not reject them
-# when observability / tunnel / backup profiles are activated in CI.
+# when observability / tunnel profiles are activated in CI.
 printf '%s\n' "smoke-langfuse-pg-password" > "$TMP_DIR/langfuse_pg_password.txt"
 printf '%s\n' "smoke-langfuse-nextauth-secret" > "$TMP_DIR/langfuse_nextauth_secret.txt"
 printf '%s\n' "smoke-langfuse-salt" > "$TMP_DIR/langfuse_salt.txt"
 printf '%s\n' "smoke-cloudflare-tunnel-token" > "$TMP_DIR/cloudflare_tunnel_token.txt"
+# backup_encrypt_key is required by the default postgres-backup service (not a profile).
 printf '%s\n' "smoke-backup-encrypt-key" > "$TMP_DIR/backup_encrypt_key.txt"
 printf '%s\n' "$(openssl rand -hex 32)" > "$TMP_DIR/jarvis_model_hmac_key.txt"
 printf '%s\n' "smoke-langfuse-pk" > "$TMP_DIR/langfuse_init_pk.txt"

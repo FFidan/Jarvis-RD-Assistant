@@ -169,7 +169,7 @@ sync_secret LANGFUSE_INIT_USER_PASSWORD   langfuse_init_user_password.txt   "ope
 sync_secret CLOUDFLARE_TUNNEL_TOKEN cloudflare_tunnel_token.txt
 
 # ---------------------------------------------------------------------------
-# Backup encryption (--profile backup)
+# Backup encryption (postgres-backup service)
 # ---------------------------------------------------------------------------
 # Passphrase file for AES-256-CBC backup encryption (PBKDF2, 600k iterations).
 # Auto-generated on first run; keep a copy offsite — losing this key means

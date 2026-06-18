@@ -94,7 +94,7 @@ export function AdminBackupsPage() {
             ? status.last_run_at
               ? `Last backup ${formatAge(status.last_run_at)} · ${status.archive_count} archive${status.archive_count !== 1 ? 's' : ''}`
               : 'No backups yet.'
-            : 'Backup sidecar not running — enable the backup profile to produce archives.'}
+            : 'Backup sidecar not running — start the postgres-backup service to produce archives.'}
         </div>
         {confirming ? (
           <div className="flex items-center gap-2">
