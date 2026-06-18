@@ -46,7 +46,7 @@ These documents are part of the repository and are available in the **Get Starte
 | [Analytics](analytics.md) | Reading activity charts and corpus statistics |
 | [Settings](settings.md) | Sources, topics, automation, integrations, and account |
 | [Telegram](telegram.md) | Pairing your Telegram account and (admin) bot-token configuration |
-| [Admin Pages](admin.md) | User management, system health, audit log, system logs (admin role only) |
+| [Admin Pages](admin.md) | User management, system health, audit log, backups, system logs (admin role only) |
 
 ## How this manual is maintained
 

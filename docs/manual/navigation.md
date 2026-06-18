@@ -30,7 +30,7 @@ The sidebar is divided into five labelled groups identified by Roman numerals. E
 | **Ⅱ Read** — *Your library, projects, and the graph that connects them.* | [Projects](projects.md) (`/projects`) · [Knowledge Graph](knowledge-graph.md) (`/knowledge`) · [Citation Graph](citation-graph.md) (`/citations`) · [Extraction Table](extraction-table.md) (`/extractions`) |
 | **Ⅲ Learn** — *Cards, analytics, and how your knowledge grows.* | [Learning Cards](learning-cards.md) (`/cards`) · [Analytics](analytics.md) (`/analytics`) |
 | **Ⅳ Ask** — *Cross-paper reasoning and workspace.* | [Ask](ask.md) (`/ask`) |
-| **Ⅴ Admin** — *Users, health, and audit trail.* (**admin role only**) | [User Management](admin.md) (`/admin/users`) · [System Health](admin.md) (`/admin/system-health`) · [Audit Log](admin.md) (`/admin/audit-log`) · [System Logs](admin.md) (`/logs`) |
+| **Ⅴ Admin** — *Users, health, backups, and audit trail.* (**admin role only**) | [User Management](admin.md) (`/admin/users`) · [System Health](admin.md) (`/admin/system-health`) · [Audit Log](admin.md) (`/admin/audit-log`) · [Backups](admin.md) (`/admin/backups`) · [System Logs](admin.md) (`/logs`) |
 
 ### Density modes — simple and full
 

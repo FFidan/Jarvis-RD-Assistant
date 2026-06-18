@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-05-18 | routes: /admin/users, /admin/audit-log, /admin/system-health, /logs -->
+<!-- verified-against-UI: 2026-06-18 | routes: /admin/users, /admin/audit-log, /admin/system-health, /admin/backups, /logs -->
 
 # Admin & Multi-tenant
 
@@ -57,6 +57,18 @@ A live operational dashboard showing the health of all backend services.
 **Readiness checklist:** A checklist of deployment prerequisites (database migrations applied, required environment variables set, source API keys present, etc.). Each item shows a status indicator and a **remediation note** describing how to resolve it if it is failing.
 
 **InfoTooltips:** Each checklist item has an info tooltip explaining what the check verifies and why it matters.
+
+---
+
+### Backups — `/admin/backups`
+
+The **Admin Backups panel** surfaces the disaster-recovery archives produced by the `postgres-backup` sidecar, which runs by default (a scheduled run plus on-demand triggers).
+
+**Archive table:** Each archive is listed newest-first with its store (main database, model-router database, secrets, or Qdrant vectors), size, age, and an **Encrypted / Plaintext** badge. A per-row **Download** streams the archive to your browser for off-site storage. Archives are encrypted at rest whenever a backup key is configured (the default).
+
+**Run backup now:** Requests an immediate on-demand backup (a confirm step guards it); the sidecar runs one right away in addition to its scheduled runs.
+
+**Restore runbook:** A **read-only** guided procedure. Restore is a destructive host operation — it drops and recreates the databases and overwrites live secrets — and the app container cannot perform it, so the panel only **displays** the host commands; it never executes anything. The steps it shows: decrypt `.enc` archives with `openssl`, restore the `secrets/` archive first, restore the `jarvis` and `litellm` databases (drop/create, then `gunzip | psql`), and recover the Qdrant vector snapshots. The same procedure is documented in the Deployment Guide.
 
 ---
 
