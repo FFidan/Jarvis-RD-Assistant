@@ -2898,8 +2898,8 @@ admin user exists (the normal single-tenant state).</p>
 <hr />
 <h2 id="backup-restore">Backup + Restore<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h2>
 <h3 id="backup">Backup<a class="headerlink" href="#backup" title="Permanent link">&para;</a></h3>
-<p><code>scripts/backup.sh</code> is scheduled by the <code>backup</code> compose profile (<code>docker compose --profile backup up -d</code>).</p>
-<p>With the <code>backup</code> profile running, admins can also list, download, and trigger an on-demand backup from the WebUI at <strong>Admin → Backups</strong> (the on-demand button signals the sidecar to run immediately). Restore stays a manual host procedure — the page surfaces the commands below as a read-only runbook but never executes them.</p>
+<p><code>scripts/backup.sh</code> runs by default in the <code>postgres-backup</code> sidecar (a daily run plus on-demand triggers). It is on out of the box and archives are encrypted with the auto-generated <code>backup_encrypt_key</code>; if you back up externally, opt out with <code>docker compose stop postgres-backup</code>.</p>
+<p>Admins can list, download, and trigger an on-demand backup from the WebUI at <strong>Admin → Backups</strong> (the on-demand button signals the sidecar to run immediately). Restore stays a manual host procedure — the page surfaces the commands below as a read-only runbook but never executes them.</p>
 <p>JARVIS state lives in more than one place, so each run captures <strong>all four</strong> of the durable stores (per-store files are timestamped together so a single run is internally consistent):</p>
 <table>
 <thead>
