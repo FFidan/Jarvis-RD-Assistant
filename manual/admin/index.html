@@ -1056,6 +1056,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#backups-adminbackups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backups — /admin/backups
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#system-logs-logs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1562,6 +1573,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#backups-adminbackups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backups — /admin/backups
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#system-logs-logs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1619,7 +1641,7 @@
   
 
 
-<!-- verified-against-UI: 2026-05-18 | routes: /admin/users, /admin/audit-log, /admin/system-health, /logs -->
+<!-- verified-against-UI: 2026-06-18 | routes: /admin/users, /admin/audit-log, /admin/system-health, /admin/backups, /logs -->
 
 <h1 id="admin-multi-tenant">Admin &amp; Multi-tenant<a class="headerlink" href="#admin-multi-tenant" title="Permanent link">&para;</a></h1>
 <p>JARVIS RD Assistant supports multiple user accounts with two roles: <strong>Admin</strong> and <strong>User</strong>. Admin-gated surfaces are only accessible to accounts with the Admin role; attempting to access them without that role redirects immediately to the Home page.</p>
@@ -1670,6 +1692,12 @@
 <p><strong>Services table:</strong> A table of services (Postgres, Qdrant, Ollama, LiteLLM, Langfuse if configured) with their current status. The table <strong>auto-refreshes every 30 seconds</strong>.</p>
 <p><strong>Readiness checklist:</strong> A checklist of deployment prerequisites (database migrations applied, required environment variables set, source API keys present, etc.). Each item shows a status indicator and a <strong>remediation note</strong> describing how to resolve it if it is failing.</p>
 <p><strong>InfoTooltips:</strong> Each checklist item has an info tooltip explaining what the check verifies and why it matters.</p>
+<hr />
+<h3 id="backups-adminbackups">Backups — <code>/admin/backups</code><a class="headerlink" href="#backups-adminbackups" title="Permanent link">&para;</a></h3>
+<p>The <strong>Admin Backups panel</strong> surfaces the disaster-recovery archives produced by the <code>postgres-backup</code> sidecar, which runs by default (a scheduled run plus on-demand triggers).</p>
+<p><strong>Archive table:</strong> Each archive is listed newest-first with its store (main database, model-router database, secrets, or Qdrant vectors), size, age, and an <strong>Encrypted / Plaintext</strong> badge. A per-row <strong>Download</strong> streams the archive to your browser for off-site storage. Archives are encrypted at rest whenever a backup key is configured (the default).</p>
+<p><strong>Run backup now:</strong> Requests an immediate on-demand backup (a confirm step guards it); the sidecar runs one right away in addition to its scheduled runs.</p>
+<p><strong>Restore runbook:</strong> A <strong>read-only</strong> guided procedure. Restore is a destructive host operation — it drops and recreates the databases and overwrites live secrets — and the app container cannot perform it, so the panel only <strong>displays</strong> the host commands; it never executes anything. The steps it shows: decrypt <code>.enc</code> archives with <code>openssl</code>, restore the <code>secrets/</code> archive first, restore the <code>jarvis</code> and <code>litellm</code> databases (drop/create, then <code>gunzip | psql</code>), and recover the Qdrant vector snapshots. The same procedure is documented in the Deployment Guide.</p>
 <hr />
 <h3 id="system-logs-logs">System Logs — <code>/logs</code><a class="headerlink" href="#system-logs-logs" title="Permanent link">&para;</a></h3>
 <p>The logs page provides a real-time view of application log output, organised into tabs:</p>
