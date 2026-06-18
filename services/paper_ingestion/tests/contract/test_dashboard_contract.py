@@ -217,3 +217,54 @@ async def test_chunked_papers_is_user_scoped(
             "DELETE FROM paper_chunks WHERE paper_id = $1 AND chunk_index = 0",
             paper_id,
         )
+
+
+async def test_pending_papers_scoped_to_calling_user(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """User A's summary on a shared paper must not lower user B's pending_papers count.
+
+    Seed a shared paper in both libraries; only user A has a summary. User B's
+    paper is unsummarized, so it must still count as pending for B.
+    """
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('dash-iso-shared', 'arxiv', 'shared-paper-dashboard-isolation',
+                   ARRAY['A. Author'], 'https://example.test/dash-iso', NULL)
+           RETURNING id"""
+    )
+    await contract_conn.executemany(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        [
+            (contract_two_users.user_a_id, paper_id),
+            (contract_two_users.user_b_id, paper_id),
+        ],
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries (paper_id, summary_brief, summary_detailed, user_id)
+           VALUES ($1, 'A summary', 'A summary', $2)""",
+        paper_id,
+        contract_two_users.user_a_id,
+    )
+
+    # Ground truth: B's own pending count (papers in B's library with no summary owned by B).
+    expected_b = await contract_conn.fetchval(
+        """SELECT COUNT(*) FROM user_library ul
+           LEFT JOIN paper_summaries ps
+             ON ul.paper_id = ps.paper_id AND ps.user_id = $1
+           WHERE ul.user_id = $1 AND ps.id IS NULL""",
+        contract_two_users.user_b_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/dashboard/metrics")
+
+    assert resp.status_code == 200, f"{resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    assert body["pending_papers"] == int(expected_b), (
+        f"pending_papers={body['pending_papers']} != scoped {expected_b}; "
+        "user A's summary leaked into B's pending count"
+    )

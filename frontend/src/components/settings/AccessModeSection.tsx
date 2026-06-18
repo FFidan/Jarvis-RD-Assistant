@@ -1,21 +1,16 @@
 /**
- * AccessModeSection — admin card for switching between single-user and
- * multi-user access mode.
+ * AccessModeSection — admin card for choosing which login method the
+ * sign-in screen offers (single-user API-key login vs multi-user magic-link).
  *
- * Shows:
- *  - A radio group offering "Single-user" vs "Multi-user".
- *  - Defaults to the current value from getFirstRunStatus().setup_mode.
- *  - Save button calls saveSetupMode(mode).
- *  - A persistent amber "pending restart" pill (survives reloads via
- *    localStorage) shown until the API-reported mode matches the saved mode.
- *  - An actionable restart instruction with the exact compose command.
+ * The choice is applied on the next status poll (the backend reads the saved
+ * value live), so there is no restart step.
  *
  * Backed by:
  *  GET  /api/setup/status → getFirstRunStatus() — reads setup_mode
  *  POST /api/setup/mode   → saveSetupMode(mode)
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { getFirstRunStatus, saveSetupMode } from '@/lib/api';
@@ -25,40 +20,12 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { errorMessage } from '@/lib/errors';
 
 const MODE_LABELS: Record<'single' | 'multi', string> = {
-  single: 'Single-user — sign-in screen shows API-key login; admin invites remain available',
-  multi: 'Multi-user — sign-in screen offers magic-link login; invite additional accounts',
+  single: 'Single-user — the sign-in screen offers API-key login',
+  multi: 'Multi-user — the sign-in screen offers magic-link login',
 };
-
-const PENDING_MODE_KEY = 'jarvis-access-mode-pending';
-
-function readPendingMode(): 'single' | 'multi' | null {
-  try {
-    const raw = localStorage.getItem(PENDING_MODE_KEY);
-    return raw === 'single' || raw === 'multi' ? raw : null;
-  } catch {
-    return null;
-  }
-}
-
-function writePendingMode(mode: 'single' | 'multi' | null): void {
-  try {
-    if (mode === null) {
-      localStorage.removeItem(PENDING_MODE_KEY);
-    } else {
-      localStorage.setItem(PENDING_MODE_KEY, mode);
-    }
-  } catch {
-    // ignore storage errors — the pill is a best-effort hint
-  }
-}
 
 export function AccessModeSection() {
   const [pendingMode, setPendingMode] = useState<'single' | 'multi' | null>(null);
-  // The mode saved-but-not-yet-applied (running services still read the old
-  // value until restarted). Persisted so the pill survives a page reload.
-  const [pendingRestartMode, setPendingRestartMode] = useState<'single' | 'multi' | null>(
-    readPendingMode,
-  );
 
   const { data: status, isLoading } = useQuery({
     queryKey: QUERY_KEYS.setup.firstRun(),
@@ -69,25 +36,10 @@ export function AccessModeSection() {
   const currentMode: 'single' | 'multi' = status?.setup_mode ?? 'single';
   const selectedMode = pendingMode ?? currentMode;
 
-  // Once the API reports the saved mode, the restart has landed — clear the pill.
-  useEffect(() => {
-    if (pendingRestartMode && status?.setup_mode === pendingRestartMode) {
-      setPendingRestartMode(null);
-      writePendingMode(null);
-    }
-  }, [pendingRestartMode, status?.setup_mode]);
-
   const saveMut = useMutation({
     mutationFn: saveSetupMode,
-    onSuccess: (data) => {
+    onSuccess: () => {
       setPendingMode(null);
-      if (data.restart_required) {
-        setPendingRestartMode(data.mode);
-        writePendingMode(data.mode);
-      } else {
-        setPendingRestartMode(null);
-        writePendingMode(null);
-      }
     },
   });
 
@@ -96,34 +48,23 @@ export function AccessModeSection() {
     saveMut.mutate(selectedMode);
   };
 
-  const restartPending = pendingRestartMode !== null && pendingRestartMode !== currentMode;
-
   if (isLoading) {
-    return <p className="text-sm text-muted-foreground">Loading access mode…</p>;
+    return <p className="text-sm text-muted-foreground">Loading sign-in method…</p>;
   }
 
   return (
     <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
         <p className="text-sm text-muted-foreground">
-          Choose which login method the sign-in screen offers. Multi-user features such as admin
-          invites are available in either mode.
+          Choose which login method the sign-in screen offers. Admin invites are
+          available in either mode.
         </p>
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {restartPending && (
-          <p
-            role="status"
-            className="inline-flex items-center gap-2 rounded-full border border-amber-400 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-300"
-          >
-            Mode change pending — restart required
-          </p>
-        )}
-
         {/* Mode radio group */}
         <fieldset className="space-y-2">
-          <legend className="sr-only">Access mode</legend>
+          <legend className="sr-only">Sign-in method</legend>
           {(['single', 'multi'] as const).map((mode) => (
             <Label
               key={mode}
@@ -151,29 +92,16 @@ export function AccessModeSection() {
             {saveMut.isPending ? 'Saving…' : 'Save'}
           </Button>
 
-          {saveMut.isSuccess && saveMut.data && (
+          {saveMut.isSuccess && (
             <p className="text-sm text-green-600 dark:text-green-400">
-              {saveMut.data.restart_required
-                ? 'Saved — restart required for the change to take effect.'
-                : 'Access mode updated.'}
+              Sign-in method updated.
             </p>
           )}
         </div>
 
         {saveMut.isError && (
           <p className="text-sm text-destructive">
-            Could not save:{' '}
-            {errorMessage(saveMut.error, 'unknown error')}
-          </p>
-        )}
-
-        {restartPending && (
-          <p className="text-xs text-muted-foreground border-t border-hair pt-3">
-            To apply, an administrator runs{' '}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.7rem]">
-              docker compose restart paper_ingestion learning_engine
-            </code>{' '}
-            on the server.
+            Could not save: {errorMessage(saveMut.error, 'unknown error')}
           </p>
         )}
       </CardContent>

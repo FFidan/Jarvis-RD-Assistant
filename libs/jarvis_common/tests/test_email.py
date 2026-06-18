@@ -600,6 +600,79 @@ def test_effective_smtp_auth_consistent_property() -> None:
     assert _EffectiveSmtp(user=None, password="p", **base).auth_consistent is True
 
 
+@pytest.mark.asyncio
+async def test_effective_smtp_db_empty_user_does_not_revert_to_env(monkeypatch) -> None:
+    """A user_config row explicitly storing smtp.user='' must clear the user, not fall back to env.
+
+    The wizard persists a cleared field as JSONB '' (setup.py:657-662). _effective_smtp
+    must treat 'row present and empty' as a deliberate clear for user/reply_to/from_name,
+    distinct from 'row absent' (which falls back to env).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from jarvis_common.email import _effective_smtp
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("SMTP_USER", "env-user")
+    monkeypatch.setenv("SMTP_REPLY_TO", "env-reply@example.com")
+    monkeypatch.setenv("SMTP_FROM_NAME", "Env Name")
+    get_secrets_settings.cache_clear()
+
+    # user_config rows: smtp.user / smtp.reply_to / smtp.from_name explicitly cleared to ''.
+    db_rows = [
+        {"key": "smtp.user", "value": "", "encrypted_value": None},
+        {"key": "smtp.reply_to", "value": "", "encrypted_value": None},
+        {"key": "smtp.from_name", "value": "", "encrypted_value": None},
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=db_rows)
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    eff = await _effective_smtp(pool)
+
+    get_secrets_settings.cache_clear()
+    # host/from were not in the DB rows → env still applies (deliverable).
+    assert eff.host == "mail.example.com"
+    assert eff.sender == "bot@example.com"
+    # The three cleared optional fields must be cleared, NOT the env value.
+    assert eff.user is None, f"cleared smtp.user must not revert to env; got {eff.user!r}"
+    assert eff.reply_to is None, (
+        f"cleared smtp.reply_to must not revert to env; got {eff.reply_to!r}"
+    )
+    assert eff.from_name is None, (
+        f"cleared smtp.from_name must not revert to env; got {eff.from_name!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_effective_smtp_absent_db_row_falls_back_to_env(monkeypatch) -> None:
+    """When a field has NO user_config row, _effective_smtp falls back to the env value (unchanged)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from jarvis_common.email import _effective_smtp
+    from jarvis_common.settings import get_secrets_settings
+
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_FROM", "bot@example.com")
+    monkeypatch.setenv("SMTP_USER", "env-user")
+    get_secrets_settings.cache_clear()
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[])  # no DB rows
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    eff = await _effective_smtp(pool)
+
+    get_secrets_settings.cache_clear()
+    assert eff.user == "env-user", "absent DB row must fall back to env user"
+
+
 # ---------------------------------------------------------------------------
 # S1 (F1): delivery-failure observability (magic_link_delivery_failed event)
 # ---------------------------------------------------------------------------

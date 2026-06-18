@@ -33,3 +33,4 @@ export * from './pulse';
 export * from './jobs';
 export * from './zotero';
 export * from './myday';
+export * from './backups';

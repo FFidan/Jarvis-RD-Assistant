@@ -150,7 +150,9 @@ async def _analyze_stream(
 
         from paper_ingestion.services.pdf_workflow import run_process_pdf
 
-        result = await run_process_pdf(paper_id, pdf_path, db_pool, pdf_processor, embedder)
+        result = await run_process_pdf(
+            paper_id, pdf_path, db_pool, pdf_processor, embedder, force=force
+        )
         chunk_count = result.get("chunk_count", 0)
     except Exception:
         logger.exception("Processing failed for paper %d", paper_id)

@@ -109,6 +109,27 @@ def test_consolidate_topics_splits_when_query_too_long():
     assert covered == {t.id for t in topics}
 
 
+def test_consolidate_topics_caps_every_bin_with_many_topics():
+    """With enough topics to fill more than two bins, EVERY emitted query must
+    stay under the 1500-char cap — the old code dumped the overflow into a
+    single unbounded second bin that arXiv would reject."""
+    source = _make_source()
+    topics = [
+        _make_topic(f"neural network topic {i:02d}", [f"neural network topic {i:02d}"], i)
+        for i in range(80)
+    ]
+    result = source.consolidate_topics(topics)
+
+    assert len(result) >= 3, f"Expected >=3 bins for 80 topics, got {len(result)}"
+    for sq in result:
+        assert len(sq.extra_params["search_query"]) <= 1500, (
+            f"bin query exceeds 1500-char cap: {len(sq.extra_params['search_query'])}"
+        )
+    # No topic is dropped: union of all bins covers every topic id.
+    covered = {t.id for sq in result for t in sq.topics}
+    assert covered == {t.id for t in topics}
+
+
 def test_consolidate_topics_empty_returns_empty():
     """Empty topic list → empty result."""
     source = _make_source()

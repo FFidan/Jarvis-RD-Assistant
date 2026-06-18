@@ -311,7 +311,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.8.7}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.8.8}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -361,6 +361,8 @@ services:
       - ./db/migrations:/app/db/migrations:ro
       - ./config:/app/config:ro  # llm-tier-candidates.yaml for /api/settings/ai
       - hf_cache:/tmp/hf_cache  # Persist HuggingFace cache (Docling layout/table models) across recreation
+      - postgres_backups:/backups:ro  # list/download DR archives in the admin Backup panel
+      - backup_trigger:/backup-trigger  # RW sentinel dir the WebUI writes to request an on-demand backup
     mem_limit: 6g
     # Base compose is CPU-safe — no GPU device reservation here so CPU-only hosts
     # can `docker compose up`. setup.sh layers docker-compose.gpu.yml when the
@@ -389,7 +391,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.8.7}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-0.8.8}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -437,7 +439,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.8.7}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.8.8}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -484,7 +486,7 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.8.7}
+    image: jarvis/dashboard:${JARVIS_VERSION:-0.8.8}
     build:
       context: ./frontend
       args:
@@ -538,6 +540,7 @@ services:
       # PGPASSWORD is NOT set here; backup.sh reads /run/secrets/postgres_password
       PGDATABASE: ${POSTGRES_DB:-jarvis}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
       # Path to encryption key file (Docker Secret); backup.sh uses this to encrypt archives.
       BACKUP_ENCRYPT_KEYFILE: /run/secrets/backup_encrypt_key
@@ -555,8 +558,11 @@ services:
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
       - ./secrets:/secrets:ro
       - postgres_backups:/backups
+      - backup_trigger:/backup-trigger  # shared sentinel dir; backup.sh runs immediately when .backup_now appears
     entrypoint: >
-      sh -euc "while true; do /usr/local/bin/backup.sh; sleep $${BACKUP_INTERVAL_SECONDS:-86400}; done"
+      sh -euc "while true; do /usr/local/bin/backup.sh;
+      i=0; while [ \"$$i\" -lt \"$${BACKUP_INTERVAL_SECONDS:-86400}\" ]; do
+      if [ -f /backup-trigger/.backup_now ]; then break; fi; sleep 5; i=$$((i+5)); done; done"
     depends_on:
       postgres:
         condition: service_healthy
@@ -611,7 +617,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.8.7}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.8.8}
     build:
       context: ./langfuse
       dockerfile: Dockerfile.langfuse
@@ -796,6 +802,7 @@ volumes:
   ollama_data:
   qdrant_data:
   postgres_backups:
+  backup_trigger:
   hf_cache:
   caddy_data:
   caddy_config:

@@ -3,6 +3,28 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## v0.8.8 (2026-06-18) — Cross-tenant data-scoping, ingestion recovery, an admin Backups panel, and the sign-in-method reframe
+
+### Added
+- An admin **Backups** panel (Admin → Backups) lists the disaster-recovery archives, downloads them, and triggers an on-demand backup; a read-only restore runbook surfaces the host restore commands without executing them. Requires the `backup` compose profile.
+
+### Security
+- Deleting a paper now removes only the requesting user's library membership and that user's vectors; the shared canonical record and other users' data are preserved unless the caller is the last holder. Per-user purges likewise skip vectors still held by another user.
+- The research-feed summary join is scoped to the requesting user, so another user's summary text or duplicate rows can no longer appear in a feed and the result count is no longer inflated. The pending-papers count and per-user entity paper counts are scoped the same way.
+
+### Changed
+- The access-mode toggle is relabeled **Sign-in method** and the change applies on the next status check — the previous "restart required" prompt (which never reflected a real requirement) was removed. The login gate itself is unchanged.
+
+### Fixed
+- A paper whose embedding was interrupted mid-run is no longer treated as fully processed; it is re-embedded on the next pass, while papers already fully embedded are marked so they are not reprocessed.
+- Encrypted backups no longer seal the encryption key inside the archive it unlocks (the key file is excluded — keep it off-site); Qdrant snapshots stream to disk instead of buffering in memory under the sidecar's memory limit; orphaned temporary files are pruned; and the backup-interval setting is honored.
+- Ask returns a 503 (non-streaming) or a degraded error frame (streaming) when the vector store is unavailable, instead of a generic 500.
+- Changing your account email to one already in use returns a clear 409 instead of a 500.
+- Research-feed bulk-selection actions apply across the active filter set rather than only the visible page.
+- Email/SMTP readiness no longer reports green when only a partial relay configuration is present.
+- The weekly summary gates on recent engagement rather than discovery date, and scheduled-job failure alerts are sent only to the owner.
+- The "process PDF" action honors the force flag, so requesting a reprocess actually re-runs it.
+
 ## v0.8.7 (2026-06-17) — Email reliability, data-scoping, error handling, and feed fixes
 
 ### Security

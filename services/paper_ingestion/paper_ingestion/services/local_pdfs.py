@@ -81,6 +81,16 @@ async def scan_local_pdf_directory(
                 "SELECT id FROM papers WHERE external_id = $1", external_id
             )
             if existing:
+                if user_id is not None:
+                    try:
+                        await add_to_library(
+                            file_conn,
+                            user_id=user_id,
+                            paper_id=existing["id"],
+                            added_via="manual_save",
+                        )
+                    except Exception:
+                        pass
                 skipped += 1
                 continue
 

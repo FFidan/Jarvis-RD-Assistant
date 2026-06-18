@@ -117,14 +117,14 @@ Configure the Langfuse observability integration for tracing LLM calls. This set
 
 _This area is evolving; verified 2026-06-06._
 
-### Access Mode
+### Sign-in Method
 
-Control whether the instance allows additional user accounts beyond the admin account.
+Control how people sign in to this instance.
 
-- **Single-user** — only the admin account can log in.
-- **Multi-user** — additional accounts can be invited via magic-link (see [Admin & Multi-tenant](admin.md)).
+- **Single-user** — only the admin account can log in (API-key login; no email/SMTP required).
+- **Multi-user** — additional accounts can be invited via magic-link email (see [Admin & Multi-tenant](admin.md)).
 
-Changing the access mode requires an application restart by an administrator.
+The change applies on the next status check — no restart required.
 
 ---
 

@@ -42,10 +42,11 @@ async def _find_or_create_entity(
     the pre-computed results via *embedding* and *similar_entity_id*.
 
     ``paper_count`` is **not** incremented here.  The caller
-    (``extract_entities_for_paper``) is responsible for incrementing it
-    exactly once per distinct entity encountered in a single extraction run,
-    preventing double-counting when the LLM emits duplicate entity names or
-    when extraction is re-run for the same paper.
+    (``extract_entities_for_paper``) increments it only when the
+    ``paper_entities`` upsert actually INSERTs a new ``(paper, entity, user)``
+    row (detected via ``RETURNING (xmax = 0)``), so re-running extraction for
+    the same paper — or the LLM emitting the same entity name twice in one run
+    — never double-counts.
     """
     canonical = name.lower().strip()
 
@@ -112,14 +113,18 @@ async def get_knowledge_graph(
             if user_id is not None:
                 entities = await conn.fetch(
                     f"""SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
-                              e.metadata, e.embedding_id, e.paper_count, e.created_at
+                              e.metadata, e.embedding_id,
+                              (SELECT COUNT(*) FROM paper_entities pe
+                               WHERE pe.entity_id = e.id
+                                 AND pe.user_id IS NOT DISTINCT FROM $4) AS paper_count,
+                              e.created_at
                        FROM entities e
                        WHERE e.entity_type = $1
                          AND (SELECT COUNT(*) FROM paper_entities pe
                               WHERE pe.entity_id = e.id
                                 AND pe.user_id IS NOT DISTINCT FROM $4) >= $2
                          AND {_user_scope_paper_entities_exists("e.id", 4)}
-                       ORDER BY e.paper_count DESC LIMIT $3""",
+                       ORDER BY paper_count DESC LIMIT $3""",
                     entity_type,
                     min_paper_count,
                     limit,
@@ -139,13 +144,17 @@ async def get_knowledge_graph(
             if user_id is not None:
                 entities = await conn.fetch(
                     f"""SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
-                              e.metadata, e.embedding_id, e.paper_count, e.created_at
+                              e.metadata, e.embedding_id,
+                              (SELECT COUNT(*) FROM paper_entities pe
+                               WHERE pe.entity_id = e.id
+                                 AND pe.user_id IS NOT DISTINCT FROM $3) AS paper_count,
+                              e.created_at
                        FROM entities e
                        WHERE (SELECT COUNT(*) FROM paper_entities pe
                               WHERE pe.entity_id = e.id
                                 AND pe.user_id IS NOT DISTINCT FROM $3) >= $1
                          AND {_user_scope_paper_entities_exists("e.id", 3)}
-                       ORDER BY e.paper_count DESC LIMIT $2""",
+                       ORDER BY paper_count DESC LIMIT $2""",
                     min_paper_count,
                     limit,
                     user_id,

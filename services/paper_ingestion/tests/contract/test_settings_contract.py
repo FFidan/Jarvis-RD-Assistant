@@ -122,6 +122,51 @@ async def test_put_config_string_value_round_trip(contract_conn, pi_settings_cli
     assert row["value"] == cron_value
 
 
+async def test_put_encrypted_key_masked_sentinel_does_not_clobber_secret(
+    contract_conn, pi_settings_client, monkeypatch
+):
+    """Re-submitting the masked display value of an encrypted key must NOT overwrite the stored secret.
+
+    Verified: config_write.py:388 (encrypt_secret(str(value))), config_db.py:122
+    (mask_secret on read), crypto.py:236 ('****'+last4 sentinel).
+    """
+    from cryptography.fernet import Fernet
+    from jarvis_common.crypto import decrypt_secret, mask_secret, refresh_fernet_cache
+
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", Fernet.generate_key().decode())
+    refresh_fernet_cache()
+
+    real_secret = "sk-openai-REAL-secret-9876"
+    put1 = await pi_settings_client.put(
+        "/api/config/llm.openai.api_key",
+        json={"key": "llm.openai.api_key", "value": real_secret},
+    )
+    assert put1.status_code == 200, f"initial PUT failed: {put1.text[:300]}"
+
+    stored = await contract_conn.fetchrow(
+        "SELECT encrypted_value FROM user_config WHERE key = 'llm.openai.api_key' AND user_id IS NULL"
+    )
+    assert stored is not None and stored["encrypted_value"] is not None
+    assert decrypt_secret(stored["encrypted_value"].decode("ascii")) == real_secret
+
+    # Resubmit the masked sentinel (what GET returns) — must be a no-op, not a clobber.
+    masked = mask_secret(real_secret)
+    assert masked.startswith("****")
+    put2 = await pi_settings_client.put(
+        "/api/config/llm.openai.api_key",
+        json={"key": "llm.openai.api_key", "value": masked},
+    )
+    assert put2.status_code == 200, f"masked PUT failed: {put2.text[:300]}"
+
+    after = await contract_conn.fetchrow(
+        "SELECT encrypted_value FROM user_config WHERE key = 'llm.openai.api_key' AND user_id IS NULL"
+    )
+    assert decrypt_secret(after["encrypted_value"].decode("ascii")) == real_secret, (
+        "Resubmitting the masked sentinel must NOT overwrite the stored secret"
+    )
+    refresh_fernet_cache()
+
+
 async def test_get_config_key_not_found_returns_404(pi_settings_client):
     """GET /api/config/{key} returns 404 when the key does not exist in DB."""
     resp = await pi_settings_client.get("/api/config/nonexistent.key.xyz")

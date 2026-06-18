@@ -86,6 +86,28 @@ async def test_search_chunks_global_qdrant_transport_error_raises():
         )
 
 
+async def test_search_similar_qdrant_transport_error_raises():
+    """A lost Qdrant connection must surface as a retriable unavailability,
+    not a raw transport error, so /api/similar can answer 503 instead of 500."""
+    from paper_ingestion.rag.exceptions import QdrantUnavailableError
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_qdrant = AsyncMock()
+    embedder = Embedder(mock_http, mock_qdrant)
+
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
+    mock_qdrant.query_points.side_effect = ResponseHandlingException(
+        ConnectionError("Qdrant connection lost")
+    )
+
+    with pytest.raises(QdrantUnavailableError):
+        await embedder.search_similar(
+            query_text="test query",
+            limit=5,
+            score_threshold=0.6,
+        )
+
+
 async def test_search_chunks_runtime_error_propagates():
     """RuntimeError from embed_texts propagates through search_chunks_in_paper."""
     mock_http = AsyncMock(spec=httpx.AsyncClient)

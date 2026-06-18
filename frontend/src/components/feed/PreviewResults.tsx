@@ -143,11 +143,13 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
       </div>
 
       <p className="text-sm text-muted-foreground mb-2">{papers.length} results</p>
-      <p className="text-sm text-muted-foreground">
-        {hasSaveablePapers
-          ? 'Library-matched results are already in your library and excluded from save actions.'
-          : 'All results in this preview are already in your library.'}
-      </p>
+      {(!hasSaveablePapers || hasLibraryMatches) && (
+        <p className="text-sm text-muted-foreground">
+          {hasLibraryMatches && hasSaveablePapers
+            ? 'Library-matched results are already in your library and excluded from save actions.'
+            : 'All results in this preview are already in your library.'}
+        </p>
+      )}
 
       <div className="space-y-2">
         {sortedPapers.map((paper, i) => {

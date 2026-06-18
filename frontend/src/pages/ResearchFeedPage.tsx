@@ -134,11 +134,11 @@ export function ResearchFeedPage() {
   // Scoped list-filter: title/author text filter within the active faceted view
   const [listFilter, setListFilter] = useState('');
 
-  // Clear bulk selection + list filter on surface change
+  // Clear bulk selection + list filter on surface/filter/facet change
   useEffect(() => {
     useBulkSelection.getState().clear();
     setListFilter('');
-  }, [surface, feedScope]);
+  }, [surface, feedScope, filter, sourceFacet, topicFacet]);
 
   // ── feed counts (numeric only — CountsBadge consumers) ───────────────────
   const { data: counts } = useQuery<FeedCountsWithFacets>({

@@ -739,6 +739,89 @@ async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
     )
 
 
+# ---------------------------------------------------------------------------
+# ING-4: DOI-matched papers must be added to the polling user's library
+# ---------------------------------------------------------------------------
+
+
+async def test_doi_match_adds_paper_to_polling_users_library(monkeypatch):
+    """A Zotero item whose DOI matches an existing corpus paper is added to the
+    polling user's library and seeded to_read (not just item-key linked)."""
+    from paper_ingestion.integrations import zotero_service
+
+    add_library_calls: list[tuple] = []
+    upsert_state_calls: list[tuple] = []
+
+    async def _spy_add_to_library(conn, *, user_id, paper_id, added_via):
+        add_library_calls.append((user_id, paper_id, added_via))
+
+    async def _spy_upsert_state(conn, paper_id, user_id, *, state, starred, on_conflict):
+        upsert_state_calls.append((paper_id, user_id, state, on_conflict))
+
+    monkeypatch.setattr(zotero_service, "add_to_library", _spy_add_to_library)
+    monkeypatch.setattr(zotero_service, "_upsert_paper_user_state", _spy_upsert_state)
+
+    # DOI lookup conn: fetchrow returns a row with existing zotero_item_key (skips key-update branch).
+    doi_conn = _make_conn(
+        fetchrow=FakeRecord({"id": 77, "zotero_item_key": "EXISTKEY", "discovered_by": 5})
+    )
+    # Connection for add_to_library + _upsert_paper_user_state (monkeypatched — conn not used).
+    library_conn = _make_conn()
+    # Version-persist conn (new_version=1 != last_version=0 → execute runs).
+    version_conn = _make_conn()
+
+    pool = _make_poll_pool(doi_conn, library_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    doi_item = _zotero_item(key="DOIITEM1", doi="10.9999/zzz")
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([doi_item], 1))
+
+        result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=42)
+
+    assert result["status"] == "ok", result
+    assert result["linked"] == 1
+    assert add_library_calls == [(42, 77, "zotero_pull")], (
+        f"add_to_library not called correctly: {add_library_calls}"
+    )
+    assert upsert_state_calls == [(77, 42, "to_read", "do_nothing")], (
+        f"_upsert_paper_user_state not called correctly: {upsert_state_calls}"
+    )
+
+
+async def test_doi_match_no_polling_user_skips_library_link(monkeypatch):
+    """When polling_user_id is None the DOI-match branch must not call add_to_library."""
+    from paper_ingestion.integrations import zotero_service
+
+    add_library_calls: list = []
+
+    async def _spy_add_to_library(conn, *, user_id, paper_id, added_via):
+        add_library_calls.append((user_id, paper_id))
+
+    monkeypatch.setattr(zotero_service, "add_to_library", _spy_add_to_library)
+
+    doi_conn = _make_conn(
+        fetchrow=FakeRecord({"id": 55, "zotero_item_key": "KEY2", "discovered_by": 3})
+    )
+    pool = _make_poll_pool(doi_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    doi_item = _zotero_item(key="DOIITEM2", doi="10.8888/qqq")
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([doi_item], 0))
+
+        result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=None)
+
+    assert result["status"] == "ok", result
+    assert add_library_calls == [], (
+        f"add_to_library must not run when polling_user_id=None: {add_library_calls}"
+    )
+
+
 async def test_get_zotero_config_encrypted_api_key(monkeypatch):
     """_get_zotero_config decrypts encrypted_value when present."""
     from cryptography.fernet import Fernet

@@ -235,7 +235,11 @@ async def batch_summarize_papers(
             """SELECT p.id FROM papers p
                JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
                WHERE EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)
-                 AND NOT EXISTS (SELECT 1 FROM paper_summaries ps WHERE ps.paper_id = p.id)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM paper_summaries ps
+                    WHERE ps.paper_id = p.id
+                      AND ps.user_id IS NOT DISTINCT FROM $2
+                 )
                ORDER BY p.created_at DESC LIMIT $1""",
             limit,
             user_id,

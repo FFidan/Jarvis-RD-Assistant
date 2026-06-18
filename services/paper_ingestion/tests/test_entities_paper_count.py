@@ -371,3 +371,26 @@ def test_user_scope_paper_entities_exists_fragment_shape() -> None:
     frag2 = _user_scope_paper_entities_exists("e1.id", 1)
     assert "pe.entity_id = e1.id" in frag2
     assert "IS NOT DISTINCT FROM $1" in frag2
+
+
+@pytest.mark.asyncio
+async def test_paper_entities_upsert_returns_fresh_insert_flag():
+    """Secondary guard: the fix is the upsert RETURNING a fresh-insert flag
+    (xmax = 0) read via fetchval, replacing the per-run set. The behavioral
+    proof lives in test_kg_contract.py; this just locks the mechanism.
+    """
+    import inspect
+
+    from paper_ingestion.extraction.entities import extract_entities_for_paper
+
+    source = inspect.getsource(extract_entities_for_paper)
+    assert "xmax" in source, "paper_entities upsert must RETURN (xmax = 0) to detect a fresh insert"
+    assert "RETURNING" in source, (
+        "paper_entities upsert must use RETURNING to surface the insert flag"
+    )
+    assert "fetchval" in source or "fetchrow" in source, (
+        "the upsert result must be captured so paper_count is gated on a fresh insert"
+    )
+    assert "paper_count_incremented" not in source, (
+        "the fresh-insert RETURNING flag replaces the per-run paper_count_incremented set"
+    )

@@ -1272,7 +1272,12 @@ export interface TelegramBotTokenSaveResponse {
 
 export interface SetupModeResponse {
   mode: 'single' | 'multi';
-  restart_required: boolean;
+  /**
+   * Legacy field retained for backend response compatibility. The sign-in
+   * method takes effect on the next status poll (the backend reads the saved
+   * value live), so the UI does not act on this flag.
+   */
+  restart_required?: boolean;
 }
 
 export interface SmtpConfigInput {

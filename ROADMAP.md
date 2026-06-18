@@ -8,7 +8,7 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v0.8.7**.
+Current release: **v0.8.8**.
 
 - **Multi-tenant, self-hostable.** Magic-link sessions and an API-key session
   path for single-operator installs; admin role separation; Telegram account

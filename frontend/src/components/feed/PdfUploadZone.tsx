@@ -10,6 +10,7 @@ import { errorMessage } from '@/lib/errors';
 type FileStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
 
 interface FileEntry {
+  uid: string;
   file: File;
   status: FileStatus;
   error?: string;
@@ -26,15 +27,16 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
   const queryClient = useQueryClient();
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
 
-  const retryFile = (index: number) => {
+  const retryFile = (uid: string) => {
+    const index = files.findIndex((f) => f.uid === uid);
     const entry = files[index];
     if (!entry) return;
-    setFiles(prev => prev.map((f, i) => (i === index ? { ...f, status: 'idle', error: undefined } : f)));
+    setFiles(prev => prev.map((f) => (f.uid === uid ? { ...f, status: 'idle', error: undefined } : f)));
     void (async () => {
       try {
-        setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'uploading' as FileStatus } : f)));
+        setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'uploading' as FileStatus } : f)));
         const paper = await uploadPdf(entry.file, entry.file.name.replace(/\.pdf$/i, ''));
-        setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'processing' as FileStatus } : f)));
+        setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'processing' as FileStatus } : f)));
         const job = await processPdf(paper.id);
         trackExternalJob({
           jobId: job.job_id,
@@ -42,14 +44,14 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
           payload: { paper_id: paper.id },
           status: 'queued',
         });
-        setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'done' as FileStatus } : f)));
+        setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'done' as FileStatus } : f)));
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
         onComplete?.();
       } catch (err) {
         setFiles(s =>
-          s.map((f, si) =>
-            si === index
+          s.map((f) =>
+            f.uid === uid
               ? { ...f, status: 'error' as FileStatus, error: errorMessage(err, 'Upload failed') }
               : f,
           ),
@@ -59,19 +61,15 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
   };
 
   const processFiles = useCallback(async (newFiles: File[]) => {
-    const entries: FileEntry[] = newFiles.map(f => ({ file: f, status: 'idle' as FileStatus }));
+    const entries: FileEntry[] = newFiles.map(f => ({ uid: crypto.randomUUID(), file: f, status: 'idle' as FileStatus }));
     setFiles(prev => {
-      const startIndex = prev.length;
       void (async () => {
-        for (let i = 0; i < entries.length; i++) {
-          const idx = startIndex + i;
-          const entry = entries[i];
-          if (!entry) continue;
-          const file = entry.file;
+        for (const entry of entries) {
+          const { uid, file } = entry;
           try {
-            setFiles(s => s.map((f, si) => (si === idx ? { ...f, status: 'uploading' as FileStatus } : f)));
+            setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'uploading' as FileStatus } : f)));
             const paper = await uploadPdf(file, file.name.replace(/\.pdf$/i, ''));
-            setFiles(s => s.map((f, si) => (si === idx ? { ...f, status: 'processing' as FileStatus } : f)));
+            setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'processing' as FileStatus } : f)));
             const job = await processPdf(paper.id);
             trackExternalJob({
               jobId: job.job_id,
@@ -79,11 +77,11 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
               payload: { paper_id: paper.id },
               status: 'queued',
             });
-            setFiles(s => s.map((f, si) => (si === idx ? { ...f, status: 'done' as FileStatus } : f)));
+            setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'done' as FileStatus } : f)));
           } catch (err) {
             setFiles(s =>
-              s.map((f, si) =>
-                si === idx
+              s.map((f) =>
+                f.uid === uid
                   ? { ...f, status: 'error' as FileStatus, error: errorMessage(err, 'Upload failed') }
                   : f,
               ),
@@ -146,15 +144,15 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
 
       {files.length > 0 && (
         <ul className="space-y-1">
-          {files.map((entry, i) => (
-            <li key={`${entry.file.name}-${entry.file.size}`} className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2 text-xs">
+          {files.map((entry) => (
+            <li key={entry.uid} className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2 text-xs">
               <span className="truncate max-w-[60%] font-medium">{entry.file.name}</span>
               <span className="flex items-center gap-2">
                 <span className={statusColor[entry.status]}>
                   {entry.status === 'error' ? (entry.error ?? 'Error') : statusLabel[entry.status]}
                 </span>
                 {entry.status === 'error' && (
-                  <Button variant="ghost" size="sm" className="h-5 px-2 text-xs" onClick={() => retryFile(i)}>
+                  <Button variant="ghost" size="sm" className="h-5 px-2 text-xs" onClick={() => retryFile(entry.uid)}>
                     Retry
                   </Button>
                 )}

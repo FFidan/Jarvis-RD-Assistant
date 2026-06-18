@@ -28,6 +28,7 @@ import logging
 import secrets
 from datetime import UTC, datetime
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import current_user_id_strict
@@ -262,11 +263,17 @@ async def confirm_email_change(
                     "UPDATE magic_link_tokens SET used_at = NOW() WHERE token_hash = $1",
                     token_hash,
                 )
-                await conn.execute(
-                    "UPDATE users SET email = $1 WHERE id = $2 AND deleted_at IS NULL",
-                    new_email,
-                    user_id,
-                )
+                try:
+                    await conn.execute(
+                        "UPDATE users SET email = $1 WHERE id = $2 AND deleted_at IS NULL",
+                        new_email,
+                        user_id,
+                    )
+                except asyncpg.UniqueViolationError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A user with that email already exists",
+                    ) from exc
                 refreshed = await conn.fetchrow(_ACCOUNT_SELECT, user_id)
     except HTTPException:
         if _audit is not None:

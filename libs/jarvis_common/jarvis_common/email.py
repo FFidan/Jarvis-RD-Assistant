@@ -167,6 +167,20 @@ async def _effective_smtp(pool: asyncpg.Pool | None) -> _EffectiveSmtp:
             return None
         return str(value)
 
+    def _optional_field(key: str, env_value: str | None) -> str | None:
+        """Resolve an optional field that the wizard can explicitly clear.
+
+        A user_config row present with an empty value is a deliberate clear
+        (setup.py persists '' for a cleared field) — return None and do NOT fall
+        back to env. Only an ABSENT row falls back to the env value.
+        """
+        if key not in by_key:
+            return env_value
+        value = by_key[key]["value"]
+        if value is None or str(value) == "":
+            return None
+        return str(value)
+
     host = _plain("smtp.host") or env.host
     port_raw = _plain("smtp.port")
     port = env.port
@@ -175,10 +189,10 @@ async def _effective_smtp(pool: asyncpg.Pool | None) -> _EffectiveSmtp:
             port = int(port_raw)
         except ValueError:
             port = env.port
-    user = _plain("smtp.user") or env.user
+    user = _optional_field("smtp.user", env.user)
     sender = _plain("smtp.from") or env.sender
-    reply_to = sanitize_header_value(_plain("smtp.reply_to")) or env.reply_to
-    from_name = sanitize_header_value(_plain("smtp.from_name")) or env.from_name
+    reply_to = sanitize_header_value(_optional_field("smtp.reply_to", env.reply_to))
+    from_name = sanitize_header_value(_optional_field("smtp.from_name", env.from_name))
 
     password = env.password
     pass_row = by_key.get("smtp.pass")

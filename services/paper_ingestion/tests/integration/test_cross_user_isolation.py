@@ -700,19 +700,22 @@ async def test_summary_read_scoped_to_calling_user(
 # ---------------------------------------------------------------------------
 
 
-async def _seed_weekly_engaged_paper(conn, ext_id, title, user_id, topic_name):
+async def _seed_weekly_engaged_paper(conn, ext_id, title, user_id, topic_name, created_at=None):
     """Seed a shared paper engaged (starred) by *user_id* under its own topic.
 
     Returns the new paper id. No paper_summaries row is created here — callers
     add per-user summaries explicitly so the JOIN-scoping behaviour is isolated.
+    When *created_at* is given it overrides papers.created_at (lets a test seed
+    a paper discovered before the weekly cutoff).
     """
     paper_id = await conn.fetchval(
-        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
-           VALUES ($1, 'arxiv', $2, ARRAY['W. Author'], $3, NULL)
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by, created_at)
+           VALUES ($1, 'arxiv', $2, ARRAY['W. Author'], $3, NULL, COALESCE($4, now()))
            RETURNING id""",
         ext_id,
         title,
         f"https://example.test/{ext_id}",
+        created_at,
     )
     await conn.execute(
         "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
@@ -853,3 +856,173 @@ async def test_weekly_summary_preserves_engaged_paper_without_summary(
     )
     assert top_paper is not None, f"engaged-but-unsummarized paper dropped from digest: {result}"
     assert top_paper["confidence"] is None
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_weekly_summary_includes_recently_engaged_old_paper(
+    contract_two_users,
+    contract_conn,
+) -> None:
+    """A paper discovered before the cutoff but engaged within the window
+    must appear in the digest (engagement recency, not discovery date)."""
+    from datetime import UTC, datetime, timedelta
+
+    from jarvis_common.testing_db import SharedConnPool
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.weekly_summary import generate_weekly_summary
+
+    old_created = datetime.now(UTC) - timedelta(days=40)
+    paper_id = await _seed_weekly_engaged_paper(
+        contract_conn,
+        "wk-old-recent-star",
+        "old-paper-recently-starred",
+        contract_two_users.user_b_id,
+        "weekly-recency-topic",
+        created_at=old_created,
+    )
+    # The star (paper_user_state row) was just inserted, so pus.updated_at = now()
+    # — recent engagement on an old paper. Force its updated_at to be unambiguously
+    # inside the 7-day window in case the seed ran at a clock boundary.
+    await contract_conn.execute(
+        "UPDATE paper_user_state SET updated_at = now() WHERE paper_id = $1 AND user_id = $2",
+        paper_id,
+        contract_two_users.user_b_id,
+    )
+
+    pool = SharedConnPool(contract_conn)
+    result = await generate_weekly_summary(
+        db_pool=pool,
+        verifier=QuoteVerifier(),
+        days=7,
+        user_id=contract_two_users.user_b_id,
+        openai_client=MagicMock(),
+    )
+
+    assert result["total_papers"] == 1, (
+        f"a paper engaged this week must appear even if discovered 40 days ago: {result}"
+    )
+    top_paper = next(
+        (tp for t in result["topics"] for tp in t["top_papers"] if tp["id"] == paper_id),
+        None,
+    )
+    assert top_paper is not None, f"recently-engaged old paper dropped from digest: {result}"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_weekly_summary_excludes_stalely_engaged_old_paper(
+    contract_two_users,
+    contract_conn,
+) -> None:
+    """An old paper whose engagement is ALSO stale must NOT appear in the digest.
+
+    Load-bearing for the DAT-6 recency gate: if either
+    `AND pusN.updated_at >= $1` predicate were removed from weekly_summary.py,
+    this stale-starred old paper would wrongly surface and this test would fail.
+    The paper was discovered 40 days ago and last engaged 30 days ago — both
+    outside the 7-day window — so it is correctly absent.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from jarvis_common.testing_db import SharedConnPool
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.weekly_summary import generate_weekly_summary
+
+    old_created = datetime.now(UTC) - timedelta(days=40)
+    paper_id = await _seed_weekly_engaged_paper(
+        contract_conn,
+        "wk-old-stale-star",
+        "old-paper-stalely-starred",
+        contract_two_users.user_b_id,
+        "weekly-recency-stale-topic",
+        created_at=old_created,
+    )
+    # The star set updated_at = now(); push engagement back to 30 days ago —
+    # before the 7-day cutoff but after discovery — so neither the discovery
+    # date nor the engagement recency admits this paper. The BEFORE-UPDATE
+    # trigger set_updated_at_paper_user_state would clobber updated_at back to
+    # now(), so disable it for this single backdating UPDATE, then re-enable.
+    stale_engaged = datetime.now(UTC) - timedelta(days=30)
+    await contract_conn.execute(
+        "ALTER TABLE paper_user_state DISABLE TRIGGER set_updated_at_paper_user_state"
+    )
+    try:
+        await contract_conn.execute(
+            "UPDATE paper_user_state SET updated_at = $3 WHERE paper_id = $1 AND user_id = $2",
+            paper_id,
+            contract_two_users.user_b_id,
+            stale_engaged,
+        )
+    finally:
+        await contract_conn.execute(
+            "ALTER TABLE paper_user_state ENABLE TRIGGER set_updated_at_paper_user_state"
+        )
+
+    pool = SharedConnPool(contract_conn)
+    result = await generate_weekly_summary(
+        db_pool=pool,
+        verifier=QuoteVerifier(),
+        days=7,
+        user_id=contract_two_users.user_b_id,
+        openai_client=MagicMock(),
+    )
+
+    assert result["total_papers"] == 0, (
+        f"an old paper engaged 30 days ago must NOT appear in this week's digest: {result}"
+    )
+    leaked = next(
+        (tp for t in result["topics"] for tp in t["top_papers"] if tp["id"] == paper_id),
+        None,
+    )
+    assert leaked is None, f"stalely-engaged old paper wrongly surfaced in digest: {leaked}"
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_weekly_summary_recent_engagement_scoped_to_engaging_user(
+    contract_two_users,
+    contract_conn,
+) -> None:
+    """The recency-inclusion path is per-user: an old paper engaged this week by
+    user B alone must NOT appear in user A's digest (A neither discovered it
+    in-window nor engaged it). Complements the positive test, which proves B
+    DOES see it."""
+    from datetime import UTC, datetime, timedelta
+
+    from jarvis_common.testing_db import SharedConnPool
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.weekly_summary import generate_weekly_summary
+
+    old_created = datetime.now(UTC) - timedelta(days=40)
+    paper_id = await _seed_weekly_engaged_paper(
+        contract_conn,
+        "wk-old-recent-star-b-only",
+        "old-paper-recently-starred-by-b",
+        contract_two_users.user_b_id,
+        "weekly-recency-scope-topic",
+        created_at=old_created,
+    )
+    await contract_conn.execute(
+        "UPDATE paper_user_state SET updated_at = now() WHERE paper_id = $1 AND user_id = $2",
+        paper_id,
+        contract_two_users.user_b_id,
+    )
+
+    pool = SharedConnPool(contract_conn)
+    result = await generate_weekly_summary(
+        db_pool=pool,
+        verifier=QuoteVerifier(),
+        days=7,
+        user_id=contract_two_users.user_a_id,
+        openai_client=MagicMock(),
+    )
+
+    assert result["total_papers"] == 0, (
+        f"a paper engaged only by user B must NOT appear in user A's digest: {result}"
+    )
+    leaked = next(
+        (tp for t in result["topics"] for tp in t["top_papers"] if tp["id"] == paper_id),
+        None,
+    )
+    assert leaked is None, f"CROSS-USER: B's recently-engaged old paper visible to A: {leaked}"

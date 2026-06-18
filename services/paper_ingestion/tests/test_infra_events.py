@@ -458,3 +458,40 @@ def test_ingest_infra_events_counts_skipped_malformed_lines(app_and_pool, caplog
     ]
     assert len(warning_records) == 1
     assert "2" in warning_records[0].message
+
+
+def test_check_auth_requires_raw_peer_in_allowlist(monkeypatch):
+    """_check_auth must reject when request.client is in-allowlist but the raw socket peer is NOT.
+
+    Mirrors the owner-override dual-check (auth.py:483-490): an XFF-rewritten
+    request.client must not alone satisfy the IP gate when the real transport
+    peer (RawClientStashMiddleware stash) is outside the allowlist.
+    """
+    import importlib
+
+    from fastapi import HTTPException
+
+    from jarvis_common.auth import RAW_CLIENT_SCOPE_KEY
+    from paper_ingestion.routers import infra_events as infra_events_mod
+
+    monkeypatch.setenv("INFRA_INGEST_KEY", "test-infra-secret")
+    monkeypatch.setenv("INFRA_INGEST_ALLOWED_CIDRS", "10.0.0.0/8")
+    importlib.reload(infra_events_mod)
+
+    class _FakeReq:
+        def __init__(self, client_host, raw_peer):
+            self.client = type("C", (), {"host": client_host})()
+            # RawClientStashMiddleware snapshot: (host, port) tuple under the scope key.
+            self.scope = {RAW_CLIENT_SCOPE_KEY: (raw_peer, 12345)}
+
+    # request.client spoofed in-allowlist (10.x) via XFF, but the real socket
+    # peer is public — must be rejected.
+    req = _FakeReq(client_host="10.1.2.3", raw_peer="203.0.113.9")
+    with pytest.raises(HTTPException) as ei:
+        infra_events_mod._check_auth(req, "test-infra-secret")  # type: ignore[arg-type]
+    assert ei.value.status_code == 403
+
+    # Both in-allowlist → passes the IP gate (key still valid).
+    ok = _FakeReq(client_host="10.1.2.3", raw_peer="10.1.2.3")
+    infra_events_mod._check_auth(ok, "test-infra-secret")  # type: ignore[arg-type]  # no raise
+    importlib.reload(infra_events_mod)

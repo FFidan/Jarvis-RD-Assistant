@@ -799,6 +799,7 @@ from paper_ingestion.routers import (  # noqa: E402
 )
 from paper_ingestion.routers import audit_admin as audit_admin_router  # noqa: E402
 from paper_ingestion.routers import auth as auth_router  # noqa: E402
+from paper_ingestion.routers import backups as backups_router  # noqa: E402
 from paper_ingestion.routers import pulse as pulse_router  # noqa: E402
 from paper_ingestion.routers import settings_ai as settings_ai_router  # noqa: E402
 from paper_ingestion.routers import setup as setup_router  # noqa: E402
@@ -809,6 +810,9 @@ app.include_router(auth_router.router)
 # Admin router uses session-only auth (no X-API-Key required for browser
 # sessions). Exempt from the global verify_api_key dep via dependencies=[].
 app.include_router(admin_router.router, dependencies=[])
+# Backup panel uses session-only admin auth (no X-API-Key); exempt from the
+# global verify_api_key dep like admin.py.
+app.include_router(backups_router.router, dependencies=[])
 # AI backend configuration — session-only admin auth, no X-API-Key required.
 app.include_router(settings_ai_router.router, dependencies=[])
 # Setup router is the first-run bootstrap. Endpoints are wide open until

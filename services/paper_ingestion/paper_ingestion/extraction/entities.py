@@ -224,14 +224,6 @@ async def extract_entities_for_paper(
     quote_verifier = QuoteVerifier()
 
     # --- DB reads + writes (connection held, no external HTTP) ---
-    # Track entity ids already processed in this run so that paper_count is
-    # incremented at most once per entity per extraction call.  This prevents
-    # double-counting when the LLM emits the same entity name more than once,
-    # and prevents re-extraction from inflating counts a second time (the
-    # paper_entities INSERT is idempotent via ON CONFLICT DO UPDATE, so only
-    # the paper_count increment needs deduplication here).
-    paper_count_incremented: set[int] = set()
-
     async with db_pool.acquire() as conn:
         for ve, pc in zip(valid_entities, precomputed):
             entity_id, was_merged = await _find_or_create_entity(
@@ -259,30 +251,36 @@ async def extract_entities_for_paper(
             else:
                 entities_added += 1
 
-            # Increment paper_count exactly once per distinct entity in this run.
-            if entity_id not in paper_count_incremented:
-                await conn.execute(
-                    "UPDATE entities SET paper_count = paper_count + 1 WHERE id = $1",
-                    entity_id,
-                )
-                paper_count_incremented.add(entity_id)
-
             entity_name_lower = ve["name"].lower()
             first_chunk_id = next(
                 (c["id"] for c in chunks if entity_name_lower in c["content"].lower()),
                 chunks[0]["id"] if chunks else None,
             )
-            await conn.execute(
+            # xmax = 0 is true only for a row this statement actually INSERTed;
+            # on ON CONFLICT DO UPDATE (the entity already linked to this paper
+            # for this user) xmax != 0. This makes a re-run idempotent and
+            # collapses a duplicate entity name within one run to a single link.
+            fresh_insert = await conn.fetchval(
                 """INSERT INTO paper_entities
                        (paper_id, entity_id, mention_count, first_chunk_id, user_id)
                    VALUES ($1, $2, 1, $3, $4)
                    ON CONFLICT (paper_id, entity_id, user_id) DO UPDATE
-                   SET mention_count = paper_entities.mention_count + 1""",
+                   SET mention_count = paper_entities.mention_count + 1
+                   RETURNING (xmax = 0)""",
                 paper_id,
                 entity_id,
                 first_chunk_id,
                 user_id,
             )
+            # A brand-new entity is created with paper_count DEFAULT 1, which
+            # already counts this paper — so only a PRE-EXISTING entity
+            # (was_merged) gaining a genuinely fresh (paper, entity, user) link
+            # needs +1. Incrementing on a freshly-created entity would double it.
+            if fresh_insert and was_merged:
+                await conn.execute(
+                    "UPDATE entities SET paper_count = paper_count + 1 WHERE id = $1",
+                    entity_id,
+                )
 
         for rel in relationships_data:
             source_name = rel.source.strip().lower()

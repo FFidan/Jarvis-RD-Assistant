@@ -431,3 +431,59 @@ async def test_feed_deprecated_statuses_param_still_returns_200(
     assert resp.status_code == 200, (
         f"deprecated statuses= must remain lenient (200); got {resp.status_code}: {resp.text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# §A-FEED-07
+# Verified: feed_query.py _BASE_FROM_USER / _BASE_FROM_CORPUS_USER paper_summaries join
+# ---------------------------------------------------------------------------
+
+
+async def test_feed_summary_join_scoped_to_calling_user(
+    contract_two_users,
+    _pi_app,
+    _configure_api_key,
+    contract_conn,
+):
+    # WHY the seed shape matters: the paper is canonical (discovered_by NULL) and
+    # in BOTH libraries, but only user A owns a paper_summaries row. An unscoped
+    # LEFT JOIN paper_summaries would match A's row for B's feed, which both leaks
+    # A's summary fields and emits an extra row per matching summary (duplication +
+    # count inflation). The three assertion clusters below pin those three failure
+    # modes to one user-scoped join.
+    a_marker = "ZZZ-FEED-ISO-A-SUMMARY-BRIEF"
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('feed-iso-shared', 'arxiv', 'shared-paper-feed-summary-isolation',
+                   ARRAY['A. Author'], 'https://example.test/feed-iso', NULL)
+           RETURNING id"""
+    )
+    await contract_conn.executemany(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        [
+            (contract_two_users.user_a_id, paper_id),
+            (contract_two_users.user_b_id, paper_id),
+        ],
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries (paper_id, summary_brief, summary_detailed, confidence, user_id)
+           VALUES ($1, $2, $2, 'HIGH', $3)""",
+        paper_id,
+        a_marker,
+        contract_two_users.user_a_id,
+    )
+
+    async with _client(_pi_app, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/papers/feed", params={"limit": 100})
+
+    assert resp.status_code == 200, f"{resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    rows = [p for p in body["papers"] if p["id"] == paper_id]
+    assert len(rows) == 1, f"feed duplicated the shared paper for user B: {len(rows)} rows"
+    assert rows[0]["summary_brief"] is None, f"LEAK: A's summary visible to B: {rows[0]}"
+    assert rows[0]["confidence"] is None
+    assert rows[0]["has_summary"] is False
+    assert a_marker not in resp.text, "LEAK: A's summary marker present in B's feed body"
+    assert body["total"] == len(body["papers"]), (
+        f"count inflated: total={body['total']} but returned {len(body['papers'])} rows"
+    )

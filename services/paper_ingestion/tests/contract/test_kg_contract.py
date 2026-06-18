@@ -1140,3 +1140,132 @@ async def test_tenant03_endpoint_per_user_extraction_own_papers(
     assert "resnet" in names_b, (
         f"User B's KG must show 'ResNet' after her extraction; entities={names_b}"
     )
+
+
+async def test_a47_graph_paper_count_is_per_user_not_global(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+):
+    """A shared entity's node paper_count must reflect only the caller's papers.
+
+    Seed one entity whose global entities.paper_count is 3 but which is linked to
+    only 1 of user A's papers and 2 of user B's. User A's graph node must report 1,
+    never the cross-tenant total of 3.
+    """
+    entity_id = await contract_conn.fetchval(
+        """INSERT INTO entities (name, canonical_name, entity_type, paper_count)
+           VALUES ('kg-shared-count', 'kg-shared-count', 'concept', 3)
+           RETURNING id"""
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_entities (paper_id, entity_id, user_id) VALUES ($1, $2, $3)"
+        " ON CONFLICT DO NOTHING",
+        contract_two_users.paper_id_a,
+        entity_id,
+        contract_two_users.user_a_id,
+    )
+    for ext in ("kg-b-cnt-1", "kg-b-cnt-2"):
+        b_paper = await contract_conn.fetchval(
+            """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+               VALUES ($1::text, 'arxiv', 'b count paper', ARRAY['Author'],
+                       'https://kg-b.test/' || $1::text, $2)
+               RETURNING id""",
+            ext,
+            contract_two_users.user_b_id,
+        )
+        await contract_conn.execute(
+            "INSERT INTO paper_entities (paper_id, entity_id, user_id) VALUES ($1, $2, $3)"
+            " ON CONFLICT DO NOTHING",
+            b_paper,
+            entity_id,
+            contract_two_users.user_b_id,
+        )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/knowledge-graph")
+
+    assert resp.status_code == 200, f"{resp.status_code}: {resp.text[:300]}"
+    node = next((e for e in resp.json()["entities"] if e["name"] == "kg-shared-count"), None)
+    assert node is not None, "user A's scoped graph should include the shared entity"
+    assert node["paper_count"] == 1, (
+        f"node paper_count={node['paper_count']} leaks cross-tenant count (expected 1)"
+    )
+    assert node["display_size"] == 18, (
+        f"display_size={node['display_size']} not derived from per-user count (15 + 1*3 = 18)"
+    )
+
+
+async def test_extract_entities_paper_count_incremented_once_on_reextraction(
+    contract_two_users,
+    contract_conn,
+    pi_contract_app_with_litellm_sidecar,
+    _configure_api_key,
+):
+    """Re-running extraction for the same (paper, entity, user) must NOT inflate
+    entities.paper_count: the second POST is a paper_entities ON CONFLICT DO UPDATE
+    (no fresh insert), so paper_count stays at 1. On HEAD the per-run set ignores
+    DB state and re-increments → paper_count becomes 2.
+    """
+    from paper_ingestion._state import set_services
+    from jarvis_common.testing_contract_apps import patch_app_state
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion.extraction.kg_models import (
+        KGEntityCandidate,
+        KGExtractionOutput,
+    )
+    import httpx
+
+    app, faux_litellm = pi_contract_app_with_litellm_sidecar
+
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('kg-dat4-recount', 'arxiv', 'DAT-4 recount', ARRAY['Author'],
+                   'https://kg-dat4.test/paper', $1)
+           RETURNING id""",
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_chunks
+               (paper_id, chunk_index, content, page_number, start_char, end_char)
+           VALUES ($1, 0, 'Transformer method improves GLUE dataset results.', 1, 0, 49)""",
+        paper_id,
+    )
+
+    # Two identical scripted responses — one per POST.
+    for _ in range(2):
+        faux_litellm.add_pydantic_response(
+            "fast",
+            KGExtractionOutput(
+                entities=[KGEntityCandidate(name="Dat4Concept", type="method")],
+                relationships=[],
+            ),
+        )
+
+    faux_qdrant = FauxQdrantClient()
+    set_services(openai_client=app.state.openai_client)
+    try:
+        async with httpx.AsyncClient() as http_client:
+            with patch_app_state(app, {"qdrant_client": faux_qdrant, "http_client": http_client}):
+                async with _make_client(app, contract_two_users.cookie_a) as c:
+                    r1 = await c.post(f"/api/extract-entities/{paper_id}")
+                    assert r1.status_code == 200, f"{r1.status_code}: {r1.text[:300]}"
+                    r2 = await c.post(f"/api/extract-entities/{paper_id}")
+                    assert r2.status_code == 200, f"{r2.status_code}: {r2.text[:300]}"
+    finally:
+        set_services(openai_client=None)
+
+    # The entity created by the first run; its global paper_count must be 1, not 2.
+    paper_count = await contract_conn.fetchval(
+        """SELECT e.paper_count FROM entities e
+           JOIN paper_entities pe ON pe.entity_id = e.id
+           WHERE pe.paper_id = $1 AND pe.user_id = $2
+           LIMIT 1""",
+        paper_id,
+        contract_two_users.user_a_id,
+    )
+    assert paper_count == 1, (
+        f"entities.paper_count={paper_count} — re-extraction double-counted "
+        "(must increment only on a genuinely fresh paper_entities insert)"
+    )

@@ -62,7 +62,7 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
     pulse: 'Pulse',
     timer: 'Timer',
     observability: 'Observability',
-    mode: 'Access Mode',
+    mode: 'Sign-in Method',
   },
   integrations: {
     telegram: 'Telegram',

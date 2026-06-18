@@ -16,7 +16,6 @@ from apscheduler.triggers.cron import CronTrigger
 from telegram import Bot
 
 from telegram_bot import formatters
-from telegram_bot import owner as _owner
 from telegram_bot.config import BotConfig
 
 logger = logging.getLogger(__name__)
@@ -199,6 +198,20 @@ class JarvisScheduler:
         )
         return str(fallback_row["value"]) if fallback_row and fallback_row["value"] else "UTC"
 
+    async def _resolve_owner_chat_id(self) -> int | None:
+        """Return the numeric telegram.owner_chat_id, or None when unset/invalid."""
+        row = await self.db_pool.fetchrow(
+            "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
+        )
+        raw = row["value"] if row else None
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring non-numeric telegram.owner_chat_id %r for failure alert", raw)
+            return None
+
     async def _run_job(self, nudge_type: str, nudge_id: int) -> None:
         """Execute a scheduled job and update last_fired_at.
 
@@ -233,22 +246,24 @@ class JarvisScheduler:
                 "Please check service logs for details."
             )
             try:
-                pairings = await _owner.list_user_pairings(self.db_pool)
-                if not pairings:
+                owner_chat_id = await self._resolve_owner_chat_id()
+                if owner_chat_id is None:
                     logger.warning(
-                        "Skipping failure alert for job %s (id=%d): no telegram pairings",
+                        "Skipping failure alert for job %s (id=%d): telegram.owner_chat_id unset",
                         nudge_type,
                         nudge_id,
                     )
                     return
-                for pairing in pairings:
-                    await self.bot.send_message(
-                        chat_id=pairing.chat_id,
-                        text=alert,
-                        parse_mode="HTML",
-                    )
+                # Operator-level failure notice goes ONLY to the owner chat —
+                # scheduled_nudges is deployment-global, so broadcasting to every
+                # paired user would leak operator diagnostics to all tenants.
+                await self.bot.send_message(
+                    chat_id=owner_chat_id,
+                    text=alert,
+                    parse_mode="HTML",
+                )
                 logger.info(
-                    "Sent failure alert for job %s (id=%d)",
+                    "Sent failure alert for job %s (id=%d) to owner chat",
                     nudge_type,
                     nudge_id,
                 )

@@ -183,9 +183,7 @@ async def run_auto_pipeline(app) -> None:
                 """SELECT p.id, p.pdf_local_path FROM papers p
                    WHERE p.pdf_downloaded = TRUE
                      AND p.pdf_local_path IS NOT NULL
-                     AND NOT EXISTS (
-                         SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id
-                     )
+                     AND p.chunked_at IS NULL
                    ORDER BY p.id
                    LIMIT 20"""
             )

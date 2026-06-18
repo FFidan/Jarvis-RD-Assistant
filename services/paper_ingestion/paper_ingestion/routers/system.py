@@ -860,20 +860,31 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
         )
 
     # SMTP — magic links fall back to stdout when unset. Probe the EFFECTIVE
-    # relay (wizard-written user_config layered over env), not just the env var,
-    # so a relay configured only through the setup wizard reports as ready. The
-    # probe falls back to env on a DB error, so this await degrades gracefully.
-    from jarvis_common.email import smtp_configured as smtp_configured_probe  # noqa: PLC0415
+    # relay (wizard-written user_config layered over env) AND its auth-consistency,
+    # so a host+sender present with a username-but-no-password (which 535s at AUTH)
+    # does NOT report green. Matches the Settings banner (effective_smtp_status).
+    from jarvis_common.email import effective_smtp_status  # noqa: PLC0415
 
-    smtp_ok = await smtp_configured_probe(request.app.state.db_pool)
+    smtp_deliverable, smtp_issues = await effective_smtp_status(request.app.state.db_pool)
+    if smtp_deliverable and not smtp_issues:
+        smtp_status = "green"
+        smtp_detail = "configured"
+    elif smtp_deliverable:
+        # Deliverable envelope but a config issue (e.g. username without password).
+        smtp_status = "amber"
+        smtp_detail = "configured with warnings"
+    else:
+        smtp_status = "amber"
+        smtp_detail = "not configured — magic links go to stdout"
     checks.append(
         ReadinessCheck(
             name="smtp",
-            status="green" if smtp_ok else "amber",
-            detail=("configured" if smtp_ok else "not configured — magic links go to stdout"),
+            status=smtp_status,
+            detail=smtp_detail,
             remediation=(
                 "Configure SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM "
-                "before inviting real users — otherwise sign-in emails print to logs."
+                "before inviting real users — otherwise sign-in emails print to logs "
+                "or the relay rejects sign-in at AUTH."
             ),
         )
     )

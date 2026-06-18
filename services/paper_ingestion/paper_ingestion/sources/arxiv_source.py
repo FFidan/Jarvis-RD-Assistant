@@ -161,16 +161,17 @@ class ArxivSource(PaperSource):
             )
 
     def consolidate_topics(self, topics: list[TopicRef]) -> list[SourceQuery]:
-        """Merge all topics into one arXiv OR-query (or 2 if > 1500 chars).
+        """Merge all topics into one arXiv OR-query, splitting into multiple bins
+        when the string would exceed the 1500-character URL ceiling.
 
-        Builds a single ``(ti:"X" OR abs:"X" OR ...)`` query from all topic
-        terms, splitting into at most 2 bins when the string would exceed the
-        1500-character URL ceiling.
+        Builds ``(ti:"X" OR abs:"X" OR ...)`` queries from the topic terms,
+        greedily packing topics into as many bins as needed to keep every
+        query string under the cap.
 
         Returns
         -------
         list[SourceQuery]
-            One or two :class:`SourceQuery` objects.
+            One :class:`SourceQuery` per bin (one when all topics fit).
         """
         if not topics:
             return []
@@ -191,39 +192,34 @@ class ArxivSource(PaperSource):
         if len(full_query) <= _cap:
             return [SourceQuery(topics=list(topics), extra_params={"search_query": full_query})]
 
-        # Greedy bin-pack into 2 bins.
-        bin1: list[TopicRef] = []
-        bin2: list[TopicRef] = []
+        # Greedy bin-pack into N bins, each query string under the cap.  A topic
+        # whose own parts already exceed the cap goes into its own (over-cap) bin
+        # rather than being dropped — best-effort beats silent loss.
+        bins: list[list[TopicRef]] = []
+        current_topics: list[TopicRef] = []
         current_parts: list[str] = []
         for topic in topics:
             new_parts = _parts_for_topic(topic)
             tentative = " OR ".join(current_parts + new_parts)
-            if len(tentative) <= _cap:
-                current_parts.extend(new_parts)
-                bin1.append(topic)
+            if current_topics and len(tentative) > _cap:
+                bins.append(current_topics)
+                current_topics = [topic]
+                current_parts = list(new_parts)
             else:
-                bin2.append(topic)
+                current_topics.append(topic)
+                current_parts.extend(new_parts)
+        if current_topics:
+            bins.append(current_topics)
 
-        queries: list[SourceQuery] = []
-        if bin1:
-            queries.append(
-                SourceQuery(
-                    topics=bin1,
-                    extra_params={
-                        "search_query": " OR ".join(p for t in bin1 for p in _parts_for_topic(t))
-                    },
-                )
+        return [
+            SourceQuery(
+                topics=bin_topics,
+                extra_params={
+                    "search_query": " OR ".join(p for t in bin_topics for p in _parts_for_topic(t))
+                },
             )
-        if bin2:
-            queries.append(
-                SourceQuery(
-                    topics=bin2,
-                    extra_params={
-                        "search_query": " OR ".join(p for t in bin2 for p in _parts_for_topic(t))
-                    },
-                )
-            )
-        return queries
+            for bin_topics in bins
+        ]
 
     async def _fetch_xml(self, params: dict) -> Any | None:
         """Rate-limited GET to the arXiv API; returns parsed XML or None on transient errors.

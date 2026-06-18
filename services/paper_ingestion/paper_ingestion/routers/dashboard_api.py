@@ -55,7 +55,8 @@ async def get_dashboard_metrics(
                               AND {EXCLUDED_STATE_SQL}
                          )) AS unread_papers,
                     (SELECT COUNT(*) FROM user_library ul
-                     LEFT JOIN paper_summaries ps ON ul.paper_id = ps.paper_id
+                     LEFT JOIN paper_summaries ps
+                       ON ul.paper_id = ps.paper_id AND ps.user_id = $1
                      WHERE ul.user_id = $1
                        AND ps.id IS NULL) AS pending_papers,
                     (SELECT COUNT(*) FROM cards
@@ -88,7 +89,8 @@ async def get_dashboard_metrics(
                               AND {EXCLUDED_STATE_SQL}
                          )) AS unread_papers,
                     (SELECT COUNT(*) FROM papers p
-                     LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
+                     LEFT JOIN paper_summaries ps
+                       ON p.id = ps.paper_id AND ps.user_id IS NULL
                      WHERE ps.id IS NULL) AS pending_papers,
                     (SELECT COUNT(*) FROM cards
                      WHERE due_at IS NOT NULL AND due_at <= NOW()

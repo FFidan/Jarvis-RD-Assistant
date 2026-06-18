@@ -118,14 +118,22 @@ class EmbeddingSearchMixin:
         else:
             query_filter = None
 
-        response = await self.qdrant.query_points(
-            collection_name=COLLECTION_NAME,
-            query=query_embedding,
-            limit=limit,
-            query_filter=query_filter,
-            score_threshold=score_threshold,
-            with_payload=True,
-        )
+        try:
+            response = await self.qdrant.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_embedding,
+                limit=limit,
+                query_filter=query_filter,
+                score_threshold=score_threshold,
+                with_payload=True,
+            )
+        except RuntimeError:
+            raise
+        except _QDRANT_TRANSPORT_EXCEPTIONS as exc:
+            if isinstance(exc, UnexpectedResponse) and (exc.status_code or 0) < 500:
+                raise
+            logger.exception("Qdrant similar-paper search failed")
+            raise QdrantUnavailableError("Qdrant unavailable") from exc
 
         results: list[dict] = []
         for hit in response.points:

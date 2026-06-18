@@ -83,8 +83,17 @@ async def _anonymize_audit_log_for_users(conn: Any, uids: list[int]) -> int:
         return 0
 
 
-async def _purge_qdrant_for_user(qdrant: Any, uid: int) -> int:
-    """Delete all Qdrant vectors whose payload ``user_id`` matches *uid*.
+async def _purge_qdrant_for_user(qdrant: Any, uid: int, protected_paper_ids: list[int]) -> int:
+    """Delete Qdrant vectors whose payload ``user_id`` matches *uid*, except any
+    point whose ``paper_id`` is still referenced by a surviving user's library.
+
+    A paper's vectors are shared (point payload carries the discoverer's
+    ``user_id`` but the point id is keyed by ``paper_id:chunk_index``). Because
+    ``papers.discovered_by`` is ``ON DELETE SET NULL``, the paper + its vectors
+    survive a user hard-delete; deleting them would strand any other tenant who
+    still holds the paper. ``protected_paper_ids`` are those still-held papers
+    (an empty list means no survivor holds any of this user's papers, so the
+    purge falls back to the legacy ``user_id``-only filter).
 
     Counts matching points before deleting so the audit metadata records the
     real per-uid vector count, not Qdrant's operation sequence number.
@@ -92,11 +101,25 @@ async def _purge_qdrant_for_user(qdrant: Any, uid: int) -> int:
     Returns the pre-delete point count (0 if count or delete fails — caller
     logs the error and continues).
     """
-    from qdrant_client.models import FieldCondition, Filter, MatchValue  # noqa: PLC0415
+    from qdrant_client.models import (  # noqa: PLC0415
+        Condition,
+        FieldCondition,
+        Filter,
+        MatchAny,
+        MatchValue,
+    )
 
     from paper_ingestion.ingestion.embedder import COLLECTION_NAME  # noqa: PLC0415
 
-    uid_filter = Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=uid))])
+    must_not: list[Condition] | None = (
+        [FieldCondition(key="paper_id", match=MatchAny(any=protected_paper_ids))]
+        if protected_paper_ids
+        else None
+    )
+    uid_filter = Filter(
+        must=[FieldCondition(key="user_id", match=MatchValue(value=uid))],
+        must_not=must_not,
+    )
 
     count_result = await qdrant.count(
         collection_name=COLLECTION_NAME,
@@ -141,10 +164,19 @@ async def data_purge_task(app: Any) -> None:
             # their vectors are not orphaned.  They remain deleted_at-marked and
             # are naturally retried on the next nightly run.
             failed_uids: set[int] = set()
+            # paper_ids still held by a user NOT being purged this run — their
+            # shared vectors must survive even though the discoverer is purged.
+            protected_rows = await conn.fetch(
+                "SELECT DISTINCT paper_id FROM user_library WHERE user_id <> ALL($1::int[])",
+                expired_ids,
+            )
+            protected_paper_ids = [r["paper_id"] for r in protected_rows]
             if qdrant is not None:
                 for uid in expired_ids:
                     try:
-                        qdrant_vectors[uid] = await _purge_qdrant_for_user(qdrant, uid)
+                        qdrant_vectors[uid] = await _purge_qdrant_for_user(
+                            qdrant, uid, protected_paper_ids
+                        )
                     except Exception as exc:
                         logger.warning("data_purge: Qdrant purge failed for user %d: %r", uid, exc)
                         qdrant_errors.append(f"uid={uid}: {exc!r}")

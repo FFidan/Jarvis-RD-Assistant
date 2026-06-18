@@ -910,6 +910,225 @@ async def test_a84_bulk_action_transitions_state_for_owner(
     )
 
 
+# --- CRIT-XT-1: multi-tenant hard-delete must not destroy a shared corpus row ---
+
+
+async def test_hard_delete_shared_paper_only_removes_callers_membership(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """User A hard-deletes a paper that user B also holds → only A's membership/state
+    is removed; the shared papers row + B's library/state survive; vectors untouched.
+    """
+    from paper_ingestion import papers_service
+
+    vector_calls: list[int] = []
+
+    async def _spy_delete_vectors(pid: int) -> None:
+        vector_calls.append(pid)
+
+    monkeypatch.setattr(papers_service, "delete_paper_vectors", _spy_delete_vectors)
+
+    user_a_id = contract_two_users.user_a_id
+    user_b_id = contract_two_users.user_b_id
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('xt1-shared', 'arxiv', 'XT1 Shared Paper', ARRAY['Au'],
+                   'https://xt1.t/shared', $1)
+           RETURNING id""",
+        user_a_id,
+    )
+    for uid in (user_a_id, user_b_id):
+        await contract_conn.execute(
+            "INSERT INTO user_library (user_id, paper_id, added_via)"
+            " VALUES ($1, $2, 'manual_save')",
+            uid,
+            paper_id,
+        )
+    # A trashed it; B is actively reading it.
+    await contract_conn.execute(
+        "INSERT INTO paper_user_state (paper_id, user_id, state, state_before_trash)"
+        " VALUES ($1, $2, 'trash', 'inbox')",
+        paper_id,
+        user_a_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, $2, 'reading')",
+        paper_id,
+        user_b_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.delete(f"/api/papers/{paper_id}")
+
+    assert resp.status_code == 200, f"got {resp.status_code}: {resp.text[:300]}"
+
+    # Shared row + B's data survive.
+    shared_paper_row = await contract_conn.fetchval("SELECT id FROM papers WHERE id=$1", paper_id)
+    assert shared_paper_row == paper_id
+    assert (
+        await contract_conn.fetchval(
+            "SELECT 1 FROM user_library WHERE paper_id=$1 AND user_id=$2", paper_id, user_b_id
+        )
+        == 1
+    )
+    assert (
+        await contract_conn.fetchval(
+            "SELECT state FROM paper_user_state WHERE paper_id=$1 AND user_id=$2",
+            paper_id,
+            user_b_id,
+        )
+        == "reading"
+    )
+    # A's membership + state gone.
+    assert (
+        await contract_conn.fetchval(
+            "SELECT 1 FROM user_library WHERE paper_id=$1 AND user_id=$2", paper_id, user_a_id
+        )
+        is None
+    )
+    assert (
+        await contract_conn.fetchval(
+            "SELECT 1 FROM paper_user_state WHERE paper_id=$1 AND user_id=$2", paper_id, user_a_id
+        )
+        is None
+    )
+    # Shared vectors NOT touched (row survives).
+    assert vector_calls == [], (
+        f"delete_paper_vectors must not run when row survives: {vector_calls}"
+    )
+
+
+async def test_hard_delete_last_holder_removes_shared_row_and_vectors(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """When the caller is the only library holder, hard-delete removes the papers row
+    and runs Qdrant cleanup (legacy full-delete preserved for the last holder).
+    """
+    from paper_ingestion import papers_service
+
+    vector_calls: list[int] = []
+
+    async def _spy_delete_vectors(pid: int) -> None:
+        vector_calls.append(pid)
+
+    monkeypatch.setattr(papers_service, "delete_paper_vectors", _spy_delete_vectors)
+
+    user_a_id = contract_two_users.user_a_id
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('xt1-solo', 'arxiv', 'XT1 Solo Paper', ARRAY['Au'],
+                   'https://xt1.t/solo', $1)
+           RETURNING id""",
+        user_a_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_a_id,
+        paper_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_user_state (paper_id, user_id, state, state_before_trash)"
+        " VALUES ($1, $2, 'trash', 'inbox')",
+        paper_id,
+        user_a_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.delete(f"/api/papers/{paper_id}")
+
+    assert resp.status_code == 200, f"got {resp.status_code}: {resp.text[:300]}"
+    purged_paper_row = await contract_conn.fetchval("SELECT id FROM papers WHERE id=$1", paper_id)
+    assert purged_paper_row is None
+    assert vector_calls == [paper_id], f"vectors must be cleaned on full delete: {vector_calls}"
+
+
+async def test_hard_delete_sole_holder_preserves_row_when_discovered_by_other(
+    contract_two_users,
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """Exercises the ``discovered_by`` guard in ``_hard_delete_scoped`` directly.
+
+    User A is the ONLY remaining library holder (so the ``others_hold`` short-circuit
+    does NOT fire), but the paper was discovered by user B. The guard must therefore
+    refuse the physical delete: A's membership/state are removed, the shared ``papers``
+    row is preserved (B remains the discoverer), and the shared Qdrant vectors are NOT
+    touched. If the guard were removed, the row would be physically deleted and
+    ``delete_paper_vectors`` would run — failing the assertions below.
+
+    Verified: services/paper_ingestion/paper_ingestion/papers_service.py:104 at HEAD
+    (``if discovered_by is not None and discovered_by != user_id: return False``).
+    """
+    from paper_ingestion import papers_service
+
+    vector_calls: list[int] = []
+
+    async def _spy_delete_vectors(pid: int) -> None:
+        vector_calls.append(pid)
+
+    monkeypatch.setattr(papers_service, "delete_paper_vectors", _spy_delete_vectors)
+
+    user_a_id = contract_two_users.user_a_id
+    user_b_id = contract_two_users.user_b_id
+    # Paper discovered by B, but only A holds it in their library (B does NOT).
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('xt1-guard', 'arxiv', 'XT1 Guard Paper', ARRAY['Au'],
+                   'https://xt1.t/guard', $1)
+           RETURNING id""",
+        user_b_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_a_id,
+        paper_id,
+    )
+    # A trashed it (hard-delete requires state='trash').
+    await contract_conn.execute(
+        "INSERT INTO paper_user_state (paper_id, user_id, state, state_before_trash)"
+        " VALUES ($1, $2, 'trash', 'inbox')",
+        paper_id,
+        user_a_id,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.delete(f"/api/papers/{paper_id}")
+
+    assert resp.status_code == 200, f"got {resp.status_code}: {resp.text[:300]}"
+
+    # (b) Shared papers row PRESERVED — A is not the discoverer, so no physical delete.
+    surviving_paper_row = await contract_conn.fetchval(
+        "SELECT id FROM papers WHERE id=$1", paper_id
+    )
+    assert surviving_paper_row == paper_id, (
+        f"shared papers row {paper_id} must survive when caller is not the discoverer"
+    )
+    # (a) A's user_library + paper_user_state rows are gone.
+    a_library_row = await contract_conn.fetchval(
+        "SELECT 1 FROM user_library WHERE paper_id=$1 AND user_id=$2", paper_id, user_a_id
+    )
+    assert a_library_row is None, "A's user_library membership must be removed"
+    a_state_row = await contract_conn.fetchval(
+        "SELECT 1 FROM paper_user_state WHERE paper_id=$1 AND user_id=$2", paper_id, user_a_id
+    )
+    assert a_state_row is None, "A's paper_user_state row must be removed"
+    # (c) Vectors NOT touched — row was not physically deleted.
+    assert vector_calls == [], (
+        f"delete_paper_vectors must not run when the discovered_by guard blocks "
+        f"physical delete: {vector_calls}"
+    )
+
+
 # --- A90: POST /api/papers/batch-process — queues job for user's unprocessed papers ---
 
 

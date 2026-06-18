@@ -138,7 +138,7 @@ export async function bulkAction(body: { paper_ids: number[]; action: BulkAction
  * `fetch_feed_facet_counts`).
  */
 export async function fetchFeedCounts(scope?: 'library' | 'corpus'): Promise<FeedCountsWithFacets> {
-  const qs = scope === 'corpus' ? '?scope=corpus' : '';
+  const qs = scope ? `?scope=${scope}` : '';
   return apiFetch(`/api/papers/feed/counts${qs}`);
 }
 

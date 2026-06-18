@@ -81,10 +81,10 @@ commits since the last Git tag.
 
 The four main services (`paper_ingestion`, `learning_engine`, `telegram_bot`,
 `dashboard`) are tagged using the `JARVIS_VERSION` environment variable
-(defaults to `0.8.7`). Set it in `.env` or `versions.env` before building:
+(defaults to `0.8.8`). Set it in `.env` or `versions.env` before building:
 
 ```bash
-JARVIS_VERSION=0.8.7
+JARVIS_VERSION=0.8.8
 docker compose build
 docker compose up -d
 ```

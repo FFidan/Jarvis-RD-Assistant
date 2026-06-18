@@ -49,6 +49,12 @@ logger = logging.getLogger(__name__)
 # keeps retrying.
 _DELIVERY_PENDING_KEY = "llm.delivery_pending"
 
+# A masked secret echo from GET /api/config: mask_secret() emits exactly '****'
+# (secret shorter than 4 chars) or '****' + the last 4 chars. Re-submitting that
+# value must be a no-op, never a write — otherwise the literal mask overwrites the
+# stored secret (defense-in-depth; the in-product forms also guard via draft!=current).
+_MASK_SENTINEL_RE = re.compile(r"^\*{4}(.{4})?$")
+
 
 def _is_litellm_no_db_error(detail: str) -> bool:
     """Match LiteLLM's /model/new | /model/delete failure when no admin DB is attached.
@@ -287,6 +293,11 @@ async def write_config(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     row_user_id = caller_user_id if _classify_config_key(key) == "personal" else None
+
+    # Encrypted keys: a re-submitted mask sentinel ('****' / '****' + last4) is a
+    # no-op — never encrypt the masked echo over the real secret.
+    if key in _ENCRYPTED_KEYS and _MASK_SENTINEL_RE.fullmatch(str(value)):
+        return mask_secret(str(value))
 
     # Model assignment check
     if key in ROLE_TO_ALIAS:

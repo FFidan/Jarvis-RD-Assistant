@@ -1800,3 +1800,64 @@ async def test_a105_ask_stream_passes_user_id_to_prepare(contract_conn, pi_test_
     assert resp.status_code == 200
     assert len(call_capture) == 1
     assert call_capture[0]["user_id"] == user_id
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_batch_summarize_candidate_scoped_to_calling_user(
+    contract_conn, contract_two_users, pi_test_client
+):
+    """A shared paper user A already summarized must still be a candidate for user B.
+
+    Seed a shared chunked paper in both libraries with a summary owned by A only.
+    User B's batch-summarize must count it in total_unsummarized (NOT EXISTS must
+    be scoped to B's user_id, not the whole corpus).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from paper_ingestion.main import app
+
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ('batchsum-iso-shared', 'arxiv', 'shared-paper-batchsum-isolation',
+                   ARRAY['A. Author'], 'https://example.test/batchsum-iso', NULL)
+           RETURNING id"""
+    )
+    await contract_conn.executemany(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        [
+            (contract_two_users.user_a_id, paper_id),
+            (contract_two_users.user_b_id, paper_id),
+        ],
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content) VALUES ($1, 0, 'chunk')",
+        paper_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_summaries (paper_id, summary_brief, summary_detailed, user_id)
+           VALUES ($1, 'A summary', 'A summary', $2)""",
+        paper_id,
+        contract_two_users.user_a_id,
+    )
+
+    mock_task = AsyncMock()
+    mock_task.defer_async = AsyncMock()
+    app.state.limiter.enabled = False
+    pi_test_client.cookies.set("jarvis_session", contract_two_users.cookie_b)
+    try:
+        with patch.dict(
+            "jarvis_common.task_registry._TASK_MAP", {"papers.batch_summarize": mock_task}
+        ):
+            resp = await pi_test_client.post("/api/papers/batch-summarize")
+    finally:
+        pi_test_client.cookies.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 202, f"{resp.status_code}: {resp.text[:300]}"
+    body = resp.json()
+    assert body["total_unsummarized"] == 1, (
+        "expected exactly 1 unsummarized candidate for user B (the shared paper); "
+        "pre-fix NOT EXISTS was unscoped so user A's summary excluded it → 0; "
+        "any value other than 1 means the scoping fix is broken or extra candidates leaked in"
+    )

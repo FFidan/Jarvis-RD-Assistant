@@ -11,6 +11,7 @@ import {
   scanPaperContradictions,
   searchPreview,
   fetchFeed,
+  fetchFeedCounts,
 } from '@/lib/api';
 
 describe('apiFetch', () => {
@@ -428,5 +429,44 @@ describe('fetchStackHealth — toStatus degraded branch', () => {
     expect(summary.downCount).toBe(0);
     // Overall rolls up to 'degraded' when any dep is degraded but none are down
     expect(summary.overall).toBe('degraded');
+  });
+});
+
+describe('fetchFeedCounts', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('hits /api/papers/feed/counts with no params when scope is undefined', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ inbox: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    await fetchFeedCounts();
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/papers/feed/counts',
+      expect.anything(),
+    );
+  });
+
+  it('hits /api/papers/feed/counts?scope=library when scope=library', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ inbox: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    await fetchFeedCounts('library');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/papers/feed/counts?scope=library',
+      expect.anything(),
+    );
+  });
+
+  it('hits /api/papers/feed/counts?scope=corpus when scope=corpus', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ inbox: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    await fetchFeedCounts('corpus');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/papers/feed/counts?scope=corpus',
+      expect.anything(),
+    );
   });
 });

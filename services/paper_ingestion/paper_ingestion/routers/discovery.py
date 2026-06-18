@@ -19,6 +19,7 @@ from paper_ingestion.models import (
     DiscoveryResultItem,
     SimilarPaperResult,
 )
+from paper_ingestion.rag.exceptions import QdrantUnavailableError
 
 router = APIRouter(prefix="/api", tags=["discovery"])
 
@@ -68,13 +69,16 @@ async def find_similar_papers(
 
         if embedder is None or embedder.qdrant is None:
             raise HTTPException(status_code=503, detail="Search service unavailable")
-        results = await embedder.search_similar(
-            query_text=query_text,
-            limit=limit * 3,  # extra results for dedup
-            paper_id_filter=paper_id,
-            score_threshold=0.6,
-            user_id=user_id,
-        )
+        try:
+            results = await embedder.search_similar(
+                query_text=query_text,
+                limit=limit * 3,  # extra results for dedup
+                paper_id_filter=paper_id,
+                score_threshold=0.6,
+                user_id=user_id,
+            )
+        except QdrantUnavailableError as exc:
+            raise HTTPException(status_code=503, detail="Search service unavailable") from exc
 
         # Deduplicate by paper_id, keep highest score per paper
         deduped = deduplicate_by_paper_id(results)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -862,3 +863,95 @@ async def test_force_reprocess_skips_qdrant_delete_when_new_fully_covers_old():
 
     assert result == {"paper_id": 100, "chunk_count": 2, "status": "processed"}
     embedder.qdrant.delete.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# ING-1: re-embed papers stuck with an incomplete chunk set (chunked_at marker)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_process_pdf_reembeds_when_chunked_at_unset():
+    """A paper with chunk rows but chunked_at IS NULL (a prior partial embed)
+    must NOT short-circuit: run_process_pdf must call the processor to finish
+    embedding the missing chunks."""
+    conn = AsyncMock()
+    # fetchval order in run_process_pdf: existing_count, chunked_at, owner_id.
+    conn.fetchval.side_effect = [3, None, None]  # 3 partial chunks, never marked complete
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+    chunks = [
+        SimpleNamespace(chunk_index=0, content="A", page_number=1, start_char=0, end_char=1),
+    ]
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(return_value=("full text", chunks, ["vec-a"]))
+    embedder = MagicMock()
+
+    result = await run_process_pdf(
+        paper_id=5,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        force=False,
+    )
+
+    assert result["status"] == "processed"
+    pdf_processor.process.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_process_pdf_short_circuits_when_chunked_at_set():
+    """A fully-processed paper (chunked_at set) still short-circuits."""
+    conn = AsyncMock()
+    conn.fetchval.side_effect = [4, datetime(2026, 6, 17, tzinfo=UTC)]
+    pool, _ = make_pool_and_conn(conn=conn)
+    pdf_processor = MagicMock()
+    embedder = MagicMock()
+
+    result = await run_process_pdf(
+        paper_id=5,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        force=False,
+    )
+
+    assert result == {"paper_id": 5, "chunk_count": 4, "status": "already_processed"}
+    pdf_processor.process.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_process_pdf_marks_chunked_at_on_success():
+    """A successful run stamps papers.chunked_at so future retries short-circuit."""
+    conn = AsyncMock()
+    conn.fetchval.side_effect = [0, None]  # no existing chunks, owner_id None
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool, _ = make_pool_and_conn(conn=conn)
+    chunks = [
+        SimpleNamespace(chunk_index=0, content="A", page_number=1, start_char=0, end_char=1),
+    ]
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(return_value=("full text", chunks, ["vec-a"]))
+    embedder = MagicMock()
+
+    await run_process_pdf(
+        paper_id=12,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+    )
+
+    conn.execute.assert_any_await("UPDATE papers SET chunked_at = now() WHERE id = $1", 12)

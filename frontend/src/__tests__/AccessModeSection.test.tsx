@@ -4,8 +4,7 @@
  * Covers:
  *  1. Renders current mode from mocked getFirstRunStatus.setup_mode.
  *  2. Changing selection and clicking Save calls saveSetupMode with the chosen mode.
- *  3. Shows the persistent restart note at all times.
- *  4. Shows success message after save.
+ *  3. Shows plain confirmation after a successful save (no restart text).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -19,7 +18,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 const fixtures = vi.hoisted(() => ({
   statusSingle: { configured: true, setup_mode: 'single' as const },
   statusMulti: { configured: true, setup_mode: 'multi' as const },
-  saveResponse: { mode: 'multi' as const, restart_required: true },
+  saveResponse: { mode: 'multi' as const, restart_required: false },
 }));
 
 // ---------------------------------------------------------------------------
@@ -116,14 +115,10 @@ describe('AccessModeSection', () => {
     });
   });
 
-  it('shows the actionable restart command only once a restart is pending', async () => {
+  it('shows the plain confirmation after a successful save', async () => {
     mockGetStatus.mockResolvedValue(fixtures.statusSingle);
     const user = userEvent.setup();
     await renderSection();
-
-    expect(
-      screen.queryByText(/docker compose restart paper_ingestion learning_engine/i),
-    ).not.toBeInTheDocument();
 
     await waitFor(() =>
       expect(screen.getByRole('radio', { name: /multi-user/i })).toBeInTheDocument(),
@@ -132,13 +127,11 @@ describe('AccessModeSection', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(
-        screen.getByText(/docker compose restart paper_ingestion learning_engine/i),
-      ).toBeInTheDocument(),
+      expect(screen.getByText(/sign-in method updated/i)).toBeInTheDocument(),
     );
   });
 
-  it('shows success message after save', async () => {
+  it('never shows a restart pill or compose command', async () => {
     mockGetStatus.mockResolvedValue(fixtures.statusSingle);
     const user = userEvent.setup();
     await renderSection();
@@ -146,18 +139,26 @@ describe('AccessModeSection', () => {
     await waitFor(() =>
       expect(screen.getByRole('radio', { name: /multi-user/i })).toBeInTheDocument(),
     );
-
     await user.click(screen.getByRole('radio', { name: /multi-user/i }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
-
     await waitFor(() =>
-      expect(
-        screen.getByText(/saved — restart required for the change to take effect/i),
-      ).toBeInTheDocument(),
+      expect(screen.getByText(/sign-in method updated/i)).toBeInTheDocument(),
     );
+
+    expect(screen.queryByText(/restart/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/docker compose/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(localStorage.getItem('jarvis-access-mode-pending')).toBeNull();
   });
 
-  it('shows the pending pill after a restart-required save and persists it', async () => {
+  // Anti-tautology: with restart_required:false the HEAD component already hides
+  // the pill (its onSuccess clears pendingRestartMode), so the negative test above
+  // passes on broken AND fixed code. This variant forces the response to claim a
+  // restart so the ONLY way the pill/compose text can stay absent is to delete the
+  // restart JSX entirely. FAILS on HEAD (the pill + compose paragraph render on a
+  // restart_required:true save), PASSES after the dead-UI removal.
+  it('ignores a restart_required:true response — no pill, no compose command, no localStorage write', async () => {
+    mockSave.mockResolvedValue({ mode: 'multi', restart_required: true });
     mockGetStatus.mockResolvedValue(fixtures.statusSingle);
     const user = userEvent.setup();
     await renderSection();
@@ -165,56 +166,16 @@ describe('AccessModeSection', () => {
     await waitFor(() =>
       expect(screen.getByRole('radio', { name: /multi-user/i })).toBeInTheDocument(),
     );
-
     await user.click(screen.getByRole('radio', { name: /multi-user/i }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
-
     await waitFor(() =>
-      expect(screen.getByText(/mode change pending — restart required/i)).toBeInTheDocument(),
-    );
-    expect(localStorage.getItem('jarvis-access-mode-pending')).toBe('multi');
-  });
-
-  it('restores the pending pill from localStorage and clears it once the API reports the mode', async () => {
-    localStorage.setItem('jarvis-access-mode-pending', 'multi');
-    // API still reports the old mode → pill should be visible.
-    mockGetStatus.mockResolvedValue(fixtures.statusSingle);
-    const { unmount } = await renderSection();
-
-    await waitFor(() =>
-      expect(screen.getByText(/mode change pending — restart required/i)).toBeInTheDocument(),
-    );
-    unmount();
-
-    // After a restart the API now reports the saved mode → pill clears.
-    mockGetStatus.mockResolvedValue(fixtures.statusMulti);
-    await renderSection();
-
-    await waitFor(() =>
-      expect(screen.getByRole('radio', { name: /multi-user/i })).toBeChecked(),
-    );
-    expect(screen.queryByText(/mode change pending/i)).not.toBeInTheDocument();
-    await waitFor(() =>
-      expect(localStorage.getItem('jarvis-access-mode-pending')).toBeNull(),
-    );
-  });
-
-  it('shows the no-restart success message when restart_required is false', async () => {
-    mockGetStatus.mockResolvedValue(fixtures.statusMulti);
-    mockSave.mockResolvedValue({ mode: 'single', restart_required: false });
-    const user = userEvent.setup();
-    await renderSection();
-
-    await waitFor(() =>
-      expect(screen.getByRole('radio', { name: /single-user/i })).toBeInTheDocument(),
+      expect(screen.getByText(/sign-in method updated/i)).toBeInTheDocument(),
     );
 
-    await user.click(screen.getByRole('radio', { name: /single-user/i }));
-    await user.click(screen.getByRole('button', { name: 'Save' }));
-
-    await waitFor(() =>
-      expect(screen.getByText(/access mode updated/i)).toBeInTheDocument(),
-    );
+    expect(screen.queryByText(/restart/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/docker compose/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(localStorage.getItem('jarvis-access-mode-pending')).toBeNull();
   });
 
   it('does not claim single-user restricts login and accurately describes what the toggle controls', async () => {

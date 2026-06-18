@@ -502,3 +502,10 @@ async def test_paper_analyze_job_forwards_force(tmp_path, monkeypatch):
     assert call_kwargs.get("force") is True, (
         f"generate_paper_summary must be called with force=True; got kwargs: {call_kwargs}"
     )
+    # ING-2: the process step must also receive force=True, else a forced
+    # re-analyze refreshes the summary but never re-chunks a stuck paper.
+    rpp_call = _workflow_stub.run_process_pdf.await_args
+    assert rpp_call is not None
+    assert rpp_call.kwargs.get("force") is True, (
+        f"run_process_pdf must be called with force=True; got kwargs={rpp_call.kwargs}"
+    )

@@ -254,9 +254,10 @@ class SetupModeBody(BaseModel):
 
 class SetupModeResponse(BaseModel):
     mode: Literal["single", "multi"]
-    # Core settings read the mode at app startup, so a change needs a service
-    # restart (never a file edit) to take effect.
-    restart_required: bool = True
+    # get_status reads the saved mode from user_config on every poll and
+    # get_core_settings() is uncached, so a /mode write takes effect on the
+    # next status read — no restart needed.
+    restart_required: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +355,8 @@ async def get_status(request: Request) -> SetupStatusResponse:
     setup_completed = _coerce_bool(row["value"] if row else None, default=False)
 
     # Report the SAVED mode (user_config, layered over env) so the wizard
-    # reflects a /mode write immediately. Running enforcement still reads env at
-    # startup, hence the persistent "restart required" hint in the UI.
+    # reflects a /mode write immediately — this is the only runtime reader of
+    # the mode, so the write is live on the next poll with no restart.
     saved_mode = mode_row["value"] if mode_row else None
     mode = saved_mode if saved_mode in ("single", "multi") else env_mode
 
@@ -905,15 +906,14 @@ async def get_telegram_bot_token_status(
 async def configure_setup_mode(body: SetupModeBody, request: Request) -> SetupModeResponse:
     """Persist the single↔multi-user mode.
 
-    Core settings read the mode at app startup, so this is durable in
-    ``user_config`` but needs a service restart to take effect — never a
-    file edit. (Layering user_config over env in ``get_core_settings`` is a
-    separate, out-of-scope follow-up.)
+    Durable in ``user_config``. ``get_status`` is the only runtime reader and
+    prefers this saved value over the env default, so the change is live on the
+    next status poll — no restart required.
     """
     await require_unconfigured_or_admin(request)
     pool = request.app.state.db_pool
     await _persist_config(pool, "setup.mode", body.mode, encrypted=False)
-    return SetupModeResponse(mode=body.mode, restart_required=True)
+    return SetupModeResponse(mode=body.mode, restart_required=False)
 
 
 __all__ = ["router", "require_unconfigured_or_admin"]

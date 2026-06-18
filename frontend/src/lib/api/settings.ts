@@ -278,7 +278,7 @@ export const saveTelegramBotToken = (token: string) =>
 
 // --- Settings: access mode (UI-5) ---
 
-/** Switch between single-user and multi-user access mode. Requires a restart. */
+/** Switch the sign-in method offered (single-user API-key vs multi-user magic-link). Applied on the next status poll. */
 export const saveSetupMode = (mode: 'single' | 'multi') =>
   apiFetch<SetupModeResponse>('/api/setup/mode', {
     method: 'POST',

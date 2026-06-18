@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useSearchParams } from 'react-router-dom';
@@ -218,6 +218,86 @@ describe('ResearchFeedPage — bulk clears on direct setSearchParams (NEW-H5-DIR
 
     // The useEffect([surface]) in ResearchFeedPage must fire and clear the store.
     // If that useEffect is removed, selectedIds.size stays 1 and this assertion fails.
+    await waitFor(() => {
+      expect(useBulkSelection.getState().selectedIds.size).toBe(0);
+    });
+  });
+});
+
+// A sibling inside the same Router that flips one query param to a target value
+// WITHOUT remounting ResearchFeedPage (so only a deps change can re-fire the effect).
+function ParamSwitcher({ param, value }: { param: string; value: string }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  return (
+    <button
+      data-testid="param-switcher"
+      onClick={() => {
+        const next = new URLSearchParams(searchParams);
+        next.set(param, value);
+        setSearchParams(next);
+      }}
+    >
+      switch
+    </button>
+  );
+}
+
+describe('ResearchFeedPage — bulk clears on filter/facet changes (FEE-1)', () => {
+  beforeEach(() => {
+    useBulkSelection.setState({ selectedIds: new Set() });
+  });
+
+  async function seedThenSwitch(initialEntry: string, param: string, value: string) {
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route
+              path="/feed"
+              element={
+                <>
+                  <ParamSwitcher param={param} value={value} />
+                  <ResearchFeedPage />
+                </>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // Page mounted → the mount-effect already cleared. Re-seed AFTER mount so the
+    // selection is live going into the param change (otherwise we'd be asserting
+    // the spurious mount-clear, not the deps-driven clear).
+    await waitFor(() =>
+      expect(screen.getByTestId('param-switcher')).toBeInTheDocument(),
+    );
+    act(() => {
+      useBulkSelection.setState({ selectedIds: new Set([99]) });
+    });
+    expect(useBulkSelection.getState().selectedIds.size).toBe(1);
+
+    await user.click(screen.getByTestId('param-switcher'));
+    return user;
+  }
+
+  it('clears bulk selection when ?filter changes (Reading→Done)', async () => {
+    await seedThenSwitch('/feed?surface=library&filter=reading', 'filter', 'done');
+    await waitFor(() => {
+      expect(useBulkSelection.getState().selectedIds.size).toBe(0);
+    });
+  });
+
+  it('clears bulk selection when ?facet_source changes', async () => {
+    await seedThenSwitch('/feed?surface=library', 'facet_source', 'arxiv');
+    await waitFor(() => {
+      expect(useBulkSelection.getState().selectedIds.size).toBe(0);
+    });
+  });
+
+  it('clears bulk selection when ?facet_topic changes', async () => {
+    await seedThenSwitch('/feed?surface=library', 'facet_topic', '3');
     await waitFor(() => {
       expect(useBulkSelection.getState().selectedIds.size).toBe(0);
     });

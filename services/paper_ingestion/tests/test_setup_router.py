@@ -114,6 +114,30 @@ async def test_setup_status_falls_back_to_env_mode_when_unsaved(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_configure_setup_mode_does_not_require_restart(monkeypatch) -> None:
+    """POST /api/setup/mode persists the row; the next get_status reads it, so no
+    restart is required — the response must report restart_required=False."""
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)  # bootstrap: no admin yet
+    pool, _ = make_pool_and_conn(conn=conn)
+    request = _build_request(pool)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.setup._persist_config", AsyncMock(return_value=None)
+    )
+
+    body = setup_router.SetupModeBody(mode="multi")
+    result = await setup_router.configure_setup_mode(body, request)
+
+    assert result.mode == "multi"
+    assert result.restart_required is False
+
+
+def test_setup_mode_response_default_is_no_restart() -> None:
+    """The SetupModeResponse default must not claim a restart is required."""
+    assert setup_router.SetupModeResponse(mode="single").restart_required is False
+
+
+@pytest.mark.asyncio
 async def test_setup_status_returns_503_on_db_failure() -> None:
     """get_status must raise HTTP 503 when the DB query fails (fail-closed)."""
     conn = AsyncMock()

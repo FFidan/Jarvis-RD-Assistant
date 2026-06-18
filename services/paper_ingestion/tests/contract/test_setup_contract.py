@@ -431,7 +431,9 @@ async def test_a139_setup_mode_persisted_to_db(setup_client, contract_conn):
     )
     body = resp.json()
     assert body["mode"] == "multi"
-    assert body["restart_required"] is True
+    # get_status reads the saved mode live (uncached) on the next poll, so the
+    # mode change takes effect without a restart.
+    assert body["restart_required"] is False
 
     # Verify user_config row.
     row = await contract_conn.fetchrow(

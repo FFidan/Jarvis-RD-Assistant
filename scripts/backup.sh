@@ -69,6 +69,14 @@ fi
 
 mkdir -p "$BACKUP_DIR"
 
+# On-demand trigger: the WebUI Backup panel writes /backup-trigger/.backup_now to
+# request an immediate run. The sidecar loop's `sleep` means a run may already be
+# in progress; clearing the flag at the top of this run consumes the request so
+# the loop does not re-fire on its next iteration. (A scheduled run also clears a
+# stale flag — harmless.)
+TRIGGER_FILE="${BACKUP_TRIGGER_DIR:-/backup-trigger}/.backup_now"
+rm -f "$TRIGGER_FILE" 2>/dev/null || true
+
 # encrypt_or_passthrough — read stdin, write encrypted (when a key is set) or
 # verbatim to stdout. Used as the final transform stage of a backup pipeline.
 encrypt_or_passthrough() {
@@ -127,7 +135,13 @@ if [ -d "$SECRETS_DIR" ]; then
     echo "[$(date -Iseconds)] WARNING: BACKUP_ENCRYPT_KEYFILE is unset — the secrets archive will contain plaintext keys. Set a backup key for production." >&2
   fi
   secrets_tmp="${SECRETS_BACKUP_FILE}.tmp"
-  tar -czf - -C "$SECRETS_DIR" . \
+  # Exclude the backup encryption key from its own encrypted archive: sealing
+  # the key inside the .enc it unlocks is circularly undecryptable after total
+  # host loss. The operator must hold this key out-of-band (see DEPLOYMENT.md).
+  # The on-disk key is backup_encrypt_key.txt (the ./secrets source for the
+  # backup_encrypt_key Docker Secret); tar --exclude globs member names, so the
+  # pattern must carry the .txt — a keyless ./backup_encrypt_key is a silent no-op.
+  tar -czf - -C "$SECRETS_DIR" --exclude=./backup_encrypt_key.txt . \
     | encrypt_or_passthrough > "$secrets_tmp"
   secrets_st=("${PIPESTATUS[@]}")
   if [ "${secrets_st[0]}" -ne 0 ] || [ "${secrets_st[1]}" -ne 0 ]; then
@@ -158,15 +172,21 @@ qdrant_http() {
   perl -MHTTP::Tiny -e '
     my ($method, $path, $out) = @ARGV;
     my %h = ("api-key" => $ENV{QDRANT_API_KEY}) if length $ENV{QDRANT_API_KEY};
-    my $res = HTTP::Tiny->new(timeout => 30)->request(
-      $method, $ENV{QDRANT_URL} . $path, { headers => \%h });
-    exit 1 unless $res->{success};
+    my %opts = ( headers => \%h );
+    my $fh;
     if (defined $out && length $out) {
-      open(my $fh, ">", $out) or exit 1;
-      binmode $fh; print $fh $res->{content}; close $fh;
-    } else {
-      print $res->{content};
+      # Stream the (potentially large) snapshot straight to disk instead of
+      # buffering the whole body in memory — the sidecar runs under a 256m
+      # mem_limit and a real collection snapshot would OOM-kill a buffered read.
+      open($fh, ">", $out) or exit 1;
+      binmode $fh;
+      $opts{data_callback} = sub { my ($chunk) = @_; print $fh $chunk; };
     }
+    my $res = HTTP::Tiny->new(timeout => 30)->request(
+      $method, $ENV{QDRANT_URL} . $path, \%opts);
+    if ($fh) { close $fh; }
+    if (!$res->{success}) { unlink $out if $fh; exit 1; }
+    if (!$fh) { print $res->{content}; }
   ' "$@"
 }
 
@@ -225,5 +245,6 @@ find "$BACKUP_DIR" \( \
     -o -name "litellm_*.sql.gz" -o -name "litellm_*.sql.gz.enc" \
     -o -name "secrets_*.tar.gz" -o -name "secrets_*.tar.gz.enc" \
     -o -name "qdrant_*.snapshot" \
+    -o -name "*.tmp" \
   \) -mtime "+${RETENTION_DAYS}" -delete
 echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"

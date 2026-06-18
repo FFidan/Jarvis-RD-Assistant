@@ -58,6 +58,9 @@ const AdminAuditLogPage = lazy(() =>
 const AdminSystemHealthPage = lazy(() =>
   import('@/pages/AdminSystemHealthPage').then((m) => ({ default: m.AdminSystemHealthPage })),
 );
+const AdminBackupsPage = lazy(() =>
+  import('@/pages/AdminBackupsPage').then((m) => ({ default: m.AdminBackupsPage })),
+);
 const OnboardingWizard = lazy(() =>
   import('@/pages/OnboardingWizard').then((m) => ({ default: m.OnboardingWizard })),
 );
@@ -202,6 +205,7 @@ export function App() {
                   <Route path="admin/users" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/audit-log" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminAuditLogPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/system-health" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminSystemHealthPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
+                  <Route path="admin/backups" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminBackupsPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="extractions" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ExtractionTablePage /></Suspense></RouteErrorBoundary>} />
                   <Route path="projects" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="cards" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><LearningCardsPage /></Suspense></RouteErrorBoundary>} />

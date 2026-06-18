@@ -141,6 +141,38 @@ async def test_readiness_all_green_aggregate(_app, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_readiness_smtp_amber_when_username_without_password(_app, monkeypatch):
+    """host+sender present but SMTP_USER set with no SMTP_PASS → readiness SMTP must not be green.
+
+    The relay would 535 at AUTH, so a half-configured login must surface as amber,
+    matching the Settings banner (effective_smtp_status), not report green.
+    """
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+    monkeypatch.setenv("SMTP_USER", "relay-user")
+    monkeypatch.delenv("SMTP_PASS", raising=False)
+
+    from jarvis_common.settings import get_secrets_settings
+
+    get_secrets_settings.cache_clear()
+    app, _conn = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/system/readiness")
+
+    assert resp.status_code == 200
+    by_name = {c["name"]: c for c in resp.json()["checks"]}
+    assert by_name["smtp"]["status"] == "amber", (
+        f"username-without-password must not be green; got {by_name['smtp']}"
+    )
+    # The remediation/detail must never echo the configured value.
+    assert "relay-user" not in resp.text
+    get_secrets_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_readiness_requires_auth(monkeypatch):
     """Without a valid X-API-Key the endpoint must 401 (global verify_api_key)."""
     monkeypatch.setenv("JARVIS_API_KEY", "secret-key-value-1234567890")

@@ -229,6 +229,7 @@ async def _paper_analyze_job(
         pool,
         pdf_processor,
         embedder,
+        force=force,
         ctx=sub_ctx,
     )
 

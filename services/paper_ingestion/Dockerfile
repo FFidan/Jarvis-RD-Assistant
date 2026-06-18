@@ -79,6 +79,12 @@ COPY services/paper_ingestion/paper_ingestion/ ./paper_ingestion/
 COPY services/paper_ingestion/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+# Writable backup-trigger dir: the admin Backup panel writes /backup-trigger/.backup_now
+# here to request an on-demand DR run. The named volume mounts root-owned by default,
+# so chown the mount point to appuser (mirrors the HF cache chown above) — otherwise
+# the non-root app's sentinel write raises PermissionError and trigger_backup 503s.
+RUN mkdir -p /backup-trigger && chown appuser:appuser /backup-trigger
+
 USER appuser
 
 ENTRYPOINT ["/app/entrypoint.sh"]

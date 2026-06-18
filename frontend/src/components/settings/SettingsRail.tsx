@@ -75,7 +75,7 @@ export const ALL_SECTIONS: RailSection[] = [
       { section: 'system', item: 'pulse', label: 'Pulse' },
       { section: 'system', item: 'timer', label: 'Timer' },
       { section: 'system', item: 'observability', label: 'Observability' },
-      { section: 'system', item: 'mode', label: 'Access Mode' },
+      { section: 'system', item: 'mode', label: 'Sign-in Method' },
     ],
   },
   {

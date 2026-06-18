@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from jarvis_common.auth import _client_ip
+from jarvis_common.auth import _client_ip, _raw_socket_ip
 from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, Field
 
@@ -105,8 +105,18 @@ def _check_auth(request: Request, provided: str | None) -> None:
     if not get_core_settings().infra_ingest_allowed_cidrs.strip():
         raise HTTPException(status_code=503, detail="INFRA_INGEST_ALLOWED_CIDRS not configured")
     client_ip = _client_ip(request)
-    if not _infra_ip_in_allowlist(client_ip):
-        logger.warning("infra-ingest: rejected request from %s (not in allowlist)", client_ip)
+    raw_ip, raw_stashed = _raw_socket_ip(request)
+    if not raw_stashed:
+        # App built without RawClientStashMiddleware (e.g. a bare test app, which
+        # also installs no ProxyHeadersMiddleware) → request.client IS the real
+        # peer; fall back to the single check on it.
+        raw_ip = client_ip
+    if not (_infra_ip_in_allowlist(client_ip) and _infra_ip_in_allowlist(raw_ip)):
+        logger.warning(
+            "infra-ingest: rejected request — client IP %s / raw socket peer %s not in allowlist",
+            client_ip,
+            raw_ip,
+        )
         raise HTTPException(status_code=403, detail="source IP not in infra ingest allowlist")
     expected = _load_ingest_key()
     if not expected:

@@ -58,6 +58,7 @@ _BASE_FROM_USER = (
     " FROM papers p"
     " JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1"
     " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
+    " AND ps.user_id IS NOT DISTINCT FROM $1"
     " LEFT JOIN paper_user_state pus"
     " ON p.id = pus.paper_id AND pus.user_id IS NOT DISTINCT FROM $1"
     " LEFT JOIN paper_recommendations pr"
@@ -67,6 +68,7 @@ _BASE_FROM_USER = (
 _BASE_FROM_CORPUS_USER = (
     " FROM papers p"
     " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
+    " AND ps.user_id IS NOT DISTINCT FROM $1"
     " LEFT JOIN paper_user_state pus"
     " ON p.id = pus.paper_id AND pus.user_id IS NOT DISTINCT FROM $1"
     " LEFT JOIN paper_recommendations pr"

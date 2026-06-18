@@ -281,7 +281,12 @@ async def run_process_pdf(
             existing_count = await conn.fetchval(
                 "SELECT COUNT(*) FROM paper_chunks WHERE paper_id = $1", paper_id
             )
-            if existing_count > 0 and not force:
+            chunked_at = None
+            if existing_count > 0:
+                chunked_at = await conn.fetchval(
+                    "SELECT chunked_at FROM papers WHERE id = $1", paper_id
+                )
+            if existing_count > 0 and chunked_at is not None and not force:
                 await _maybe_progress(1.0, "Already processed")
                 return {
                     "paper_id": paper_id,
@@ -400,6 +405,7 @@ async def run_process_pdf(
                     for chunk, point_id in zip(chunks, point_ids)
                 ],
             )
+            await conn.execute("UPDATE papers SET chunked_at = now() WHERE id = $1", paper_id)
 
     # Qdrant cleanup runs after DB replacement so a failed force reprocess keeps
     # the previous chunk rows intact. point_ids_to_delete contains only stale IDs

@@ -3,7 +3,7 @@
 Verifies that user-controlled fields (nudge_type) are escaped through
 formatters.escape() before being interpolated into HTML parse_mode messages.
 
-Also covers per-pairing delivery of failure alerts (list_user_pairings path).
+Also covers owner-only delivery of failure alerts (telegram.owner_chat_id path).
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from telegram_bot.owner import UserPairing
 from telegram_bot.scheduler import JarvisScheduler
 
 # ---------------------------------------------------------------------------
@@ -19,19 +18,22 @@ from telegram_bot.scheduler import JarvisScheduler
 # ---------------------------------------------------------------------------
 
 
-def _make_scheduler() -> JarvisScheduler:
-    """Return a JarvisScheduler with all deps mocked out."""
+def _make_scheduler(owner_chat_id: int | None = 99) -> JarvisScheduler:
+    """Return a JarvisScheduler with all deps mocked out.
+
+    db_pool.fetchrow resolves telegram.owner_chat_id (the single chat the
+    failure alert is delivered to). Pass owner_chat_id=None to simulate an
+    unconfigured owner.
+    """
     db_pool = MagicMock()
     db_pool.execute = AsyncMock()
+    row = {"value": str(owner_chat_id)} if owner_chat_id is not None else None
+    db_pool.fetchrow = AsyncMock(return_value=row)
     http_client = MagicMock()
     bot = MagicMock()
     bot.send_message = AsyncMock()
     config = MagicMock()
     return JarvisScheduler(db_pool=db_pool, http_client=http_client, bot=bot, config=config)
-
-
-def _one_pairing(chat_id: int = 99) -> list[UserPairing]:
-    return [UserPairing(user_id=1, chat_id=chat_id)]
 
 
 # ---------------------------------------------------------------------------
@@ -47,10 +49,7 @@ async def test_nudge_type_html_injection_is_escaped() -> None:
     nudge_id = 7
 
     with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
-        with patch(
-            "telegram_bot.owner.list_user_pairings", new=AsyncMock(return_value=_one_pairing(99))
-        ):
-            await scheduler._run_job(malicious_nudge_type, nudge_id)
+        await scheduler._run_job(malicious_nudge_type, nudge_id)
 
     scheduler.bot.send_message.assert_called_once()
     call_kwargs = scheduler.bot.send_message.call_args.kwargs
@@ -71,10 +70,7 @@ async def test_nudge_type_ampersand_is_escaped() -> None:
     nudge_id = 3
 
     with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
-        with patch(
-            "telegram_bot.owner.list_user_pairings", new=AsyncMock(return_value=_one_pairing(99))
-        ):
-            await scheduler._run_job(nudge_type_with_amp, nudge_id)
+        await scheduler._run_job(nudge_type_with_amp, nudge_id)
 
     call_kwargs = scheduler.bot.send_message.call_args.kwargs
     text: str = call_kwargs["text"]
@@ -92,10 +88,7 @@ async def test_safe_nudge_type_passes_through() -> None:
     nudge_id = 1
 
     with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
-        with patch(
-            "telegram_bot.owner.list_user_pairings", new=AsyncMock(return_value=_one_pairing(99))
-        ):
-            await scheduler._run_job(safe_nudge_type, nudge_id)
+        await scheduler._run_job(safe_nudge_type, nudge_id)
 
     call_kwargs = scheduler.bot.send_message.call_args.kwargs
     text: str = call_kwargs["text"]
@@ -104,27 +97,19 @@ async def test_safe_nudge_type_passes_through() -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_alert_sent_when_no_pairings() -> None:
-    """When list_user_pairings returns empty, no message is sent."""
-    scheduler = _make_scheduler()
-
+async def test_no_alert_sent_when_owner_chat_unconfigured() -> None:
+    """With no telegram.owner_chat_id configured, no failure alert is sent."""
+    scheduler = _make_scheduler(owner_chat_id=None)
     with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
-        with patch("telegram_bot.owner.list_user_pairings", new=AsyncMock(return_value=[])):
-            await scheduler._run_job("daily_summary", 5)
-
+        await scheduler._run_job("daily_summary", 5)
     scheduler.bot.send_message.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_alert_sent_to_each_paired_user() -> None:
-    """Failure alert is sent once per pairing when multiple users are paired."""
-    scheduler = _make_scheduler()
-    pairings = [UserPairing(user_id=1, chat_id=11), UserPairing(user_id=2, chat_id=22)]
-
+async def test_failure_alert_sent_only_to_owner_chat() -> None:
+    """Failure alert goes to telegram.owner_chat_id only — never broadcast."""
+    scheduler = _make_scheduler(owner_chat_id=4242)
     with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
-        with patch("telegram_bot.owner.list_user_pairings", new=AsyncMock(return_value=pairings)):
-            await scheduler._run_job("daily_summary", 5)
-
-    assert scheduler.bot.send_message.call_count == 2
-    sent_chat_ids = {call.kwargs["chat_id"] for call in scheduler.bot.send_message.call_args_list}
-    assert sent_chat_ids == {11, 22}
+        await scheduler._run_job("daily_summary", 5)
+    scheduler.bot.send_message.assert_called_once()
+    assert scheduler.bot.send_message.call_args.kwargs["chat_id"] == 4242

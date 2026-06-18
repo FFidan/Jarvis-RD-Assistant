@@ -293,3 +293,58 @@ async def test_a2_patch_account_email_verification_sent_true_when_smtp_succeeds(
     assert body.get("email_verification_sent") is True, (
         f"email_verification_sent must be True when SMTP succeeds; body={body}"
     )
+
+
+async def test_confirm_email_change_soft_deleted_clash_returns_409(
+    contract_two_users,
+    contract_conn,
+    _pi_app_with_pool,
+    _configure_api_key,
+):
+    """POST /api/account/confirm-email: target email belongs to a soft-deleted user → 409, not 500.
+
+    users_email_key UNIQUE (email) is unconditional (db/init.sql:1626), so the
+    UPDATE raises asyncpg.UniqueViolationError when the email is held by a
+    deleted_at-set row. The handler must translate that to 409.
+    Verified: account.py:266 (unconditional UPDATE), admin.py:155 (mirror pattern).
+    """
+    import hashlib
+    import secrets
+    from datetime import UTC, datetime, timedelta
+
+    # A soft-deleted user already owns the target email (row still occupies the
+    # unique index because the constraint ignores deleted_at).
+    taken_email = "confirm-clash-deleted@contract.example.com"
+    await contract_conn.execute(
+        "INSERT INTO users (email, role, deleted_at) VALUES ($1, 'user', NOW())",
+        taken_email,
+    )
+
+    # Issue a confirm-email-change token for user A pointing at that email.
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    expires_at = datetime.now(UTC) + timedelta(minutes=15)
+    await contract_conn.execute(
+        "INSERT INTO magic_link_tokens (token_hash, user_id, expires_at, pending_email)"
+        " VALUES ($1, $2, $3, $4)",
+        token_hash,
+        contract_two_users.user_a_id,
+        expires_at,
+        taken_email,
+    )
+
+    from jarvis_common.testing_contract_apps import make_contract_client as _make_client
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post("/api/account/confirm-email", json={"token": raw_token})
+
+    assert resp.status_code == 409, (
+        f"Soft-deleted-email clash must return 409, not 500; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+    # The failure audit must still fire (the except branch logs it).
+    audit = await contract_conn.fetchrow(
+        "SELECT 1 FROM audit_log WHERE action = 'account.email.change.failure' AND resource = $1",
+        f"users/{contract_two_users.user_a_id}",
+    )
+    assert audit is not None, "confirm-email failure must be audited even on the constraint path"

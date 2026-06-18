@@ -153,7 +153,19 @@ async def generate_weekly_summary(
             JOIN topics t ON pt.topic_id = t.id
             LEFT JOIN paper_summaries ps
                 ON p.id = ps.paper_id AND ps.user_id IS NOT DISTINCT FROM $2
-            WHERE p.created_at >= $1
+            WHERE (
+                  p.created_at >= $1
+                  OR EXISTS (
+                      SELECT 1 FROM paper_user_state pus2
+                      WHERE pus2.paper_id = p.id
+                        AND (
+                            COALESCE(pus2.starred, FALSE)
+                            OR pus2.state IN ('reading', 'done')
+                        )
+                        AND pus2.user_id IS NOT DISTINCT FROM $2
+                        AND pus2.updated_at >= $1
+                  )
+              )
               AND (
                   EXISTS (
                       SELECT 1 FROM paper_user_state pus
@@ -163,6 +175,7 @@ async def generate_weekly_summary(
                             OR pus.state IN ('reading', 'done')
                         )
                         AND pus.user_id IS NOT DISTINCT FROM $2
+                        AND pus.updated_at >= $1
                   )
                   OR
                   EXISTS (

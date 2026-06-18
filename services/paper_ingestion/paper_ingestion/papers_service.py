@@ -55,6 +55,59 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+async def _hard_delete_scoped(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
+    paper_id: int,
+    user_id: int | None,
+) -> bool:
+    """Remove the caller's claim on *paper_id*; physically delete the shared row
+    only when it is safe to do so.
+
+    Single-user mode (``user_id is None``) keeps the legacy full delete.
+
+    Multi-tenant mode removes the caller's ``user_library`` membership and their
+    per-user rows, then deletes the canonical ``papers`` row ONLY when no other
+    ``user_library`` row references it AND ``discovered_by`` is the caller or NULL.
+    Other tenants' data and the shared Qdrant vectors are never destroyed on a
+    membership-only removal.
+
+    Returns ``True`` iff the physical ``papers`` row was deleted, so the caller
+    knows whether to run the (shared, by-paper_id) Qdrant cleanup.
+    """
+    if user_id is None:
+        await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
+        return True
+
+    await conn.execute(
+        "DELETE FROM user_library WHERE paper_id = $1 AND user_id = $2",
+        paper_id,
+        user_id,
+    )
+    await conn.execute(
+        "DELETE FROM paper_user_state WHERE paper_id = $1 AND user_id = $2",
+        paper_id,
+        user_id,
+    )
+
+    others_hold = await conn.fetchval(
+        "SELECT 1 FROM user_library WHERE paper_id = $1 AND user_id <> $2 LIMIT 1",
+        paper_id,
+        user_id,
+    )
+    if others_hold is not None:
+        return False
+
+    discovered_by = await conn.fetchval(
+        "SELECT discovered_by FROM papers WHERE id = $1",
+        paper_id,
+    )
+    if discovered_by is not None and discovered_by != user_id:
+        return False
+
+    await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
+    return True
+
+
 async def _apply_bulk_action(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     paper_id: int,
@@ -95,13 +148,16 @@ async def _apply_bulk_action(
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
         # Caller (bulk_action_papers) already wraps each paper in a per-paper
         # SAVEPOINT (async with conn.transaction()), so no inner txn is needed.
-        await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
-        # Collect the ID for Qdrant cleanup OUTSIDE the transaction.
-        # Callers that do not pass _hard_deleted_ids get the legacy inline
-        # behaviour as a fallback (e.g. tests that call this directly).
-        if _hard_deleted_ids is not None:
+        row_deleted = await _hard_delete_scoped(conn, paper_id, user_id)
+        # Qdrant vectors are shared (keyed by paper_id), so only clean them when
+        # the canonical row was physically removed — never on a membership-only
+        # removal that leaves the row for other tenants.
+        if row_deleted and _hard_deleted_ids is not None:
+            # Collect the ID for Qdrant cleanup OUTSIDE the transaction.
             _hard_deleted_ids.append(paper_id)
-        else:
+        elif row_deleted:
+            # Callers that do not pass _hard_deleted_ids get the legacy inline
+            # behaviour as a fallback (e.g. tests that call this directly).
             try:
                 await delete_paper_vectors(paper_id)
             except Exception:  # noqa: BLE001 — best-effort cleanup; orphan vectors are harmless
@@ -230,15 +286,18 @@ async def hard_delete_paper(
         await assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
         async with conn.transaction():
-            await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
+            row_deleted = await _hard_delete_scoped(conn, paper_id, user_id)
         # Qdrant cleanup OUTSIDE the transaction — Qdrant is non-transactional;
         # we prefer the row to commit first so a Qdrant failure leaves orphan
         # vectors (recoverable) rather than a missing-vectors row (data loss).
-        try:
-            await delete_paper_vectors(paper_id)
-        except Exception:  # noqa: BLE001 — best-effort cleanup
-            router_logger.exception(
-                "Qdrant cleanup failed for paper %d after DB delete; vectors are now orphans",
-                paper_id,
-            )
+        # Vectors are shared (keyed by paper_id) so only clean them when the
+        # canonical row was physically removed, not on a membership-only removal.
+        if row_deleted:
+            try:
+                await delete_paper_vectors(paper_id)
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                router_logger.exception(
+                    "Qdrant cleanup failed for paper %d after DB delete; vectors are now orphans",
+                    paper_id,
+                )
     return {"deleted": paper_id}

@@ -585,6 +585,24 @@ async def poll_zotero_library(
                                 row["id"],
                                 exc_info=True,
                             )
+                    if polling_user_id is not None:
+                        async with db_pool.acquire() as conn:
+                            await add_to_library(
+                                conn,
+                                user_id=polling_user_id,
+                                paper_id=row["id"],
+                                added_via="zotero_pull",
+                            )
+                            # First-sync wins: never overwrite existing user
+                            # state (the user may have trashed the paper).
+                            await _upsert_paper_user_state(
+                                conn,
+                                row["id"],
+                                polling_user_id,
+                                state="to_read",
+                                starred=False,
+                                on_conflict="do_nothing",
+                            )
                     linked_count += 1
                     continue
             except Exception:

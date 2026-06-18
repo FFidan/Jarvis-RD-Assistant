@@ -313,7 +313,7 @@ All ongoing configuration goes through the web wizard and Settings — no `.env`
 | SMTP relay | Settings → System → Email / SMTP / onboarding wizard | No |
 | Cloud LLM keys (OpenAI, Anthropic, Gemini) | Settings → Models → Cloud Providers | No |
 | Telegram bot token | Settings → Integrations → Bot Token | Yes — `docker compose restart telegram_bot` |
-| Access mode (single ↔ multi-user) | Settings → System → Access Mode | Yes — `docker compose restart paper_ingestion learning_engine` |
+| Sign-in method (single ↔ multi-user) | Settings → System → Sign-in Method | No |
 | Auto-fetch interval | Settings → Automation | No |
 
 For multi-user (team) deployment and the full trust boundary, see [docs/SECURITY.md](SECURITY.md).
@@ -490,6 +490,8 @@ make up-build            # full docker compose up -d --build
 
 `scripts/backup.sh` is scheduled by the `backup` compose profile (`docker compose --profile backup up -d`).
 
+With the `backup` profile running, admins can also list, download, and trigger an on-demand backup from the WebUI at **Admin → Backups** (the on-demand button signals the sidecar to run immediately). Restore stays a manual host procedure — the page surfaces the commands below as a read-only runbook but never executes them.
+
 JARVIS state lives in more than one place, so each run captures **all four** of the durable stores (per-store files are timestamped together so a single run is internally consistent):
 
 | Store | Output (in `/backups`) | Notes |
@@ -514,6 +516,14 @@ JARVIS state lives in more than one place, so each run captures **all four** of 
 The `litellm` DB is owned by the same superuser (`POSTGRES_USER`) that created it, so the same credentials dump both DBs. A failed `pg_dump` aborts the run (non-zero exit) rather than leaving a tiny but well-formed empty archive. The encryption key, Qdrant API key, and `./secrets` source are already wired into the `postgres-backup` sidecar in `docker-compose.yml`. S3 credentials: `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (or IAM instance role) scoped to `s3:PutObject`.
 
 > **Without an encryption key the secrets archive is written in the clear** and the script logs a warning — set `BACKUP_ENCRYPT_KEYFILE` (default already points at the `backup_encrypt_key` Docker Secret) for production.
+
+> **Store the backup encryption key OFF-SITE, separately from the `.enc`
+> archives.** The secrets archive is encrypted with `backup_encrypt_key` and
+> that key is **excluded** from the archive (it is not packed inside the file
+> it unlocks). After total host loss you can only decrypt the off-site `.enc`
+> backups if you also kept a copy of `backup_encrypt_key` somewhere else
+> (a password manager, a sealed envelope, a separate cloud secret). Losing the
+> key makes every encrypted backup permanently unrecoverable.
 
 ### Restore
 
