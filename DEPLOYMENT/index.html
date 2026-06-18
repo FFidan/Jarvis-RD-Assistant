@@ -2773,9 +2773,9 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <td>Yes — <code>docker compose restart telegram_bot</code></td>
 </tr>
 <tr>
-<td>Access mode (single ↔ multi-user)</td>
-<td>Settings → System → Access Mode</td>
-<td>Yes — <code>docker compose restart paper_ingestion learning_engine</code></td>
+<td>Sign-in method (single ↔ multi-user)</td>
+<td>Settings → System → Sign-in Method</td>
+<td>No</td>
 </tr>
 <tr>
 <td>Auto-fetch interval</td>
@@ -2899,6 +2899,7 @@ admin user exists (the normal single-tenant state).</p>
 <h2 id="backup-restore">Backup + Restore<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h2>
 <h3 id="backup">Backup<a class="headerlink" href="#backup" title="Permanent link">&para;</a></h3>
 <p><code>scripts/backup.sh</code> is scheduled by the <code>backup</code> compose profile (<code>docker compose --profile backup up -d</code>).</p>
+<p>With the <code>backup</code> profile running, admins can also list, download, and trigger an on-demand backup from the WebUI at <strong>Admin → Backups</strong> (the on-demand button signals the sidecar to run immediately). Restore stays a manual host procedure — the page surfaces the commands below as a read-only runbook but never executes them.</p>
 <p>JARVIS state lives in more than one place, so each run captures <strong>all four</strong> of the durable stores (per-store files are timestamped together so a single run is internally consistent):</p>
 <table>
 <thead>
@@ -2990,6 +2991,13 @@ admin user exists (the normal single-tenant state).</p>
 <p>The <code>litellm</code> DB is owned by the same superuser (<code>POSTGRES_USER</code>) that created it, so the same credentials dump both DBs. A failed <code>pg_dump</code> aborts the run (non-zero exit) rather than leaving a tiny but well-formed empty archive. The encryption key, Qdrant API key, and <code>./secrets</code> source are already wired into the <code>postgres-backup</code> sidecar in <code>docker-compose.yml</code>. S3 credentials: <code>AWS_ACCESS_KEY_ID</code> + <code>AWS_SECRET_ACCESS_KEY</code> (or IAM instance role) scoped to <code>s3:PutObject</code>.</p>
 <blockquote>
 <p><strong>Without an encryption key the secrets archive is written in the clear</strong> and the script logs a warning — set <code>BACKUP_ENCRYPT_KEYFILE</code> (default already points at the <code>backup_encrypt_key</code> Docker Secret) for production.</p>
+<p><strong>Store the backup encryption key OFF-SITE, separately from the <code>.enc</code>
+archives.</strong> The secrets archive is encrypted with <code>backup_encrypt_key</code> and
+that key is <strong>excluded</strong> from the archive (it is not packed inside the file
+it unlocks). After total host loss you can only decrypt the off-site <code>.enc</code>
+backups if you also kept a copy of <code>backup_encrypt_key</code> somewhere else
+(a password manager, a sealed envelope, a separate cloud secret). Losing the
+key makes every encrypted backup permanently unrecoverable.</p>
 </blockquote>
 <h3 id="restore">Restore<a class="headerlink" href="#restore" title="Permanent link">&para;</a></h3>
 <p><strong>Step 0 — decrypt</strong> (if the archive ends in <code>.enc</code>):</p>
