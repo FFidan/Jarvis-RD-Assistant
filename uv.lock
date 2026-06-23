@@ -186,11 +186,11 @@ wheels = [
 
 [[package]]
 name = "aiosmtplib"
-version = "3.0.2"
+version = "5.1.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/91/2a/812517f8350cd317aad2ba1ce25dfc213c6f1f2e62e1cbf662b4bdc51d34/aiosmtplib-3.0.2.tar.gz", hash = "sha256:08fd840f9dbc23258025dca229e8a8f04d2ccf3ecb1319585615bfc7933f7f47", size = 59941, upload-time = "2024-07-31T05:13:10.065Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/25/d36d056e62a1dc3dd51ce76e7647c62966702193dc91eafa7fd4e1006a91/aiosmtplib-5.1.2.tar.gz", hash = "sha256:04a0ea3c678f5b719f998f290dce010ca512e1385836d3944206299df03b060f", size = 71031, upload-time = "2026-06-20T15:00:48.269Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/87/35/441faea7a11159795881a6ec869454f40269e4e3806dced935a35d83a412/aiosmtplib-3.0.2-py3-none-any.whl", hash = "sha256:8783059603a34834c7c90ca51103c3aa129d5922003b5ce98dbaa6d4440f10fc", size = 27111, upload-time = "2024-07-31T05:13:08.515Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/ec/c5a415cd1309eaac28ad3c599458194d25ba07189bb07a1bac2c6713c17e/aiosmtplib-5.1.2-py3-none-any.whl", hash = "sha256:070d467cc329dafd0af59108ba5d217d973cba10309910fed359a2a7bfb52d7a", size = 28394, upload-time = "2026-06-20T15:00:47.299Z" },
 ]
 
 [[package]]
@@ -732,14 +732,14 @@ wheels = [
 
 [[package]]
 name = "docling"
-version = "2.101.0"
+version = "2.105.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docling-slim", extra = ["standard"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/03/3fc134bd4255397960df9c2adcfd48318e221f33588137d20322441d5fca/docling-2.101.0.tar.gz", hash = "sha256:7d50eeee0c73b206e433b7e45bd42b74f688557293ebdfb8cec8a79ff267abc9", size = 8845, upload-time = "2026-06-10T16:04:07.053Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/fb/db8377446f8c4c18ae8d460f0359106d80cd314f5f6b1970abe3257e5599/docling-2.105.0.tar.gz", hash = "sha256:1c878b3e7a41d05bf95081bfd9eb84b5d5829f3f4ae7d47cf061bcc239265a67", size = 8843, upload-time = "2026-06-22T10:10:22.472Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/2e/90efdee1d0c3d329b347b5810c007bb19f822873455c4bd61acacee3cbfa/docling-2.101.0-py3-none-any.whl", hash = "sha256:f3cd3e1b5e2daeb7c06bcef6ea7cb2596537fd2e7b44174a952956c7a0715888", size = 5015, upload-time = "2026-06-10T16:04:05.911Z" },
+    { url = "https://files.pythonhosted.org/packages/23/0f/e19d583638c79b1f54aab7415d55905809178f403d8a25d3f68eff5a90ef/docling-2.105.0-py3-none-any.whl", hash = "sha256:f3e4597bd7f0d5010babd13c4a0c75be88cdbc0bff094432e651f9b7977e380b", size = 5013, upload-time = "2026-06-22T10:10:21.257Z" },
 ]
 
 [package.optional-dependencies]
@@ -749,7 +749,7 @@ rapidocr = [
 
 [[package]]
 name = "docling-core"
-version = "2.81.0"
+version = "2.84.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "defusedxml" },
@@ -765,9 +765,9 @@ dependencies = [
     { name = "typer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/47/6d/0582f6c48d78b10b70b0519b3c295f716756a69ed3bbebcfc2335a9d87a5/docling_core-2.81.0.tar.gz", hash = "sha256:db496c2dd5aa71f0f6536eae4a4b5cda391a645eda97206cf8a8e8641b18a5a0", size = 350488, upload-time = "2026-06-10T14:26:08.061Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/bc/41d9d5a38502538a7cd3c7fb66a06eb676f8cc1d6d275d7fbe971352efd7/docling_core-2.84.0.tar.gz", hash = "sha256:331035d5032be683a6d66d476146652491d2c75e4562e04da3f1a8d989d74bfc", size = 317993, upload-time = "2026-06-23T09:44:42.339Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b5/c2/6f102e0b6b7c6705807acbb0173d18179496406b754068e71a7da458f54a/docling_core-2.81.0-py3-none-any.whl", hash = "sha256:5ab2628fd389e9beeeebafceff9177457ba9d816b9533e3c1faa530b75c9c5ac", size = 297048, upload-time = "2026-06-10T14:26:06.342Z" },
+    { url = "https://files.pythonhosted.org/packages/50/d4/a8742fdd4c8b782608005ffde77a24bbfd54602c4c49825bf04ea25363ab/docling_core-2.84.0-py3-none-any.whl", hash = "sha256:2aee881b94138234c703298066b5ed94999490323ae6a29cbe5110f9248b83dd", size = 257936, upload-time = "2026-06-23T09:44:40.506Z" },
 ]
 
 [package.optional-dependencies]
@@ -836,7 +836,7 @@ wheels = [
 
 [[package]]
 name = "docling-slim"
-version = "2.101.0"
+version = "2.105.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -848,9 +848,9 @@ dependencies = [
     { name = "requests" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d8/1d/1f7b82f1a9a2116accc215fcefe79d0c8ddd6757c6496b0f3eb02989e45a/docling_slim-2.101.0.tar.gz", hash = "sha256:7c2f098885892ca74522130ffcbabe62cbdc26afd483249a841798387fb49235", size = 415777, upload-time = "2026-06-10T16:02:45.835Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ee/69/5a13cc8eed677e03bff9f0c23e23ffd8f44dc15d5e70aa3ad14d07042b06/docling_slim-2.105.0.tar.gz", hash = "sha256:3f4354ceacc8c27ed82dbf70ea54b94d2314fb78c3acb6ce79f7f73d19beb5bb", size = 448399, upload-time = "2026-06-22T10:08:55.206Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/31/4b/cce1670a139a74f9e8505ac4ef2c84d1125661307336b0d3dc4aa93ae590/docling_slim-2.101.0-py3-none-any.whl", hash = "sha256:3b8f2acf0aeb30b2c0e5245e4663e76500d513ea2bf3555ecb68e46aa30a5276", size = 537763, upload-time = "2026-06-10T16:02:44.016Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/83/797078f69a0e5422deab8663f41f7be3af83b1b1ceb222fa2a8cba3a64b5/docling_slim-2.105.0-py3-none-any.whl", hash = "sha256:6c0f07b5382ab3e4af2ccbb40ad492b72dbc6ca5b748dc8bc28488527837c845", size = 575430, upload-time = "2026-06-22T10:08:53.289Z" },
 ]
 
 [package.optional-dependencies]
@@ -877,6 +877,7 @@ standard = [
     { name = "pylatexenc" },
     { name = "pypdfium2" },
     { name = "python-docx" },
+    { name = "python-dotenv" },
     { name = "python-pptx" },
     { name = "rapidocr" },
     { name = "rich" },
@@ -1588,12 +1589,12 @@ telegram-bot = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
+    { name = "aiosmtplib", specifier = ">=3.0,<6.0" },
     { name = "apscheduler", specifier = ">=3.10.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
-    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.102.0" },
+    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.106.0" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.136.1,<0.138.0" },
     { name = "fsrs", specifier = ">=4.0.0,<6.0.0" },
@@ -1637,7 +1638,7 @@ dev = [
     { name = "uvloop", specifier = ">=0.19,<1" },
 ]
 jarvis-common = [
-    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
+    { name = "aiosmtplib", specifier = ">=3.0,<6.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
@@ -1659,7 +1660,7 @@ jarvis-common = [
     { name = "urllib3", specifier = ">=2.7.0" },
 ]
 learning-engine = [
-    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
+    { name = "aiosmtplib", specifier = ">=3.0,<6.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
@@ -1688,12 +1689,12 @@ learning-engine = [
     { name = "uvloop", specifier = ">=0.19,<1" },
 ]
 paper-ingestion = [
-    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
+    { name = "aiosmtplib", specifier = ">=3.0,<6.0" },
     { name = "apscheduler", specifier = ">=3.10.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=48.0.1" },
-    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.102.0" },
+    { name = "docling", extras = ["rapidocr"], specifier = ">=2.96.0,<2.106.0" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.136.1,<0.138.0" },
     { name = "gitpython", specifier = ">=3.1.50" },
@@ -1730,7 +1731,7 @@ paper-ingestion-optional = [
     { name = "sentence-transformers", specifier = ">=3.2.0" },
 ]
 telegram-bot = [
-    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
+    { name = "aiosmtplib", specifier = ">=3.0,<6.0" },
     { name = "apscheduler", specifier = ">=3.10.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
@@ -3307,16 +3308,16 @@ wheels = [
 
 [[package]]
 name = "pydantic-settings"
-version = "2.14.0"
+version = "2.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/42/98/c8345dccdc31de4228c039a98f6467a941e39558da41c1744fbe29fa5666/pydantic_settings-2.14.0.tar.gz", hash = "sha256:24285fd4b0e0c06507dd9fdfd331ee23794305352aaec8fc4eb92d4047aeb67d", size = 235709, upload-time = "2026-04-20T13:37:40.293Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/b5/8f48e906c3e0205276e8bd8cb7512217a87b2685304d64be27cad5b3019f/pydantic_settings-2.14.2.tar.gz", hash = "sha256:c19dd64b19097f1de80184f0cc7b0272a13ae6e170cbf240a3e27e381ed14a5f", size = 237700, upload-time = "2026-06-19T13:44:56.324Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/dd/bebff3040138f00ae8a102d426b27349b9a49acc310fcae7f92112d867e3/pydantic_settings-2.14.0-py3-none-any.whl", hash = "sha256:fc8d5d692eb7092e43c8647c1c35a3ecd00e040fcf02ed86f4cb5458ca62182e", size = 60940, upload-time = "2026-04-20T13:37:38.586Z" },
+    { url = "https://files.pythonhosted.org/packages/77/c1/6e422f34e569cf8e18df68d1939c81c099d2b61e4f7d9621c8a77560799c/pydantic_settings-2.14.2-py3-none-any.whl", hash = "sha256:a20c97b37910b6550d5ea50fbcc2d4187defe58cd57070b73863d069419c9440", size = 61715, upload-time = "2026-06-19T13:44:55.02Z" },
 ]
 
 [[package]]
