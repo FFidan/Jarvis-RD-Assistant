@@ -33,7 +33,7 @@ export function RecentActivitySection({ items }: RecentActivitySectionProps) {
         id="recent-activity-heading"
         className="mb-3 text-xs font-semibold tracking-widest text-muted-foreground uppercase"
       >
-        § RECENT ACTIVITY
+        RECENT ACTIVITY
       </h3>
 
       {items.length === 0 ? (

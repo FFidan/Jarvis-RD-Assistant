@@ -129,23 +129,23 @@ describe('FeedPaperRow', () => {
     expect(onMarkDone).toHaveBeenCalledWith(toReadPaper.id);
   });
 
-  it('state=reading: renders Set Aside and Mark Done buttons; shows ★ when starred=true', async () => {
+  it('state=reading: renders Pause reading and Mark Done buttons; shows ★ when starred=true', async () => {
     const user = userEvent.setup();
     const onSetAside = vi.fn();
     const onMarkDone = vi.fn();
     renderRow({ paper: readingPaper, onSetAside, onMarkDone });
     expect(screen.getByTitle('Starred')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: `Set aside ${readingPaper.title}` }));
+    await user.click(screen.getByRole('button', { name: `Pause reading ${readingPaper.title}` }));
     await user.click(screen.getByRole('button', { name: `Mark ${readingPaper.title} as done` }));
     expect(onSetAside).toHaveBeenCalledWith(readingPaper.id);
     expect(onMarkDone).toHaveBeenCalledWith(readingPaper.id);
   });
 
-  it('state=done: renders Re-open button', async () => {
+  it('state=done: renders Resume reading button', async () => {
     const user = userEvent.setup();
     const onReopen = vi.fn();
     renderRow({ paper: donePaper, onReopen });
-    await user.click(screen.getByRole('button', { name: `Re-open ${donePaper.title}` }));
+    await user.click(screen.getByRole('button', { name: `Resume reading ${donePaper.title}` }));
     expect(onReopen).toHaveBeenCalledWith(donePaper.id);
   });
 

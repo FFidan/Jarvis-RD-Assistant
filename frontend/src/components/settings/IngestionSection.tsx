@@ -715,19 +715,19 @@ const CONFIG_METADATA: Record<
     label: 'Embedding model (embed)',
     description:
       'Powers search across your library. Fixed once chosen — switching it requires re-indexing every paper.',
-    group: 'LLM Models',
+    group: 'AI models',
   },
   'llm.fast_model': {
     label: 'Quick model (fast)',
     description:
       'Scores and triages incoming papers. Pick a small, fast model — your choice applies automatically.',
-    group: 'LLM Models',
+    group: 'AI models',
   },
   'llm.smart_model': {
     label: 'Main model (smart)',
     description:
       'Writes your summaries, cards, and Ask answers. Pick the strongest model your GPU fits — your choice applies automatically.',
-    group: 'LLM Models',
+    group: 'AI models',
   },
 };
 // Note: 'user.timezone' is intentionally excluded from CONFIG_METADATA here;
@@ -736,7 +736,7 @@ const CONFIG_METADATA: Record<
 /** Preferred order for groups (unlisted groups sort alphabetically after these).
  *  Keys without metadata fall into 'Other' which is intentionally omitted here
  *  so they disappear rather than exposing raw JSON to the UI. */
-const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Preferences'];
+const GROUP_ORDER = ['AI models', 'Spaced Repetition', 'Preferences'];
 
 // ---------------------------------------------------------------------------
 // IngestionSection
@@ -875,7 +875,7 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
     );
   };
 
-  const llmGroup = grouped['LLM Models'];
+  const llmGroup = grouped['AI models'];
 
   return (
     <div className="space-y-2">
@@ -884,22 +884,22 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
           <h4 className="mt-4 mb-2 text-sm font-semibold text-muted-foreground first:mt-0">
             {group}
           </h4>
-          {group === 'LLM Models' && (
+          {group === 'AI models' && (
             <p className="mb-3 text-sm text-muted-foreground" data-testid="llm-models-description">
               Choose the models that read and write your research. We pick sensible
               defaults for your GPU and apply changes for you.
             </p>
           )}
-          {/* Hardware strip — shown once at top of LLM Models group (§6.2) */}
-          {group === 'LLM Models' && hardware && (
+          {/* Hardware strip — shown once at top of AI models group (§6.2) */}
+          {group === 'AI models' && hardware && (
             <HardwareStrip hardware={hardware} />
           )}
           {/* ONE advisory only — the concise "we picked X" line when a model is
               already seeded on a GPU, otherwise the per-VRAM recommendation. */}
-          {group === 'LLM Models' && showFirstBootBanner ? (
+          {group === 'AI models' && showFirstBootBanner ? (
             <FirstBootModelBanner smartModel={currentSmartModel} vramGb={hardware?.vram_gb} />
           ) : (
-            group === 'LLM Models' && hardwareRecommendation && (
+            group === 'AI models' && hardwareRecommendation && (
               <HardwareRecommendationBanner recommendation={hardwareRecommendation} />
             )
           )}
@@ -946,7 +946,7 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
           </div>
         </div>
       ))}
-      {/* Render hardware strip + recommendation even if LLM Models group is absent (edge case) */}
+      {/* Render hardware strip + recommendation even if AI models group is absent (edge case) */}
       {!llmGroup && hardware && (
         <HardwareStrip hardware={hardware} />
       )}

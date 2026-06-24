@@ -432,6 +432,44 @@ describe('fetchStackHealth — toStatus degraded branch', () => {
   });
 });
 
+describe('fetchStackHealth — hard deadline (no-response fallback)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('settles to an all-unknown degraded summary when probes hang past the deadline', async () => {
+    vi.useFakeTimers();
+    // Health probes never respond (network black-hole) — fetch stays pending
+    // forever (the request also never hits its own abort here).
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () => new Promise<Response>(() => {}),
+    );
+
+    const promise = fetchStackHealth();
+    // Advance past the 5s health deadline so the race resolves to the fallback.
+    await vi.advanceTimersByTimeAsync(5001);
+    const summary = await promise;
+
+    // Every service reports 'unknown' (structured degraded state, not a hang)
+    expect(summary.services.map((s) => s.name)).toEqual([
+      'paper_ingestion',
+      'learning_engine',
+      'postgres',
+      'qdrant',
+      'ollama',
+      'litellm',
+      'vector',
+    ]);
+    expect(summary.services.every((s) => s.status === 'unknown')).toBe(true);
+    expect(summary.overall).toBe('unknown');
+    // The all-unknown fallback is not a real down/degraded count.
+    expect(summary.downCount).toBe(0);
+    expect(summary.degradedCount).toBe(0);
+
+    vi.useRealTimers();
+  });
+});
+
 describe('fetchFeedCounts', () => {
   beforeEach(() => {
     vi.restoreAllMocks();

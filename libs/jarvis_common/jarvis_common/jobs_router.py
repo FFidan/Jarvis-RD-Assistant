@@ -43,8 +43,16 @@ from typing import Annotated, Any
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field, TypeAdapter, field_validator, model_validator
 from slowapi import Limiter
+
+try:  # FastAPI >=0.137 flattens the route tree through this public iterator.
+    from fastapi.routing import (
+        iter_route_contexts as _iter_route_contexts,  # type: ignore[attr-defined]
+    )
+except ImportError:  # FastAPI <0.137 keeps router.routes a flat APIRoute list.
+    _iter_route_contexts = None
 
 from jarvis_common import (
     ErrorResponse,
@@ -57,12 +65,37 @@ from jarvis_common import (
 from jarvis_common import jobs as jobs_lib
 from jarvis_common.settings import get_jobs_settings
 
-__all__ = ["build_jobs_router", "serialise_row"]
+__all__ = ["build_jobs_router", "collect_handlers", "serialise_row"]
 
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def collect_handlers(router: APIRouter) -> dict[str, Callable[..., Any]]:
+    """Map ``endpoint.__name__`` → endpoint for every ``APIRoute`` in ``router``.
+
+    FastAPI >=0.137 turned ``router.routes`` into a tree (``APIRoute`` plus
+    opaque ``_IncludedRouter`` nodes), so a flat comprehension misses routes from
+    included sub-routers; its public ``iter_route_contexts`` flattens that tree.
+    On <0.137 the iterator is absent and ``router.routes`` is already flat, so we
+    fall back to iterating it directly. Both paths guard ``isinstance(APIRoute)``
+    + a present ``endpoint`` so non-route nodes are skipped.
+    """
+    handlers: dict[str, Callable[..., Any]] = {}
+    if _iter_route_contexts is not None:
+        for context in _iter_route_contexts(router.routes):
+            route = context.route
+            endpoint = getattr(route, "endpoint", None)
+            if isinstance(route, APIRoute) and endpoint is not None:
+                handlers[endpoint.__name__] = endpoint
+    else:
+        for route in router.routes:
+            endpoint = getattr(route, "endpoint", None)
+            if isinstance(route, APIRoute) and endpoint is not None:
+                handlers[endpoint.__name__] = endpoint
+    return handlers
 
 
 def serialise_row(row: dict[str, Any]) -> dict[str, Any]:

@@ -53,7 +53,7 @@ describe('JobsIndicator', () => {
     render(<JobsIndicator />);
 
     // Open the popover to render job rows
-    const trigger = screen.getByRole('button', { name: /background jobs/i });
+    const trigger = screen.getByRole('button', { name: /background tasks/i });
     await userEvent.click(trigger);
 
     // The Shadcn Progress indicator uses inline transform to show fill.
@@ -77,7 +77,7 @@ describe('JobsIndicator', () => {
 
     render(<JobsIndicator />);
 
-    await userEvent.click(screen.getByRole('button', { name: /background jobs/i }));
+    await userEvent.click(screen.getByRole('button', { name: /background tasks/i }));
 
     expect(screen.getByText('Scanning Contradictions')).toBeInTheDocument();
   });

@@ -80,7 +80,7 @@ describe('EndOfDaySection shutdown ritual', () => {
 
   it('renders the 3 structured prompts', async () => {
     renderEod();
-    expect(await screen.findByText(/§ End of day/i)).toBeInTheDocument();
+    expect(await screen.findByText(/End of day/i)).toBeInTheDocument();
     expect(screen.getByLabelText('One thing that worked')).toBeInTheDocument();
     expect(screen.getByLabelText("What's still blocking me")).toBeInTheDocument();
     expect(screen.getByLabelText('First move tomorrow')).toBeInTheDocument();

@@ -64,7 +64,7 @@ const EMPTY_STATE: Record<string, EmptyStateCopy> = {
   inbox: {
     icon: Inbox,
     title: 'Inbox is empty',
-    description: 'Auto-fetched papers will appear here. Add topics in Settings to discover research automatically.',
+    description: 'Papers from your sources will appear here. Add topics in Settings to discover research automatically.',
   },
   library: LIBRARY_EMPTY_STATE,
   starred: {

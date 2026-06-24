@@ -96,7 +96,9 @@ export function ProvidersSection() {
   const handleBlur = (provider: CloudProvider) => {
     const draft = drafts[provider];
     const current = getMaskedKey(configs, provider);
-    if (draft !== null && draft !== undefined && draft !== current) {
+    // A blank draft means "left the field untouched/empty", not "delete the key".
+    // Persisting '' would overwrite a stored key with an empty value.
+    if (draft !== null && draft !== undefined && draft.trim() !== '' && draft !== current) {
       setMut.mutate({ provider, value: draft });
     }
     setDrafts((prev) => ({ ...prev, [provider]: null }));

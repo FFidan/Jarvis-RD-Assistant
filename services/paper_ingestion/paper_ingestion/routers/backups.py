@@ -19,6 +19,7 @@ Registered in main.py with ``dependencies=[]`` + ``router.auth_exempt=True``
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -46,15 +47,15 @@ _TRIGGER_SENTINEL = Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")
 
 # Strict allowlist for the four archive shapes scripts/backup.sh emits:
 #   jarvis_<ts>.sql.gz[.enc] · litellm_<ts>.sql.gz[.enc]
-#   secrets_<ts>.tar.gz[.enc] · qdrant_<collection>_<ts>.snapshot
-# <ts> = %Y%m%d_%H%M%S (backup.sh:60). The regex pins the whole string and
+#   secrets_<ts>.tar.gz[.enc] · qdrant_<collection>_<ts>.snapshot[.enc]
+# <ts> = %Y%m%d_%H%M%S (backup.sh). The regex pins the whole string and
 # permits no path separators or '..', blocking traversal to /run/secrets/*.
 _TS = r"\d{8}_\d{6}"
 _FILENAME_RE = re.compile(
     rf"^(?:jarvis_{_TS}\.sql\.gz(?:\.enc)?"
     rf"|litellm_{_TS}\.sql\.gz(?:\.enc)?"
     rf"|secrets_{_TS}\.tar\.gz(?:\.enc)?"
-    rf"|qdrant_[A-Za-z0-9_-]+_{_TS}\.snapshot)$"
+    rf"|qdrant_[A-Za-z0-9_-]+_{_TS}\.snapshot(?:\.enc)?)$"
 )
 # Globs used to enumerate the directory (mirror the four shapes; '*' here is a
 # filesystem glob, NOT regex — every match is re-validated by _FILENAME_RE).
@@ -66,7 +67,12 @@ _ARCHIVE_GLOBS = (
     "secrets_*.tar.gz",
     "secrets_*.tar.gz.enc",
     "qdrant_*.snapshot",
+    "qdrant_*.snapshot.enc",
 )
+# Parses the %Y%m%d_%H%M%S timestamp group key out of any allowlisted filename,
+# and (for qdrant) the collection name between `qdrant_` and `_<ts>`.
+_TS_RE = re.compile(rf"_({_TS})\.")
+_QDRANT_RE = re.compile(rf"^qdrant_([A-Za-z0-9_-]+)_{_TS}\.snapshot(?:\.enc)?$")
 
 
 class BackupEntry(BaseModel):
@@ -80,8 +86,40 @@ class BackupEntry(BaseModel):
 class BackupStatus(BaseModel):
     backup_dir_available: bool
     archive_count: int
-    last_run_at: datetime | None
+    last_run_at: datetime | None  # newest-archive mtime (last *success* proxy)
+    last_attempt_at: datetime | None  # from .last_run.json; last run that was attempted
+    last_run_succeeded: bool | None  # from .last_run.json; None when unknown
     trigger_pending: bool
+
+
+class RestorePointFile(BaseModel):
+    filename: str
+    store: str
+    size_bytes: int
+    encrypted: bool
+
+
+class RestorePoint(BaseModel):
+    timestamp: str
+    created_at: datetime
+    stores: list[str]
+    qdrant_collections: list[str]
+    complete: bool
+    encrypted: bool
+    total_size_bytes: int
+    files: list[RestorePointFile]
+
+
+class RestoreLastRun(BaseModel):
+    attempted_at: datetime | None
+    succeeded: bool | None
+    stores: dict[str, str]
+
+
+class RestorePointsResponse(BaseModel):
+    restore_points: list[RestorePoint]
+    retention_days: int | None
+    last_run: RestoreLastRun | None
 
 
 def _classify(name: str) -> str:
@@ -129,6 +167,54 @@ def _list_entries() -> list[BackupEntry]:
     return entries
 
 
+def _read_last_run() -> dict | None:
+    """Read the sidecar's .last_run.json outcome record; None if absent/unreadable.
+
+    The sidecar writes this on every run (even a FATAL one) so a failed attempt is
+    visible — distinct from "no recent archive". Never raises: a missing or
+    malformed file degrades to None rather than breaking /status or /restore-points.
+    """
+    try:
+        return json.loads((_BACKUP_DIR / ".last_run.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _group_restore_points(entries: list[BackupEntry]) -> list[RestorePoint]:
+    """Group archive entries by their %Y%m%d_%H%M%S timestamp into restore points."""
+    groups: dict[str, list[BackupEntry]] = {}
+    for e in entries:
+        m = _TS_RE.search(e.filename)
+        if m:
+            groups.setdefault(m.group(1), []).append(e)
+    points: list[RestorePoint] = []
+    for ts, members in groups.items():
+        stores = sorted({m.store for m in members})
+        collections = sorted(qm.group(1) for m in members if (qm := _QDRANT_RE.match(m.filename)))
+        points.append(
+            RestorePoint(
+                timestamp=ts,
+                created_at=max(m.modified_at for m in members),
+                stores=stores,
+                qdrant_collections=collections,
+                complete={"jarvis", "litellm", "secrets"}.issubset(stores),
+                encrypted=all(m.encrypted for m in members),
+                total_size_bytes=sum(m.size_bytes for m in members),
+                files=[
+                    RestorePointFile(
+                        filename=m.filename,
+                        store=m.store,
+                        size_bytes=m.size_bytes,
+                        encrypted=m.encrypted,
+                    )
+                    for m in members
+                ],
+            )
+        )
+    points.sort(key=lambda p: p.created_at, reverse=True)
+    return points
+
+
 @router.get("", response_model=list[BackupEntry], dependencies=[Depends(require_admin)])
 @limiter.limit("30/minute")
 async def list_backups(request: Request) -> list[BackupEntry]:
@@ -146,14 +232,54 @@ async def list_backups(request: Request) -> list[BackupEntry]:
 @router.get("/status", response_model=BackupStatus, dependencies=[Depends(require_admin)])
 @limiter.limit("30/minute")
 async def backup_status(request: Request) -> BackupStatus:
-    """Report sidecar reachability + the inferred last-run time (newest archive)."""
+    """Report sidecar reachability, last-success (newest archive) and last-attempt.
+
+    ``last_run_at`` (newest-archive mtime) is the last *success* proxy; the
+    ``last_attempt_*`` fields come from the sidecar's ``.last_run.json`` so a
+    failed run is visible as "attempted + failed", not "no recent backup".
+    """
     entries = _list_entries()
     last = entries[0].modified_at if entries else None
+    run = _read_last_run()
     return BackupStatus(
         backup_dir_available=_BACKUP_DIR.is_dir(),
         archive_count=len(entries),
         last_run_at=last,
+        last_attempt_at=run.get("attempted_at") if run else None,
+        last_run_succeeded=run.get("succeeded") if run else None,
         trigger_pending=_TRIGGER_SENTINEL.exists(),
+    )
+
+
+@router.get(
+    "/restore-points",
+    response_model=RestorePointsResponse,
+    dependencies=[Depends(require_admin)],
+)
+@limiter.limit("30/minute")
+async def list_restore_points(request: Request) -> RestorePointsResponse:
+    """List archives grouped into per-timestamp restore points (newest first)."""
+    points = _group_restore_points(_list_entries())
+    run = _read_last_run()
+    last_run = None
+    retention = None
+    if run:
+        retention = run.get("retention_days")
+        last_run = RestoreLastRun(
+            attempted_at=run.get("attempted_at"),
+            succeeded=run.get("succeeded"),
+            stores=run.get("stores") or {},
+        )
+    await log_audit(
+        request.app.state.db_pool,
+        action="backup.restore_points",
+        resource="backups",
+        user_id=_caller_id(request),
+    )
+    return RestorePointsResponse(
+        restore_points=points,
+        retention_days=retention,
+        last_run=last_run,
     )
 
 

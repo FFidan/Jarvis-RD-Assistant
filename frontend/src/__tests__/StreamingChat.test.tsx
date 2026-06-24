@@ -2,7 +2,7 @@
  * FE-SSE-1 — StreamingChat renders role="alert" banner when streamError is set.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 // Mock the hook before importing the component
 const mockUseStreamingChat = vi.fn();
@@ -59,6 +59,7 @@ vi.mock('lucide-react', () => ({
   Send: () => null,
   Square: () => null,
   Trash2: () => null,
+  RotateCcw: () => null,
 }));
 vi.mock('@/components/ui/tooltip', () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -81,6 +82,7 @@ function baseHookReturn(overrides: Record<string, unknown> = {}) {
     phase: 'idle',
     sendMessage: vi.fn(),
     stopStreaming: vi.fn(),
+    retry: vi.fn(),
     clearChat: vi.fn(),
     modelUsed: null,
     streamError: null,
@@ -98,12 +100,23 @@ describe('StreamingChat — FE-SSE-1 error banner', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('renders alert when streamError is set', () => {
+  it('renders friendly copy + a Retry button (not the raw error text) when streamError is set', () => {
     mockUseStreamingChat.mockReturnValue(baseHookReturn({ streamError: 'context too long' }));
     render(<StreamingChat chatId="c1" scope="cross-paper" />);
     const alert = screen.getByRole('alert');
     expect(alert).toBeTruthy();
-    expect(alert.textContent).toBe('context too long');
+    // Friendly copy is shown; the raw error string is NOT leaked to the user.
+    expect(alert.textContent).toContain('Something went wrong answering that');
+    expect(alert.textContent).not.toContain('context too long');
+    expect(screen.getByRole('button', { name: 'Retry last question' })).toBeTruthy();
+  });
+
+  it('clicking Retry calls the hook retry()', () => {
+    const retry = vi.fn();
+    mockUseStreamingChat.mockReturnValue(baseHookReturn({ streamError: 'boom', retry }));
+    render(<StreamingChat chatId="c1" scope="cross-paper" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry last question' }));
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it('threads elapsedSeconds and isFirstQuestion from the hook into the loading ChatMessage (U1)', () => {

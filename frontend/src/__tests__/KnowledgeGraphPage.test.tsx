@@ -1,15 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { KnowledgeGraphPage } from '@/pages/KnowledgeGraphPage';
 import { useAuthStore } from '@/stores/auth-store';
 import * as api from '@/lib/api';
 
-// Mock cytoscape so jsdom doesn't choke on canvas
+// Mock cytoscape so jsdom doesn't choke on canvas. Capture registered tap
+// handlers so a test can simulate a node click.
+const tapHandlers: Array<(evt: { target: { id: () => string } }) => void> = [];
 vi.mock('cytoscape', () => {
   const mockCy = {
-    on: vi.fn(),
+    on: vi.fn((event: string, selectorOrCb: unknown, cb?: unknown) => {
+      if (event === 'tap' && typeof cb === 'function') {
+        tapHandlers.push(cb as (evt: { target: { id: () => string } }) => void);
+      }
+    }),
+    fit: vi.fn(),
     destroy: vi.fn(),
   };
   return { default: vi.fn(() => mockCy) };
@@ -68,6 +75,7 @@ function renderPage() {
 
 describe('KnowledgeGraphPage', () => {
   beforeEach(() => {
+    tapHandlers.length = 0;
     vi.mocked(api.getKnowledgeGraph).mockResolvedValue(WITH_ENTITIES);
   });
 
@@ -135,6 +143,46 @@ describe('KnowledgeGraphPage', () => {
       expect(screen.getByText('Total Relationships')).toBeInTheDocument();
       expect(screen.getByText('2')).toBeInTheDocument(); // 2 relationships
     });
+  });
+});
+
+describe('KnowledgeGraphPage — node detail panel', () => {
+  beforeEach(() => {
+    tapHandlers.length = 0;
+    vi.mocked(api.getKnowledgeGraph).mockResolvedValue(WITH_ENTITIES);
+  });
+
+  it('shows a degraded empty state before any node is selected', async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('kg-node-detail')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/Click a node in the graph to see its details/i),
+    ).toBeInTheDocument();
+  });
+
+  it('opens the panel with the clicked node’s details and relationships', async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('cytoscape-container')).toBeInTheDocument();
+    });
+    // Cytoscape registered at least one tap('node', cb) handler.
+    expect(tapHandlers.length).toBeGreaterThan(0);
+
+    // Simulate clicking entity id 1 (Transformer).
+    act(() => {
+      tapHandlers.forEach((cb) => cb({ target: { id: () => '1' } }));
+    });
+
+    const panel = screen.getByTestId('kg-node-detail');
+    expect(panel).toHaveTextContent('Transformer');
+    expect(panel).toHaveTextContent('method'); // entity_type badge
+    expect(panel).toHaveTextContent('Self-attention architecture'); // description
+    expect(panel).toHaveTextContent('Relationships (2)');
+    // Connected entity names resolved from ids.
+    expect(panel).toHaveTextContent('ImageNet');
+    expect(panel).toHaveTextContent('BLEU');
   });
 });
 

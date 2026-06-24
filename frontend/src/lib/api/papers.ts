@@ -427,11 +427,6 @@ export const fetchCitationsFromS2 = (paperId: number) =>
     `/api/citations/${paperId}/fetch`, { method: 'POST' }
   );
 
-export const batchFetchCitations = () =>
-  apiFetch<{ queued: number; message: string }>('/api/citations/batch-fetch', {
-    method: 'POST',
-  });
-
 // --- Knowledge Graph ---
 export const getKnowledgeGraph = (entityType?: string, minPaperCount?: number) => {
   const params = new URLSearchParams();
@@ -464,6 +459,48 @@ export async function downloadExtractionCsv(templateId: number): Promise<void> {
   const res = await apiFetchRaw(`/api/extractions/table?template_id=${templateId}&format=csv`);
   const blob = await res.blob();
   triggerBlobDownload(blob, 'extractions.csv');
+}
+
+// --- Citation Export (BibTeX / RIS) ---
+
+export type CitationFormat = 'bibtex' | 'ris';
+
+function filenameFromDisposition(res: Response, fallback: string): string {
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  return match && match[1] ? match[1] : fallback;
+}
+
+export async function downloadPaperCitation(paperId: number, format: CitationFormat): Promise<void> {
+  const res = await apiFetchRaw(`/api/papers/${paperId}/citation?format=${format}`);
+  const blob = await res.blob();
+  const ext = format === 'bibtex' ? 'bib' : 'ris';
+  triggerBlobDownload(blob, filenameFromDisposition(res, `paper_${paperId}.${ext}`));
+}
+
+export async function copyPaperCitation(paperId: number, format: CitationFormat): Promise<string> {
+  const res = await apiFetchRaw(`/api/papers/${paperId}/citation?format=${format}`);
+  return res.text();
+}
+
+function fetchBulkCitations(paperIds: number[], format: CitationFormat): Promise<Response> {
+  return apiFetchRaw('/api/papers/citations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paper_ids: paperIds, format }),
+  });
+}
+
+export async function downloadBulkCitations(paperIds: number[], format: CitationFormat): Promise<void> {
+  const res = await fetchBulkCitations(paperIds, format);
+  const blob = await res.blob();
+  const ext = format === 'bibtex' ? 'bib' : 'ris';
+  triggerBlobDownload(blob, filenameFromDisposition(res, `citations.${ext}`));
+}
+
+export async function copyBulkCitations(paperIds: number[], format: CitationFormat): Promise<string> {
+  const res = await fetchBulkCitations(paperIds, format);
+  return res.text();
 }
 
 // --- Snapshots ---

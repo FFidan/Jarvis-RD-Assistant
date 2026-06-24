@@ -21,6 +21,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import type { FeedCountsWithFacets, SurfaceView, LibraryFilter, InboxSourceFilter, FeedScope } from '@/types';
+import { SOURCE_LABELS } from '@/lib/labels/sources';
 
 // --------------------------------------------------------------------------
 // Types
@@ -127,14 +128,6 @@ const STATUS_ITEMS: StatusItem[] = [
   },
 ];
 
-const SOURCE_LABELS: Record<string, string> = {
-  arxiv: 'arXiv',
-  semantic_scholar: 'Semantic Scholar',
-  openalex: 'OpenAlex',
-  pubmed: 'PubMed',
-  local: 'Local PDF',
-};
-
 // --------------------------------------------------------------------------
 // Sub-components
 // --------------------------------------------------------------------------
@@ -235,10 +228,10 @@ function FacetListContent({
   // Scope-honest copy for Source/Topic empty states.
   const isCorpus = feedScope === 'corpus';
   const sourceEmptyCopy = isCorpus
-    ? 'No papers found in the shared corpus for this source.'
+    ? 'No papers found in the shared library for this source.'
     : 'No papers in your library yet — papers you save or that match your topics appear here.';
   const topicEmptyCopy = isCorpus
-    ? 'No papers in the shared corpus are tagged with a topic yet.'
+    ? 'No papers in the shared library are tagged with a topic yet.'
     : 'No library papers tagged with a topic yet — add a topic in Settings and turn on "Auto-add matches".';
 
   return (

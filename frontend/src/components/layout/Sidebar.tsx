@@ -17,7 +17,7 @@
  *
  * Footer: nav-mode toggle · Settings link · HealthDots pill (navigates to
  *         /admin/system-health for admins; expands in-place for non-admins) ·
- *         Logout button.
+ *         Sign out button.
  */
 
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
@@ -382,7 +382,7 @@ export function Sidebar() {
 
         <Separator />
 
-        {/* Footer: Nav-mode toggle · Settings · HealthDots · Logout */}
+        {/* Footer: Nav-mode toggle · Settings · HealthDots · Sign out */}
         <div className="p-3 space-y-2">
           {/* Nav-mode toggle — simple ⇄ full nav density (device-scoped) */}
           <Tooltip>
@@ -447,7 +447,7 @@ export function Sidebar() {
             adminLink={isAdmin && !sidebarCollapsed ? '/admin/system-health' : undefined}
           />
 
-          {/* Logout */}
+          {/* Sign out */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -457,11 +457,11 @@ export function Sidebar() {
                 className="w-full"
               >
                 <LogOut className="h-4 w-4" />
-                {!sidebarCollapsed && <span className="ml-2">Logout</span>}
+                {!sidebarCollapsed && <span className="ml-2">Sign out</span>}
               </Button>
             </TooltipTrigger>
             {sidebarCollapsed && (
-              <TooltipContent side="right">Logout</TooltipContent>
+              <TooltipContent side="right">Sign out</TooltipContent>
             )}
           </Tooltip>
         </div>

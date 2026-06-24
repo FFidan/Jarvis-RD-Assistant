@@ -26,7 +26,7 @@ export function UserAvatarMenu() {
           Settings
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => { logout(); navigate('/'); }}>
-          Logout
+          Sign out
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

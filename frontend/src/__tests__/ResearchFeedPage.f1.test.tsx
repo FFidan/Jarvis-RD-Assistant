@@ -261,7 +261,7 @@ describe('ResearchFeedPage — F1 3-pane IA', () => {
   it('shows library scope toggle at surface=library', async () => {
     renderPage('?surface=library');
     await waitFor(() => {
-      expect(screen.getByRole('tablist', { name: /library corpus scope/i })).toBeInTheDocument();
+      expect(screen.getByRole('tablist', { name: /library scope/i })).toBeInTheDocument();
     });
   });
 

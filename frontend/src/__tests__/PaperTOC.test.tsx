@@ -76,7 +76,7 @@ describe('PaperTOC — pipeline status', () => {
     renderTOC({ pdfDownloaded: false, chunkCount: 0, hasSummary: false });
     // All three step labels present
     expect(screen.getByText('Downloaded')).toBeInTheDocument();
-    expect(screen.getByText('Processing…')).toBeInTheDocument();
+    expect(screen.getByText('Extracting passages…')).toBeInTheDocument();
     expect(screen.getByText('Summarizing…')).toBeInTheDocument();
   });
 
@@ -128,9 +128,9 @@ describe('PaperTOC — pipeline tri-state icons', () => {
   });
 
   it('active (in-progress) step renders spinning Loader2 icon', () => {
-    // PDF downloaded, no chunks yet → Processing… is active.
+    // PDF downloaded, no chunks yet → Extracting passages… is active.
     renderTOC({ pdfDownloaded: true, chunkCount: 0, hasSummary: false });
-    const row = getStepRow('Processing…');
+    const row = getStepRow('Extracting passages…');
     const svg = row.querySelector('svg');
     expect(svg).not.toBeNull();
     // Loader2 has the animate-spin class applied to it.
@@ -139,14 +139,14 @@ describe('PaperTOC — pipeline tri-state icons', () => {
 
   it('failed step renders XCircle icon with destructive styling', () => {
     renderTOC({ pdfDownloaded: true, chunkCount: 0, hasSummary: false, processingFailed: true });
-    const row = getStepRow('Processing…');
+    const row = getStepRow('Extracting passages…');
     const svg = row.querySelector('svg');
     expect(svg).not.toBeNull();
     // XCircle should carry text-destructive.
     const iconClass = svg!.className.baseVal ?? svg!.getAttribute('class') ?? '';
     expect(iconClass).toContain('text-destructive');
     // The step label itself should also be styled destructive + font-medium.
-    const span = within(row).getByText('Processing…');
+    const span = within(row).getByText('Extracting passages…');
     expect(span.className).toContain('text-destructive');
     expect(span.className).toContain('font-medium');
   });
@@ -164,7 +164,7 @@ describe('PaperTOC — pipeline tri-state icons', () => {
 
   it('processingFailed=false does NOT show failed icon on processing step', () => {
     renderTOC({ pdfDownloaded: true, chunkCount: 0, hasSummary: false, processingFailed: false });
-    const row = getStepRow('Processing…');
+    const row = getStepRow('Extracting passages…');
     const svg = row.querySelector('svg');
     // Active (Loader2) — should have animate-spin, not text-destructive.
     const iconClass = svg ? (svg.className.baseVal ?? svg.getAttribute('class') ?? '') : '';

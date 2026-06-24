@@ -80,7 +80,7 @@ export function HeroPulse() {
   if (isError) {
     return (
       <ErrorSentinel
-        message={`Couldn't load today's Pulse — ${error?.message ?? 'please try again'}.`}
+        message={`Couldn't load your recommendations — ${error?.message ?? 'please try again'}.`}
       />
     );
   }

@@ -253,7 +253,7 @@ describe('HeroPulse empty-vs-error states (RED-ERROR-EMPTY-STATE)', () => {
     renderHeroPulse();
 
     const sentinel = await screen.findByRole('status');
-    expect(sentinel).toHaveTextContent(/Couldn't load today's Pulse/i);
+    expect(sentinel).toHaveTextContent(/Couldn't load your recommendations/i);
     // It must NOT show the no-data CTA.
     expect(screen.queryByRole('link', { name: /Open Library/i })).toBeNull();
   });

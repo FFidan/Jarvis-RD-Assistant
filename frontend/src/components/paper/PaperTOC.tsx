@@ -96,7 +96,7 @@ export function PaperTOC({
       {/* § Sections */}
       <div>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          § Sections
+          Paper sections
         </p>
         <ul className="space-y-0.5">
           {sections.map((sec) => {
@@ -138,7 +138,7 @@ export function PaperTOC({
       {/* § Pipeline */}
       <div>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          § Pipeline
+          Processing steps
         </p>
         <div className="space-y-1.5 pl-1">
           <PipelineStep
@@ -151,7 +151,7 @@ export function PaperTOC({
             done={chunkCount > 0}
             inProgress={pdfDownloaded && chunkCount === 0 && !processingFailed}
             failed={processingFailed && chunkCount === 0}
-            label={chunkCount > 0 ? `${chunkCount} passages` : 'Processing…'}
+            label={chunkCount > 0 ? `${chunkCount} passages` : 'Extracting passages…'}
           />
           <PipelineStep
             done={hasSummary}

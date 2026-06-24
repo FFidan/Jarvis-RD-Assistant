@@ -27,3 +27,22 @@ regexes = [
   '''pk-lf-35d525''',
   '''sk-lf-031360''',
 ]
+
+# ---------------------------------------------------------------------------
+# Allowlist: synthetic API-key / token fixtures in test files
+#
+# Context: the test suites hard-code obviously-fake credentials as fixtures
+# (e.g. 'valid-api-key-32chars-long-xxxxx', 'correct-key-1234567890abcdefghij',
+# a deterministic Fernet key). gitleaks' generic-api-key rule flags these as
+# high-entropy strings, but they are not real secrets — they exercise auth,
+# settings, and provider code paths. Real credentials never live in tests.
+#
+# Scope: only files under test directories (services/*/tests/, libs/*/tests/,
+# frontend src __tests__). Precise path globs, not a blanket allow.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Synthetic credential fixtures in test files (not real secrets)"
+paths = [
+  '''.*/tests/.*''',
+  '''.*/__tests__/.*''',
+]

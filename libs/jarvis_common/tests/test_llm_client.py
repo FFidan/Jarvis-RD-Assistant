@@ -271,12 +271,70 @@ async def test_call_llm_structured_passes_timeout_through():
 
 
 @pytest.mark.asyncio
+async def test_call_llm_structured_forwards_extra_body():
+    """call_llm_structured must forward options.extra_body to the OpenAI SDK call.
+
+    extra_body carries provider passthrough such as chat_template_kwargs (e.g.
+    disabling Qwen "thinking"); it must reach the underlying create() verbatim.
+    Verified: llm_client.py:392 — **({"extra_body": _options.extra_body} ...).
+    """
+    from pydantic import BaseModel
+
+    recorded: dict = {}
+    fake_client, _ = _make_instructor_recorder(recorded)
+
+    class _Out(BaseModel):
+        pass
+
+    await llm_client.call_llm_structured(
+        fake_client,
+        response_model=_Out,
+        prompt="hi",
+        options=llm_client.ChatCompletionOptions(
+            model="smart",
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+    )
+
+    assert recorded.get("extra_body") == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+@pytest.mark.asyncio
+async def test_call_llm_structured_omits_extra_body_when_none():
+    """When extra_body is None (default), the key must not reach the SDK at all.
+
+    Passing extra_body=None through to create() could be forwarded into the
+    request body as a null and rejected by some providers; the helper guards this
+    by omitting the key entirely when falsy.
+    Verified: llm_client.py:392 — the conditional spread yields {} when falsy.
+    """
+    from pydantic import BaseModel
+
+    recorded: dict = {}
+    fake_client, _ = _make_instructor_recorder(recorded)
+
+    class _Out(BaseModel):
+        pass
+
+    await llm_client.call_llm_structured(
+        fake_client,
+        response_model=_Out,
+        prompt="hi",
+        options=llm_client.ChatCompletionOptions(model="smart"),
+    )
+
+    assert "extra_body" not in recorded, (
+        f"extra_body must be omitted when None; recorded kwargs: {sorted(recorded)}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_call_llm_structured_raises_when_client_is_none():
     """A clear RuntimeError is preferable to a downstream Instructor crash."""
     with pytest.raises(RuntimeError, match="openai_client is required"):
         await llm_client.call_llm_structured(
             None,  # type: ignore[arg-type]
-            response_model=type("_X", (), {}),
+            response_model=type("_X", (), {}),  # type: ignore[arg-type]
             prompt="hi",
             options=llm_client.ChatCompletionOptions(model="smart"),
         )
@@ -288,7 +346,7 @@ async def test_call_llm_structured_raises_without_prompt_or_messages():
     with pytest.raises(ValueError, match="Either prompt or messages must be provided"):
         await llm_client.call_llm_structured(
             MagicMock(),
-            response_model=type("_X", (), {}),
+            response_model=type("_X", (), {}),  # type: ignore[arg-type]
             options=llm_client.ChatCompletionOptions(model="smart"),
         )
 
@@ -351,7 +409,7 @@ async def test_call_llm_structured_rejects_empty_model():
     with pytest.raises(ValueError, match="model must be a non-empty"):
         await llm_client.call_llm_structured(
             MagicMock(),
-            response_model=type("_X", (), {}),
+            response_model=type("_X", (), {}),  # type: ignore[arg-type]
             prompt="hi",
             options=llm_client.ChatCompletionOptions(model=""),
         )

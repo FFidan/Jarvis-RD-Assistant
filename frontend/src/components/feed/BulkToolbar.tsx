@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import type { BulkAction, SurfaceView } from '@/types';
 import { HardDeleteModal } from './HardDeleteModal';
+import { CitationMenu } from '@/components/citation/CitationMenu';
 import { errorMessage } from '@/lib/errors';
 
 interface BulkToolbarProps {
@@ -58,7 +59,7 @@ const ACTION_CONFIG: Record<BulkAction, ActionConfig> = {
   unstar:            { label: 'Unstar',                tooltip: 'Unstar',                                                       icon: <StarOff className="h-3.5 w-3.5" /> },
   feedback_positive: { label: 'More like this',        tooltip: 'More like this',                                               icon: <ThumbsUp className="h-3.5 w-3.5" /> },
   feedback_negative: { label: 'Less like this',        tooltip: 'Less like this',                                               icon: <ThumbsDown className="h-3.5 w-3.5" /> },
-  hard_delete:       { label: 'Delete forever',        tooltip: 'Permanently delete the selected papers (cannot be undone)',     icon: <X className="h-3.5 w-3.5" /> },
+  hard_delete:       { label: 'Permanently delete',    tooltip: 'Permanently delete the selected papers (cannot be undone)',     icon: <X className="h-3.5 w-3.5" /> },
 };
 
 export function BulkToolbar({ surface, papersOnPage }: BulkToolbarProps) {
@@ -166,6 +167,7 @@ export function BulkToolbar({ surface, papersOnPage }: BulkToolbarProps) {
                 </Tooltip>
               );
             })}
+            <CitationMenu paperIds={Array.from(selectedIds)} />
             <Button size="sm" variant="ghost" onClick={clear}>
               Clear
             </Button>

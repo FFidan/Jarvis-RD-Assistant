@@ -1,18 +1,35 @@
 import { useState } from 'react';
 import { errorMessage } from '@/lib/errors';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { batchFetchCitations } from '@/lib/api';
+import { fetchCitationsFromS2 } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Loader2, Download } from 'lucide-react';
 
-export function FetchCitationsButton() {
+interface FetchCitationsButtonProps {
+  /** Papers the user has selected; citations are fetched only for these. */
+  paperIds: number[];
+}
+
+export function FetchCitationsButton({ paperIds }: FetchCitationsButtonProps) {
   const queryClient = useQueryClient();
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: () => batchFetchCitations(),
+    mutationFn: async (ids: number[]) => {
+      let citationsAdded = 0;
+      let referencesAdded = 0;
+      for (const id of ids) {
+        const res = await fetchCitationsFromS2(id);
+        citationsAdded += res.citations_added;
+        referencesAdded += res.references_added;
+      }
+      return { papers: ids.length, citationsAdded, referencesAdded };
+    },
     onSuccess: (data) => {
-      setStatusMessage(data.message);
+      setStatusMessage(
+        `Fetched citations for ${data.papers} paper${data.papers === 1 ? '' : 's'} ` +
+          `(${data.citationsAdded} citations, ${data.referencesAdded} references)`,
+      );
       // Note: bare prefix for invalidation — no registry factory for citation all-entries
       queryClient.invalidateQueries({ queryKey: ['citation-graph'] });
     },
@@ -21,8 +38,8 @@ export function FetchCitationsButton() {
   return (
     <div className="space-y-2">
       <Button
-        onClick={() => mutation.mutate()}
-        disabled={mutation.isPending}
+        onClick={() => mutation.mutate(paperIds)}
+        disabled={mutation.isPending || paperIds.length === 0}
         size="sm"
       >
         {mutation.isPending ? (

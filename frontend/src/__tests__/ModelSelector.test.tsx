@@ -240,7 +240,7 @@ describe('ModelSelector', () => {
     expect(screen.getByText('3.5GB VRAM')).toBeInTheDocument();
     expect(screen.queryByText('Qwen3 14B')).not.toBeInTheDocument();
     expect(screen.queryByText('Qwen3 Embedding 0.6B')).not.toBeInTheDocument();
-    expect(screen.getByText('Local (Ollama)')).toBeInTheDocument();
+    expect(screen.getByText('Ollama (default)')).toBeInTheDocument();
   });
 
   it('shows current badge when catalog entry is active for the role', async () => {

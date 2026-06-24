@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { errorMessage } from '@/lib/errors';
+import { cardTypeLabel } from '@/lib/labels/cardTypes';
 
 const CARD_TYPES = ['concept', 'quote', 'method', 'comparison'] as const;
 
@@ -97,8 +98,8 @@ export function CreateCardForm({ open, onOpenChange, defaultDeckId }: CreateCard
               </SelectTrigger>
               <SelectContent>
                 {CARD_TYPES.map((t) => (
-                  <SelectItem key={t} value={t} className="capitalize">
-                    {t}
+                  <SelectItem key={t} value={t}>
+                    {cardTypeLabel(t)}
                   </SelectItem>
                 ))}
               </SelectContent>

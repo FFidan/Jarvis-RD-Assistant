@@ -120,7 +120,7 @@ const effectiveFit = (e: ModelCatalogEntry): string => e.fit_detail?.default ?? 
 // ---------------------------------------------------------------------------
 
 const PROVIDER_LABELS: Record<string, string> = {
-  local: 'Local (Ollama)',
+  local: 'Ollama (default)',
   anthropic: 'Anthropic',
   openai: 'OpenAI',
   google: 'Google',

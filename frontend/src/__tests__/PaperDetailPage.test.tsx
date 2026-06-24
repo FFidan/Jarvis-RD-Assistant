@@ -357,9 +357,9 @@ describe('PaperDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText(/2 passages from the PDF/)).toBeInTheDocument();
     });
-    // Individual chunk buttons are visible
-    expect(screen.getByText(/Chunk 0/)).toBeInTheDocument();
-    expect(screen.getByText(/Chunk 1/)).toBeInTheDocument();
+    // Individual passage buttons are visible
+    expect(screen.getByText(/Passage 0/)).toBeInTheDocument();
+    expect(screen.getByText(/Passage 1/)).toBeInTheDocument();
   });
 
   it('shows notes in the scrolling column', async () => {
@@ -669,7 +669,7 @@ describe('PaperDetailPage', () => {
     });
 
     // Pipeline section visible in TOC
-    expect(screen.getByText('§ Pipeline')).toBeInTheDocument();
+    expect(screen.getByText('Processing steps')).toBeInTheDocument();
     expect(screen.getByText('Downloaded')).toBeInTheDocument();
     expect(screen.getByText('Summarized')).toBeInTheDocument();
   });
@@ -692,9 +692,9 @@ describe('PaperDetailPage', () => {
     });
 
     const nav = screen.getByRole('navigation', { name: 'Paper navigation' });
-    // The "Processing…" step label is rendered destructive (failed) — proving
+    // The "Extracting passages…" step label is rendered destructive (failed) — proving
     // PaperTOC received processingFailed=true from the live payload.
-    const processingLabel = within(nav).getByText('Processing…');
+    const processingLabel = within(nav).getByText('Extracting passages…');
     expect(processingLabel.className).toContain('text-destructive');
   });
 
@@ -714,7 +714,7 @@ describe('PaperDetailPage', () => {
     });
 
     const nav = screen.getByRole('navigation', { name: 'Paper navigation' });
-    const processingLabel = within(nav).getByText('Processing…');
+    const processingLabel = within(nav).getByText('Extracting passages…');
     expect(processingLabel.className).not.toContain('text-destructive');
   });
 

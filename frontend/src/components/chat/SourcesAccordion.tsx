@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { Source } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -31,7 +32,15 @@ export function SourcesAccordion({ sources }: SourcesAccordionProps) {
           {sources.map((source, i) => (
             <div key={source.chunk_id ?? `src-${i}`} className="rounded border p-2 text-xs">
               {source.paper_title && (
-                <p className="font-medium">{source.paper_title}</p>
+                <p className="font-medium">
+                  {source.paper_id != null ? (
+                    <Link to={`/paper/${source.paper_id}`} className="hover:underline">
+                      {source.paper_title}
+                    </Link>
+                  ) : (
+                    source.paper_title
+                  )}
+                </p>
               )}
               <div className="mt-1 text-muted-foreground line-clamp-3">
                 <MarkdownContent className="prose prose-xs dark:prose-invert max-w-none text-muted-foreground">{source.text || source.content || ''}</MarkdownContent>

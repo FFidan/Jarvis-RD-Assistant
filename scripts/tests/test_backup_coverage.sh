@@ -80,6 +80,52 @@ else
 fi
 rm -rf "$bac1_dir"
 
+# BAC-1 (qdrant): the downloaded snapshot must be routed through
+# encrypt_or_passthrough and written with a .enc suffix when ENCRYPT=1 — NOT
+# straight to disk in the clear like the pre-fix code (a DR snapshot carries the
+# full vector store and must be at-rest encrypted with the DB/secrets archives).
+check "encrypts the Qdrant snapshot via encrypt_or_passthrough" \
+  'encrypt_or_passthrough[[:space:]]*<[[:space:]]*"\$qsnap_raw"'
+check "writes the encrypted Qdrant snapshot with a .enc suffix" \
+  'qdrant_\$\{col\}_\$\{TIMESTAMP\}\.snapshot\.enc'
+check "prunes encrypted Qdrant snapshots on retention" 'qdrant_\*\.snapshot\.enc'
+
+# BAC-1 (qdrant, behavioral): replay backup.sh's encrypt_or_passthrough against a
+# fixture snapshot with ENCRYPT=1 and prove the .enc is REAL ciphertext that
+# openssl recovers to the original bytes — and is NOT the plaintext. Source-grep
+# alone can't catch an encrypt stage that is silently a no-op (the v0.8.8 BAC-1
+# lesson: `--exclude=./backup_encrypt_key` was a no-op that grep accepted).
+bac1q_dir="$(mktemp -d)"
+bac1q_key="${bac1q_dir}/key.txt"
+printf 'test-backup-passphrase' > "$bac1q_key"
+printf 'SNAPSHOT-VECTOR-BYTES-\x00\x01\x02' > "${bac1q_dir}/plain.snapshot"
+# Extract the exact cipher recipe backup.sh's encrypt_or_passthrough uses so a
+# change to the cipher params is exercised here too (single source of truth).
+recipe="$(grep -oE 'openssl enc -aes-256-cbc -pbkdf2 -iter [0-9]+' "$BACKUP_SCRIPT" | head -1)"
+if [ -n "$recipe" ]; then
+  $recipe -kfile "${bac1q_key}" \
+    < "${bac1q_dir}/plain.snapshot" > "${bac1q_dir}/out.snapshot.enc" 2>/dev/null
+  if [ -s "${bac1q_dir}/out.snapshot.enc" ] \
+     && ! cmp -s "${bac1q_dir}/plain.snapshot" "${bac1q_dir}/out.snapshot.enc" \
+     && $recipe -d -kfile "${bac1q_key}" -in "${bac1q_dir}/out.snapshot.enc" 2>/dev/null \
+          | cmp -s - "${bac1q_dir}/plain.snapshot"; then
+    pass "Qdrant snapshot encrypt is real ciphertext (openssl round-trips to original)"
+  else
+    printf 'FAIL: Qdrant snapshot encrypt did not produce decryptable ciphertext\n' >&2
+    fail=1
+  fi
+else
+  printf 'FAIL: could not locate the openssl enc recipe in backup.sh\n' >&2
+  fail=1
+fi
+rm -rf "$bac1q_dir"
+
+# BAC (status): a FAILED run must be recorded — backup.sh writes .last_run.json
+# on EVERY exit via a trap, so /status can show "attempted + failed" instead of
+# silently reading "no recent backup".
+check "writes .last_run.json on exit via a trap" 'trap[[:space:]]+write_last_run[[:space:]]+EXIT'
+check "records per-store outcome in .last_run.json" '"stores":\{"jarvis":'
+
 # N. On-demand trigger: backup.sh consumes a sentinel flag-file (written by the
 #    WebUI Backup panel) so the sidecar runs immediately, then clears it.
 check "consumes the on-demand backup-trigger sentinel" 'backup_now'

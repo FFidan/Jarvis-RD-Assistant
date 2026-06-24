@@ -54,7 +54,7 @@ export function QuestionsSection({ projectId, questions }: QuestionsSectionProps
         id="open-questions-heading"
         className="mb-3 text-xs font-semibold tracking-widest text-muted-foreground uppercase"
       >
-        § OPEN QUESTIONS · {questions.length}
+        OPEN QUESTIONS · {questions.length}
       </h3>
 
       {questions.length === 0 ? (

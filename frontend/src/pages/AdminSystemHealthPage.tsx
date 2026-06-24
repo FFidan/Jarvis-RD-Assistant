@@ -208,7 +208,11 @@ export function AdminSystemHealthPage() {
 
         {!stackLoading && !stackError && stackData && (
           <>
-          {(stackData.downCount > 0 || stackData.degradedCount > 0) ? (
+          {stackData.overall === 'unknown' ? (
+            <p className="text-sm text-muted-foreground mb-3" data-testid="stack-summary">
+              Could not determine service status — the health endpoints did not respond in time.
+            </p>
+          ) : (stackData.downCount > 0 || stackData.degradedCount > 0) ? (
             <p className="text-sm mb-3" data-testid="stack-summary">
               {stackData.downCount > 0 && (
                 <span className="text-red-600 dark:text-red-400 font-medium">

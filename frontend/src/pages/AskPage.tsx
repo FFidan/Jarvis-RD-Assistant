@@ -10,9 +10,11 @@
  *   - useStreamingChat hook (chat-store backed, survives navigation)
  */
 
-import { MessageCircleQuestion } from 'lucide-react';
+import { MessageCircleQuestion, Sparkles } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { StreamingChat } from '@/components/chat/StreamingChat';
+import { Button } from '@/components/ui/button';
 import { fetchDashboardMetrics } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
 
@@ -20,11 +22,15 @@ import { QUERY_KEYS } from '@/lib/query-keys';
 const ASK_CHAT_ID = 'global-ask';
 
 export function AskPage() {
-  const { data: metrics } = useQuery({
+  const { data: metrics, isSuccess } = useQuery({
     queryKey: QUERY_KEYS.dashboard.metrics(),
     queryFn: fetchDashboardMetrics,
   });
   const hasAnalyzedPapers = (metrics?.chunked_papers ?? 0) > 0;
+  // Only claim "nothing to ask" once metrics confirm an empty library. While the
+  // request is loading or has failed, fall back to the chat workspace rather than
+  // a misleading empty-state (failed request -> degraded, never empty).
+  const showOnboarding = isSuccess && !hasAnalyzedPapers;
 
   return (
     <div className="flex flex-col h-full" data-testid="ask-page">
@@ -43,11 +49,30 @@ export function AskPage() {
 
       {/* Chat workspace */}
       <div className="flex-1 min-h-0">
-        <StreamingChat
-          chatId={ASK_CHAT_ID}
-          scope="cross-paper"
-          hasAnalyzedPapers={hasAnalyzedPapers}
-        />
+        {showOnboarding ? (
+          <div
+            className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center"
+            data-testid="ask-empty-state"
+          >
+            <Sparkles className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+            <div className="max-w-md space-y-2">
+              <h2 className="text-lg font-semibold tracking-tight">Nothing to ask yet</h2>
+              <p className="text-sm text-muted-foreground">
+                Ask reasons across every analyzed paper in your library to answer questions
+                with cited evidence. Import and analyze at least one paper to get started.
+              </p>
+            </div>
+            <Button asChild>
+              <Link to="/feed?surface=search">Find papers to analyze</Link>
+            </Button>
+          </div>
+        ) : (
+          <StreamingChat
+            chatId={ASK_CHAT_ID}
+            scope="cross-paper"
+            hasAnalyzedPapers={hasAnalyzedPapers}
+          />
+        )}
       </div>
     </div>
   );

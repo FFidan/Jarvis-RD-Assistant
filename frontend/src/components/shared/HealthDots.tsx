@@ -53,6 +53,8 @@ function pillColor(status: ServiceHealthStatus): string {
 function pillLabel(overall: ServiceHealthStatus, downCount: number, degradedCount: number): string {
   if (overall === 'ok') return 'All healthy';
   if (overall === 'down') return `${downCount} down`;
+  // No probe response within the deadline: every service is 'unknown'.
+  if (overall === 'unknown') return 'Status unknown';
   return `${degradedCount} degraded`;
 }
 

@@ -35,6 +35,7 @@ import { ActionsSidebar } from '@/components/paper/ActionsSidebar';
 import { LifecycleActionsCard } from '@/components/paper/LifecycleActionsCard';
 import { UserStateForm } from '@/components/paper/UserStateForm';
 import { ZoteroPanel } from '@/components/paper/ZoteroPanel';
+import { CitationMenu } from '@/components/citation/CitationMenu';
 import { ContradictionsPanel } from '@/components/paper/ContradictionsPanel';
 import { PaperTOC, type TOCSection } from '@/components/paper/PaperTOC';
 import { PaperResearchLog } from '@/components/paper/PaperResearchLog';
@@ -250,6 +251,9 @@ export function PaperDetailPage() {
         />
         <UserStateForm paperId={paperId} userState={user_state} />
         <ZoteroPanel paperId={paperId} hasProjectLinks={hasProjectLinks} />
+        <div className="mt-3">
+          <CitationMenu paperIds={[paperId]} />
+        </div>
         <ContradictionsPanel paperId={paperId} />
       </div>
     </div>

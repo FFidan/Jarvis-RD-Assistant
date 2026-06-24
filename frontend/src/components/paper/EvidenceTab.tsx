@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import type { Summary } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -66,12 +67,17 @@ export function EvidenceTab({ summary, paperId }: EvidenceTabProps) {
                       <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none italic">{kf.quote}</MarkdownContent>
                     </blockquote>
                   )}
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {kf.page_number != null && (
                       <Badge variant="outline" className="text-xs">Page {kf.page_number}</Badge>
                     )}
                     {kf.chunk_id != null && (
-                      <Badge variant="outline" className="text-xs">Chunk #{kf.chunk_id}</Badge>
+                      <Badge variant="outline" className="text-xs">Passage #{kf.chunk_id}</Badge>
+                    )}
+                    {paperId != null && (
+                      <Link to={`/paper/${paperId}`} className="text-xs text-muted-foreground hover:underline">
+                        Open paper
+                      </Link>
                     )}
                   </div>
                 </div>

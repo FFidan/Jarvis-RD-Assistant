@@ -15,14 +15,47 @@ export interface BackupStatus {
   archive_count: number;
   last_run_at: string | null;
   trigger_pending: boolean;
+  last_attempt_at: string | null;
+  last_run_succeeded: boolean | null;
 }
 
-/** List backup archive metadata, newest first. Requires admin session. */
-export const listBackups = () => apiFetch<BackupEntry[]>('/api/admin/backups');
+export interface RestorePointFile {
+  filename: string;
+  store: BackupEntry['store'];
+  size_bytes: number;
+  encrypted: boolean;
+}
+
+export interface RestorePoint {
+  timestamp: string;
+  created_at: string;
+  stores: BackupEntry['store'][];
+  qdrant_collections: string[];
+  complete: boolean;
+  encrypted: boolean;
+  total_size_bytes: number;
+  files: RestorePointFile[];
+}
+
+export interface RestoreLastRun {
+  attempted_at: string | null;
+  succeeded: boolean | null;
+  stores: Record<string, string>;
+}
+
+export interface RestorePointsResponse {
+  restore_points: RestorePoint[];
+  retention_days: number | null;
+  last_run: RestoreLastRun | null;
+}
 
 /** Sidecar reachability + inferred last-run time. */
 export const getBackupStatus = () =>
   apiFetch<BackupStatus>('/api/admin/backups/status');
+
+/** Group archives into restore points (one per backup run). Requires admin session. */
+export const getRestorePoints = () =>
+  apiFetch<RestorePointsResponse>('/api/admin/backups/restore-points');
 
 /** Request an on-demand backup (writes a sentinel the sidecar polls). */
 export const triggerBackup = () =>

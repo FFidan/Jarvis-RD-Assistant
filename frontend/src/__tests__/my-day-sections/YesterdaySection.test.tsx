@@ -53,7 +53,7 @@ describe('YesterdaySection', () => {
   it('renders the header note + completed and deferred items', async () => {
     vi.mocked(fetchYesterday).mockResolvedValue(SUMMARY);
     renderSection();
-    expect(await screen.findByText(/§ Yesterday/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Yesterday/i)).toBeInTheDocument();
     expect(screen.getByText(/3.2h focused · 6 cards · 2 tasks done/)).toBeInTheDocument();
     expect(screen.getByText('Solver benchmark compiled')).toBeInTheDocument();
     expect(screen.getByText('Adjoint memory bound')).toBeInTheDocument();

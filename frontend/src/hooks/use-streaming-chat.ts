@@ -38,6 +38,8 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
   // The ref here is only used by stopStreaming() to abort imperatively.
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const lastQuestionRef = useRef<string | null>(null);
+
   // Keep a ref to phase so sendMessage doesn't need phase in its deps array,
   // preventing unnecessary recreation on every phase change.
   const phaseRef = useRef<Phase>(phase);
@@ -71,6 +73,8 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
   const sendMessage = useCallback(
     async (question: string) => {
       if (phaseRef.current !== 'idle') return;
+
+      lastQuestionRef.current = question;
 
       // Capture prior turns BEFORE adding the new user message and the assistant
       // placeholder — both addMessage calls below would otherwise appear in the
@@ -169,6 +173,13 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
     abortStream(chatId);
   }, [chatId]);
 
+  const retry = useCallback(() => {
+    const last = lastQuestionRef.current;
+    if (!last) return;
+    setStreamError(null);
+    void sendMessage(last);
+  }, [sendMessage]);
+
   return {
     messages,
     sources,
@@ -177,6 +188,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
     elapsedSeconds,
     sendMessage,
     stopStreaming,
+    retry,
     clearChat: () => { setStreamError(null); clearChat(chatId); },
     modelUsed,
     streamError,

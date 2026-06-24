@@ -87,6 +87,32 @@ encrypt_or_passthrough() {
   fi
 }
 
+# Per-store outcome tracking so a FAILED run is visible to /status — not just
+# "no new archive" (which reads as "no recent backup"). The trap fires on EVERY
+# exit path, so a FATAL pg_dump failure (set -e) still records jarvis=failed.
+# Primary DBs start failed (a crash before they succeed must read as failed);
+# best-effort stores start skipped (no attempt yet).
+ATTEMPTED_AT="$(date -Iseconds)"
+JARVIS_STATE="failed"
+LITELLM_STATE="failed"
+SECRETS_STATE="skipped"
+QDRANT_STATE="skipped"
+
+# write_last_run — emit ${BACKUP_DIR}/.last_run.json (a dotfile, NOT an archive,
+# so the router's allowlist/globs never match it).
+write_last_run() {
+  local succeeded="false"
+  [ "$JARVIS_STATE" = "ok" ] && [ "$LITELLM_STATE" = "ok" ] && succeeded="true"
+  local enc="false"
+  [ "$ENCRYPT" -eq 1 ] && enc="true"
+  local lr_tmp="${BACKUP_DIR}/.last_run.json.tmp"
+  cat > "$lr_tmp" <<JSON
+{"attempted_at":"${ATTEMPTED_AT}","timestamp":"${TIMESTAMP}","succeeded":${succeeded},"encrypted":${enc},"retention_days":${RETENTION_DAYS},"stores":{"jarvis":"${JARVIS_STATE}","litellm":"${LITELLM_STATE}","secrets":"${SECRETS_STATE}","qdrant":"${QDRANT_STATE}"}}
+JSON
+  mv -f "$lr_tmp" "${BACKUP_DIR}/.last_run.json"
+}
+trap write_last_run EXIT
+
 # dump_db <db-name> <archive-prefix>
 #   pg_dump <db> | gzip [| openssl] → /backups/<prefix>_<ts>.sql.gz[.enc]
 #   Stages to <final>.tmp and promotes ONLY when every pipeline stage exited 0
@@ -121,7 +147,9 @@ echo "[$(date -Iseconds)] Starting backup..."
 
 # --- PostgreSQL: jarvis (primary) + litellm (API keys / virtual keys / spend) -
 JARVIS_BACKUP_FILE="$(dump_db "${PGDATABASE:-jarvis}" jarvis)"
+JARVIS_STATE="ok"
 LITELLM_BACKUP_FILE="$(dump_db "$LITELLM_DATABASE" litellm)"
+LITELLM_STATE="ok"
 
 # --- secrets/ directory ------------------------------------------------------
 # The Docker-secret source files; an encrypted DB backup is useless without the
@@ -146,11 +174,13 @@ if [ -d "$SECRETS_DIR" ]; then
   secrets_st=("${PIPESTATUS[@]}")
   if [ "${secrets_st[0]}" -ne 0 ] || [ "${secrets_st[1]}" -ne 0 ]; then
     rm -f "$secrets_tmp"
+    SECRETS_STATE="failed"
     echo "FATAL: secrets archive failed (tar=${secrets_st[0]} enc=${secrets_st[1]})" >&2
     exit 1
   fi
   chmod 600 "$secrets_tmp"
   mv "$secrets_tmp" "$SECRETS_BACKUP_FILE"
+  SECRETS_STATE="ok"
   echo "[$(date -Iseconds)] Backup saved to $SECRETS_BACKUP_FILE ($(du -h "$SECRETS_BACKUP_FILE" | cut -f1))"
 else
   echo "[$(date -Iseconds)] secrets dir $SECRETS_DIR not mounted; skipping secrets backup"
@@ -205,22 +235,46 @@ if collections_json="$(qdrant_http GET /collections 2>/dev/null)"; then
         | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 \
         | sed -E 's/.*"name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
       if [ -n "$snap" ]; then
-        qsnap_tmp="${BACKUP_DIR}/qdrant_${col}_${TIMESTAMP}.snapshot.tmp"
-        qsnap_out="${BACKUP_DIR}/qdrant_${col}_${TIMESTAMP}.snapshot"
-        if qdrant_http GET "/collections/${col}/snapshots/${snap}" "$qsnap_tmp"; then
-          chmod 600 "$qsnap_tmp"; mv "$qsnap_tmp" "$qsnap_out"
-          echo "[$(date -Iseconds)] Qdrant snapshot saved to $qsnap_out ($(du -h "$qsnap_out" | cut -f1))"
+        # Stream the snapshot straight to disk (memory-safe under mem_limit), then
+        # stream that raw file through encrypt_or_passthrough so the on-disk vector
+        # snapshot is at-rest encrypted (.enc) like the DB/secrets archives — it is
+        # not a separate plane of plaintext. openssl reads stdin incrementally, so
+        # the encrypt stage stays within the 256m mem_limit too.
+        qsnap_raw="${BACKUP_DIR}/qdrant_${col}_${TIMESTAMP}.snapshot.raw"
+        if [ "$ENCRYPT" -eq 1 ]; then
+          qsnap_out="${BACKUP_DIR}/qdrant_${col}_${TIMESTAMP}.snapshot.enc"
         else
-          rm -f "$qsnap_tmp"
+          qsnap_out="${BACKUP_DIR}/qdrant_${col}_${TIMESTAMP}.snapshot"
+        fi
+        qsnap_tmp="${qsnap_out}.tmp"
+        if qdrant_http GET "/collections/${col}/snapshots/${snap}" "$qsnap_raw"; then
+          if encrypt_or_passthrough < "$qsnap_raw" > "$qsnap_tmp"; then
+            chmod 600 "$qsnap_tmp"; mv "$qsnap_tmp" "$qsnap_out"; rm -f "$qsnap_raw"
+            echo "[$(date -Iseconds)] Qdrant snapshot saved to $qsnap_out ($(du -h "$qsnap_out" | cut -f1))"
+          else
+            rm -f "$qsnap_raw" "$qsnap_tmp"
+            QDRANT_STATE="failed"
+            echo "[$(date -Iseconds)] WARNING: failed to encrypt Qdrant snapshot for '$col'; continuing" >&2
+          fi
+        else
+          rm -f "$qsnap_raw"
+          QDRANT_STATE="failed"
           echo "[$(date -Iseconds)] WARNING: failed to download Qdrant snapshot for '$col'; continuing" >&2
         fi
       else
+        QDRANT_STATE="failed"
         echo "[$(date -Iseconds)] WARNING: could not parse Qdrant snapshot name for '$col'; continuing" >&2
       fi
     else
+      QDRANT_STATE="failed"
       echo "[$(date -Iseconds)] WARNING: failed to create Qdrant snapshot for '$col'; continuing" >&2
     fi
   done
+  # No snapshot failed and at least one collection was processed → ok. No
+  # collections (nothing to snapshot) or unreachable Qdrant stays skipped.
+  if [ "$QDRANT_STATE" = "skipped" ] && [ -n "$collections" ]; then
+    QDRANT_STATE="ok"
+  fi
 else
   echo "[$(date -Iseconds)] Qdrant unreachable at $QDRANT_URL; skipping vector snapshot (Postgres/secrets backups unaffected)" >&2
 fi
@@ -231,7 +285,8 @@ if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
     echo "[$(date -Iseconds)] aws CLI not available; skipping S3 upload (install awscli or use the amazon/aws-cli sidecar)"
   else
     for f in "$JARVIS_BACKUP_FILE" "$LITELLM_BACKUP_FILE" "$SECRETS_BACKUP_FILE" \
-             "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot; do
+             "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot \
+             "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot.enc; do
       [ -n "$f" ] && [ -f "$f" ] || continue
       aws s3 cp "$f" "s3://${BACKUP_S3_BUCKET}/$(basename "$f")"
     done
@@ -244,7 +299,7 @@ find "$BACKUP_DIR" \( \
     -name "jarvis_*.sql.gz" -o -name "jarvis_*.sql.gz.enc" \
     -o -name "litellm_*.sql.gz" -o -name "litellm_*.sql.gz.enc" \
     -o -name "secrets_*.tar.gz" -o -name "secrets_*.tar.gz.enc" \
-    -o -name "qdrant_*.snapshot" \
-    -o -name "*.tmp" \
+    -o -name "qdrant_*.snapshot" -o -name "qdrant_*.snapshot.enc" \
+    -o -name "*.tmp" -o -name "*.raw" \
   \) -mtime "+${RETENTION_DAYS}" -delete
 echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"

@@ -170,7 +170,7 @@ describe('MyDayPage', () => {
     await screen.findByText(/RESEARCH LOG/);
     // YesterdaySection is an on-the-fly rollup (UI_v3); it stays silent when
     // completed+deferred are both empty (default mock).
-    expect(screen.queryByText(/§ Yesterday/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Yesterday/i)).not.toBeInTheDocument();
   });
 
   it('renders Yesterday section when the rollup has activity', async () => {
@@ -183,14 +183,14 @@ describe('MyDayPage', () => {
       deferred: [{ id: 12, title: 'Adjoint proof', status: 'deferred' }],
     });
     renderWithProviders();
-    expect(await screen.findByText(/§ Yesterday/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Yesterday/i)).toBeInTheDocument();
     expect(screen.getByText('Closed the solver benchmark')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /carry over/i })).toBeInTheDocument();
   });
 
   it('renders Now section with Pulse #1 mode tab', async () => {
     renderWithProviders();
-    expect(await screen.findByText(/§ Now/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Now/i)).toBeInTheDocument();
     // ModePicker uses role="tab" buttons (ARIA enhancement); Pulse #1 is always visible
     expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
     // Continue task only shows with an active Pomodoro (none in this test)
@@ -198,7 +198,7 @@ describe('MyDayPage', () => {
 
   it("renders Today's intent section marker", async () => {
     renderWithProviders();
-    expect(await screen.findByText(/§ Today's intent/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Today's intent/i)).toBeInTheDocument();
   });
 
   it('renders tasks from my-day data in IntentSection', async () => {
@@ -209,14 +209,14 @@ describe('MyDayPage', () => {
 
   it('renders Projects section with project name', async () => {
     renderWithProviders();
-    expect(await screen.findByText(/§ Projects/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Projects/i)).toBeInTheDocument();
     // Wait for async data to hydrate the project list
     expect(await screen.findAllByText('JARVIS')).not.toHaveLength(0);
   });
 
   it('renders Learning & focus section marker', async () => {
     renderWithProviders();
-    expect(await screen.findByText(/§ Learning/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Learning & focus/i)).toBeInTheDocument();
   });
 
   it('renders Learning cards sub-section', async () => {
@@ -237,7 +237,7 @@ describe('MyDayPage', () => {
 
   it('renders End of day shutdown ritual with the 3 structured prompts', async () => {
     renderWithProviders();
-    expect(await screen.findByText(/§ End of day/i)).toBeInTheDocument();
+    expect(await screen.findByText(/End of day/i)).toBeInTheDocument();
     expect(screen.getByLabelText('One thing that worked')).toBeInTheDocument();
     expect(screen.getByLabelText("What's still blocking me")).toBeInTheDocument();
     expect(screen.getByLabelText('First move tomorrow')).toBeInTheDocument();
@@ -247,12 +247,12 @@ describe('MyDayPage', () => {
     renderWithProviders();
     // Wait for data to load, then assert Triage is absent (it returns null when empty)
     await screen.findByText(/RESEARCH LOG/);
-    expect(screen.queryByText(/§ Triage/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Triage/i)).not.toBeInTheDocument();
   });
 
   it('renders no-pulse-yet message in HeroNow when deck is null', async () => {
     renderWithProviders();
-    // When pulseDeck resolves to null, HeroPulse (inside HeroNow §Now) shows
+    // When pulseDeck resolves to null, HeroPulse (inside HeroNow Now) shows
     // a "No Pulse for today yet" message instead of pulse card content.
     expect(
       await screen.findByText(/No Pulse for today yet/i),
@@ -480,8 +480,8 @@ describe('MyDayPage hash-scroll', () => {
     );
 
     // HeroNow renders <section id="now"> — wait for it to be present in the DOM.
-    // The §Now marker text is rendered inside the section by SectionHeader.
-    await screen.findByText(/§ Now/i);
+    // The Now marker text is rendered inside the section by SectionHeader.
+    await screen.findByText(/Now/i);
 
     // The rAF retry loop should find #now and call scrollIntoView with the
     // smooth options specified in MyDayPage's useEffect.

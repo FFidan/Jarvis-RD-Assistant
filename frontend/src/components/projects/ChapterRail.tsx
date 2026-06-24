@@ -19,14 +19,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { EmptyState } from '@/components/EmptyState';
-
-// §3.2 — map backend status values to display chip labels
-const STATUS_DISPLAY: Record<string, string> = {
-  active: 'reading',
-  paused: 'drafting',
-  completed: 'shipped',
-  archived: 'idle',
-};
+import { PROJECT_STATUS_LABELS } from '@/lib/labels/projectStatus';
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   active: 'default',
@@ -79,7 +72,7 @@ export function ChapterRail({ projects, selectedId, onSelect }: ChapterRailProps
       {/* Rail header */}
       <div className="px-4 pt-4 pb-2">
         <span className="text-xs font-semibold tracking-widest text-muted-foreground uppercase">
-          § CHAPTERS · {projects.length}
+          PROJECTS · {projects.length}
         </span>
       </div>
 
@@ -88,8 +81,8 @@ export function ChapterRail({ projects, selectedId, onSelect }: ChapterRailProps
         {projects.length === 0 ? (
           <div className="px-2">
             <EmptyState
-              title="No chapters yet"
-              description="Create a project to start a research chapter."
+              title="No projects yet"
+              description="Create a project to start organizing your research."
               icon={FolderKanban}
             />
           </div>
@@ -116,13 +109,13 @@ export function ChapterRail({ projects, selectedId, onSelect }: ChapterRailProps
                     variant={STATUS_VARIANTS[project.status] ?? 'secondary'}
                     className="ml-1 shrink-0 text-[10px] px-1.5 py-0"
                   >
-                    {STATUS_DISPLAY[project.status] ?? project.status}
+                    {PROJECT_STATUS_LABELS[project.status] ?? project.status}
                   </Badge>
                 </div>
                 {/* Row 2: counts */}
                 <div className="flex items-center gap-3 pl-8 text-xs text-muted-foreground">
                   <span>{project.paper_count ?? 0} papers</span>
-                  <span>{project.open_question_count ?? 0} Qs</span>
+                  <span>{project.open_question_count ?? 0} Questions</span>
                 </div>
               </button>
             ))}
@@ -140,7 +133,7 @@ export function ChapterRail({ projects, selectedId, onSelect }: ChapterRailProps
           aria-label="Create project"
         >
           <Plus className="mr-1 h-4 w-4" />
-          New Chapter
+          New Project
         </Button>
       </div>
 

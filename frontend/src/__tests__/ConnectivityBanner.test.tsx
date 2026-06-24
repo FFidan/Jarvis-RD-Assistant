@@ -68,7 +68,7 @@ describe('OfflineBanner (inside ConnectivityBanner)', () => {
     expect(banner).toBeTruthy();
     // Check core copy is present (partial match)
     expect(banner.textContent).toContain("offline");
-    expect(banner.textContent).toContain("last-known-good");
+    expect(banner.textContent).toContain("saved data");
   });
 
   it('has role=status and aria-live=polite', () => {

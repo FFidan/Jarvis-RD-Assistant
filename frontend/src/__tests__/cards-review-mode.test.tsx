@@ -106,7 +106,7 @@ describe('ReviewMode', () => {
     await waitFor(() => screen.getByText(CARD_FIXTURE.front));
     await userEvent.click(screen.getByText(/click to reveal answer/i));
     expect(screen.getByText(CARD_FIXTURE.back)).toBeInTheDocument();
-    expect(screen.getByText(/§ Answer/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Answer$/i)).toBeInTheDocument();
   });
 
   it('shows all 4 rating buttons after reveal', async () => {
@@ -166,13 +166,13 @@ describe('ReviewMode', () => {
   it('shows deck name in eyebrow when decks are loaded', async () => {
     mockFetchDecks.mockResolvedValue(DECK_FIXTURE);
     renderReview({});
-    await waitFor(() => screen.getByText(/§ Card 1 · ALGORITHMS/));
+    await waitFor(() => screen.getByText(/Card 1 · ALGORITHMS/));
   });
 
   it('displays eyebrow with session card index', async () => {
     renderReview({ sessionCardIndex: 5 });
     await waitFor(() => screen.getByText(CARD_FIXTURE.front));
-    expect(screen.getByText(/§ Card 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/Card 5/i)).toBeInTheDocument();
   });
 
   it('skip button refetches without rating', async () => {

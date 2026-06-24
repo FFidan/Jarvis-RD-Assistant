@@ -95,13 +95,13 @@ describe('PulseCard', () => {
 
   it('renders Trash & Reject button', () => {
     renderCard();
-    expect(screen.getByRole('button', { name: /trash and reject/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /remove and show fewer like this/i })).toBeInTheDocument();
   });
 
   it('calls trashAndRejectPaper when Trash & Reject button clicked', async () => {
     const user = userEvent.setup();
     renderCard();
-    await user.click(screen.getByRole('button', { name: /trash and reject/i }));
+    await user.click(screen.getByRole('button', { name: /remove and show fewer like this/i }));
     await waitFor(() => {
       expect(vi.mocked(api.trashAndRejectPaper)).toHaveBeenCalledWith(42);
     });
@@ -253,7 +253,7 @@ describe('PulseCard', () => {
           <PulseCard card={sampleCard} onRate={onRate} />
         </QueryClientProvider>,
       );
-      await user.click(screen.getByRole('button', { name: /trash and reject/i }));
+      await user.click(screen.getByRole('button', { name: /remove and show fewer like this/i }));
       await waitFor(() => {
         expect(vi.mocked(api.trashAndRejectPaper)).toHaveBeenCalledWith(42);
       });
@@ -307,7 +307,7 @@ describe('PulseCard', () => {
           <PulseCard card={sampleCard} onRate={vi.fn()} />
         </QueryClientProvider>,
       );
-      await user.click(screen.getByRole('button', { name: /trash and reject/i }));
+      await user.click(screen.getByRole('button', { name: /remove and show fewer like this/i }));
       // onMutate fires synchronously — cache is patched before the mutation resolves
       const cached = queryClient.getQueryData<{ cards: { card_id: number }[] }>(['pulse-today']);
       expect(cached?.cards).toHaveLength(1);

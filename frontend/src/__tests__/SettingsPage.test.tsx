@@ -159,14 +159,14 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
   });
 
-  it('renders §I Account section in nav for any authenticated user', async () => {
+  it('renders Account section in nav for any authenticated user', async () => {
     renderSettingsPage();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Profile & Email/i })).toBeInTheDocument(),
     );
   });
 
-  it('renders §VI Research section nav items for any authenticated user', async () => {
+  it('renders Research section nav items for any authenticated user', async () => {
     renderSettingsPage();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Topics/i })).toBeInTheDocument(),
@@ -174,32 +174,32 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('button', { name: /Authors/i })).toBeInTheDocument();
   });
 
-  it('hides §II Sources nav items for non-admin (role=user)', async () => {
+  it('hides Sources nav items for non-admin (role=user)', async () => {
     renderSettingsPageAs('user');
     // Wait for render to settle via heading role (avoids multiple-match with breadcrumb)
     await waitFor(() => screen.getByRole('heading', { name: 'Settings' }));
-    // Sources section header should not be visible
-    expect(screen.queryByText('§II')).not.toBeInTheDocument();
+    // Sources section (header + nav item) should not be visible
+    expect(screen.queryByText('Sources')).not.toBeInTheDocument();
   });
 
-  it('hides §IV System nav items for non-admin (role=user)', async () => {
+  it('hides System nav items for non-admin (role=user)', async () => {
     renderSettingsPageAs('user');
     await waitFor(() => screen.getByRole('heading', { name: 'Settings' }));
-    expect(screen.queryByText('§IV')).not.toBeInTheDocument();
+    expect(screen.queryByText('System')).not.toBeInTheDocument();
   });
 
-  it('shows §II Sources section header for admin', async () => {
+  it('shows Sources section header for admin', async () => {
     renderSettingsPageAs('admin');
-    await waitFor(() => expect(screen.getByText('§II')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Sources').length).toBeGreaterThan(0));
   });
 
-  it('shows §III Models and §IV System section headers for admin', async () => {
+  it('shows Models and System section headers for admin', async () => {
     renderSettingsPageAs('admin');
-    await waitFor(() => expect(screen.getByText('§III')).toBeInTheDocument());
-    expect(screen.getByText('§IV')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Models')).toBeInTheDocument());
+    expect(screen.getByText('System')).toBeInTheDocument();
   });
 
-  it('defaults to §VI Research / Topics content pane', async () => {
+  it('defaults to Research / Topics content pane', async () => {
     renderSettingsPage();
     // The detail pane heading should say "Topics"
     await waitFor(() =>
@@ -235,17 +235,17 @@ describe('SettingsPage', () => {
   it('shows API-key-only session (null user) same as non-admin — hides system sections', async () => {
     renderSettingsPageAs(null);
     await waitFor(() => screen.getByRole('heading', { name: 'Settings' }));
-    expect(screen.queryByText('§II')).not.toBeInTheDocument();
-    expect(screen.queryByText('§IV')).not.toBeInTheDocument();
+    expect(screen.queryByText('Sources')).not.toBeInTheDocument();
+    expect(screen.queryByText('System')).not.toBeInTheDocument();
   });
 });
 
 // ---------------------------------------------------------------------------
 // Conflict-5 — IngestionSection filterGroups split
 //
-// §III Models → LLM must render the full IngestionSection (LLM Models group).
+// §III Models → LLM must render the full IngestionSection (AI models group).
 // §VI Research → Spaced Repetition must render ONLY the Spaced Repetition
-// group via the SpacedRepetitionSection wrapper — no LLM Models / Preferences.
+// group via the SpacedRepetitionSection wrapper — no AI models / Preferences.
 // ---------------------------------------------------------------------------
 
 describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5)', () => {
@@ -276,18 +276,18 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
     );
   }
 
-  it('§III Models → LLM renders the LLM Models group with the advanced backend disclosure', async () => {
+  it('§III Models → LLM renders the AI models group with the advanced backend disclosure', async () => {
     renderDetail('models', 'llm');
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'LLM Models', level: 4 })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
     );
     expect(screen.getByTestId('advanced-backend-disclosure')).toBeInTheDocument();
   });
 
-  it('§III Models → stale ?item=ai deep-link resolves to the consolidated LLM Models page', async () => {
+  it('§III Models → stale ?item=ai deep-link resolves to the consolidated AI models page', async () => {
     renderDetail('models', 'ai');
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'LLM Models', level: 4 })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
     );
     expect(screen.getByTestId('advanced-backend-disclosure')).toBeInTheDocument();
   });
@@ -299,8 +299,8 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
         screen.getByRole('heading', { name: 'Spaced Repetition', level: 4 }),
       ).toBeInTheDocument(),
     );
-    // The LLM Models group (and any Preferences group) must NOT leak in.
-    expect(screen.queryByRole('heading', { name: 'LLM Models', level: 4 })).not.toBeInTheDocument();
+    // The AI models group (and any Preferences group) must NOT leak in.
+    expect(screen.queryByRole('heading', { name: 'AI models', level: 4 })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Preferences', level: 4 })).not.toBeInTheDocument();
   });
 });
@@ -324,23 +324,23 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
 
   // ---- Layer 1: SettingsRail item visibility --------------------------------
 
-  it('non-admin: bot-token rail item is NOT rendered in §V Integrations', async () => {
+  it('non-admin: bot-token rail item is NOT rendered in Integrations', async () => {
     renderSettingsPageAs('user');
     await waitFor(() => screen.getByRole('heading', { name: 'Settings' }));
-    // Bot Token nav button must not exist
-    expect(screen.queryByRole('button', { name: /Bot Token/i })).not.toBeInTheDocument();
+    // Telegram bot key nav button must not exist
+    expect(screen.queryByRole('button', { name: /Telegram bot key/i })).not.toBeInTheDocument();
   });
 
   it('null-user (API-key session): bot-token rail item is NOT rendered', async () => {
     renderSettingsPageAs(null);
     await waitFor(() => screen.getByRole('heading', { name: 'Settings' }));
-    expect(screen.queryByRole('button', { name: /Bot Token/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Telegram bot key/i })).not.toBeInTheDocument();
   });
 
-  it('admin: bot-token rail item IS rendered in §V Integrations', async () => {
+  it('admin: bot-token rail item IS rendered in Integrations', async () => {
     renderSettingsPageAs('admin');
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /Bot Token/i })).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /Telegram bot key/i })).toBeInTheDocument(),
     );
   });
 
@@ -353,10 +353,10 @@ describe('FE-RBAC-1 — bot-token item gate', () => {
     );
   });
 
-  it('admin deep-link ?section=integrations&item=bot-token → stays on Bot Token', async () => {
+  it('admin deep-link ?section=integrations&item=bot-token → stays on Telegram bot key', async () => {
     renderSettingsPageAs('admin', '?section=integrations&item=bot-token');
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'Bot Token', level: 2 })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'Telegram bot key', level: 2 })).toBeInTheDocument(),
     );
     // Must NOT have been redirected to Topics
     expect(screen.queryByRole('heading', { name: 'Topics', level: 2 })).not.toBeInTheDocument();

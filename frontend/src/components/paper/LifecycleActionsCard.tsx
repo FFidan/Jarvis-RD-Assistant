@@ -203,11 +203,11 @@ export function LifecycleActionsCard({
             size="sm"
             onClick={() => saveMut.mutate()}
             disabled={saveMut.isPending}
-            title="Set aside (back to reading list)"
-            aria-label="Set aside"
+            title="Pause reading (back to reading list)"
+            aria-label="Pause reading"
           >
             <Library className="mr-1 h-4 w-4" />
-            Set Aside
+            Pause reading
           </Button>
         </>
       );
@@ -220,11 +220,11 @@ export function LifecycleActionsCard({
           size="sm"
           onClick={() => markReadingMut.mutate()}
           disabled={markReadingMut.isPending}
-          title="Re-open for reading"
-          aria-label="Re-open paper"
+          title="Resume reading"
+          aria-label="Resume reading"
         >
           <RotateCcw className="mr-1 h-4 w-4" />
-          Re-open
+          Resume reading
         </Button>
       );
     }
@@ -249,11 +249,11 @@ export function LifecycleActionsCard({
             className="text-destructive hover:text-destructive"
             onClick={() => setHardDeleteOpen(true)}
             disabled={hardDeleteMut.isPending}
-            title="Delete forever"
-            aria-label="Delete paper forever"
+            title="Permanently delete"
+            aria-label="Permanently delete paper"
           >
             <Trash className="mr-1 h-4 w-4" />
-            Delete Forever
+            Permanently delete
           </Button>
         </>
       );

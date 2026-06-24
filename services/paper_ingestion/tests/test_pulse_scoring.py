@@ -235,6 +235,68 @@ async def test_stage2_structured_failure_records_truthful_degraded_reason() -> N
     assert degraded.reasoning_confidence is RagConfidence.UNVERIFIED
 
 
+async def test_stage2_disables_thinking_via_extra_body_to_create() -> None:
+    """Stage-2 must suppress qwen3 <think> output at the source on the structured path.
+
+    qwen3 is a thinking model and instructor Mode.JSON parses the whole completion,
+    raising on the <think> preamble before caller code runs. The fix sets
+    extra_body={"chat_template_kwargs": {"enable_thinking": False}}, which instructor
+    forwards to AsyncOpenAI.chat.completions.create() → LiteLLM/Ollama. This pins that
+    the option is plumbed all the way to create(), not just constructed.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.models import TopicRef
+    from paper_ingestion.pulse.models import PulseScoringOutput
+    from paper_ingestion.pulse.profile import UserProfile
+    from paper_ingestion.pulse.scoring import ScoredCandidate, stage2_llm_rerank
+    from paper_ingestion.rag.verification import RagConfidence
+
+    candidate = ScoredCandidate(
+        paper=_make_paper(),
+        signals={"embedding": 0.7, "recency": 0.5},
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=0.6,
+    )
+    profile = UserProfile(
+        topics=[TopicRef(id=1, name="Topic", description="desc")],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
+        library_centroid=None,
+        weights={"embedding": 0.5, "llm_relevance": 0.3, "llm_novelty": 0.2},
+        deck_size=5,
+        stage2_top_k=10,
+        recent_positive_titles=[],
+        recent_negative_titles=[],
+    )
+
+    create_mock = AsyncMock(
+        return_value=PulseScoringOutput(relevance=7, novelty=6, reasoning="Relevant.")
+    )
+    openai_client = MagicMock()
+    openai_client.chat.completions.create = create_mock
+
+    with patch(
+        "paper_ingestion.pulse.scoring.verify_pulse_reasoning",
+        AsyncMock(return_value=(True, RagConfidence.HIGH)),
+    ):
+        result = await stage2_llm_rerank(
+            [candidate], profile, verifier=QuoteVerifier(), openai_client=openai_client
+        )
+
+    assert result[0].llm_relevance == 7
+    create_mock.assert_awaited_once()
+    await_args = create_mock.await_args
+    assert await_args is not None
+    sent = await_args.kwargs
+    assert sent["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}, (
+        "stage-2 must forward enable_thinking=False through extra_body to create()"
+    )
+
+
 def test_pulse_scoring_shape_a_system_prompt_is_non_empty() -> None:
     """Shape A regression: stage2_llm_rerank uses a split-role prompt.
 

@@ -106,6 +106,16 @@ async def _pi_pulse_app(contract_conn):
         app.dependency_overrides.pop(get_db_pool, None)
 
 
+async def _promote_user_to_admin(conn, user_id: int) -> None:
+    """Elevate a seeded contract user to the admin role.
+
+    POST /api/pulse/generate is admin-gated (Depends(require_admin)); the
+    contract_two_users fixture seeds role='user', so generate tests promote
+    the caller first.
+    """
+    await conn.execute("UPDATE users SET role='admin' WHERE id=$1", user_id)
+
+
 # ---------------------------------------------------------------------------
 # §D2-01 — Pulse IDOR: explain_card user isolation
 # ---------------------------------------------------------------------------
@@ -841,6 +851,8 @@ async def test_pulse_generate_endpoint_enqueues_job_and_returns_job_id_shape(
 
     fake_task.defer_async.side_effect = _capture_defer
 
+    await _promote_user_to_admin(contract_conn, contract_two_users.user_a_id)
+
     with patch.dict(_TASK_MAP, {"pulse.generate": fake_task}):
         async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
             resp = await c.post("/api/pulse/generate")
@@ -1253,6 +1265,8 @@ async def test_pulse_generate_user_id_threading_deck_is_user_scoped(
     user_b_id = contract_two_users.user_b_id
     user_a_id = contract_two_users.user_a_id
 
+    await _promote_user_to_admin(contract_conn, user_b_id)
+
     with patch.dict(_TASK_MAP, {"pulse.generate": fake_task}):
         # Call as user B
         async with _client(_pi_pulse_app, contract_two_users.cookie_b) as c:
@@ -1274,6 +1288,88 @@ async def test_pulse_generate_user_id_threading_deck_is_user_scoped(
     assert deferred_user_id != user_a_id, (
         f"Job user_id must NOT be user A's id {user_a_id}; "
         f"got {deferred_user_id!r} — cross-user contamination detected."
+    )
+
+
+# §C14-06 — POST /api/pulse/generate: non-admin caller is rejected with 403
+# Verified: routers/pulse.py generate_pulse — Depends(require_admin)
+# Verified: libs/jarvis_common/jarvis_common/auth.py:206 (require_admin → 403)
+
+
+async def test_pulse_generate_non_admin_returns_403(
+    _pi_pulse_app,
+    _configure_api_key,
+    contract_two_users,
+):
+    """POST /api/pulse/generate as a non-admin browser user returns 403.
+
+    The contract_two_users fixture seeds role='user'; the admin gate must fire
+    before any advisory-lock probe or job enqueue.
+    """
+    async with _client(_pi_pulse_app, contract_two_users.cookie_b) as c:
+        resp = await c.post("/api/pulse/generate")
+
+    assert resp.status_code == 403, (
+        f"Non-admin POST /api/pulse/generate must be 403; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+# §C14-07 — POST /api/pulse/generate: 409 in-flight body never leaks another user's job id
+# Verified: routers/pulse.py generate_pulse — in-flight lookup scoped to args->>'user_id' = current_uid
+
+
+async def test_pulse_generate_409_does_not_leak_cross_user_job_id(
+    _contract_pool,
+    contract_conn,
+    _pi_pulse_app,
+    _configure_api_key,
+    contract_two_users,
+):
+    """When the caller's pulse lock is held, the 409 body must not disclose
+    another user's in-flight pulse.generate job id.
+
+    Holds the caller's per-user advisory lock on a SEPARATE connection so the
+    endpoint's probe sees it as taken, then seeds a pulse.generate job owned by
+    a DIFFERENT user. The scoped in-flight lookup must return None — proving the
+    409 body carries no cross-user job id.
+    """
+    from jarvis_common.advisory_lock import _kind_lock_key
+
+    caller_id = contract_two_users.user_a_id
+    other_id = contract_two_users.user_b_id
+    await _promote_user_to_admin(contract_conn, caller_id)
+
+    # Seed an in-flight pulse.generate job owned by the OTHER user.
+    other_job_id = await contract_conn.fetchval(
+        """INSERT INTO procrastinate_jobs (queue_name, task_name, args, status)
+           VALUES ('default', 'pulse.generate', $1::jsonb, 'doing')
+           RETURNING id""",
+        {"user_id": other_id},
+    )
+
+    key1 = _kind_lock_key("pulse.generate")
+    key2 = caller_id
+
+    # Hold the caller's lock from a dedicated session so the endpoint probe fails.
+    async with _contract_pool.acquire() as lock_conn:
+        got = await lock_conn.fetchval("SELECT pg_try_advisory_lock($1, $2)", key1, key2)
+        assert got, "Test setup: expected to acquire the caller's pulse advisory lock"
+        try:
+            async with _client(_pi_pulse_app, contract_two_users.cookie_a) as c:
+                resp = await c.post("/api/pulse/generate")
+        finally:
+            await lock_conn.execute("SELECT pg_advisory_unlock($1, $2)", key1, key2)
+
+    assert resp.status_code == 409, (
+        f"Caller's held lock must yield 409; got {resp.status_code}: {resp.text[:300]}"
+    )
+    detail = resp.json()["detail"]
+    assert detail["reason"] == "already_running"
+    assert detail["in_flight_job_id"] != other_job_id, (
+        f"409 body leaked another user's job id {other_job_id}: {detail!r}"
+    )
+    assert detail["in_flight_job_id"] is None, (
+        f"Caller has no own in-flight job; in_flight_job_id must be None, got {detail!r}"
     )
 
 

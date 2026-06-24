@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { type PriorityLevel } from '@/types';
+import { PRIORITY_LABELS } from '@/lib/labels/priority';
 import { cn } from '@/lib/utils';
 
 interface PriorityBadgeProps {
@@ -14,13 +15,6 @@ const priorityStyles: Record<PriorityLevel, string> = {
   'unscored': 'bg-gray-100 text-gray-600 border-gray-200',
 };
 
-const priorityLabels: Record<PriorityLevel, string> = {
-  'must-read': 'MUST READ',
-  'recommended': 'Recommended',
-  'background': 'Background',
-  'unscored': 'Not yet ranked',
-};
-
 export function PriorityBadge({ level }: PriorityBadgeProps) {
   if (level === 'unscored') {
     return (
@@ -32,8 +26,8 @@ export function PriorityBadge({ level }: PriorityBadgeProps) {
             </Badge>
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-xs text-xs">
-            This paper has not been ranked by the Pulse discovery pipeline yet. Scored papers appear
-            in your daily Pulse deck on My Day.
+            This paper has not been scored yet. Scored papers appear in your daily recommendations
+            on My Day.
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
@@ -42,7 +36,7 @@ export function PriorityBadge({ level }: PriorityBadgeProps) {
 
   return (
     <Badge variant="outline" className={cn('shrink-0 text-xs', priorityStyles[level])}>
-      {priorityLabels[level]}
+      {PRIORITY_LABELS[level]}
     </Badge>
   );
 }

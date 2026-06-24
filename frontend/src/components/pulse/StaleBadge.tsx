@@ -61,7 +61,7 @@ export function StaleBadge({ ageDays, diagnostics, onRetry }: Props) {
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="right" className="w-full sm:max-w-md">
           <SheetHeader>
-            <SheetTitle>Stale Pulse Deck</SheetTitle>
+            <SheetTitle>Outdated recommendations</SheetTitle>
             <SheetDescription>
               {staleBadgeText(ageDays)}. A fresh deck hasn&apos;t been generated yet today.
             </SheetDescription>

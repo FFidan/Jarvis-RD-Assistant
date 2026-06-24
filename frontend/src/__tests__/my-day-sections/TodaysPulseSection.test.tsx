@@ -132,7 +132,7 @@ describe('TodaysPulseSection', () => {
 
     renderWithProviders();
 
-    // SectionHeader renders "§ Today's pulse" — use a partial regex to match
+    // SectionHeader renders "Today's pulse" — use a partial regex to match
     expect(screen.getByText(/Today's pulse/)).toBeInTheDocument();
   });
 

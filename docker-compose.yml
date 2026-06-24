@@ -311,7 +311,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.8.8}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.9.0}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -391,7 +391,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.8.8}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-0.9.0}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -439,7 +439,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.8.8}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.9.0}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -486,7 +486,7 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.8.8}
+    image: jarvis/dashboard:${JARVIS_VERSION:-0.9.0}
     build:
       context: ./frontend
       args:
@@ -624,7 +624,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.8.8}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.9.0}
     build:
       context: ./langfuse
       dockerfile: Dockerfile.langfuse

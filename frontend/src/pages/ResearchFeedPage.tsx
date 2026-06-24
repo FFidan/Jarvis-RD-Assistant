@@ -451,7 +451,7 @@ export function ResearchFeedPage() {
                 <div
                   className="ml-auto inline-flex rounded-md border border-hair p-0.5"
                   role="tablist"
-                  aria-label="Library corpus scope"
+                  aria-label="Library scope"
                 >
                   {FEED_SCOPES.map(({ value, label }) => (
                     <button
@@ -512,7 +512,7 @@ export function ResearchFeedPage() {
               <div className="mb-1 flex items-center gap-2">
                 <SectionInfo>
                   {feedScope === 'corpus'
-                    ? 'All discovered papers — the shared global corpus across all sources.'
+                    ? 'All discovered papers — the shared library across all sources.'
                     : filter === 'reading'
                       ? 'Papers you\'re currently reading.'
                       : filter === 'to_read'

@@ -104,7 +104,7 @@ export function CitationGraphPage() {
               />
             </div>
 
-            <FetchCitationsButton />
+            <FetchCitationsButton paperIds={paperIds} />
             <GraphControls layout={layout} onLayoutChange={setLayout} />
           </div>
         </CardContent>

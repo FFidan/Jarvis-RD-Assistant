@@ -22,7 +22,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Send, Square, Trash2 } from 'lucide-react';
+import { RotateCcw, Send, Square, Trash2 } from 'lucide-react';
 
 interface StreamingChatProps {
   chatId: string;
@@ -37,7 +37,7 @@ interface StreamingChatProps {
 }
 
 export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true }: StreamingChatProps) {
-  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat, streamError, elapsedSeconds } =
+  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat, retry, streamError, elapsedSeconds } =
     useStreamingChat({ chatId, scope, paperId });
   // First question of this chat: the warm-up hint only applies before any prior answer.
   const isFirstQuestion = messages.filter((m) => m.role === 'user').length <= 1;
@@ -124,10 +124,25 @@ export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true
         </div>
       </ScrollArea>
 
-      {/* SSE stream error banner */}
+      {/* SSE stream error banner — friendly copy + Retry (degraded, never empty) */}
       {streamError && (
-        <div role="alert" className="text-xs text-destructive px-3 py-1 rounded bg-destructive/10">
-          {streamError}
+        <div
+          role="alert"
+          className="mx-4 mb-2 flex items-center justify-between gap-3 rounded bg-destructive/10 px-3 py-2 text-xs text-destructive"
+        >
+          <span>Something went wrong answering that. Please try again.</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={retry}
+            disabled={isStreaming}
+            className="gap-1.5"
+            aria-label="Retry last question"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
         </div>
       )}
 

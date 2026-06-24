@@ -24,11 +24,7 @@ import { getAISettings, postAISettings, redetectHW, getFirstRunStatus, dismissBa
 import { QUERY_KEYS } from '@/lib/query-keys';
 import { Button } from '@/components/ui/button';
 import { errorMessage } from '@/lib/errors';
-
-const BACKEND_LABELS: Record<'vllm' | 'ollama', string> = {
-  vllm: 'High-Performance (vLLM)',
-  ollama: 'Local (Ollama)',
-};
+import { BACKEND_LABELS, BACKEND_TOOLTIP } from '@/lib/labels/backends';
 
 export function AIPanel() {
   const qc = useQueryClient();
@@ -74,7 +70,7 @@ export function AIPanel() {
     data?.recommended_backend === 'vllm' ? 'vllm' : 'ollama';
 
   // Only surface a recommendation the catalog plane can actually assign — the
-  // LLM Models page is authoritative, so a recommendation it can't honour would
+  // AI models page is authoritative, so a recommendation it can't honour would
   // contradict it. A recommended (backend, model) counts only if it appears in
   // candidates_for_tier.
   const recommendationIsAssignable = (data?.candidates_for_tier ?? []).some(
@@ -179,7 +175,7 @@ export function AIPanel() {
         </div>
         {data?.eval_report_date && (
           <p className="text-xs text-muted-foreground">
-            Eval report: <span className="font-mono">{data.eval_report_date}</span>
+            Last checked: <span className="font-mono">{data.eval_report_date}</span>
           </p>
         )}
       </section>
@@ -196,7 +192,15 @@ export function AIPanel() {
           <span>
             A GPU was detected at install but the stack is running on CPU — your GPU
             isn&apos;t being used. Re-run <code>setup.sh</code> (or set <code>COMPOSE_FILE</code> to
-            include <code>docker-compose.gpu.yml</code>) and confirm the NVIDIA container runtime is installed.
+            include <code>docker-compose.gpu.yml</code>) and confirm the NVIDIA container runtime is installed.{' '}
+            <a
+              href="https://ffidan.github.io/Jarvis-RD-Assistant/manual/hardware-and-models/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline whitespace-nowrap"
+            >
+              GPU setup guide →
+            </a>
           </span>
         </div>
       )}
@@ -299,6 +303,7 @@ export function AIPanel() {
       {/* Backend toggle */}
       <section className="space-y-3">
         <h3 className="text-sm font-medium">Backend</h3>
+        <p className="text-xs text-muted-foreground">{BACKEND_TOOLTIP}</p>
         <div className="flex flex-wrap gap-3">
           {(['vllm', 'ollama'] as const).map((b) => {
             const isRecommended = b === data?.recommended_backend;
@@ -335,7 +340,7 @@ export function AIPanel() {
             {BACKEND_LABELS[activeBackend]} has no curated model for your hardware tier. Switch to
             the {BACKEND_LABELS[recommendedBackend]} backend
             {recommendedBackend === activeBackend ? '' : ' (marked Recommended above)'}, or pick a
-            model on the LLM Models page.
+            model on the AI models page.
           </p>
         ) : (
           <select

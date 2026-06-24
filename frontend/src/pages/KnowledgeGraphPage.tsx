@@ -12,8 +12,9 @@ import { KGQueryInput } from '@/components/knowledge/KGQueryInput';
 import { EntityBreakdown } from '@/components/knowledge/EntityBreakdown';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
-import { Network, Sparkles, Loader2 } from 'lucide-react';
+import { Network, Sparkles, Loader2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link } from 'react-router-dom';
 import type { CytoscapeNode, CytoscapeEdge } from '@/components/graph/CytoscapeGraph';
@@ -30,6 +31,7 @@ export function KnowledgeGraphPage() {
   const [entityType, setEntityType] = useState('All');
   const [minPaperCount, setMinPaperCount] = useState(1);
   const [layout, setLayout] = useState<LayoutType>('cose');
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
 
   const queryClient = useQueryClient();
@@ -74,6 +76,18 @@ export function KnowledgeGraphPage() {
     label: r.relationship_type,
     directed: false,
   }));
+
+  const entityNameById = new Map(entities.map((e) => [e.id, e.name] as const));
+  const selectedEntity =
+    selectedNodeId != null
+      ? (entities.find((e) => String(e.id) === selectedNodeId) ?? null)
+      : null;
+  const selectedRelationships = selectedEntity
+    ? relationships.filter(
+        (r) =>
+          r.source_entity_id === selectedEntity.id || r.target_entity_id === selectedEntity.id,
+      )
+    : [];
 
   const stats = [
     { label: 'Total Entities', value: entities.length },
@@ -169,13 +183,91 @@ export function KnowledgeGraphPage() {
 
       {entities.length > 0 && (
         <>
-          <CytoscapeGraph
-            nodes={nodes}
-            edges={edges}
-            layout={layout}
-            colorMap={TYPE_COLORS}
-            height={500}
-          />
+          <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+            <CytoscapeGraph
+              nodes={nodes}
+              edges={edges}
+              layout={layout}
+              colorMap={TYPE_COLORS}
+              height={500}
+              onNodeClick={setSelectedNodeId}
+            />
+            <Card className="rounded-md border-hair shadow-none" data-testid="kg-node-detail">
+              <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-2">
+                <CardTitle className="text-sm">Node Details</CardTitle>
+                {selectedEntity && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    aria-label="Clear selection"
+                    onClick={() => setSelectedNodeId(null)}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+              </CardHeader>
+              <CardContent>
+                {!selectedEntity ? (
+                  <p className="text-sm text-muted-foreground">
+                    Click a node in the graph to see its details and relationships.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-strong">{selectedEntity.name}</span>
+                        <Badge variant="secondary" className="text-xs">
+                          {selectedEntity.entity_type}
+                        </Badge>
+                      </div>
+                      {selectedEntity.canonical_name &&
+                        selectedEntity.canonical_name !== selectedEntity.name && (
+                          <p className="text-xs text-muted-foreground">
+                            Canonical: {selectedEntity.canonical_name}
+                          </p>
+                        )}
+                      <p className="text-xs text-muted-foreground">
+                        Appears in {selectedEntity.paper_count}{' '}
+                        {selectedEntity.paper_count === 1 ? 'paper' : 'papers'}
+                      </p>
+                    </div>
+
+                    {selectedEntity.description && (
+                      <p className="text-sm text-muted-foreground">{selectedEntity.description}</p>
+                    )}
+
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Relationships ({selectedRelationships.length})
+                      </p>
+                      {selectedRelationships.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No relationships recorded.</p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {selectedRelationships.map((r) => {
+                            const otherId =
+                              r.source_entity_id === selectedEntity.id
+                                ? r.target_entity_id
+                                : r.source_entity_id;
+                            const otherName = entityNameById.get(otherId) ?? `#${otherId}`;
+                            return (
+                              <li key={r.id} className="text-xs">
+                                <span className="text-muted-foreground">
+                                  {r.relationship_type.replace(/_/g, ' ')}
+                                </span>{' '}
+                                <span className="text-strong">{otherName}</span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
           <GraphStats stats={stats} />
           <EntityBreakdown counts={entityTypeCounts} />
         </>

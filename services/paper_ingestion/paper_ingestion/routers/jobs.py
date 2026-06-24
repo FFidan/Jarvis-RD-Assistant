@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Literal
 
 from jarvis_common import jobs as jobs_lib
-from jarvis_common.jobs_router import build_jobs_router
+from jarvis_common.jobs_router import build_jobs_router, collect_handlers
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -122,7 +122,7 @@ router = build_jobs_router(
 # ---------------------------------------------------------------------------
 # Re-exports — preserve the public symbol surface tests + main.py rely on.
 # ---------------------------------------------------------------------------
-_HANDLERS = {r.endpoint.__name__: r.endpoint for r in router.routes}  # type: ignore[attr-defined]
+_HANDLERS = collect_handlers(router)
 create_job = _HANDLERS["create_job"]
 get_job = _HANDLERS["get_job"]
 list_jobs = _HANDLERS["list_jobs"]

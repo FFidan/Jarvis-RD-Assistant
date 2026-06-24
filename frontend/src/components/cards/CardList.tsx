@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { cardTypeLabel } from '@/lib/labels/cardTypes';
 import {
   Table,
   TableBody,
@@ -83,8 +84,8 @@ export function CardList({ deckId }: CardListProps) {
                   {card.back}
                 </TableCell>
                 <TableCell>
-                  <Badge variant="outline" className="capitalize text-xs">
-                    {card.card_type}
+                  <Badge variant="outline" className="text-xs">
+                    {cardTypeLabel(card.card_type)}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">

@@ -26,11 +26,11 @@ import type { RecentFeedback } from '@/types';
 
 const ACTION_TOOLTIPS: Record<string, string> = {
   analyze:
-    'Run the full pipeline: download the PDF, process it into chunks, and generate a summary. One click for everything.',
+    'Do everything in one click: download the PDF, extract passages, and generate a summary.',
   download:
     'Download the PDF from its source URL to local storage. Required before processing.',
   process:
-    'Parse the PDF text, split into chunks, and embed for semantic search. Required before chat, summary, or flashcards.',
+    'Parse the PDF text, extract passages, and prepare for search. Required before chat, summary, or flashcards.',
   summarize:
     'Generate an LLM summary with verbatim evidence quotes and page numbers. Saved to the Summary tab.',
   'generate-cards':
@@ -305,7 +305,7 @@ export function ActionsSidebar({
   const analyzeLabel = (() => {
     switch (analyzeStep) {
       case 'downloading': return 'Downloading PDF...';
-      case 'processing': return 'Processing PDF...';
+      case 'processing': return 'Extracting passages…';
       case 'summarizing': return 'Summarizing...';
       default: return 'Analyze Paper';
     }

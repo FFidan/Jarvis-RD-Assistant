@@ -106,7 +106,7 @@ describe('ChapterPane', () => {
 
   it('renders empty state when project is null', () => {
     renderPane(null);
-    expect(screen.getByText(/select a chapter/i)).toBeInTheDocument();
+    expect(screen.getByText(/select a project/i)).toBeInTheDocument();
   });
 
   it('shows section headings with resolved data counts when project is supplied', async () => {
@@ -138,8 +138,8 @@ describe('ChapterPane', () => {
     renderPane();
 
     await waitFor(() => {
-      expect(screen.getByText(/§ TASKS · 3/i)).toBeInTheDocument();
+      expect(screen.getByText(/TASKS · 3/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/§ MILESTONES · 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/MILESTONES · 2/i)).toBeInTheDocument();
   });
 });

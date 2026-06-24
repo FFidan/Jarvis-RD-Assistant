@@ -219,7 +219,7 @@ describe('IngestionSection — hardware strip', () => {
     expect(screen.getByText(/nvidia-smi/)).toBeInTheDocument();
   });
 
-  it('renders hardware strip only in LLM Models group context', async () => {
+  it('renders hardware strip only in AI models group context', async () => {
     renderSection();
     await waitFor(() => {
       expect(screen.getByTestId('hardware-strip')).toBeInTheDocument();
@@ -1091,7 +1091,7 @@ describe('IngestionSection — researcher-language model labels', () => {
     vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
   });
 
-  it('renders a plain-language top-of-page description for the LLM Models group', async () => {
+  it('renders a plain-language top-of-page description for the AI models group', async () => {
     renderSection();
     await waitFor(() => {
       expect(screen.getByTestId('llm-models-description')).toBeInTheDocument();

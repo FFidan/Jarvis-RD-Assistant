@@ -113,6 +113,45 @@ describe('WhyPopover', () => {
     });
   });
 
+  it('suppresses the per-card scoring-failed sentinel when the deck is degraded', async () => {
+    const { explainPulseCard } = await import('@/lib/api');
+    vi.mocked(explainPulseCard).mockResolvedValue({
+      card_id: 7,
+      reasoning: 'LLM scoring failed',
+      signals: { topic_sim: 0.8 },
+      llm_relevance: null,
+      llm_novelty: null,
+    });
+    const user = userEvent.setup();
+    renderWithClient(<WhyPopover cardId={7} degraded trigger={<button>Why?</button>} />);
+    await user.click(screen.getByText('Why?'));
+    await waitFor(() => {
+      expect(screen.getByText('Why this paper?')).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/AI scoring unavailable for this card/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it('still shows the per-card scoring-failed text for an isolated failure (not degraded)', async () => {
+    const { explainPulseCard } = await import('@/lib/api');
+    vi.mocked(explainPulseCard).mockResolvedValue({
+      card_id: 7,
+      reasoning: 'LLM scoring failed',
+      signals: { topic_sim: 0.8 },
+      llm_relevance: null,
+      llm_novelty: null,
+    });
+    const user = userEvent.setup();
+    renderWithClient(<WhyPopover cardId={7} trigger={<button>Why?</button>} />);
+    await user.click(screen.getByText('Why?'));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/AI scoring unavailable for this card/i),
+      ).toBeInTheDocument();
+    });
+  });
+
   it('closes on outside click', async () => {
     const { explainPulseCard } = await import('@/lib/api');
     vi.mocked(explainPulseCard).mockResolvedValue({

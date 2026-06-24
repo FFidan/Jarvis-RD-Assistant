@@ -1,11 +1,10 @@
 /**
- * SettingsRail — §-grouped left navigation for the 2-pane Settings IA.
+ * SettingsRail — grouped left navigation for the 2-pane Settings IA.
  *
- * Renders Roman-numeral section groups with nested rail items. The active item
- * is highlighted.
+ * Renders section groups with nested rail items. The active item is highlighted.
  *
- * RBAC: §IV System section is hidden entirely for non-admin users.
- *       §II Sources and §IV System items are admin-only.
+ * RBAC: the System section is hidden entirely for non-admin users.
+ *       Sources and System items are admin-only.
  */
 import { cn } from '@/lib/utils';
 
@@ -14,9 +13,7 @@ import { cn } from '@/lib/utils';
 // ---------------------------------------------------------------------------
 
 export interface RailSection {
-  /** Roman numeral label shown as section header (e.g. "§I"). */
-  label: string;
-  /** Display title next to the numeral. */
+  /** Section header title. */
   title: string;
   /** admin-only — entire section hidden for non-admin. */
   adminOnly?: boolean;
@@ -28,6 +25,8 @@ export interface RailItem {
   section: string;
   item: string;
   label: string;
+  /** Optional hover hint shown on the nav button. */
+  tooltip?: string;
   /** Small status dot colour — 'ok' (green), 'warn' (yellow), undefined = none. */
   status?: 'ok' | 'warn';
   /** admin-only — item hidden for non-admin users (section may still be visible). */
@@ -35,12 +34,11 @@ export interface RailItem {
 }
 
 // ---------------------------------------------------------------------------
-// All sections (static — §II Sources is now a single item, not dynamic)
+// All sections (static — Sources is now a single item, not dynamic)
 // ---------------------------------------------------------------------------
 
 export const ALL_SECTIONS: RailSection[] = [
   {
-    label: '§I',
     title: 'Account',
     items: [
       { section: 'account', item: 'profile', label: 'Profile & Email' },
@@ -48,7 +46,6 @@ export const ALL_SECTIONS: RailSection[] = [
     ],
   },
   {
-    label: '§II',
     title: 'Sources',
     adminOnly: true,
     items: [
@@ -56,39 +53,41 @@ export const ALL_SECTIONS: RailSection[] = [
     ],
   },
   {
-    label: '§III',
     title: 'Models',
     adminOnly: true,
     items: [
-      { section: 'models', item: 'llm', label: 'LLM Models' },
+      { section: 'models', item: 'llm', label: 'AI models' },
       { section: 'models', item: 'providers', label: 'Cloud Providers' },
     ],
   },
   {
-    label: '§IV',
     title: 'System',
     adminOnly: true,
     items: [
       { section: 'system', item: 'automation', label: 'Automation' },
       { section: 'system', item: 'extraction', label: 'Extraction Templates' },
-      { section: 'system', item: 'smtp', label: 'Email / SMTP' },
+      { section: 'system', item: 'smtp', label: 'Email (SMTP)' },
       { section: 'system', item: 'pulse', label: 'Pulse' },
       { section: 'system', item: 'timer', label: 'Timer' },
-      { section: 'system', item: 'observability', label: 'Observability' },
+      { section: 'system', item: 'observability', label: 'Monitoring (Langfuse)' },
       { section: 'system', item: 'mode', label: 'Sign-in Method' },
     ],
   },
   {
-    label: '§V',
     title: 'Integrations',
     items: [
       { section: 'integrations', item: 'telegram', label: 'Telegram' },
-      { section: 'integrations', item: 'bot-token', label: 'Bot Token', adminOnly: true },
+      {
+        section: 'integrations',
+        item: 'bot-token',
+        label: 'Telegram bot key',
+        tooltip: 'The API token from BotFather that lets JARVIS send and receive Telegram messages.',
+        adminOnly: true,
+      },
       { section: 'integrations', item: 'zotero', label: 'Zotero' },
     ],
   },
   {
-    label: '§VI',
     title: 'Research',
     items: [
       { section: 'research', item: 'topics', label: 'Topics' },
@@ -119,10 +118,9 @@ export function SettingsRail({ activeSection, activeItem, isAdmin, onSelect }: S
       className="h-full w-full border-r border-hair bg-[hsl(var(--surface-1))] py-4 overflow-y-auto"
     >
       {visibleSections.map((section) => (
-        <div key={section.label} className="mb-4">
+        <div key={section.title} className="mb-4">
           {/* Section header */}
-          <div className="flex items-baseline gap-1.5 px-4 mb-1">
-            <span className="font-mono text-[10px] text-muted-foreground">{section.label}</span>
+          <div className="px-4 mb-1">
             <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
               {section.title}
             </span>
@@ -135,6 +133,7 @@ export function SettingsRail({ activeSection, activeItem, isAdmin, onSelect }: S
               <button
                 key={`${item.section}-${item.item}`}
                 type="button"
+                title={item.tooltip}
                 aria-current={isActive ? 'page' : undefined}
                 className={cn(
                   'w-full flex items-center gap-2 px-5 py-1.5 text-sm text-left transition-colors',

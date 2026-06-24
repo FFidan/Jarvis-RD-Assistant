@@ -113,7 +113,7 @@ describe('TriageSection', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     // Component returns null when both lists are empty — nothing in the container
-    expect(screen.queryByText(/§ Triage/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Triage/i)).not.toBeInTheDocument();
     expect(container.firstChild).toBeNull();
   });
 

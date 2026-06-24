@@ -69,6 +69,28 @@ function makeStackHealth(vectorOk = false): StackHealthSummary {
   };
 }
 
+/**
+ * The synthesized degraded summary fetchStackHealth resolves to when the health
+ * probes don't respond within the deadline: every service 'unknown',
+ * overall 'unknown'.
+ */
+function makeAllUnknownStackHealth(): StackHealthSummary {
+  return {
+    overall: 'unknown',
+    degradedCount: 0,
+    downCount: 0,
+    services: [
+      { name: 'paper_ingestion', label: 'Paper Ingestion', status: 'unknown' },
+      { name: 'learning_engine', label: 'Learning Engine', status: 'unknown' },
+      { name: 'postgres', label: 'PostgreSQL', status: 'unknown' },
+      { name: 'qdrant', label: 'Qdrant', status: 'unknown' },
+      { name: 'ollama', label: 'Ollama', status: 'unknown' },
+      { name: 'litellm', label: 'LiteLLM', status: 'unknown' },
+      { name: 'vector', label: 'Vector', status: 'unknown' },
+    ],
+  };
+}
+
 /** All-green response — no dev flags active, environment is production. */
 const allGreenResponse = {
   status: 'green' as const,
@@ -419,6 +441,40 @@ describe('AdminSystemHealthPage', () => {
     for (const name of expectedNames) {
       expect(screen.getByTestId(`live-svc-row-${name}`)).toBeInTheDocument();
     }
+  });
+
+  it('settles live services to "Unknown" badges (not stuck "Checking services…") when the probe times out', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    // fetchStackHealth applies its own hard deadline and resolves to an
+    // all-unknown summary when the probes hang; simulate that resolved value.
+    fetchStackHealthMock.mockResolvedValue(makeAllUnknownStackHealth());
+    renderPage();
+
+    // The table renders (we left the "Checking…" state) ...
+    await waitFor(() => {
+      expect(screen.getByTestId('live-services-table')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Checking services…')).not.toBeInTheDocument();
+
+    // ... every service row shows an "Unknown" badge.
+    const expectedNames = [
+      'paper_ingestion',
+      'learning_engine',
+      'postgres',
+      'qdrant',
+      'ollama',
+      'litellm',
+      'vector',
+    ];
+    for (const name of expectedNames) {
+      const row = screen.getByTestId(`live-svc-row-${name}`);
+      expect(row.querySelector('[data-testid="svc-status-badge-unknown"]')).toBeInTheDocument();
+    }
+
+    // The summary reflects the no-response state rather than "All services running."
+    const summary = screen.getByTestId('stack-summary');
+    expect(summary).toHaveTextContent(/did not respond in time/i);
+    expect(summary).not.toHaveTextContent(/All services running/i);
   });
 
   it('shows readiness checks alongside live services (superset)', async () => {

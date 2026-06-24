@@ -8,7 +8,7 @@ export interface MarkerCaptionProps {
 }
 
 /**
- * Section-level marker caption ("§ Yesterday", "§ Now").
+ * Section-level marker caption ("Yesterday", "Now").
  *
  * Use only when a section contains >=2 sibling sub-blocks each with its
  * own caption. Forbidden directly inside a `TabsContent` or above a
@@ -19,7 +19,7 @@ export function MarkerCaption({ id, marker, meta, right }: MarkerCaptionProps) {
   return (
     <div id={id} className="flex items-baseline gap-3 mb-3">
       <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-meta">
-        § {marker}
+        {marker}
       </span>
       {meta && (
         <span className="font-mono text-[10px] text-faint">{meta}</span>

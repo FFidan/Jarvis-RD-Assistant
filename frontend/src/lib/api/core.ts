@@ -173,8 +173,37 @@ export interface StackHealthSummary {
   overall: ServiceHealthStatus;
 }
 
+/** Static labels for every stack component, in display order. */
+const STACK_HEALTH_SERVICES: ReadonlyArray<{ name: string; label: string }> = [
+  { name: 'paper_ingestion', label: 'Paper Ingestion' },
+  { name: 'learning_engine', label: 'Learning Engine' },
+  { name: 'postgres', label: 'PostgreSQL' },
+  { name: 'qdrant', label: 'Qdrant' },
+  { name: 'ollama', label: 'Ollama' },
+  { name: 'litellm', label: 'LiteLLM' },
+  { name: 'vector', label: 'Vector' },
+];
+
+/** Hard deadline for {@link fetchStackHealth} so the UI never stays "Checking…". */
+const STACK_HEALTH_DEADLINE_MS = 5000;
+
 /**
- * Fetch full health status for all stack components.
+ * Timeout/no-response fallback: every service is reported as 'unknown' so
+ * callers leave the "checking" state and render neutral dots rather than
+ * hanging forever. A real 'down' from a responding endpoint always returns
+ * its true per-service statuses via the normal path.
+ */
+function unknownStackHealth(): StackHealthSummary {
+  const services: ServiceHealth[] = STACK_HEALTH_SERVICES.map((s) => ({
+    name: s.name,
+    label: s.label,
+    status: 'unknown',
+  }));
+  return { services, degradedCount: 0, downCount: 0, overall: 'unknown' };
+}
+
+/**
+ * Probe every stack component and assemble the real per-service summary.
  *
  * Calls public endpoints for service-level status (paper_ingestion,
  * learning_engine) and the authenticated internal endpoint for
@@ -183,7 +212,7 @@ export interface StackHealthSummary {
  * Individual fetch failures are mapped to 'down' so a single unreachable
  * service never throws — callers always get a StackHealthSummary.
  */
-export async function fetchStackHealth(): Promise<StackHealthSummary> {
+async function probeStackHealth(): Promise<StackHealthSummary> {
   // Dependency statuses from paper_ingestion internal health endpoint
   const depLabels: Record<string, string> = {
     postgres: 'PostgreSQL',
@@ -234,6 +263,29 @@ export async function fetchStackHealth(): Promise<StackHealthSummary> {
     downCount > 0 ? 'down' : degradedCount > 0 ? 'degraded' : 'ok';
 
   return { services, degradedCount, downCount, overall };
+}
+
+/**
+ * Fetch full health status for all stack components, with a hard deadline.
+ *
+ * The underlying probes (apiFetch / checkHealth) share the 5-min request
+ * timeout, so a network black-hole could otherwise leave the health UI stuck
+ * on "Checking…" for minutes. We race the real probe against a
+ * {@link STACK_HEALTH_DEADLINE_MS} timer: if the probe doesn't settle in time,
+ * we resolve to a synthesized all-'unknown' degraded summary so callers always
+ * leave the checking state quickly. The function always settles (never rejects);
+ * the real success/failure path is unchanged.
+ */
+export async function fetchStackHealth(): Promise<StackHealthSummary> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<StackHealthSummary>((resolve) => {
+    timeoutId = setTimeout(() => resolve(unknownStackHealth()), STACK_HEALTH_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([probeStackHealth(), deadline]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 }
 
 /** Trigger a browser download for a blob (shared by Anki/CSV exporters). */

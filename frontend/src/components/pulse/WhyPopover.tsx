@@ -5,11 +5,12 @@ import { explainPulseCard } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
-import { displayReasoning } from '@/components/pulse/reasoning-display';
+import { displayReasoning, suppressScoringFailed } from '@/components/pulse/reasoning-display';
 
 export interface WhyPopoverProps {
   cardId: number;
   trigger: React.ReactNode;
+  degraded?: boolean;
 }
 
 /**
@@ -23,7 +24,7 @@ export interface WhyPopoverProps {
  * Uses @radix-ui/react-popover (via the ui/popover Shadcn wrapper) for
  * focus-trap, ARIA correctness, Escape-to-close, and click-outside handling.
  */
-export function WhyPopover({ cardId, trigger }: WhyPopoverProps) {
+export function WhyPopover({ cardId, trigger, degraded = false }: WhyPopoverProps) {
   const [open, setOpen] = React.useState(false);
 
   const { data, isLoading } = useQuery({
@@ -34,6 +35,9 @@ export function WhyPopover({ cardId, trigger }: WhyPopoverProps) {
   });
 
   const signalEntries = data ? Object.entries(data.signals ?? {}) : [];
+  const shownReasoning = data
+    ? displayReasoning(degraded ? suppressScoringFailed(data.reasoning) : data.reasoning)
+    : null;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -54,9 +58,9 @@ export function WhyPopover({ cardId, trigger }: WhyPopoverProps) {
           </div>
         ) : (
           <div className="space-y-3">
-            {displayReasoning(data.reasoning) && (
+            {shownReasoning && (
               <p className="text-xs italic text-muted-foreground">
-                {displayReasoning(data.reasoning)}
+                {shownReasoning}
               </p>
             )}
             {signalEntries.length > 0 && (

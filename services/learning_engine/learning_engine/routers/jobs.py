@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Literal
 
 from jarvis_common import jobs as jobs_lib
-from jarvis_common.jobs_router import build_jobs_router
+from jarvis_common.jobs_router import build_jobs_router, collect_handlers
 from pydantic import BaseModel
 
 from learning_engine.deps import get_db_pool, limiter
@@ -58,7 +58,7 @@ router = build_jobs_router(
 # ``router`` from here. Build a {endpoint_name: function} map from the
 # router's routes so the symbol surface stays stable.
 # ---------------------------------------------------------------------------
-_HANDLERS = {r.endpoint.__name__: r.endpoint for r in router.routes}  # type: ignore[attr-defined]
+_HANDLERS = collect_handlers(router)
 create_job = _HANDLERS["create_job"]
 get_job = _HANDLERS["get_job"]
 list_jobs = _HANDLERS["list_jobs"]

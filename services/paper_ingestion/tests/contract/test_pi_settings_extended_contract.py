@@ -130,11 +130,12 @@ async def test_s03_nudge_update_persists_to_db(
 async def test_s04_sources_list_ordered_by_display_order(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
-    """GET /api/sources returns rows ordered by display_order ASC.
+    """GET /api/sources (admin) returns rows ordered by display_order ASC.
 
-    # Verified: services/paper_ingestion/paper_ingestion/routers/settings.py:324
-    # (list_sources: ORDER BY display_order ASC, id ASC).
+    # Verified: services/paper_ingestion/paper_ingestion/routers/settings_sources.py:113
+    # (list_sources: Depends(require_admin); ORDER BY display_order ASC, id ASC).
     """
+    await _promote_user_to_admin(contract_conn, contract_two_users.user_a_id)
     # SourceResponse Pydantic model only accepts source_type ∈ SourceType enum;
     # can't insert test_source_X. Verify ordering across existing seeded rows.
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
@@ -145,6 +146,22 @@ async def test_s04_sources_list_ordered_by_display_order(
     rows = body if isinstance(body, list) else body.get("sources", [])
     orders = [r.get("display_order", 0) for r in rows]
     assert orders == sorted(orders), f"Sources not ordered by display_order ASC: {orders}"
+
+
+async def test_s04b_sources_list_non_admin_returns_403(
+    contract_two_users, _pi_app_with_pool, _configure_api_key
+):
+    """GET /api/sources as a non-admin browser user returns 403.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/settings_sources.py:113
+    # (list_sources: Depends(require_admin) — non-admin session ⇒ 403).
+    """
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/sources")
+
+    assert resp.status_code == 403, (
+        f"Non-admin GET /api/sources should be 403; got {resp.status_code}: {resp.text[:200]}"
+    )
 
 
 # ---------------------------------------------------------------------------

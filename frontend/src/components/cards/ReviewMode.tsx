@@ -133,7 +133,7 @@ export function ReviewMode({
       {/* Eyebrow strip */}
       <div className="flex items-baseline justify-between">
         <span className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
-          § Card {sessionCardIndex}{deckName ? ` · ${deckName.toUpperCase()}` : ''}
+          Card {sessionCardIndex}{deckName ? ` · ${deckName.toUpperCase()}` : ''}
         </span>
         {lastSeenDays !== null && (
           <span className="text-[11px] text-muted-foreground">
@@ -168,7 +168,7 @@ export function ReviewMode({
             <hr className="border-hair" />
 
             <p className="text-[10px] font-semibold tracking-widest text-[hsl(var(--ring))] uppercase">
-              § Answer
+              Answer
             </p>
 
             <p className="text-base leading-relaxed text-foreground">

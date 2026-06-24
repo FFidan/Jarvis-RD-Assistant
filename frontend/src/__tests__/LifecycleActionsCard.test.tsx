@@ -79,21 +79,21 @@ describe('LifecycleActionsCard — state-contextual rendering', () => {
     expect(screen.getByRole('button', { name: /Mark as reading/ })).toBeInTheDocument();
   });
 
-  it('renders Mark Done + Set Aside for reading state', () => {
+  it('renders Mark Done + Pause reading for reading state', () => {
     renderCard('reading');
     expect(screen.getByRole('button', { name: /Mark as done/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Set aside/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pause reading/ })).toBeInTheDocument();
   });
 
-  it('renders Re-open for done state', () => {
+  it('renders Resume reading for done state', () => {
     renderCard('done');
-    expect(screen.getByRole('button', { name: /Re-open paper/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Resume reading/ })).toBeInTheDocument();
   });
 
-  it('renders Restore + Delete Forever for trash state, no Star/Trash', () => {
+  it('renders Restore + Permanently delete for trash state, no Star/Trash', () => {
     renderCard('trash');
     expect(screen.getByRole('button', { name: /Restore paper/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Delete paper forever/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Permanently delete paper/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Star paper/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Trash paper/ })).not.toBeInTheDocument();
   });

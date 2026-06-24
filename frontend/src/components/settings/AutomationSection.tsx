@@ -313,11 +313,11 @@ export function AutomationSection() {
       {/* Auto-fetch interval — always visible regardless of nudge count */}
       {!isLoading && (
         <div>
-          <h3 className="text-base font-semibold mt-0 mb-2">Pipeline Settings</h3>
+          <h3 className="text-base font-semibold mt-0 mb-2">Paper fetching</h3>
           <Card className="rounded-md border-hair shadow-none">
             <CardContent className="flex items-center gap-4 p-4">
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm">Auto-fetch interval (hours)</div>
+                <div className="font-medium text-sm">Check for new papers every (hours)</div>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   How often the background pipeline fetches new papers from all sources
                 </p>

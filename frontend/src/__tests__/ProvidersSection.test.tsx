@@ -146,6 +146,45 @@ describe('ProvidersSection', () => {
     });
   });
 
+  it('does NOT call setProviderKey on blur when draft is cleared to blank (blank is not delete)', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(MASKED_CONFIG);
+    const user = userEvent.setup();
+    renderSection();
+
+    await waitFor(() => {
+      expect(document.getElementById('provider-key-anthropic')).toBeInTheDocument();
+    });
+    const anthropicInput = document.getElementById('provider-key-anthropic') as HTMLInputElement;
+    // Clear the masked value to empty, then blur. The stored key must survive —
+    // a blank draft is "left empty", not "delete the key".
+    await user.clear(anthropicInput);
+    await user.tab();
+
+    await waitFor(() => {
+      // After blur the draft resets to null, so the masked value re-displays.
+      expect(anthropicInput.value).toBe('sk-ant-a****');
+    });
+    expect(vi.mocked(setProviderKey)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call setProviderKey on blur when draft is whitespace-only', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(MASKED_CONFIG);
+    const user = userEvent.setup();
+    renderSection();
+
+    await waitFor(() => {
+      expect(document.getElementById('provider-key-anthropic')).toBeInTheDocument();
+    });
+    const anthropicInput = document.getElementById('provider-key-anthropic') as HTMLInputElement;
+    await user.clear(anthropicInput);
+    await user.type(anthropicInput, '   ');
+    await user.tab();
+
+    await waitFor(() => {
+      expect(vi.mocked(setProviderKey)).not.toHaveBeenCalled();
+    });
+  });
+
   it('calls testProvider with correct provider on Test button click', async () => {
     vi.mocked(testProvider).mockResolvedValue({ ok: true, error: null });
     const user = userEvent.setup();

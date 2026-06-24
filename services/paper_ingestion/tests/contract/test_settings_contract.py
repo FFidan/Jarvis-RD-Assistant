@@ -91,6 +91,46 @@ async def test_list_config_returns_list(pi_settings_client):
     assert isinstance(body, list)
 
 
+async def test_list_config_user_row_wins_over_null_row(
+    contract_conn, contract_two_users, pi_settings_client
+):
+    """When both a user-specific row and a NULL-user row exist for the same key,
+    GET /api/config (non-admin browser user) returns the USER row, not the global.
+
+    Locks in the DISTINCT ON (key) ... ORDER BY key, user_id IS NULL precedence:
+    in Postgres `false < true`, so the user row (user_id IS NULL → false) sorts
+    first and DISTINCT ON keeps it. (Audit fix #4 was REFUTED — no code change.)
+    """
+    key = "recommendation.liked_weight"  # PERSONAL_KEY, non-secret, raw value
+    user_a = contract_two_users.user_a_id
+
+    # Global (NULL-user) row.
+    await contract_conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES (NULL, $1, $2::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value""",
+        key,
+        "0.1",
+    )
+    # User-specific row for the calling user (cookie_a → user_a).
+    await contract_conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES ($1, $2, $3::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value""",
+        user_a,
+        key,
+        "0.9",
+    )
+
+    resp = await pi_settings_client.get("/api/config")
+    assert resp.status_code == 200
+    by_key = {e["key"]: e["value"] for e in resp.json()}
+    # asyncpg's jsonb codec stores the Python str inputs as JSON strings.
+    assert by_key.get(key) == "0.9", (
+        f"User row (0.9) must shadow the global row (0.1) for {key!r}; got {by_key.get(key)!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # PUT + GET round-trip for a known safe key (pulse.deck_size — integer)
 #

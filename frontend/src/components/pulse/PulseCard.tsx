@@ -35,6 +35,7 @@ export interface PulseCardProps {
    * Save button to prevent double-tap firing the save twice (DOM-F-03).
    */
   savePending?: boolean;
+  degraded?: boolean;
 }
 
 /**
@@ -52,6 +53,7 @@ export function PulseCard({
   rated = false,
   hideTrashAndReject = false,
   savePending = false,
+  degraded = false,
 }: PulseCardProps) {
   const queryClient = useQueryClient();
 
@@ -160,7 +162,7 @@ export function PulseCard({
               #{card.rank}
             </Badge>
             <InfoTooltip
-              content={`Composite score: ${card.score.toFixed(2)}`}
+              content={`Overall score: ${card.score.toFixed(2)}`}
             />
             {(() => {
               const safePaperUrl = card.paper_url && (card.paper_url.startsWith('http://') || card.paper_url.startsWith('https://'))
@@ -258,8 +260,8 @@ export function PulseCard({
                 size="sm"
                 disabled={trashAndRejectMut.isPending}
                 onClick={() => trashAndRejectMut.mutate()}
-                title="Trash and don't recommend similar"
-                aria-label="Trash and reject"
+                title="Remove and show fewer like this"
+                aria-label="Remove and show fewer like this"
               >
                 <Trash2 size={14} />
                 <ThumbsDown size={12} className="ml-0.5 -mr-0.5" />
@@ -268,6 +270,7 @@ export function PulseCard({
           </div>
           <WhyPopover
             cardId={card.card_id}
+            degraded={degraded}
             trigger={
               <Button variant="ghost" size="sm" aria-label="Why?">
                 <HelpCircle className="mr-1 h-3.5 w-3.5" />

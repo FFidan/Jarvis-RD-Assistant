@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { CitationGraphPage } from '@/pages/CitationGraphPage';
+import { fetchCitationsFromS2 } from '@/lib/api';
 
 // Mock cytoscape so jsdom doesn't choke on canvas
 vi.mock('cytoscape', () => {
@@ -34,8 +35,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
         { source: 1, target: 10, is_influential: true, context: null },
       ],
     }),
-    batchFetchCitations: vi.fn().mockResolvedValue({
-      queued: 2, message: 'Queued 2 papers',
+    fetchCitationsFromS2: vi.fn().mockResolvedValue({
+      citations_added: 5, references_added: 3, stubs_created: 2,
     }),
   };
 });
@@ -119,5 +120,33 @@ describe('CitationGraphPage', () => {
     await waitFor(() => {
       expect(screen.getByText('1/10 papers selected')).toBeInTheDocument();
     });
+  });
+
+  it('disables Fetch Citations when no papers are selected', () => {
+    renderPage();
+    expect(screen.getByRole('button', { name: /Fetch Citations/i })).toBeDisabled();
+  });
+
+  it('fetches citations only for the selected papers', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const searchInput = screen.getByPlaceholderText('Search papers to add to citation graph...');
+    await user.type(searchInput, 'Attention');
+    await waitFor(() => {
+      expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
+    });
+    await user.click(screen.getByText('Attention Is All You Need'));
+    await waitFor(() => {
+      expect(screen.getByText('1/10 papers selected')).toBeInTheDocument();
+    });
+
+    const fetchButton = screen.getByRole('button', { name: /Fetch Citations/i });
+    expect(fetchButton).toBeEnabled();
+    await user.click(fetchButton);
+
+    await waitFor(() => {
+      expect(fetchCitationsFromS2).toHaveBeenCalledWith(1);
+    });
+    expect(fetchCitationsFromS2).toHaveBeenCalledTimes(1);
   });
 });

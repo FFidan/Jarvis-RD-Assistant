@@ -3,6 +3,39 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## v0.9.0 (2026-06-24) — Working daily Pulse, plain-language UI, clickable citations, citation export, and hardened backups & CI
+
+### Added
+- **Citation export.** Export or copy any paper's citation as BibTeX or RIS from the feed, the paper detail page, and the bulk-selection toolbar; bulk export concatenates the selected papers into one file. BibTeX is generated natively, without an external BibTeX runtime dependency.
+- **PubMed as a discovery source.** PubMed (NCBI E-utilities) is enabled as a selectable source in Discover.
+- **Restore points in the Backups panel.** The admin Backups panel groups archives into restore points (a point-in-time set across the databases, vectors, and secrets) showing completeness, encryption, size, and retention per point, with a collapsible per-file detail view.
+
+### Security
+- Pulse generation and the source-configuration listing now require an admin session.
+- The "generation already in progress" response no longer includes another user's job identifier.
+- Qdrant vector snapshots are now encrypted at rest with the backup key (previously the snapshot files were written unencrypted); a failed secrets archive is recorded as failed rather than skipped.
+- The CI security gate adds repository secret scanning and static analysis (CodeQL), and releases flag copyleft-licensed dependencies.
+
+### Changed
+- **Plain-language interface.** Researcher-facing screens were relabeled to remove implementation jargon (for example "excerpts" instead of "chunks/passages", "all papers" instead of "corpus", and clearer source and status labels), with labels centralized so they stay consistent across the app.
+- **Clickable citations.** Citations in answers link to the cited paper.
+- The backup status distinguishes the last attempt from the last success, so a failed run is visible instead of being masked by an older successful archive.
+
+### Fixed
+- **The daily Pulse computes AI relevance scores again.** The per-card scoring call to the local model now returns structured output successfully; when scoring is genuinely unavailable the deck shows a single calm "basic ranking" banner instead of a red "AI scoring unavailable" message on every card (including the "why this matched" popover).
+- Service health checks resolve to a status within a bounded time instead of showing "Checking services…" indefinitely; a check that cannot complete is reported as unknown rather than collapsing a real outage into "healthy".
+- Ask shows a guided empty-state when no analyzed papers exist, and a failed question renders a friendly error with a Retry action instead of raw error text. Ask no longer shows that empty-state while the library check is still loading or has failed.
+- Knowledge Graph nodes open a detail panel, and graph-query results render as cards rather than raw JSON; graph layout and labels are less cramped.
+- The citation graph honors the current paper selection instead of fetching across the whole library.
+- The Zotero polling cursor is persisted for the shared (no-user) configuration, preventing a repeated re-poll from the beginning.
+- A provider API key is no longer cleared when its field loses focus while empty.
+- The restore runbook references the actual Qdrant collections (`kg_entities`, `paper_chunks`) and notes the decrypt-first step for encrypted snapshots.
+- The Backups panel shows a distinct loading state instead of briefly reading "backup service not running", and reports an explicit "status unavailable" state when the status check fails.
+
+### Internal
+- Widened the supported FastAPI range and migrated route enumeration to the version-stable API.
+- Added a first-run clean-machine smoke check to CI.
+
 ## v0.8.8 (2026-06-18) — Cross-tenant data-scoping, ingestion recovery, an admin Backups panel, and the sign-in-method reframe
 
 ### Added

@@ -57,3 +57,89 @@ jobs:
         with:
           name: sbom-node
           path: frontend/sbom-node.json
+
+  # Inventory dependency licenses and surface copyleft (GPL/AGPL/LGPL/MPL/EUPL)
+  # for release-time legal review. Warn-only: this runs on release, not as a PR
+  # gate, so a transitive copyleft dep is a review item, not an automatic build
+  # break. Tool/setup failures still fail the job.
+  license-scan:
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: ${{ vars.JARVIS_RUNNER == '' }}
+
+      - name: Sync Python dependencies
+        run: uv sync
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Scan Python licenses (copyleft = warn)
+        run: |
+          uv tool run pip-licenses --format=json > licenses-python.json
+          python3 - <<'PY'
+          import json, os, re
+          data = json.load(open("licenses-python.json"))
+          pat = re.compile(r"GPL|AGPL|LGPL|MPL|EUPL|copyleft", re.I)
+          hits = [(d.get("Name", "?"), d.get("Version", "?"), d.get("License", "?"))
+                  for d in data if pat.search(d.get("License", ""))]
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
+          with open(summary, "a") as fh:
+              fh.write(f"## Python license scan\n\n")
+              fh.write(f"- packages scanned: **{len(data)}**\n")
+              fh.write(f"- copyleft hits (GPL/AGPL/LGPL/MPL/EUPL): **{len(hits)}**\n\n")
+              if hits:
+                  fh.write("| Package | Version | License |\n|---|---|---|\n")
+                  for name, ver, lic in sorted(hits):
+                      fh.write(f"| {name} | {ver} | {lic} |\n")
+                  fh.write("\n_Review these for release at the legal-review step._\n\n")
+          if hits:
+              print(f"::warning title=Python copyleft licenses::{len(hits)} "
+                    f"copyleft dependency licenses found — review for release: "
+                    + ", ".join(f"{n} ({l})" for n, _, l in sorted(hits)))
+          PY
+
+      - name: Scan Node licenses (copyleft = warn)
+        run: |
+          npx --yes license-checker-rseidelsohn --production --json > frontend/licenses-node.json
+          python3 - <<'PY'
+          import json, os, re
+          data = json.load(open("frontend/licenses-node.json"))
+          pat = re.compile(r"GPL|AGPL|LGPL|MPL|EUPL|copyleft", re.I)
+          hits = [(pkg, info.get("licenses", "?"))
+                  for pkg, info in data.items()
+                  if pat.search(str(info.get("licenses", "")))]
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
+          with open(summary, "a") as fh:
+              fh.write(f"## Node license scan\n\n")
+              fh.write(f"- packages scanned: **{len(data)}**\n")
+              fh.write(f"- copyleft hits (GPL/AGPL/LGPL/MPL/EUPL): **{len(hits)}**\n\n")
+              if hits:
+                  fh.write("| Package | License |\n|---|---|\n")
+                  for pkg, lic in sorted(hits):
+                      fh.write(f"| {pkg} | {lic} |\n")
+                  fh.write("\n_Review these for release at the legal-review step._\n\n")
+          if hits:
+              print(f"::warning title=Node copyleft licenses::{len(hits)} "
+                    f"copyleft dependency licenses found — review for release: "
+                    + ", ".join(f"{p} ({l})" for p, l in sorted(hits)))
+          PY
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: license-inventory
+          path: |
+            licenses-python.json
+            frontend/licenses-node.json

@@ -124,7 +124,7 @@ const PROJECT_D: Project = {
 // ---------------------------------------------------------------------------
 
 describe('ChapterRail', () => {
-  it('renders § CHAPTERS header with project count', () => {
+  it('renders PROJECTS header with project count', () => {
     wrap(
       <ChapterRail
         projects={[BASE_PROJECT, PROJECT_B]}
@@ -132,7 +132,7 @@ describe('ChapterRail', () => {
         onSelect={vi.fn()}
       />,
     );
-    expect(screen.getByText(/§ CHAPTERS · 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/PROJECTS · 2/i)).toBeInTheDocument();
   });
 
   it('displays roman-numeral ordinals I, II, III for three projects', () => {
@@ -148,7 +148,7 @@ describe('ChapterRail', () => {
     expect(screen.getByText('III')).toBeInTheDocument();
   });
 
-  it('translates status labels: active→reading, paused→drafting, completed→shipped, archived→idle', () => {
+  it('translates status labels: active→In progress, paused→Draft, completed→Completed, archived→Archived', () => {
     wrap(
       <ChapterRail
         projects={[BASE_PROJECT, PROJECT_B, PROJECT_C, PROJECT_D]}
@@ -156,10 +156,10 @@ describe('ChapterRail', () => {
         onSelect={vi.fn()}
       />,
     );
-    expect(screen.getByText('reading')).toBeInTheDocument();
-    expect(screen.getByText('drafting')).toBeInTheDocument();
-    expect(screen.getByText('shipped')).toBeInTheDocument();
-    expect(screen.getByText('idle')).toBeInTheDocument();
+    expect(screen.getByText('In progress')).toBeInTheDocument();
+    expect(screen.getByText('Draft')).toBeInTheDocument();
+    expect(screen.getByText('Completed')).toBeInTheDocument();
+    expect(screen.getByText('Archived')).toBeInTheDocument();
   });
 
   it('shows paper_count and open_question_count including zeros', () => {
@@ -170,12 +170,12 @@ describe('ChapterRail', () => {
         onSelect={vi.fn()}
       />,
     );
-    // BASE_PROJECT: 3 papers, 2 Qs
+    // BASE_PROJECT: 3 papers, 2 Questions
     expect(screen.getByText('3 papers')).toBeInTheDocument();
-    expect(screen.getByText('2 Qs')).toBeInTheDocument();
-    // PROJECT_B: 0 papers, 0 Qs
+    expect(screen.getByText('2 Questions')).toBeInTheDocument();
+    // PROJECT_B: 0 papers, 0 Questions
     expect(screen.getByText('0 papers')).toBeInTheDocument();
-    expect(screen.getByText('0 Qs')).toBeInTheDocument();
+    expect(screen.getByText('0 Questions')).toBeInTheDocument();
   });
 
   it('highlights selected chapter row', () => {
@@ -208,7 +208,7 @@ describe('ChapterRail', () => {
     wrap(
       <ChapterRail projects={[]} selectedId={null} onSelect={vi.fn()} />,
     );
-    expect(screen.getByText(/no chapters yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no projects yet/i)).toBeInTheDocument();
   });
 
   it('coalesces missing paper_count/open_question_count to 0', () => {
@@ -221,7 +221,7 @@ describe('ChapterRail', () => {
       <ChapterRail projects={[noCountProject]} selectedId={null} onSelect={vi.fn()} />,
     );
     expect(screen.getByText('0 papers')).toBeInTheDocument();
-    expect(screen.getByText('0 Qs')).toBeInTheDocument();
+    expect(screen.getByText('0 Questions')).toBeInTheDocument();
   });
 });
 
@@ -263,9 +263,9 @@ describe('QuestionsSection', () => {
     mockDeleteQuestion.mockResolvedValue(undefined);
   });
 
-  it('renders § OPEN QUESTIONS header with count', () => {
+  it('renders OPEN QUESTIONS header with count', () => {
     wrap(<QuestionsSection projectId={1} questions={QUESTIONS} />);
-    expect(screen.getByText(/§ OPEN QUESTIONS · 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/OPEN QUESTIONS · 2/i)).toBeInTheDocument();
   });
 
   it('renders Q1, Q2 labels for each question', () => {
@@ -283,7 +283,7 @@ describe('QuestionsSection', () => {
   it('shows empty state when no questions', () => {
     wrap(<QuestionsSection projectId={1} questions={[]} />);
     expect(screen.getByText(/no open questions/i)).toBeInTheDocument();
-    expect(screen.getByText(/§ OPEN QUESTIONS · 0/i)).toBeInTheDocument();
+    expect(screen.getByText(/OPEN QUESTIONS · 0/i)).toBeInTheDocument();
   });
 
   it('calls createProjectQuestion when user submits a new question via button', async () => {
@@ -336,9 +336,9 @@ const ACTIVITY_ITEMS: ProjectActivityItem[] = [
 ];
 
 describe('RecentActivitySection', () => {
-  it('renders § RECENT ACTIVITY header', () => {
+  it('renders RECENT ACTIVITY header', () => {
     wrap(<RecentActivitySection items={ACTIVITY_ITEMS} />);
-    expect(screen.getByText(/§ RECENT ACTIVITY/i)).toBeInTheDocument();
+    expect(screen.getByText(/RECENT ACTIVITY/i)).toBeInTheDocument();
   });
 
   it('maps added_paper kind to ADDED prefix', () => {
@@ -417,53 +417,53 @@ describe('ProjectsPage shell', () => {
     });
   });
 
-  it('renders § CHAPTERS rail header', async () => {
+  it('renders PROJECTS rail header', async () => {
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/§ CHAPTERS · 2/i)).toBeInTheDocument();
+      expect(screen.getByText(/PROJECTS · 2/i)).toBeInTheDocument();
     });
   });
 
-  it('renders § OPEN QUESTIONS section in the document pane', async () => {
+  it('renders OPEN QUESTIONS section in the document pane', async () => {
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/§ OPEN QUESTIONS/i)).toBeInTheDocument();
+      expect(screen.getByText(/OPEN QUESTIONS ·/i)).toBeInTheDocument();
     });
   });
 
-  it('renders § RECENT ACTIVITY section in the document pane', async () => {
+  it('renders RECENT ACTIVITY section in the document pane', async () => {
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/§ RECENT ACTIVITY/i)).toBeInTheDocument();
+      expect(screen.getByText(/RECENT ACTIVITY/i)).toBeInTheDocument();
     });
   });
 
-  it('renders § MILESTONES · 0 header (live count) in document pane when no milestones', async () => {
+  it('renders MILESTONES · 0 header (live count) in document pane when no milestones', async () => {
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/§ MILESTONES · 0/i)).toBeInTheDocument();
+      expect(screen.getByText(/MILESTONES · 0/i)).toBeInTheDocument();
     });
   });
 
-  it('renders § MILESTONES · N header with correct live count', async () => {
+  it('renders MILESTONES · N header with correct live count', async () => {
     mockFetchMilestones.mockResolvedValue([
       { id: 1, project_id: 1, name: 'Draft complete', description: null, deadline: null, completed: false, completed_at: null, created_at: '2026-01-01T00:00:00Z' },
       { id: 2, project_id: 1, name: 'Submitted', description: null, deadline: null, completed: true, completed_at: '2026-01-02T00:00:00Z', created_at: '2026-01-02T00:00:00Z' },
     ]);
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/§ MILESTONES · 2/i)).toBeInTheDocument();
+      expect(screen.getByText(/MILESTONES · 2/i)).toBeInTheDocument();
     });
   });
 
-  it('renders § TASKS · 0 header (live count) in document pane when no tasks', async () => {
+  it('renders TASKS · 0 header (live count) in document pane when no tasks', async () => {
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/§ TASKS · 0/i)).toBeInTheDocument();
+      expect(screen.getByText(/TASKS · 0/i)).toBeInTheDocument();
     });
   });
 
-  it('renders § TASKS · N header with correct live count', async () => {
+  it('renders TASKS · N header with correct live count', async () => {
     mockFetchTasks.mockResolvedValue([
       { id: 10, project_id: 1, parent_task_id: null, title: 'Write intro', description: null, status: 'todo', priority: 3, deadline: null, estimated_hours: null, actual_hours: null, sort_order: 0, completed_at: null, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
       { id: 11, project_id: 1, parent_task_id: null, title: 'Run experiments', description: null, status: 'in_progress', priority: 2, deadline: null, estimated_hours: null, actual_hours: null, sort_order: 1, completed_at: null, created_at: '2026-01-02T00:00:00Z', updated_at: '2026-01-02T00:00:00Z' },
@@ -471,14 +471,14 @@ describe('ProjectsPage shell', () => {
     ]);
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/§ TASKS · 3/i)).toBeInTheDocument();
+      expect(screen.getByText(/TASKS · 3/i)).toBeInTheDocument();
     });
   });
 
-  it('renders § PAPERS section in the document pane', async () => {
+  it('renders PAPERS section in the document pane', async () => {
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/§ PAPERS/i)).toBeInTheDocument();
+      expect(screen.getByText(/PAPERS ·/i)).toBeInTheDocument();
     });
   });
 
@@ -489,19 +489,19 @@ describe('ProjectsPage shell', () => {
     });
   });
 
-  it('shows empty chapter pane prompt when no projects exist', async () => {
+  it('shows empty project pane prompt when no projects exist', async () => {
     mockFetchProjects.mockResolvedValue([]);
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/select a chapter/i)).toBeInTheDocument();
+      expect(screen.getByText(/select a project/i)).toBeInTheDocument();
     });
   });
 
-  it('shows translated status chip in rail (active → reading)', async () => {
+  it('shows translated status chip in rail (active → In progress)', async () => {
     wrap(<ProjectsPage />);
     await waitFor(() => {
-      // "reading" appears at least once in the rail and/or breadcrumb status select
-      expect(screen.getAllByText('reading').length).toBeGreaterThan(0);
+      // "In progress" appears at least once in the rail and/or breadcrumb status select
+      expect(screen.getAllByText('In progress').length).toBeGreaterThan(0);
     });
   });
 
@@ -569,15 +569,15 @@ describe('Existing functionality preserved', () => {
     expect(screen.getByText(/delete project\?/i)).toBeInTheDocument();
   });
 
-  it('Create chapter button opens Create Project dialog', async () => {
+  it('New Project button opens Create Project dialog', async () => {
     wrap(<ProjectsPage />);
     await waitFor(
       () => {
-        expect(screen.getByText(/new chapter/i)).toBeInTheDocument();
+        expect(screen.getByText(/new project/i)).toBeInTheDocument();
       },
       { timeout: 5000 },
     );
-    await userEvent.click(screen.getByText(/new chapter/i));
+    await userEvent.click(screen.getByText(/new project/i));
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /create project/i })).toBeInTheDocument();
     });

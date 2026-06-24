@@ -170,7 +170,7 @@ function HardDeleteModalBulk({
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction onClick={handleConfirm} autoFocus>
-            Delete forever
+            Permanently delete
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

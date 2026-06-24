@@ -140,7 +140,7 @@ export function JobsIndicator() {
           size="icon"
           className="relative h-8 w-8"
           title={`${runningCount} job${runningCount !== 1 ? 's' : ''} running`}
-          aria-label="Background jobs"
+          aria-label="Background tasks"
         >
           <Activity className="h-4 w-4" />
           {runningCount > 0 && (
@@ -156,7 +156,7 @@ export function JobsIndicator() {
         sideOffset={8}
       >
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-sm font-semibold">Background Jobs</span>
+          <span className="text-sm font-semibold">Background tasks</span>
           {runningCount > 0 && (
             <span className="text-xs text-muted-foreground">
               {runningCount} running

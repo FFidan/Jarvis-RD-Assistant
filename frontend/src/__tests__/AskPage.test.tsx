@@ -13,6 +13,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AskPage } from '@/pages/AskPage';
+import { fetchDashboardMetrics } from '@/lib/api';
 import { QUERY_KEYS } from '@/lib/query-keys';
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,13 @@ vi.mock('@/lib/sse', () => ({
     yield { type: 'done', model_used: null };
   }),
 }));
+
+// Partial-mock the API barrel so the metrics query can be forced to fail while
+// the rest of @/lib/api (used by StreamingChat) stays real.
+vi.mock('@/lib/api', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/api')>();
+  return { ...actual, fetchDashboardMetrics: vi.fn() };
+});
 
 // Mock auth store (needed by downstream components)
 vi.mock('@/stores/auth-store', () => ({
@@ -127,9 +135,48 @@ describe('AskPage', () => {
     expect(screen.getByTestId('ask-page')).toBeInTheDocument();
   });
 
-  it('gates the input when the library has no analyzed papers', () => {
+  it('shows the onboarding empty-state (explainer + CTA) instead of a dead input when no analyzed papers', () => {
     renderAskPage(0);
-    const textarea = screen.getByPlaceholderText(/Ask a question/);
-    expect(textarea).toBeDisabled();
+    // No chat input is rendered in the empty-state.
+    expect(screen.queryByPlaceholderText(/Ask a question/)).not.toBeInTheDocument();
+    // Onboarding guidance is shown.
+    const emptyState = screen.getByTestId('ask-empty-state');
+    expect(emptyState).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Nothing to ask yet' })).toBeInTheDocument();
+    expect(screen.getByText(/Import and analyze at least one paper/)).toBeInTheDocument();
+    // Primary CTA links to the discover/import surface.
+    const cta = screen.getByRole('link', { name: 'Find papers to analyze' });
+    expect(cta).toBeInTheDocument();
+    expect(cta).toHaveAttribute('href', '/feed?surface=search');
+  });
+
+  it('renders the chat input (not the empty-state) when analyzed papers exist', () => {
+    renderAskPage(1);
+    expect(screen.getByPlaceholderText(/Ask a question/)).toBeInTheDocument();
+    expect(screen.queryByTestId('ask-empty-state')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the chat workspace (not the empty-state) when the metrics request fails', async () => {
+    // Invariant #1: a failed request must render a degraded/working state, never a
+    // misleading empty-state. With no cached metrics and a rejecting query, the
+    // page must NOT claim "Nothing to ask yet".
+    vi.mocked(fetchDashboardMetrics).mockRejectedValue(new Error('metrics down'));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <AskPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchDashboardMetrics)).toHaveBeenCalled();
+    });
+    expect(screen.queryByTestId('ask-empty-state')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Ask a question/)).toBeInTheDocument();
   });
 });

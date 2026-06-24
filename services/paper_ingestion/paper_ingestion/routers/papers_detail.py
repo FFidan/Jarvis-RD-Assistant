@@ -1,17 +1,27 @@
 """Paper detail and batch-save endpoints: get_paper_detail, batch_save_papers."""
 
 import logging
+import re
 import uuid
 from typing import Annotated
 from urllib.parse import urlparse
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi.responses import Response
 from jarvis_common import ErrorResponse
 from jarvis_common.auth import get_current_user_id
 from jarvis_common.library import add_to_library
 
 from paper_ingestion import papers_service
+from paper_ingestion.citation_format import (
+    CitationBulkRequest,
+    CitationFormat,
+    build_citations,
+    content_type,
+    file_extension,
+)
+from paper_ingestion.citations import _filter_visible_paper_ids
 from paper_ingestion.converters import (
     row_to_chunk_response,
     row_to_paper_response,
@@ -159,6 +169,69 @@ async def get_paper_detail(
         has_project_links=has_project_links,
         processing_failed=processing_failed,
     )
+
+
+# ---------------------------------------------------------------------------
+# Citation export (BibTeX / RIS)
+# ---------------------------------------------------------------------------
+
+
+def _safe_filename(stem: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_\-]", "_", stem)[:100]
+
+
+def _citation_response(text: str, fmt: CitationFormat, stem: str) -> Response:
+    filename = f"{_safe_filename(stem)}.{file_extension(fmt)}"
+    return Response(
+        content=text,
+        media_type=content_type(fmt),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{paper_id}/citation")
+@limiter.limit("60/minute")
+async def get_paper_citation(
+    request: Request,
+    paper_id: int,
+    format: CitationFormat = CitationFormat.BIBTEX,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
+) -> Response:
+    """Return a single paper's citation as BibTeX or RIS text (file-download)."""
+    async with db_pool.acquire() as conn:
+        await papers_service.assert_paper_ownership(conn, paper_id, user_id)
+        paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+        if not paper_row:
+            raise HTTPException(status_code=404, detail="Paper not found")
+
+    text = build_citations([paper_row], format)
+    stem = paper_row["zotero_citation_key"] or f"paper-{paper_id}"
+    return _citation_response(text, format, stem)
+
+
+@router.post("/citations")
+@limiter.limit("60/minute")
+async def get_papers_citations(
+    request: Request,
+    body: CitationBulkRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
+) -> Response:
+    """Return concatenated citations for the caller-visible subset of paper_ids.
+
+    Input order is preserved; ids the caller cannot see are silently dropped.
+    """
+    async with db_pool.acquire() as conn:
+        visible_ids = await _filter_visible_paper_ids(conn, body.paper_ids, user_id)
+        if not visible_ids:
+            raise HTTPException(status_code=404, detail="No citable papers found")
+        rows = await conn.fetch("SELECT * FROM papers WHERE id = ANY($1::int[])", visible_ids)
+
+    rows_by_id = {row["id"]: row for row in rows}
+    ordered = [rows_by_id[pid] for pid in body.paper_ids if pid in rows_by_id]
+    text = build_citations(ordered, body.format)
+    return _citation_response(text, body.format, "citations")
 
 
 # ---------------------------------------------------------------------------

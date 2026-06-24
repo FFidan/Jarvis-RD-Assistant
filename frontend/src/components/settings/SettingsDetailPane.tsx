@@ -50,23 +50,23 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
     sources: 'Sources',
   },
   models: {
-    llm: 'LLM Models',
+    llm: 'AI models',
     providers: 'Cloud Providers',
-    // Stale ?item=ai deep-links now land on the consolidated LLM Models page.
-    ai: 'LLM Models',
+    // Stale ?item=ai deep-links now land on the consolidated AI models page.
+    ai: 'AI models',
   },
   system: {
     automation: 'Automation',
     extraction: 'Extraction Templates',
-    smtp: 'Email / SMTP',
+    smtp: 'Email (SMTP)',
     pulse: 'Pulse',
     timer: 'Timer',
-    observability: 'Observability',
+    observability: 'Monitoring (Langfuse)',
     mode: 'Sign-in Method',
   },
   integrations: {
     telegram: 'Telegram',
-    'bot-token': 'Bot Token',
+    'bot-token': 'Telegram bot key',
     zotero: 'Zotero',
   },
   research: {
@@ -124,13 +124,13 @@ function DetailContent({
   }
 
   if (section === 'models') {
-    // LLM Models is the single authoritative model plane. Backend & hardware
+    // AI models is the single authoritative model plane. Backend & hardware
     // controls live behind an "Advanced" disclosure here rather than as a peer
     // rail item, so the two planes can't drift or contradict each other.
     if (item === 'llm' || item === 'ai') {
       return (
         <div className="space-y-6">
-          <IngestionSection filterGroups={['LLM Models']} />
+          <IngestionSection filterGroups={['AI models']} />
           <details className="rounded-md border border-hair" data-testid="advanced-backend-disclosure">
             <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
               Advanced: backend &amp; hardware

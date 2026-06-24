@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/tooltip';
 import { PriorityBadge } from '@/components/paper/PriorityBadge';
 import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
+import { CitationMenu } from '@/components/citation/CitationMenu';
 import { formatAuthors, formatDate } from '@/lib/utils';
 import { type FeedPaper, type SurfaceView, priorityLevel } from '@/types';
 
@@ -37,10 +38,10 @@ const STATE_BADGE_CLASSES: Record<string, string> = {
 const STATE_TOOLTIP: Record<string, string> = {
   inbox: 'State: Inbox — New, unread paper. Save to add to your Reading List, or Skip to archive.',
   to_read:
-    'State: Reading List — Saved for later. Mark Reading when you start, or Mark Done when finished. Use Set Aside to push back to Reading List.',
+    'State: Reading List — Saved for later. Mark Reading when you start, or Mark Done when finished. Use Pause reading to push back to Reading List.',
   reading:
-    'State: Reading — Currently reading. Mark Done when finished, or Set Aside to push back to Reading List.',
-  done: 'State: Done — Finished reading. Re-open to move back to Reading.',
+    'State: Reading — Currently reading. Mark Done when finished, or Pause reading to push back to Reading List.',
+  done: 'State: Done — Finished reading. Resume reading to move back to Reading.',
   trash: 'State: Trash — Archived paper. Restore to return it, or permanently delete.',
 };
 
@@ -166,7 +167,7 @@ function FeedPaperRowInner({
               title={
                 paper.discovery_origin === 'pulse'
                   ? "Also in today's Pulse Deck"
-                  : 'Surfaced by the recommender'
+                  : 'Suggested by AI based on your interests'
               }
             >
               ✦ {paper.discovery_origin === 'pulse' ? 'Pulse' : 'Recommended'}
@@ -194,9 +195,18 @@ function FeedPaperRowInner({
           <div className="flex gap-1">
             {/* FeedPaper has no pdf_downloaded/has_chunks/has_summary at top-level — they come from LifecyclePaperResponse extensions */}
             {paper.has_chunks && (
-              <Badge variant="outline" className="px-1.5 py-0 text-xs">
-                Chunked
-              </Badge>
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="px-1.5 py-0 text-xs">
+                      Processed
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    PDF text prepared for AI search
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             {paper.has_summary && (
               <Badge variant="outline" className="px-1.5 py-0 text-xs">
@@ -427,10 +437,10 @@ function FeedPaperRowInner({
                           variant="outline"
                           size="sm"
                           onClick={() => onSetAside(paper.id)}
-                          aria-label={`Set aside ${paper.title}`}
+                          aria-label={`Pause reading ${paper.title}`}
                         >
                           <Library className="mr-1 h-3 w-3" />
-                          Set Aside
+                          Pause reading
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="top" className="text-xs">
@@ -523,14 +533,14 @@ function FeedPaperRowInner({
                           variant="outline"
                           size="sm"
                           onClick={() => onReopen(paper.id)}
-                          aria-label={`Re-open ${paper.title}`}
+                          aria-label={`Resume reading ${paper.title}`}
                         >
                           <RotateCcw className="mr-1 h-3 w-3" />
-                          Re-open
+                          Resume reading
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="top" className="text-xs">
-                        Re-open — moves Done → Reading
+                        Resume reading — moves Done → Reading
                       </TooltipContent>
                     </Tooltip>
                   )}
@@ -615,7 +625,7 @@ function FeedPaperRowInner({
                           aria-label={`Permanently delete ${paper.title}`}
                         >
                           <X className="mr-1 h-3 w-3" />
-                          Delete forever
+                          Permanently delete
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="top" className="text-xs">
@@ -625,6 +635,8 @@ function FeedPaperRowInner({
                   )}
                 </>
               )}
+
+              <CitationMenu paperIds={[paper.id]} />
 
               {/* View */}
               {onView && (

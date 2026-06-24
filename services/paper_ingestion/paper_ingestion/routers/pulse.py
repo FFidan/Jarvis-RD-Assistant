@@ -23,6 +23,7 @@ from jarvis_common import (
     current_user_id_strict_with_owner_override,
     get_current_user_id,
     log_audit,
+    require_admin,
 )
 from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.paper_state import trash_paper as _trash_paper
@@ -73,6 +74,7 @@ async def generate_pulse(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     current_uid: int = Depends(get_current_user_id),
+    _admin: None = Depends(require_admin),
 ) -> PulseGenerateResponse:
     """Enqueue an on-demand Pulse deck generation job.
 
@@ -98,12 +100,16 @@ async def generate_pulse(
             # Free immediately — we only probed; the actual job holds its own lock
             await probe_conn.execute("SELECT pg_advisory_unlock($1, $2)", key1, key2)
         else:
-            # Lock is held — find the in-flight job for the response body (best-effort)
+            # Lock is held — find the caller's own in-flight job for the response
+            # body (best-effort). Scoped to current_uid so the 409 never discloses
+            # another user's job id.
             in_flight = await probe_conn.fetchrow(
                 "SELECT id FROM procrastinate_jobs"
                 " WHERE task_name LIKE '%pulse.generate%'"
                 " AND status IN ('doing', 'todo')"
-                " ORDER BY id DESC LIMIT 1"
+                " AND args->>'user_id' = $1::text"
+                " ORDER BY id DESC LIMIT 1",
+                str(current_uid),
             )
             raise HTTPException(
                 status_code=409,

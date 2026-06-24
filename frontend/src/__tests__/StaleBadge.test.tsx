@@ -19,7 +19,7 @@ describe('StaleBadge', () => {
     render(<StaleBadge ageDays={2} diagnostics={null} />);
     await user.click(screen.getByTestId('stale-badge'));
     await waitFor(() => {
-      expect(screen.getByText('Stale Pulse Deck')).toBeInTheDocument();
+      expect(screen.getByText('Outdated recommendations')).toBeInTheDocument();
     });
   });
 

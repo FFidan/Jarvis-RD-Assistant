@@ -18,8 +18,8 @@ const BASE_CLASS = 'font-mono text-[11px] uppercase tracking-widest text-meta';
  * Use this in place of ad-hoc `<h3 class="font-mono text-[11px] uppercase
  * tracking-widest text-meta">...</h3>` elements (see AppearanceSection,
  * AutomationSection). For section-level markers that head a group of
- * sibling sub-blocks, use `MarkerCaption` instead — it renders `§ {marker}`
- * with the leading § symbol.
+ * sibling sub-blocks, use `MarkerCaption` instead — it renders the
+ * tracked-uppercase eyebrow micro-label.
  *
  * See the typography contract: `docs/typography-contract.md`.
  */

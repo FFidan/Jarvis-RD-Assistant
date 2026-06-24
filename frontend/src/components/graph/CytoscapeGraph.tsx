@@ -76,19 +76,27 @@ export function CytoscapeGraph({
         ? {
             name: 'cose',
             animate: false,
+            fit: true,
+            padding: 40,
+            // Spread disconnected components and reduce node overlap so labels
+            // below each node have room and do not collide.
+            componentSpacing: 120,
+            nodeOverlap: 24,
             nodeRepulsion: () => 8000,
             idealEdgeLength: () => 120,
             gravity: 0.25,
           }
         : layout === 'breadthfirst'
-          ? { name: 'breadthfirst', directed: true, spacingFactor: 1.2 }
+          ? { name: 'breadthfirst', directed: true, spacingFactor: 1.2, fit: true, padding: 40 }
           : layout === 'concentric'
             ? {
                 name: 'concentric',
                 concentric: (n: cytoscape.NodeSingular) => n.degree(false),
                 levelWidth: () => 2,
+                fit: true,
+                padding: 40,
               }
-            : { name: 'circle' };
+            : { name: 'circle', fit: true, padding: 40 };
 
     const cy = cytoscape({
       container: containerRef.current,
@@ -149,6 +157,12 @@ export function CytoscapeGraph({
     cy.on('tap', 'node', (evt) => {
       const nodeId = evt.target.id();
       handleNodeClick(nodeId);
+    });
+
+    // Re-fit once the layout settles so node labels (rendered below each node)
+    // are not clipped at the viewport edge.
+    cy.on('layoutstop', () => {
+      cy.fit(undefined, 40);
     });
 
     cyRef.current = cy;

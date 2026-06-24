@@ -76,8 +76,8 @@ describe('AIPanel', () => {
     vi.mocked(api.getAISettings).mockResolvedValue(baseSettings as any);
     render(wrap(<AIPanel />));
     await screen.findByText(/ge-48/);
-    expect(screen.getByRole('button', { name: /High-Performance \(vLLM\)/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Local \(Ollama\)/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /vLLM \(high-throughput\)/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Ollama \(default\)/ })).toBeInTheDocument();
   });
 
   it('guides the user instead of dead-ending when a backend has no candidates for the tier', async () => {
@@ -97,13 +97,13 @@ describe('AIPanel', () => {
 
     // configured_backend=vllm is not selectable (no vllm candidate) so the panel
     // opens on the recommended ollama backend; click vllm to reach the empty state.
-    const vllmButton = await screen.findByRole('button', { name: /High-Performance \(vLLM\)/ });
+    const vllmButton = await screen.findByRole('button', { name: /vLLM \(high-throughput\)/ });
     fireEvent.click(vllmButton);
 
     const guidance = await screen.findByTestId('no-candidates-guidance');
     expect(guidance).toHaveTextContent(/no curated model for your hardware tier/i);
-    expect(guidance).toHaveTextContent(/Local \(Ollama\)/);
-    expect(guidance).toHaveTextContent(/LLM Models page/i);
+    expect(guidance).toHaveTextContent(/Ollama \(default\)/);
+    expect(guidance).toHaveTextContent(/AI models page/i);
   });
 
   it('shows offline banner when observed != configured', async () => {

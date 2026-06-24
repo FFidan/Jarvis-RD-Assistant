@@ -62,6 +62,28 @@ function makeWithDown(count: number): StackHealthSummary {
   };
 }
 
+/**
+ * The synthesized degraded summary fetchStackHealth resolves to when the health
+ * probes don't respond within the deadline: every service 'unknown', overall
+ * 'unknown'. The UI must leave the "Checking…" state and render unknown dots.
+ */
+function makeAllUnknown(): StackHealthSummary {
+  return {
+    overall: 'unknown',
+    degradedCount: 0,
+    downCount: 0,
+    services: [
+      { name: 'paper_ingestion', label: 'Paper Ingestion', status: 'unknown' },
+      { name: 'learning_engine', label: 'Learning Engine', status: 'unknown' },
+      { name: 'postgres', label: 'PostgreSQL', status: 'unknown' },
+      { name: 'qdrant', label: 'Qdrant', status: 'unknown' },
+      { name: 'ollama', label: 'Ollama', status: 'unknown' },
+      { name: 'litellm', label: 'LiteLLM', status: 'unknown' },
+      { name: 'vector', label: 'Vector', status: 'unknown' },
+    ],
+  };
+}
+
 function makeWithDegraded(count: number): StackHealthSummary {
   const base = makeAllOk();
   const services = base.services.map((s, i) =>
@@ -243,6 +265,36 @@ describe('HealthDots', () => {
     renderHealthDots();
 
     expect(screen.getByTestId('health-dots-loading')).toBeInTheDocument();
+  });
+
+  it('settles to degraded "Status unknown" dots (not stuck "Checking…") when the probe times out', async () => {
+    // fetchStackHealth applies its own hard deadline and resolves to an
+    // all-unknown summary when the probes hang; simulate that resolved value.
+    mockFetchStackHealth.mockResolvedValue(makeAllUnknown());
+    renderHealthDots();
+
+    // The pill must appear (i.e. we left the "Checking…" state).
+    await waitFor(() => {
+      expect(screen.getByTestId('health-pill-toggle')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Checking services…')).not.toBeInTheDocument();
+    expect(screen.getByText('Status unknown')).toBeInTheDocument();
+
+    // Expanding shows every service as 'unknown' (degraded/unknown style dots).
+    fireEvent.click(screen.getByTestId('health-pill-toggle'));
+    const pgRow = screen.getByTestId('health-row-postgres');
+    expect(pgRow.querySelector('[aria-label*="unknown"]')).toBeInTheDocument();
+  });
+
+  it('compact mode renders unknown dots (not stuck "Checking…") when the probe times out', async () => {
+    mockFetchStackHealth.mockResolvedValue(makeAllUnknown());
+    renderHealthDots(/* compact= */ true);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('health-dots-compact')).toBeInTheDocument();
+    });
+    // Loading placeholder must be gone once the (degraded) summary settles.
+    expect(screen.queryByTestId('health-dots-loading')).not.toBeInTheDocument();
   });
 
   it('does not flash "Checking services…" during refetch when cached data exists', async () => {

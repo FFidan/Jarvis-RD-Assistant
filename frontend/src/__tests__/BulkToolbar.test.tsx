@@ -159,10 +159,10 @@ describe('BulkToolbar', () => {
 
   // --- Additional toolbar tests ---
 
-  it('surface=trash renders Delete forever button when papers selected', () => {
+  it('surface=trash renders Permanently delete button when papers selected', () => {
     useBulkSelection.setState({ selectedIds: new Set([1, 2]) });
     renderToolbar('trash', [1, 2]);
-    expect(screen.getByRole('button', { name: /Delete forever/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Permanently delete/i })).toBeInTheDocument();
   });
 
   it('save label reads "Save to Reading List" not "Save to Library"', () => {
@@ -191,10 +191,10 @@ describe('BulkToolbar', () => {
     expect(selectedIds.size).toBe(0);
   });
 
-  it('Delete forever on trash surface opens confirmation modal', async () => {
+  it('Permanently delete on trash surface opens confirmation modal', async () => {
     useBulkSelection.setState({ selectedIds: new Set([1, 2]) });
     renderToolbar('trash', [1, 2]);
-    await userEvent.click(screen.getByRole('button', { name: /Delete forever/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Permanently delete/i }));
     // Modal should appear with the bulk title
     expect(screen.getByText(/Permanently delete 2 papers\?/i)).toBeInTheDocument();
   });

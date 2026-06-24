@@ -175,11 +175,108 @@ jobs:
           exit 0
 
   # ---------------------------------------------------------------------------
+  # gitleaks — Secret scan over the FULL git history (every commit).
+  # Version pin: v8.30.1 (latest stable 8.x at 2026-06-24; update via dependabot).
+  # Uses the prebuilt binary (mirrors the osv-scanner pattern; no Go toolchain on
+  # the self-hosted runner). Allowlist for non-secrets lives in .gitleaks.toml.
+  # ---------------------------------------------------------------------------
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0  # full history — `gitleaks detect` scans every commit
+
+      - name: Install gitleaks v8.30.1 (prebuilt binary; no Go toolchain)
+        run: |
+          curl -fsSL -o /tmp/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          # Integrity check: verify the tarball matches the SHA-256 published in
+          # gitleaks_8.30.1_checksums.txt for v8.30.1 before extracting/executing
+          # (supply-chain defence; mirrors the osv-scanner integrity check above).
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz" | sha256sum -c
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          chmod +x /tmp/gitleaks
+          /tmp/gitleaks version
+
+      - name: Run gitleaks (full history)
+        # --redact: never print a matched secret to the log.
+        # --exit-code 1: fail the job if any (non-allowlisted) leak is found.
+        run: /tmp/gitleaks detect --source . --config .gitleaks.toml --redact --exit-code 1 --verbose
+
+  # ---------------------------------------------------------------------------
+  # codeql — Static analysis (code scanning) for Python and JS/TS.
+  # Interpreted languages use the no-build path (build-mode: none).
+  # Pin: github/codeql-action v4.36.2.
+  # NOTE: this job's green run is deferred to the v0.9.0 PR (no CodeQL CLI to
+  # validate locally); the YAML/SHAs/permissions are pinned and reviewed here.
+  # ---------------------------------------------------------------------------
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    # Code scanning (SARIF upload) requires GitHub Advanced Security on a PRIVATE
+    # repo and is free once the repo is public. Run CodeQL only when the repo is
+    # public, so it auto-activates at the public flip with no further edit; while
+    # private it is skipped and the security-gate below tolerates the skip.
+    if: ${{ github.event.repository.private == false }}
+    permissions:
+      security-events: write  # required to upload SARIF results to code scanning
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none  # interpreted languages — no compilation step needed
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # ---------------------------------------------------------------------------
   # security-gate — Enforced as a required status check via branch protection (not via cross-workflow needs:).
   security-gate:
     name: Security gate
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
-    needs: [pip-audit, npm-audit, osv-scanner, docker-build-smoke]
+    needs: [pip-audit, npm-audit, osv-scanner, docker-build-smoke, gitleaks, codeql]
+    # always() so the gate reports a definitive pass/fail even when codeql is
+    # SKIPPED on a private repo (see the codeql job). Job results are read via env
+    # and checked explicitly — a skipped codeql is acceptable, any failure is not.
+    if: always()
     steps:
-      - name: All security jobs passed
-        run: echo "pip-audit + npm-audit + osv-scanner + docker-build-smoke all green"
+      - name: Verify security jobs
+        env:
+          PIP_AUDIT: ${{ needs.pip-audit.result }}
+          NPM_AUDIT: ${{ needs.npm-audit.result }}
+          OSV_SCANNER: ${{ needs.osv-scanner.result }}
+          DOCKER_SMOKE: ${{ needs.docker-build-smoke.result }}
+          GITLEAKS: ${{ needs.gitleaks.result }}
+          CODEQL: ${{ needs.codeql.result }}
+        run: |
+          fail=0
+          for pair in "pip-audit=$PIP_AUDIT" "npm-audit=$NPM_AUDIT" \
+                      "osv-scanner=$OSV_SCANNER" "docker-build-smoke=$DOCKER_SMOKE" \
+                      "gitleaks=$GITLEAKS"; do
+            name="${pair%%=*}"; result="${pair##*=}"
+            if [ "$result" != "success" ]; then
+              echo "::error::required security job '$name' did not succeed (result=$result)"
+              fail=1
+            fi
+          done
+          # CodeQL gates only when it actually ran (public repo). 'skipped' is
+          # acceptable while the repo is private; anything else is a failure.
+          case "$CODEQL" in
+            success) echo "codeql: success" ;;
+            skipped) echo "::notice::codeql skipped (private repo — code scanning activates at the public flip)" ;;
+            *) echo "::error::codeql did not succeed (result=$CODEQL)"; fail=1 ;;
+          esac
+          [ "$fail" -eq 0 ] && echo "Security gate: all required security jobs are green."
+          exit "$fail"

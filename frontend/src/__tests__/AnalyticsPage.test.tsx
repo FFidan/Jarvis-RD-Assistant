@@ -1,7 +1,7 @@
 /**
  * AnalyticsPage unit tests — covers the Analytics IA:
  *  - Breadcrumb ("Learn" group), hero "Analytics", period subtitle
- *  - § section markers (REVIEW · N DAYS, READING CADENCE, LIBRARY, REVIEWS, COST)
+ *  - section markers (REVIEW · N DAYS, READING CADENCE, LIBRARY, REVIEWS, COST)
  *  - KPI band renders via summaryQuery
  *  - DateRangeFilter drives days param into summary + chart queries
  *  - All six existing chart cards still render (regression guard)
@@ -86,9 +86,8 @@ describe('AnalyticsPage — Analytics IA', () => {
     expect(nav).toHaveTextContent('Learn');
   });
 
-  it('renders § REVIEW · 30 DAYS marker with default days', () => {
+  it('renders REVIEW · 30 DAYS marker with default days', () => {
     renderPage();
-    // MarkerCaption prepends "§ " — check the marker text includes the period
     expect(screen.getByText(/REVIEW · 30 DAYS/i)).toBeInTheDocument();
   });
 
@@ -106,33 +105,32 @@ describe('AnalyticsPage — Analytics IA', () => {
 
   // ── Section markers ──────────────────────────────────────────────────────
 
-  it('renders § READING CADENCE section marker', () => {
+  it('renders READING CADENCE section marker', () => {
     renderPage();
     expect(screen.getByText(/READING CADENCE/i)).toBeInTheDocument();
   });
 
-  it('renders § LIBRARY section marker', () => {
+  it('renders LIBRARY section marker', () => {
     renderPage();
     expect(screen.getByText(/LIBRARY/i)).toBeInTheDocument();
   });
 
-  it('renders § REVIEWS section marker', () => {
+  it('renders REVIEWS section marker', () => {
     renderPage();
-    // MarkerCaption renders "§ " + "REVIEWS" as sibling text nodes inside a span.
-    // Match via the parent span's full textContent using a function matcher.
+    // MarkerCaption renders "REVIEWS" inside the eyebrow span.
     const el = screen.getByText((_, element) =>
       element?.tagName === 'SPAN' &&
-      (element.textContent ?? '') === '§ REVIEWS',
+      (element.textContent ?? '') === 'REVIEWS',
     );
     expect(el).toBeInTheDocument();
   });
 
-  it('renders § COST section marker', () => {
+  it('renders COST section marker', () => {
     renderPage();
-    // Same pattern — span textContent "§ COST".
+    // Same pattern — span textContent "COST".
     const el = screen.getByText((_, element) =>
       element?.tagName === 'SPAN' &&
-      (element.textContent ?? '') === '§ COST',
+      (element.textContent ?? '') === 'COST',
     );
     expect(el).toBeInTheDocument();
   });
@@ -219,7 +217,7 @@ describe('AnalyticsPage — Analytics IA', () => {
     });
   });
 
-  it('§ REVIEW marker updates to · 7 DAYS after clicking Last 7 days', async () => {
+  it('REVIEW marker updates to · 7 DAYS after clicking Last 7 days', async () => {
     renderPage();
     fireEvent.click(screen.getByText('Last 7 days'));
     await waitFor(() => {

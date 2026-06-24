@@ -391,8 +391,8 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByLabelText('Semantic Scholar')).toBeInTheDocument();
     expect(screen.getByLabelText('OpenAlex')).toBeInTheDocument();
     expect(screen.getByLabelText('PubMed')).toBeInTheDocument();
-    // Local source should not appear in the Search tab checkboxes
-    expect(screen.queryByLabelText('Local')).not.toBeInTheDocument();
+    // Local (uploaded PDF) source should not appear in the Search tab checkboxes
+    expect(screen.queryByLabelText('Uploaded PDF')).not.toBeInTheDocument();
   });
 
   it('search with only arxiv + pubmed checked passes correct source_types to API', async () => {

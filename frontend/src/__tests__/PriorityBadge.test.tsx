@@ -15,9 +15,9 @@ describe('PriorityBadge', () => {
     expect(badge).toHaveAttribute('data-state', 'closed');
   });
 
-  it('renders "MUST READ" for must-read level', () => {
+  it('renders "Must read" for must-read level', () => {
     render(<PriorityBadge level="must-read" />);
-    expect(screen.getByText('MUST READ')).toBeInTheDocument();
+    expect(screen.getByText('Must read')).toBeInTheDocument();
   });
 
   it('renders "Recommended" for recommended level', () => {

@@ -576,9 +576,9 @@ async def test_poll_library_enqueues_new_items():
 
 
 async def test_poll_library_updates_version():
-    """zotero.last_library_version updated in user_config after poll.
+    """zotero.last_library_version updated in user_config after poll (user-scoped row).
 
-    polling_user_id must be non-None for the upsert to fire.
+    See test_poll_library_updates_version_for_null_user for the NULL-user path.
     """
     item = _zotero_item(key="VER0001", doi="")
     # upsert conn for the item
@@ -606,6 +606,38 @@ async def test_poll_library_updates_version():
     sql, version_arg = version_conn.execute.call_args[0][:2]
     assert "zotero.last_library_version" in sql
     assert "42" in str(version_arg)
+    assert result["version_to"] == 42
+
+
+async def test_poll_library_updates_version_for_null_user():
+    """The cursor is persisted to the NULL-user config row when polling_user_id is None.
+
+    Regression: the old code SKIPPED the upsert for polling_user_id=None, so the
+    cursor stayed at 0 and the whole library was re-polled from scratch forever.
+    The user_config unique index is NULLS NOT DISTINCT, so the NULL-user row
+    upserts cleanly. The persisted user_id arg must be None.
+    """
+    item = _zotero_item(key="VERNULL1", doi="")
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 56}))
+    version_conn = _make_conn()
+    pool = _make_poll_pool(upsert_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([item], 42))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_task.defer_async = AsyncMock()
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=None)
+
+    version_conn.execute.assert_called_once()
+    version_arg, user_arg = version_conn.execute.call_args[0][1:3]
+    assert version_arg == 42
+    assert user_arg is None, f"NULL-user cursor must persist with user_id=None; got {user_arg!r}"
     assert result["version_to"] == 42
 
 
@@ -1417,17 +1449,17 @@ async def test_get_zotero_config_critical_decrypt_failure_raises(caplog):
 # ---------------------------------------------------------------------------
 
 
-async def test_poll_library_skips_version_upsert_when_polling_user_id_is_none(caplog):
-    """When polling_user_id is None, last_library_version must not be upserted.
+async def test_poll_library_persists_version_for_null_user_no_skip_log(caplog):
+    """When polling_user_id is None, last_library_version IS persisted (NULL-user row).
 
-    A ghost row with user_id=NULL would be inserted into user_config on every
-    anonymous cron poll. The fix gates the upsert on polling_user_id is not None.
+    Previously the upsert was skipped for anonymous cron polls, pinning the cursor
+    at 0 and re-polling the entire library every cycle. The NULLS NOT DISTINCT
+    index makes the NULL-user upsert well-defined, so the cursor now advances.
     """
     import logging
 
     new_item = _zotero_item(key="NULLUSER1", doi="")
     upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 101}))
-    # version_conn would only be used if the upsert runs; we give it a spy.
     version_conn = _make_conn()
 
     # _make_poll_pool prepends a config conn; remaining conns go to poll body.
@@ -1436,7 +1468,7 @@ async def test_poll_library_skips_version_upsert_when_polling_user_id_is_none(ca
 
     with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
         mock_client = mock_client_cls.return_value
-        # version 99 != 0 → would normally trigger the upsert
+        # version 99 != 0 → triggers the upsert
         mock_client.fetch_items_since = AsyncMock(return_value=([new_item], 99))
 
         import jarvis_common.task_registry as task_registry
@@ -1451,18 +1483,24 @@ async def test_poll_library_skips_version_upsert_when_polling_user_id_is_none(ca
                     db_pool=pool, http_client=http, polling_user_id=None
                 )
 
-    # The version_conn must NOT have had execute called with last_library_version.
+    # The version_conn MUST have had execute called with last_library_version,
+    # and the user_id arg must be None (the NULL-user row).
     version_persist_calls = [
         c for c in version_conn.execute.call_args_list if "zotero.last_library_version" in str(c)
     ]
-    assert not version_persist_calls, (
-        "last_library_version must not be upserted when polling_user_id=None; "
+    assert len(version_persist_calls) == 1, (
+        "last_library_version must be upserted once for polling_user_id=None; "
         f"found: {version_persist_calls}"
     )
+    assert version_persist_calls[0].args[2] is None, (
+        f"NULL-user cursor must persist with user_id=None; got {version_persist_calls[0].args!r}"
+    )
 
-    # A log message must announce the skip.
-    assert any("skipping last_library_version" in r.message for r in caplog.records), (
-        f"Expected skip log; got: {[r.message for r in caplog.records]}"
+    # The old skip log must be gone.
+    assert not any("skipping last_library_version" in r.message for r in caplog.records), (
+        f"No skip log expected now that the NULL-user cursor persists; got: "
+        f"{[r.message for r in caplog.records]}"
     )
 
     assert result["status"] == "ok"
+    assert result["version_to"] == 99

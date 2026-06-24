@@ -250,7 +250,7 @@ describe('PaperResearchLog — summary sections', () => {
 
   it('shows unverified warning when not verified', () => {
     renderLog({ summary: { ...SUMMARY, summary_verified: false } });
-    expect(screen.getByText(/LLM-generated/)).toBeInTheDocument();
+    expect(screen.getByText(/AI-generated/)).toBeInTheDocument();
   });
 });
 
@@ -258,7 +258,7 @@ describe('PaperResearchLog — coverage transparency', () => {
   it('shows "full paper covered" note when passes > 1 and coverage is clean', () => {
     renderLog({ summary: { ...SUMMARY, coverage: 1.0, passes: 3 } });
     expect(screen.getByTestId('coverage-note')).toBeInTheDocument();
-    expect(screen.getByText(/Read in 3 passes — full paper covered/)).toBeInTheDocument();
+    expect(screen.getByText(/Analyzed in 3 passes — full paper covered/)).toBeInTheDocument();
   });
 
   it('shows abstract-fallback warning when coverage is 0', () => {
@@ -311,8 +311,8 @@ describe('PaperResearchLog — chunks (lazy)', () => {
       expect(screen.getByText(/2 passages from the PDF/)).toBeInTheDocument();
     });
     // Individual chunk header buttons visible
-    expect(screen.getByText(/Chunk 0/)).toBeInTheDocument();
-    expect(screen.getByText(/Chunk 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Passage 0/)).toBeInTheDocument();
+    expect(screen.getByText(/Passage 1/)).toBeInTheDocument();
   });
 
   it('collapses chunks when toggle is clicked a second time', async () => {

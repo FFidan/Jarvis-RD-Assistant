@@ -22,15 +22,7 @@ import { TasksTab } from './TasksTab';
 import { LinkedPapersTab } from './LinkedPapersTab';
 import { QuestionsSection } from './QuestionsSection';
 import { RecentActivitySection } from './RecentActivitySection';
-
-/** §3.2 — map backend status values to display chip labels. */
-const STATUS_DISPLAY: Record<string, string> = {
-  active: 'reading',
-  paused: 'drafting',
-  completed: 'shipped',
-  archived: 'idle',
-};
-
+import { PROJECT_STATUS_LABELS } from '@/lib/labels/projectStatus';
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   active: 'default',
@@ -100,14 +92,14 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
   if (!project) {
     return (
       <EmptyState
-        title="Select a chapter"
-        description="Choose a project from the rail or create a new chapter."
+        title="Select a project"
+        description="Choose a project from the rail or create a new one."
         icon={FolderKanban}
       />
     );
   }
 
-  const displayStatus = STATUS_DISPLAY[project.status] ?? project.status;
+  const displayStatus = PROJECT_STATUS_LABELS[project.status] ?? project.status;
 
   // Build the italic subtitle per spec §3.3 pt 2
   const subtitle = [
@@ -147,7 +139,7 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
             <SelectContent>
               {BACKEND_STATUSES.map((s) => (
                 <SelectItem key={s} value={s}>
-                  {STATUS_DISPLAY[s]}
+                  {PROJECT_STATUS_LABELS[s]}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -214,45 +206,45 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
       {/* Scrolling document pane */}
       <ScrollArea className="flex-1">
         <div className="space-y-10 px-6 py-6">
-          {/* § OPEN QUESTIONS */}
+          {/* Open questions */}
           {questionsError && <ErrorSentinel message="Failed to load questions." />}
           <QuestionsSection projectId={project.id} questions={questions} />
 
-          {/* § RECENT ACTIVITY */}
+          {/* Recent activity */}
           {activityError && <ErrorSentinel message="Failed to load activity." />}
           <RecentActivitySection items={activityItems} />
 
-          {/* § MILESTONES */}
+          {/* Milestones */}
           <section aria-labelledby="milestones-section-heading">
             <h3
               id="milestones-section-heading"
               className="mb-3 text-xs font-semibold tracking-widest text-muted-foreground uppercase"
             >
-              § MILESTONES · {milestones.length}
+              MILESTONES · {milestones.length}
             </h3>
             {milestonesError && <ErrorSentinel message="Failed to load milestones." />}
             <MilestonesTab projectId={project.id} />
           </section>
 
-          {/* § TASKS */}
+          {/* Tasks */}
           <section aria-labelledby="tasks-section-heading">
             <h3
               id="tasks-section-heading"
               className="mb-3 text-xs font-semibold tracking-widest text-muted-foreground uppercase"
             >
-              § TASKS · {tasks.length}
+              TASKS · {tasks.length}
             </h3>
             {tasksError && <ErrorSentinel message="Failed to load tasks." />}
             <TasksTab projectId={project.id} />
           </section>
 
-          {/* § PAPERS */}
+          {/* Papers */}
           <section aria-labelledby="papers-section-heading">
             <h3
               id="papers-section-heading"
               className="mb-3 text-xs font-semibold tracking-widest text-muted-foreground uppercase"
             >
-              § PAPERS · {project.paper_count ?? 0}
+              PAPERS · {project.paper_count ?? 0}
             </h3>
             <LinkedPapersTab projectId={project.id} />
           </section>

@@ -12,7 +12,7 @@ const SHORTCUTS: { key: string; action: string; note?: string }[] = [
   { key: 's', action: 'Save (Inbox) / Star (other surfaces)', note: 'surface-aware' },
   { key: 'Shift+s', action: 'Save & Star', note: 'Inbox only' },
   { key: 't', action: 'Trash', note: 'any non-trash surface' },
-  { key: 'e', action: 'Set Aside', note: 'Reading → Reading List; no-op elsewhere' },
+  { key: 'e', action: 'Pause reading', note: 'Reading → Reading List; no-op elsewhere' },
   { key: 'r', action: 'Restore', note: 'Trash only' },
   { key: 'd', action: 'Done', note: 'Reading or to_read only' },
   { key: 'o / Enter', action: 'Open Paper Detail' },

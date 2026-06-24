@@ -703,22 +703,23 @@ async def poll_zotero_library(
             MAX_ENQUEUE_PER_SYNC,
         )
     if new_version != last_version:
-        if polling_user_id is None:
-            logger.info("Zotero poll: skipping last_library_version upsert (polling_user_id=None)")
-        else:
-            try:
-                async with db_pool.acquire() as conn:
-                    await conn.execute(
-                        """
-                    INSERT INTO user_config (user_id, key, value)
-                    VALUES ($2, 'zotero.last_library_version', $1::jsonb)
-                    ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value
-                    """,
-                        new_version,
-                        polling_user_id,
-                    )
-            except Exception:
-                logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)
+        # polling_user_id may be None (single-tenant / system poll). The
+        # user_config unique index is NULLS NOT DISTINCT, so the NULL-user row
+        # upserts correctly — persist the cursor instead of skipping (skipping
+        # left the cursor at 0 and re-polled the whole library forever).
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                INSERT INTO user_config (user_id, key, value)
+                VALUES ($2, 'zotero.last_library_version', $1::jsonb)
+                ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value
+                """,
+                    new_version,
+                    polling_user_id,
+                )
+        except Exception:
+            logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)
 
     logger.info(
         "Zotero poll complete: new=%d linked=%d enqueued=%d version=%d→%d",

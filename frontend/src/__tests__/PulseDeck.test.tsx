@@ -216,7 +216,7 @@ describe('PulseDeck', () => {
   it('shows error state when fetchPulseToday throws', async () => {
     vi.mocked(fetchPulseToday).mockRejectedValue(new Error('boom'));
     renderDeck();
-    expect(await screen.findByText(/failed to load pulse/i)).toBeInTheDocument();
+    expect(await screen.findByText(/couldn't load your recommendations/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
   });
 
@@ -340,6 +340,107 @@ describe('PulseDeck', () => {
     expect(
       screen.queryByText(/AI scoring is unavailable for all cards/i),
     ).not.toBeInTheDocument();
+  });
+
+  it('shows ONE calm deck banner and suppresses per-card scoring-failed text when degraded', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(
+      makeDeck({
+        degraded_reason:
+          'AI relevance scoring is temporarily unavailable — showing basic ranking.',
+        cards: [
+          {
+            card_id: 1,
+            paper_id: 101,
+            paper_title: 'Paper One',
+            paper_authors: ['Alice'],
+            paper_url: null,
+            rank: 1,
+            score: 0.9,
+            llm_relevance: null,
+            llm_novelty: null,
+            reasoning: 'LLM scoring failed',
+            reasoning_verified: null,
+            reasoning_confidence: null,
+            signals: {},
+          },
+          {
+            card_id: 2,
+            paper_id: 202,
+            paper_title: 'Paper Two',
+            paper_authors: ['Bob'],
+            paper_url: null,
+            rank: 2,
+            score: 0.8,
+            llm_relevance: null,
+            llm_novelty: null,
+            reasoning: 'LLM scoring failed',
+            reasoning_verified: null,
+            reasoning_confidence: null,
+            signals: {},
+          },
+        ],
+      }),
+    );
+    renderDeck();
+    await screen.findByText('Paper One');
+
+    // The single calm deck-level banner renders the backend's basic-ranking reason.
+    expect(
+      screen.getByText(/showing basic ranking/i),
+    ).toBeInTheDocument();
+    // No per-card "AI scoring unavailable for this card" text on any card.
+    expect(
+      screen.queryByText(/AI scoring unavailable for this card/i),
+    ).not.toBeInTheDocument();
+    // The alarming all-cards banner is not shown when a degraded reason already explains it.
+    expect(
+      screen.queryByText(/AI scoring is unavailable for all cards/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it('still shows per-card scoring-failed text when the deck is NOT degraded', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(
+      makeDeck({
+        cards: [
+          {
+            card_id: 1,
+            paper_id: 101,
+            paper_title: 'Paper One',
+            paper_authors: ['Alice'],
+            paper_url: null,
+            rank: 1,
+            score: 0.9,
+            llm_relevance: 8,
+            llm_novelty: 7,
+            reasoning: 'LLM scoring failed',
+            reasoning_verified: null,
+            reasoning_confidence: null,
+            signals: {},
+          },
+          {
+            card_id: 2,
+            paper_id: 202,
+            paper_title: 'Paper Two',
+            paper_authors: ['Bob'],
+            paper_url: null,
+            rank: 2,
+            score: 0.8,
+            llm_relevance: 7,
+            llm_novelty: 6,
+            reasoning: 'valid reasoning',
+            reasoning_verified: null,
+            reasoning_confidence: null,
+            signals: {},
+          },
+        ],
+      }),
+    );
+    renderDeck();
+    await screen.findByText('Paper One');
+    // Isolated single-card failure (no deck-level degraded_reason) keeps its per-card text.
+    expect(
+      screen.getByText(/AI scoring unavailable for this card/i),
+    ).toBeInTheDocument();
   });
 
   it('only passes savePending=true to the targeted card while a mutation is in flight (M-13)', async () => {

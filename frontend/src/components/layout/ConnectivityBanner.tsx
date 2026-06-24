@@ -48,7 +48,7 @@ function OfflineBanner() {
     >
       <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       <span>
-        You&apos;re offline &mdash; showing last-known-good. Some actions are unavailable.
+        You&apos;re offline &mdash; showing saved data. Some actions are unavailable.
       </span>
     </div>
   );

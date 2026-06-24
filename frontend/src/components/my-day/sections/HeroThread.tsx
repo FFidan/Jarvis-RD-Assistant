@@ -64,7 +64,7 @@ export function HeroThread() {
   if (!thread) {
     return (
       <p className="text-faint italic font-serif text-center py-8">
-        No open threads — start one in § Open threads below.
+        No open threads — start one in Open threads below.
       </p>
     );
   }

@@ -65,7 +65,7 @@ export function LangfuseLinkCard() {
   return (
     <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
-        <CardTitle>Observability</CardTitle>
+        <CardTitle>Monitoring (Langfuse)</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">

@@ -10,6 +10,7 @@
 const STEPS: { title: string; note?: string; code: string }[] = [
   {
     title: 'Step 0 — decrypt (only for .enc archives)',
+    note: 'Applies to any encrypted artifact, including Qdrant snapshots (e.g. qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot.enc). Decrypt to the plain filename (drop the .enc suffix) before using it below.',
     code: `openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -d \\
   -kfile ./secrets/backup_encrypt_key.txt \\
   -in <archive>.enc -out <archive>`,
@@ -35,12 +36,24 @@ docker compose up -d paper_ingestion learning_engine`,
   },
   {
     title: 'Step 3 — restore Qdrant vectors',
-    code: `docker compose stop qdrant
-docker compose cp qdrant_papers_YYYYMMDD_HHMMSS.snapshot qdrant:/qdrant/snapshots/restore.snapshot
+    note: 'One snapshot per collection. The collection list is whatever qdrant_<name>_YYYYMMDD_HHMMSS.snapshot files exist for the chosen restore point — currently kg_entities and paper_chunks. Restore each collection independently; repeat the block per collection. Encrypted snapshots (.snapshot.enc) must be decrypted first (Step 0).',
+    code: `# Restore kg_entities
+docker compose stop qdrant
+docker compose cp qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot qdrant:/qdrant/snapshots/restore.snapshot
 docker compose start qdrant
 docker compose exec qdrant sh -c 'curl -s -X PUT \\
   -H "api-key: $(cat /run/secrets/qdrant_api_key)" \\
-  "http://localhost:6333/collections/papers/snapshots/recover" \\
+  "http://localhost:6333/collections/kg_entities/snapshots/recover" \\
+  -H "Content-Type: application/json" \\
+  -d "{\\"location\\":\\"file:///qdrant/snapshots/restore.snapshot\\"}"'
+
+# Restore paper_chunks
+docker compose stop qdrant
+docker compose cp qdrant_paper_chunks_YYYYMMDD_HHMMSS.snapshot qdrant:/qdrant/snapshots/restore.snapshot
+docker compose start qdrant
+docker compose exec qdrant sh -c 'curl -s -X PUT \\
+  -H "api-key: $(cat /run/secrets/qdrant_api_key)" \\
+  "http://localhost:6333/collections/paper_chunks/snapshots/recover" \\
   -H "Content-Type: application/json" \\
   -d "{\\"location\\":\\"file:///qdrant/snapshots/restore.snapshot\\"}"'`,
   },

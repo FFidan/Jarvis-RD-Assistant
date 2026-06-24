@@ -7,3 +7,10 @@ export function displayReasoning(reasoning: string | null | undefined): string |
   if (reasoning === LLM_SCORING_FAILED) return LLM_SCORING_UNAVAILABLE;
   return reasoning;
 }
+
+export function suppressScoringFailed(
+  reasoning: string | null | undefined,
+): string | null {
+  if (reasoning === LLM_SCORING_FAILED) return null;
+  return reasoning ?? null;
+}

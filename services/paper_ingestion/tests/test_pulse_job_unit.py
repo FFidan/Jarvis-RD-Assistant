@@ -101,3 +101,70 @@ async def test_emit_post_run_telemetry_calls_update_progress_when_ctx_present():
 
     # Verify ctx.update_progress was called with correct args
     ctx.update_progress.assert_called_once_with(1.0, "Done")
+
+
+def _make_unscored_candidate():
+    """A stage-1 survivor with no LLM scores (the all-fail per-card outcome)."""
+    from datetime import date
+
+    from paper_ingestion.models import PaperCreate, SourceType
+    from paper_ingestion.pulse.scoring import ScoredCandidate
+
+    paper = PaperCreate(
+        external_id="arxiv:degr-0001",
+        source_type=SourceType.ARXIV,
+        title="Degraded Paper",
+        authors=["Author A"],
+        abstract="Abstract.",
+        published_date=date(2025, 1, 1),
+        url="https://arxiv.org/abs/degr-0001",
+    )
+    return ScoredCandidate(
+        paper=paper,
+        signals={"embedding": 0.7, "recency": 0.5},
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning="LLM scoring failed",
+        final_score=0.6,
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_stage2_sets_degraded_reason_when_all_cards_fail():
+    """All per-card stage-2 calls failing must surface a deck-level degraded_reason.
+
+    stage2_llm_rerank catches per-card failures internally and returns cards with
+    llm_relevance=None. Without a deck-level reason the UI renders "AI scoring
+    unavailable" cards with no banner — the bug this guards. _run_stage2 must
+    detect the all-None outcome and set degraded_reason while still returning the
+    cards (embedding-only ranking remains usable).
+
+    Verified: pulse/job.py:_run_stage2 — all-fail degradation branch.
+    """
+    from paper_ingestion.pulse.job import _run_stage2
+
+    failed = [_make_unscored_candidate() for _ in range(5)]
+
+    services = MagicMock()
+    services.verifier = MagicMock()
+    services.openai_client = object()
+
+    with (
+        patch("paper_ingestion.pulse.job.get_services", return_value=services),
+        patch(
+            "paper_ingestion.pulse.job.effective_num_ctx",
+            AsyncMock(return_value=4096),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage2_llm_rerank",
+            AsyncMock(return_value=failed),
+        ),
+    ):
+        stage2_out, degraded_reason, llm_calls = await _run_stage2(
+            failed, profile=MagicMock(), ctx=None, db_pool=MagicMock()
+        )
+
+    assert llm_calls == 0
+    assert len(stage2_out) == 5
+    assert degraded_reason, "all-fail stage-2 must set a non-null deck degraded_reason"
+    assert all(sc.llm_relevance is None for sc in stage2_out)

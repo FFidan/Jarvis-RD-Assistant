@@ -22,12 +22,12 @@ function ChunkItem({ chunk }: { chunk: Chunk }) {
         ) : (
           <ChevronRight className="h-4 w-4 shrink-0" />
         )}
-        Chunk {chunk.chunk_index} (Page {chunk.page_number ?? '?'})
+        Passage {chunk.chunk_index} (Page {chunk.page_number ?? '?'})
       </button>
       {open && (
         <div className="border-t px-4 py-3">
           <p className="whitespace-pre-wrap text-sm leading-relaxed">
-            {chunk.content || 'Empty chunk.'}
+            {chunk.content || 'Empty passage'}
           </p>
         </div>
       )}
@@ -40,8 +40,8 @@ export function ChunksTab({ chunks }: ChunksTabProps) {
     return (
       <EmptyState
         icon={FileStack}
-        title="No chunks available"
-        description="Analyze the paper first to extract text chunks."
+        title="No passages extracted yet"
+        description="Analyze the paper first to extract text passages."
       />
     );
   }

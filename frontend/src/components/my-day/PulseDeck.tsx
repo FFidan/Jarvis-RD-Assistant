@@ -17,7 +17,7 @@ import { useJobStore } from '@/stores/job-store';
 import { errorMessage } from '@/lib/errors';
 import { usePulseRating } from '@/hooks/usePulseRating';
 import type { PulseDeck as PulseDeckType, PulseRating, PulseSourceDiagnostic } from '@/types';
-import { LLM_SCORING_FAILED } from '@/components/pulse/reasoning-display';
+import { LLM_SCORING_FAILED, suppressScoringFailed } from '@/components/pulse/reasoning-display';
 
 function sourceDiagnosticsFromStats(
   stats: Record<string, unknown>,
@@ -80,7 +80,7 @@ export function PulseDeck() {
       <Card className="border-destructive/50 bg-destructive/5">
         <CardHeader className="pb-2">
           <CardTitle className="text-destructive text-base">
-            Failed to load Pulse
+            Couldn't load your recommendations
           </CardTitle>
         </CardHeader>
         <CardContent className="flex items-center justify-between gap-4">
@@ -100,9 +100,9 @@ export function PulseDeck() {
       if (err instanceof ApiError && err.status === 409) {
         toast.info('Pulse is already running. Your deck will be ready shortly.');
       } else if (err instanceof ApiError && err.status === 429) {
-        toast.error('Rate limit reached. Try again in a minute.');
+        toast.error("You've refreshed too many times — try again shortly.");
       } else {
-        toast.error('Failed to start Pulse generation.');
+        toast.error("Couldn't refresh your recommendations.");
       }
     });
   };
@@ -231,7 +231,7 @@ export function PulseDeck() {
           )}
         </div>
       )}
-      {allScoringUnavailable && (
+      {allScoringUnavailable && !deck.degraded_reason && (
         <div className="flex items-center justify-between gap-3 rounded-md border border-muted bg-muted/20 px-3 py-2">
           <p className="text-sm text-muted-foreground">
             AI scoring is unavailable for all cards. Regenerating may improve results.
@@ -278,17 +278,21 @@ export function PulseDeck() {
         <div className="space-y-3">
           {deck.cards.map((card, idx) => {
             const pendingSavePaperId = rateMutation.variables?.paperId;
+            const displayCard = deck.degraded_reason
+              ? { ...card, reasoning: suppressScoringFailed(card.reasoning) }
+              : card;
             return (
               <div
                 key={card.card_id}
                 data-tour-id={idx === 0 ? 'pulse-card-first' : undefined}
               >
                 <PulseCard
-                  card={card}
+                  card={displayCard}
                   onRate={handleRate}
                   onOpen={handleOpen}
                   rated={ratedCards.has(card.paper_id)}
                   savePending={pendingSavePaperId === card.paper_id && rateMutation.isPending}
+                  degraded={!!deck.degraded_reason}
                 />
               </div>
             );

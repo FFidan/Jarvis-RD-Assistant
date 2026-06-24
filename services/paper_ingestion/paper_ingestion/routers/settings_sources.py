@@ -113,6 +113,7 @@ async def update_nudge(
 async def list_sources(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _admin: None = Depends(require_admin),
 ) -> list[SourceResponse]:
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM paper_sources ORDER BY display_order ASC, id ASC")

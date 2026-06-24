@@ -336,6 +336,13 @@ async def _run_stage2(
         )
         # Count actual LLM calls: candidates where llm_relevance was set
         llm_calls = sum(1 for sc in stage2_out if sc.llm_relevance is not None)
+        # Per-card stage-2 failures are caught inside stage2_llm_rerank and surface only as
+        # llm_relevance=None — without this the deck silently renders "AI scoring unavailable"
+        # cards with no banner. Degrade honestly when a strong majority scored nothing.
+        if stage2_out and llm_calls <= len(stage2_out) // 5:
+            degraded_reason = (
+                "AI relevance scoring is temporarily unavailable — showing basic ranking."
+            )
     except Stage2ClientUnavailableError:
         # explicit sentinel — openai_client was None at stage2 entry
         degraded_reason = "stage2 skipped: openai_client unavailable"

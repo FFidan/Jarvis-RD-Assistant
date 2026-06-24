@@ -79,8 +79,8 @@ describe('ProjectsPage', () => {
       // Project name appears in the chapter rail row
       expect(screen.getAllByText('Test Project').length).toBeGreaterThan(0);
     });
-    // §3.2 — status chips use translated labels
-    expect(screen.getAllByText('reading').length).toBeGreaterThan(0);
+    // status chips use translated labels
+    expect(screen.getAllByText('In progress').length).toBeGreaterThan(0);
   });
 
   it('shows empty state in rail when no projects exist', async () => {
@@ -89,10 +89,10 @@ describe('ProjectsPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('No chapters yet')).toBeInTheDocument();
+      expect(screen.getByText('No projects yet')).toBeInTheDocument();
     });
     expect(
-      screen.getByText('Create a project to start a research chapter.'),
+      screen.getByText('Create a project to start organizing your research.'),
     ).toBeInTheDocument();
   });
 
@@ -122,11 +122,11 @@ describe('ProjectsPage', () => {
     expect(screen.queryByText('Select a project')).not.toBeInTheDocument();
   });
 
-  it('shows § CHAPTERS header in the chapter rail', async () => {
+  it('shows PROJECTS header in the chapter rail', async () => {
     mockFetchProjects.mockResolvedValue([]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText(/§ CHAPTERS · 0/i)).toBeInTheDocument();
+      expect(screen.getByText(/PROJECTS · 0/i)).toBeInTheDocument();
     });
   });
 
@@ -137,14 +137,14 @@ describe('ProjectsPage', () => {
       expect(screen.getByText(/couldn't load/i)).toBeInTheDocument();
     });
     // 2-pane layout must NOT be rendered
-    expect(screen.queryByText(/§ CHAPTERS/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/PROJECTS ·/i)).not.toBeInTheDocument();
   });
 
   it('empty projects shows 2-pane layout (not error UI)', async () => {
     mockFetchProjects.mockResolvedValue([]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText(/§ CHAPTERS · 0/i)).toBeInTheDocument();
+      expect(screen.getByText(/PROJECTS · 0/i)).toBeInTheDocument();
     });
     // A successful empty response must not show the error UI
     expect(screen.queryByText(/couldn't load/i)).not.toBeInTheDocument();
