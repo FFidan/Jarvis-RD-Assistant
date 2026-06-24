@@ -3,6 +3,11 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## v0.9.1 (2026-06-24) — Fix daily Pulse AI relevance scoring
+
+### Fixed
+- **The daily Pulse computes AI relevance scores reliably.** The shipped configuration pointed Stage-2 scoring at the small local model alias, which intermittently returns the response schema instead of a score and silently disables AI relevance scoring (every card shows "AI scoring unavailable"). Stage-2 now defaults to the larger, structured-output-capable model — matching the in-code default — with the deployment defaults, documentation, and a regression test aligned to it.
+
 ## v0.9.0 (2026-06-24) — Working daily Pulse, plain-language UI, clickable citations, citation export, and hardened backups & CI
 
 ### Added

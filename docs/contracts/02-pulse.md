@@ -188,7 +188,7 @@ The lookback/grace knobs ARE user_config keys (see [01-settings.md §2.1](01-set
 ### 5.1 Worst-case math
 
 With `pulse.stage2_top_k = 40` (default), `PULSE_LLM_CONCURRENCY = 4` (default),
-`PULSE_STAGE2_MODEL=fast`, `PULSE_STAGE2_MAX_RETRIES=1`, and per-call timeout
+`PULSE_STAGE2_MODEL=smart`, `PULSE_STAGE2_MAX_RETRIES=1`, and per-call timeout
 120 s, the theoretical worst-case Stage-2 wall-clock is
 
 ```
@@ -362,7 +362,7 @@ is to surface the choices.
 | `_pulse_generate_job` job handler | services/paper_ingestion/paper_ingestion/pulse/job.py:555 | On-demand entry point via jobs subsystem |
 | `ScoredCandidate` dataclass | services/paper_ingestion/paper_ingestion/pulse/scoring.py:69 | Cross-stage envelope |
 | `_llm_concurrency()` lazy getter | services/paper_ingestion/paper_ingestion/pulse/scoring.py:45 | Stage-2 semaphore; default 4 via env `PULSE_LLM_CONCURRENCY` |
-| `_llm_model()` reads `PULSE_STAGE2_MODEL` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:49 | Stage-2 model alias defaults to `fast` |
+| `_llm_model()` reads `PULSE_STAGE2_MODEL` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:49 | Stage-2 model alias defaults to `smart` (must be structured-output-capable; the `fast` 4B alias schema-echoes → `llm_calls=0`) |
 | `_stage2_max_retries()` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:59 | Stage-2 structured-output retry budget defaults to 1 (env `PULSE_STAGE2_MAX_RETRIES`) |
 | `_LLM_MAX_TOKENS = 512`, `_LLM_TEMPERATURE = 0.0` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:53-54 | Stage-2 LLM options |
 | `stage1_embedding_filter` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:121 | Stage 1: embed + cosine + recency + author bonus + L2 |

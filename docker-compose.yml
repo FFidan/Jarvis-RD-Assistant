@@ -39,7 +39,7 @@ x-shared-env: &shared-env
   ENVIRONMENT: ${ENVIRONMENT:-development}
   DB_POOL_MIN: ${DB_POOL_MIN:-2}
   DB_POOL_MAX: ${DB_POOL_MAX:-10}
-  PULSE_STAGE2_MODEL: ${PULSE_STAGE2_MODEL:-fast}
+  PULSE_STAGE2_MODEL: ${PULSE_STAGE2_MODEL:-smart}
   PULSE_STAGE2_MAX_RETRIES: ${PULSE_STAGE2_MAX_RETRIES:-1}
   JARVIS_TRUST_CF_CONNECTING_IP: ${JARVIS_TRUST_CF_CONNECTING_IP:-false}
   # Source CIDRs allowed to use the X-Owner-User-Id override (the Telegram bot's
@@ -311,7 +311,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.9.0}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.9.1}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -391,7 +391,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.9.0}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-0.9.1}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -439,7 +439,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.9.0}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.9.1}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -486,7 +486,7 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.9.0}
+    image: jarvis/dashboard:${JARVIS_VERSION:-0.9.1}
     build:
       context: ./frontend
       args:
@@ -624,7 +624,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.9.0}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.9.1}
     build:
       context: ./langfuse
       dockerfile: Dockerfile.langfuse

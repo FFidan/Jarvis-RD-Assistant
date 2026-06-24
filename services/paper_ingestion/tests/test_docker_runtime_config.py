@@ -38,7 +38,7 @@ def test_paper_ingestion_receives_pulse_stage2_runtime_knobs() -> None:
 
     shared_env = compose["x-shared-env"]
 
-    assert shared_env["PULSE_STAGE2_MODEL"] == "${PULSE_STAGE2_MODEL:-fast}"
+    assert shared_env["PULSE_STAGE2_MODEL"] == "${PULSE_STAGE2_MODEL:-smart}"
     assert shared_env["PULSE_STAGE2_MAX_RETRIES"] == "${PULSE_STAGE2_MAX_RETRIES:-1}"
 
 
