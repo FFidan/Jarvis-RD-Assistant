@@ -1121,6 +1121,12 @@ fi
 # 12. Summary (only reached when all mandatory services are healthy)
 # -----------------------------------------------------------------------------
 DASHBOARD_URL="http://localhost:3001"
+# Let's Encrypt / --domain production deploys serve TLS on the public hostname
+# (Caddy + ACME), not localhost. access_mode stays "1" (the dashboard still
+# binds locally behind Caddy), so key off the profile/domain here.
+if [ "$NI_PROFILE" = "letsencrypt" ] && [ -n "$NI_DOMAIN" ]; then
+  DASHBOARD_URL="https://${NI_DOMAIN}"
+fi
 case "$ACCESS_MODE_LABEL" in
   lan)
     if [ -n "$LAN_IP" ]; then
@@ -1142,6 +1148,23 @@ printf '\n%s================================================================%s\n
 printf '%s   Setup complete.%s\n' "$C_GREEN" "$C_RESET"
 printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 printf '  Dashboard:    %s\n' "$DASHBOARD_URL"
+
+# Click-to-finish setup link: carries the setup token so the wizard can complete
+# first-run setup (the token gates the bootstrap WRITE endpoints). init-secrets.sh
+# generated secrets/jarvis_setup_token.txt above.
+JARVIS_SETUP_TOKEN="$(cat secrets/jarvis_setup_token.txt 2>/dev/null || true)"
+if [ -n "$JARVIS_SETUP_TOKEN" ]; then
+  SETUP_LINK="${DASHBOARD_URL}/setup?setup_token=${JARVIS_SETUP_TOKEN}"
+  printf '  Finish setup: %s\n' "$SETUP_LINK"
+  # Best-effort: open the click-to-finish link in the operator's browser.
+  # Non-fatal — a headless/server box simply skips this.
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$SETUP_LINK" >/dev/null 2>&1 &
+  elif command -v open >/dev/null 2>&1; then
+    open "$SETUP_LINK" >/dev/null 2>&1 &
+  fi
+fi
+
 if [ "$NI_MODE" = "single" ]; then
   # Single-user mode: API key auth is enabled.
   _KEY_FILE="${HOME}/.config/jarvis/api-key"

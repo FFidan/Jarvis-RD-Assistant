@@ -138,25 +138,38 @@ export const dismissBanner = (banner_kind: string) =>
     body: JSON.stringify({ banner_kind }),
   });
 
-export const runFirstRunSystemCheck = () =>
-  apiFetch<FirstRunSystemCheck>('/api/setup/system-check', { method: 'POST' });
+// The first-run wizard authorizes these unauthenticated POSTs with the
+// bootstrap setup token (printed by setup.sh, captured from the URL). The
+// header is sent only when a token is present; an unconfigured/legacy install
+// without a token is treated as open by the backend.
+const setupTokenHeader = (token?: string | null): Record<string, string> =>
+  token ? { 'X-Setup-Token': token } : {};
 
-export const saveFirstRunSmtp = (body: FirstRunSmtpBody) =>
+export const runFirstRunSystemCheck = (setupToken?: string | null) =>
+  apiFetch<FirstRunSystemCheck>('/api/setup/system-check', {
+    method: 'POST',
+    headers: setupTokenHeader(setupToken),
+  });
+
+export const saveFirstRunSmtp = (body: FirstRunSmtpBody, setupToken?: string | null) =>
   apiFetch<FirstRunSmtpResponse>('/api/setup/smtp', {
     method: 'POST',
     body: JSON.stringify(body),
+    headers: setupTokenHeader(setupToken),
   });
 
-export const createFirstRunAdmin = (email: string) =>
+export const createFirstRunAdmin = (email: string, setupToken?: string | null) =>
   apiFetch<FirstRunAdminResponse>('/api/setup/admin', {
     method: 'POST',
     body: JSON.stringify({ email }),
+    headers: setupTokenHeader(setupToken),
   });
 
-export const saveFirstRunCloudKeys = (body: FirstRunCloudKeysBody) =>
+export const saveFirstRunCloudKeys = (body: FirstRunCloudKeysBody, setupToken?: string | null) =>
   apiFetch<FirstRunCloudKeysResponse>('/api/setup/cloud-llm-keys', {
     method: 'POST',
     body: JSON.stringify(body),
+    headers: setupTokenHeader(setupToken),
   });
 
 // --- Per-user multi-tenant Telegram pairing ---

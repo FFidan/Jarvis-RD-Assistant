@@ -222,22 +222,21 @@ async function probeStackHealth(): Promise<StackHealthSummary> {
     vector: 'Vector',
   };
 
-  let depChecks: Record<string, string> = {};
-  try {
-    const internal = await apiFetch<{ status: string; checks: Record<string, string> }>(
+  // Fire all three probes concurrently so wall time is max(one probe), not the
+  // sum — comfortably under STACK_HEALTH_DEADLINE_MS. allSettled so one rejected
+  // probe never drops the others' results.
+  const [internalResult, piOk, leOk] = await Promise.all([
+    apiFetch<{ status: string; checks: Record<string, string> }>(
       '/health/paper_ingestion/internal',
-    );
-    depChecks = internal.checks ?? {};
-  } catch {
-    // If internal endpoint is unreachable, mark all deps as unknown
-    for (const key of Object.keys(depLabels)) depChecks[key] = 'unknown';
-  }
-
-  // Service-level status from public health endpoints
-  const [piOk, leOk] = await Promise.all([
+    ).then(
+      (internal) => internal.checks ?? {},
+      // If internal endpoint is unreachable, mark all deps as unknown.
+      () => Object.fromEntries(Object.keys(depLabels).map((key) => [key, 'unknown'])),
+    ),
     checkHealth('/health/paper_ingestion'),
     checkHealth('/health/learning_engine'),
   ]);
+  const depChecks: Record<string, string> = internalResult;
 
   const toStatus = (raw: string | undefined): ServiceHealthStatus => {
     if (raw === 'ok') return 'ok';
@@ -259,8 +258,20 @@ async function probeStackHealth(): Promise<StackHealthSummary> {
 
   const degradedCount = services.filter((s) => s.status === 'degraded').length;
   const downCount = services.filter((s) => s.status === 'down').length;
+  // 'vector' (the log collector) is optional: an unknown vector never degrades
+  // the rollup. Any *non-optional* service that is 'unknown' keeps the overall
+  // off 'ok' — we never report "All healthy" while a required dep is unverified.
+  const requiredUnknown = services.some(
+    (s) => s.name !== 'vector' && s.status === 'unknown',
+  );
   const overall: ServiceHealthStatus =
-    downCount > 0 ? 'down' : degradedCount > 0 ? 'degraded' : 'ok';
+    downCount > 0
+      ? 'down'
+      : degradedCount > 0
+        ? 'degraded'
+        : requiredUnknown
+          ? 'unknown'
+          : 'ok';
 
   return { services, degradedCount, downCount, overall };
 }

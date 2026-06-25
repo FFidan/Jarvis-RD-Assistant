@@ -42,9 +42,30 @@ async def test_capabilities_returns_both_boolean_keys(_app):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body.keys()) == {"networkx", "scikit_learn"}
+    assert set(body.keys()) == {"networkx", "scikit_learn", "structured_output_enforced"}
     assert isinstance(body["networkx"], bool)
     assert isinstance(body["scikit_learn"], bool)
+    assert isinstance(body["structured_output_enforced"], bool)
+
+
+@pytest.mark.asyncio
+async def test_capabilities_structured_output_enforced_true_on_default(_app):
+    """The shipped default instructor mode is grammar-enforcing, so the flag is True."""
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/system/capabilities")
+
+    assert resp.status_code == 200
+    assert resp.json()["structured_output_enforced"] is True
+
+
+def test_grammar_enforcing_modes_reject_prompt_only_mode():
+    """A non-grammar mode name is not in the enforcing set (a silent revert flips False)."""
+    from paper_ingestion.routers.system import _GRAMMAR_ENFORCING_MODES
+
+    assert "JSON_SCHEMA" in _GRAMMAR_ENFORCING_MODES
+    assert "JSON" not in _GRAMMAR_ENFORCING_MODES
 
 
 @pytest.mark.asyncio

@@ -48,7 +48,7 @@ LEGACY_SEEDED_CONFIG: dict[str, Any] = {
         {
             "model_name": "smart",
             "litellm_params": {
-                "model": "ollama/qwen3:8b",
+                "model": "ollama_chat/qwen3:8b",
                 "api_base": "http://ollama:11434",
                 "temperature": 0.2,
                 "num_ctx": 8192,
@@ -60,7 +60,7 @@ LEGACY_SEEDED_CONFIG: dict[str, Any] = {
         {
             "model_name": "fast",
             "litellm_params": {
-                "model": "ollama/qwen3:4b",
+                "model": "ollama_chat/qwen3:4b",
                 "api_base": "http://ollama:11434",
                 "temperature": 0.1,
                 "num_ctx": 4096,
@@ -70,7 +70,7 @@ LEGACY_SEEDED_CONFIG: dict[str, Any] = {
         {
             "model_name": "smart-fallback",
             "litellm_params": {
-                "model": "ollama/qwen3:4b",
+                "model": "ollama_chat/qwen3:4b",
                 "api_base": "http://ollama:11434",
                 "timeout": 120,
             },
@@ -85,8 +85,8 @@ LEGACY_SEEDED_CONFIG: dict[str, Any] = {
     ],
     "router_settings": {
         "fallbacks": [
-            {"smart": ["ollama/qwen3:4b"]},
-            {"fast": ["ollama/qwen3:4b"]},
+            {"smart": ["ollama_chat/qwen3:4b"]},
+            {"fast": ["ollama_chat/qwen3:4b"]},
         ]
     },
 }
@@ -198,7 +198,7 @@ def test_scrub_preserves_live_header_comment(tmp_path: Path) -> None:
         "model_list:\n"
         "  - model_name: smart\n"
         "    litellm_params:\n"
-        "      model: ollama/qwen3:8b\n"
+        "      model: ollama_chat/qwen3:8b\n"
         "      api_base: http://ollama:11434\n"
     )
     assert "model_list:" in live_text

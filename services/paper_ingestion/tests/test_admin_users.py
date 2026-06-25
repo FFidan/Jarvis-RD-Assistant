@@ -261,6 +261,86 @@ async def test_non_admin_cannot_send_link() -> None:
 
 
 # ---------------------------------------------------------------------------
+# B2/OPS-2: invite deliverability — surface the link only when undeliverable
+# ---------------------------------------------------------------------------
+
+
+def _invite_conn() -> AsyncMock:
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            None,  # conflict check: no existing user
+            {
+                "id": 7,
+                "email": "bob@example.com",
+                "role": "user",
+                "created_at": _NOW,
+                "last_login_at": None,
+            },
+        ]
+    )
+    conn.execute = AsyncMock()
+    return conn
+
+
+@pytest.mark.asyncio
+async def test_invite_returns_link_when_smtp_unconfigured(monkeypatch) -> None:
+    """SMTP unconfigured → the admin gets the link back to share manually."""
+    monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
+    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=False))
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool(_invite_conn())
+    request = _build_request(pool, user_id=1, user_role="admin")
+    body = admin_router.InviteUserBody(email="bob@example.com", role="user")
+
+    result = await admin_router.invite_user(body, request)
+
+    assert result.email == "bob@example.com"
+    assert result.invite_link is not None
+    assert "token=" in result.invite_link
+
+
+@pytest.mark.asyncio
+async def test_invite_omits_link_when_smtp_configured(monkeypatch) -> None:
+    """SMTP configured + send succeeds → no link leaked in the response."""
+    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
+    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool(_invite_conn())
+    request = _build_request(pool, user_id=1, user_role="admin")
+    body = admin_router.InviteUserBody(email="bob@example.com", role="user")
+
+    result = await admin_router.invite_user(body, request)
+
+    assert result.invite_link is None
+
+
+@pytest.mark.asyncio
+async def test_invite_returns_link_when_smtp_send_fails(monkeypatch) -> None:
+    """SMTP nominally configured but the send raises → still surface the link."""
+    monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+
+    async def _failing_send(email, link, *, pool=None):
+        raise OSError("SMTP connect refused")
+
+    monkeypatch.setattr(admin_router, "send_magic_link", _failing_send)
+    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool(_invite_conn())
+    request = _build_request(pool, user_id=1, user_role="admin")
+    body = admin_router.InviteUserBody(email="bob@example.com", role="user")
+
+    result = await admin_router.invite_user(body, request)
+
+    assert result.invite_link is not None
+    assert "token=" in result.invite_link
+
+
+# ---------------------------------------------------------------------------
 # PI-AUTH-01: invite SMTP failure log must not contain raw email
 # ---------------------------------------------------------------------------
 

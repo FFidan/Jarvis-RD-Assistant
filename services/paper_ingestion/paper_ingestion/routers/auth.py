@@ -25,7 +25,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
@@ -388,30 +388,61 @@ async def api_key_session(
             )
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
 
+    from jarvis_common.auth import api_key_login_enabled  # noqa: PLC0415
+
     core = get_core_settings()
 
     async with pool.acquire() as conn:
         # Guardrail 3: single-tenant gate.
         user_count = await conn.fetchval("SELECT count(*) FROM users WHERE deleted_at IS NULL")
-        if int(user_count or 0) != 1 and not core.api_key_login_enabled:
-            raise HTTPException(
-                status_code=403,
-                detail=("API-key login disabled for multi-tenant deployments; use magic-link"),
-            )
+        multi_user = int(user_count or 0) != 1
+        flag_enabled = await api_key_login_enabled(conn)
 
-        # Guardrail 1: resolve the single explicit owner. Never create one.
+        # B1 (owner self-lockout exemption): a configured OWNER_USER_ID that
+        # resolves to a live admin can ALWAYS mint via API key — even on a
+        # multi-user box with the flag OFF — so the operator is never locked out
+        # once magic-link is the only path and SMTP is down. Pre-resolve with the
+        # SAME role='admin' lookup the explicit-owner branch uses; members never
+        # match (the lookup requires admin), so this exempts the owner only.
+        owner: Any = None
         if core.owner_user_id is not None:
-            # A-3 (defense-in-depth): the explicit-owner lookup must enforce
-            # role='admin' symmetrically with the fallback branch below. A
-            # configured OWNER_USER_ID that resolves to a non-admin must NOT
-            # silently mint a member "owner" session — distinguish "missing"
-            # (deleted/absent) from "exists but not admin" so the operator
-            # gets an actionable error instead of a privilege downgrade.
             owner = await conn.fetchrow(
                 "SELECT id, email, role FROM users "
                 "WHERE id = $1 AND deleted_at IS NULL AND role = 'admin'",
                 int(core.owner_user_id),
             )
+        owner_exempt = owner is not None
+
+        if multi_user and not flag_enabled and not owner_exempt:
+            raise HTTPException(
+                status_code=403,
+                detail=("API-key login disabled for multi-tenant deployments; use magic-link"),
+            )
+
+        # SEC-2 (fallback gate): when the gate passed ONLY because the flag is on
+        # (multi-user box, flag enabled, no exempt owner), an explicit
+        # OWNER_USER_ID is mandatory — binding the session to an arbitrary
+        # lowest-id admin on a shared box is a silent privilege grant. Refuse the
+        # fallback; the explicit-owner branch below handles a set-but-unresolved
+        # OWNER_USER_ID with its own 409s. Single-user keeps the fallback.
+        if multi_user and flag_enabled and not owner_exempt and core.owner_user_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "set OWNER_USER_ID for multi-user API-key login; refusing to "
+                    "bind the session to an arbitrary admin"
+                ),
+            )
+
+        # Guardrail 1: resolve the single explicit owner. Never create one.
+        if core.owner_user_id is not None:
+            # A-3 (defense-in-depth): the explicit-owner lookup (pre-resolved as
+            # ``owner`` above) enforces role='admin' symmetrically with the
+            # fallback branch below. A configured OWNER_USER_ID that resolves to a
+            # non-admin must NOT silently mint a member "owner" session —
+            # distinguish "missing" (deleted/absent) from "exists but not admin"
+            # so the operator gets an actionable error instead of a privilege
+            # downgrade.
             if owner is None:
                 non_admin = await conn.fetchrow(
                     "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL",

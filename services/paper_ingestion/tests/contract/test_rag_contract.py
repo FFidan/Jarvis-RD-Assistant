@@ -1290,6 +1290,160 @@ async def test_rag_w2_weekly_summary_aggregates_across_papers(
 
 
 # ---------------------------------------------------------------------------
+# M6.5 — summarization adversarial tripwires (schema-echo defense-in-depth)
+#
+# Production is already safe by construction (M1 grammar-constrained decoding).
+# These tests lock the consumer-side net: a schema-echo all-empty
+# SummarizationOutput must NEVER persist as a successful (coverage=1.0) summary,
+# and genuinely unrepairable garbage must surface as an error, never silent
+# acceptance of the schema object as the result.
+# ---------------------------------------------------------------------------
+
+# schema_object parses cleanly to an all-empty instance (the all-empty guard's
+# job); truncated/double_encoded never parse (the structured-call error contract).
+_SUMMARY_UNREPAIRABLE_SHAPES = ("truncated", "double_encoded")
+
+
+def _valid_summary_json() -> str:
+    from paper_ingestion.services.summarization_models import SummarizationOutput
+
+    return SummarizationOutput(
+        tldr="A valid one-sentence contribution.",
+        summary_brief="A valid brief summary.",
+        summary_detailed="A valid detailed summary of the paper.",
+        key_findings=[],
+    ).model_dump_json()
+
+
+@pytest.mark.nightly_smoke
+async def test_rag_w2_summarize_schema_object_echo_degrades_to_abstract(
+    pi_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """A schema-object echo parses to an all-empty SummarizationOutput and is never
+    persisted as a successful summary — it degrades to the abstract (coverage=0.0).
+
+    Removing the all-empty net (summarization.py:737-745) makes this test FAIL:
+    the empty brief/detailed would persist verbatim with coverage=1.0.
+    """
+    import httpx
+
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.services.summarization import generate_paper_summary
+    from paper_ingestion.services.summarization_models import SummarizationOutput
+    from tests.conftest import adversarial_llm_payloads
+
+    app, faux = pi_contract_app_with_litellm_sidecar
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('w2-summ-schema-echo@contract.test', 'user') RETURNING id"
+    )
+    abstract = "This abstract is the honest fallback when the LLM returns nothing usable."
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url, abstract, discovered_by)"
+        " VALUES ('w2-summ-schema-01', 'arxiv', 'W2 Summary Schema Echo', $1, 'http://w2se1', $2, $3)"
+        " RETURNING id",
+        ["Author S"],
+        abstract,
+        user_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content)"
+        " VALUES ($1, 0, 'Transformers attend over all token positions in parallel.')",
+        paper_id,
+    )
+
+    schema_echo = adversarial_llm_payloads(SummarizationOutput, _valid_summary_json())[
+        "schema_object"
+    ]
+    faux.add_response("smart", schema_echo)
+
+    result = await generate_paper_summary(
+        paper_id=paper_id,
+        db_pool=app.state.db_pool,
+        http_client=httpx.AsyncClient(),
+        verifier=QuoteVerifier(),
+        embedder=None,
+        openai_client=app.state.openai_client,
+    )
+
+    assert result.coverage == 0.0, (
+        "schema-echo all-empty result must degrade (coverage=0.0), never report success"
+    )
+
+    row = await contract_conn.fetchrow(
+        "SELECT summary_brief, summary_detailed, summary_verified"
+        " FROM paper_summaries WHERE paper_id = $1",
+        paper_id,
+    )
+    assert row is not None, "a row is persisted (degraded), not silently dropped"
+    assert row["summary_brief"] == abstract, "empty brief must be replaced by the abstract"
+    assert row["summary_detailed"] == abstract, "empty detailed must be replaced by the abstract"
+    assert row["summary_verified"] is False, "a degraded summary is never marked verified"
+
+
+@pytest.mark.nightly_smoke
+@pytest.mark.parametrize("shape", _SUMMARY_UNREPAIRABLE_SHAPES)
+async def test_rag_w2_summarize_unrepairable_payload_raises(
+    shape,
+    pi_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """Unrepairable adversarial payloads (truncated/double_encoded) surface as an
+    LLMError after retries — never a silently-accepted schema object.
+
+    Verified: services/paper_ingestion/paper_ingestion/services/summarization.py:239-240
+    (pydantic.ValidationError -> LLMError "Malformed LLM response").
+    """
+    import httpx
+
+    from paper_ingestion.exceptions import LLMError
+    from paper_ingestion.services.summarization import generate_paper_summary
+    from paper_ingestion.services.summarization_models import SummarizationOutput
+    from tests.conftest import adversarial_llm_payloads
+
+    app, faux = pi_contract_app_with_litellm_sidecar
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        f" VALUES ('w2-summ-unrep-{shape}@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)"
+        f" VALUES ('w2-summ-unrep-{shape}', 'arxiv', 'W2 Summary Unrepairable', ARRAY['Author U'],"
+        " 'http://w2unrep', $1) RETURNING id",
+        user_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content)"
+        " VALUES ($1, 0, 'Attention weights are normalized with a softmax.')",
+        paper_id,
+    )
+
+    payload = adversarial_llm_payloads(SummarizationOutput, _valid_summary_json())[shape]
+    # Instructor reasks on validation failure (max_retries=2 -> 3 attempts); queue
+    # enough copies to exhaust the budget so the failure propagates as LLMError.
+    for _ in range(5):
+        faux.add_response("smart", payload)
+
+    with pytest.raises(LLMError):
+        await generate_paper_summary(
+            paper_id=paper_id,
+            db_pool=app.state.db_pool,
+            http_client=httpx.AsyncClient(),
+            verifier=None,
+            embedder=None,
+            openai_client=app.state.openai_client,
+        )
+
+    count = await contract_conn.fetchval(
+        "SELECT COUNT(*) FROM paper_summaries WHERE paper_id = $1", paper_id
+    )
+    assert count == 0, "an unrepairable payload must never persist a summary row"
+
+
+# ---------------------------------------------------------------------------
 # Null openai_client → 503 (not 502)
 #
 # Differentiates startup misconfiguration (_RagServiceNotReady → 503) from

@@ -4,7 +4,7 @@ COMPOSE_ENV_FILES = $(if $(wildcard .env),--env-file .env,) --env-file versions.
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose $(COMPOSE_ENV_FILES)
 COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 
-.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys no-tracked-secrets
+.PHONY: setup dev-env setup-service deps-export deps-check test test-service lint clean typecheck frontend-check check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys init-secrets no-tracked-secrets
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -127,12 +127,16 @@ observability-up: gen-langfuse-keys
 	  $(COMPOSE) --profile observability up -d --build langfuse paper_ingestion learning_engine
 
 ## Docker shortcuts
-up: gen-langfuse-keys
+up: gen-langfuse-keys init-secrets
 	$(COMPOSE) up -d
 
 ## Ensure Langfuse init keypair exists before any compose up (idempotent — never overwrites an existing key)
 gen-langfuse-keys:
 	./scripts/gen-langfuse-keys.sh
+
+## Ensure Docker-secret source files exist before any compose up (idempotent — never overwrites existing secrets)
+init-secrets:
+	./scripts/init-secrets.sh
 
 down:
 	$(COMPOSE) down
@@ -158,7 +162,7 @@ rebuild-local:
 	$(COMPOSE) build paper_ingestion learning_engine dashboard
 	$(COMPOSE) up -d paper_ingestion learning_engine dashboard
 
-up-build:
+up-build: gen-langfuse-keys init-secrets
 	$(COMPOSE) up -d --build
 
 ## Capture a perf snapshot (frontend bundle + backend timings + py-spy + pg_stat_statements)

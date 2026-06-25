@@ -271,64 +271,6 @@ async def test_call_llm_structured_passes_timeout_through():
 
 
 @pytest.mark.asyncio
-async def test_call_llm_structured_forwards_extra_body():
-    """call_llm_structured must forward options.extra_body to the OpenAI SDK call.
-
-    extra_body carries provider passthrough such as chat_template_kwargs (e.g.
-    disabling Qwen "thinking"); it must reach the underlying create() verbatim.
-    Verified: llm_client.py:392 — **({"extra_body": _options.extra_body} ...).
-    """
-    from pydantic import BaseModel
-
-    recorded: dict = {}
-    fake_client, _ = _make_instructor_recorder(recorded)
-
-    class _Out(BaseModel):
-        pass
-
-    await llm_client.call_llm_structured(
-        fake_client,
-        response_model=_Out,
-        prompt="hi",
-        options=llm_client.ChatCompletionOptions(
-            model="smart",
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-        ),
-    )
-
-    assert recorded.get("extra_body") == {"chat_template_kwargs": {"enable_thinking": False}}
-
-
-@pytest.mark.asyncio
-async def test_call_llm_structured_omits_extra_body_when_none():
-    """When extra_body is None (default), the key must not reach the SDK at all.
-
-    Passing extra_body=None through to create() could be forwarded into the
-    request body as a null and rejected by some providers; the helper guards this
-    by omitting the key entirely when falsy.
-    Verified: llm_client.py:392 — the conditional spread yields {} when falsy.
-    """
-    from pydantic import BaseModel
-
-    recorded: dict = {}
-    fake_client, _ = _make_instructor_recorder(recorded)
-
-    class _Out(BaseModel):
-        pass
-
-    await llm_client.call_llm_structured(
-        fake_client,
-        response_model=_Out,
-        prompt="hi",
-        options=llm_client.ChatCompletionOptions(model="smart"),
-    )
-
-    assert "extra_body" not in recorded, (
-        f"extra_body must be omitted when None; recorded kwargs: {sorted(recorded)}"
-    )
-
-
-@pytest.mark.asyncio
 async def test_call_llm_structured_raises_when_client_is_none():
     """A clear RuntimeError is preferable to a downstream Instructor crash."""
     with pytest.raises(RuntimeError, match="openai_client is required"):
@@ -462,6 +404,41 @@ def test_boundary_functions_are_observed():
         "Trace-boundary functions missing @observe() (per docs/contracts/04-observability.md §3): "
         + ", ".join(missing)
     )
+
+
+# ---------------------------------------------------------------------------
+# Structured-decoding mode — the instructor client must request grammar-
+# constrained json_schema decoding, not prompt-only json_object.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_init_langfuse_hook_builds_json_schema_instructor_client(monkeypatch):
+    """The shared instructor client must use Mode.JSON_SCHEMA (grammar-constrained).
+
+    init_langfuse_hook (app_factory.py:467-473) builds the Instructor-patched
+    AsyncOpenAI stored on app.state.openai_client; call_llm_structured routes
+    every structured call through it. Mode.JSON_SCHEMA makes instructor emit a
+    native response_format of type "json_schema", which arms the backend grammar
+    engine; the old Mode.JSON emits "json_object" and prompt-injects the schema
+    (the v0.9.1 schema-echo cause). instructor exposes the configured mode on the
+    patched client as ``.mode``, so we assert against the real construction with
+    no network call. Reverting :472 back to Mode.JSON fails this.
+    """
+    import types  # noqa: PLC0415
+
+    import instructor  # noqa: PLC0415
+    from jarvis_common import app_factory  # noqa: PLC0415
+
+    monkeypatch.setenv("OBSERVABILITY_ENABLED", "false")
+
+    app = types.SimpleNamespace(state=types.SimpleNamespace())
+
+    await app_factory.init_langfuse_hook(app)  # type: ignore[arg-type]
+
+    client = app.state.openai_client
+    assert client.mode is instructor.Mode.JSON_SCHEMA
+    assert client.mode is not instructor.Mode.JSON
 
 
 # ---------------------------------------------------------------------------

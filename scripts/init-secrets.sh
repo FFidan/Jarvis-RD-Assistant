@@ -79,6 +79,7 @@ sync_secret() {
     # to the openssl command documented in the call site's $generator argument.
     case "$key" in
       JARVIS_API_KEY)              value=$(openssl rand -hex 32) ;;
+      JARVIS_SETUP_TOKEN)          value=$(openssl rand -hex 32) ;;
       LITELLM_MASTER_KEY)          value=$(openssl rand -hex 32) ;;
       LITELLM_SALT_KEY)            value=$(openssl rand -hex 32) ;;
       POSTGRES_PASSWORD)           value=$(openssl rand -hex 24) ;;
@@ -124,6 +125,10 @@ sync_secret() {
 # Auto-generated secrets
 # ---------------------------------------------------------------------------
 sync_secret JARVIS_API_KEY     jarvis_api_key.txt     "openssl rand -hex 32"
+# JARVIS_SETUP_TOKEN gates the first-run setup wizard's WRITE endpoints while no
+# admin exists (closes the unauthenticated first-admin-takeover window). setup.sh
+# prints it as the ?setup_token= query param in the click-to-finish link.
+sync_secret JARVIS_SETUP_TOKEN jarvis_setup_token.txt "openssl rand -hex 32"
 sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
 # LITELLM_SALT_KEY encrypts model credentials LiteLLM stores in its database.
 # Without it litellm falls back to the master key as salt, so a master-key

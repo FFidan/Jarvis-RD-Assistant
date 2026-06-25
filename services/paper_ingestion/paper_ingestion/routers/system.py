@@ -16,6 +16,7 @@ from jarvis_common import (
     require_admin,
     require_admin_or_api_key,
 )
+from jarvis_common.app_factory import STRUCTURED_DECODING_MODE
 from jarvis_common.audit import log_audit
 from jarvis_common.hardware_fit import recommend_models
 from jarvis_common.model_catalog import Role
@@ -39,6 +40,7 @@ from paper_ingestion.services.model_lifecycle import (
     normalize_model_tag,
     recommendations_for_role,
 )
+from paper_ingestion.services.model_prefixes import strip_ollama_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -235,8 +237,7 @@ async def _compute_model_warnings() -> list[str]:
         routed_full = str(params.get("model", ""))
         if not routed_full:
             continue
-        if routed_full.startswith("ollama/"):
-            routed_full = routed_full[len("ollama/") :]
+        routed_full = strip_ollama_prefix(routed_full)
         role_to_routed[alias] = _strip_latest(routed_full)
 
     if not role_to_routed:
@@ -457,10 +458,7 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
             # Normalize: strip provider prefix so "ollama/qwen3:8b" → "qwen3:8b".
             # Cloud models (anthropic/…, openai/…) keep the prefix because that
             # is how `current` stores cloud model assignments too.
-            if routed_full.startswith("ollama/"):
-                routed_normalized = routed_full[len("ollama/") :]
-            else:
-                routed_normalized = routed_full
+            routed_normalized = strip_ollama_prefix(routed_full)
             # Normalize :latest so "qwen3:8b:latest" and "qwen3:8b" compare equal.
             routed_normalized = _strip_latest(routed_normalized)
             # Multiple deployments per alias can exist mid-replace; the
@@ -936,11 +934,15 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
 # ---------------------------------------------------------------------------
 
 
+_GRAMMAR_ENFORCING_MODES = frozenset({"JSON_SCHEMA"})
+
+
 class SystemCapabilities(BaseModel):
     """Available optional heavy-library capabilities on the backend."""
 
     networkx: bool
     scikit_learn: bool
+    structured_output_enforced: bool
 
 
 @router.get(
@@ -954,8 +956,135 @@ async def get_system_capabilities(request: Request) -> SystemCapabilities:
 
     Uses ``importlib.util.find_spec`` — no actual import, trivially cheap.
     The frontend Pulse settings UI uses this to suppress false-alarm warnings.
+
+    ``structured_output_enforced`` reports whether the configured instructor mode
+    constrains decoding to the schema grammar — derived from the module constant,
+    not a live probe — so an operator-visible flip catches a silent revert to a
+    prompt-only mode.
     """
     return SystemCapabilities(
         networkx=importlib.util.find_spec("networkx") is not None,
         scikit_learn=importlib.util.find_spec("sklearn") is not None,
+        structured_output_enforced=STRUCTURED_DECODING_MODE in _GRAMMAR_ENFORCING_MODES,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/system/effective-config
+# ---------------------------------------------------------------------------
+
+# Concrete code-default model per role. smart/fast mirror the static fallbacks
+# in main.py (_LITELLM_ROLE_FALLBACKS) — reconstructed here because main.py is
+# the FastAPI entrypoint and importing it has module-load side effects. embed
+# and pulse_stage2 default to LiteLLM aliases, sourced from PaperIngestionSettings.
+_ROLE_CODE_DEFAULTS: dict[str, str] = {
+    "smart": "qwen3:8b",
+    "fast": "qwen3:4b",
+}
+
+# Static deployment invariant: litellm/config.yaml sets `drop_params: true`
+# (LiteLLM's own config, not parsed by the app). Reported as a constant rather
+# than a runtime yaml read — the value is version-controlled and never varies
+# per request.
+_LITELLM_DROP_PARAMS = True
+
+
+class ResolvedRole(BaseModel):
+    """Resolved model selection for one LLM role: code default vs effective value."""
+
+    code_default: str
+    effective: str
+    transport_prefix: str
+
+
+class EffectiveConfig(BaseModel):
+    """Static resolved-vs-default config snapshot: the §5 silent-override control.
+
+    Diffing ``effective`` against ``code_default`` per role is what surfaces an
+    override like ``PULSE_STAGE2_MODEL=fast`` shadowing the ``smart`` default.
+    """
+
+    roles: dict[str, ResolvedRole]
+    instructor_mode: str
+    structured_output_enforced: bool
+    drop_params: bool
+    think_disabled: dict[str, bool]
+
+
+@router.get(
+    "/effective-config",
+    response_model=EffectiveConfig,
+    dependencies=[Depends(require_admin_or_api_key)],
+)
+@limiter.limit("30/minute")
+async def get_effective_config(request: Request) -> EffectiveConfig:
+    """Return the resolved model roles and structured-output enforcement state.
+
+    No live LLM/HTTP call — one cheap DB read for the smart/fast/embed overrides
+    plus static settings/constants. The effective value is the committed DB
+    override when present, else the settings/env default; pulse_stage2 resolves
+    from ``PaperIngestionSettings`` (env), mirroring ``pulse/scoring.py``.
+    """
+    from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
+        ALIAS_BOOTSTRAP_PARAMS,
+    )
+
+    settings = get_paper_ingestion_settings()
+
+    overrides: dict[str, str] = {}
+    try:
+        async with request.app.state.db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT key, value FROM user_config "
+                "WHERE key = ANY($1::text[]) AND user_id IS NULL",
+                ["llm.smart_model", "llm.fast_model", "llm.embed_model"],
+            )
+        for r in rows:
+            val = r["value"]
+            if isinstance(val, str):
+                val = val.strip('"')
+            overrides[r["key"].replace("llm.", "")] = val
+    except Exception:
+        logger.warning("Could not load resolved model overrides", exc_info=True)
+
+    def _transport_prefix(alias: str) -> str:
+        return "ollama/" if alias == "embed" else "ollama_chat/"
+
+    embed_default = type(settings).model_fields["embedding_model"].default
+    pulse_default = type(settings).model_fields["pulse_stage2_model"].default
+    roles = {
+        "smart": ResolvedRole(
+            code_default=_ROLE_CODE_DEFAULTS["smart"],
+            effective=overrides.get("smart_model") or _ROLE_CODE_DEFAULTS["smart"],
+            transport_prefix=_transport_prefix("smart"),
+        ),
+        "fast": ResolvedRole(
+            code_default=_ROLE_CODE_DEFAULTS["fast"],
+            effective=overrides.get("fast_model") or _ROLE_CODE_DEFAULTS["fast"],
+            transport_prefix=_transport_prefix("fast"),
+        ),
+        "embed": ResolvedRole(
+            code_default=embed_default,
+            effective=overrides.get("embed_model") or embed_default,
+            transport_prefix=_transport_prefix("embed"),
+        ),
+        "pulse_stage2": ResolvedRole(
+            code_default=pulse_default,
+            effective=settings.pulse_stage2_model or pulse_default,
+            transport_prefix=_transport_prefix("pulse_stage2"),
+        ),
+    }
+
+    think_disabled = {
+        alias: params.get("think") is False
+        for alias, params in ALIAS_BOOTSTRAP_PARAMS.items()
+        if alias in ("smart", "fast")
+    }
+
+    return EffectiveConfig(
+        roles=roles,
+        instructor_mode=STRUCTURED_DECODING_MODE,
+        structured_output_enforced=STRUCTURED_DECODING_MODE in _GRAMMAR_ENFORCING_MODES,
+        drop_params=_LITELLM_DROP_PARAMS,
+        think_disabled=think_disabled,
     )

@@ -23,6 +23,7 @@ from paper_ingestion.services.ai_settings import (
     resolve_candidates_for_tier,
 )
 from paper_ingestion.services.model_lifecycle import normalize_model_tag
+from paper_ingestion.services.model_prefixes import strip_ollama_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +84,9 @@ async def _ensure_ollama_model_present(
     if target in installed:
         return
 
-    # Strip the LiteLLM ``ollama/`` prefix for the pull name; Ollama expects
-    # the bare tag (e.g. ``qwen3:8b``).
-    pull_name = model.removeprefix("ollama/")
+    # Strip the LiteLLM ``ollama/`` / ``ollama_chat/`` prefix for the pull name;
+    # Ollama expects the bare tag (e.g. ``qwen3:8b``).
+    pull_name = strip_ollama_prefix(model)
     async with client.stream(
         "POST",
         f"{ollama_url}/api/pull",

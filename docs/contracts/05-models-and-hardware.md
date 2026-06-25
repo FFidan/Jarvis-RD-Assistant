@@ -451,6 +451,45 @@ a nested `extra_body` is silently ignored). The first-boot default for fresh dep
 Persisted as `llm.{machine_id}.thinking_disabled.{model_id}` (boolean); first-boot default is
 `true` for thinking-capable entries, `false` for everything else.
 
+### 6.7 Structured-output capability — empirical, not a per-model boolean
+
+**There is no `supports_structured_output` field in the catalog, and there must not be.** Structured
+output capability is not a fixed property of a model — it is a function of the model, the schema
+complexity, the prompt, and the instructor mode in use. Adding a boolean would be wrong in both
+directions, and the evidence proves it.
+
+**The observed asymmetry (v0.9.1).** The same `qwen3:4b` (the `fast` role — see
+[`_LITELLM_ROLE_FALLBACKS` at main.py:249-252](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/main.py#L249-L252))
+successfully produced `KGExtractionOutput` — a nested schema with `list[KGEntityCandidate]` and
+`list[KGRelationshipCandidate]`, constrained enums, min-length fields, and up to 25 total objects
+([kg_models.py:58-70](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/kg_models.py#L58-L70))
+— while simultaneously echoing the schema definition instead of an instance for `PulseScoringOutput`,
+a three-field flat model with only `int`/`str` fields
+([pulse/models.py:6-11](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/models.py#L6-L11)).
+Capability was not the differentiator — instructor mode was. `KGExtractionOutput` ran under
+`Mode.JSON_SCHEMA` (grammar-constrained); `PulseScoringOutput` ran under the old `Mode.JSON`
+(prompt-injected schema), which is where the echo occurred.
+
+**The fix.** Root-cause enforcement at the choke point: the instructor client is built with
+`Mode.JSON_SCHEMA` for all structured calls (see [03-llm.md §1.0](03-llm.md#10-structured-output-enforcement-mechanism)).
+Grammar constraints at the decoding layer make schema-echo structurally impossible regardless of
+model size.
+
+**Empirical grain.** VRAM-tiered bench data lives in
+[`config/llm-tier-candidates.yaml`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/config/llm-tier-candidates.yaml)
+as an operator-facing empirical overlay consumed by `GET /api/settings/ai`. This file describes
+ranked candidates per hardware tier; it is NOT a capability matrix. A candidate that bench-passes
+at Tier 2 may fail at Tier 0 (insufficient VRAM for the KV cache), so capability is
+per (model × hardware-tier × schema × mode) — four dimensions, not one boolean.
+
+**Opt-in hard-gate.** When `JARVIS_STRICT_MODELS` is set, a real structured-output probe is run
+against each live model alias at startup; failure hard-blocks the affected feature for that alias.
+This is NOT a boot fail-fast (the service still starts) and NOT a per-model boolean — it is an
+operator-chosen strictness level for deployments where a degraded structured-output response is
+unacceptable. By default, the degrade signal in
+[`pulse/job.py:337-345`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L337-L345)
+logs a warning and degrades gracefully without a hard stop.
+
 ---
 
 ## 7. API summary
@@ -556,3 +595,8 @@ Implementation: `_models_match()` in `services/paper_ingestion/paper_ingestion/r
 | `SystemModelsResponse` | services/paper_ingestion/paper_ingestion/models/papers.py:404-413 | Loose Pydantic response; additive `fit_detail` does not break clients. |
 | Active runtime defaults | litellm_config.py `ALIAS_BOOTSTRAP_PARAMS` + litellm/config.yaml | smart=`ollama/qwen3:8b`, fast=`ollama/qwen3:4b`, smart-fallback=`ollama/qwen3:4b` (admin DB); embed=`ollama/qwen3-embedding:4b` (YAML). |
 | `PaperIngestionSettings.embedding_model_name` / `embedding_dimension` | services/paper_ingestion/paper_ingestion/config.py | Defaults `qwen3-embedding:4b` / `2560`. |
+| `_LITELLM_ROLE_FALLBACKS` (fast role default) | services/paper_ingestion/paper_ingestion/main.py:249-252 | `"llm.fast_model"` → `("JARVIS_FAST_MODEL", "qwen3:4b")` |
+| `KGExtractionOutput` | services/paper_ingestion/paper_ingestion/extraction/kg_models.py:58-70 | Nested structured output: `list[KGEntityCandidate]` + `list[KGRelationshipCandidate]`; constrained enums, min-length, max 25 objects |
+| `PulseScoringOutput` | services/paper_ingestion/paper_ingestion/pulse/models.py:6-11 | Flat structured output: `relevance: int`, `novelty: int`, `reasoning: str` |
+| `config/llm-tier-candidates.yaml` | config/llm-tier-candidates.yaml | Empirical VRAM-tier candidate overlay for `GET /api/settings/ai`; not a capability matrix |
+| Pulse degrade signal (majority-failed scoring) | services/paper_ingestion/paper_ingestion/pulse/job.py:337-345 | Logs warning + degrades to Stage 1 ranking when `llm_calls ≤ len(stage2_out) // 5` |

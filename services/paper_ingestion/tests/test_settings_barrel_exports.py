@@ -19,6 +19,7 @@ import paper_ingestion.services.settings_service as settings_service
 # Public (non-underscore) names the barrel must continue to re-export.
 EXPECTED_PUBLIC_EXPORTS = frozenset(
     {
+        "API_KEY_LOGIN_CONFIG_KEY",
         "CLOUD_PROVIDERS",
         "PERSONAL_KEYS",
         "ProviderTestResult",

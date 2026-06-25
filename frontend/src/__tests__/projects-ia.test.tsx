@@ -135,7 +135,7 @@ describe('ChapterRail', () => {
     expect(screen.getByText(/PROJECTS · 2/i)).toBeInTheDocument();
   });
 
-  it('displays roman-numeral ordinals I, II, III for three projects', () => {
+  it('displays plain numeric ordinals 1, 2, 3 for three projects', () => {
     wrap(
       <ChapterRail
         projects={[BASE_PROJECT, PROJECT_B, PROJECT_C]}
@@ -143,9 +143,9 @@ describe('ChapterRail', () => {
         onSelect={vi.fn()}
       />,
     );
-    expect(screen.getByText('I')).toBeInTheDocument();
-    expect(screen.getByText('II')).toBeInTheDocument();
-    expect(screen.getByText('III')).toBeInTheDocument();
+    expect(screen.getByText('1')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
   });
 
   it('translates status labels: active→In progress, paused→Draft, completed→Completed, archived→Archived', () => {

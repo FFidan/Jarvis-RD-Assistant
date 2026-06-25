@@ -101,7 +101,7 @@ async def test_update_replaces_db_deployment(monkeypatch):
     """Model switch = POST /model/new (replacement) + POST /model/delete (old id)."""
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
     _mock_model_info(
-        [_entry("smart", {"model": "ollama/mistral-nemo", "api_base": "http://ollama:11434"})]
+        [_entry("smart", {"model": "ollama_chat/mistral-nemo", "api_base": "http://ollama:11434"})]
     )
     new_route = respx.post(f"{LITELLM}/model/new").mock(
         return_value=httpx.Response(200, json={"model_id": "new-1"})
@@ -115,7 +115,7 @@ async def test_update_replaces_db_deployment(monkeypatch):
     assert result is True
     payload = _last_payload(new_route)
     assert payload["model_name"] == "smart"
-    assert payload["litellm_params"]["model"] == "ollama/qwen3:4b"
+    assert payload["litellm_params"]["model"] == "ollama_chat/qwen3:4b"
     assert payload["litellm_params"]["api_base"] == "http://ollama:11434"
     assert _last_payload(delete_route) == {"id": "dep-1"}
 
@@ -125,7 +125,7 @@ async def test_update_replaces_db_deployment(monkeypatch):
 async def test_update_same_model_is_noop():
     """Alias already routing the requested model → False, zero admin writes."""
     _mock_model_info(
-        [_entry("smart", {"model": "ollama/mistral-nemo", "api_base": "http://ollama:11434"})]
+        [_entry("smart", {"model": "ollama_chat/mistral-nemo", "api_base": "http://ollama:11434"})]
     )
     new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
     delete_route = respx.post(f"{LITELLM}/model/delete").mock(
@@ -143,7 +143,7 @@ async def test_update_same_model_is_noop():
 @pytest.mark.asyncio
 async def test_update_strips_latest_tag_before_compare():
     """'mistral-nemo:latest' equals 'mistral-nemo' (Ollama implicit tag)."""
-    _mock_model_info([_entry("smart", {"model": "ollama/mistral-nemo"})])
+    _mock_model_info([_entry("smart", {"model": "ollama_chat/mistral-nemo"})])
     new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
 
     assert await update_litellm_model("llm.smart_model", "mistral-nemo:latest") is False
@@ -181,7 +181,7 @@ async def test_update_preserves_non_ollama_prefix_and_api_base():
 async def test_update_preserves_existing_num_ctx_when_disabling_think():
     """think=False merges with the deployment's num_ctx — both TOP-LEVEL."""
     _mock_model_info(
-        [_entry("smart", {"model": "ollama/qwen3:14b", "num_ctx": 8192}, dep_id="old-14b")]
+        [_entry("smart", {"model": "ollama_chat/qwen3:14b", "num_ctx": 8192}, dep_id="old-14b")]
     )
     new_route = respx.post(f"{LITELLM}/model/new").mock(
         return_value=httpx.Response(200, json={"model_id": "new-14b"})
@@ -214,7 +214,7 @@ async def test_update_lifts_legacy_extra_body_values():
         [
             _entry(
                 "smart",
-                {"model": "ollama/qwen3:14b", "extra_body": {"num_ctx": 8192, "think": False}},
+                {"model": "ollama_chat/qwen3:14b", "extra_body": {"num_ctx": 8192, "think": False}},
             )
         ]
     )
@@ -227,7 +227,7 @@ async def test_update_lifts_legacy_extra_body_values():
 
     assert result is True
     params = _last_payload(new_route)["litellm_params"]
-    assert params["model"] == "ollama/qwen3:8b"
+    assert params["model"] == "ollama_chat/qwen3:8b"
     assert params["num_ctx"] == 8192
     assert params["think"] is False
     assert "extra_body" not in params
@@ -238,7 +238,7 @@ async def test_update_lifts_legacy_extra_body_values():
 async def test_update_explicit_reenable_removes_think():
     """thinking_disabled=False removes only the think flag, keeping num_ctx."""
     _mock_model_info(
-        [_entry("smart", {"model": "ollama/qwen3:14b", "num_ctx": 8192, "think": False})]
+        [_entry("smart", {"model": "ollama_chat/qwen3:14b", "num_ctx": 8192, "think": False})]
     )
     new_route = respx.post(f"{LITELLM}/model/new").mock(
         return_value=httpx.Response(200, json={"model_id": "new-1"})
@@ -262,7 +262,7 @@ async def test_update_explicit_reenable_removes_think():
 @pytest.mark.asyncio
 async def test_update_pending_num_ctx_override_wins():
     """An explicit num_ctx kwarg (pending settings write) overrides the carried value."""
-    _mock_model_info([_entry("smart", {"model": "ollama/qwen3:8b", "num_ctx": 8192})])
+    _mock_model_info([_entry("smart", {"model": "ollama_chat/qwen3:8b", "num_ctx": 8192})])
     new_route = respx.post(f"{LITELLM}/model/new").mock(
         return_value=httpx.Response(200, json={"model_id": "new-1"})
     )
@@ -286,7 +286,7 @@ async def test_local_delivery_syncs_system_num_ctx_row_and_invalidates_cache(mon
     from tests.conftest import _make_pool_and_conn
 
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
-    _mock_model_info([_entry("smart", {"model": "ollama/qwen3:8b", "num_ctx": 8192})])
+    _mock_model_info([_entry("smart", {"model": "ollama_chat/qwen3:8b", "num_ctx": 8192})])
     respx.post(f"{LITELLM}/model/new").mock(
         return_value=httpx.Response(200, json={"model_id": "new-1"})
     )
@@ -324,7 +324,7 @@ async def test_local_noop_delivery_does_not_touch_system_num_ctx_row(monkeypatch
     no delivery happens — and the system row / cache are left untouched."""
     from tests.conftest import _make_pool_and_conn
 
-    _mock_model_info([_entry("smart", {"model": "ollama/qwen3:8b", "num_ctx": 4096})])
+    _mock_model_info([_entry("smart", {"model": "ollama_chat/qwen3:8b", "num_ctx": 4096})])
     new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
 
     # fetchrow_return=None: the per-machine thinking_disabled read resolves to
@@ -365,7 +365,7 @@ async def test_fresh_creation_seeds_bootstrap_defaults(monkeypatch):
 
     assert result is True
     params = _last_payload(new_route)["litellm_params"]
-    assert params["model"] == "ollama/qwen3:8b"
+    assert params["model"] == "ollama_chat/qwen3:8b"
     assert params["api_base"] == "http://ollama:11434"
     assert params["temperature"] == 0.2
     assert params["num_ctx"] == 8192
@@ -404,7 +404,7 @@ async def test_yaml_stacked_alias_warns_but_delivers(caplog):
     import logging
 
     _mock_model_info(
-        [_entry("smart", {"model": "ollama/qwen3:8b"}, db_model=False, dep_id="yaml-1")]
+        [_entry("smart", {"model": "ollama_chat/qwen3:8b"}, db_model=False, dep_id="yaml-1")]
     )
     new_route = respx.post(f"{LITELLM}/model/new").mock(
         return_value=httpx.Response(200, json={"model_id": "new-1"})
@@ -426,7 +426,7 @@ async def test_yaml_stacked_alias_warns_but_delivers(caplog):
 @pytest.mark.asyncio
 async def test_delete_failure_rolls_back_new_deployment():
     """Failed stale-deployment cleanup rolls the just-created deployment back."""
-    _mock_model_info([_entry("smart", {"model": "ollama/qwen3:8b"}, dep_id="old-1")])
+    _mock_model_info([_entry("smart", {"model": "ollama_chat/qwen3:8b"}, dep_id="old-1")])
     respx.post(f"{LITELLM}/model/new").mock(
         return_value=httpx.Response(200, json={"model_id": "new-1"})
     )
@@ -558,7 +558,7 @@ async def test_ensure_smart_fallback_creates_deployment():
     payload = _last_payload(new_route)
     assert payload["model_name"] == "smart-fallback"
     params = payload["litellm_params"]
-    assert params["model"] == "ollama/qwen3:4b"
+    assert params["model"] == "ollama_chat/qwen3:4b"
     assert params["timeout"] == 120
     assert params["num_ctx"] == 4096
     assert params["think"] is False
@@ -569,7 +569,7 @@ async def test_ensure_smart_fallback_creates_deployment():
 @pytest.mark.asyncio
 async def test_ensure_smart_fallback_existing_is_noop():
     """smart-fallback already routing the fast model → False, no admin writes."""
-    _mock_model_info([_entry("smart-fallback", {"model": "ollama/qwen3:4b", "timeout": 120})])
+    _mock_model_info([_entry("smart-fallback", {"model": "ollama_chat/qwen3:4b", "timeout": 120})])
     new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
 
     assert await ensure_smart_fallback("qwen3:4b") is False
@@ -652,7 +652,7 @@ async def test_ensure_smart_fallback_cloud_missing_key_pins_static_default(monke
     assert first is True
     assert second is True  # model_info mock never shows the pinned deployment
     params = _last_payload(new_route)["litellm_params"]
-    assert params["model"] == "ollama/qwen3:4b"
+    assert params["model"] == "ollama_chat/qwen3:4b"
     assert params["api_base"] == "http://ollama:11434"
     assert params["num_ctx"] == 4096
     assert params["think"] is False
@@ -690,14 +690,14 @@ async def test_apply_litellm_runtime_update_strips_upstream_body_from_detail(mon
 
     monkeypatch.setenv("LITELLM_BASE_URL", LITELLM)
     pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"value": "ollama/qwen3:8b", "encrypted_value": None}
+    conn.fetchrow.return_value = {"value": "ollama_chat/qwen3:8b", "encrypted_value": None}
 
     with caplog.at_level(logging.ERROR, logger="paper_ingestion.services.config_write"):
         with pytest.raises(HTTPException) as exc_info:
             await _apply_litellm_runtime_update(
                 db_pool=pool,
                 key="llm.smart_model",
-                value="ollama/qwen3:8b",
+                value="ollama_chat/qwen3:8b",
                 update_litellm_model_fn=_failing_update_fn,
             )
 
@@ -728,9 +728,11 @@ async def test_ensure_smart_fallback_deletes_stale_sibling_when_match_exists():
     _mock_model_info(
         [
             _entry(
-                "smart-fallback", {"model": "ollama/qwen3:4b", "timeout": 120}, dep_id="match-1"
+                "smart-fallback",
+                {"model": "ollama_chat/qwen3:4b", "timeout": 120},
+                dep_id="match-1",
             ),
-            _entry("smart-fallback", {"model": "ollama/old-model:7b"}, dep_id="stale-1"),
+            _entry("smart-fallback", {"model": "ollama_chat/old-model:7b"}, dep_id="stale-1"),
         ]
     )
     new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
@@ -752,7 +754,13 @@ async def test_ensure_smart_fallback_deletes_stale_sibling_when_match_exists():
 async def test_ensure_smart_fallback_match_only_no_delete():
     """A single matching deployment with no stale siblings → no delete, no new delivery."""
     _mock_model_info(
-        [_entry("smart-fallback", {"model": "ollama/qwen3:4b", "timeout": 120}, dep_id="match-1")]
+        [
+            _entry(
+                "smart-fallback",
+                {"model": "ollama_chat/qwen3:4b", "timeout": 120},
+                dep_id="match-1",
+            )
+        ]
     )
     new_route = respx.post(f"{LITELLM}/model/new").mock(return_value=httpx.Response(200, json={}))
     delete_route = respx.post(f"{LITELLM}/model/delete").mock(
@@ -764,6 +772,58 @@ async def test_ensure_smart_fallback_match_only_no_delete():
     assert result is False
     assert not new_route.called
     assert not delete_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_migrated_reconcile_set_does_not_flap_on_second_pass(monkeypatch):
+    """Two consecutive reconcile passes over a migrated smart/fast/smart-fallback
+    set deliver nothing the second time.
+
+    A guard that recognised only ``ollama/`` would treat every ``ollama_chat/``
+    deployment as foreign — re-emitting the chat prefix and never matching its
+    own prior delivery, so each pass would re-create the deployment forever.
+    Pass 1 starts from an empty proxy and creates all three; the created
+    deployments are fed back as the live state for pass 2, which must be a no-op.
+    """
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
+
+    deployments: list[dict[str, Any]] = []
+    respx.get(f"{LITELLM}/v1/model/info").mock(
+        side_effect=lambda request: httpx.Response(200, json={"data": deployments})
+    )
+    new_route = respx.post(f"{LITELLM}/model/new").mock(
+        return_value=httpx.Response(200, json={"model_id": "dep-new"})
+    )
+    respx.post(f"{LITELLM}/model/delete").mock(return_value=httpx.Response(200, json={}))
+
+    async def _reconcile() -> list[bool]:
+        return [
+            await update_litellm_model("llm.smart_model", "qwen3:8b"),
+            await update_litellm_model("llm.fast_model", "qwen3:4b"),
+            await ensure_smart_fallback("qwen3:4b"),
+        ]
+
+    first = await _reconcile()
+    assert first == [True, True, True]
+    # Capture what pass 1 delivered and present it as the now-live proxy state.
+    deployments = [
+        _entry(
+            json.loads(call.request.content)["model_name"],
+            json.loads(call.request.content)["litellm_params"],
+            dep_id=f"dep-{idx}",
+        )
+        for idx, call in enumerate(new_route.calls)
+    ]
+    assert {d["litellm_params"]["model"] for d in deployments} == {
+        "ollama_chat/qwen3:8b",
+        "ollama_chat/qwen3:4b",
+    }
+    calls_after_first = new_route.call_count
+
+    second = await _reconcile()
+    assert second == [False, False, False]
+    assert new_route.call_count == calls_after_first  # no second-pass delivery
 
 
 @respx.mock
@@ -780,5 +840,5 @@ async def test_ensure_smart_fallback_missing_key_guard_intact():
 
     assert result is True
     params = _last_payload(new_route)["litellm_params"]
-    assert params["model"] == "ollama/qwen3:4b"
+    assert params["model"] == "ollama_chat/qwen3:4b"
     assert "api_key" not in params

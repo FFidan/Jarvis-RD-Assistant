@@ -212,6 +212,84 @@ class TestProcrastinateWorkerLifespan:
 
 
 # ---------------------------------------------------------------------------
+# SEC-4 boot gate: multi-user non-prod boot requires JARVIS_MODEL_HMAC_KEY
+# ---------------------------------------------------------------------------
+
+
+class TestModelHmacKeyBootGate:
+    """validate_production_config runs first in configure_lifespan (before the
+    DB pool), so a multi-user (JARVIS_SETUP_MODE != single) boot without a
+    dedicated JARVIS_MODEL_HMAC_KEY must abort startup — defending the pulse
+    pickle-signing path from a stolen-bearer forgery on internal multi-user
+    boxes. Single-user dev is unchanged."""
+
+    @staticmethod
+    def _minimal_lifespan():
+        from jarvis_common.app_factory import ServiceLifespanConfig, configure_lifespan
+
+        config = ServiceLifespanConfig(service_name="test_hmac_boot_gate")
+        return configure_lifespan(config)
+
+    async def test_multi_user_nonprod_boot_requires_hmac_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi import FastAPI
+
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("DEV_MODE", "false")
+        monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+        monkeypatch.setenv("JARVIS_SETUP_MODE", "multi")
+        monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+        monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY_FILE", raising=False)
+
+        lifespan = self._minimal_lifespan()
+        # The gate raises before any DB pool is created, so no asyncpg patch is needed.
+        with pytest.raises(RuntimeError, match="JARVIS_MODEL_HMAC_KEY"):
+            async with lifespan(FastAPI()):
+                pass
+
+    async def test_single_user_dev_boot_does_not_require_hmac_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        fake_pool: AsyncMock,
+        fake_http_client: AsyncMock,
+    ) -> None:
+        from fastapi import FastAPI
+
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("DEV_MODE", "false")
+        monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+        monkeypatch.setenv("JARVIS_SETUP_MODE", "single")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
+        monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+        monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY_FILE", raising=False)
+
+        import jarvis_common.app_factory as _af
+
+        lifespan = self._minimal_lifespan()
+        # Single-user dev must pass the boot gate; the REAL
+        # validate_production_config runs (not stubbed) so the gate is genuinely
+        # exercised. Only the post-gate DB/HTTP I/O is stubbed out.
+        with (
+            patch(
+                "jarvis_common.app_factory.asyncpg.create_pool",
+                AsyncMock(return_value=fake_pool),
+            ),
+            patch(
+                "jarvis_common.app_factory.validate_encrypted_config_rows",
+                AsyncMock(return_value=None),
+            ),
+            patch.object(
+                _af.httpx,
+                "AsyncClient",
+                MagicMock(return_value=fake_http_client),
+            ),
+        ):
+            async with lifespan(FastAPI()) as _:
+                pass
+
+
+# ---------------------------------------------------------------------------
 # _autoconfigure_models_hook structural + unit tests
 # ---------------------------------------------------------------------------
 

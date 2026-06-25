@@ -37,12 +37,35 @@ regexes = [
 # high-entropy strings, but they are not real secrets — they exercise auth,
 # settings, and provider code paths. Real credentials never live in tests.
 #
-# Scope: only files under test directories (services/*/tests/, libs/*/tests/,
-# frontend src __tests__). Precise path globs, not a blanket allow.
+# Design: regexes-only — NO blanket path disable. A finding must match a regex
+# to be suppressed, so an unrecognised real secret in a test dir is still flagged.
+# Private-key/AWS/PAT rules remain active in test directories.
 # ---------------------------------------------------------------------------
 [[allowlists]]
 description = "Synthetic credential fixtures in test files (not real secrets)"
-paths = [
-  '''.*/tests/.*''',
-  '''.*/__tests__/.*''',
+# Covered fixtures — confirmed via `gitleaks dir` + `gitleaks detect` on the tree:
+#
+# Current-HEAD fixtures (working tree):
+#   valid-api-key-32chars-long-xxxxx   frontend/src/__tests__/auth-store.test.ts
+#   test-api-key-32chars-xxxxxxxxxx    frontend/src/__tests__/auth-store.persist.test.ts
+#   Citation-12345                     frontend/src/__tests__/ResearchFeedPage.test.tsx
+#   AIza-sec003-secret-key             services/paper_ingestion/tests/test_providers.py
+#   secret-zotero-key-abc123           services/paper_ingestion/tests/test_zotero_service.py
+#
+# Historical-commit fixtures (removed from HEAD, present in git history):
+#   xK9mP2qR7nL4wJ8vB5hC1dG6tF3sY0uA  libs/jarvis_common/tests/test_dev_mode_retirement.py
+#   pgyJ7t8w9KYMFgZ-9_M89P0VbyzqWj4Xz9LgSjlvKxs=  (deterministic Fernet key fixture,
+#       replaced by Fernet.generate_key() in later commits)
+#   correct-key-1234567890abcdefghij   libs/jarvis_common/tests/test_verify_api_key_session.py
+regexes = [
+  # Current-HEAD fixtures
+  '''valid-api-key-32chars-long-xxxxx''',
+  '''test-api-key-32chars-xxxxxxxxxx''',
+  '''AIza-sec003-secret-key''',
+  '''secret-zotero-key-abc123''',
+  '''Citation-12345''',
+  # Historical-commit fixtures (burned/replaced; not real secrets)
+  '''xK9mP2qR7nL4wJ8vB5hC1dG6tF3sY0uA''',
+  '''pgyJ7t8w9KYMFgZ-9_M89P0VbyzqWj4Xz9LgSjlvKxs=''',
+  '''correct-key-1234567890abcdefghij''',
 ]

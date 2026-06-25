@@ -399,7 +399,7 @@ async def test_compute_model_warnings_not_pulled(monkeypatch):
         return [
             {
                 "model_name": "smart",
-                "litellm_params": {"model": "ollama/qwen3:8b"},
+                "litellm_params": {"model": "ollama_chat/qwen3:8b"},
                 "model_info": {"id": "dep-1", "db_model": True},
             }
         ]
@@ -446,12 +446,12 @@ async def test_compute_model_warnings_empty_when_all_match(monkeypatch):
         return [
             {
                 "model_name": "smart",
-                "litellm_params": {"model": "ollama/qwen3:8b"},
+                "litellm_params": {"model": "ollama_chat/qwen3:8b"},
                 "model_info": {"id": "dep-smart", "db_model": True},
             },
             {
                 "model_name": "fast",
-                "litellm_params": {"model": "ollama/qwen3:4b"},
+                "litellm_params": {"model": "ollama_chat/qwen3:4b"},
                 "model_info": {"id": "dep-fast", "db_model": True},
             },
         ]
@@ -500,7 +500,7 @@ async def test_compute_model_warnings_latest_tolerant(monkeypatch):
             {
                 "model_name": "smart",
                 # LiteLLM reports with :latest
-                "litellm_params": {"model": "ollama/qwen3:8b:latest"},
+                "litellm_params": {"model": "ollama_chat/qwen3:8b:latest"},
                 "model_info": {"id": "dep-smart", "db_model": True},
             }
         ]

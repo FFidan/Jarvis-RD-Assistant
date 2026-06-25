@@ -62,14 +62,20 @@ def _configure_config_key(monkeypatch):
     refresh_fernet_cache()
 
 
+_SETUP_TOKEN = "test-sentinel-token"
+
+
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def setup_client(contract_conn):
+async def setup_client(contract_conn, monkeypatch):
     """ASGI client for setup.py endpoints.
 
     No session cookie required — calls are made in bootstrap mode (no admin in DB).
-    Sets BOTH pool overrides.  Disables rate limiter.
+    Sets BOTH pool overrides.  Disables rate limiter.  Configures the bootstrap
+    setup token and sends it as the default ``X-Setup-Token`` header so the
+    token-gated WRITE endpoints succeed.
     """
     from jarvis_common import verify_api_key
+    from jarvis_common.settings import get_secrets_settings
     from jarvis_common.testing_contract_apps import (
         make_contract_client,
         patch_app_state,
@@ -77,6 +83,9 @@ async def setup_client(contract_conn):
     )
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
+
+    monkeypatch.setenv("JARVIS_SETUP_TOKEN", _SETUP_TOKEN)
+    get_secrets_settings.cache_clear()
 
     shared = SharedConnPool(contract_conn)
     app.state.limiter.enabled = False
@@ -89,9 +98,11 @@ async def setup_client(contract_conn):
             ),
         ):
             async with make_contract_client(app, None) as client:
+                client.headers["X-Setup-Token"] = _SETUP_TOKEN
                 yield client
     finally:
         app.state.limiter.enabled = True
+        get_secrets_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +323,39 @@ async def test_a135_create_admin_409_when_admin_already_exists(setup_client, con
 
     assert resp.status_code == 409, (
         f"Expected 409 when admin already exists; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+async def test_setup_write_without_token_is_forbidden_over_http(setup_client):
+    """B3/SEC-1 over the real ASGI route: a bootstrap WRITE with no valid token is 403.
+
+    The other tests send the default ``X-Setup-Token`` header (positive path).
+    This proves the gate END-TO-END over HTTP: with a token configured and no
+    admin in DB (bootstrap mode), a setup WRITE that does not carry a valid
+    token is rejected with 403 by ``require_unconfigured_or_admin`` — while the
+    read-only status probe stays open.
+
+    Verified: setup.py:286-322 _require_setup_token / require_unconfigured_or_admin
+    (403 on missing/wrong token for a bootstrap POST) at HEAD.
+    """
+    # Read-only status probe stays open even when a token is configured.
+    status_resp = await setup_client.get("/api/setup/status")
+    assert status_resp.status_code == 200, (
+        f"GET /api/setup/status must stay open without a token; "
+        f"got {status_resp.status_code}: {status_resp.text[:300]}"
+    )
+
+    # A bootstrap WRITE carrying a WRONG token (overriding the fixture's valid
+    # default header) must be rejected with 403, not persisted.
+    resp = await setup_client.post(
+        "/api/setup/admin",
+        json={"email": "no-token-admin@example.com"},
+        headers={"X-Setup-Token": "wrong-token"},
+    )
+
+    assert resp.status_code == 403, (
+        f"Expected 403 for a bootstrap setup WRITE without a valid token; "
+        f"got {resp.status_code}: {resp.text[:300]}"
     )
 
 

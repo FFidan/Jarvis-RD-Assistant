@@ -361,6 +361,50 @@ async def test_put_setup_completed_persists_true(contract_conn, pi_settings_clie
     assert row["value"] is True, f"Expected True; got {row['value']!r}"
 
 
+async def test_put_api_key_login_enabled_persists_and_invalidates_cache(
+    contract_conn, pi_settings_client
+):
+    """PUT /api/config/auth.api_key_login_enabled persists the system row + clears the cache.
+
+    The DB override is read by jarvis_common.auth.api_key_login_enabled through a
+    process cache; the settings write must invalidate it so the next mint sees
+    the new value. Verified: config_write.py invalidate_api_key_login_cache hook.
+    """
+    from jarvis_common import auth as _auth_mod
+    from jarvis_common.auth import API_KEY_LOGIN_CONFIG_KEY
+
+    # Prime the cache to a stale False so we can prove invalidation runs.
+    _auth_mod._api_key_login_db_override = False
+
+    resp = await pi_settings_client.put(
+        f"/api/config/{API_KEY_LOGIN_CONFIG_KEY}",
+        json={"key": API_KEY_LOGIN_CONFIG_KEY, "value": True},
+    )
+    assert resp.status_code == 200, f"PUT {API_KEY_LOGIN_CONFIG_KEY} failed: {resp.json()}"
+    assert resp.json()["value"] is True
+
+    row = await contract_conn.fetchrow(
+        "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+        API_KEY_LOGIN_CONFIG_KEY,
+    )
+    assert row is not None, f"{API_KEY_LOGIN_CONFIG_KEY} row must exist in user_config"
+    assert row["value"] is True, f"Expected True; got {row['value']!r}"
+    assert _auth_mod._api_key_login_db_override is None, (
+        "settings write must invalidate the API-key-login cache"
+    )
+
+
+async def test_put_api_key_login_enabled_rejects_non_bool(pi_settings_client):
+    """A non-boolean value for the API-key-login toggle is rejected with 400."""
+    from jarvis_common.auth import API_KEY_LOGIN_CONFIG_KEY
+
+    resp = await pi_settings_client.put(
+        f"/api/config/{API_KEY_LOGIN_CONFIG_KEY}",
+        json={"key": API_KEY_LOGIN_CONFIG_KEY, "value": "yes"},
+    )
+    assert resp.status_code == 400, f"Expected 400 for non-bool, got {resp.status_code}"
+
+
 # ---------------------------------------------------------------------------
 # telegram.owner_chat_id — optional int system key
 # ---------------------------------------------------------------------------
@@ -687,7 +731,7 @@ async def _ai_settings_client(contract_conn, tmp_path_factory):
     _orig_config_path = _sai_mod._CONFIG_PATH
     _orig_observed_share = _sai_mod.observed_share
     _sai_mod._CONFIG_PATH = config_path
-    _sai_mod.observed_share = lambda _role: ("ollama/qwen3:14b", 0.95)
+    _sai_mod.observed_share = lambda _role: ("ollama_chat/qwen3:14b", 0.95)
     app.state.limiter.enabled = False
     try:
         with (

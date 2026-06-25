@@ -450,6 +450,90 @@ async def test_extraction_w2_verifier_mandatory_blocks_unverified(
 
 
 # ---------------------------------------------------------------------------
+# M6.5 — dynamic-extraction adversarial tripwire (schema-echo defense-in-depth)
+#
+# A schema-object echo has top-level keys (type/properties/required/...) that do
+# NOT match template field names, so every template field resolves to None — no
+# schema keyword ever reaches the DB as a field value. all-None is LEGITIMATE
+# (a paper with no extractable fields), so the request must fail SAFE (null
+# values, confidence 0.0), not 500 and not a hard all-None rejection.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.nightly_smoke
+async def test_extraction_w2_schema_object_echo_no_key_corruption(
+    pi_contract_app_with_litellm_sidecar,
+    contract_conn,
+):
+    """A schema-object echo resolves every template field to None with confidence 0.0
+    and never lets a JSON-schema keyword leak into a field value/quote.
+
+    # Verified: services/paper_ingestion/paper_ingestion/extraction/core.py:227-233
+    # (getattr(llm_result, field_name) on schema-object keys -> None per field)
+    """
+    import json
+
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.extraction.core import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import _build_extraction_response_model
+
+    app, faux = pi_contract_app_with_litellm_sidecar
+
+    user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role)"
+        " VALUES ('w2-extv-schema-echo@contract.test', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        "INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)"
+        " VALUES ('w2-extv-schema-01', 'arxiv', 'W2 Extraction Schema Echo', ARRAY['Author E'],"
+        " 'http://w2ese', $1) RETURNING id",
+        user_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO paper_chunks (paper_id, chunk_index, content)"
+        " VALUES ($1, 0, 'The model achieves 94.2% accuracy on GLUE.')",
+        paper_id,
+    )
+    template_id = await contract_conn.fetchval(
+        "INSERT INTO extraction_templates (name, fields) VALUES ($1, $2::jsonb) RETURNING id",
+        "w2-schema-echo-template",
+        [
+            {"name": "accuracy", "label": "Accuracy", "type": "text", "description": "Accuracy"},
+            {"name": "dataset", "label": "Dataset", "type": "text", "description": "Dataset"},
+        ],
+    )
+
+    # The LLM echoes its own JSON schema object instead of extracted values.
+    response_model = _build_extraction_response_model(("accuracy", "dataset"))
+    faux.add_response("smart", json.dumps(response_model.model_json_schema()))
+
+    result = await extract_fields_for_paper(
+        http_client=None,  # type: ignore[arg-type]
+        db_pool=app.state.db_pool,
+        paper_id=paper_id,
+        template_id=template_id,
+        embedder=None,
+        verifier=QuoteVerifier(),
+        openai_client=app.state.openai_client,
+    )
+
+    schema_keywords = {"type", "properties", "required", "$defs", "title", "ExtractedFieldOutput"}
+    for field_name in ("accuracy", "dataset"):
+        field = result.extractions.get(field_name)
+        assert field is not None, f"{field_name} must be present in the extraction result"
+        assert field.value is None, (
+            f"{field_name}: schema-echo must resolve to a null value (all-None is legitimate)"
+        )
+        assert field.confidence == 0.0, f"{field_name}: a null extraction must carry confidence 0.0"
+        assert field.value not in schema_keywords, (
+            f"{field_name}: a JSON-schema keyword must never leak into a field value"
+        )
+        assert field.quote is None or field.quote not in schema_keywords, (
+            f"{field_name}: a JSON-schema keyword must never leak into a field quote"
+        )
+
+
+# ---------------------------------------------------------------------------
 # TENANT-01: per-user extraction isolation
 # ---------------------------------------------------------------------------
 

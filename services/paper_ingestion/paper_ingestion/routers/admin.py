@@ -30,7 +30,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import require_admin
-from jarvis_common.email import send_magic_link
+from jarvis_common.email import send_magic_link, smtp_configured
 from pydantic import BaseModel, EmailStr, Field
 
 from paper_ingestion.routers.auth import MAGIC_LINK_TTL, _hash_email, _hash_token
@@ -60,6 +60,13 @@ class UserRecord(BaseModel):
     role: str
     created_at: datetime
     last_login_at: datetime | None
+
+
+class InviteUserResponse(UserRecord):
+    """Invite result. ``invite_link`` is populated only when SMTP could not
+    deliver the magic link, so the admin can hand it over manually."""
+
+    invite_link: str | None = None
 
 
 class InviteUserBody(BaseModel):
@@ -118,14 +125,16 @@ async def list_users(request: Request) -> list[UserRecord]:
 
 @router.post(
     "/users",
-    response_model=UserRecord,
+    response_model=InviteUserResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_admin)],
 )
-async def invite_user(body: InviteUserBody, request: Request) -> UserRecord:
+async def invite_user(body: InviteUserBody, request: Request) -> InviteUserResponse:
     """Create a new user and send them a 24-hour invite magic link.
 
-    Raises 409 if a non-deleted user with the same email already exists.
+    Raises 409 if a non-deleted user with the same email already exists. When
+    SMTP cannot deliver the link (unconfigured relay or a send failure), the
+    link is returned in ``invite_link`` so the admin can share it manually.
     """
     pool = request.app.state.db_pool
     email_norm = body.email.lower().strip()
@@ -177,9 +186,11 @@ async def invite_user(body: InviteUserBody, request: Request) -> UserRecord:
         )
 
     link = _build_invite_link(request, raw_token)
+    delivered = await smtp_configured(pool)
     try:
         await send_magic_link(email_norm, link, pool=pool)
     except Exception:  # noqa: BLE001 — never expose SMTP errors
+        delivered = False
         logger.exception(
             "send_magic_link (invite) failed for email_hash=%s", _hash_email(email_norm)
         )
@@ -192,7 +203,12 @@ async def invite_user(body: InviteUserBody, request: Request) -> UserRecord:
         user_id=str(caller_id) if caller_id is not None else None,
     )
 
-    return _row_to_user(user_row)
+    # Surface the link to the (admin-only) caller only when it could not be
+    # delivered, so they can hand it over manually.
+    return InviteUserResponse(
+        **_row_to_user(user_row).model_dump(),
+        invite_link=None if delivered else link,
+    )
 
 
 @router.patch(

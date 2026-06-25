@@ -64,6 +64,9 @@ logger = logging.getLogger(__name__)
 
 _POSTGRES_SECRET_PATH = "/run/secrets/postgres_password"
 
+# instructor.Mode member that emits grammar-constrained decoding
+STRUCTURED_DECODING_MODE = "JSON_SCHEMA"
+
 
 def build_database_url() -> str:
     """Construct the PostgreSQL DSN without embedding a password in any env var.
@@ -469,7 +472,7 @@ async def init_langfuse_hook(
             base_url=f"{litellm_config.base_url}/v1",
             api_key=_master_key_secret.get_secret_value() if _master_key_secret else "dummy",
         ),
-        mode=instructor.Mode.JSON,
+        mode=instructor.Mode[STRUCTURED_DECODING_MODE],
     )
     app.state.openai_client = openai_client
     if set_services_callback is not None:

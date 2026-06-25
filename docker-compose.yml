@@ -311,7 +311,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.9.1}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.9.2}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -343,8 +343,11 @@ services:
       JARVIS_CONFIG_KEY_FILE: /run/secrets/jarvis_config_key
       # Vector sidecar uses this to authenticate to POST /infra-events
       INFRA_INGEST_KEY_FILE: /run/secrets/infra_ingest_key
+      # Gates the first-run setup wizard's WRITE endpoints while no admin exists.
+      JARVIS_SETUP_TOKEN_FILE: /run/secrets/jarvis_setup_token
     secrets:
       - jarvis_api_key
+      - jarvis_setup_token
       - jarvis_model_hmac_key
       - postgres_password
       - telegram_bot_token
@@ -391,7 +394,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.9.1}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-0.9.2}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -439,7 +442,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.9.1}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.9.2}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -486,7 +489,7 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.9.1}
+    image: jarvis/dashboard:${JARVIS_VERSION:-0.9.2}
     build:
       context: ./frontend
       args:
@@ -537,6 +540,9 @@ services:
     security_opt: ["no-new-privileges:true"]
     mem_limit: 256m
     environment:
+      # backup.sh hard-refuses to run with insecure defaults when ENVIRONMENT=production;
+      # the sidecar must receive it explicitly (it does not use the shared env anchor).
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       PGHOST: postgres
       PGUSER: ${POSTGRES_USER:-jarvis}
       # PGPASSWORD is NOT set here; backup.sh reads /run/secrets/postgres_password
@@ -624,7 +630,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.9.1}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.9.2}
     build:
       context: ./langfuse
       dockerfile: Dockerfile.langfuse
@@ -830,6 +836,8 @@ secrets:
     file: ./secrets/postgres_password.txt
   jarvis_api_key:
     file: ./secrets/jarvis_api_key.txt
+  jarvis_setup_token:
+    file: ./secrets/jarvis_setup_token.txt
   jarvis_model_hmac_key:
     file: ./secrets/jarvis_model_hmac_key.txt
   telegram_bot_token:

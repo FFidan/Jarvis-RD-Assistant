@@ -432,6 +432,66 @@ describe('fetchStackHealth — toStatus degraded branch', () => {
   });
 });
 
+describe('fetchStackHealth — unknown-aware rollup', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("internal fails → required deps unknown, public ok → overall NOT 'ok'", async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/health/paper_ingestion/internal')) {
+        // Internal endpoint unreachable → every dep is unknown.
+        return new Response(null, { status: 503 });
+      }
+      // Both public service probes report ok.
+      return new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const summary = await fetchStackHealth();
+
+    // Required deps could not be verified → never a false "All healthy".
+    expect(summary.overall).not.toBe('ok');
+    expect(summary.overall).toBe('unknown');
+    // Public services still reported ok from their own probes.
+    expect(summary.services.find((s) => s.name === 'paper_ingestion')?.status).toBe('ok');
+    expect(summary.services.find((s) => s.name === 'learning_engine')?.status).toBe('ok');
+    // Required deps are unknown, not silently healthy.
+    expect(summary.services.find((s) => s.name === 'postgres')?.status).toBe('unknown');
+    // 'unknown' is not a real down/degraded count.
+    expect(summary.downCount).toBe(0);
+    expect(summary.degradedCount).toBe(0);
+  });
+
+  it("only the optional 'vector' dep unknown → overall stays 'ok'", async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('/health/paper_ingestion/internal')) {
+        return new Response(
+          JSON.stringify({
+            status: 'ok',
+            checks: { postgres: 'ok', qdrant: 'ok', ollama: 'ok', litellm: 'ok', vector: 'unknown' },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const summary = await fetchStackHealth();
+
+    // Vector is optional — an unknown vector alone never blocks "All healthy".
+    expect(summary.overall).toBe('ok');
+    expect(summary.services.find((s) => s.name === 'vector')?.status).toBe('unknown');
+  });
+});
+
 describe('fetchStackHealth — hard deadline (no-response fallback)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();

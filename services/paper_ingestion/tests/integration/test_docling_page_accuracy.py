@@ -8,10 +8,13 @@ and snapshot selection (``services/summarization.py``).  A wrong page reads as
 This opt-in integration test runs the REAL production path —
 :func:`paper_ingestion.pdf_processor._extract_text_sync` (Docling, page-bounded
 provenance anchors) + :meth:`Embedder.chunk_text` (page-bounded chunking) — and
-scores each chunk's ``page_number`` against the PyMuPDF (``fitz``) physical
-page.  fitz is the oracle because ``PDFProcessor.generate_snapshots`` numbers
-snapshots by the same physical page — exactly what the user sees when clicking a
-citation.
+scores each chunk's ``page_number`` against a **frozen oracle**: probe lines
+captured once per physical page and committed to ``page_accuracy_probes.json``.
+Each probe is unique to a single physical page, so its true page is the page the
+user sees when clicking a citation (the snapshot numbering is by the same
+physical page).  Freezing the oracle keeps this guard independent of the system
+under test and removes the previous PyMuPDF/AGPL dependency: the fixture was
+generated with fitz once and is now read from disk; no AGPL code is imported.
 
 Docling assigns a paragraph that spans a page break to the page where it
 *begins*, so the only deviation from a line-level oracle is such a paragraph
@@ -26,13 +29,13 @@ test_docling_page_accuracy.py -m integration -v -s``
 
 from __future__ import annotations
 
+import json
 import re
 import tempfile
 import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import fitz
 import pytest
 
 from paper_ingestion.ingestion.embedder import Embedder
@@ -47,6 +50,7 @@ _EXACT_FLOOR = 0.80  # most citations land on the exact physical page
 _ADJACENT_FLOOR = 0.98  # trust guarantee: a citation is never >1 page off
 _MIN_PROBES = 10
 _CACHE = Path(tempfile.gettempdir()) / "jarvis_docling_accuracy_pdfs"
+_PROBES_FIXTURE = Path(__file__).parent / "page_accuracy_probes.json"
 
 
 def _ensure_pdf(arxiv_id: str) -> Path:
@@ -67,30 +71,16 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", text.lower())).strip()
 
 
-def _fitz_pages(pdf_path: Path) -> list[str]:
-    doc = fitz.open(str(pdf_path))
-    try:
-        return [doc[i].get_text() for i in range(doc.page_count)]
-    finally:
-        doc.close()
-
-
-def _candidate_probes(page_text: str) -> list[str]:
-    probes = []
-    for raw in page_text.split("\n"):
-        raw = raw.strip()
-        if len(raw) < 60:
-            continue
-        if sum(ch.isalpha() or ch.isspace() for ch in raw) / len(raw) >= 0.8:
-            probes.append(raw)
-    return probes
+def _load_probes(arxiv_id: str) -> list[tuple[str, int]]:
+    """Frozen oracle: (normalized probe, true physical page) pairs."""
+    fixture = json.loads(_PROBES_FIXTURE.read_text())
+    return [(_norm(rec["probe"]), rec["true_page"]) for rec in fixture[arxiv_id]]
 
 
 @pytest.mark.parametrize("arxiv_id", _ARXIV_IDS)
 def test_docling_page_accuracy(arxiv_id: str) -> None:
     pdf_path = _ensure_pdf(arxiv_id)
-    fitz_pages = _fitz_pages(pdf_path)
-    norm_pages = [_norm(p) for p in fitz_pages]
+    probes = _load_probes(arxiv_id)
 
     # Real production path: Docling extraction + page-bounded chunking.
     full_text, page_anchors = _extract_text_sync(pdf_path)
@@ -100,38 +90,23 @@ def test_docling_page_accuracy(arxiv_id: str) -> None:
 
     located = exact = adjacent = 0
     far_misses: list[str] = []
-    seen: set[str] = set()
 
-    for page_idx, page_text in enumerate(fitz_pages):
-        true_page = page_idx + 1
-        per_page = 0
-        for probe in _candidate_probes(page_text):
-            n = _norm(probe)
-            if len(n) < 50 or n in seen:
-                continue
-            # Probe must be unique to one physical page, else its true page is
-            # ambiguous and it cannot be scored.
-            if sum(1 for np_ in norm_pages if n in np_) != 1:
-                continue
-            seen.add(n)
-            matched = [pg for pg, cn in chunk_norms if pg is not None and n in cn]
-            if not matched:
-                continue
-            located += 1
-            if true_page in matched:
-                exact += 1
-            if min(abs(pg - true_page) for pg in matched) <= 1:
-                adjacent += 1
-            else:
-                far_misses.append(f"  p{true_page} -> {sorted(set(matched))}: {probe[:70]!r}")
-            per_page += 1
-            if per_page >= 4:  # spread probes across pages
-                break
+    for probe_norm, true_page in probes:
+        matched = [pg for pg, cn in chunk_norms if pg is not None and probe_norm in cn]
+        if not matched:
+            continue
+        located += 1
+        if true_page in matched:
+            exact += 1
+        if min(abs(pg - true_page) for pg in matched) <= 1:
+            adjacent += 1
+        else:
+            far_misses.append(f"  p{true_page} -> {sorted(set(matched))}: {probe_norm[:70]!r}")
 
     exact_rate = exact / located if located else 0.0
     adjacent_rate = adjacent / located if located else 0.0
     print(
-        f"\n[{arxiv_id}] pages={len(fitz_pages)} chunks={len(chunks)} located={located} "
+        f"\n[{arxiv_id}] probes={len(probes)} chunks={len(chunks)} located={located} "
         f"exact={exact_rate:.3f} within1={adjacent_rate:.3f} far_misses={len(far_misses)}"
     )
     if far_misses:

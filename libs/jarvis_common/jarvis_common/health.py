@@ -12,7 +12,8 @@ Public surface
   async callable taking :class:`fastapi.Request` and returning the per-check
   status string (``"ok"`` / ``"unavailable"`` / ``"unknown"``).  Probes are
   expected to swallow their own exceptions and return the status string
-  instead; the aggregator does NOT translate exceptions to ``"unavailable"``.
+  instead; as a fail-safe the aggregator maps a probe that nevertheless
+  raises to ``"unavailable"`` (and a per-probe timeout to ``"timeout"``).
 * :func:`register_health_routes` -- registers the public ``GET /health``
   (status-only, no auth) and authenticated ``GET /health/internal`` (full
   ``{status, service, checks}``) on the given FastAPI app.
@@ -31,7 +32,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Depends, FastAPI, Request
@@ -66,34 +69,75 @@ _OK_STATUSES: frozenset[str] = frozenset({"ok", "unknown"})
 # downstream dependency hangs (L-08).
 _PROBE_TIMEOUT_S: float = 5.0
 
+# Short-lived memo of the last sweep so the M4.1 frontend poll — which hits
+# ``/health`` and ``/health/internal`` back-to-back each cycle — reuses one
+# probe run instead of sweeping twice (D3 "double-sweep").  The TTL is well
+# under any poll interval, so a degraded/unknown result is never served as
+# healthy beyond this window.
+_SWEEP_MEMO_TTL_S: float = 1.0
+_SWEEP_MEMO_ATTR: str = "_health_sweep_memo"
+
 _logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _SweepMemo:
+    expires_at: float
+    status: str
+    results: dict[str, str]
+
+
+async def _execute_sweep(request: Request, checks: list[HealthCheck]) -> tuple[str, dict[str, str]]:
+    """Run every probe concurrently and return ``(status, checks_dict)``.
+
+    All probes are awaited together under one 5s ``asyncio.wait_for`` budget
+    each (L-08), so the worst-case latency is one ``_PROBE_TIMEOUT_S`` rather
+    than the sum across probes. A probe that exceeds the budget is recorded as
+    ``"timeout"``; a probe that raises despite the expectation that it swallow
+    its own exceptions is recorded as ``"unavailable"`` so the overall response
+    is still well-formed.
+    """
+    outcomes = await asyncio.gather(
+        *(asyncio.wait_for(probe(request), timeout=_PROBE_TIMEOUT_S) for _name, probe in checks),
+        return_exceptions=True,
+    )
+    results: dict[str, str] = {}
+    for (name, _probe), outcome in zip(checks, outcomes, strict=True):
+        if isinstance(outcome, TimeoutError):
+            _logger.warning("Health probe %r exceeded %.1fs", name, _PROBE_TIMEOUT_S)
+            results[name] = "timeout"
+        elif isinstance(outcome, BaseException):
+            results[name] = "unavailable"
+        else:
+            results[name] = outcome
+
+    status = "ok" if all(v in _OK_STATUSES for v in results.values()) else "degraded"
+    return status, results
 
 
 async def run_health_checks(
     request: Request, checks: list[HealthCheck]
 ) -> tuple[str, dict[str, str]]:
-    """Execute every probe sequentially and return ``(status, checks_dict)``.
+    """Return ``(status, checks_dict)``, reusing a sub-second sweep memo.
 
-    Each probe is awaited in declared order under a 5s ``asyncio.wait_for``
-    budget (L-08); a probe that exceeds the budget is recorded as
-    ``"timeout"`` so a hung dependency cannot stall the ``/health`` endpoint
-    indefinitely. Probes are expected to handle their own exceptions and
-    return a status string; if a probe nevertheless raises, the aggregator
-    records the check as ``"unavailable"`` so the overall response is still
-    well-formed.
+    Probes run concurrently (see :func:`_execute_sweep`). The result is cached
+    on ``request.app.state`` for :data:`_SWEEP_MEMO_TTL_S`; the paired
+    ``/health`` + ``/health/internal`` poll therefore triggers a single probe
+    run per cycle instead of two. The TTL is shorter than any poll interval, so
+    a degraded/unknown status is never served as healthy past the window.
     """
-    results: dict[str, str] = {}
-    for name, probe in checks:
-        try:
-            results[name] = await asyncio.wait_for(probe(request), timeout=_PROBE_TIMEOUT_S)
-        except TimeoutError:
-            _logger.warning("Health probe %r exceeded %.1fs", name, _PROBE_TIMEOUT_S)
-            results[name] = "timeout"
-        except Exception:  # Best-effort: a misbehaving probe must not 500 the endpoint
-            results[name] = "unavailable"
+    now = time.monotonic()
+    memo: _SweepMemo | None = getattr(request.app.state, _SWEEP_MEMO_ATTR, None)
+    if memo is not None and now < memo.expires_at:
+        return memo.status, dict(memo.results)
 
-    status = "ok" if all(v in _OK_STATUSES for v in results.values()) else "degraded"
-    return status, results
+    status, results = await _execute_sweep(request, checks)
+    setattr(
+        request.app.state,
+        _SWEEP_MEMO_ATTR,
+        _SweepMemo(expires_at=now + _SWEEP_MEMO_TTL_S, status=status, results=results),
+    )
+    return status, dict(results)
 
 
 def register_health_routes(
@@ -247,7 +291,7 @@ def make_litellm_probe(
                 from jarvis_common.llm_client import get_litellm_config  # noqa: PLC0415
 
                 cfg = get_litellm_config()
-            resp = await client.get(f"{cfg.base_url}/health/readiness")
+            resp = await client.get(f"{cfg.base_url}/health/readiness", timeout=2.0)
             return "ok" if resp.status_code == 200 else "unavailable"
         except Exception:
             _logger.warning("Health check: LiteLLM unavailable", exc_info=True)

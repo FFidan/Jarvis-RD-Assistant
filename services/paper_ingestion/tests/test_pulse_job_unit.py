@@ -129,6 +129,130 @@ def _make_unscored_candidate():
     )
 
 
+def _make_scored_candidate(idx: int = 0):
+    """A stage-1 survivor that received an LLM relevance score (the success outcome)."""
+    from datetime import date
+
+    from paper_ingestion.models import PaperCreate, SourceType
+    from paper_ingestion.pulse.scoring import ScoredCandidate
+
+    paper = PaperCreate(
+        external_id=f"arxiv:ok-{idx:04d}",
+        source_type=SourceType.ARXIV,
+        title=f"Scored Paper {idx}",
+        authors=["Author A"],
+        abstract="Abstract.",
+        published_date=date(2025, 1, 1),
+        url=f"https://arxiv.org/abs/ok-{idx:04d}",
+    )
+    return ScoredCandidate(
+        paper=paper,
+        signals={"embedding": 0.7, "recency": 0.5},
+        llm_relevance=8,
+        llm_novelty=6,
+        reasoning="Relevant.",
+        final_score=0.75,
+    )
+
+
+async def _call_run_stage2(stage2_result):
+    """Invoke _run_stage2 with stage2_llm_rerank patched to return ``stage2_result``."""
+    from paper_ingestion.pulse.job import _run_stage2
+
+    services = MagicMock()
+    services.verifier = MagicMock()
+    services.openai_client = object()
+
+    with (
+        patch("paper_ingestion.pulse.job.get_services", return_value=services),
+        patch(
+            "paper_ingestion.pulse.job.effective_num_ctx",
+            AsyncMock(return_value=4096),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage2_llm_rerank",
+            AsyncMock(return_value=stage2_result),
+        ),
+    ):
+        return await _run_stage2(stage2_result, profile=MagicMock(), ctx=None, db_pool=MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_run_stage2_flags_small_deck_partial_failure():
+    """A 3-card deck with only 1 LLM success now sets degraded_reason (was unflagged).
+
+    Old threshold ``len // 5`` was 0 for n<5, so a deck of 3 with 2 failures never
+    degraded. The fraction rule ``len // 3`` flags it (1 <= 3 // 3) while leaving a
+    healthy single-card deck alone (see the n=1 test below).
+
+    Verified: pulse/job.py:_run_stage2 — small-deck degrade branch.
+    """
+    deck = [_make_scored_candidate(0)] + [_make_unscored_candidate() for _ in range(2)]
+
+    stage2_out, degraded_reason, llm_calls = await _call_run_stage2(deck)
+
+    assert llm_calls == 1
+    assert len(stage2_out) == 3
+    assert degraded_reason, "small-deck partial failure must set degraded_reason"
+
+
+@pytest.mark.asyncio
+async def test_run_stage2_healthy_single_card_not_degraded():
+    """A 1-card deck whose only card scored must NOT be flagged degraded.
+
+    The ``len // 3`` fraction rule gives a threshold of 0 for n=1, so a healthy
+    single-paper Pulse (llm_calls == 1) stays healthy — guards against the boundary
+    wart where a floor of 1 would falsely show "AI scoring unavailable".
+    """
+    deck = [_make_scored_candidate(0)]
+
+    stage2_out, degraded_reason, llm_calls = await _call_run_stage2(deck)
+
+    assert llm_calls == 1
+    assert len(stage2_out) == 1
+    assert degraded_reason is None
+
+
+@pytest.mark.asyncio
+async def test_run_stage2_healthy_large_deck_not_degraded():
+    """A large deck where every card scored is not degraded (n>=5, all success)."""
+    deck = [_make_scored_candidate(i) for i in range(5)]
+
+    stage2_out, degraded_reason, llm_calls = await _call_run_stage2(deck)
+
+    assert llm_calls == 5
+    assert len(stage2_out) == 5
+    assert degraded_reason is None
+
+
+@pytest.mark.asyncio
+async def test_run_stage2_strict_mode_raises_on_all_fail():
+    """With jarvis_strict_models=True an all-fail non-empty deck raises instead of degrading.
+
+    Verified: pulse/job.py:_run_stage2 — strict-mode hard-fail branch.
+    """
+    failed = [_make_unscored_candidate() for _ in range(5)]
+    strict_cfg = MagicMock(jarvis_strict_models=True, pulse_stage2_timeout_seconds=900)
+
+    with patch("paper_ingestion.pulse.job._get_cfg", return_value=strict_cfg):  # noqa: SIM117
+        with pytest.raises(RuntimeError, match="JARVIS_STRICT_MODELS"):
+            await _call_run_stage2(failed)
+
+
+@pytest.mark.asyncio
+async def test_run_stage2_strict_mode_off_degrades_same_input():
+    """With jarvis_strict_models=False the same all-fail deck degrades (no raise)."""
+    failed = [_make_unscored_candidate() for _ in range(5)]
+    soft_cfg = MagicMock(jarvis_strict_models=False, pulse_stage2_timeout_seconds=900)
+
+    with patch("paper_ingestion.pulse.job._get_cfg", return_value=soft_cfg):
+        stage2_out, degraded_reason, llm_calls = await _call_run_stage2(failed)
+
+    assert llm_calls == 0
+    assert len(stage2_out) == 5
+    assert degraded_reason
+
+
 @pytest.mark.asyncio
 async def test_run_stage2_sets_degraded_reason_when_all_cards_fail():
     """All per-card stage-2 calls failing must surface a deck-level degraded_reason.

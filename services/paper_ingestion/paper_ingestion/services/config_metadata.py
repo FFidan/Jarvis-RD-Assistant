@@ -2,9 +2,12 @@
 
 import re
 
+from jarvis_common.auth import API_KEY_LOGIN_CONFIG_KEY
+
 from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS
 
 __all__ = [
+    "API_KEY_LOGIN_CONFIG_KEY",
     "_ALLOWED_CONFIG_KEYS",
     "PERSONAL_KEYS",
     "SYSTEM_KEYS",
@@ -57,6 +60,9 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "pulse.startup_grace_seconds",
         # Setup wizard
         "setup.completed",
+        # Multi-tenant API-key-login gate (admin-flippable recovery toggle;
+        # read as env default OR this DB override by jarvis_common.auth).
+        API_KEY_LOGIN_CONFIG_KEY,
         "telegram.owner_chat_id",
         # Zotero integration
         "zotero.api_key",
@@ -191,6 +197,10 @@ SYSTEM_KEYS: frozenset[str] = frozenset(
         "pulse.startup_grace_seconds",
         # Setup wizard gate
         "setup.completed",
+        # Multi-tenant API-key-login gate — deployment-wide, admin-only write;
+        # read WHERE user_id IS NULL by jarvis_common.auth.api_key_login_enabled,
+        # so write-scope must match that read-scope.
+        API_KEY_LOGIN_CONFIG_KEY,
         # Telegram owner pairing (single owner, system-wide)
         "telegram.owner_chat_id",
         # SMTP relay — one deployment-wide mail config; admin-only.

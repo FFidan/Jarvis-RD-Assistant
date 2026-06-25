@@ -15,6 +15,8 @@ from typing import Any
 import yaml
 from jarvis_common.model_catalog import ModelCatalogEntry, load_model_catalog
 
+from paper_ingestion.services.model_prefixes import strip_ollama_prefix
+
 _CONFIG_FILE = Path("config/llm-tier-candidates.yaml")
 _SUPPORTED_BACKENDS = {"ollama", "vllm"}
 _SAFE_VLLM_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$")
@@ -59,9 +61,7 @@ def find_candidate_config_path() -> Path:
 
 
 def _normalize_model_id(model_id: str) -> str:
-    value = model_id.strip()
-    if value.startswith("ollama/"):
-        value = value.removeprefix("ollama/")
+    value = strip_ollama_prefix(model_id.strip())
     return value.removesuffix(":latest")
 
 

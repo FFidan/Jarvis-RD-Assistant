@@ -1269,3 +1269,221 @@ async def test_extract_entities_paper_count_incremented_once_on_reextraction(
         f"entities.paper_count={paper_count} — re-extraction double-counted "
         "(must increment only on a genuinely fresh paper_entities insert)"
     )
+
+
+# ---------------------------------------------------------------------------
+# M6.2 — Adversarial-content regression net (H3 / TEST-2 / TEST-1)
+#
+# Consumer-side proof that when the structured KG extraction call returns garbage
+# — the JSON schema object itself, a truncated body, or double-encoded JSON — the
+# extract-entities endpoint NEVER persists the schema object as garbage entities:
+# unrepairable garbage propagates (non-200), and the schema object (which parses
+# to an empty KGExtractionOutput) yields zero persisted entities, never rows
+# named after schema keys.
+#
+# Mode note: the faux sidecar is not a grammar-constrained model, so it returns
+# whatever is queued under either instructor.Mode.JSON (fixture) or
+# Mode.JSON_SCHEMA (production). Only consumer resilience at the catch site is
+# under test here; grammar enforcement itself is verified by the M1.0 spike and
+# the Stage-A live re-verify, NOT by this faux suite.
+#
+# call_llm_structured uses its default retry budget (max_retries=2) at this
+# call site (extraction/entities.py:168-177). Instructor maps max_retries=2 to
+# tenacity stop_after_attempt(2) → exactly 2 HTTP attempts (NOT "initial + 2
+# retries = 3"), so at least 2 unparseable responses must be queued to exhaust
+# every attempt. FauxLiteLLMServer returns the default '{}' once its queue is
+# drained, and '{}' is a valid empty KGExtractionOutput — so any under-queued
+# response would let a later attempt silently succeed instead of surfacing the
+# failure. We queue 3 for a harmless one-response margin; the extra is never
+# consumed because the 2nd attempt already exhausts the budget.
+# ---------------------------------------------------------------------------
+
+# Instructor max_retries=2 → tenacity stop_after_attempt(2) = 2 HTTP attempts.
+# Queue >=2 unparseable responses to exhaust the budget; the 3rd is unconsumed margin.
+_KG_RETRY_BUDGET = 3
+
+# Shape names are drawn from the single-sourced taxonomy in tests/conftest.py
+# (ADVERSARIAL_SHAPES). Only the truly unrepairable shapes exercise the KG
+# raise-path; schema_object has its own dedicated test below.
+from tests.conftest import ADVERSARIAL_SHAPES  # noqa: E402
+
+_KG_UNREPAIRABLE_SHAPES = ("truncated", "double_encoded")
+assert set(_KG_UNREPAIRABLE_SHAPES) <= set(ADVERSARIAL_SHAPES), (
+    "KG adversarial shapes must be a subset of ADVERSARIAL_SHAPES"
+)
+
+
+def _valid_kg_json() -> str:
+    from paper_ingestion.extraction.kg_models import KGEntityCandidate, KGExtractionOutput
+
+    return KGExtractionOutput(
+        entities=[KGEntityCandidate(name="Transformer", type="method")],
+        relationships=[],
+    ).model_dump_json()
+
+
+def _make_client_capturing_500(app, cookie: str):
+    """Contract client that returns the 500 envelope instead of re-raising.
+
+    The default ASGI transport (``raise_app_exceptions=True``) re-raises an
+    unhandled server exception in the test, bypassing the response that the
+    registered ``generic_exception_handler`` actually emits in production. This
+    client mirrors ``make_contract_client``'s auth headers/cookie but sets
+    ``raise_app_exceptions=False`` so the production 500 is observed — the same
+    idiom as ``libs/jarvis_common/tests/contract/test_error_envelope_contract.py``.
+    """
+    import httpx
+
+    from jarvis_common.testing_contract_apps import DEFAULT_CONTRACT_API_KEY
+
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+        headers={"X-API-Key": DEFAULT_CONTRACT_API_KEY},
+        cookies={"jarvis_session": cookie},
+        follow_redirects=False,
+    )
+
+
+async def _seed_kg_paper_with_chunk(conn, user_id: int, external_id: str) -> int:
+    paper_id = await conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ($1, 'arxiv', 'Adversarial KG Test', ARRAY['Author'],
+                   $2, $3)
+           RETURNING id""",
+        external_id,
+        f"https://kg-adv.test/{external_id}",
+        user_id,
+    )
+    await conn.execute(
+        """INSERT INTO paper_chunks
+               (paper_id, chunk_index, content, page_number, start_char, end_char)
+           VALUES ($1, 0, 'Transformer method improves GLUE dataset results.', 1, 0, 49)""",
+        paper_id,
+    )
+    return paper_id
+
+
+@pytest.mark.parametrize("shape", _KG_UNREPAIRABLE_SHAPES)
+async def test_kg_extract_entities_unrepairable_payload_returns_non_200(
+    shape,
+    contract_two_users,
+    contract_conn,
+    pi_contract_app_with_litellm_sidecar,
+    _configure_api_key,
+):
+    """POST /api/extract-entities returns non-200 when the LLM returns unrepairable garbage.
+
+    Truncated and double-encoded payloads cannot be salvaged by Instructor; after
+    the retry budget is exhausted the InstructorRetryException propagates and the
+    endpoint (which catches only ValueError) surfaces a non-200. No paper_entities
+    row may be written.
+    Verified: extraction/entities.py:178-180 — logger.exception(...); raise.
+    Verified: routers/knowledge_graph.py:107-131 — only ValueError → 4xx; others propagate.
+    """
+    import httpx
+
+    from tests.conftest import adversarial_llm_payloads
+    from jarvis_common.testing_contract_apps import patch_app_state
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion._state import set_services
+    from paper_ingestion.extraction.kg_models import KGExtractionOutput
+
+    app, faux_litellm = pi_contract_app_with_litellm_sidecar
+    paper_id = await _seed_kg_paper_with_chunk(
+        contract_conn, contract_two_users.user_a_id, f"kg-adv-{shape}"
+    )
+
+    content = adversarial_llm_payloads(KGExtractionOutput, _valid_kg_json())[shape]
+    for _ in range(_KG_RETRY_BUDGET):
+        faux_litellm.add_response("fast", content)
+
+    faux_qdrant = FauxQdrantClient()
+    set_services(openai_client=app.state.openai_client)
+    try:
+        async with httpx.AsyncClient() as http_client:
+            with patch_app_state(app, {"qdrant_client": faux_qdrant, "http_client": http_client}):
+                async with _make_client_capturing_500(app, contract_two_users.cookie_a) as c:
+                    resp = await c.post(f"/api/extract-entities/{paper_id}")
+    finally:
+        set_services(openai_client=None)
+
+    assert resp.status_code != 200, (
+        f"{shape}: unrepairable LLM garbage must surface as a non-200, never a 200 with garbage "
+        f"entities; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+    row = await contract_conn.fetchrow(
+        "SELECT 1 FROM paper_entities WHERE paper_id = $1 LIMIT 1", paper_id
+    )
+    assert row is None, f"{shape}: no paper_entities row may be written when extraction fails"
+
+
+async def test_kg_extract_entities_schema_object_echo_persists_no_entities(
+    contract_two_users,
+    contract_conn,
+    pi_contract_app_with_litellm_sidecar,
+    _configure_api_key,
+):
+    """POST /api/extract-entities never persists the echoed JSON schema object as entities.
+
+    The schema object parses cleanly to an EMPTY KGExtractionOutput (its keys —
+    'properties', '$defs', 'type', 'title' — match no entity field), so the
+    endpoint completes with zero entities added. The contract is that NO
+    paper_entities row and NO entity named after a schema key is ever created.
+    Verified: extraction/entities.py:182-200 — entities loop is a no-op on empty output.
+    Verified: extraction/kg_models.py:69 — entities defaults to []; schema keys are ignored.
+    """
+    import httpx
+    import json
+
+    from jarvis_common.testing_contract_apps import patch_app_state
+    from jarvis_common.testing_sidecars import FauxQdrantClient
+    from paper_ingestion._state import set_services
+    from paper_ingestion.extraction.kg_models import KGExtractionOutput
+
+    app, faux_litellm = pi_contract_app_with_litellm_sidecar
+    paper_id = await _seed_kg_paper_with_chunk(
+        contract_conn, contract_two_users.user_a_id, "kg-adv-schema-object"
+    )
+
+    schema_echo = json.dumps(KGExtractionOutput.model_json_schema())
+    for _ in range(_KG_RETRY_BUDGET):
+        faux_litellm.add_response("fast", schema_echo)
+
+    faux_qdrant = FauxQdrantClient()
+    set_services(openai_client=app.state.openai_client)
+    try:
+        async with httpx.AsyncClient() as http_client:
+            with patch_app_state(app, {"qdrant_client": faux_qdrant, "http_client": http_client}):
+                async with _make_client(app, contract_two_users.cookie_a) as c:
+                    resp = await c.post(f"/api/extract-entities/{paper_id}")
+    finally:
+        set_services(openai_client=None)
+
+    if resp.status_code == 200:
+        assert resp.json()["entities_added"] == 0, (
+            "the echoed schema object must yield zero entities_added, never a parsed "
+            f"schema key; got {resp.json()!r}"
+        )
+    else:
+        # Honest degradation is equally acceptable, but only as a real error status —
+        # never a silent success. (Asserting != 200 inside the else is a tautology.)
+        assert resp.status_code in (422, 500), (
+            "non-200 must be a genuine error status (422 client / 500 server), "
+            f"not an arbitrary code; got {resp.status_code}: {resp.text[:300]}"
+        )
+
+    pe_row = await contract_conn.fetchrow(
+        "SELECT 1 FROM paper_entities WHERE paper_id = $1 LIMIT 1", paper_id
+    )
+    assert pe_row is None, "no paper_entities row may be created from the echoed schema object"
+
+    schema_key_entity = await contract_conn.fetchrow(
+        "SELECT id FROM entities WHERE canonical_name = ANY($1::text[])",
+        ["properties", "$defs", "title", "type", "definitions"],
+    )
+    assert schema_key_entity is None, (
+        "no entity may be created whose name is a JSON-schema key — the schema object "
+        "must never be silently accepted as entity data"
+    )

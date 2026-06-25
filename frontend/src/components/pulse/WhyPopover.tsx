@@ -6,6 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { displayReasoning, suppressScoringFailed } from '@/components/pulse/reasoning-display';
+import { signalLabel } from '@/lib/labels/signals';
 
 export interface WhyPopoverProps {
   cardId: number;
@@ -74,7 +75,7 @@ export function WhyPopover({ cardId, trigger, degraded = false }: WhyPopoverProp
                       className="space-y-0.5"
                     >
                       <div className="flex justify-between text-[10px] text-muted-foreground">
-                        <span>{name}</span>
+                        <span>{signalLabel(name)}</span>
                         <span>{value.toFixed(2)}</span>
                       </div>
                       <div className="h-1.5 w-full rounded bg-muted">

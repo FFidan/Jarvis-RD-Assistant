@@ -98,7 +98,6 @@ class ChatCompletionOptions:
     timeout: float = LLM_TIMEOUT_DEFAULT
     response_format: dict[str, str] | None = None
     system: str | None = None  # Optional system prompt sent as a system role message
-    extra_body: dict[str, Any] | None = None  # Passthrough merged into the LiteLLM request body
 
     def with_response_format(
         self, response_format: dict[str, str] | None
@@ -379,8 +378,6 @@ async def call_llm_structured(
     # openai_client is already instructor-patched (wrapped in the service lifespan).
     # Do NOT call instructor.from_openai() again — double-wrapping returns None on
     # some instructor versions, causing 'NoneType has no attribute chat'.
-    # Instructor forwards unknown kwargs to the underlying AsyncOpenAI create(), so
-    # extra_body reaches the LiteLLM/Ollama request body (e.g. chat_template_kwargs).
     result = await openai_client.chat.completions.create(
         model=_options.model,
         response_model=response_model,
@@ -389,7 +386,6 @@ async def call_llm_structured(
         temperature=_options.temperature,
         timeout=_options.timeout,
         max_retries=max_retries,
-        **({"extra_body": _options.extra_body} if _options.extra_body else {}),
     )
     if _options.model == "smart":
         # Instructor attaches the raw ChatCompletion as _raw_response on the result.

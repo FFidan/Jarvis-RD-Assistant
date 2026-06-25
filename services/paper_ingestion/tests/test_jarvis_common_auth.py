@@ -144,3 +144,61 @@ def test_validate_production_config_config_key_not_required_outside_production(
     monkeypatch.delenv("JARVIS_CONFIG_KEY_FILE", raising=False)
 
     validate_production_config()  # must not raise
+
+
+def test_validate_production_config_multi_user_nonprod_requires_hmac_key(monkeypatch):
+    """SEC-4: a multi-user non-prod boot must require JARVIS_MODEL_HMAC_KEY.
+
+    The derivation-from-JARVIS_API_KEY fallback is refused on any multi-user
+    deployment (``JARVIS_SETUP_MODE != single``), not only in production — so a
+    stolen bearer cannot also forge pulse model blobs on an internal multi-user
+    box (e.g. REDACTED-HOST).
+    """
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+    monkeypatch.setenv("JARVIS_SETUP_MODE", "multi")
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY_FILE", raising=False)
+
+    with pytest.raises(RuntimeError, match="JARVIS_MODEL_HMAC_KEY"):
+        validate_production_config()
+
+
+def test_validate_production_config_multi_user_nonprod_accepts_hmac_key(monkeypatch):
+    """SEC-4: a multi-user non-prod boot passes once JARVIS_MODEL_HMAC_KEY is set.
+
+    Multi-user does not pull in the production-only gates (CONFIG_KEY, SMTP,
+    LiteLLM, Postgres, APP_BASE_URL) — only the broadened HMAC requirement.
+    """
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+    monkeypatch.setenv("JARVIS_SETUP_MODE", "multi")
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "y" * 32)
+
+    validate_production_config()  # must not raise
+
+
+def test_validate_production_config_multi_user_nonprod_rejects_short_hmac_key(monkeypatch):
+    """SEC-4: the broadened gate also enforces the 32-char minimum."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+    monkeypatch.setenv("JARVIS_SETUP_MODE", "multi")
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "y" * 16)
+
+    with pytest.raises(RuntimeError, match="at least 32 characters"):
+        validate_production_config()
+
+
+def test_validate_production_config_single_user_dev_does_not_require_hmac_key(monkeypatch):
+    """SEC-4 non-regression: single-user dev boot stays unchanged (no HMAC key needed)."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+    monkeypatch.setenv("JARVIS_SETUP_MODE", "single")
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY_FILE", raising=False)
+
+    validate_production_config()  # must not raise

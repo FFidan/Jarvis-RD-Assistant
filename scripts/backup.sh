@@ -154,34 +154,40 @@ LITELLM_STATE="ok"
 # --- secrets/ directory ------------------------------------------------------
 # The Docker-secret source files; an encrypted DB backup is useless without the
 # key that decrypts it. Always encrypted when a backup key is configured.
+# When no key is set: refuse outright in production (plaintext secrets on disk
+# is unacceptable); silently skip in non-production with a clear warning.
+ENVIRONMENT="${ENVIRONMENT:-development}"
 SECRETS_BACKUP_FILE=""
 if [ -d "$SECRETS_DIR" ]; then
   if [ "$ENCRYPT" -eq 1 ]; then
     SECRETS_BACKUP_FILE="${BACKUP_DIR}/secrets_${TIMESTAMP}.tar.gz.enc"
-  else
-    SECRETS_BACKUP_FILE="${BACKUP_DIR}/secrets_${TIMESTAMP}.tar.gz"
-    echo "[$(date -Iseconds)] WARNING: BACKUP_ENCRYPT_KEYFILE is unset — the secrets archive will contain plaintext keys. Set a backup key for production." >&2
-  fi
-  secrets_tmp="${SECRETS_BACKUP_FILE}.tmp"
-  # Exclude the backup encryption key from its own encrypted archive: sealing
-  # the key inside the .enc it unlocks is circularly undecryptable after total
-  # host loss. The operator must hold this key out-of-band (see DEPLOYMENT.md).
-  # The on-disk key is backup_encrypt_key.txt (the ./secrets source for the
-  # backup_encrypt_key Docker Secret); tar --exclude globs member names, so the
-  # pattern must carry the .txt — a keyless ./backup_encrypt_key is a silent no-op.
-  tar -czf - -C "$SECRETS_DIR" --exclude=./backup_encrypt_key.txt . \
-    | encrypt_or_passthrough > "$secrets_tmp"
-  secrets_st=("${PIPESTATUS[@]}")
-  if [ "${secrets_st[0]}" -ne 0 ] || [ "${secrets_st[1]}" -ne 0 ]; then
-    rm -f "$secrets_tmp"
-    SECRETS_STATE="failed"
-    echo "FATAL: secrets archive failed (tar=${secrets_st[0]} enc=${secrets_st[1]})" >&2
+    secrets_tmp="${SECRETS_BACKUP_FILE}.tmp"
+    # Exclude the backup encryption key from its own encrypted archive: sealing
+    # the key inside the .enc it unlocks is circularly undecryptable after total
+    # host loss. The operator must hold this key out-of-band (see DEPLOYMENT.md).
+    # The on-disk key is backup_encrypt_key.txt (the ./secrets source for the
+    # backup_encrypt_key Docker Secret); tar --exclude globs member names, so the
+    # pattern must carry the .txt — a keyless ./backup_encrypt_key is a silent no-op.
+    tar -czf - -C "$SECRETS_DIR" --exclude=./backup_encrypt_key.txt . \
+      | encrypt_or_passthrough > "$secrets_tmp"
+    secrets_st=("${PIPESTATUS[@]}")
+    if [ "${secrets_st[0]}" -ne 0 ] || [ "${secrets_st[1]}" -ne 0 ]; then
+      rm -f "$secrets_tmp"
+      SECRETS_STATE="failed"
+      echo "FATAL: secrets archive failed (tar=${secrets_st[0]} enc=${secrets_st[1]})" >&2
+      exit 1
+    fi
+    chmod 600 "$secrets_tmp"
+    mv "$secrets_tmp" "$SECRETS_BACKUP_FILE"
+    SECRETS_STATE="ok"
+    echo "[$(date -Iseconds)] Backup saved to $SECRETS_BACKUP_FILE ($(du -h "$SECRETS_BACKUP_FILE" | cut -f1))"
+  elif [ "$ENVIRONMENT" = "production" ]; then
+    echo "FATAL: BACKUP_ENCRYPT_KEYFILE is unset in production — refusing to write a plaintext secrets archive. Set BACKUP_ENCRYPT_KEYFILE to a non-empty key file before running backups." >&2
     exit 1
+  else
+    SECRETS_STATE="skipped"
+    echo "[$(date -Iseconds)] WARNING: BACKUP_ENCRYPT_KEYFILE is unset — secrets archive skipped (plaintext keys will NOT be written to disk). Set BACKUP_ENCRYPT_KEYFILE to include secrets in the backup." >&2
   fi
-  chmod 600 "$secrets_tmp"
-  mv "$secrets_tmp" "$SECRETS_BACKUP_FILE"
-  SECRETS_STATE="ok"
-  echo "[$(date -Iseconds)] Backup saved to $SECRETS_BACKUP_FILE ($(du -h "$SECRETS_BACKUP_FILE" | cut -f1))"
 else
   echo "[$(date -Iseconds)] secrets dir $SECRETS_DIR not mounted; skipping secrets backup"
 fi

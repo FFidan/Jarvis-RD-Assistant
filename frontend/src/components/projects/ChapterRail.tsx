@@ -99,10 +99,10 @@ export function ChapterRail({ projects, selectedId, onSelect }: ChapterRailProps
                     'border-l-[hsl(var(--ring))] bg-accent text-strong',
                 )}
               >
-                {/* Row 1: roman numeral + name + status chip */}
+                {/* Row 1: ordinal + name + status chip */}
                 <div className="flex w-full items-center gap-2">
                   <span className="shrink-0 text-xs font-mono text-muted-foreground w-6 text-right">
-                    {toRoman(idx + 1)}
+                    {idx + 1}
                   </span>
                   <span className="flex-1 font-medium truncate">{project.name}</span>
                   <Badge

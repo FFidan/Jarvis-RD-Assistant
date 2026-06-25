@@ -1,7 +1,7 @@
 """Shared test fixtures for paper_ingestion tests.
 
 Loaded automatically by pytest before any test file in this directory.
-All runtime dependencies (fitz, tiktoken, qdrant_client, rapidfuzz, docling,
+All runtime dependencies (pypdfium2, tiktoken, qdrant_client, rapidfuzz, docling,
 sentence_transformers, apscheduler) are installed on the host venv — no
 module stubs are needed.
 
@@ -84,6 +84,54 @@ def _configure_api_key(monkeypatch):
 def _make_client(app, cookie: str):
     """Return the standard contract-test ASGI client for PI contract tests."""
     return make_contract_client(app, cookie)
+
+
+# Single source of truth for the adversarial-content shape taxonomy. Both the KG
+# and Pulse consumer-resilience contract suites parametrize over (subsets of)
+# this tuple, and adversarial_llm_payloads keys are exactly these names — so the
+# shape list lives in exactly one place.
+ADVERSARIAL_SHAPES = (
+    "schema_object",
+    "think_wrapped",
+    "prose_before",
+    "truncated",
+    "double_encoded",
+)
+
+
+def adversarial_llm_payloads(model, valid_json: str) -> dict[str, str]:
+    """Build the five adversarial-content payload shapes for a structured LLM call.
+
+    Each value is a raw string suitable for ``FauxLiteLLMServer.add_response`` —
+    it is placed verbatim into ``choices[0].message.content`` and then parsed by
+    Instructor against ``model``. Used by the consumer-resilience contract tests
+    (Pulse stage-2 degrade path, KG entity-extraction raise path) to prove a
+    structured call never silently accepts the JSON schema object as a result.
+
+    Parameters
+    ----------
+    model:
+        The Pydantic response model class whose ``model_json_schema()`` becomes
+        the schema-object payload.
+    valid_json:
+        A valid serialized instance of ``model``, reused to build the
+        think-wrapped, prose-prefixed, and double-encoded shapes.
+    """
+    import json
+
+    payloads = {
+        "schema_object": json.dumps(model.model_json_schema()),
+        "think_wrapped": "<think>reasoning</think>" + valid_json,
+        "prose_before": "Here is the answer: " + valid_json,
+        "truncated": valid_json[: max(1, len(valid_json) // 2)],
+        "double_encoded": json.dumps(valid_json),
+    }
+    # Keys must stay in lockstep with the canonical shape taxonomy.
+    assert set(payloads) == set(ADVERSARIAL_SHAPES), (
+        "adversarial_llm_payloads keys must match ADVERSARIAL_SHAPES; "
+        f"payloads={sorted(payloads)} taxonomy={sorted(ADVERSARIAL_SHAPES)}"
+    )
+    return payloads
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")

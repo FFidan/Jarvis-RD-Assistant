@@ -1931,3 +1931,279 @@ async def test_scheduler_xact_probe_sees_pulse_session_advisory_lock(_contract_p
     assert free_after_release == [user_id], (
         "probe must report the user free once the session lock is released"
     )
+
+
+# ---------------------------------------------------------------------------
+# M6.2 — Adversarial-content regression net (H3 / TEST-2 / TEST-1)
+#
+# Consumer-side proof that if a structured stage-2 call returns garbage — the
+# JSON schema object itself, a truncated body, or double-encoded JSON — the
+# pipeline degrades honestly (llm_relevance stays None; degraded_reason set) and
+# NEVER silently accepts the schema object as a score. Reproduces the live
+# v0.9.1 schema-echo at the consumer seam so it can never regress silently.
+#
+# Mode note: the faux sidecar is not a grammar-constrained model, so it returns
+# whatever is queued under either instructor.Mode.JSON (fixture) or
+# Mode.JSON_SCHEMA (production). Only consumer resilience at the catch sites is
+# under test here; grammar enforcement itself is verified by the M1.0 spike and
+# the Stage-A live re-verify, NOT by this faux suite.
+#
+# The think-wrapped and prose-prefixed shapes are intentionally NOT asserted to
+# degrade: Instructor (Mode.JSON) repairs them by extracting the embedded valid
+# JSON, so the boundary recovers a real score — verified by the dedicated repair
+# test below, which proves the recovered score comes from the embedded payload
+# and never from the schema object.
+# ---------------------------------------------------------------------------
+
+# Shape names are drawn from the single-sourced taxonomy in tests/conftest.py
+# (ADVERSARIAL_SHAPES) so the list never drifts from adversarial_llm_payloads.
+from tests.conftest import ADVERSARIAL_SHAPES  # noqa: E402
+
+# Unrepairable shapes: Instructor cannot salvage these, so stage-2 must degrade.
+_PULSE_UNREPAIRABLE_SHAPES = ("schema_object", "truncated", "double_encoded")
+# Repairable shapes: Instructor extracts the embedded valid JSON.
+_PULSE_REPAIRABLE_SHAPES = ("think_wrapped", "prose_before")
+# Guard: the two subsets must together partition the canonical taxonomy.
+assert set(_PULSE_UNREPAIRABLE_SHAPES) | set(_PULSE_REPAIRABLE_SHAPES) == set(ADVERSARIAL_SHAPES), (
+    "Pulse adversarial subsets must partition ADVERSARIAL_SHAPES"
+)
+
+
+def _valid_pulse_json() -> str:
+    from paper_ingestion.pulse.models import PulseScoringOutput
+
+    return PulseScoringOutput(
+        relevance=7, novelty=5, reasoning="Directly relevant to the stated research topic."
+    ).model_dump_json()
+
+
+def _pulse_candidate(external_id: str):
+    from paper_ingestion.models import PaperCreate, SourceType
+    from paper_ingestion.pulse.scoring import ScoredCandidate
+
+    return ScoredCandidate(
+        paper=PaperCreate(
+            external_id=external_id,
+            source_type=SourceType.ARXIV,
+            title="Adversarial content candidate",
+            authors=["Author"],
+            abstract="An abstract used only to drive stage-2 scoring.",
+            url=f"https://arxiv.test/{external_id}",
+        ),
+        signals={"embedding": 0.6, "topic": 0.4, "recency": 0.8, "author_bonus": 0.0},
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=0.5,
+    )
+
+
+def _pulse_profile():
+    from paper_ingestion.models import TopicRef
+    from paper_ingestion.pulse.profile import UserProfile
+
+    return UserProfile(
+        topics=[TopicRef(id=1, name="Topic", description="desc")],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
+        library_centroid=None,
+        weights={"embedding": 0.5, "llm_relevance": 0.3, "llm_novelty": 0.2},
+        deck_size=5,
+        stage2_top_k=10,
+        recent_positive_titles=[],
+        recent_negative_titles=[],
+    )
+
+
+@pytest.mark.parametrize("shape", _PULSE_UNREPAIRABLE_SHAPES)
+async def test_pulse_stage2_adversarial_payload_degrades_per_candidate(shape):
+    """stage2_llm_rerank degrades every candidate (llm_relevance=None) on garbage LLM output.
+
+    For each unrepairable adversarial payload shape — including the schema object
+    itself — one adversarial response is queued per candidate. Instructor cannot
+    salvage these, so each candidate is caught and degraded; no candidate is
+    silently scored from the schema object.
+    Verified: pulse/scoring.py:365-384 — broad except → llm_relevance=None.
+    """
+    import instructor
+    import openai
+
+    from tests.conftest import adversarial_llm_payloads
+    from jarvis_common.testing_sidecars import FauxLiteLLMServer
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.pulse.models import PulseScoringOutput
+
+    import paper_ingestion.pulse.scoring as _scoring
+
+    content = adversarial_llm_payloads(PulseScoringOutput, _valid_pulse_json())[shape]
+
+    candidates = [_pulse_candidate(f"pulse-adv-{shape}-{i}") for i in range(3)]
+
+    async with FauxLiteLLMServer() as faux:
+        oc = instructor.from_openai(
+            openai.AsyncOpenAI(base_url=f"{faux.url}/v1", api_key="dummy"),
+            mode=instructor.Mode.JSON,
+        )
+        for c in candidates:  # one adversarial response per candidate
+            faux.add_response(_scoring._llm_model(), content)
+
+        result = await _scoring.stage2_llm_rerank(
+            candidates, _pulse_profile(), verifier=QuoteVerifier(), openai_client=oc
+        )
+
+    assert len(result) == len(candidates)
+    for sc in result:
+        assert sc.llm_relevance is None, (
+            f"{shape}: llm_relevance must be None (degraded), never a score parsed from the "
+            f"adversarial payload; got {sc.llm_relevance!r}"
+        )
+        assert sc.reasoning == "LLM scoring failed", (
+            f"{shape}: degraded candidate must carry the failure sentinel; got {sc.reasoning!r}"
+        )
+
+
+async def test_pulse_run_schema_object_echo_persists_degraded_reason(
+    contract_conn,
+    contract_two_users,
+):
+    """run_pulse persists degraded_reason when stage-2 echoes the JSON schema object.
+
+    Reproduces the live v0.9.1 schema-echo at the consumer seam end-to-end: real
+    candidates flow into the REAL stage2_llm_rerank, the faux LLM echoes
+    PulseScoringOutput.model_json_schema() for every candidate, and the deck must
+    persist with pulse_decks.degraded_reason set and zero cards scored from the
+    schema object.
+    Verified: pulse/job.py:342-345 — degrade when llm_calls <= len//3.
+    Verified: pulse/job.py:226-227 — degraded_reason copied into stats.
+    """
+    import json
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import instructor
+    import openai
+
+    from jarvis_common.testing import SharedConnPool
+    from jarvis_common.testing_sidecars import FauxLiteLLMServer
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion._state import set_services
+    from paper_ingestion.pulse.job import run_pulse
+    from paper_ingestion.pulse.models import PulseScoringOutput
+    import paper_ingestion.pulse.scoring as _scoring
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+    deck_date_far = datetime(2099, 10, 1, 4, 0, tzinfo=UTC)
+    candidates = [_pulse_candidate(f"schema-echo-{i}") for i in range(3)]
+    schema_echo = json.dumps(PulseScoringOutput.model_json_schema())
+
+    async with FauxLiteLLMServer() as srv:
+        for _ in candidates:
+            srv.add_response(_scoring._llm_model(), schema_echo)
+
+        oc = instructor.from_openai(
+            openai.AsyncOpenAI(base_url=f"{srv.url}/v1", api_key="dummy"),
+            mode=instructor.Mode.JSON,
+        )
+        set_services(openai_client=oc, verifier=QuoteVerifier())
+        try:
+            with (
+                patch(
+                    "paper_ingestion.pulse.job.load_profile",
+                    AsyncMock(return_value=_pulse_profile()),
+                ),
+                patch(
+                    "paper_ingestion.pulse.job.discover_candidates",
+                    AsyncMock(return_value=([], {}, {})),
+                ),
+                patch(
+                    "paper_ingestion.pulse.job.stage1_embedding_filter",
+                    AsyncMock(return_value=candidates),
+                ),
+                patch(
+                    "paper_ingestion.pulse.job._run_optional_signals",
+                    AsyncMock(side_effect=lambda _db, s2, _p, _u: (s2, None, None)),
+                ),
+            ):
+                stats = await run_pulse(
+                    db_pool=pool,
+                    http_client=MagicMock(),
+                    embedder=MagicMock(),
+                    now=deck_date_far,
+                    user_id=user_id,
+                )
+        finally:
+            set_services(openai_client=None, verifier=None)
+
+    assert stats["llm_calls"] == 0, (
+        f"No candidate may be scored from the echoed schema object; got llm_calls="
+        f"{stats['llm_calls']!r}"
+    )
+    assert stats.get("degraded_reason") is not None, (
+        "stats['degraded_reason'] must be set when stage-2 echoes the schema object"
+    )
+
+    row = await contract_conn.fetchrow(
+        "SELECT degraded_reason FROM pulse_decks WHERE deck_date = $1 AND user_id = $2",
+        deck_date_far.date(),
+        user_id,
+    )
+    assert row is not None, "pulse_decks row must persist even on full stage-2 degradation"
+    assert row["degraded_reason"] == stats.get("degraded_reason"), (
+        f"persisted degraded_reason {row['degraded_reason']!r} must match stats "
+        f"{stats.get('degraded_reason')!r}"
+    )
+
+    card_relevances = await contract_conn.fetch(
+        """SELECT pc.llm_relevance FROM pulse_cards pc
+           JOIN pulse_decks pd ON pd.id = pc.deck_id
+           WHERE pd.deck_date = $1 AND pd.user_id = $2""",
+        deck_date_far.date(),
+        user_id,
+    )
+    assert all(r["llm_relevance"] is None for r in card_relevances), (
+        "no persisted card may carry an llm_relevance parsed from the schema object; "
+        f"got {[r['llm_relevance'] for r in card_relevances]!r}"
+    )
+
+
+@pytest.mark.parametrize("shape", _PULSE_REPAIRABLE_SHAPES)
+async def test_pulse_stage2_repairable_payload_scores_from_embedded_json_not_schema(shape):
+    """Instructor recovers the embedded valid score; the schema object is never the source.
+
+    The think-wrapped and prose-prefixed shapes wrap a valid PulseScoringOutput,
+    which Instructor extracts. The recovered relevance must equal the embedded
+    value (7) — proving the boundary salvages the embedded payload and never
+    parses the schema object as a score.
+    Verified: pulse/scoring.py:316-330 — call_llm_structured result mapped to llm_relevance.
+    """
+    import instructor
+    import openai
+
+    from tests.conftest import adversarial_llm_payloads
+    from jarvis_common.testing_sidecars import FauxLiteLLMServer
+    from jarvis_common.verify import QuoteVerifier
+    from paper_ingestion.pulse.models import PulseScoringOutput
+
+    import paper_ingestion.pulse.scoring as _scoring
+
+    content = adversarial_llm_payloads(PulseScoringOutput, _valid_pulse_json())[shape]
+    candidate = _pulse_candidate(f"pulse-repair-{shape}")
+
+    async with FauxLiteLLMServer() as faux:
+        oc = instructor.from_openai(
+            openai.AsyncOpenAI(base_url=f"{faux.url}/v1", api_key="dummy"),
+            mode=instructor.Mode.JSON,
+        )
+        faux.add_response(_scoring._llm_model(), content)
+
+        result = await _scoring.stage2_llm_rerank(
+            [candidate], _pulse_profile(), verifier=QuoteVerifier(), openai_client=oc
+        )
+
+    assert len(result) == 1
+    assert result[0].llm_relevance == 7, (
+        f"{shape}: recovered relevance must equal the embedded valid value (7), proving the "
+        f"score came from the embedded JSON and not the schema object; got "
+        f"{result[0].llm_relevance!r}"
+    )

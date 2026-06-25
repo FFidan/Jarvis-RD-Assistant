@@ -1,20 +1,5 @@
-import { PULSE_WEIGHT_LABELS } from '@/components/settings/pulse/pulse-constants';
 import { displayReasoning } from '@/components/pulse/reasoning-display';
-
-// Keys not in the canonical map (WhyChips-only signals / short aliases)
-const SIGNAL_LABELS_EXT: Record<string, string> = {
-  emb: 'Semantic similarity',
-  llm: 'Relevance score',
-  rec: 'Recommendation',
-  recommendation: 'Recommendation',
-  graph: 'Citation graph',
-  graph_boost: 'Citation graph',
-  author_overlap: 'Author overlap',
-  topic_match: 'Topic match',
-  library_overlap: 'In your library',
-};
-
-const SIGNAL_LABELS: Record<string, string> = { ...PULSE_WEIGHT_LABELS, ...SIGNAL_LABELS_EXT };
+import { signalLabel } from '@/lib/labels/signals';
 
 interface WhySignal {
   label: string;
@@ -31,7 +16,7 @@ export function WhyChips({ signals, reasoning, max = 3 }: WhyChipsProps) {
   const displayedReasoning = displayReasoning(reasoning);
   const ranked: WhySignal[] = Object.entries(signals)
     .filter(([, w]) => w > 0.1)
-    .map(([k, w]) => ({ label: SIGNAL_LABELS[k] ?? k, weight: w }))
+    .map(([k, w]) => ({ label: signalLabel(k), weight: w }))
     .sort((a, b) => b.weight - a.weight)
     .slice(0, max);
 

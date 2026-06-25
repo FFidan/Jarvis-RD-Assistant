@@ -283,3 +283,132 @@ async def test_run_pulse_classifier_training_enqueue_success_path(
     assert isinstance(vs["total"], int)
     assert isinstance(vs["passed"], int)
     assert isinstance(vs["failed"], int)
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — stage-2 schema-echo (all llm_relevance=None) degrades end-to-end
+#          and persists the degraded_reason to the pulse_decks row
+# ---------------------------------------------------------------------------
+
+
+def _unscored_candidate():
+    """A stage-1 survivor with no LLM relevance — the schema-echo all-fail outcome."""
+    from datetime import date
+
+    from paper_ingestion.models import PaperCreate, SourceType
+    from paper_ingestion.pulse.scoring import ScoredCandidate
+
+    paper = PaperCreate(
+        external_id="arxiv:seam-echo-0001",
+        source_type=SourceType.ARXIV,
+        title="Schema Echo Paper",
+        authors=["Author A"],
+        abstract="Abstract.",
+        published_date=date(2025, 1, 1),
+        url="https://arxiv.org/abs/seam-echo-0001",
+    )
+    return ScoredCandidate(
+        paper=paper,
+        signals={"embedding": 0.7, "recency": 0.5},
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=0.6,
+    )
+
+
+async def test_run_pulse_stage2_schema_echo_persists_degraded_reason(
+    contract_conn,
+    contract_two_users,
+):
+    """All stage-2 cards schema-echo (llm_relevance=None) → degraded deck is persisted.
+
+    Drives the full run_pulse pipeline end-to-end against the real contract DB
+    (which the _run_stage2 unit tests never reach): stage-1 yields one survivor,
+    stage-2 returns it with llm_relevance=None (simulating the per-card schema
+    echo), so llm_calls==0 and the degradation-threshold branch fires. Strict
+    mode is off (default), so the pipeline does NOT raise — it produces a deck,
+    records a non-null degraded_reason, and writes a pulse_decks row carrying it.
+
+    Verified: pulse/job.py:338-349 (llm_calls counted from llm_relevance,
+              degradation-threshold warning), pulse/job.py:284-287
+              (_persist_pipeline threads stats['degraded_reason']),
+              pulse/deck.py:73-89 (pulse_decks UPSERT with degraded_reason).
+    """
+    from paper_ingestion.pulse.job import run_pulse
+
+    pool = SharedConnPool(contract_conn)
+    user_id = contract_two_users.user_a_id
+
+    # Far-future, distinct from sibling tests, to avoid UPSERT collisions.
+    deck_date_t4 = datetime(2098, 12, 4, 4, 0, tzinfo=UTC)
+
+    survivors = [_unscored_candidate()]
+
+    with (
+        patch(
+            "paper_ingestion.pulse.job.load_profile",
+            AsyncMock(return_value=_minimal_profile()),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.discover_candidates",
+            AsyncMock(return_value=(list(survivors), {}, {})),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage1_embedding_filter",
+            AsyncMock(return_value=list(survivors)),
+        ),
+        # stage-2 echoes the stage-1 list back unscored (llm_relevance stays None)
+        patch(
+            "paper_ingestion.pulse.job.stage2_llm_rerank",
+            AsyncMock(return_value=list(survivors)),
+        ),
+        # avoid the real per-role num_ctx DB lookup inside _run_stage2
+        patch(
+            "paper_ingestion.pulse.job.effective_num_ctx",
+            AsyncMock(return_value=4096),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.stage3_combine",
+            AsyncMock(return_value=list(survivors)),
+        ),
+        patch(
+            "paper_ingestion.pulse.job.assemble_deck",
+            MagicMock(return_value=list(survivors)),
+        ),
+    ):
+        stats = await run_pulse(
+            db_pool=pool,
+            http_client=MagicMock(),
+            embedder=MagicMock(),
+            now=deck_date_t4,
+            user_id=user_id,
+        )
+
+    # Every stage-2 card was unscored → no real LLM calls counted.
+    assert stats["llm_calls"] == 0, (
+        f"all-None stage-2 scores must yield llm_calls==0; got {stats['llm_calls']!r}"
+    )
+    # The degradation-threshold branch must record an honest degraded_reason.
+    assert stats["degraded_reason"] is not None, (
+        "stage-2 schema-echo must set a non-null degraded_reason; "
+        f"got degraded_reason={stats['degraded_reason']!r}, last_error={stats['last_error']!r}"
+    )
+
+    # The degraded deck must be persisted with its reason — the unit tests never
+    # exercise this DB write. The paper row is absent in the contract DB, so
+    # card_count may be 0, but the pulse_decks row is still written.
+    row = await contract_conn.fetchrow(
+        """
+        SELECT degraded_reason
+        FROM pulse_decks
+        WHERE deck_date = $1
+          AND user_id IS NOT DISTINCT FROM $2
+        """,
+        deck_date_t4.date(),
+        user_id,
+    )
+    assert row is not None, "run_pulse must persist a pulse_decks row for the degraded deck"
+    assert row["degraded_reason"] is not None, (
+        "the persisted pulse_decks row must carry the degraded_reason; got NULL"
+    )

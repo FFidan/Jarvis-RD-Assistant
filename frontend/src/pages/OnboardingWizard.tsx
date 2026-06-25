@@ -64,6 +64,8 @@ import {
   saveFirstRunSmtp,
   setConfig,
   updateSource,
+  type FirstRunCloudKeysBody,
+  type FirstRunSmtpBody,
   type FirstRunStatus,
   type FirstRunSystemCheck,
 } from '@/lib/api';
@@ -97,6 +99,40 @@ const ALL_STEPS: readonly StepKind[] = [
   'done',
 ];
 
+// Bootstrap setup token persistence (M2 refresh-recovery fix). The token is a
+// one-time bootstrap secret captured from the URL. Persisting it in
+// sessionStorage lets it survive a tab refresh / OS tab-restore during first
+// run (before the admin exists) — without it, a refresh permanently lost the
+// token and every write 403'd with no in-UI recovery. sessionStorage is scoped
+// to the tab/session (not durable like localStorage, not sent on requests like
+// cookies). All access is guarded so a locked-down sessionStorage never crashes
+// the wizard.
+const SETUP_TOKEN_STORAGE_KEY = 'jarvis_setup_token';
+
+function readStoredSetupToken(): string | null {
+  try {
+    return sessionStorage.getItem(SETUP_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeSetupToken(token: string): void {
+  try {
+    sessionStorage.setItem(SETUP_TOKEN_STORAGE_KEY, token);
+  } catch {
+    /* sessionStorage unavailable (private mode / disabled) — degrade silently */
+  }
+}
+
+function clearStoredSetupToken(): void {
+  try {
+    sessionStorage.removeItem(SETUP_TOKEN_STORAGE_KEY);
+  } catch {
+    /* sessionStorage unavailable — nothing to clear */
+  }
+}
+
 interface OnboardingWizardProps {
   firstRun: FirstRunStatus;
   authed: boolean;
@@ -106,6 +142,26 @@ export function OnboardingWizard({ firstRun, authed }: OnboardingWizardProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  // Bootstrap setup token (B3/SEC-1): captured once from the URL, then stripped
+  // from the address bar so it can't leak via history / Referer / logs. Held in
+  // a ref (not state) and sent as X-Setup-Token on the first-run WRITE calls.
+  //
+  // Refresh-recovery (M2): resolve the token as URL param OR the value persisted
+  // in sessionStorage. A URL-sourced token is mirrored to sessionStorage so it
+  // survives a tab refresh / OS tab-restore during first run (before the admin
+  // exists). On the refresh case the URL is already clean and the stored value
+  // is used. The token is cleared from sessionStorage once setup completes.
+  const setupTokenRef = useRef<string | null>(
+    searchParams.get('setup_token') ?? readStoredSetupToken(),
+  );
+  useEffect(() => {
+    const urlToken = searchParams.get('setup_token');
+    if (!urlToken) return;
+    storeSetupToken(urlToken);
+    setSearchParams({ step: searchParams.get('step') ?? '1' }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // The admin-create step is only shown when no admin exists yet. When the
   // install is already `configured` (CLI-bootstrapped or resuming post-auth),
@@ -167,6 +223,7 @@ export function OnboardingWizard({ firstRun, authed }: OnboardingWizardProps) {
           onNext={goNext}
           onSkip={handleSkipAll}
           skipError={markCompletedMut.isError ? markCompletedMut.error : null}
+          setupToken={setupTokenRef.current}
         />
       )}
       {kind === 'smtp' && (
@@ -175,10 +232,15 @@ export function OnboardingWizard({ firstRun, authed }: OnboardingWizardProps) {
           onBack={goBack}
           onNext={goNext}
           singleUser={firstRun.setup_mode === 'single'}
+          setupToken={setupTokenRef.current}
         />
       )}
-      {kind === 'admin' && <AdminStep {...stepProps} onBack={goBack} onNext={goNext} />}
-      {kind === 'cloud' && <CloudLlmStep {...stepProps} onBack={goBack} onNext={goNext} />}
+      {kind === 'admin' && (
+        <AdminStep {...stepProps} onBack={goBack} onNext={goNext} setupToken={setupTokenRef.current} />
+      )}
+      {kind === 'cloud' && (
+        <CloudLlmStep {...stepProps} onBack={goBack} onNext={goNext} setupToken={setupTokenRef.current} />
+      )}
       {kind === 'topic' && <FirstTopicStep {...stepProps} onBack={goBack} onNext={goNext} />}
       {kind === 'automation' && <AutomationStep {...stepProps} onBack={goBack} onNext={goNext} />}
       {kind === 'sources' && <SourceApiKeysStep {...stepProps} onBack={goBack} onNext={goNext} />}
@@ -206,6 +268,8 @@ interface StepNavProps {
  * setup-status query.
  */
 function markFirstRunCompleted(queryClient: ReturnType<typeof useQueryClient>): void {
+  // Setup is finished — the one-time bootstrap token must not linger (M2).
+  clearStoredSetupToken();
   queryClient.setQueryData<FirstRunStatus>(QUERY_KEYS.setup.firstRun(), (prev) =>
     prev ? { ...prev, setup_completed: true } : prev,
   );
@@ -222,7 +286,13 @@ function WelcomeSystemCheckStep({
   onNext,
   onSkip,
   skipError,
-}: StepNavProps & { onNext: () => void; onSkip: () => void; skipError?: Error | null }) {
+  setupToken,
+}: StepNavProps & {
+  onNext: () => void;
+  onSkip: () => void;
+  skipError?: Error | null;
+  setupToken?: string | null;
+}) {
   const [data, setData] = useState<FirstRunSystemCheck | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -231,7 +301,7 @@ function WelcomeSystemCheckStep({
     setLoading(true);
     setError(null);
     try {
-      setData(await runFirstRunSystemCheck());
+      setData(await runFirstRunSystemCheck(setupToken));
     } catch (e) {
       setError(errorMessage(e, 'Probe failed'));
     } finally {
@@ -334,7 +404,13 @@ function SmtpStep({
   onBack,
   onNext,
   singleUser,
-}: StepNavProps & { onBack: () => void; onNext: () => void; singleUser?: boolean }) {
+  setupToken,
+}: StepNavProps & {
+  onBack: () => void;
+  onNext: () => void;
+  singleUser?: boolean;
+  setupToken?: string | null;
+}) {
   const [host, setHost] = useState('');
   const [port, setPort] = useState('587');
   const [user, setUser] = useState('');
@@ -355,7 +431,7 @@ function SmtpStep({
   });
 
   const saveMut = useMutation({
-    mutationFn: saveFirstRunSmtp,
+    mutationFn: (body: FirstRunSmtpBody) => saveFirstRunSmtp(body, setupToken),
     onSuccess: (res) => {
       setSavedOk(res.saved);
       // Refresh so the banner reflects what was just persisted.
@@ -572,12 +648,13 @@ function AdminStep({
   totalSteps,
   onBack,
   onNext,
-}: StepNavProps & { onBack: () => void; onNext: () => void }) {
+  setupToken,
+}: StepNavProps & { onBack: () => void; onNext: () => void; setupToken?: string | null }) {
   const [email, setEmail] = useState('');
   const loginWithSession = useAuthStore((s) => s.loginWithSession);
 
   const createMut = useMutation({
-    mutationFn: createFirstRunAdmin,
+    mutationFn: (adminEmail: string) => createFirstRunAdmin(adminEmail, setupToken),
     onSuccess: (res) => {
       // Backend has set the jarvis_session cookie atomically; mirror the
       // session into the auth store so the App flips to authed=true and the
@@ -637,13 +714,14 @@ function CloudLlmStep({
   totalSteps,
   onBack,
   onNext,
-}: StepNavProps & { onBack: () => void; onNext: () => void }) {
+  setupToken,
+}: StepNavProps & { onBack: () => void; onNext: () => void; setupToken?: string | null }) {
   const [openai, setOpenai] = useState('');
   const [anthropic, setAnthropic] = useState('');
   const [gemini, setGemini] = useState('');
 
   const saveMut = useMutation({
-    mutationFn: saveFirstRunCloudKeys,
+    mutationFn: (body: FirstRunCloudKeysBody) => saveFirstRunCloudKeys(body, setupToken),
     onSuccess: () => onNext(),
     onError: (err: Error) => {
       console.error('Failed to save cloud LLM keys', err);

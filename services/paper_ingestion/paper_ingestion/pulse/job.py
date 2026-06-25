@@ -339,9 +339,13 @@ async def _run_stage2(
         # Per-card stage-2 failures are caught inside stage2_llm_rerank and surface only as
         # llm_relevance=None — without this the deck silently renders "AI scoring unavailable"
         # cards with no banner. Degrade honestly when a strong majority scored nothing.
-        if stage2_out and llm_calls <= len(stage2_out) // 5:
+        if stage2_out and llm_calls <= len(stage2_out) // 3:
             degraded_reason = (
                 "AI relevance scoring is temporarily unavailable — showing basic ranking."
+            )
+            logger.warning(
+                "pulse.stage2 degraded — most candidates scored no LLM relevance",
+                extra={"llm_calls": llm_calls, "candidates": len(stage2_out)},
             )
     except Stage2ClientUnavailableError:
         # explicit sentinel — openai_client was None at stage2 entry
@@ -363,6 +367,13 @@ async def _run_stage2(
         degraded_reason = f"stage2 error (embedding-only fallback used): {exc}"
         logger.exception("pulse.stage2 failed — falling back to stage1")
         stage2_out = _fallback_stage2(stage1_out)
+
+    if stage2_out and llm_calls == 0 and _get_cfg().jarvis_strict_models:
+        raise RuntimeError(
+            "JARVIS_STRICT_MODELS=1: stage-2 structured scoring produced zero results — "
+            f"{degraded_reason or 'no candidates were scored'}. "
+            "Check PULSE_STAGE2_MODEL and the LLM enforcement config."
+        )
 
     return stage2_out, degraded_reason, llm_calls
 

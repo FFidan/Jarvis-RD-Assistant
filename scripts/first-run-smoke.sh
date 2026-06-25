@@ -47,7 +47,14 @@ set -euo pipefail
 readonly SMOKE_PROJECT="jarvis-firstrun-smoke"
 export COMPOSE_PROJECT_NAME="$SMOKE_PROJECT"
 
-readonly DASHBOARD_URL="http://localhost:3001"
+# Isolation: distinct subnet + dashboard port so a smoke run never collides with
+# a live deploy on the same host (which uses 10.137.241.0/24 and port 3001).
+# Override via env before calling this script if the defaults conflict.
+: "${JARVIS_NET_SUBNET:=10.137.242.0/24}"
+: "${DASHBOARD_HOST_PORT:=13001}"
+export JARVIS_NET_SUBNET DASHBOARD_HOST_PORT
+
+readonly DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT}"
 
 FORCE=0
 TIMEOUT_SECONDS=3600

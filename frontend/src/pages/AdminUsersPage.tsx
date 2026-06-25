@@ -23,6 +23,7 @@ import {
   deleteUser,
   sendSignInLink,
   type AdminUser,
+  type FirstRunStatus,
 } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { ApiError } from '@/lib/api';
@@ -79,16 +80,31 @@ function InviteModal({ open, onClose }: InviteModalProps) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'user' | 'admin'>('user');
   const [error, setError] = useState<string | null>(null);
+  const [manualLink, setManualLink] = useState<string | null>(null);
   const queryClient = useQueryClient();
+
+  // Cache-only read of the SMTP-readiness signal warmed by the pre-auth
+  // /api/setup/status query (mirrors LoginPage). No extra network request.
+  const smtpConfigured = queryClient.getQueryData<FirstRunStatus>(
+    QUERY_KEYS.setup.firstRun(),
+  )?.smtp_configured;
 
   const { mutate, isPending } = useMutation({
     mutationFn: () => inviteUser(email.trim(), role),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.users() });
-      setEmail('');
-      setRole('user');
       setError(null);
-      onClose();
+      // The backend returns invite_link only when the email could not be
+      // delivered. Surface it so the admin can share it manually; keep the
+      // modal open in that case so the link stays visible.
+      const link = (data as AdminUser & { invite_link?: string | null }).invite_link;
+      if (link) {
+        setManualLink(link);
+      } else {
+        setEmail('');
+        setRole('user');
+        onClose();
+      }
     },
     onError: (err) => {
       if (err instanceof ApiError) {
@@ -110,6 +126,7 @@ function InviteModal({ open, onClose }: InviteModalProps) {
     setEmail('');
     setRole('user');
     setError(null);
+    setManualLink(null);
     onClose();
   }
 
@@ -119,45 +136,76 @@ function InviteModal({ open, onClose }: InviteModalProps) {
         <DialogHeader>
           <DialogTitle>Invite user</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="invite-email">Email address</Label>
-            <Input
-              id="invite-email"
-              type="email"
-              placeholder="user@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoFocus
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="invite-role">Role</Label>
-            <Select value={role} onValueChange={(v) => setRole(v as 'user' | 'admin')}>
-              <SelectTrigger id="invite-role">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="user">User</SelectItem>
-                <SelectItem value="admin">Admin</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {error && (
-            <p className="text-sm text-destructive" role="alert">
-              {error}
+        {manualLink ? (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground" role="status">
+              SMTP is not configured, so the invite email could not be sent. Share
+              this sign-in link with the user manually — it expires in 24 hours.
             </p>
-          )}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={handleClose} disabled={isPending}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isPending || !email.trim()}>
-              {isPending ? 'Sending invite…' : 'Send invite'}
-            </Button>
-          </DialogFooter>
-        </form>
+            <div className="space-y-2">
+              <Label htmlFor="invite-link">Sign-in link</Label>
+              <Input
+                id="invite-link"
+                type="text"
+                readOnly
+                value={manualLink}
+                onFocus={(e) => e.currentTarget.select()}
+                aria-label="Invite sign-in link"
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" onClick={handleClose}>
+                Done
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {smtpConfigured === false && (
+              <p className="text-sm text-muted-foreground" role="status">
+                SMTP is not configured. After inviting, you&apos;ll get a link to
+                share with the user manually.
+              </p>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="invite-email">Email address</Label>
+              <Input
+                id="invite-email"
+                type="email"
+                placeholder="user@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="invite-role">Role</Label>
+              <Select value={role} onValueChange={(v) => setRole(v as 'user' | 'admin')}>
+                <SelectTrigger id="invite-role">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="user">User</SelectItem>
+                  <SelectItem value="admin">Admin</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {error && (
+              <p className="text-sm text-destructive" role="alert">
+                {error}
+              </p>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={handleClose} disabled={isPending}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isPending || !email.trim()}>
+                {isPending ? 'Sending invite…' : 'Send invite'}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

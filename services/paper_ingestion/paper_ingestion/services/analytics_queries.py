@@ -44,7 +44,7 @@ async def fetch_papers_by_status(
     if user_id is None or is_admin:
         rows = await conn.fetch(
             """
-            SELECT COALESCE(pus.state::TEXT, 'inbox') AS status, COUNT(*) AS count
+            SELECT COALESCE(pus.state::TEXT, 'inbox') AS status, COUNT(DISTINCT p.id) AS count
             FROM papers p
             LEFT JOIN paper_user_state pus ON p.id = pus.paper_id
             GROUP BY COALESCE(pus.state::TEXT, 'inbox')

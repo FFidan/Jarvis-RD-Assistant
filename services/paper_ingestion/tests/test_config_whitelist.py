@@ -246,3 +246,17 @@ def test_cloud_llm_api_key_classify_returns_system(key: str):
     assert _classify_config_key(key) == "system", (
         f"_classify_config_key({key!r}) returned {_classify_config_key(key)!r}, expected 'system'"
     )
+
+
+# --- auth.api_key_login_enabled (admin-flippable multi-tenant gate) ---
+
+from jarvis_common.auth import API_KEY_LOGIN_CONFIG_KEY  # noqa: E402
+
+
+def test_api_key_login_key_allowed_and_system_scoped():
+    """The API-key-login toggle is a deployment-wide (admin-only) config key."""
+    assert API_KEY_LOGIN_CONFIG_KEY == "auth.api_key_login_enabled"
+    assert API_KEY_LOGIN_CONFIG_KEY in _ALLOWED_CONFIG_KEYS
+    assert API_KEY_LOGIN_CONFIG_KEY in SYSTEM_KEYS
+    assert API_KEY_LOGIN_CONFIG_KEY not in PERSONAL_KEYS
+    assert _classify_config_key(API_KEY_LOGIN_CONFIG_KEY) == "system"

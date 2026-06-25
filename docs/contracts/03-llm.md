@@ -45,6 +45,43 @@ outside this module may construct a chat-completions HTTP request directly.
 There is no `call_llm` or `call_llm_json_value` — the older dict-returning
 helpers were removed; there is no backwards-compat alias.
 
+### 1.0 Structured-output enforcement mechanism
+
+Every structured call is **grammar-constrained by construction**. The
+Instructor client is built once per service lifespan at
+[app_factory.py:467-473](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/app_factory.py#L467-L473)
+with `instructor.Mode.JSON_SCHEMA`. This mode emits a native
+`response_format={"type":"json_schema","json_schema":{…}}` header on every
+chat-completion request — it does NOT inject the schema into the prompt text.
+
+The schema reaches the model as a grammar constraint at the runtime layer:
+
+- **Ollama** (`ollama_chat/` prefix → `/api/chat`): the `format:<schema>`
+  field in the request body; Ollama enforces it via constrained token sampling.
+- **vLLM** (`vllm/` prefix): the `guided_json` parameter; vLLM enforces the
+  same guarantee.
+
+Because the constraint is structural (grammar-enforced at the decoding layer),
+a model **cannot echo the schema object instead of a schema instance** — the
+output is grammatically forced to be a conforming JSON value. This is the root
+fix for the v0.9.1 flagship schema-echo regression.
+
+`call_llm_structured` itself passes **no** `response_format` argument to
+Instructor — the client's Mode handles that. The `ChatCompletionOptions.response_format`
+field is therefore irrelevant to structured calls (it exists for
+`request_chat_completion_content` only).
+
+**Second line of defence.** Grammar constraints enforce structure, type, and
+enum membership. They do NOT enforce numeric bounds (`ge`/`le`) or string
+length (`min_length`/`max_length`) — those constraints are owned by the Pydantic
+field definitions and enforced at parse time by Instructor, triggering a
+`ValidationError` → retry loop (up to `max_retries=2`, §3.2).
+
+**Observability.** `SystemCapabilities` (M1.4, `GET /api/system/capabilities`)
+reports a `structured_output_enforced` verdict. An admin-gated effective-config
+dump endpoint (M1.5) surfaces the resolved mode; its exact shape is defined in
+that task's contract.
+
 ### 1.1 `call_llm_structured` signature
 
 ```python
@@ -540,6 +577,12 @@ The implementation MUST satisfy these. Testable.
 7. **Prompt provenance.** All prompt templates referenced by the call sites
    MUST live in version-controlled source files (no external workflow nodes,
    no DB strings, no env-var prompts). Per [ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md).
+8. **Structured calls are grammar-constrained.** The instructor client MUST be
+   built with `Mode.JSON_SCHEMA` and all local structured calls MUST route via
+   the `ollama_chat/` prefix (not `ollama/`). Schema-echo — where the model
+   returns the schema definition instead of a conforming instance — is
+   structurally impossible under this configuration. Verify with:
+   `grep -n "Mode\." libs/jarvis_common/jarvis_common/app_factory.py` → `Mode.JSON_SCHEMA`.
 
 ---
 
@@ -574,6 +617,8 @@ The implementation MUST satisfy these. Testable.
 | `get_litellm_config` | libs/jarvis_common/jarvis_common/llm_client.py:123 | Resolves LiteLLM base URL → `LiteLLMConfig` |
 | `request_chat_completion_content` | libs/jarvis_common/jarvis_common/llm_client.py:226 | Raw chat completion; returns think-stripped string |
 | `call_llm_structured` | libs/jarvis_common/jarvis_common/llm_client.py:328 | Instructor-patched structured output; returns a validated `T` |
+| Instructor client bootstrap (`Mode.JSON_SCHEMA`) | libs/jarvis_common/jarvis_common/app_factory.py:467-473 | `instructor.from_openai(…, mode=instructor.Mode.JSON_SCHEMA)` — grammar-constrained decoding by construction |
+| `OLLAMA_PREFIXES` / `strip_ollama_prefix` / `is_local_ollama` | services/paper_ingestion/paper_ingestion/services/model_prefixes.py:13-30 | Transport prefix helpers; `ollama_chat/` routes to `/api/chat` (format constraint honored); `ollama/` routes to `/api/generate` (embedding) |
 | `embed_texts` | libs/jarvis_common/jarvis_common/llm_client.py:442 | Embeddings via `/v1/embeddings`; ordered vectors |
 | Site 1 `call_llm_structured` (Pulse Stage-2) | services/paper_ingestion/paper_ingestion/pulse/scoring.py:309 | Inside `_score_one`; `PulseScoringOutput` |
 | Site 2 `call_llm_structured` (extraction) | services/paper_ingestion/paper_ingestion/extraction/core.py:188 | `get_smart_model()`; dynamic per-template model |

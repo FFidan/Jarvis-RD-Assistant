@@ -55,6 +55,7 @@ from paper_ingestion.rag.streaming import (
     stream_rag_events,
 )
 from paper_ingestion.rag.verification import verify_answer_summary
+from paper_ingestion.services.model_prefixes import is_local_ollama
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -409,7 +410,7 @@ async def ask_paper_stream(
     async def _stream_with_backend_badge():
         served, _ = observed_share("smart")
         configured = os.getenv("JARVIS_LLM_BACKEND", "ollama")
-        is_fallback = bool(served and configured == "vllm" and served.startswith("ollama/"))
+        is_fallback = bool(served and configured == "vllm" and is_local_ollama(served))
         payload = json.dumps({"served_by": served, "fallback": is_fallback})
         yield f"event: backend\ndata: {payload}\n\n"
         async for event in stream_rag_events(
@@ -561,7 +562,7 @@ async def ask_cross_paper_stream(
 
     served, _ = observed_share("smart")
     configured = os.getenv("JARVIS_LLM_BACKEND", "ollama")
-    is_fallback = bool(served and configured == "vllm" and served.startswith("ollama/"))
+    is_fallback = bool(served and configured == "vllm" and is_local_ollama(served))
     _backend_event = (
         f"event: backend\ndata: {json.dumps({'served_by': served, 'fallback': is_fallback})}\n\n"
     )

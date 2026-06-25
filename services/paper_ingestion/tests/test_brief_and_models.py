@@ -766,12 +766,12 @@ async def test_system_models_routing_mismatch_surfaces_inconsistency(_app, monke
     ]
     mock_http.get.side_effect = httpx.ConnectError("no ollama")
 
-    # LiteLLM routes smart → "ollama/qwen3:8b" (normalized: "qwen3:8b")
+    # LiteLLM routes smart → "ollama_chat/qwen3:8b" (normalized: "qwen3:8b")
     async def _fake_deployments():
         return [
             {
                 "model_name": "smart",
-                "litellm_params": {"model": "ollama/qwen3:8b"},
+                "litellm_params": {"model": "ollama_chat/qwen3:8b"},
                 "model_info": {"id": "dep-1", "db_model": True},
             }
         ]
@@ -836,12 +836,12 @@ async def test_system_models_routing_consistent_when_litellm_matches(_app, monke
         return [
             {
                 "model_name": "smart",
-                "litellm_params": {"model": "ollama/qwen3:8b"},
+                "litellm_params": {"model": "ollama_chat/qwen3:8b"},
                 "model_info": {"id": "dep-smart", "db_model": True},
             },
             {
                 "model_name": "fast",
-                "litellm_params": {"model": "ollama/qwen3:4b"},
+                "litellm_params": {"model": "ollama_chat/qwen3:4b"},
                 "model_info": {"id": "dep-fast", "db_model": True},
             },
         ]
@@ -861,7 +861,7 @@ async def test_system_models_routing_consistent_when_litellm_matches(_app, monke
 async def test_system_models_routing_consistent_with_latest_suffix(_app, monkeypatch):
     """:latest suffix on either side must not cause false divergence (consistent=True).
 
-    Staged: DB stores "qwen3:8b"; LiteLLM reports "ollama/qwen3:8b:latest".
+    Staged: DB stores "qwen3:8b"; LiteLLM reports "ollama_chat/qwen3:8b:latest".
     The :latest-tolerant normalization must treat these as equal and set
     consistent=True.  Without the fix a direct-API-created row shows permanent
     false divergence.
@@ -883,7 +883,7 @@ async def test_system_models_routing_consistent_with_latest_suffix(_app, monkeyp
         return [
             {
                 "model_name": "smart",
-                "litellm_params": {"model": "ollama/qwen3:8b:latest"},
+                "litellm_params": {"model": "ollama_chat/qwen3:8b:latest"},
                 "model_info": {"id": "dep-smart", "db_model": True},
             }
         ]

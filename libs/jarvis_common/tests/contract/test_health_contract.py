@@ -45,6 +45,19 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 
 
+def _clear_sweep_memo(app: Any) -> None:
+    """Drop the short-TTL health sweep memo so a rewired app re-probes immediately.
+
+    The contract tests reuse the module-level service ``app`` singleton and flip
+    dependency state between cases; without this reset a prior cycle's cached
+    status would leak into the next case within the memo TTL.
+    """
+    from jarvis_common.health import _SWEEP_MEMO_ATTR
+
+    if hasattr(app.state, _SWEEP_MEMO_ATTR):
+        delattr(app.state, _SWEEP_MEMO_ATTR)
+
+
 def _make_mock_pool(*, raise_on_acquire: bool = False) -> MagicMock:
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=1)
@@ -85,6 +98,7 @@ def _wire_pi_app(*, db_up: bool = True, http_healthy: bool = True) -> Any:
     app.state.db_pool = pool
     app.state.http_client = http
     app.state.qdrant_client = qdrant
+    _clear_sweep_memo(app)
     try:
         app.state.limiter.enabled = False
     except AttributeError:
@@ -106,6 +120,7 @@ def _wire_le_app(*, db_up: bool = True, http_healthy: bool = True) -> Any:
 
     app.state.db_pool = pool
     app.state.http_client = http
+    _clear_sweep_memo(app)
     try:
         app.state.limiter.enabled = False
     except AttributeError:
@@ -315,3 +330,152 @@ async def test_telegram_bot_health_no_auth_required(tg_internal_app):
         resp = await c.get("/health", headers={})
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Aggregator behaviour: concurrency, per-request timeout, sweep memo (M4.2 / D3)
+# ---------------------------------------------------------------------------
+
+
+def _fake_request() -> Any:
+    """Minimal stand-in for fastapi.Request exposing ``.app.state`` for probes/memo."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+
+
+async def test_sweep_runs_concurrently() -> None:
+    """_execute_sweep awaits all probes at once: wall time ≈ one probe, not the sum."""
+    import asyncio
+    import time
+
+    from jarvis_common.health import _execute_sweep
+
+    async def _slow(_request: Any) -> str:
+        await asyncio.sleep(0.2)
+        return "ok"
+
+    checks = [("a", _slow), ("b", _slow), ("c", _slow)]
+    start = time.monotonic()
+    status, results = await _execute_sweep(_fake_request(), checks)
+    elapsed = time.monotonic() - start
+
+    assert status == "ok"
+    assert results == {"a": "ok", "b": "ok", "c": "ok"}
+    # Sequential would be ≥0.6s; concurrent stays well under the 0.6s sum.
+    assert elapsed < 0.4, f"sweep took {elapsed:.3f}s — probes did not run concurrently"
+
+
+async def test_sweep_maps_timeout_and_exception() -> None:
+    """A probe over budget → 'timeout'; a probe that raises → 'unavailable'; rollup degraded."""
+    import asyncio
+
+    import jarvis_common.health as health
+
+    async def _ok(_request: Any) -> str:
+        return "ok"
+
+    async def _hangs(_request: Any) -> str:
+        await asyncio.sleep(10)
+        return "ok"
+
+    async def _raises(_request: Any) -> str:
+        raise RuntimeError("boom")
+
+    checks = [("good", _ok), ("slow", _hangs), ("broken", _raises)]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(health, "_PROBE_TIMEOUT_S", 0.05)
+        status, results = await health._execute_sweep(_fake_request(), checks)
+
+    assert results == {"good": "ok", "slow": "timeout", "broken": "unavailable"}
+    assert status == "degraded"
+
+
+async def test_double_sweep_eliminated_within_ttl() -> None:
+    """Two back-to-back run_health_checks on one app share a single probe run (D3)."""
+    from jarvis_common.health import run_health_checks
+
+    calls = {"n": 0}
+
+    async def _counting(_request: Any) -> str:
+        calls["n"] += 1
+        return "ok"
+
+    request = _fake_request()
+    checks = [("dep", _counting)]
+    first = await run_health_checks(request, checks)
+    second = await run_health_checks(request, checks)
+
+    assert first == second == ("ok", {"dep": "ok"})
+    assert calls["n"] == 1, "probe ran more than once — sweep memo did not dedupe the paired poll"
+
+
+async def test_sweep_memo_expires_after_ttl() -> None:
+    """After the TTL, run_health_checks re-probes rather than serving a stale memo."""
+    import jarvis_common.health as health
+
+    calls = {"n": 0}
+
+    async def _counting(_request: Any) -> str:
+        calls["n"] += 1
+        return "ok"
+
+    request = _fake_request()
+    checks = [("dep", _counting)]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(health, "_SWEEP_MEMO_TTL_S", 0.0)
+        await health.run_health_checks(request, checks)
+        await health.run_health_checks(request, checks)
+
+    assert calls["n"] == 2, "memo with 0s TTL should not be reused"
+
+
+async def test_sweep_memo_preserves_degraded() -> None:
+    """A degraded sweep is memoized as degraded — never collapsed to ok within the TTL."""
+    from jarvis_common.health import run_health_checks
+
+    async def _down(_request: Any) -> str:
+        return "unavailable"
+
+    request = _fake_request()
+    status, results = await run_health_checks(request, [("dep", _down)])
+    cached_status, _ = await run_health_checks(request, [("dep", _down)])
+
+    assert status == "degraded"
+    assert results == {"dep": "unavailable"}
+    assert cached_status == "degraded"
+
+
+async def test_litellm_probe_uses_per_request_timeout() -> None:
+    """make_litellm_probe issues client.get with an explicit ~2s per-request timeout."""
+    from jarvis_common.health import make_litellm_probe
+    from jarvis_common.llm_client import LiteLLMConfig
+
+    resp = MagicMock()
+    resp.status_code = 200
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=resp)
+    cfg = LiteLLMConfig(base_url="http://litellm:4000")
+
+    probe = make_litellm_probe(http_client=client, config=cfg)
+    assert await probe(_fake_request()) == "ok"
+
+    _args, kwargs = client.get.call_args
+    assert kwargs.get("timeout") == 2.0, "LiteLLM probe must pass an explicit per-request timeout"
+
+
+async def test_vector_probe_short_circuits_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_probe_vector returns 'unknown' with no network round-trip when vector_api_url is empty."""
+    import paper_ingestion.main as pi_main
+    from paper_ingestion.config import PaperIngestionSettings
+
+    settings = PaperIngestionSettings(vector_api_url="")
+    monkeypatch.setattr(pi_main, "get_paper_ingestion_settings", lambda: settings)
+
+    request = _fake_request()
+    http = AsyncMock()
+    http.get = AsyncMock(side_effect=AssertionError("vector probe must not make a request"))
+    request.app.state.http_client = http
+
+    assert await pi_main._probe_vector(request) == "unknown"
+    http.get.assert_not_called()

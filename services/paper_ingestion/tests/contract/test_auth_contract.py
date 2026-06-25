@@ -230,3 +230,179 @@ async def test_a17_api_key_session_non_ascii_returns_403(
     assert resp.status_code == 403, (
         f"Expected 403 for non-ASCII api_key, got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# B1 / SEC-2: api-key-session multi-tenant gate (owner exemption + fallback)
+#
+# Verified: services/paper_ingestion/paper_ingestion/routers/auth.py:391
+# (api_key_session gate). The endpoint binds the session to the configured
+# OWNER_USER_ID (a live admin) or, single-tenant only, the lowest-id admin
+# fallback.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_api_key_login_cache():
+    """Drop the module-level DB-override cache around each gate test."""
+    from jarvis_common.auth import invalidate_api_key_login_cache
+
+    invalidate_api_key_login_cache()
+    yield
+    invalidate_api_key_login_cache()
+
+
+async def _seed_user_with_role(conn, email: str, role: str) -> int:
+    return int(
+        await conn.fetchval(
+            "INSERT INTO users (email, role) VALUES ($1, $2) RETURNING id",
+            email,
+            role,
+        )
+    )
+
+
+async def test_owner_exempt_mints_on_multi_user_box_flag_off(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """B1: a configured admin OWNER_USER_ID mints on a 2+ user box with the flag OFF."""
+    owner_id = await _seed_user_with_role(contract_conn, "owner-admin@example.com", "admin")
+    await _seed_user_with_role(contract_conn, "member@example.com", "user")
+    monkeypatch.setenv("OWNER_USER_ID", str(owner_id))
+    monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 200, (
+        f"Owner must mint on a multi-user box flag-off, got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert resp.json()["id"] == owner_id
+    assert resp.json()["role"] == "admin"
+    assert "jarvis_session" in resp.cookies
+
+
+async def test_non_admin_owner_user_id_still_409s(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """B1 guard: a non-admin OWNER_USER_ID does NOT exempt — the A-3 409 still fires.
+
+    Flag ON so the multi-tenant gate is passed; the explicit-owner branch must
+    then reject the non-admin OWNER_USER_ID with a 409 (not a silent member mint).
+    """
+    member_id = await _seed_user_with_role(contract_conn, "member-owner@example.com", "user")
+    await _seed_user_with_role(contract_conn, "real-admin@example.com", "admin")
+    monkeypatch.setenv("OWNER_USER_ID", str(member_id))
+    monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 409, (
+        f"Non-admin OWNER_USER_ID must 409, got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert "non-admin" in resp.json()["detail"]
+
+
+async def test_flag_on_without_owner_user_id_refuses_fallback_409(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """SEC-2: flag ON, no OWNER_USER_ID, multi-user → lowest-id fallback refused (409)."""
+    await _seed_user_with_role(contract_conn, "admin-a@example.com", "admin")
+    await _seed_user_with_role(contract_conn, "admin-b@example.com", "admin")
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 409, (
+        f"Flag-on without OWNER_USER_ID must refuse the fallback (409), "
+        f"got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert "OWNER_USER_ID" in resp.json()["detail"]
+
+
+async def test_non_owner_multi_user_flag_off_still_403(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """Multi-user box, flag OFF, no exempt owner → multi-tenant gate still 403s."""
+    await _seed_user_with_role(contract_conn, "admin-only@example.com", "admin")
+    await _seed_user_with_role(contract_conn, "plain-member@example.com", "user")
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 403, (
+        f"Multi-user flag-off must 403, got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+async def test_single_user_login_unchanged(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """Single-user box mints via the lowest-id admin fallback (no OWNER_USER_ID)."""
+    admin_id = await _seed_user_with_role(contract_conn, "solo-admin@example.com", "admin")
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 200, (
+        f"Single-user login must mint, got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert resp.json()["id"] == admin_id
+    assert "jarvis_session" in resp.cookies
+
+
+async def test_db_override_enables_multi_user_login(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """The DB override (auth.api_key_login_enabled row) flips the gate when env is off.
+
+    With OWNER_USER_ID set to a live admin the owner is already exempt, so to
+    exercise the DB-override read path use the SEC-2 branch: flag enabled purely
+    via the DB row, no OWNER_USER_ID, multi-user → fallback refused (409). A
+    bare 403 would prove the override was NOT read.
+    """
+    from jarvis_common.auth import API_KEY_LOGIN_CONFIG_KEY
+
+    await _seed_user_with_role(contract_conn, "ovr-admin-a@example.com", "admin")
+    await _seed_user_with_role(contract_conn, "ovr-admin-b@example.com", "admin")
+    await contract_conn.execute(
+        "INSERT INTO user_config (user_id, key, value) VALUES (NULL, $1, $2::jsonb)",
+        API_KEY_LOGIN_CONFIG_KEY,
+        True,
+    )
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("API_KEY_LOGIN_ENABLED", raising=False)
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 409, (
+        f"DB override must enable the gate (then SEC-2 409s the fallback), "
+        f"got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert "OWNER_USER_ID" in resp.json()["detail"]

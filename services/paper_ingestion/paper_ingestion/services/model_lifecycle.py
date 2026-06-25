@@ -22,6 +22,8 @@ from jarvis_common.model_catalog import (
     warn_if_catalog_stale,
 )
 
+from paper_ingestion.services.model_prefixes import strip_ollama_prefix
+
 logger = logging.getLogger(__name__)
 
 Status = Literal["active", "pulled", "downloadable", "unfit", "cloud_active", "cloud_required"]
@@ -169,12 +171,10 @@ def normalize_model_tag(tag: str) -> str:
     Returns
     -------
     str
-        Canonical tag with the ``ollama/`` prefix and ``:latest`` suffix
-        stripped (e.g. ``"qwen3:8b"`` or ``"mistral-nemo"``).
+        Canonical tag with the ``ollama/`` / ``ollama_chat/`` prefix and
+        ``:latest`` suffix stripped (e.g. ``"qwen3:8b"`` or ``"mistral-nemo"``).
     """
-    value = tag.strip()
-    if value.startswith("ollama/"):
-        value = value.removeprefix("ollama/")
+    value = strip_ollama_prefix(tag.strip())
     return value.removesuffix(":latest")
 
 

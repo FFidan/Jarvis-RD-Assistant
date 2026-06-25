@@ -17,6 +17,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdminUsersPage } from '@/pages/AdminUsersPage';
 import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
 import { ApiError } from '@/lib/api';
+import { QUERY_KEYS } from '@/lib/query-keys';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -548,6 +549,94 @@ describe('AdminUsersPage — send sign-in link', () => {
 
     await waitFor(() => expect(aliceBtn).toBeDisabled());
     expect(adminBtn).not.toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B2/OPS-2 — invite deliverability: manual-link fallback when SMTP is off
+// ---------------------------------------------------------------------------
+
+function renderPageWithCache(smtpConfigured: boolean | undefined) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  if (smtpConfigured !== undefined) {
+    queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), {
+      smtp_configured: smtpConfigured,
+    });
+  }
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/admin/users']}>
+        <Routes>
+          <Route path="/admin/users" element={<AdminUsersPage />} />
+          <Route path="/" element={<div>HOME</div>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe('AdminUsersPage — invite deliverability (B2/OPS-2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _mockRole = 'admin';
+    _mockUserId = 1;
+  });
+
+  it('shows the manual-share notice and the link when SMTP is unconfigured', async () => {
+    const link = 'https://localhost:3001/auth/verify?token=abc123';
+    listUsersMock.mockResolvedValue(_sampleUsers);
+    inviteUserMock.mockResolvedValueOnce({
+      id: 3,
+      email: 'new@example.com',
+      role: 'user',
+      created_at: new Date().toISOString(),
+      last_login_at: null,
+      invite_link: link,
+    });
+
+    renderPageWithCache(false);
+    await waitFor(() => screen.getByText('admin@example.com'));
+
+    await userEvent.click(screen.getByRole('button', { name: /invite user/i }));
+    await userEvent.type(screen.getByLabelText(/email address/i), 'new@example.com');
+    await userEvent.click(screen.getByRole('button', { name: /send invite/i }));
+
+    // Modal stays open, shows the SMTP notice + the link to copy.
+    await waitFor(() => {
+      expect(screen.getByText(/smtp is not configured/i)).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText(/invite sign-in link/i)).toHaveValue(link);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('closes the modal with no link shown when SMTP is configured', async () => {
+    listUsersMock.mockResolvedValue(_sampleUsers);
+    inviteUserMock.mockResolvedValueOnce({
+      id: 3,
+      email: 'new@example.com',
+      role: 'user',
+      created_at: new Date().toISOString(),
+      last_login_at: null,
+      // No invite_link: backend omits it when delivery succeeded.
+    });
+
+    renderPageWithCache(true);
+    await waitFor(() => screen.getByText('admin@example.com'));
+
+    await userEvent.click(screen.getByRole('button', { name: /invite user/i }));
+    await userEvent.type(screen.getByLabelText(/email address/i), 'new@example.com');
+    await userEvent.click(screen.getByRole('button', { name: /send invite/i }));
+
+    await waitFor(() => {
+      expect(inviteUserMock).toHaveBeenCalledWith('new@example.com', 'user');
+    });
+    // Modal closes; no link surfaced.
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText(/invite sign-in link/i)).not.toBeInTheDocument();
   });
 });
 

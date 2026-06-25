@@ -17,6 +17,8 @@ import pytest_asyncio
 from jarvis_common import effective_num_ctx, invalidate_effective_num_ctx_cache
 from jarvis_common.testing import SharedConnPool
 
+from paper_ingestion.services.model_prefixes import is_local_ollama, strip_ollama_prefix
+
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.real_auth,
@@ -88,7 +90,7 @@ def _local_smart_deployments(deployments: list[dict]) -> list[dict]:
         d
         for d in deployments
         if d.get("model_name") == "smart"
-        and str(d.get("litellm_params", {}).get("model", "")).startswith("ollama/")
+        and is_local_ollama(str(d.get("litellm_params", {}).get("model", "")))
     ]
 
 
@@ -115,9 +117,11 @@ async def test_num_ctx_write_delivers_and_updates_budget_reader(
         pytest.skip(f"live LiteLLM not reachable in this environment: {exc}")
     before = _local_smart_deployments(deployments)
     if not before:
-        pytest.skip("live LiteLLM has no local (ollama/) smart deployment to retune")
+        pytest.skip(
+            "live LiteLLM has no local (ollama/ or ollama_chat/) smart deployment to retune"
+        )
     prior_params = before[0]["litellm_params"]
-    model_id = str(prior_params["model"]).removeprefix("ollama/")
+    model_id = strip_ollama_prefix(str(prior_params["model"]))
     prior_num_ctx = prior_params.get("num_ctx")
     prior_api_base = prior_params.get("api_base")
     if prior_api_base:

@@ -4,7 +4,7 @@ Covers:
 - SSRF guard (_validate_pdf_url): allowlist, private/reserved IPs, schemes, IDN,
   DNS failure, DNS rebinding, userinfo injection, malformed URLs
 - Size cap (MAX_PDF_SIZE): streaming accumulation exceeds limit → ValueError
-- Page cap (MAX_PDF_PAGES): fitz.open() returns oversized doc → ValueError
+- Page cap (MAX_PDF_PAGES): pypdfium2.PdfDocument returns oversized doc → ValueError
 - Malformed PDF bytes: empty, non-PDF, truncated
 """
 
@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-# fitz/tiktoken/qdrant_client/docling are installed in the venv, so importing
+# pypdfium2/tiktoken/qdrant_client/docling are installed in the venv, so importing
 # paper_ingestion.pdf_processor here is safe; the Docling converter is built
 # lazily on first use, not at import time.
 import paper_ingestion.pdf_processor as pdf_processor
@@ -310,7 +310,7 @@ def test_generate_snapshots_rejects_too_many_pages(
     fake_doc.__len__ = MagicMock(return_value=MAX_PDF_PAGES + 1)
     fake_doc.close = MagicMock()
 
-    monkeypatch.setattr(pdf_processor.fitz, "open", MagicMock(return_value=fake_doc))
+    monkeypatch.setattr(pdf_processor.pdfium, "PdfDocument", MagicMock(return_value=fake_doc))
     monkeypatch.setattr(pdf_processor, "SNAPSHOT_STORAGE_PATH", str(tmp_path))
 
     dummy_pdf = tmp_path / "test.pdf"
@@ -323,15 +323,17 @@ def test_generate_snapshots_rejects_too_many_pages(
     with pytest.raises(ValueError, match="exceeding limit"):
         processor.generate_snapshots(dummy_pdf, paper_id=1)
 
+    fake_doc.close.assert_called_once()
+
 
 def test_generate_snapshots_zero_pages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """generate_snapshots with 0 pages must return an empty list without crashing."""
     fake_doc = MagicMock()
     fake_doc.__len__ = MagicMock(return_value=0)
-    fake_doc.__iter__ = MagicMock(return_value=iter([]))
+    fake_doc.__getitem__ = MagicMock(side_effect=IndexError)
     fake_doc.close = MagicMock()
 
-    monkeypatch.setattr(pdf_processor.fitz, "open", MagicMock(return_value=fake_doc))
+    monkeypatch.setattr(pdf_processor.pdfium, "PdfDocument", MagicMock(return_value=fake_doc))
     monkeypatch.setattr(pdf_processor, "SNAPSHOT_STORAGE_PATH", str(tmp_path))
 
     dummy_pdf = tmp_path / "empty.pdf"
@@ -341,6 +343,39 @@ def test_generate_snapshots_zero_pages(tmp_path: Path, monkeypatch: pytest.Monke
     result = processor.generate_snapshots(dummy_pdf, paper_id=99)
 
     assert result == []
+    fake_doc.close.assert_called_once()
+
+
+def test_generate_snapshots_real_pdf_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Render a real multi-page PDF: one valid PNG per page, 1-indexed, dims = points*DPI/72."""
+    import pypdfium2 as pdfium
+    from paper_ingestion.pdf_processor import SNAPSHOT_DPI
+    from PIL import Image
+
+    page_sizes = [(595.0, 842.0), (612.0, 792.0), (595.0, 842.0)]  # A4, Letter, A4 (points)
+    src = pdfium.PdfDocument.new()
+    for width, height in page_sizes:
+        src.new_page(width, height)
+    pdf_path = tmp_path / "sample.pdf"
+    src.save(str(pdf_path))
+    src.close()
+
+    monkeypatch.setattr(pdf_processor, "SNAPSHOT_STORAGE_PATH", str(tmp_path / "snapshots"))
+
+    processor = PDFProcessor(http_client=MagicMock(), embedder=MagicMock())
+    paths = processor.generate_snapshots(pdf_path, paper_id=7)
+
+    assert len(paths) == len(page_sizes)
+    scale = SNAPSHOT_DPI / 72
+    for i, ((width, height), path) in enumerate(zip(page_sizes, paths, strict=True), start=1):
+        assert path.name == f"page_{i}.png"
+        assert path.exists()
+        with Image.open(path) as img:
+            assert img.format == "PNG"
+            assert abs(img.width - round(width * scale)) <= 2
+            assert abs(img.height - round(height * scale)) <= 2
 
 
 # ---------------------------------------------------------------------------

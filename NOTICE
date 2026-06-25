@@ -1,0 +1,107 @@
+JARVIS RD Assistant
+Copyright 2026 Ferhat Fidan
+
+This product is licensed under the Apache License, Version 2.0 (the "License").
+You may not use this product except in compliance with the License.
+A copy of the License is included in this repository as the LICENSE file
+and is also available at https://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+This product includes third-party software. The following notices are provided
+to satisfy attribution and disclosure requirements of those licenses. All
+third-party packages are used unmodified as standard pip/npm dependencies.
+
+Generated from pip-licenses --python .venv/bin/python (223 packages, 2026-06-25).
+No AGPL-licensed packages are present in this distribution.
+
+================================================================================
+LGPL-3.0 — GNU Lesser General Public License v3 (weak copyleft)
+================================================================================
+These packages are used unmodified as dynamically-loaded pip dependencies.
+LGPL permits use in any licensed software, including Apache-2.0, provided the
+library itself remains unmodified and end-users can replace it. No source
+disclosure obligation applies to this project.
+
+  frozendict        2.4.7   — LGPL-3.0
+  psycopg           3.3.4   — LGPL-3.0-only
+  psycopg-binary    3.3.4   — LGPL-3.0-only
+  psycopg-pool      3.3.1   — LGPL-3.0-only
+  psycopg2-binary   2.9.12  — LGPL (v2 or later)
+  python-telegram-bot 22.7  — LGPL-3.0-only
+
+================================================================================
+MPL-2.0 — Mozilla Public License 2.0 (file-level copyleft)
+================================================================================
+MPL-2.0 is file-level copyleft: only modifications to the MPL-covered files
+themselves must remain MPL-2.0. Merely depending on these packages imposes no
+obligation on the rest of this project.
+
+  certifi     2026.4.22  — MPL-2.0   (CA bundle; transitive via requests/httpx)
+  orjson      3.11.8     — MPL-2.0 AND (Apache-2.0 OR MIT)  (partial MPL files)
+  tqdm        4.67.3     — MPL-2.0 AND MIT  (partial MPL files)
+  hypothesis  6.152.2    — MPL-2.0   (test-only; not shipped in the runtime image)
+
+================================================================================
+pypdfium2 — (Apache-2.0 OR BSD-3-Clause) AND LicenseRef-PdfiumThirdParty
+================================================================================
+pypdfium2 bundles Google's PDFium library, which incorporates several
+third-party components under their own permissive licenses. The combined
+bundle is redistributed under the terms of LicenseRef-PdfiumThirdParty
+alongside the Apache-2.0 / BSD-3-Clause wrapper.
+
+  pypdfium2  4.30.0  — (Apache-2.0 OR BSD-3-Clause) AND LicenseRef-PdfiumThirdParty
+
+Full third-party notices for the bundled PDFium components are available at:
+  https://chromium.googlesource.com/chromium/src/+/main/third_party/pdfium/LICENSE
+
+================================================================================
+NVIDIA Proprietary — GPU runtime libraries (GPU image only)
+================================================================================
+The following NVIDIA CUDA libraries are included in the GPU Docker image only.
+They are redistributed under the NVIDIA Software License Agreement and/or the
+NVIDIA End User License Agreement. These libraries are NOT open-source but are
+freely redistributable under NVIDIA's standard terms for CUDA-enabled software.
+They are NOT present in CPU-only deployments.
+
+  cuda-bindings          13.2.0    — LicenseRef-NVIDIA-SOFTWARE-LICENSE
+  cuda-toolkit           13.0.2    — NVIDIA CUDA Toolkit (EULA)
+  nvidia-cublas          13.1.0.3  — LicenseRef-NVIDIA-Proprietary
+  nvidia-cuda-cupti      13.0.85   — NVIDIA Proprietary
+  nvidia-cuda-nvrtc      13.0.88   — NVIDIA Proprietary
+  nvidia-cuda-runtime    13.0.96   — LicenseRef-NVIDIA-Proprietary
+  nvidia-cudnn-cu13      9.19.0.56 — LicenseRef-NVIDIA-Proprietary
+  nvidia-cufft           12.0.0.61 — NVIDIA Proprietary
+  nvidia-cufile          1.15.1.6  — NVIDIA Proprietary
+  nvidia-curand          10.4.0.35 — NVIDIA Proprietary
+  nvidia-cusolver        12.0.4.66 — NVIDIA Proprietary
+  nvidia-cusparse        12.6.3.3  — NVIDIA Proprietary
+  nvidia-cusparselt-cu13 0.8.0     — NVIDIA Proprietary Software
+  nvidia-nccl-cu13       2.28.9    — LicenseRef-NVIDIA-Proprietary
+  nvidia-nvjitlink       13.0.88   — NVIDIA Proprietary
+  nvidia-nvshmem-cu13    3.4.5     — LicenseRef-NVIDIA-Proprietary
+  nvidia-nvtx            13.0.85   — NVIDIA Proprietary
+
+NVIDIA license terms: https://docs.nvidia.com/cuda/eula/
+
+================================================================================
+OCR / Vision pipeline (Apache-2.0 / MIT — permissive)
+================================================================================
+These packages are used for OCR and computer-vision processing within the
+document ingestion pipeline. They are permissively licensed.
+
+  opencv-python  4.13.0.92  — Apache Software License (Apache-2.0)
+                              Note: OpenCV bundles FFmpeg codecs; those codecs
+                              are NOT activated by this project's usage (PDF/image
+                              processing only; no video codec calls).
+  onnxruntime    1.25.1     — MIT License
+
+================================================================================
+All other packages
+================================================================================
+The remaining 197 packages are permissively licensed (MIT, BSD-2, BSD-3, ISC,
+Apache-2.0, and functionally equivalent variants). No further attribution or
+disclosure obligation applies.
+
+Full license texts for all installed packages are available by running:
+  uv tool run pip-licenses --python .venv/bin/python --format=plain-vertical --with-license-file

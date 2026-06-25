@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml)
 [![Docs](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml/badge.svg?branch=master)](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 ![My Day — JARVIS RD Assistant](docs/screenshots/02-my-day.png)
@@ -244,4 +244,4 @@ JARVIS RD Assistant was built with heavy AI-assisted development, kept honest by
 
 ## License
 
-[MIT](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/LICENSE)
+[Apache 2.0](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/LICENSE)

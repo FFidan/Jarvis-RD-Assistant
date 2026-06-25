@@ -105,11 +105,11 @@ async def test_absent_model_is_pulled_before_apply(_patched, monkeypatch):
     apply_spy.side_effect = lambda *a, **k: order.append("apply")
 
     client = _FakeAsyncClient(installed=["other-model:latest"])
-    req = settings_ai.ApplyRequest(backend="ollama", model="ollama/qwen3:8b")
+    req = settings_ai.ApplyRequest(backend="ollama", model="ollama_chat/qwen3:8b")
 
     await settings_ai.apply_ai_settings(req, _make_request(client), _admin=None)
 
-    # A pull was issued for the bare tag (ollama/ prefix stripped).
+    # A pull was issued for the bare tag (ollama_chat/ prefix stripped).
     assert client.pull_names == ["qwen3:8b"]
     assert any("POST http://ollama:11434/api/pull" in c for c in client.calls)
     # apply ran AFTER the pull stream completed.
@@ -123,7 +123,7 @@ async def test_absent_model_is_pulled_before_apply(_patched, monkeypatch):
 async def test_present_model_skips_pull(_patched):
     apply_spy = _patched
     client = _FakeAsyncClient(installed=["qwen3:8b"])
-    req = settings_ai.ApplyRequest(backend="ollama", model="ollama/qwen3:8b")
+    req = settings_ai.ApplyRequest(backend="ollama", model="ollama_chat/qwen3:8b")
 
     await settings_ai.apply_ai_settings(req, _make_request(client), _admin=None)
 
@@ -136,7 +136,7 @@ async def test_present_model_skips_pull(_patched):
 async def test_pull_failure_surfaces_502_and_skips_apply(_patched):
     apply_spy = _patched
     client = _FakeAsyncClient(installed=[], pull_status=500)
-    req = settings_ai.ApplyRequest(backend="ollama", model="ollama/qwen3:8b")
+    req = settings_ai.ApplyRequest(backend="ollama", model="ollama_chat/qwen3:8b")
 
     with pytest.raises(HTTPException) as excinfo:
         await settings_ai.apply_ai_settings(req, _make_request(client), _admin=None)
@@ -151,7 +151,7 @@ async def test_pull_error_event_surfaces_502_and_skips_apply(_patched):
     client = _FakeAsyncClient(
         installed=[], pull_status=200, pull_events=[{"error": "no such model"}]
     )
-    req = settings_ai.ApplyRequest(backend="ollama", model="ollama/qwen3:8b")
+    req = settings_ai.ApplyRequest(backend="ollama", model="ollama_chat/qwen3:8b")
 
     with pytest.raises(HTTPException) as excinfo:
         await settings_ai.apply_ai_settings(req, _make_request(client), _admin=None)
@@ -168,7 +168,7 @@ async def test_pull_stream_without_success_event_surfaces_502(_patched):
     client = _FakeAsyncClient(
         installed=[], pull_status=200, pull_events=[{"status": "pulling manifest"}]
     )
-    req = settings_ai.ApplyRequest(backend="ollama", model="ollama/qwen3:8b")
+    req = settings_ai.ApplyRequest(backend="ollama", model="ollama_chat/qwen3:8b")
 
     with pytest.raises(HTTPException) as excinfo:
         await settings_ai.apply_ai_settings(req, _make_request(client), _admin=None)

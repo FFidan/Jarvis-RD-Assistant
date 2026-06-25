@@ -128,3 +128,43 @@ def test_hmac_key_prefers_model_hmac_key_over_api_key(monkeypatch):
     # And must NOT equal the api_key derivation
     api_key_derived = _expected_digest_from_raw_env("should-not-be-used")
     assert result != api_key_derived
+
+
+def test_hmac_key_multi_user_nonprod_refuses_derivation_fallback(monkeypatch):
+    """SEC-4: a multi-user (JARVIS_SETUP_MODE != single) box refuses the
+    api_key-derivation fallback even outside production — the dedicated
+    JARVIS_MODEL_HMAC_KEY must be set."""
+    _isolated_secrets(monkeypatch, JARVIS_API_KEY="bearer-only-no-dedicated-key")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("JARVIS_SETUP_MODE", "multi")
+
+    from paper_ingestion.pulse.training import _hmac_key
+
+    with pytest.raises(RuntimeError, match="JARVIS_MODEL_HMAC_KEY"):
+        _hmac_key()
+
+
+def test_hmac_key_multi_user_nonprod_uses_dedicated_key(monkeypatch):
+    """SEC-4: with the dedicated key set, a multi-user box derives no fallback."""
+    _isolated_secrets(
+        monkeypatch,
+        JARVIS_MODEL_HMAC_KEY="dedicated-model-key-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+        JARVIS_API_KEY="should-not-be-used",
+    )
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("JARVIS_SETUP_MODE", "multi")
+
+    from paper_ingestion.pulse.training import _hmac_key
+
+    assert _hmac_key() == b"dedicated-model-key-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+
+
+def test_hmac_key_single_user_nonprod_allows_derivation_fallback(monkeypatch):
+    """SEC-4 non-regression: single-user dev still derives from JARVIS_API_KEY."""
+    _isolated_secrets(monkeypatch, JARVIS_API_KEY="single-user-dev-key")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("JARVIS_SETUP_MODE", "single")
+
+    from paper_ingestion.pulse.training import _hmac_key
+
+    assert _hmac_key() == _expected_digest_from_raw_env("single-user-dev-key")

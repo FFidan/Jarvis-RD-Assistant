@@ -885,12 +885,17 @@ async def _probe_ollama(request: Request) -> str:
 
 
 async def _probe_vector(request: Request) -> str:
-    """Vector sidecar probe — API is disabled in production so failures map to
-    ``"unknown"`` (not ``"unavailable"``) so they do not drag overall status
-    to ``"degraded"``.
+    """Vector sidecar probe — the API is optional so failures map to
+    ``"unknown"`` (not ``"unavailable"``) and do not drag overall status to
+    ``"degraded"``.
+
+    When ``vector_api_url`` is unset (the sidecar is disabled) the probe
+    short-circuits to ``"unknown"`` without a network round-trip.
     """
+    vector_url = get_paper_ingestion_settings().vector_api_url.strip()
+    if not vector_url:
+        return "unknown"
     try:
-        vector_url = get_paper_ingestion_settings().vector_api_url
         resp = await asyncio.wait_for(
             request.app.state.http_client.get(f"{vector_url}/health"),
             timeout=3.0,

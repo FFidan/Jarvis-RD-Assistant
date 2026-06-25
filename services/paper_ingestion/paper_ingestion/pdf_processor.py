@@ -1,7 +1,7 @@
 """PDF processing pipeline.
 
 Downloads PDFs via httpx, extracts text with Docling (Markdown + per-page
-provenance), generates page snapshots at 150 DPI via PyMuPDF, and orchestrates
+provenance), generates page snapshots at 150 DPI via pypdfium2, and orchestrates
 page-bounded chunking + embedding storage.
 """
 
@@ -14,8 +14,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-import fitz  # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Docling
 import httpx
+import pypdfium2 as pdfium  # page snapshot generation only; text extraction uses Docling
 from jarvis_common.settings import get_core_settings
 
 from paper_ingestion.config import ALLOWED_PDF_DOMAINS, get_paper_ingestion_settings
@@ -311,7 +311,7 @@ class PDFProcessor:
         )
         return pdf_path
 
-    # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Docling
+    # pypdfium2 used for page snapshot generation only; text extraction uses Docling
 
     def generate_snapshots(self, pdf_path: Path, paper_id: int) -> list[Path]:
         """Generate PNG snapshots of each page at 150 DPI.
@@ -331,33 +331,34 @@ class PDFProcessor:
         snapshot_dir = Path(SNAPSHOT_STORAGE_PATH) / str(paper_id)
         snapshot_dir.mkdir(parents=True, exist_ok=True)
 
-        doc = fitz.open(str(pdf_path))
+        pdf = pdfium.PdfDocument(str(pdf_path))
         try:
-            if len(doc) > MAX_PDF_PAGES:
-                raise ValueError(f"PDF has {len(doc)} pages, exceeding limit of {MAX_PDF_PAGES}")
+            if len(pdf) > MAX_PDF_PAGES:
+                raise ValueError(f"PDF has {len(pdf)} pages, exceeding limit of {MAX_PDF_PAGES}")
             paths: list[Path] = []
 
             MAX_PIXMAP_DIMENSION = 4096  # Cap oversized pages
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                scale = SNAPSHOT_DPI / 72
-                # Cap scale if page would exceed max dimension
-                page_rect = page.rect
-                max_side = max(page_rect.width, page_rect.height) * scale
-                if max_side > MAX_PIXMAP_DIMENSION:
-                    scale = MAX_PIXMAP_DIMENSION / max(page_rect.width, page_rect.height)
-                mat = fitz.Matrix(scale, scale)
-                pix = page.get_pixmap(matrix=mat)
-                # Store as 1-indexed page numbers
-                snapshot_path = snapshot_dir / f"page_{page_num + 1}.png"
-                pix.save(str(snapshot_path))
-                pix = None
-                paths.append(snapshot_path)
+            for page_num in range(len(pdf)):
+                page = pdf[page_num]
+                try:
+                    width, height = page.get_size()
+                    scale = SNAPSHOT_DPI / 72
+                    # Cap scale if page would exceed max dimension
+                    if max(width, height) * scale > MAX_PIXMAP_DIMENSION:
+                        scale = MAX_PIXMAP_DIMENSION / max(width, height)
+                    # render accepts a float scale; the stub's int default narrows it.
+                    pil_image = page.render(scale=scale).to_pil()  # type: ignore[arg-type]
+                    # Store as 1-indexed page numbers
+                    snapshot_path = snapshot_dir / f"page_{page_num + 1}.png"
+                    pil_image.save(str(snapshot_path))
+                    paths.append(snapshot_path)
+                finally:
+                    page.close()
 
             logger.info("Generated %d snapshots for paper %d", len(paths), paper_id)
             return paths
         finally:
-            doc.close()
+            pdf.close()
 
     async def process(
         self,

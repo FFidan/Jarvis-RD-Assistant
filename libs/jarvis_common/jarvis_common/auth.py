@@ -119,6 +119,52 @@ def refresh_api_key_cache() -> None:
     _CACHED_API_KEY = _load_api_key()
 
 
+# System ``user_config`` row (user_id NULL) that lets an admin flip the
+# multi-tenant API-key-login gate in-app — the recovery path before the boot
+# API key would otherwise be the only credential. Read as ``env default OR DB
+# override`` so the operator can enable it post-deploy without an env edit. The
+# key string lives here (jarvis_common) so the read side owns it; the
+# paper_ingestion config allowlist imports this constant to register the write.
+API_KEY_LOGIN_CONFIG_KEY = "auth.api_key_login_enabled"
+
+# Module-level cache of the DB override. ``None`` means "not yet read / just
+# invalidated"; once read it caches True/False. Single-process uvicorn, so this
+# mirrors the _CACHED_API_KEY single-process assumption. The flag only WIDENS
+# access, so an admin flip OFF must invalidate promptly — settings write does so.
+_api_key_login_db_override: bool | None = None
+
+
+def invalidate_api_key_login_cache() -> None:
+    """Drop the cached DB override (call after an admin flips the flag).
+
+    Mirror of :func:`invalidate_effective_num_ctx_cache`: the next
+    :func:`api_key_login_enabled` read re-resolves the system row.
+    """
+    global _api_key_login_db_override
+    _api_key_login_db_override = None
+
+
+async def api_key_login_enabled(conn: asyncpg.Connection) -> bool:
+    """Resolve the effective multi-tenant API-key-login flag.
+
+    ``env default OR DB override``: the env ``API_KEY_LOGIN_ENABLED`` short-
+    circuits to True when set (operators who hard-enable it in compose env keep
+    that behaviour); otherwise the in-app admin toggle persisted to the
+    ``auth.api_key_login_enabled`` system row decides. The DB read is cached in
+    process and invalidated by :func:`invalidate_api_key_login_cache` on write.
+    """
+    if get_core_settings().api_key_login_enabled:
+        return True
+    global _api_key_login_db_override
+    if _api_key_login_db_override is None:
+        row = await conn.fetchrow(
+            "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+            API_KEY_LOGIN_CONFIG_KEY,
+        )
+        _api_key_login_db_override = bool(row["value"]) if row is not None else False
+    return _api_key_login_db_override
+
+
 async def verify_api_key(request: Request, api_key: str | None = Depends(_api_key_header)) -> None:
     """Validate API key.
 
@@ -668,28 +714,31 @@ def validate_production_config() -> None:
                 "set a strong secret before deploying to production"
             )
 
-    # H14 / M-07 — Pulse model HMAC key gate. The pulse classifier signs
+    # H14 / M-07 / SEC-4 — Pulse model HMAC key gate. The pulse classifier signs
     # pickle blobs with HMAC-SHA256; without a real key, an attacker with DB
     # write access could forge a signed blob and trigger RCE via pickle.loads.
-    # In production, the dedicated ``JARVIS_MODEL_HMAC_KEY`` is mandatory
-    # (M-07 — the derivation-from-JARVIS_API_KEY fallback is refused so a
-    # stolen bearer cannot also forge model blobs). Require ≥ 32 chars so
-    # the signing key has meaningful entropy.
-    if env == "production":
-        import os as _os  # noqa: PLC0415
-        from pathlib import Path  # noqa: PLC0415
-
+    # The dedicated ``JARVIS_MODEL_HMAC_KEY`` is mandatory whenever the
+    # derivation-from-JARVIS_API_KEY fallback would let a stolen bearer also
+    # forge model blobs: in production AND on any multi-user deployment
+    # (``JARVIS_SETUP_MODE != single``, e.g. an internal multi-user box).
+    # Require ≥ 32 chars so the signing key has meaningful entropy.
+    if env == "production" or core.jarvis_setup_mode != "single":
         model_hmac_secret = get_secrets_settings().jarvis_model_hmac_key
         model_hmac_key = model_hmac_secret.get_secret_value() if model_hmac_secret else ""
         if not model_hmac_key:
             raise RuntimeError(
-                "JARVIS_MODEL_HMAC_KEY must be set in production "
-                "(no derivation fallback). See docs/SECURITY.md#pulse-model-signing."
+                "JARVIS_MODEL_HMAC_KEY must be set for production or multi-user "
+                "deployments (no derivation fallback). "
+                "See docs/SECURITY.md#pulse-model-signing."
             )
         if len(model_hmac_key) < 32:
             raise RuntimeError(
                 f"JARVIS_MODEL_HMAC_KEY must be at least 32 characters (got {len(model_hmac_key)})"
             )
+
+    if env == "production":
+        import os as _os  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
 
         # DOM-E-08 — Config encryption key gate. user_config rows are encrypted
         # with Fernet using JARVIS_CONFIG_KEY. Without it the first decrypt at

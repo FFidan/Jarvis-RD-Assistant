@@ -54,11 +54,6 @@ def _llm_model() -> str:
 
 
 _LLM_MAX_TOKENS = 1536  # headroom for JSON even if a model leaks reasoning before it
-# qwen3 is a thinking model; instructor Mode.JSON parses the WHOLE completion and raises on
-# the <think> preamble before any caller code runs, so think output must be suppressed at the
-# source. chat_template_kwargs.enable_thinking=False is qwen3's documented off-switch and rides
-# through instructor → AsyncOpenAI → LiteLLM via extra_body.
-_STAGE2_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 _LLM_TEMPERATURE = 0.0
 _RECENCY_HALF_LIFE_DAYS = 30.0  # e-folding time for the recency decay: exp(-age_days / N)
 _AUTHOR_BONUS_WEIGHT = 0.5  # weight applied to author_bonus in the stage-1 preliminary score
@@ -317,7 +312,6 @@ async def stage2_llm_rerank(
                     max_tokens=_LLM_MAX_TOKENS,
                     temperature=_LLM_TEMPERATURE,
                     system=PULSE_SCORING_SYSTEM_PROMPT,
-                    extra_body=_STAGE2_EXTRA_BODY,
                 )
                 with probe_span("pulse_stage2_llm", model=_llm_model()):
                     output: PulseScoringOutput = await call_llm_structured(

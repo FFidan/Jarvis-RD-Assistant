@@ -1,7 +1,7 @@
 """Streaming RAG helpers — SSE event generator and RAG preparation.
 
 This module is kept separate from ``main.py`` so that tests can import
-these functions without triggering the ``fitz`` (PyMuPDF) import chain.
+these functions without triggering the ``pypdfium2`` import chain.
 """
 
 import asyncio

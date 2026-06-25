@@ -164,7 +164,7 @@ async def test_update_litellm_model_injects_cloud_key_and_master_key(monkeypatch
     respx.get(f"{LITELLM}/v1/model/info").mock(
         return_value=httpx.Response(
             200,
-            json={"data": [_entry("smart", {"model": "ollama/qwen3:8b"}, dep_id="old-1")]},
+            json={"data": [_entry("smart", {"model": "ollama_chat/qwen3:8b"}, dep_id="old-1")]},
         )
     )
     new_route = respx.post(f"{LITELLM}/model/new").mock(
@@ -225,7 +225,7 @@ async def test_update_litellm_model_no_key_delivers_keyless_and_warns(monkeypatc
     respx.get(f"{LITELLM}/v1/model/info").mock(
         return_value=httpx.Response(
             200,
-            json={"data": [_entry("smart", {"model": "ollama/mistral-nemo"}, dep_id="old-1")]},
+            json={"data": [_entry("smart", {"model": "ollama_chat/mistral-nemo"}, dep_id="old-1")]},
         )
     )
     new_route = respx.post(f"{LITELLM}/model/new").mock(
@@ -257,13 +257,13 @@ async def test_update_litellm_model_local_model_never_reads_provider_keys(monkey
     respx.get(f"{LITELLM}/v1/model/info").mock(
         return_value=httpx.Response(
             200,
-            json={"data": [_entry("smart", {"model": "ollama/mistral-nemo"})]},
+            json={"data": [_entry("smart", {"model": "ollama_chat/mistral-nemo"})]},
         )
     )
 
     with patch.object(mod, "get_provider_api_key", new_callable=AsyncMock) as mock_gpa:
         # Same model → no-op; the relevant assertion is the key read below.
-        await update_litellm_model("smart", "ollama/mistral-nemo", db_pool=pool)
+        await update_litellm_model("smart", "ollama_chat/mistral-nemo", db_pool=pool)
 
         # get_provider_api_key must NOT have been called — this is a local model.
         mock_gpa.assert_not_called()

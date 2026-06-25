@@ -33,6 +33,7 @@ admin is logged in. Both can coexist.
 """
 
 import asyncio
+import hmac
 import logging
 import os
 import re
@@ -54,7 +55,7 @@ from jarvis_common.email import smtp_configured as _smtp_configured_probe
 from jarvis_common.net import _reject_non_public_host
 from jarvis_common.serialization import _coerce_bool
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
-from jarvis_common.settings import get_core_settings
+from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from paper_ingestion.deps import limiter
@@ -279,6 +280,30 @@ def _cookie_secure() -> bool:
     return not get_core_settings().dev_mode
 
 
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _require_setup_token(request: Request) -> None:
+    """Gate a bootstrap WRITE on the setup token, when one is configured.
+
+    The token is an additional bootstrap factor (closes the unauthenticated
+    first-admin-takeover window). It is enforced only for unsafe methods; the
+    read-only setup probes stay open. When no token is configured the gate is a
+    no-op, preserving backward-compatibility for dev/legacy installs.
+    """
+    if request.method in _SAFE_METHODS:
+        return
+    expected = get_secrets_settings().jarvis_setup_token
+    if expected is None:
+        return
+    provided = request.headers.get("X-Setup-Token", "")
+    if not hmac.compare_digest(provided.encode(), expected.get_secret_value().encode()):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or missing setup token",
+        )
+
+
 async def require_unconfigured_or_admin(request: Request) -> None:
     """Allow the call IFF no admin exists, OR the caller is an admin.
 
@@ -289,6 +314,7 @@ async def require_unconfigured_or_admin(request: Request) -> None:
     pool = request.app.state.db_pool
     admins = await _admin_count(pool)
     if admins == 0:
+        _require_setup_token(request)
         return  # bootstrap mode
     role = getattr(request.state, "user_role", None)
     if role != "admin":
@@ -730,6 +756,11 @@ async def create_first_admin(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="An admin user already exists; use the invite flow instead.",
                 )
+
+            # Bootstrap confirmed (admin_count == 0): this is the genuine
+            # first-admin creation, so gate it on the setup token. An
+            # existing-admin probe still gets the informative 409 above.
+            _require_setup_token(request)
 
             # Pre-existing soft-deleted user with the same email is a hard error;
             # operator should reach out for ops support rather than silently undelete.

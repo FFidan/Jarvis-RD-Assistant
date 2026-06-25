@@ -223,6 +223,11 @@ class PaperIngestionSettings(JarvisCommonSettings):
             "modest queue buffer without wasteful over-subscription."
         ),
     )
+    jarvis_strict_models: bool = Field(
+        default=False,
+        description="When true, hard-fail a structured-LLM feature on a real probe failure "
+        "(every stage-2 candidate scored nothing) instead of degrading (JARVIS_STRICT_MODELS).",
+    )
 
     # --- External API keys ---------------------------------------------
     semantic_scholar_api_key: SecretStr | None = Field(

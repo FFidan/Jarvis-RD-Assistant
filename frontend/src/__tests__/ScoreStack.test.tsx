@@ -57,7 +57,7 @@ describe('ScoreStack', () => {
     expect(graphBg).toContain('#f59e0b');
   });
 
-  it('title tooltips contain signal name and normalised percentage', () => {
+  it('title tooltips contain human-readable signal label and normalised percentage', () => {
     const { container } = render(
       <ScoreStack score={0.6} parts={{ emb: 0.5, llm: 0.5, rec: 0, graph: 0 }} />,
     );
@@ -69,10 +69,10 @@ describe('ScoreStack', () => {
     const [emb, llm, rec, graph] = Array.from(segments);
     if (!emb || !llm || !rec || !graph) throw new Error('test fixture: expected 4 segment divs');
 
-    expect(emb.getAttribute('title')).toContain('emb 50%');
-    expect(llm.getAttribute('title')).toContain('llm 50%');
-    expect(rec.getAttribute('title')).toContain('rec 0%');
-    expect(graph.getAttribute('title')).toContain('graph 0%');
+    expect(emb.getAttribute('title')).toContain('Semantic similarity 50%');
+    expect(llm.getAttribute('title')).toContain('Relevance score 50%');
+    expect(rec.getAttribute('title')).toContain('Recommendation 0%');
+    expect(graph.getAttribute('title')).toContain('Citation graph 0%');
   });
 
   it('zero-sum payload — renders a single gray "no signal" bar (not 4 equal blocks)', () => {
@@ -88,11 +88,20 @@ describe('ScoreStack', () => {
     expect(bar.style.width).toBe('100%');
   });
 
-  it('zero-sum payload — badge label reads "no signal" not "emb·llm·rec·g"', () => {
+  it('zero-sum payload — badge label reads "no signal"', () => {
     const { getByText } = render(
       <ScoreStack score={0} parts={{ emb: 0, llm: 0, rec: 0, graph: 0 }} />,
     );
 
     expect(getByText('no signal')).toBeInTheDocument();
+  });
+
+  it('non-zero payload — badge shows abbreviated human-readable label, not raw jargon', () => {
+    const { getByText, queryByText } = render(
+      <ScoreStack score={0.8} parts={{ emb: 0.8, llm: 0, rec: 0, graph: 0 }} />,
+    );
+
+    expect(getByText('sem·rel·rec·cit')).toBeInTheDocument();
+    expect(queryByText('emb·llm·rec·g')).not.toBeInTheDocument();
   });
 });

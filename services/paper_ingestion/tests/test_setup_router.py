@@ -9,7 +9,24 @@ import asyncpg
 import paper_ingestion.routers.setup as setup_router
 import pytest
 from fastapi import HTTPException
+from jarvis_common.settings import get_secrets_settings
 from jarvis_common.testing import make_pool_and_conn
+from starlette.datastructures import Headers
+
+_SETUP_TOKEN = "test-sentinel-token"
+
+
+@pytest.fixture(autouse=True)
+def _setup_token_env(monkeypatch):
+    """Configure the bootstrap setup token so write-handler tests carry it.
+
+    The cache must be cleared on both setup and teardown so neither this suite
+    nor a sibling sees a stale SecretsSettings.
+    """
+    monkeypatch.setenv("JARVIS_SETUP_TOKEN", _SETUP_TOKEN)
+    get_secrets_settings.cache_clear()
+    yield
+    get_secrets_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -22,10 +39,16 @@ def _disable_limiter():
     limiter.enabled = original
 
 
-def _build_request(pool: MagicMock) -> SimpleNamespace:
+def _build_request(
+    pool: MagicMock,
+    *,
+    method: str = "POST",
+    headers: dict[str, str] | None = None,
+) -> SimpleNamespace:
     state = SimpleNamespace(db_pool=pool)
     app = SimpleNamespace(state=state)
-    return SimpleNamespace(app=app, state=state, cookies={})
+    hdrs = Headers({"x-setup-token": _SETUP_TOKEN} if headers is None else headers)
+    return SimpleNamespace(app=app, state=state, cookies={}, method=method, headers=hdrs)
 
 
 @pytest.mark.asyncio

@@ -94,6 +94,5 @@ async def test_call_llm_structured_validation_error_propagates():
             max_retries=1,
         )
         assert isinstance(result, _TightConstraint)
-    except Exception:
-        # Any exception (InstructorRetryException or otherwise) is acceptable
-        pass
+    except Exception as exc:
+        pytest.skip(f"LLM returned unparseable result (non-blocking for nightly): {exc}")

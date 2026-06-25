@@ -31,6 +31,15 @@ isolation expectation that every contributor must follow.
 
 ---
 
+## License
+
+By contributing to this project you agree that your contributions are licensed
+under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0),
+the same license that covers the project. No additional contributor license
+agreement is required.
+
+---
+
 ## AI-Assisted Contributions
 
 This project was built with substantial AI assistance, and AI-assisted contributions are welcome — but every PR, human- or agent-authored, must pass the full gate (`make check`: ruff, ruff-format, pyright, tach, the Python + frontend test suites, and the build) before review.

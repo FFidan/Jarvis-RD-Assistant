@@ -34,6 +34,8 @@ from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
 from jarvis_common.llm_client import build_litellm_headers, get_litellm_config
 
+from paper_ingestion.services.model_prefixes import is_local_ollama
+
 logger = logging.getLogger(__name__)
 
 # Serializes concurrent LiteLLM delivery sequences — the settings router imports
@@ -62,8 +64,9 @@ ROLE_TO_ALIAS: dict[str, str] = {
 # mirror the values formerly seeded in litellm/config.yaml.
 #
 # Placement invariant (verified against the pinned LiteLLM image): for ollama/
-# models, num_ctx and think must be TOP-LEVEL litellm_params. Non-OpenAI
-# providers pass unknown top-level params straight into Ollama's ``options``
+# and ollama_chat/ models, num_ctx and think must be TOP-LEVEL litellm_params.
+# Non-OpenAI providers pass unknown top-level params straight into Ollama's
+# ``options``
 # (and the ollama transforms pop top-level ``think`` into the request body),
 # while a nested ``extra_body`` is forwarded verbatim under ``options`` and
 # silently ignored by Ollama.
@@ -576,15 +579,19 @@ async def update_litellm_model(
     base_params = _carry_base_params(base_entry)
 
     # New model string: caller-supplied provider prefix wins; otherwise inherit
-    # the existing entry's prefix; otherwise default to ollama/.
+    # the existing entry's prefix; otherwise default to the local prefix. Chat
+    # aliases default to ollama_chat/ (the chat transport that honors
+    # grammar-constrained decoding); the dimension-locked embed alias stays on
+    # ollama/ (different endpoint — ollama_chat/ would break embeddings).
     existing_model = str(base_params.get("model", ""))
+    local_default_prefix = "ollama/" if alias == "embed" else "ollama_chat/"
     if "/" in model_name:
         new_model = model_name
-    elif "/" in existing_model and not existing_model.startswith("ollama/"):
+    elif "/" in existing_model and not is_local_ollama(existing_model):
         existing_prefix = existing_model.split("/")[0]
         new_model = f"{existing_prefix}/{model_name}"
     else:
-        new_model = f"ollama/{model_name}"
+        new_model = f"{local_default_prefix}{model_name}"
 
     # -------------------------------------------------------------------------
     # Embed guard: the embed alias is dimension-locked to the Qdrant collection
@@ -667,11 +674,11 @@ async def update_litellm_model(
         # Fresh creation (post-de-seed bootstrap): seed the tuned defaults.
         new_params = {**ALIAS_BOOTSTRAP_PARAMS.get(alias, {}), **new_params}
     new_params["model"] = new_model
-    if new_model.startswith("ollama/"):
+    if is_local_ollama(new_model):
         new_params["api_base"] = get_paper_ingestion_settings().ollama_base_url
     # else (inherited non-cloud prefix, e.g. the vLLM openai/ spike): keep the
     # carried api_base — forcing the Ollama URL would break that transport.
-    if effective_num_ctx is not None and new_model.startswith("ollama/"):
+    if effective_num_ctx is not None and is_local_ollama(new_model):
         new_params["num_ctx"] = effective_num_ctx
     if effective_thinking_disabled:
         new_params["think"] = False
@@ -710,7 +717,7 @@ async def update_litellm_model(
         delivered
         and db_pool is not None
         and effective_num_ctx is not None
-        and new_model.startswith("ollama/")
+        and is_local_ollama(new_model)
     ):
         from paper_ingestion.services.config_db import _upsert_system_num_ctx  # noqa: PLC0415
 
@@ -764,7 +771,7 @@ async def ensure_smart_fallback(
             cloud_provider = None
             fast_model = _STATIC_FALLBACK_MODEL
 
-    new_model = fast_model if "/" in fast_model else f"ollama/{fast_model}"
+    new_model = fast_model if "/" in fast_model else f"ollama_chat/{fast_model}"
 
     deployments = await get_litellm_deployments()
     db_entries, yaml_entries = _deployments_for_alias(deployments, "smart-fallback")

@@ -1,3 +1,5 @@
+import { signalLabel } from '@/lib/labels/signals';
+
 interface ScoreStackProps {
   score: number;
   parts: { emb: number; llm: number; rec: number; graph: number };
@@ -29,16 +31,16 @@ export function ScoreStack({ score, parts, className = '', showBadges = true }: 
           />
         ) : (
           <>
-            <div title={`emb ${(norm!.emb * 100).toFixed(0)}%`}     style={{ width: `${norm!.emb * 100}%`,   backgroundColor: 'var(--ink-blue)' }} />
-            <div title={`llm ${(norm!.llm * 100).toFixed(0)}%`}     style={{ width: `${norm!.llm * 100}%`,   backgroundColor: 'var(--score-llm, #14b8a6)' }} />
-            <div title={`rec ${(norm!.rec * 100).toFixed(0)}%`}     style={{ width: `${norm!.rec * 100}%`,   backgroundColor: 'var(--score-rec, #a855f7)' }} />
-            <div title={`graph ${(norm!.graph * 100).toFixed(0)}%`} style={{ width: `${norm!.graph * 100}%`, backgroundColor: 'var(--score-graph, #f59e0b)' }} />
+            <div title={`${signalLabel('emb')} ${(norm!.emb * 100).toFixed(0)}%`}     style={{ width: `${norm!.emb * 100}%`,   backgroundColor: 'var(--ink-blue)' }} />
+            <div title={`${signalLabel('llm')} ${(norm!.llm * 100).toFixed(0)}%`}     style={{ width: `${norm!.llm * 100}%`,   backgroundColor: 'var(--score-llm, #14b8a6)' }} />
+            <div title={`${signalLabel('rec')} ${(norm!.rec * 100).toFixed(0)}%`}     style={{ width: `${norm!.rec * 100}%`,   backgroundColor: 'var(--score-rec, #a855f7)' }} />
+            <div title={`${signalLabel('graph')} ${(norm!.graph * 100).toFixed(0)}%`} style={{ width: `${norm!.graph * 100}%`, backgroundColor: 'var(--score-graph, #f59e0b)' }} />
           </>
         )}
       </div>
       {showBadges && (
         <span className="font-mono text-[10px] text-meta tracking-tight tabular-nums whitespace-nowrap">
-          {noSignal ? 'no signal' : 'emb·llm·rec·g'}
+          {noSignal ? 'no signal' : 'sem·rel·rec·cit'}
         </span>
       )}
     </div>

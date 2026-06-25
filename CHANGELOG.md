@@ -3,6 +3,30 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## v0.9.2 (2026-06-25) — Hardened structured AI output, setup & account safeguards, permissive PDF rendering
+
+### Added
+- **Effective-configuration view.** A new admin endpoint reports the resolved model roles, transport, and structured-output enforcement state, so a misconfigured model default can be diagnosed at a glance.
+- **Third-party NOTICE.** A `NOTICE` file at the repository root documents the bundled third-party components (LGPL, MPL, NVIDIA, and the PDFium licenses).
+- **Nightly model smoke check.** A scheduled workflow exercises each AI pipeline against a live model, with an offline cassette fallback that runs on every check, so a structured-output regression is caught early; an active alert is raised when a run produces no AI scores.
+
+### Changed
+- **Relicensed to Apache-2.0.** The project license moved from MIT to Apache-2.0; license metadata and documentation are aligned.
+- **Permissive PDF rendering.** Page snapshots are rendered with pypdfium2 instead of PyMuPDF, removing the AGPL dependency; text extraction is unchanged.
+- **Concurrent stack-health checks.** Health probes run in parallel with per-probe timeouts and never report a degraded or unknown dependency as healthy.
+- **Plain-language relevance labels** are sourced from a single shared map across the relevance views.
+
+### Security
+- **Structured-output enforcement at the model boundary.** AI features use grammar-constrained decoding so a model can no longer return its response schema instead of a result; the daily Pulse, knowledge-graph extraction, and summaries degrade honestly rather than silently accepting malformed output.
+- **Owner sign-in safeguard.** A configured owner can always create an API-key session, preventing a multi-user lockout; on multi-user deployments API-key login requires an explicit owner, and a dedicated model-signing key is required.
+- **First-run setup token.** Bootstrap setup writes require a one-time token issued by the installer, closing an unauthenticated first-administrator takeover window on network-reachable deployments; the setup status stays readable so the wizard can guide the operator.
+- **Backups never archive secrets unencrypted**, and required secrets are provisioned as a prerequisite of `make up`.
+
+### Fixed
+- **Invite links when email is unconfigured.** Inviting a user without working email returns a shareable invite link instead of failing silently.
+- **Admin paper-by-status counts** no longer double-count papers shared across users.
+- **Citation fetching reports partial progress** instead of discarding successful fetches when one of them fails.
+
 ## v0.9.1 (2026-06-24) — Fix daily Pulse AI relevance scoring
 
 ### Fixed

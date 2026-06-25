@@ -7,6 +7,10 @@ from typing import Any
 
 import asyncpg
 import httpx
+from jarvis_common.auth import (
+    API_KEY_LOGIN_CONFIG_KEY,
+    invalidate_api_key_login_cache,
+)
 from jarvis_common.crypto import encrypt_secret, mask_secret
 from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
 
@@ -285,6 +289,14 @@ async def write_config(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # The multi-tenant API-key-login toggle is owned by jarvis_common.auth (the
+    # read side); its bool validator is not in _CONFIG_VALIDATORS, so guard it here.
+    if key == API_KEY_LOGIN_CONFIG_KEY:
+        try:
+            _validate_bool(value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     validator = _CONFIG_VALIDATORS.get(key)
     if validator is not None:
         try:
@@ -406,6 +418,11 @@ async def write_config(
             )
         else:
             await _write_config_row(conn, user_id=row_user_id, key=key, value=value)
+
+    # Drop the in-process API-key-login cache so the next mint sees the new
+    # value immediately (the flag only widens access — a flip OFF must apply now).
+    if key == API_KEY_LOGIN_CONFIG_KEY:
+        invalidate_api_key_login_cache()
 
     # Scheduler side-effects
     if key == "pulse.cron":

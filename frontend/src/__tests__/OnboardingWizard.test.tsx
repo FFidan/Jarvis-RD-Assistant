@@ -15,8 +15,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QUERY_KEYS } from '@/lib/query-keys';
+
+function LocationDisplay() {
+  const location = useLocation();
+  return <span data-testid="location-search">{location.search}</span>;
+}
 
 vi.mock('@/lib/api', () => ({
   getFirstRunStatus: vi.fn().mockResolvedValue({ configured: false, setup_completed: false }),
@@ -76,7 +81,15 @@ function renderWizard(
       <MemoryRouter initialEntries={[initialUrl]}>
         <Routes>
           {/* Wizard reads ?step= from the URL at any path. */}
-          <Route path="/" element={<OnboardingWizard firstRun={firstRun} authed={authed} />} />
+          <Route
+            path="/"
+            element={
+              <>
+                <LocationDisplay />
+                <OnboardingWizard firstRun={firstRun} authed={authed} />
+              </>
+            }
+          />
           <Route path="/done-marker" element={<div>DASHBOARD</div>} />
         </Routes>
       </MemoryRouter>
@@ -95,6 +108,7 @@ function renderWizard(
 describe('OnboardingWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
     useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
     vi.mocked(api.getFirstRunStatus).mockResolvedValue({ configured: false, setup_completed: false });
     vi.mocked(api.getSetupStatus).mockResolvedValue({
@@ -391,5 +405,91 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
     // markSetupCompleted must NOT be called (can't mark completed without a session).
     expect(api.markSetupCompleted).not.toHaveBeenCalled();
+  });
+
+  // B3/SEC-1 (a): the setup token is captured then stripped from the URL on mount.
+  it('(B3) captures setup_token from the URL and strips it from the address bar on mount', async () => {
+    renderWizard({ configured: false, setup_completed: false }, false, '/?setup_token=test-tok&step=1');
+    expect(await screen.findByText('Welcome to JARVIS')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('location-search').textContent).not.toContain('setup_token');
+    });
+    // The step query survives the strip.
+    expect(screen.getByTestId('location-search').textContent).toContain('step=1');
+  });
+
+  // B3/SEC-1 (b): the captured token is forwarded to the first-run WRITE call.
+  it('(B3) forwards the setup token as the X-Setup-Token arg to createFirstRunAdmin', async () => {
+    const user = userEvent.setup();
+    // Admin is step 3 in the fresh-install sequence.
+    renderWizard({ configured: false, setup_completed: false }, false, '/?setup_token=test-tok&step=3');
+    expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/admin email/i), 'admin@example.com');
+    await user.click(screen.getByRole('button', { name: /create admin & sign in/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(api.createFirstRunAdmin).mock.calls[0]?.[1]).toBe('test-tok');
+    });
+  });
+
+  // B3/SEC-1 (c): no token in the URL → no token forwarded (regression guard).
+  it('(B3) passes no setup token to createFirstRunAdmin when the URL has none', async () => {
+    const user = userEvent.setup();
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=3');
+    expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/admin email/i), 'admin@example.com');
+    await user.click(screen.getByRole('button', { name: /create admin & sign in/i }));
+
+    await waitFor(() => {
+      expect(api.createFirstRunAdmin).toHaveBeenCalled();
+    });
+    expect(vi.mocked(api.createFirstRunAdmin).mock.calls[0]?.[1]).toBeNull();
+  });
+
+  // M2 refresh-recovery (a): token persisted in sessionStorage but absent from
+  // the URL (the post-refresh case) is still forwarded to the first-run write.
+  it('(M2) recovers the setup token from sessionStorage after a refresh and forwards it', async () => {
+    const user = userEvent.setup();
+    // Simulate a refresh: the token survives in sessionStorage, URL is clean.
+    sessionStorage.setItem('jarvis_setup_token', 'stored-tok');
+    renderWizard({ configured: false, setup_completed: false }, false, '/?step=3');
+    expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/admin email/i), 'admin@example.com');
+    await user.click(screen.getByRole('button', { name: /create admin & sign in/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(api.createFirstRunAdmin).mock.calls[0]?.[1]).toBe('stored-tok');
+    });
+  });
+
+  // M2 refresh-recovery (b): a URL-sourced token is mirrored into sessionStorage
+  // (so it survives a subsequent refresh).
+  it('(M2) persists a URL setup token into sessionStorage on mount', async () => {
+    renderWizard({ configured: false, setup_completed: false }, false, '/?setup_token=url-tok&step=1');
+    expect(await screen.findByText('Welcome to JARVIS')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(sessionStorage.getItem('jarvis_setup_token')).toBe('url-tok');
+    });
+  });
+
+  // M2 hygiene: completing setup clears the one-time token from sessionStorage.
+  it('(M2) clears the setup token from sessionStorage once setup completes', async () => {
+    sessionStorage.setItem('jarvis_setup_token', 'stored-tok');
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
+
+    // Done is step 8 in the configured (admin-skipped) sequence — it marks
+    // completion on mount, which runs markFirstRunCompleted → clears the token.
+    renderWizard({ configured: true, setup_completed: false }, true, '/?step=8', queryClient);
+
+    await waitFor(() => {
+      expect(api.markSetupCompleted).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(sessionStorage.getItem('jarvis_setup_token')).toBeNull();
+    });
   });
 });

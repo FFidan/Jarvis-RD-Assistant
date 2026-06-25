@@ -171,7 +171,7 @@ Each summary includes: title / authors / date / venue from source API (never LLM
    fabrications top out ~57 (`rag/verification.py` `RAG_SUPPORT_FUZZY`).
    The two bars serve different semantics: 97 is a verbatim-quote check;
    70 is a paraphrase-grounding check. Do not unify them.
-3. **PDF Page Snapshots** — 150 DPI PyMuPDF; `GET /api/snapshots/{paper_id}/{page}`.
+3. **PDF Page Snapshots** — 150 DPI pypdfium2; `GET /api/snapshots/{paper_id}/{page}`.
 4. **Cross-Reference Check** — semantic consistency checking across ingested papers.
 
 ### 5.4 Confidence Signals

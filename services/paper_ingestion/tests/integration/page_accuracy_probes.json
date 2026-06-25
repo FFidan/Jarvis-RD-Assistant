@@ -1,0 +1,328 @@
+{
+  "1706.03762": [
+    {
+      "probe": "Provided proper attribution is provided, Google hereby grants permission to",
+      "true_page": 1
+    },
+    {
+      "probe": "reproduce the tables and figures in this paper solely for use in journalistic or",
+      "true_page": 1
+    },
+    {
+      "probe": "The dominant sequence transduction models are based on complex recurrent or",
+      "true_page": 1
+    },
+    {
+      "probe": "convolutional neural networks that include an encoder and a decoder. The best",
+      "true_page": 1
+    },
+    {
+      "probe": "Recurrent neural networks, long short-term memory [13] and gated recurrent [7] neural networks",
+      "true_page": 2
+    },
+    {
+      "probe": "in particular, have been firmly established as state of the art approaches in sequence modeling and",
+      "true_page": 2
+    },
+    {
+      "probe": "transduction problems such as language modeling and machine translation [35, 2, 5]. Numerous",
+      "true_page": 2
+    },
+    {
+      "probe": "efforts have since continued to push the boundaries of recurrent language models and encoder-decoder",
+      "true_page": 2
+    },
+    {
+      "probe": "The Transformer follows this overall architecture using stacked self-attention and point-wise, fully",
+      "true_page": 3
+    },
+    {
+      "probe": "connected layers for both the encoder and decoder, shown in the left and right halves of Figure 1,",
+      "true_page": 3
+    },
+    {
+      "probe": "The encoder is composed of a stack of N = 6 identical layers. Each layer has two",
+      "true_page": 3
+    },
+    {
+      "probe": "sub-layers. The first is a multi-head self-attention mechanism, and the second is a simple, position-",
+      "true_page": 3
+    },
+    {
+      "probe": "Figure 2: (left) Scaled Dot-Product Attention. (right) Multi-Head Attention consists of several",
+      "true_page": 4
+    },
+    {
+      "probe": "of the values, where the weight assigned to each value is computed by a compatibility function of the",
+      "true_page": 4
+    },
+    {
+      "probe": "We call our particular attention \"Scaled Dot-Product Attention\" (Figure 2). The input consists of",
+      "true_page": 4
+    },
+    {
+      "probe": "queries and keys of dimension dk, and values of dimension dv. We compute the dot products of the",
+      "true_page": 4
+    },
+    {
+      "probe": "output values. These are concatenated and once again projected, resulting in the final values, as",
+      "true_page": 5
+    },
+    {
+      "probe": "Multi-head attention allows the model to jointly attend to information from different representation",
+      "true_page": 5
+    },
+    {
+      "probe": "subspaces at different positions. With a single attention head, averaging inhibits this.",
+      "true_page": 5
+    },
+    {
+      "probe": "In this work we employ h = 8 parallel attention layers, or heads. For each of these we use",
+      "true_page": 5
+    },
+    {
+      "probe": "Table 1: Maximum path lengths, per-layer complexity and minimum number of sequential operations",
+      "true_page": 6
+    },
+    {
+      "probe": "for different layer types. n is the sequence length, d is the representation dimension, k is the kernel",
+      "true_page": 6
+    },
+    {
+      "probe": "size of convolutions and r the size of the neighborhood in restricted self-attention.",
+      "true_page": 6
+    },
+    {
+      "probe": "Since our model contains no recurrence and no convolution, in order for the model to make use of the",
+      "true_page": 6
+    },
+    {
+      "probe": "length n is smaller than the representation dimensionality d, which is most often the case with",
+      "true_page": 7
+    },
+    {
+      "probe": "sentence representations used by state-of-the-art models in machine translations, such as word-piece",
+      "true_page": 7
+    },
+    {
+      "probe": "[38] and byte-pair [31] representations. To improve computational performance for tasks involving",
+      "true_page": 7
+    },
+    {
+      "probe": "very long sequences, self-attention could be restricted to considering only a neighborhood of size r in",
+      "true_page": 7
+    },
+    {
+      "probe": "Table 2: The Transformer achieves better BLEU scores than previous state-of-the-art models on the",
+      "true_page": 8
+    },
+    {
+      "probe": "English-to-German and English-to-French newstest2014 tests at a fraction of the training cost.",
+      "true_page": 8
+    },
+    {
+      "probe": "We apply dropout [33] to the output of each sub-layer, before it is added to the",
+      "true_page": 8
+    },
+    {
+      "probe": "sub-layer input and normalized. In addition, we apply dropout to the sums of the embeddings and the",
+      "true_page": 8
+    }
+  ],
+  "1810.04805": [
+    {
+      "probe": "Figure 1: Overall pre-training and ﬁne-tuning procedures for BERT. Apart from output layers, the same architec-",
+      "true_page": 3
+    },
+    {
+      "probe": "tures are used in both pre-training and ﬁne-tuning. The same pre-trained model parameters are used to initialize",
+      "true_page": 3
+    },
+    {
+      "probe": "models for different down-stream tasks. During ﬁne-tuning, all parameters are ﬁne-tuned. [CLS] is a special",
+      "true_page": 3
+    },
+    {
+      "probe": "symbol added in front of every input example, and [SEP] is a special separator token (e.g. separating ques-",
+      "true_page": 3
+    },
+    {
+      "probe": "former is often referred to as a “Transformer encoder” while",
+      "true_page": 4
+    },
+    {
+      "probe": "the left-context-only version is referred to as a “Transformer",
+      "true_page": 4
+    },
+    {
+      "probe": "Figure 2: BERT input representation. The input embeddings are the sum of the token embeddings, the segmenta-",
+      "true_page": 5
+    },
+    {
+      "probe": "Table 1: GLUE Test results, scored by the evaluation server (https://gluebenchmark.com/leaderboard).",
+      "true_page": 6
+    },
+    {
+      "probe": "The number below each task denotes the number of training examples. The “Average” column is slightly different",
+      "true_page": 6
+    },
+    {
+      "probe": "than the ofﬁcial GLUE score, since we exclude the problematic WNLI set.8 BERT and OpenAI GPT are single-",
+      "true_page": 6
+    },
+    {
+      "probe": "model, single task. F1 scores are reported for QQP and MRPC, Spearman correlations are reported for STS-B, and",
+      "true_page": 6
+    },
+    {
+      "probe": "Figure 3: Differences in pre-training model architectures. BERT uses a bidirectional Transformer. OpenAI GPT",
+      "true_page": 13
+    },
+    {
+      "probe": "uses a left-to-right Transformer. ELMo uses the concatenation of independently trained left-to-right and right-to-",
+      "true_page": 13
+    },
+    {
+      "probe": "left LSTMs to generate features for downstream tasks. Among the three, only BERT representations are jointly",
+      "true_page": 13
+    },
+    {
+      "probe": "conditioned on both left and right context in all layers. In addition to the architecture differences, BERT and",
+      "true_page": 13
+    },
+    {
+      "probe": "Figure 4: Illustrations of Fine-tuning BERT on Different Tasks.",
+      "true_page": 15
+    }
+  ],
+  "2010.11929": [
+    {
+      "probe": "Alexey Dosovitskiy∗,†, Lucas Beyer∗, Alexander Kolesnikov∗, Dirk Weissenborn∗,",
+      "true_page": 1
+    },
+    {
+      "probe": "Xiaohua Zhai∗, Thomas Unterthiner, Mostafa Dehghani, Matthias Minderer,",
+      "true_page": 1
+    },
+    {
+      "probe": "Georg Heigold, Sylvain Gelly, Jakob Uszkoreit, Neil Houlsby∗,†",
+      "true_page": 1
+    },
+    {
+      "probe": "While the Transformer architecture has become the de-facto standard for natural",
+      "true_page": 1
+    },
+    {
+      "probe": "inherent to CNNs, such as translation equivariance and locality, and therefore do not generalize well",
+      "true_page": 2
+    },
+    {
+      "probe": "However, the picture changes if the models are trained on larger datasets (14M-300M images). We",
+      "true_page": 2
+    },
+    {
+      "probe": "ﬁnd that large scale training trumps inductive bias. Our Vision Transformer (ViT) attains excellent",
+      "true_page": 2
+    },
+    {
+      "probe": "results when pre-trained at sufﬁcient scale and transferred to tasks with fewer datapoints. When",
+      "true_page": 2
+    },
+    {
+      "probe": "Figure 1: Model overview. We split an image into ﬁxed-size patches, linearly embed each of them,",
+      "true_page": 3
+    },
+    {
+      "probe": "add position embeddings, and feed the resulting sequence of vectors to a standard Transformer",
+      "true_page": 3
+    },
+    {
+      "probe": "encoder. In order to perform classiﬁcation, we use the standard approach of adding an extra learnable",
+      "true_page": 3
+    },
+    {
+      "probe": "“classiﬁcation token” to the sequence. The illustration of the Transformer encoder was inspired by",
+      "true_page": 3
+    },
+    {
+      "probe": "We note that Vision Transformer has much less image-speciﬁc inductive bias than",
+      "true_page": 4
+    },
+    {
+      "probe": "CNNs. In CNNs, locality, two-dimensional neighborhood structure, and translation equivariance are",
+      "true_page": 4
+    },
+    {
+      "probe": "baked into each layer throughout the whole model. In ViT, only MLP layers are local and transla-",
+      "true_page": 4
+    },
+    {
+      "probe": "tionally equivariant, while the self-attention layers are global. The two-dimensional neighborhood",
+      "true_page": 4
+    },
+    {
+      "probe": "We also evaluate on the 19-task VTAB classiﬁcation suite (Zhai et al., 2019b). VTAB evaluates",
+      "true_page": 5
+    },
+    {
+      "probe": "low-data transfer to diverse tasks, using 1 000 training examples per task. The tasks are divided into",
+      "true_page": 5
+    },
+    {
+      "probe": "three groups: Natural – tasks like the above, Pets, CIFAR, etc. Specialized – medical and satellite",
+      "true_page": 5
+    },
+    {
+      "probe": "imagery, and Structured – tasks that require geometric understanding like localization.",
+      "true_page": 5
+    },
+    {
+      "probe": "Comparison with state of the art on popular image classiﬁcation benchmarks. We re-",
+      "true_page": 6
+    },
+    {
+      "probe": "port mean and standard deviation of the accuracies, averaged over three ﬁne-tuning runs. Vision",
+      "true_page": 6
+    },
+    {
+      "probe": "Transformer models pre-trained on the JFT-300M dataset outperform ResNet-based baselines on all",
+      "true_page": 6
+    },
+    {
+      "probe": "datasets, while taking substantially less computational resources to pre-train. ViT pre-trained on the",
+      "true_page": 6
+    },
+    {
+      "probe": "Figure 5: Performance versus pre-training compute for different architectures: Vision Transformers,",
+      "true_page": 7
+    },
+    {
+      "probe": "ResNets, and hybrids. Vision Transformers generally outperform ResNets with the same compu-",
+      "true_page": 7
+    },
+    {
+      "probe": "tational budget. Hybrids improve upon pure Transformers for smaller model sizes, but the gap",
+      "true_page": 7
+    },
+    {
+      "probe": "region spanned by BiT models of different sizes. The BiT CNNs outperform ViT on ImageNet, but",
+      "true_page": 7
+    },
+    {
+      "probe": "We perform a controlled scaling study of different models by evaluating transfer performance from",
+      "true_page": 8
+    },
+    {
+      "probe": "JFT-300M. In this setting data size does not bottleneck the models’ performances, and we assess",
+      "true_page": 8
+    },
+    {
+      "probe": "performance versus pre-training cost of each model. The model set includes: 7 ResNets, R50x1,",
+      "true_page": 8
+    },
+    {
+      "probe": "trained for 7 epochs, plus R50+ViT-L/16 pre-trained for 14 epochs (for hybrids, the number at the",
+      "true_page": 8
+    }
+  ]
+}

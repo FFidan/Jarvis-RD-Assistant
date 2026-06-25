@@ -71,12 +71,12 @@ describe('WhyPopover', () => {
     expect(explainPulseCard).toHaveBeenCalledWith(7);
   });
 
-  it('renders signal breakdown bars', async () => {
+  it('renders signal breakdown bars with human-readable labels', async () => {
     const { explainPulseCard } = await import('@/lib/api');
     vi.mocked(explainPulseCard).mockResolvedValue({
       card_id: 7,
       reasoning: 'r',
-      signals: { topic_sim: 0.8, author_overlap: 0.25 },
+      signals: { author_overlap: 0.25, emb: 0.8 },
       llm_relevance: 9,
       llm_novelty: 7,
     });
@@ -84,9 +84,12 @@ describe('WhyPopover', () => {
     renderWithClient(<WhyPopover cardId={7} trigger={<button>Why?</button>} />);
     await user.click(screen.getByText('Why?'));
     await waitFor(() => {
-      expect(screen.getByTestId('why-signal-topic_sim')).toBeInTheDocument();
       expect(screen.getByTestId('why-signal-author_overlap')).toBeInTheDocument();
+      expect(screen.getByTestId('why-signal-emb')).toBeInTheDocument();
     });
+    // Signal labels must be human-readable, not raw keys.
+    expect(screen.getByText('Author overlap')).toBeInTheDocument();
+    expect(screen.getByText('Semantic similarity')).toBeInTheDocument();
     // LLM scores should render.
     expect(screen.getByText(/relevance/i)).toBeInTheDocument();
     expect(screen.getByText(/novelty/i)).toBeInTheDocument();

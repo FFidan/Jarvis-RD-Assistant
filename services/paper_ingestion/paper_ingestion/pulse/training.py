@@ -29,19 +29,26 @@ def _hmac_key() -> bytes:
        direct use of the bearer. **Only permitted outside production.**
 
     Raises ``RuntimeError`` if no usable key is configured. In production
-    (``ENVIRONMENT=production``), ``JARVIS_MODEL_HMAC_KEY`` is mandatory —
+    (``ENVIRONMENT=production``) and on any multi-user deployment
+    (``JARVIS_SETUP_MODE != single``), ``JARVIS_MODEL_HMAC_KEY`` is mandatory —
     the derivation fallback is refused so a stolen bearer cannot also forge
     model blobs.
     """
-    from jarvis_common.settings import get_secrets_settings  # noqa: PLC0415
+    from jarvis_common.settings import (  # noqa: PLC0415
+        get_core_settings,
+        get_secrets_settings,
+    )
 
     model_secret = get_secrets_settings().jarvis_model_hmac_key
     model_key = model_secret.get_secret_value() if model_secret else None
     if model_key:
         return model_key.encode()
-    if os.environ.get("ENVIRONMENT", "").lower() == "production":
+    is_production = os.environ.get("ENVIRONMENT", "").lower() == "production"
+    is_multi_user = get_core_settings().jarvis_setup_mode != "single"
+    if is_production or is_multi_user:
         raise RuntimeError(
-            "JARVIS_MODEL_HMAC_KEY must be set in production (no derivation fallback)"
+            "JARVIS_MODEL_HMAC_KEY must be set for production or multi-user "
+            "deployments (no derivation fallback)"
         )
     api_key_secret = get_secrets_settings().jarvis_api_key
     if api_key_secret:

@@ -235,14 +235,12 @@ async def test_stage2_structured_failure_records_truthful_degraded_reason() -> N
     assert degraded.reasoning_confidence is RagConfidence.UNVERIFIED
 
 
-async def test_stage2_disables_thinking_via_extra_body_to_create() -> None:
-    """Stage-2 must suppress qwen3 <think> output at the source on the structured path.
+async def test_stage2_applies_parsed_scoring_output_to_candidate() -> None:
+    """A successful structured call yields a candidate carrying the parsed scores.
 
-    qwen3 is a thinking model and instructor Mode.JSON parses the whole completion,
-    raising on the <think> preamble before caller code runs. The fix sets
-    extra_body={"chat_template_kwargs": {"enable_thinking": False}}, which instructor
-    forwards to AsyncOpenAI.chat.completions.create() → LiteLLM/Ollama. This pins that
-    the option is plumbed all the way to create(), not just constructed.
+    Stage-2 must surface the validated PulseScoringOutput on the returned
+    ScoredCandidate — relevance, novelty, reasoning, and a verified-reasoning
+    result — rather than leaving the heuristic-ranked candidate unscored.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -287,14 +285,12 @@ async def test_stage2_disables_thinking_via_extra_body_to_create() -> None:
             [candidate], profile, verifier=QuoteVerifier(), openai_client=openai_client
         )
 
-    assert result[0].llm_relevance == 7
-    create_mock.assert_awaited_once()
-    await_args = create_mock.await_args
-    assert await_args is not None
-    sent = await_args.kwargs
-    assert sent["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}, (
-        "stage-2 must forward enable_thinking=False through extra_body to create()"
-    )
+    scored = result[0]
+    assert scored.llm_relevance == 7
+    assert scored.llm_novelty == 6
+    assert scored.reasoning == "Relevant."
+    assert scored.reasoning_verified is True
+    assert scored.reasoning_confidence is RagConfidence.HIGH
 
 
 def test_pulse_scoring_shape_a_system_prompt_is_non_empty() -> None:

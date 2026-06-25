@@ -60,7 +60,7 @@ async def test_delivered_local_row_wins_over_fallback():
     """A delivered ``llm.{role}_num_ctx`` system row is returned verbatim."""
     db = _fake_db(
         [
-            {"key": "llm.smart_model", "value": "ollama/qwen3:8b"},
+            {"key": "llm.smart_model", "value": "ollama_chat/qwen3:8b"},
             {"key": "llm.smart_num_ctx", "value": 16384},
         ]
     )

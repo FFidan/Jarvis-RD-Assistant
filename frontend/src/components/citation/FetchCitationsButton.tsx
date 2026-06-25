@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { errorMessage } from '@/lib/errors';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchCitationsFromS2 } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -10,30 +9,71 @@ interface FetchCitationsButtonProps {
   paperIds: number[];
 }
 
+interface FetchCitationsResult {
+  total: number;
+  succeeded: number;
+  failedIds: number[];
+  citationsAdded: number;
+  referencesAdded: number;
+}
+
+type PaperOutcome =
+  | { id: number; ok: true; citationsAdded: number; referencesAdded: number }
+  | { id: number; ok: false };
+
+async function fetchCitationsForAll(ids: number[]): Promise<FetchCitationsResult> {
+  const outcomes = await Promise.all(
+    ids.map(
+      (id): Promise<PaperOutcome> =>
+        fetchCitationsFromS2(id).then(
+          (res) => ({
+            id,
+            ok: true,
+            citationsAdded: res.citations_added,
+            referencesAdded: res.references_added,
+          }),
+          () => ({ id, ok: false }),
+        ),
+    ),
+  );
+
+  const result: FetchCitationsResult = {
+    total: ids.length,
+    succeeded: 0,
+    failedIds: [],
+    citationsAdded: 0,
+    referencesAdded: 0,
+  };
+
+  for (const outcome of outcomes) {
+    if (outcome.ok) {
+      result.succeeded += 1;
+      result.citationsAdded += outcome.citationsAdded;
+      result.referencesAdded += outcome.referencesAdded;
+    } else {
+      result.failedIds.push(outcome.id);
+    }
+  }
+
+  return result;
+}
+
 export function FetchCitationsButton({ paperIds }: FetchCitationsButtonProps) {
   const queryClient = useQueryClient();
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [result, setResult] = useState<FetchCitationsResult | null>(null);
 
   const mutation = useMutation({
-    mutationFn: async (ids: number[]) => {
-      let citationsAdded = 0;
-      let referencesAdded = 0;
-      for (const id of ids) {
-        const res = await fetchCitationsFromS2(id);
-        citationsAdded += res.citations_added;
-        referencesAdded += res.references_added;
-      }
-      return { papers: ids.length, citationsAdded, referencesAdded };
-    },
+    mutationFn: fetchCitationsForAll,
     onSuccess: (data) => {
-      setStatusMessage(
-        `Fetched citations for ${data.papers} paper${data.papers === 1 ? '' : 's'} ` +
-          `(${data.citationsAdded} citations, ${data.referencesAdded} references)`,
-      );
+      setResult(data);
       // Note: bare prefix for invalidation — no registry factory for citation all-entries
-      queryClient.invalidateQueries({ queryKey: ['citation-graph'] });
+      if (data.succeeded > 0) {
+        queryClient.invalidateQueries({ queryKey: ['citation-graph'] });
+      }
     },
   });
+
+  const failedCount = result ? result.failedIds.length : 0;
 
   return (
     <div className="space-y-2">
@@ -50,14 +90,31 @@ export function FetchCitationsButton({ paperIds }: FetchCitationsButtonProps) {
         Fetch Citations
       </Button>
 
-      {statusMessage && (
-        <p className="text-xs [color:var(--status-ok)]">{statusMessage}</p>
-      )}
+      {result && !mutation.isPending && (
+        <div className="space-y-1">
+          <p
+            className={
+              failedCount > 0
+                ? 'text-xs text-destructive'
+                : 'text-xs [color:var(--status-ok)]'
+            }
+          >
+            {result.succeeded} of {result.total} succeeded ({failedCount} failed)
+            {result.succeeded > 0 &&
+              ` — ${result.citationsAdded} citations, ${result.referencesAdded} references`}
+          </p>
 
-      {mutation.isError && (
-        <p className="text-xs text-destructive">
-          Failed to fetch citations: {errorMessage(mutation.error)}
-        </p>
+          {failedCount > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate(result.failedIds)}
+            >
+              Retry {failedCount} failed
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );

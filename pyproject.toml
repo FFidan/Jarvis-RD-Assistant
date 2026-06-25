@@ -1,10 +1,10 @@
 [project]
 name = "jarvis-rd-assistant"
-version = "0.9.1"
+version = "0.9.2"
 description = "Self-hosted AI-powered research assistant"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
 requires-python = ">=3.12"
-license = "MIT"
+license = "Apache-2.0"
 
 [dependency-groups]
 jarvis-common = [
@@ -41,7 +41,7 @@ paper-ingestion = [
     "markdownify>=0.14.1",
     "orjson>=3.11.6",
     "pydantic>=2.0,<3.0.0",
-    "PyMuPDF>=1.24.0",
+    "pypdfium2>=4.30.0",
     "pillow>=12.2.0",
     "python-multipart>=0.0.31",  # >=0.0.31 clears CVE-2026-53538/53539/53540
     "pyyaml>=6.0",
@@ -143,6 +143,7 @@ markers = [
     "slow: slower tests excluded from ordinary host runs",
     "real_auth: opt out of the autouse user-id stub; exercise the real session resolver",
     "contract: DB-backed contract test (session container + per-test txn rollback); requires JARVIS_RUN_LIVE_PG=1",
+    "nightly_smoke: smoke-level tripwires for pipeline degradation guards (schema-echo, all-empty)",
 ]
 # Service + library roots on sys.path so each package resolves by its unique
 # name (paper_ingestion, learning_engine, telegram_bot, jarvis_common).
