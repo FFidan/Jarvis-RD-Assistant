@@ -110,6 +110,22 @@ async def test_build_fsrs_manager_reads_desired_retention() -> None:
 
 
 @pytest.mark.asyncio
+async def test_build_fsrs_manager_clamps_above_range_retention() -> None:
+    """desired_retention > 1 is clamped to at most 0.99; FSRS requires (0,1) open interval."""
+    conn = _make_fake_conn([{"key": "fsrs.desired_retention", "value": "1.5"}])
+    mgr = await _build_fsrs_manager_from_db(conn)
+    assert mgr.scheduler.desired_retention <= 0.99
+
+
+@pytest.mark.asyncio
+async def test_build_fsrs_manager_clamps_zero_retention() -> None:
+    """desired_retention == 0 (degenerate: log(0) in FSRS) is pulled into (0,1)."""
+    conn = _make_fake_conn([{"key": "fsrs.desired_retention", "value": "0"}])
+    mgr = await _build_fsrs_manager_from_db(conn)
+    assert 0.0 < mgr.scheduler.desired_retention < 1.0
+
+
+@pytest.mark.asyncio
 async def test_build_fsrs_manager_reads_learning_steps() -> None:
     """fsrs.learning_steps from DB overrides the [1, 10] default."""
     conn = _make_fake_conn([{"key": "fsrs.learning_steps", "value": json.dumps([5, 20])}])

@@ -336,6 +336,36 @@ describe('JobStore', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.papers.detail(77) });
   });
 
+  it('trackExternalJob: library-wide contradiction scan (no paper_id) invalidates consensus', async () => {
+    // The ConsensusPage CTA scans the whole library (no paper_id) → the paperId==null
+    // branch must invalidate the consensus list so the page refetches. Dropping
+    // QUERY_KEYS.consensus.all() from that branch makes this test fail.
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"running","progress":0.25,"progress_message":"Scanning"}\n\n',
+          'data: {"status":"succeeded","progress":1,"progress_message":"Done"}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-contradictions-library',
+      kind: 'contradictions.scan',
+      payload: { limit: 25 }, // no paper_id → library-wide branch
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.consensus.all() });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['contradictions'] });
+  });
+
   it('subscribe: running + [DONE] reconciles and retries external Zotero jobs', async () => {
     vi.useFakeTimers();
     const { getJob } = await import('@/lib/api');
@@ -532,7 +562,7 @@ describe('JobStore', () => {
     // Job should still be in store (eviction timer hasn't fired yet)
     expect(useJobStore.getState().jobs['job-3']).toBeDefined();
     expect(requireJob(useJobStore.getState().jobs['job-3'], 'job-3').status).toBe('succeeded');
-    expect(toast.success).toHaveBeenCalledWith('pulse.generate completed');
+    expect(toast.success).toHaveBeenCalledWith('Generating Pulse completed');
   });
 
   it('subscribe: succeeded card.generate with zero cards does NOT fire the success toast', async () => {
@@ -1054,9 +1084,9 @@ describe('JobStore', () => {
     expect(readerSpy).toHaveBeenCalledTimes(1);
   });
 
-  // ----- createSSEReader integration (DRY-F1) -----
+  // ----- createSSEReader integration -----
 
-  it('subscribe: uses createSSEReader to stream job events (DRY-F1)', async () => {
+  it('subscribe: uses createSSEReader to stream job events', async () => {
     // Spy on createSSEReader to confirm subscribe delegates to it.
     const readerSpy = vi.spyOn(sseReader, 'createSSEReader');
 

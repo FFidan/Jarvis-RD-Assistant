@@ -70,7 +70,7 @@ def test_ts_07_flags_make_config_with_botconfig_direct():
 def _make_config():
     return BotConfig(api_key="x")
 """
-    errors, warnings = _run_check(src, filename="test_make_config_direct.py")
+    _, warnings = _run_check(src, filename="test_make_config_direct.py")
     assert warnings, "expected TS-07 to fire on _make_config with BotConfig"
     ts07 = [w for w in warnings if "TS-07" in w and "make_config" in w]
     assert ts07, f"TS-07 make_config warning missing; got warnings={warnings}"
@@ -85,7 +85,7 @@ def test_ts_07_skips_make_config_delegating_to_helper():
 def _make_config(telegram_chat_id: int | None = 777):
     return make_bot_config(telegram_chat_id=telegram_chat_id)
 """
-    errors, warnings = _run_check(src, filename="test_make_config_delegating.py")
+    _, warnings = _run_check(src, filename="test_make_config_delegating.py")
     ts07 = [w for w in warnings if "TS-07" in w and "make_config" in w]
     assert not ts07, f"expected TS-07 to be skipped for delegating _make_config; got: {ts07}"
 
@@ -131,25 +131,22 @@ def _make_config() -> BotConfig:
 
 
 def _run_contract_doc_check(
-    content: str, path: str = "docs/contracts/07-testing.md"
+    content: str,
+    tmp_path: Path,
+    path: str = "docs/contracts/07-testing.md",
 ) -> tuple[list[str], list[str]]:
-    """Write *content* to a real temp file and call check_contract_doc().
+    """Write *content* under *tmp_path* and call check_contract_doc().
 
-    The file is always written to CWD/<path> so the normalised-suffix match
-    in check_contract_doc() fires correctly.
+    check_contract_doc() identifies the testing contract by normalised path
+    SUFFIX, so writing to ``tmp_path/<path>`` (which still ends with
+    ``docs/contracts/07-testing.md``) fires the suffix match while never
+    touching the real tracked contract doc under the repo CWD. pytest cleans
+    up tmp_path, so no manual removal is needed.
     """
-    cwd = os.getcwd()
-    abs_path = os.path.join(cwd, path)
-    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-    try:
-        with open(abs_path, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        return check_contract_doc(abs_path)
-    finally:
-        try:
-            os.remove(abs_path)
-        except OSError:
-            pass
+    abs_path = tmp_path / path
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path.write_text(content, encoding="utf-8")
+    return check_contract_doc(str(abs_path))
 
 
 # Minimal valid testing-contract doc with ≥3 carve-out entries.
@@ -203,17 +200,17 @@ _WEAKENED_DOC = """\
 """
 
 
-def test_ts08_passes_on_intact_doc():
+def test_ts08_passes_on_intact_doc(tmp_path):
     """Intact doc with ≥3 carve-out entries: no errors."""
-    errors, warnings = _run_contract_doc_check(_VALID_CONTRACT_DOC)
+    errors, warnings = _run_contract_doc_check(_VALID_CONTRACT_DOC, tmp_path)
     ts08 = [e for e in errors if "TS-08" in e]
     assert not ts08, f"Expected no TS-08 errors on intact doc; got: {ts08}"
     assert not warnings, f"Unexpected warnings: {warnings}"
 
 
-def test_ts08_errors_on_missing_section_heading():
+def test_ts08_errors_on_missing_section_heading(tmp_path):
     """Stripped carve-out heading → TS-08 ERROR."""
-    errors, _ = _run_contract_doc_check(_STRIPPED_HEADING_DOC)
+    errors, _ = _run_contract_doc_check(_STRIPPED_HEADING_DOC, tmp_path)
     ts08 = [e for e in errors if "TS-08" in e]
     assert ts08, f"Expected TS-08 error when heading is missing; got errors={errors}"
     assert "Carve-out registry" in ts08[0] or "## 5." in ts08[0], (
@@ -221,9 +218,9 @@ def test_ts08_errors_on_missing_section_heading():
     )
 
 
-def test_ts08_errors_on_weakened_registry():
+def test_ts08_errors_on_weakened_registry(tmp_path):
     """Carve-out section with only 1 data entry → TS-08 ERROR."""
-    errors, _ = _run_contract_doc_check(_WEAKENED_DOC)
+    errors, _ = _run_contract_doc_check(_WEAKENED_DOC, tmp_path)
     ts08 = [e for e in errors if "TS-08" in e]
     assert ts08, f"Expected TS-08 error when registry is weakened; got errors={errors}"
     assert "minimum" in ts08[0] or "entry" in ts08[0], (
@@ -231,10 +228,11 @@ def test_ts08_errors_on_weakened_registry():
     )
 
 
-def test_ts08_ignores_non_contract_files():
+def test_ts08_ignores_non_contract_files(tmp_path):
     """check_contract_doc must be a no-op for any path that is NOT 07-testing.md."""
     errors, warnings = _run_contract_doc_check(
         _STRIPPED_HEADING_DOC,
+        tmp_path,
         path="docs/contracts/08-other-doc.md",
     )
     assert not errors, f"check_contract_doc should ignore non-contract paths; got: {errors}"

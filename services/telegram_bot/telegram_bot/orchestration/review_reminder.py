@@ -17,7 +17,7 @@ async def _send_reminder_to_chat(
     bot: Bot,
     config: BotConfig,
     chat_id: int,
-    user_id: int | None = None,
+    user_id: int,
 ) -> None:
     """Fetch due-card stats and send a review reminder to a single chat.
 
@@ -31,8 +31,8 @@ async def _send_reminder_to_chat(
         Bot configuration.
     chat_id : int
         Target Telegram chat ID.
-    user_id : int | None
-        DB user PK. When set, adds ``X-Owner-User-Id`` + ``X-API-Key`` headers
+    user_id : int
+        DB user PK. Adds ``X-Owner-User-Id`` + ``X-API-Key`` headers
         so the backend scopes stats to that user.
     """
     headers = _owner_headers(config, user_id)

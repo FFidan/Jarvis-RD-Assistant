@@ -60,7 +60,7 @@ async def batch_extract_entities(
         # Get papers with summaries but no entities. ``discovered_by`` is the
         # per-paper owner under the canonical-corpus design (mig 042); we
         # stamp that user onto every paper_entities row written by this job
-        # so the KG read endpoints can scope correctly (H3 + M-01..M-04).
+        # so the KG read endpoints can scope correctly.
         rows = await conn.fetch(
             """SELECT p.id, p.discovered_by FROM papers p
                JOIN paper_summaries ps ON p.id = ps.paper_id
@@ -327,7 +327,7 @@ async def get_entity_detail(
             )
 
         # Scope the "papers that mention this entity" list to the caller's
-        # own paper_entities rows to prevent paper enumeration (M-03).
+        # own paper_entities rows to prevent paper enumeration.
         if user_id is not None:
             papers = await conn.fetch(
                 """SELECT p.id, p.title, pe.mention_count

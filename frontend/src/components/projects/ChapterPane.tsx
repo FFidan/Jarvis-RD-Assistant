@@ -101,7 +101,7 @@ export function ChapterPane({ project, onDeleted }: ChapterPaneProps) {
 
   const displayStatus = PROJECT_STATUS_LABELS[project.status] ?? project.status;
 
-  // Build the italic subtitle per spec §3.3 pt 2
+  // Build the italic subtitle
   const subtitle = [
     project.description,
     project.deadline

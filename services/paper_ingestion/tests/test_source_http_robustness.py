@@ -82,8 +82,8 @@ async def test_s2_fetch_json_returns_empty_on_429(status_code: int) -> None:
 async def test_openalex_rejects_file_scheme_pdf_url() -> None:
     """pdf_url with file:// scheme is rejected even if hostname is in ALLOWED_PDF_DOMAINS.
 
-    The hostname-only check (PI-EDGE-007) was insufficient; an attacker could
-    craft file://arxiv.org/etc/passwd.  H21 adds a scheme guard.
+    The hostname-only check was insufficient; an attacker could
+    craft file://arxiv.org/etc/passwd.  a scheme guard was added.
     """
     # Pick a hostname that IS in the allowlist
     allowed_host = next(iter(ALLOWED_PDF_DOMAINS))

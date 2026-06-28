@@ -1,4 +1,4 @@
-"""Tests for DOM-B-09: SemanticScholarSource filters openAccessPdf.url via ALLOWED_PDF_DOMAINS.
+"""Tests that SemanticScholarSource filters openAccessPdf.url via ALLOWED_PDF_DOMAINS.
 
 S2's openAccessPdf field can point to arbitrary third-party hosts.  The fix
 validates pdf_url at parse time so the DB never receives unsafe URLs.
@@ -42,7 +42,7 @@ def _s2_paper(paper_id: str, open_access_pdf: dict | None) -> dict:
     }
 
 
-# DOM-B-09: pdf_url validated against ALLOWED_PDF_DOMAINS allowlist at parse time
+# pdf_url validated against ALLOWED_PDF_DOMAINS allowlist at parse time
 # ---------------------------------------------------------------------------
 
 

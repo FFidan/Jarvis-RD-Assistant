@@ -8,7 +8,7 @@ import { MarkerCaption } from '@/components/typography/MarkerCaption';
  * button, loading/error/empty states) in a page-level shell. The My Day page
  * shows a top-3 PulsePreviewCard that links here via "View all".
  *
- * Spec: docs/specs/2026-04-29-paper-lifecycle-redesign.md §5.4 + Amendment 7.
+ * Pulse deck page.
  */
 export function PulseDeckPage() {
   return (

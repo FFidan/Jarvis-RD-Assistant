@@ -29,6 +29,7 @@ export * from './analytics';
 export * from './projects';
 export * from './cards';
 export * from './papers';
+export * from './highlights';
 export * from './pulse';
 export * from './jobs';
 export * from './zotero';

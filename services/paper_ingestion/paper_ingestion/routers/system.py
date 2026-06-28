@@ -25,6 +25,7 @@ from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel, Field
 
 from paper_ingestion.config import get_paper_ingestion_settings
+from paper_ingestion.constants import FAST_MODEL_DEFAULT, SMART_MODEL_DEFAULT
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.ingestion.embedder import (
     EMBEDDING_DIMENSION,
@@ -230,10 +231,10 @@ async def _compute_model_warnings() -> list[str]:
     # Build role → routed-model map (ollama/ prefix stripped + :latest stripped).
     role_to_routed: dict[str, str] = {}
     for dep in deployments:
-        alias = dep.get("model_name", "")
+        alias = dep.model_name
         if alias not in _MODEL_ROLES:
             continue
-        params = dep.get("litellm_params") or {}
+        params = dep.litellm_params
         routed_full = str(params.get("model", ""))
         if not routed_full:
             continue
@@ -448,10 +449,10 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
         # Each deployment entry has model_name == alias (smart/fast/embed) and
         # litellm_params.model == the full routed model string (e.g. "ollama/qwen3:8b").
         for dep in deployments:
-            alias = dep.get("model_name", "")
+            alias = dep.model_name
             if alias not in _MODEL_ROLES:
                 continue
-            params = dep.get("litellm_params") or {}
+            params = dep.litellm_params
             routed_full = str(params.get("model", ""))
             if not routed_full:
                 continue
@@ -874,6 +875,15 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
     else:
         smtp_status = "amber"
         smtp_detail = "not configured — magic links go to stdout"
+        # A multi-user production box has no other login path for non-owner
+        # users, so a missing relay is a hard failure (red), not a warning.
+        if core.environment.lower() == "production":
+            async with request.app.state.db_pool.acquire() as conn:
+                user_count = int(
+                    await conn.fetchval("SELECT count(*) FROM users WHERE deleted_at IS NULL") or 0
+                )
+            if user_count > 1:
+                smtp_status = "red"
     checks.append(
         ReadinessCheck(
             name="smtp",
@@ -978,8 +988,8 @@ async def get_system_capabilities(request: Request) -> SystemCapabilities:
 # the FastAPI entrypoint and importing it has module-load side effects. embed
 # and pulse_stage2 default to LiteLLM aliases, sourced from PaperIngestionSettings.
 _ROLE_CODE_DEFAULTS: dict[str, str] = {
-    "smart": "qwen3:8b",
-    "fast": "qwen3:4b",
+    "smart": SMART_MODEL_DEFAULT,
+    "fast": FAST_MODEL_DEFAULT,
 }
 
 # Static deployment invariant: litellm/config.yaml sets `drop_params: true`
@@ -998,7 +1008,7 @@ class ResolvedRole(BaseModel):
 
 
 class EffectiveConfig(BaseModel):
-    """Static resolved-vs-default config snapshot: the §5 silent-override control.
+    """Static resolved-vs-default config snapshot: the silent-override control.
 
     Diffing ``effective`` against ``code_default`` per role is what surfaces an
     override like ``PULSE_STAGE2_MODEL=fast`` shadowing the ``smart`` default.

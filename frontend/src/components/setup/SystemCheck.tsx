@@ -98,6 +98,9 @@ export function SystemCheck() {
       <Row status={modelStatus} label={modelLabel} hint={modelHint ?? 'Ollama / LiteLLM'} />
       <Row status={topicsStatus} label={topicsLabel} />
       <Row status={telegramStatus} label={telegramLabel} />
+      {(data.model_warnings ?? []).map((w) => (
+        <Row key={w} status="warn" label={w} />
+      ))}
     </div>
   );
 }

@@ -88,7 +88,7 @@ engaged with. Excludes unengaged Pulse cards — the two features never duplicat
 
 Sources also include local PDF upload, bulk scan, and tracked authors.
 
-Out of scope: full-text PDF annotation, manuscript drafting.
+Out of scope: manuscript drafting.
 
 ### 3.2 Learning Engine
 

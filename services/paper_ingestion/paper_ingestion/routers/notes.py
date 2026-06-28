@@ -165,7 +165,7 @@ async def update_note(
                 raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
             if note_row["source"] == "zotero":
                 raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
-            # DOM-A-05: assert_paper_ownership for the parent paper.
+            # Assert ownership of the parent paper.
             await assert_paper_ownership(conn, note_row["paper_id"], user_id)
         else:
             # Single-tenant (user_id is None): no IDOR risk; source check safe.
@@ -182,6 +182,7 @@ async def update_note(
             note_id,
             updates,
             _NOTE_ALLOWED_COLUMNS,
+            extra_where=("user_id", user_id) if user_id is not None else None,
         )
     if not row:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
@@ -339,7 +340,7 @@ async def delete_note(
                 raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
             if note_row["source"] == "zotero":
                 raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
-            # DOM-A-06: assert_paper_ownership for the parent paper.
+            # Assert ownership of the parent paper.
             await assert_paper_ownership(conn, note_row["paper_id"], user_id)
         else:
             # Single-tenant (user_id is None): no IDOR risk; source check safe.
@@ -350,9 +351,18 @@ async def delete_note(
                 raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
             if note_row["source"] == "zotero":
                 raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
-        await delete_or_404(
-            conn,
-            "DELETE FROM paper_notes WHERE id = $1",
-            note_id,
-            detail=f"Note {note_id} not found",
-        )
+        if user_id is not None:
+            await delete_or_404(
+                conn,
+                "DELETE FROM paper_notes WHERE id = $1 AND user_id = $2",
+                note_id,
+                user_id,
+                detail=f"Note {note_id} not found",
+            )
+        else:
+            await delete_or_404(
+                conn,
+                "DELETE FROM paper_notes WHERE id = $1",
+                note_id,
+                detail=f"Note {note_id} not found",
+            )

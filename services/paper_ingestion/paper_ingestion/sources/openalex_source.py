@@ -264,7 +264,7 @@ class OpenAlexSource(PaperSource):
         if primary_location and isinstance(primary_location, dict):
             pdf_url = primary_location.get("pdf_url") or None
 
-        # PI-EDGE-007: Validate pdf_url scheme + hostname against the SSRF allowlist
+        # Validate pdf_url scheme + hostname against the SSRF allowlist
         # before storing it — OpenAlex can return arbitrary third-party PDF URLs.
         if pdf_url is not None:
             _parsed = urlparse(pdf_url)

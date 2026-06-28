@@ -143,7 +143,7 @@ export function OnboardingWizard({ firstRun, authed }: OnboardingWizardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Bootstrap setup token (B3/SEC-1): captured once from the URL, then stripped
+  // Bootstrap setup token: captured once from the URL, then stripped
   // from the address bar so it can't leak via history / Referer / logs. Held in
   // a ref (not state) and sent as X-Setup-Token on the first-run WRITE calls.
   //
@@ -655,11 +655,11 @@ function AdminStep({
 
   const createMut = useMutation({
     mutationFn: (adminEmail: string) => createFirstRunAdmin(adminEmail, setupToken),
-    onSuccess: (res) => {
+    onSuccess: async (res) => {
       // Backend has set the jarvis_session cookie atomically; mirror the
       // session into the auth store so the App flips to authed=true and the
       // post-auth wizard steps can call authenticated endpoints.
-      loginWithSession({ id: res.id, email: res.email, role: res.role as 'admin' | 'user' });
+      await loginWithSession({ id: res.id, email: res.email, role: res.role as 'admin' | 'user' });
       onNext();
     },
   });

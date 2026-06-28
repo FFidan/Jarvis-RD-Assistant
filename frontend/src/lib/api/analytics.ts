@@ -9,6 +9,7 @@ import type {
   StatusCountRow,
   AnalyticsSummaryResponse,
   PaperContradictionsResponse,
+  ConsensusResponse,
   JobAccepted,
 } from '@/types';
 
@@ -59,3 +60,6 @@ export const scanPaperContradictions = (paperId: number, body?: { limit?: number
     method: 'POST',
     body: JSON.stringify(body ?? {}),
   });
+
+// --- Consensus ---
+export const fetchConsensus = () => apiFetch<ConsensusResponse>('/api/consensus');

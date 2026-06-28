@@ -1,6 +1,6 @@
 """Tests for CF-Connecting-IP validation in http_rate_limiter._real_ip.
 
-SEC-006 follow-up: when ``JARVIS_TRUST_CF_CONNECTING_IP`` is enabled the
+When ``JARVIS_TRUST_CF_CONNECTING_IP`` is enabled the
 CF-Connecting-IP header is trusted as the canonical client IP — but only when
 it is a single, well-formed IP address.  A malformed value (e.g. two
 comma-separated IPs forged by an attacker, or garbage) must NOT be trusted; the
@@ -62,12 +62,12 @@ def test_malformed_cf_connecting_ip_falls_through_to_xff(
         headers={
             # Two IPs — invalid for a single-IP parse; an attacker could forge this.
             "CF-Connecting-IP": "1.2.3.4, 5.6.7.8",
-            # XFF: 8.8.8.8 (public client) -> 10.0.0.5 (trusted Docker hop).
-            "X-Forwarded-For": "8.8.8.8, 10.0.0.5",
+            # XFF: 8.8.8.8 (public client) -> 127.0.0.1 (trusted loopback hop).
+            "X-Forwarded-For": "8.8.8.8, 127.0.0.1",
         }
     )
 
-    # Falls through to XFF; right-to-left walk skips the trusted 10/8 hop and
+    # Falls through to XFF; right-to-left walk skips the trusted loopback hop and
     # returns the first non-trusted entry.
     with caplog.at_level("WARNING", logger=cf_trust_enabled.logger.name):
         assert cf_trust_enabled._real_ip(req) == "8.8.8.8"
@@ -84,7 +84,7 @@ def test_malformed_cf_connecting_ip_falls_through_to_xff(
 
 
 def test_malformed_xff_hop_falls_back_to_socket_peer() -> None:
-    """COM-SEC-001: a malformed XFF hop must yield the socket peer, not the forged string.
+    """A malformed XFF hop must yield the socket peer, not the forged string.
 
     An attacker can inject a hop like "not-an-ip" into X-Forwarded-For to create
     distinct rate-limit keys for each request (bypassing per-IP limits).  The fix
@@ -99,7 +99,7 @@ def test_malformed_xff_hop_falls_back_to_socket_peer() -> None:
     _m.get_jarvis_common_settings = lambda: m_settings
     try:
         req = _FakeRequest(
-            headers={"X-Forwarded-For": "not-an-ip, 10.0.0.1"},
+            headers={"X-Forwarded-For": "not-an-ip, 127.0.0.1"},
             client=_FakeClient(host="203.0.113.55"),
         )
         result = _m._real_ip(req)
@@ -112,7 +112,7 @@ def test_malformed_xff_hop_falls_back_to_socket_peer() -> None:
 
 
 def test_malformed_xff_hop_with_no_client_returns_unknown() -> None:
-    """COM-SEC-001: malformed XFF hop with no socket peer returns 'unknown'."""
+    """Malformed XFF hop with no socket peer returns 'unknown'."""
     import jarvis_common.http_rate_limiter as _m
 
     m_settings = _Settings(trust_cf_connecting_ip=False)

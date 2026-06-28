@@ -1,14 +1,12 @@
-"""`thread` entity CRUD + auto-seed producers (UI_v3 My-Day § Open threads).
+"""`thread` entity CRUD + auto-seed producers (My-Day § Open threads).
 
-A ``thread`` is a user's resumable mid-flight line of work (spec
-internal design spec (archived), §4.1).
-Open-question 2 (RESOLVED 2026-05-15) requires both a manual create path AND
-two auto-seed producers:
+A ``thread`` is a user's resumable mid-flight line of work.
+Both a manual create path and two auto-seed producers are supported:
 
 * ``POST /api/my-day/threads/seed/pomodoro`` — an interrupted Pomodoro session
   becomes a resumable thread.
 * ``POST /api/my-day/threads/seed/eod`` — the EOD "make this a thread" action
-  (spec §3.10) turns a blocker into a resumable Open Thread.
+  turns a blocker into a resumable Open Thread.
 
 Every endpoint is strictly user-scoped via ``current_user_id_strict`` — no
 cross-user read or write is possible (consistent with the RBAC model).
@@ -123,7 +121,7 @@ async def create_thread(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
 ) -> ThreadResponse:
-    """Create a user-owned thread (the manual create path of §4.1)."""
+    """Create a user-owned thread (the manual create path)."""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "INSERT INTO thread (user_id, title, anchor, progress) "
@@ -226,7 +224,7 @@ async def seed_thread_from_pomodoro(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
 ) -> ThreadSeedResponse:
-    """Auto-seed a thread from an interrupted Pomodoro session (§4.1, OQ-2).
+    """Auto-seed a thread from an interrupted Pomodoro session.
 
     De-duplicated: if an open thread with the same title already exists for the
     caller it is touched (``last_at`` bumped, ``progress`` advanced if higher)
@@ -276,7 +274,7 @@ async def seed_thread_from_eod(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
 ) -> ThreadSeedResponse:
-    """Auto-seed from the EOD "make this a thread" action (spec §3.10 / §4.3).
+    """Auto-seed from the EOD "make this a thread" action.
 
     A blocker line from the shutdown ritual becomes a resumable Open Thread
     instead of a dead journal line. De-duplicated on title the same way as the

@@ -1,4 +1,4 @@
-"""UI_v3 §I Account — self-service current-user profile models.
+"""Account — self-service current-user profile models.
 
 Strictly the *authenticated caller's own* profile. Admin user-management
 (``/api/admin/users``) is a separate surface with its own models; nothing

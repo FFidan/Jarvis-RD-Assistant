@@ -147,7 +147,7 @@ export function LearningCardsPage() {
           </div>
         </div>
 
-        {/* Stats bar lives in Library view (per spec §3.3) */}
+        {/* Stats bar lives in Library view */}
         <StatsHeader />
 
         {/* Deck browser with "Start review" per deck */}

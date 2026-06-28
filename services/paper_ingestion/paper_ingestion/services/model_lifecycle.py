@@ -463,7 +463,7 @@ def compute_vram_fit(
 ) -> FitDetail:
     """Compute VRAM fit for an entry at a given num_ctx on this machine.
 
-    Returns a dict matching contract §5.1 fit_detail shape:
+    Returns a dict matching the fit_detail shape:
       {"default": "fits"|"partial"|"unfit"|"cloud"|"unknown",
        "at_num_ctx": int, "required_vram_gb": float | None,
        "base_vram_gb": float | None, "base_num_ctx": int,

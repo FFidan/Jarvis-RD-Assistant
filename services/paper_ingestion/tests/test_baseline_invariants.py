@@ -1034,3 +1034,212 @@ async def test_tracked_authors_three_col_unique_constraint(
             "INSERT INTO tracked_authors (author_name, s2_author_id, source, user_id) "
             "VALUES ('Alice Smith', NULL, 'manual', 9901)"
         )
+
+
+# ---------------------------------------------------------------------------
+# v1.0.0 squash fold (migrations 0096-0101) + the paper_notes annotation
+# dedupe fix. These invariants assert db/init.sql embodies the folded schema
+# directly (the migration files no longer exist to replay).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_baseline_papers_chunked_at_present(baseline_conn: asyncpg.Connection) -> None:
+    """papers.chunked_at is a nullable timestamptz (auto_fetch picks chunked_at IS NULL)."""
+    conn = baseline_conn
+    row = await conn.fetchrow(
+        "SELECT data_type, is_nullable FROM information_schema.columns "
+        "WHERE table_name = 'papers' AND column_name = 'chunked_at'"
+    )
+    assert row is not None, "papers.chunked_at must exist"
+    assert row["data_type"] == "timestamp with time zone"
+    assert row["is_nullable"] == "YES"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_baseline_papers_zotero_attachment_key_present(
+    baseline_conn: asyncpg.Connection,
+) -> None:
+    """papers.zotero_attachment_key (vestigial global key) survives the fold."""
+    conn = baseline_conn
+    dtype = await conn.fetchval(
+        "SELECT data_type FROM information_schema.columns "
+        "WHERE table_name = 'papers' AND column_name = 'zotero_attachment_key'"
+    )
+    assert dtype == "text", f"papers.zotero_attachment_key must be text, got {dtype!r}"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_baseline_contradictions_stance_and_claim_topic(
+    baseline_conn: asyncpg.Connection,
+) -> None:
+    """paper_contradictions carries stance + claim_topic; stance CHECK admits
+    only NULL/supports/opposes/neutral; claim_topic has its partial index."""
+    conn = baseline_conn
+    cols = {
+        r["column_name"]: r["data_type"]
+        for r in await conn.fetch(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_name = 'paper_contradictions' "
+            "AND column_name IN ('stance', 'claim_topic')"
+        )
+    }
+    assert cols.get("stance") == "character varying"
+    assert cols.get("claim_topic") == "text"
+
+    idx = await conn.fetchrow(
+        "SELECT indexdef FROM pg_indexes "
+        "WHERE tablename = 'paper_contradictions' "
+        "AND indexname = 'idx_paper_contradictions_claim_topic'"
+    )
+    assert idx is not None, "idx_paper_contradictions_claim_topic must exist"
+
+    paper_a = await _seed_paper(conn, "baseline-0098-a")
+    paper_b = await _seed_paper(conn, "baseline-0098-b")
+    with pytest.raises(asyncpg.exceptions.CheckViolationError):
+        await conn.execute(
+            "INSERT INTO paper_contradictions "
+            "(paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b, "
+            " explanation, confidence, stance) "
+            "VALUES ($1, $2, 'fa', 'fb', 'qa', 'qb', 'e', 0.5, 'maybe')",
+            paper_a,
+            paper_b,
+        )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_baseline_paper_highlights_per_user_annotation_uniqueness(
+    baseline_conn: asyncpg.Connection,
+) -> None:
+    """paper_highlights exists; zotero annotation uniqueness is PER-USER
+    (uq_paper_highlights_zotero_key on (user_id, zotero_annotation_key)),
+    NOT the global 0099 index — two users may import the same annotation key,
+    one user may not import it twice."""
+    conn = baseline_conn
+    # The replaced 0099 global index must be absent.
+    global_idx = await conn.fetchval(
+        "SELECT 1 FROM pg_indexes WHERE tablename = 'paper_highlights' "
+        "AND indexname = 'idx_paper_highlights_zotero_key'"
+    )
+    assert global_idx is None, (
+        "global idx_paper_highlights_zotero_key must NOT exist (re-scoped per-user)"
+    )
+
+    paper_id = await _seed_paper(conn, "baseline-0099-hl")
+    await conn.execute("INSERT INTO users (id, email) VALUES (91, 'hl-a@example.com')")
+    await conn.execute("INSERT INTO users (id, email) VALUES (92, 'hl-b@example.com')")
+    await conn.execute(
+        "INSERT INTO paper_highlights (paper_id, user_id, page, rect, zotero_annotation_key) "
+        "VALUES ($1, 91, 1, '{}'::jsonb, 'ANN1')",
+        paper_id,
+    )
+    # Different user, same annotation key -> allowed (per-user scope).
+    await conn.execute(
+        "INSERT INTO paper_highlights (paper_id, user_id, page, rect, zotero_annotation_key) "
+        "VALUES ($1, 92, 1, '{}'::jsonb, 'ANN1')",
+        paper_id,
+    )
+    # Same user, same annotation key -> rejected.
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await conn.execute(
+            "INSERT INTO paper_highlights (paper_id, user_id, page, rect, zotero_annotation_key) "
+            "VALUES ($1, 91, 2, '{}'::jsonb, 'ANN1')",
+            paper_id,
+        )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_baseline_paper_user_zotero_links_per_user_item_uniqueness(
+    baseline_conn: asyncpg.Connection,
+) -> None:
+    """paper_user_zotero_links has PK (paper_id, user_id) and a partial unique
+    index uq_pu_zotero_item (user_id, zotero_item_key): a user may not map the
+    same item_key to two papers; two users may share an item_key; NULL item_key
+    is unconstrained."""
+    conn = baseline_conn
+    paper1 = await _seed_paper(conn, "baseline-0101-p1")
+    paper2 = await _seed_paper(conn, "baseline-0101-p2")
+    paper3 = await _seed_paper(conn, "baseline-0101-p3")
+    await conn.execute("INSERT INTO users (id, email) VALUES (101, 'pz-a@example.com')")
+    await conn.execute("INSERT INTO users (id, email) VALUES (102, 'pz-b@example.com')")
+
+    await conn.execute(
+        "INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key) "
+        "VALUES ($1, 101, 'ITEM1')",
+        paper1,
+    )
+    # Different user, same item_key -> allowed.
+    await conn.execute(
+        "INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key) "
+        "VALUES ($1, 102, 'ITEM1')",
+        paper1,
+    )
+    # Same user, same item_key on another paper -> rejected by uq_pu_zotero_item.
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await conn.execute(
+            "INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key) "
+            "VALUES ($1, 101, 'ITEM1')",
+            paper2,
+        )
+    # NULL item_key is exempt from the partial index: two NULL rows coexist.
+    await conn.execute(
+        "INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key) "
+        "VALUES ($1, 101, NULL)",
+        paper2,
+    )
+    await conn.execute(
+        "INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key) "
+        "VALUES ($1, 101, NULL)",
+        paper3,
+    )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_baseline_paper_user_zotero_links_cascades_on_user_delete(
+    baseline_conn: asyncpg.Connection,
+) -> None:
+    """Deleting a user removes their paper_user_zotero_links rows (ON DELETE CASCADE)."""
+    conn = baseline_conn
+    paper_id = await _seed_paper(conn, "baseline-0101-cascade")
+    uid = await conn.fetchval(
+        "INSERT INTO users (email) VALUES ('pz-cascade@example.com') RETURNING id"
+    )
+    await conn.execute(
+        "INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key) "
+        "VALUES ($1, $2, 'ITEMX')",
+        paper_id,
+        uid,
+    )
+    await conn.execute("DELETE FROM users WHERE id = $1", uid)
+    remaining = await conn.fetchval(
+        "SELECT count(*) FROM paper_user_zotero_links WHERE paper_id = $1", paper_id
+    )
+    assert remaining == 0, "paper_user_zotero_links must cascade-delete with the owning user"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_baseline_paper_notes_annotation_unique_nulls_not_distinct(
+    baseline_conn: asyncpg.Connection,
+) -> None:
+    """uq_paper_notes_zotero_annotation is NULLS NOT DISTINCT: a NULL-owner note
+    and a per-user note with the same (paper_id, zotero_annotation_key) coexist,
+    but a SECOND NULL-owner note for that pair is rejected (NULLs equal)."""
+    conn = baseline_conn
+    paper_id = await _seed_paper(conn, "baseline-n1-notes")
+    await conn.execute("INSERT INTO users (id, email) VALUES (77, 'n1@example.com')")
+    await conn.execute(
+        "INSERT INTO paper_notes (paper_id, user_note, source, zotero_annotation_key, user_id) "
+        "VALUES ($1, 'n', 'zotero', 'ANNKEY', NULL)",
+        paper_id,
+    )
+    await conn.execute(
+        "INSERT INTO paper_notes (paper_id, user_note, source, zotero_annotation_key, user_id) "
+        "VALUES ($1, 'n', 'zotero', 'ANNKEY', 77)",
+        paper_id,
+    )
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await conn.execute(
+            "INSERT INTO paper_notes (paper_id, user_note, source, zotero_annotation_key, user_id) "
+            "VALUES ($1, 'n', 'zotero', 'ANNKEY', NULL)",
+            paper_id,
+        )

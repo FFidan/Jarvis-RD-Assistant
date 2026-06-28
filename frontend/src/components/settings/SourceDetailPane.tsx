@@ -1,5 +1,5 @@
 /**
- * SourceDetailPane — full-pane view for a single source in §II Sources.
+ * SourceDetailPane — full-pane view for a single source in Sources.
  *
  * Shows the source-level enable/disable toggle and API-key management
  * for the selected source, then the full source reorder list below.

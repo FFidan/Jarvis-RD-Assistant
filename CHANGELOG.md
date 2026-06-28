@@ -3,6 +3,38 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## v1.0.0 (2026-06-27) — Consensus view, in-PDF annotation with Zotero sync, one-click restore, and multi-user hardening
+
+First stable release. It adds a cross-paper consensus view, an in-PDF reader with spatial highlights that sync to Zotero, and guided one-click backup restore, and completes per-user isolation and restore-safety hardening across the application.
+
+### Added
+- **Consensus view.** A new page shows where the papers in your library agree or disagree on shared claims extracted by the contradiction pipeline: an "Agreement by claim" chart with per-claim Supports and Opposes counts, and expandable evidence showing the assessed quote from each compared paper. A consensus scan can be queued on demand, with a guided empty state for the first run.
+- **In-PDF reader with spatial highlights.** Source PDFs render directly on the paper detail page. Select text to create a colour-coded highlight with an optional note; highlights can be edited and deleted and are anchored to their exact position on the page.
+- **Highlight export to Zotero.** A paper's not-yet-synced in-app and in-PDF highlights can be pushed to a linked Zotero library as annotations; already-synced highlights are skipped.
+- **One-click restore.** The admin Backups panel restores a point-in-time backup through a guided, typed-confirmation flow. Restore points carry compatibility metadata, and an off-host restore inbox supports recovery onto a fresh host.
+- **Admin account recovery.** An administrator can restore a soft-deleted user, and a usable sign-in link is surfaced when email delivery is unavailable.
+
+### Changed
+- **Per-user Zotero.** A paper's Zotero item, attachment, citation key, and sync state are now scoped to each user through a per-user link table, so collaborators no longer share or overwrite one another's Zotero links. Citation keys and the library Zotero indicator are likewise scoped per user.
+- **Restore safety.** A sentinel-driven maintenance mode keeps the application returning 503 while a destructive restore is unfinished or was interrupted, rather than serving partially restored data; the boot sequence validates multi-user, setup-token, and email configuration once the database is available.
+- **Hybrid-search enrichment** batches paper lookups into a single query.
+
+### Security
+- **Per-user data isolation.** PDF and page-snapshot access for private sources is scoped to the owner, the filesystem-wide local PDF scan is restricted to administrators, and a task's parent must belong to the same project.
+- **Owner sign-in and administrator safeguards.** The first administrator is persisted as the owner and resolved at API-key login; the last-administrator safeguard is serialised so it cannot be bypassed by concurrent requests.
+- **Restore integrity.** A restore whose backup manifest is unreadable is rejected before any destructive step, and the restore archive is protected from the routine backup-retention prune.
+- **Atomic account removal.** Account deletion and audit-log anonymisation are applied atomically.
+- **Release license gate.** A pre-release check fails the build on strong-copyleft dependencies, and a `NOTICE` file documents the bundled third-party components.
+- The setup token is no longer recorded in access logs, and cached identity data is cleared on session expiry and re-login on shared browsers.
+
+### Fixed
+- **Spaced-repetition reviews** synced from offline use are scheduled at their original review time rather than at sync time.
+- **Cross-service Zotero push** is queued reliably when a paper is linked from a project.
+- **Telegram reminder reloads** surface failures instead of silently swallowing them.
+- Downloaded PDFs are written atomically to avoid corruption on retry, and highlights cascade when a user is deleted.
+- Only newly imported library papers are queued for analysis during a Zotero poll, avoiding redundant reprocessing.
+- Clickable cards are keyboard-operable.
+
 ## v0.9.2 (2026-06-25) — Hardened structured AI output, setup & account safeguards, permissive PDF rendering
 
 ### Added

@@ -1079,7 +1079,7 @@ describe('IngestionSection — GPU overlay divergence line (Part 3-3)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Researcher-language pass — §III model controls carry plain-language labels
+// Researcher-language pass — model controls carry plain-language labels
 // + a one-sentence "what this does" description for each role.
 // ---------------------------------------------------------------------------
 

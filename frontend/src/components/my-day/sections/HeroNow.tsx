@@ -105,7 +105,7 @@ export function HeroNow() {
   });
   const hasThread = (threadData ?? []).some((t) => t.status === 'open');
 
-  // Smart default (SPEC §4): paused-Pomodoro → task; an open thread → thread;
+  // Smart default: paused-Pomodoro → task; an open thread → thread;
   // else pulse. A persisted explicit choice always wins.
   const [mode, setMode] = useState<Mode>(() => {
     const stored = readStoredMode();

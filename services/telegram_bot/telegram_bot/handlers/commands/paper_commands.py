@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _library_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
-    """/papers Library row buttons per spec §5.3."""
+    """/papers Library row buttons."""
     return InlineKeyboardMarkup(
         [
             [
@@ -42,7 +42,7 @@ def _library_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
 
 
 def _pulse_card_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
-    """/next single Pulse card buttons per spec §5.3."""
+    """/next single Pulse card buttons."""
     return InlineKeyboardMarkup(
         [
             [
@@ -65,7 +65,7 @@ def _pulse_card_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
 
 # Decorator order: @rate_limit outer, @auth_required inner.
 # Rate-limiting runs FIRST so unauthenticated floods are shed before any auth
-# DB lookup occurs (DOM-D-03: silent-drop auth must not run before rate-limiter).
+# DB lookup occurs (auth must not run before rate-limiter).
 @rate_limit(max_calls=5, window_seconds=60)
 @auth_required
 async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -266,7 +266,7 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 def _inbox_keyboard(
     paper_id: int | str, discovery_origin: str = "user_initiated"
 ) -> InlineKeyboardMarkup:
-    """Inbox row buttons per spec §5.3 (origin-conditional feedback)."""
+    """Inbox row buttons (origin-conditional feedback)."""
     primary = [
         InlineKeyboardButton("💾 Save", callback_data=f"paper:save:{paper_id}"),
         InlineKeyboardButton("🗑 Trash", callback_data=f"paper:trash:{paper_id}"),

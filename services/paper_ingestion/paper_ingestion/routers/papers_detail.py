@@ -28,6 +28,7 @@ from paper_ingestion.converters import (
     row_to_summary_response,
 )
 from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.integrations.zotero_service import _resolve_zotero_user_id
 from paper_ingestion.models import (
     PaperCreate,
     PaperDetailResponse,
@@ -103,7 +104,7 @@ async def get_paper_detail(
             paper_id,
             user_id,
         )
-        # PI-SEC-01: scope the link count to the caller's own projects. Without
+        # Scope the link count to the caller's own projects. Without
         # the projects JOIN this counted other users' links too, leaking a
         # cross-tenant signal (gates the "Send to Zotero" button). NULL-safe
         # predicate keeps single-user mode (user_id IS NULL) counting all rows.
@@ -124,12 +125,12 @@ async def get_paper_detail(
             FROM procrastinate_jobs pj
             WHERE pj.task_name IN ('paper.process', 'paper.analyze')
               AND pj.args->>'paper_id' = $1::text
-              AND pj.args->>'user_id' = $2::text
+              AND ($2::text IS NULL OR pj.args->>'user_id' = $2::text)
             ORDER BY pj.id DESC
             LIMIT 1
             """,
             str(paper_id),
-            str(user_id),
+            str(user_id) if user_id is not None else None,
         )
 
     paper = row_to_paper_response(paper_row)
@@ -201,12 +202,24 @@ async def get_paper_citation(
     """Return a single paper's citation as BibTeX or RIS text (file-download)."""
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)
-        paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
-        if not paper_row:
+        resolved_uid = await _resolve_zotero_user_id(conn, user_id)
+        row = await conn.fetchrow(
+            """
+            SELECT p.*, l.zotero_citation_key AS link_citation_key
+            FROM papers p
+            LEFT JOIN paper_user_zotero_links l
+                ON l.paper_id = p.id AND l.user_id = $2
+            WHERE p.id = $1
+            """,
+            paper_id,
+            resolved_uid,
+        )
+        if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
 
-    text = build_citations([paper_row], format)
-    stem = paper_row["zotero_citation_key"] or f"paper-{paper_id}"
+    paper = dict(row) | {"zotero_citation_key": row["link_citation_key"]}
+    stem = row["link_citation_key"] or f"paper-{paper_id}"
+    text = build_citations([paper], format)
     return _citation_response(text, format, stem)
 
 
@@ -226,9 +239,22 @@ async def get_papers_citations(
         visible_ids = await _filter_visible_paper_ids(conn, body.paper_ids, user_id)
         if not visible_ids:
             raise HTTPException(status_code=404, detail="No citable papers found")
-        rows = await conn.fetch("SELECT * FROM papers WHERE id = ANY($1::int[])", visible_ids)
+        resolved_uid = await _resolve_zotero_user_id(conn, user_id)
+        rows = await conn.fetch(
+            """
+            SELECT p.*, l.zotero_citation_key AS link_citation_key
+            FROM papers p
+            LEFT JOIN paper_user_zotero_links l
+                ON l.paper_id = p.id AND l.user_id = $2
+            WHERE p.id = ANY($1::int[])
+            """,
+            visible_ids,
+            resolved_uid,
+        )
 
-    rows_by_id = {row["id"]: row for row in rows}
+    rows_by_id = {
+        row["id"]: dict(row) | {"zotero_citation_key": row["link_citation_key"]} for row in rows
+    }
     ordered = [rows_by_id[pid] for pid in body.paper_ids if pid in rows_by_id]
     text = build_citations(ordered, body.format)
     return _citation_response(text, body.format, "citations")

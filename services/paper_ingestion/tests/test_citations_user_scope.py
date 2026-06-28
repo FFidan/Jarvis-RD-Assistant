@@ -19,6 +19,35 @@ from tests.conftest import FakeRecord, make_pool_and_conn
 
 
 # ---------------------------------------------------------------------------
+# Helpers shared by citation-key tests
+# ---------------------------------------------------------------------------
+
+
+def _citation_paper_row(
+    *,
+    paper_id: int,
+    link_citation_key: str | None,
+    zotero_citation_key: str | None = None,
+) -> FakeRecord:
+    """Simulates a row returned by the per-user JOIN query in papers_detail.py."""
+    return FakeRecord(
+        {
+            "id": paper_id,
+            "title": "Test Paper",
+            "authors": [],
+            "abstract": None,
+            "published_date": None,
+            "url": "https://example.test/x",
+            "metadata": {},
+            # vestigial global column — empty after migration 0101
+            "zotero_citation_key": zotero_citation_key,
+            # per-user column from paper_user_zotero_links JOIN
+            "link_citation_key": link_citation_key,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -271,3 +300,173 @@ async def test_get_citations_keeps_visible_counter_parties() -> None:
     assert len(body) == 1, f"Visible counter-party P2 must be kept; got: {body}"
     assert body[0]["source_paper_id"] == p1_id
     assert body[0]["cited_paper_id"] == p2_id
+
+
+# ---------------------------------------------------------------------------
+# Citation-key value flows from paper_user_zotero_links, not papers.*
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_citation_key_flows_from_link_table_single() -> None:
+    """BibTeX key is read from paper_user_zotero_links, not papers.zotero_citation_key.
+
+    Regression: revert the JOIN in get_paper_citation to SELECT * FROM papers →
+    row["link_citation_key"] raises KeyError → 500 → status_code != 200 → RED.
+    """
+    import httpx
+    from httpx import ASGITransport
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    user_a_id = 1
+    paper_id = 42
+
+    pool, conn = make_pool_and_conn()
+
+    # fetchrow call order:
+    # 1. assert_paper_ownership ownership check
+    # 2. per-user JOIN query — link_citation_key comes from paper_user_zotero_links
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            FakeRecord({"id": paper_id, "discovered_by": user_a_id}),
+            _citation_paper_row(paper_id=paper_id, link_citation_key="Smith2024"),
+        ]
+    )
+
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+
+    async def _db_pool():
+        return pool
+
+    async def _api_key():
+        return None
+
+    app.dependency_overrides[get_db_pool] = _db_pool
+    app.dependency_overrides[verify_api_key] = _api_key
+    app.dependency_overrides[get_current_user_id] = lambda: user_a_id
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get(f"/api/papers/{paper_id}/citation?format=bibtex")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 200, resp.text
+    # decisive value-from-link-table assertion
+    assert resp.headers["content-disposition"] == 'attachment; filename="Smith2024.bib"'
+    assert "@article{Smith2024" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_citation_key_other_user_without_link_gets_fallback() -> None:
+    """A user with no link row receives paper-{id} fallback, not the first user's key."""
+    import httpx
+    from httpx import ASGITransport
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    user_b_id = 2
+    paper_id = 42
+
+    pool, conn = make_pool_and_conn()
+
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            FakeRecord({"id": paper_id, "discovered_by": user_b_id}),
+            # LEFT JOIN finds no link row for user_b → link_citation_key is NULL
+            _citation_paper_row(paper_id=paper_id, link_citation_key=None),
+        ]
+    )
+
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+
+    async def _db_pool():
+        return pool
+
+    async def _api_key():
+        return None
+
+    app.dependency_overrides[get_db_pool] = _db_pool
+    app.dependency_overrides[verify_api_key] = _api_key
+    app.dependency_overrides[get_current_user_id] = lambda: user_b_id
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get(f"/api/papers/{paper_id}/citation?format=bibtex")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 200, resp.text
+    expected_filename = f'"paper-{paper_id}.bib"'
+    assert expected_filename in resp.headers["content-disposition"], (
+        f"user without a link row must get fallback key; got: {resp.headers['content-disposition']}"
+    )
+    assert f"@article{{paper-{paper_id}" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_citation_key_none_user_id_sole_user_resolves() -> None:
+    """user_id=None (single-user mode) resolves to the sole active user's link key.
+
+    _resolve_zotero_user_id(conn, None) queries users WHERE deleted_at IS NULL;
+    when exactly one row exists it returns that user's id, so the JOIN finds the
+    correct paper_user_zotero_links row and surfaces "Smith2024".
+    """
+    import httpx
+    from httpx import ASGITransport
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    sole_user_id = 1
+    paper_id = 42
+
+    pool, conn = make_pool_and_conn()
+
+    # _resolve_zotero_user_id(conn, None) calls conn.fetch for the sole-user lookup
+    conn.fetch = AsyncMock(return_value=[FakeRecord({"id": sole_user_id})])
+
+    # assert_paper_ownership(conn, paper_id, None) returns early — no fetchrow call.
+    # Only one fetchrow: the per-user JOIN query.
+    conn.fetchrow = AsyncMock(
+        return_value=_citation_paper_row(paper_id=paper_id, link_citation_key="Smith2024")
+    )
+
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+
+    async def _db_pool():
+        return pool
+
+    async def _api_key():
+        return None
+
+    app.dependency_overrides[get_db_pool] = _db_pool
+    app.dependency_overrides[verify_api_key] = _api_key
+    # non-strict dependency: None signals single-user mode
+    app.dependency_overrides[get_current_user_id] = lambda: None
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get(f"/api/papers/{paper_id}/citation?format=bibtex")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 200, resp.text
+    # None→sole-user resolution must surface the link-table key, not paper-{id}
+    assert resp.headers["content-disposition"] == 'attachment; filename="Smith2024.bib"'
+    assert "@article{Smith2024" in resp.text

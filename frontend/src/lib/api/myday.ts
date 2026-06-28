@@ -88,7 +88,7 @@ export async function upsertJournalEntry(
   });
 }
 
-// --- My Day § Yesterday (UI_v3, on-the-fly rollup) ---
+// --- My Day § Yesterday (on-the-fly rollup) ---
 
 /**
  * GET /api/my-day/yesterday — on-the-fly § Yesterday rollup.
@@ -100,7 +100,7 @@ export const fetchYesterday = (tzOffsetMinutes = 0) =>
     `/api/my-day/yesterday?tz_offset_minutes=${tzOffsetMinutes}`,
   );
 
-// --- My Day § Open threads (UI_v3 `thread` entity) ---
+// --- My Day § Open threads (`thread` entity) ---
 
 export const fetchThreads = () =>
   apiFetch<Thread[]>('/api/my-day/threads');
@@ -147,7 +147,7 @@ export const seedThreadFromEod = (data: {
     body: JSON.stringify(data),
   });
 
-// --- §I Account (UI_v3 self-service profile) ---
+// --- Account (self-service profile) ---
 
 export const fetchAccount = () => apiFetch<AccountResponse>('/api/account');
 /**

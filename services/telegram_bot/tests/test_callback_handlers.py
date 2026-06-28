@@ -433,7 +433,7 @@ async def test_paper_action_invalid_callback_data():
 
 @pytest.mark.asyncio
 async def test_paper_action_auth_fail_answers_query():
-    """H1 regression guard: an unauthorised callback still answers the query.
+    """Regression guard: an unauthorised callback still answers the query.
 
     Without this, the Telegram client spins indefinitely on auth-rejected
     callbacks.
@@ -458,7 +458,7 @@ async def test_paper_action_auth_fail_answers_query():
 
 @pytest.mark.asyncio
 async def test_paper_feedback_auth_fail_answers_query():
-    """H1 regression guard for paper_feedback_callback."""
+    """Regression guard for paper_feedback_callback."""
     update, context, mock_db, mock_http = _make_callback_update_and_context(
         "paper:feedback_pos:42:pulse_thumbs", chat_id=99999
     )
@@ -773,7 +773,7 @@ async def test_task_done_service_error_replies_gracefully():
 
 
 # ---------------------------------------------------------------------------
-# TG-SEC-03: cross-tenant task-done writes are now blocked server-side.
+# Cross-tenant task-done writes are now blocked server-side.
 #
 # Post-REST-migration, task_done_callback no longer runs an ownership pre-check
 # in the bot — it PUTs to the Learning Engine, which scopes by the forwarded
@@ -787,7 +787,7 @@ async def test_task_done_service_error_replies_gracefully():
 
 @pytest.mark.asyncio
 async def test_task_done_forwards_owner_user_id_for_paired_user():
-    """TG-SEC-03 (bot half): the PUT forwards X-Owner-User-Id so the LE can scope."""
+    """Bot half: the PUT forwards X-Owner-User-Id so the LE can scope."""
     update, context, _, mock_http = _make_paired_callback("task_done_5")
     mock_http.put.return_value = make_http_response({"id": 5, "status": "done"})
 
@@ -805,7 +805,7 @@ async def test_task_done_forwards_owner_user_id_for_paired_user():
 
 @pytest.mark.asyncio
 async def test_task_done_non_owned_task_returns_not_found_no_leak():
-    """TG-SEC-03 (bot half): a non-owned task → LE 404 → 'not found' (no existence leak)."""
+    """Bot half: a non-owned task → LE 404 → 'not found' (no existence leak)."""
     update, context, _, mock_http = _make_paired_callback("task_done_9")
     # The LE scopes by X-Owner-User-Id; another user's task is invisible → 404.
     mock_http.put.return_value = make_http_response(None, status=404)

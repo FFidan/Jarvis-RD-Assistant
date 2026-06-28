@@ -45,7 +45,7 @@ interface FeedViewProps {
   /** §Topic facet "Untagged" sentinel — restrict to papers with no topic. */
   untagged?: boolean;
   /**
-   * Scoped list-filter (spec §3.4): client-side title/author text filter
+   * Scoped list-filter: client-side title/author text filter
    * applied to the currently loaded page. Not sent to the backend.
    */
   listFilter?: string;
@@ -154,7 +154,7 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
     placeholderData: keepPreviousData,
   });
 
-  // Spec §3.4: client-side scoped list-filter (title/author, within active facets)
+  // Client-side scoped list-filter (title/author, within active facets)
   const papers = useMemo(() => {
     // Cast inside memo so the expression doesn't escape and destabilise deps
     const raw = (data?.papers ?? []) as FeedPaper[];
@@ -240,7 +240,7 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
     setHardDeleteTarget({ id: paperId, title });
   }, []);
 
-  // --- DOM-F-02: stable callbacks for FeedPaperRow props ---
+  // --- Stable callbacks for FeedPaperRow props ---
   // Inline arrows create new function references each render and break React.memo.
   // These useCallbacks depend only on their respective mutation refs which are
   // stable across renders (TanStack Query mutations are stable objects).
@@ -260,7 +260,7 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
   const onUnstarCb = useCallback((id: number) => unstarMutation.mutate(id), [unstarMutation]);
   const onRestoreCb = useCallback((id: number) => restoreMutation.mutate(id), [restoreMutation]);
 
-  // DOM-F-02 (onHardDelete): stable callback — avoids inline arrow that creates a new
+  // Stable onHardDelete callback — avoids inline arrow that creates a new
   // function reference every parent render and defeats React.memo on FeedPaperRow.
   // We keep a ref to the latest `papers` array so the callback can look up the
   // title at click time without being included in the dependency array.
@@ -364,7 +364,7 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes, topi
                 surface={surface}
                 isSelected={selectedIds.has(paper.id)}
                 onToggleSelect={onToggleSelectCb}
-                // Lifecycle callbacks wired to mutations (stable via useCallback — DOM-F-02)
+                // Lifecycle callbacks wired to mutations (stable via useCallback)
                 onSave={onSaveCb}
                 onSkip={onSkipCb}
                 onMarkReading={onMarkReadingCb}

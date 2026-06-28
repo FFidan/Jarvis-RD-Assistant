@@ -177,7 +177,7 @@ See [`.env.example`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/.
 ├── libs/jarvis_common/    # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql           # PostgreSQL bedrock schema
-│   └── migrations/        # Versioned schema changes (0092+; 0089–0091 folded into init.sql)
+│   └── migrations/        # Versioned schema changes (0102+; 0089–0101 folded into init.sql)
 ├── litellm/config.yaml    # LLM gateway routing (smart/fast/embed aliases)
 ├── docker-compose.yml     # All services
 ├── .env.example           # Configuration template
@@ -240,7 +240,7 @@ See **[docs/DEPLOYMENT.md → Troubleshooting](docs/DEPLOYMENT.md#troubleshootin
 
 ## Built with AI-assisted development
 
-JARVIS RD Assistant was built with heavy AI-assisted development, kept honest by strict automated gates — `ruff`, `pyright`, `tach` module-boundary checks, the full test suite, and multi-tenant-isolation tests all run in CI on every change.
+JARVIS RD Assistant was built with heavy AI-assisted development, kept honest by layered automated gates. On every change, `ruff`, `pyright`, `tach` module-boundary checks, a fast unit test suite (excluding the database-backed, integration, and slow tests), cross-user multi-tenant isolation tests, DB-backed contract tests, and a full frontend lint/typecheck/test/build are all required gates. A mocked end-to-end smoke suite runs informational. Live-model tests run on a nightly schedule.
 
 ## License
 

@@ -403,6 +403,17 @@ async def test_sync_annotations_attributed_to_syncing_user(contract_conn):
             f'"{value}"',
         )
 
+    # sync now reads the Zotero item key from the per-user link table,
+    # not the global papers.zotero_item_key column seeded above. Seed user B's
+    # link row so B's LEFT JOIN resolves 'ZITEM001' and the sync proceeds.
+    await contract_conn.execute(
+        "INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key)"
+        " VALUES ($1, $2, $3)",
+        int(paper_id),
+        user_b_id,
+        "ZITEM001",
+    )
+
     shared = SharedConnPool(contract_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 

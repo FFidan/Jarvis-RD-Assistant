@@ -1,9 +1,9 @@
-"""Pydantic models for the `thread` entity (UI_v3 My-Day § Open threads).
+"""Pydantic models for the `thread` entity (My-Day Open threads).
 
 A ``thread`` is a user's resumable mid-flight line of work surfaced in My-Day's
 § Open threads section and the 3-mode hero ("Resume thread"). It is both
 user-created AND auto-seeded from (a) interrupted Pomodoro sessions and (b) the
-EOD "make this a thread" action (spec §3.10 / §4.1).
+EOD "make this a thread" action.
 
 Note: ``from __future__ import annotations`` is intentionally absent — the same
 PydanticUserError-with-FastAPI-body trace documented in ``routers/my_day.py``

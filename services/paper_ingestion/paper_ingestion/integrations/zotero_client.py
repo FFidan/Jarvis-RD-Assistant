@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import logging
+import os
 import urllib.parse
 from typing import Literal
 from urllib.parse import urlparse
@@ -146,6 +148,21 @@ def validate_bbt_base_url(url: str | None = None) -> None:
             raise
 
 
+def _read_pdf_for_upload(pdf_path: str) -> tuple[bytes, str, int, int]:
+    """Read PDF bytes + compute ``(bytes, md5_hex, filesize, mtime_ms)``.
+
+    Runs off the event loop (see :meth:`ZoteroClient.upload_attachment`) because
+    reading + MD5-hashing a multi-MB PDF is blocking. ``mtime`` is returned in
+    **milliseconds**, the unit the Zotero upload-authorize request requires.
+    The MD5 is a Zotero content fingerprint, not a security primitive.
+    """
+    st = os.stat(pdf_path)
+    with open(pdf_path, "rb") as fh:
+        file_bytes = fh.read()
+    md5_hex = hashlib.md5(file_bytes, usedforsecurity=False).hexdigest()
+    return file_bytes, md5_hex, st.st_size, int(st.st_mtime * 1000)
+
+
 class ZoteroClient:
     def __init__(
         self,
@@ -209,17 +226,108 @@ class ZoteroClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def upload_attachment(self, item_key: str, pdf_path: str) -> None:
-        """Attach a PDF file to a Zotero item (best-effort, does not raise on failure).
+    async def add_item_to_collections(self, item_key: str, collection_keys: list[str]) -> None:
+        """Add an existing item to *collection_keys* (idempotent set-union merge).
 
-        Zotero attachment upload is complex (3-stage); simplified version
-        just logs intent — full impl can use linkMode "imported_file".
+        GETs the item for its current version + collections, unions in the new
+        keys, and PATCHes only when the set grows. The If-Unmodified-Since-Version
+        precondition makes the write a compare-and-swap (412 on a concurrent edit).
         """
-        logger.info(
-            "Zotero attachment upload not yet implemented for item %s path %s",
-            item_key,
-            pdf_path,
+        if not collection_keys:
+            return
+        encoded = urllib.parse.quote(item_key, safe="")
+        resp = await _zotero_request_with_retry(
+            "GET",
+            self._http,
+            f"{self._base}/items/{encoded}",
+            headers=self._headers(),
+            timeout=15.0,
         )
+        resp.raise_for_status()
+        item = resp.json() or {}
+        version = int(item.get("version", 0))
+        existing = list((item.get("data") or {}).get("collections") or [])
+        merged = sorted(set(existing) | set(collection_keys))
+        if merged == sorted(existing):
+            return
+        patch = await _zotero_request_with_retry(
+            "PATCH",
+            self._http,
+            f"{self._base}/items/{encoded}",
+            json={"collections": merged},
+            headers={**self._headers(), "If-Unmodified-Since-Version": str(version)},
+            timeout=30.0,
+        )
+        patch.raise_for_status()
+
+    async def upload_attachment(self, item_key: str, pdf_path: str) -> None:
+        """Upload a PDF file to a Zotero attachment item via the 3-stage protocol.
+
+        ``item_key`` must already exist as an ``imported_file`` attachment item.
+
+        1. **Authorize** — ``POST {base}/items/{KEY}/file`` (form-urlencoded,
+           ``If-None-Match: *`` for a new file) carrying ``md5``/``filename``/
+           ``filesize``/``mtime`` (milliseconds)/``params=1``. The 200 response is
+           either ``{"exists": 1}`` (identical file already stored → done) or the
+           upload parameters ``{url, contentType, prefix, suffix, uploadKey}``.
+        2. **Upload bytes** — ``POST`` the concatenation ``prefix + bytes + suffix``
+           to the Stage-1 ``url`` (S3, not api.zotero.org). This request carries the
+           Stage-1 ``contentType`` and **no Zotero auth/version headers**, and
+           bypasses the Zotero-host 429 retry wrapper (which is host-specific).
+        3. **Register** — ``POST {base}/items/{KEY}/file`` with ``upload=<uploadKey>``
+           and the same precondition; success is ``204 No Content``.
+
+        Returns ``None`` on success (including the ``{"exists": 1}`` short-circuit).
+        Raises ``httpx.HTTPStatusError`` on any Zotero-host failure (412/413/428/429);
+        the caller maps these to a status (413 == storage quota exceeded).
+        """
+        file_bytes, md5_hex, filesize, mtime_ms = await asyncio.to_thread(
+            _read_pdf_for_upload, pdf_path
+        )
+        filename = os.path.basename(pdf_path)
+        file_url = f"{self._base}/items/{urllib.parse.quote(item_key, safe='')}/file"
+
+        # Stage 1 — authorize. If-None-Match: * declares a brand-new file.
+        authorize = await _zotero_request_with_retry(
+            "POST",
+            self._http,
+            file_url,
+            data={
+                "md5": md5_hex,
+                "filename": filename,
+                "filesize": filesize,
+                "mtime": mtime_ms,
+                "params": 1,
+            },
+            headers={**self._headers(), "If-None-Match": "*"},
+            timeout=30.0,
+        )
+        authorize.raise_for_status()
+        auth = authorize.json()
+        if auth.get("exists"):
+            # Identical bytes already on the server — nothing to upload or register.
+            return
+
+        # Stage 2 — upload bytes to S3. No Zotero headers; plain client POST so the
+        # Zotero-host 429 retry wrapper is bypassed. 2xx (201) == success.
+        upload = await self._http.post(
+            auth["url"],
+            content=auth["prefix"].encode("utf-8") + file_bytes + auth["suffix"].encode("utf-8"),
+            headers={"Content-Type": auth["contentType"]},
+            timeout=300.0,
+        )
+        upload.raise_for_status()
+
+        # Stage 3 — register the completed upload. 204 == success.
+        register = await _zotero_request_with_retry(
+            "POST",
+            self._http,
+            file_url,
+            data={"upload": auth["uploadKey"]},
+            headers={**self._headers(), "If-None-Match": "*"},
+            timeout=30.0,
+        )
+        register.raise_for_status()
 
     async def search_by_doi(self, doi: str) -> dict | None:
         """GET /items?q=doi — find existing item by DOI. Returns first match or None."""

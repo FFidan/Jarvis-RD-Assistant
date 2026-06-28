@@ -1,4 +1,4 @@
-"""Tests for H1 fix: brace-escape isolation from verification corpus.
+"""Tests for brace-escape isolation fix from verification corpus.
 
 Ensures that literal { and } characters in paper text (e.g. math notation like
 {x ∈ ℝⁿ}) do not leak into the verification corpus as escaped {{ / }} sequences,
@@ -36,7 +36,7 @@ def _make_openai_client() -> MagicMock:
 async def test_card_with_brace_quote_passes_verification() -> None:
     """A card whose evidence_quote contains literal { } must survive verification.
 
-    H1 regression: before the fix, full_text was escaped ({{ / }}) before being
+    brace-escape regression: before the fix, full_text was escaped ({{ / }}) before being
     passed to _verify_raw_cards.  The LLM returns quotes with literal { / }, so
     the normalized substring match failed and all math-heavy cards were discarded,
     leaving only the abstract fallback.
@@ -91,7 +91,7 @@ async def test_card_with_brace_quote_passes_verification() -> None:
 async def test_full_text_with_braces_does_not_crash_format() -> None:
     """Paper text containing literal { x } must not raise KeyError from str.format().
 
-    H1 regression (format side): before the fix the raw full_text was fed directly
+    brace-escape regression (format side): before the fix the raw full_text was fed directly
     into CARD_GENERATION_PROMPT.format(...), causing KeyError on any token that
     looks like a format placeholder.
 

@@ -1,4 +1,4 @@
-"""Tests for SEC-2: snapshot endpoint user-library scoping for local/uploaded PDFs.
+"""Tests for snapshot endpoint user-library scoping for local/uploaded PDFs.
 
 Coverage:
   (a) Tenant B gets 404 for tenant A's uploaded/local paper snapshot.
@@ -15,8 +15,12 @@ from httpx import ASGITransport
 from jarvis_common.testing import make_pool_and_conn
 
 
-def _paper_row(source_type: str, in_library: bool) -> dict:
-    return {"source_type": source_type, "in_library": in_library}
+def _paper_row(source_type: str, in_library: bool, discovered_by: int | None = None) -> dict:
+    return {
+        "source_type": source_type,
+        "in_library": in_library,
+        "discovered_by": discovered_by,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +58,7 @@ def _snap_app(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# (a) Local paper blocked for non-owner (SEC-2 core case)
+# (a) Local paper blocked for non-owner
 # ---------------------------------------------------------------------------
 
 
@@ -64,7 +68,7 @@ async def test_local_paper_snapshot_denied_to_non_owner(_snap_app):
     from jarvis_common.auth import get_current_user_id
 
     app.dependency_overrides[get_current_user_id] = lambda: 2  # Tenant B
-    conn.fetchrow.return_value = _paper_row("local", in_library=False)
+    conn.fetchrow.return_value = _paper_row("local", in_library=False, discovered_by=1)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -83,6 +87,67 @@ async def test_local_paper_snapshot_allowed_for_owner(_snap_app):
 
     app.dependency_overrides[get_current_user_id] = lambda: 1  # Owner
     conn.fetchrow.return_value = _paper_row("local", in_library=True)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/snapshots/1/1")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+
+
+# ---------------------------------------------------------------------------
+# (a') ZOTERO (private-origin) papers are ownership-scoped, not public
+# ---------------------------------------------------------------------------
+
+
+async def test_zotero_paper_snapshot_denied_to_non_discoverer(_snap_app):
+    """A ZOTERO paper discovered by user 1 is an opaque 404 for user 2.
+
+    ZOTERO is private-origin (not public corpus); without a library row a
+    non-discoverer must not be served the snapshot via its enumerable id.
+    """
+    app, conn = _snap_app
+    from jarvis_common.auth import get_current_user_id
+
+    app.dependency_overrides[get_current_user_id] = lambda: 2  # Non-discoverer
+    conn.fetchrow.return_value = _paper_row("zotero", in_library=False, discovered_by=1)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/snapshots/1/1")
+
+    assert resp.status_code == 404
+    # Opaque — must not leak existence via different wording
+    assert "library" not in resp.text.lower()
+
+
+async def test_zotero_paper_snapshot_allowed_for_discoverer(_snap_app):
+    """The caller who discovered a ZOTERO paper can retrieve its snapshot."""
+    app, conn = _snap_app
+    from jarvis_common.auth import get_current_user_id
+
+    app.dependency_overrides[get_current_user_id] = lambda: 1  # Discoverer
+    conn.fetchrow.return_value = _paper_row("zotero", in_library=False, discovered_by=1)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/snapshots/1/1")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+
+
+async def test_private_paper_snapshot_allowed_via_library(_snap_app):
+    """A private paper discovered by another user but in the caller's library is served."""
+    app, conn = _snap_app
+    from jarvis_common.auth import get_current_user_id
+
+    app.dependency_overrides[get_current_user_id] = lambda: 2  # Not the discoverer
+    conn.fetchrow.return_value = _paper_row("zotero", in_library=True, discovered_by=1)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

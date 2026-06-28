@@ -11,6 +11,8 @@ module-level constants so no real /backups mount is required.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import pytest_asyncio
 from jarvis_common.testing import SharedConnPool
@@ -115,6 +117,85 @@ async def plain_client(contract_conn, backups_dir):
         app.state.limiter.enabled = True
 
 
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def restore_paths(tmp_path_factory, monkeypatch):
+    """Point the restore request/status sentinels at a tmp trigger dir."""
+    from paper_ingestion.routers import backups as backups_router
+
+    trig = tmp_path_factory.mktemp("restore_trigger")
+    monkeypatch.setattr(backups_router, "_RESTORE_SENTINEL", trig / ".restore_request.json")
+    monkeypatch.setattr(backups_router, "_RESTORE_STATUS", trig / ".restore_status.json")
+    return trig
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def restore_ready(backups_dir):
+    """Complete the restore point in backups_dir by adding the missing litellm archive.
+
+    backups_dir ships jarvis + secrets only; adding litellm makes the
+    ``20260617_120000`` point ``complete`` so /restore accepts it.
+    """
+    (backups_dir / "litellm_20260617_120000.sql.gz").write_bytes(b"FAKE-LITELLM-DUMP")
+    return "20260617_120000"
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def restore_newer(backups_dir, restore_ready, tmp_path_factory, monkeypatch):
+    """Make the complete restore point report compat='newer' vs the running code.
+
+    A manifest with schema_version 99 against a code migration max of 42 forces
+    the newer-than-deployment compat gate.
+    """
+    migrations = tmp_path_factory.mktemp("migrations")
+    (migrations / "0001_init.sql").write_text("-- init")
+    (migrations / "0042_feature.sql").write_text("-- feature")
+    monkeypatch.setenv("DB_MIGRATIONS_DIR", str(migrations))
+    ts = "20260617_120000"
+    manifest = {
+        "schema_version": 99,
+        "app_version": "9.9.9",
+        "archives": [
+            {"filename": f"jarvis_{ts}.sql.gz"},
+            {"filename": f"litellm_{ts}.sql.gz"},
+            {"filename": "secrets_20260617_120000.tar.gz.enc"},
+        ],
+    }
+    (backups_dir / f"manifest_{ts}.json").write_text(json.dumps(manifest))
+    return ts
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def restore_corrupt_manifest(backups_dir, restore_ready):
+    """Complete restore point whose manifest_<ts>.json is present but unreadable.
+
+    Invalid JSON makes ``_read_manifest`` degrade to None while the file still
+    exists on disk — the present-but-broken case the new 409 must reject.
+    """
+    ts = restore_ready
+    (backups_dir / f"manifest_{ts}.json").write_text("{ not json")
+    return ts
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def restore_no_schema_version(backups_dir, restore_ready):
+    """Complete restore point with a valid manifest that lacks ``schema_version``.
+
+    Present, parseable, archive-consistent — only the optional schema_version is
+    absent (an older backup). It must still restore (no false reject).
+    """
+    ts = restore_ready
+    manifest = {
+        "app_version": "1.2.3",
+        "archives": [
+            {"filename": f"jarvis_{ts}.sql.gz", "sha256": "a" * 64},
+            {"filename": f"litellm_{ts}.sql.gz", "sha256": "b" * 64},
+            {"filename": "secrets_20260617_120000.tar.gz.enc", "sha256": "c" * 64},
+        ],
+    }
+    (backups_dir / f"manifest_{ts}.json").write_text(json.dumps(manifest))
+    return ts
+
+
 async def test_list_returns_archive_metadata(admin_client):
     resp = await admin_client.get("/api/admin/backups")
     assert resp.status_code == 200, resp.text
@@ -196,3 +277,190 @@ async def test_trigger_writes_sentinel(admin_client, backups_dir):
 async def test_trigger_non_admin_gets_403(plain_client):
     resp = await plain_client.post("/api/admin/backups")
     assert resp.status_code == 403, resp.text
+
+
+async def test_restore_request_writes_sentinel(admin_client, restore_paths, restore_ready):
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": restore_ready, "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json() == {"status": "scheduled"}
+    sentinel = restore_paths / ".restore_request.json"
+    assert sentinel.exists()
+    written = json.loads(sentinel.read_text())
+    assert written["timestamp"] == "20260617_120000"
+    assert written["confirm"] == "RESTORE"
+    assert "requested_at" in written
+
+
+async def test_restore_wrong_confirm_400(admin_client, restore_paths, restore_ready):
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": restore_ready, "confirm": "yes please"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert not (restore_paths / ".restore_request.json").exists()
+
+
+async def test_restore_unknown_timestamp_404(admin_client, restore_paths, restore_ready):
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": "20990101_000000", "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 404, resp.text
+    assert not (restore_paths / ".restore_request.json").exists()
+
+
+async def test_restore_incomplete_timestamp_404(admin_client, restore_paths):
+    # backups_dir has jarvis + secrets but no litellm -> the point is incomplete.
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": "20260617_120000", "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 404, resp.text
+
+
+async def test_restore_newer_backup_409(admin_client, restore_paths, restore_newer):
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": restore_newer, "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert not (restore_paths / ".restore_request.json").exists()
+
+
+async def test_restore_corrupt_manifest_409(admin_client, restore_paths, restore_corrupt_manifest):
+    # Present-but-unreadable manifest must be rejected before any sentinel write.
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": restore_corrupt_manifest, "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert not (restore_paths / ".restore_request.json").exists()
+
+
+async def test_restore_valid_manifest_without_schema_version_proceeds(
+    admin_client, restore_paths, restore_no_schema_version
+):
+    # No false reject: a parseable manifest merely lacking schema_version still
+    # restores (the 409 keys on unreadable, not on a missing schema_version field).
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": restore_no_schema_version, "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert (restore_paths / ".restore_request.json").exists()
+
+
+async def test_restore_non_admin_gets_403(plain_client, restore_paths, restore_ready):
+    resp = await plain_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": restore_ready, "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_restore_status_idle_when_absent(admin_client, restore_paths):
+    resp = await admin_client.get("/api/admin/backups/restore/status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "idle"
+    assert body["current_step"] is None
+    assert body["steps"] == []
+
+
+async def test_restore_status_pending_when_request_queued(admin_client, restore_paths):
+    # A queued restore (the request sentinel exists) with no status file yet must
+    # report "pending" so the UI keeps tracking through the few-second window
+    # before the sidecar writes the first status (not "idle" -> stop).
+    (restore_paths / ".restore_request.json").write_text(
+        '{"timestamp": "20260617_120000", "confirm": "RESTORE"}'
+    )
+    resp = await admin_client.get("/api/admin/backups/restore/status")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "pending"
+
+
+async def test_restore_status_pending_overrides_stale_status_file(admin_client, restore_paths):
+    # A leftover status file from a prior run must not mask a freshly-queued
+    # restore: the sentinel's presence wins -> "pending".
+    (restore_paths / ".restore_status.json").write_text('{"state": "done", "steps": []}')
+    (restore_paths / ".restore_request.json").write_text(
+        '{"timestamp": "20260617_120000", "confirm": "RESTORE"}'
+    )
+    resp = await admin_client.get("/api/admin/backups/restore/status")
+    assert resp.json()["state"] == "pending"
+
+
+async def test_restore_status_reflects_status_file(admin_client, restore_paths):
+    (restore_paths / ".restore_status.json").write_text(
+        json.dumps(
+            {
+                "state": "running",
+                "current_step": "Restoring database",
+                "steps": [
+                    {"name": "Safety backup", "status": "done"},
+                    {"name": "Restoring database", "status": "running"},
+                    {"name": "Restoring API-key store", "status": "pending"},
+                    {"name": "Restoring search index", "status": "pending"},
+                    {"name": "Finishing up", "status": "pending"},
+                ],
+                "safety_backup_ts": "20260617_115900",
+                "started_at": "2026-06-17T12:00:00+00:00",
+                "finished_at": None,
+                "error": None,
+                "drop_started": True,
+            }
+        )
+    )
+    resp = await admin_client.get("/api/admin/backups/restore/status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "running"
+    assert body["current_step"] == "Restoring database"
+    assert len(body["steps"]) == 5
+    assert body["steps"][1] == {"name": "Restoring database", "status": "running"}
+    assert body["safety_backup_ts"] == "20260617_115900"
+    # The sidecar's extra drop_started key is dropped by the response model.
+    assert "drop_started" not in body
+
+
+async def test_restore_status_malformed_degrades_to_idle(admin_client, restore_paths):
+    (restore_paths / ".restore_status.json").write_text("{ not valid json")
+    resp = await admin_client.get("/api/admin/backups/restore/status")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "idle"
+
+
+async def test_restore_status_non_admin_gets_403(plain_client, restore_paths):
+    resp = await plain_client.get("/api/admin/backups/restore/status")
+    assert resp.status_code == 403, resp.text
+
+
+async def test_restore_duplicate_request_409(
+    admin_client, restore_paths, restore_ready, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from paper_ingestion.routers import backups as backups_router
+
+    mock_audit = AsyncMock()
+    monkeypatch.setattr(backups_router, "log_audit", mock_audit)
+
+    # Plant a pre-existing sentinel to simulate a pending restore.
+    sentinel = restore_paths / ".restore_request.json"
+    sentinel.write_text(
+        '{"timestamp": "20260617_120000", "confirm": "RESTORE", "requested_at": "2026-01-01T00:00:00+00:00"}'
+    )
+    resp = await admin_client.post(
+        "/api/admin/backups/restore",
+        json={"timestamp": restore_ready, "confirm": "RESTORE"},
+    )
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"].lower()
+    assert "pending" in detail or "running" in detail
+    # Duplicate-rejected path must never write an audit row.
+    mock_audit.assert_not_called()
+    # The sentinel must not have been overwritten.
+    written = sentinel.read_text()
+    assert "20260617_120000" in written

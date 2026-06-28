@@ -1,5 +1,5 @@
 /**
- * Unit tests for AccountSection (§I Account).
+ * Unit tests for AccountSection.
  *
  * Coverage:
  *  - Profile render (display_name, email, role, dates)

@@ -1,4 +1,4 @@
-"""PI-SEC-02 — LIKE metacharacter escaping for the /api/logs/events search.
+"""LIKE metacharacter escaping for the /api/logs/events search.
 
 A user-supplied ``q`` flows into a ``message ILIKE`` predicate that the endpoint
 builds as ``f"%{escape_like(q)}%"`` paired with ``ESCAPE '\\'`` (see

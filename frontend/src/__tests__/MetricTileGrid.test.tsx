@@ -14,10 +14,10 @@ const mockMetrics: DashboardMetrics = {
   nudge_count: 0,
 };
 
-function renderGrid(metrics: DashboardMetrics | undefined, isLoading = false) {
+function renderGrid(metrics: DashboardMetrics | undefined, isLoading = false, isError = false) {
   return render(
     <MemoryRouter>
-      <MetricTileGrid metrics={metrics} isLoading={isLoading} />
+      <MetricTileGrid metrics={metrics} isLoading={isLoading} isError={isError} />
     </MemoryRouter>,
   );
 }
@@ -65,5 +65,11 @@ describe('MetricTileGrid', () => {
     tileTitles.forEach((title) => {
       expect(screen.getByText(title)).toBeInTheDocument();
     });
+  });
+
+  it('shows a degraded banner instead of tiles when isError is true', () => {
+    renderGrid(undefined, false, true);
+    expect(screen.getByText(/Dashboard unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText('Papers')).not.toBeInTheDocument();
   });
 });

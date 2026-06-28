@@ -168,7 +168,7 @@ async def test_api_failure_sends_diagnostic(caplog):
 
 @pytest.mark.asyncio
 async def test_card_message_has_three_inline_buttons(monkeypatch):
-    """Per-card buttons use the spec §5.3 callback name convention.
+    """Per-card buttons use the expected callback name convention.
 
     The legacy ``pulse_(up|down|save)_<id>`` callbacks were retired in favour
     of ``paper:feedback_pos:<id>:pulse_thumbs`` / ``paper:feedback_neg:...`` /

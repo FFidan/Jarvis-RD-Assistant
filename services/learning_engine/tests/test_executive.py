@@ -27,9 +27,9 @@ survivor citations:
   test_quick_add_task_invalid_priority_returns_422 → same
 
 These remaining tests cover:
-  - The timezone-window helper for /api/executive/my-day-bundle (pure unit §1.1)
+  - The timezone-window helper for /api/executive/my-day-bundle (pure unit)
   - The focus-streak SQL gaps-and-islands implementation vs. its old Python
-    walk (live-PG differential, §1.2-adjacent)
+    walk (live-PG differential)
 """
 
 from __future__ import annotations

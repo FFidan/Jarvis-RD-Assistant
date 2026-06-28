@@ -8,6 +8,7 @@ page-bounded chunking + embedding storage.
 import asyncio
 import ipaddress
 import logging
+import os
 import socket
 import threading
 from collections.abc import Awaitable, Callable
@@ -33,6 +34,7 @@ __all__ = [
     "SNAPSHOT_DPI",
     "SNAPSHOT_STORAGE_PATH",
     "check_pdf_path_safe",
+    "quote_to_rects",
     "_validate_pdf_url",
 ]
 
@@ -250,6 +252,7 @@ class PDFProcessor:
         pdf_dir = Path(PDF_STORAGE_PATH)
         pdf_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = pdf_dir / f"{paper_id}.pdf"
+        tmp_path = pdf_path.with_suffix(".tmp")
 
         bytes_written = 0
         # Resolve redirects manually to re-validate each target against SSRF
@@ -276,35 +279,45 @@ class PDFProcessor:
         header_bytes = b""
 
         def _write_pdf_chunk(path: Path, data: bytes) -> None:
-            """Write PDF chunk to disk (blocking I/O wrapped for async context)."""
+            """Append a PDF chunk to the temp file (blocking I/O for async context)."""
             with open(path, "ab") as f:
                 f.write(data)
 
-        async with self.http_client.stream(
-            "GET", current_url, timeout=120.0, follow_redirects=False
-        ) as stream_resp:
-            stream_resp.raise_for_status()
-            # Pre-create empty file
-            await asyncio.to_thread(pdf_path.touch)
-            async for data in stream_resp.aiter_bytes(chunk_size=65536):
-                total_size += len(data)
-                if total_size > MAX_PDF_SIZE:
-                    pdf_path.unlink(missing_ok=True)
-                    raise ValueError(
-                        f"PDF exceeds maximum size of {MAX_PDF_SIZE // (1024 * 1024)} MB"
-                    )
-                if not header_bytes:
-                    header_bytes = data[:5]
-                    if not header_bytes.startswith(b"%PDF-"):
-                        pdf_path.unlink(missing_ok=True)
-                        raise ValueError("Downloaded file is not a valid PDF (missing %PDF header)")
-                await asyncio.to_thread(_write_pdf_chunk, pdf_path, data)
+        # Stream to a temp sibling and atomically promote it on success, so a
+        # mid-stream failure never leaves a partial that a retry would append to
+        # (which would produce a corrupt, concatenated PDF).
+        try:
+            # Drop any stale temp so the first chunk starts a fresh file at byte 0.
+            await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
+            async with self.http_client.stream(
+                "GET", current_url, timeout=120.0, follow_redirects=False
+            ) as stream_resp:
+                stream_resp.raise_for_status()
+                async for data in stream_resp.aiter_bytes(chunk_size=65536):
+                    total_size += len(data)
+                    if total_size > MAX_PDF_SIZE:
+                        raise ValueError(
+                            f"PDF exceeds maximum size of {MAX_PDF_SIZE // (1024 * 1024)} MB"
+                        )
+                    if not header_bytes:
+                        header_bytes = data[:5]
+                        if not header_bytes.startswith(b"%PDF-"):
+                            raise ValueError(
+                                "Downloaded file is not a valid PDF (missing %PDF header)"
+                            )
+                    await asyncio.to_thread(_write_pdf_chunk, tmp_path, data)
 
-        bytes_written = total_size
+            bytes_written = total_size
 
-        if bytes_written == 0:
-            pdf_path.unlink(missing_ok=True)
-            raise ValueError("PDF download resulted in 0 bytes")
+            if bytes_written == 0:
+                raise ValueError("PDF download resulted in 0 bytes")
+
+            # Atomically promote the validated temp file to its final name.
+            await asyncio.to_thread(os.replace, tmp_path, pdf_path)
+        finally:
+            # On any failure path, ensure no stale temp survives. After a
+            # successful os.replace the temp no longer exists, so this is a no-op.
+            await asyncio.to_thread(tmp_path.unlink, missing_ok=True)
 
         logger.info(
             "Downloaded PDF for paper %d (%d bytes) to %s", paper_id, bytes_written, pdf_path
@@ -403,3 +416,122 @@ class PDFProcessor:
         point_ids = await self.embedder.embed_and_store(paper_id, chunks, user_id=user_id)
 
         return full_text, chunks, point_ids
+
+
+# ---------------------------------------------------------------------------
+# Quote → rect bridge (locate a verified quote for the in-PDF reader highlight)
+# ---------------------------------------------------------------------------
+
+# A normalized highlight rectangle: every coord in [0, 1], TOP-origin (y grows
+# downward, matching canvas / pdf.js), with x0 < x1 and y0 < y1. Named distinctly
+# from the validated ``paper_ingestion.models.Rect`` Pydantic model (same concept,
+# different layer): this is the bridge's internal dict shape, not a public type.
+NormRect = dict[str, float]
+
+# A char's tight bounding box from pypdfium2: (left, bottom, right, top) in PDF
+# points, BOTTOM-origin.
+_CharBox = tuple[float, float, float, float]
+
+# Two char boxes belong to the same text line when their vertical bands overlap
+# by at least this fraction of the shorter box's height — robust to descenders
+# and baseline jitter while still separating distinct lines.
+_LINE_OVERLAP_FRACTION = 0.5
+# A char whose left edge jumps back more than this (PDF points) past the
+# previous char marks a carriage return → a new line sharing the same band.
+_CARRIAGE_RETURN_TOL = 1.0
+
+
+def _group_into_lines(boxes: list[_CharBox]) -> list[list[_CharBox]]:
+    """Split a document-order run of char boxes into per-line groups."""
+    lines: list[list[_CharBox]] = []
+    current: list[_CharBox] = []
+    band_bottom = band_top = prev_left = 0.0
+    for box in boxes:
+        left, bottom, top = box[0], box[1], box[3]
+        if current:
+            overlap = min(band_top, top) - max(band_bottom, bottom)
+            shorter = min(band_top - band_bottom, top - bottom)
+            same_band = shorter > 0 and overlap >= _LINE_OVERLAP_FRACTION * shorter
+            carriage_return = left < prev_left - _CARRIAGE_RETURN_TOL
+            if not same_band or carriage_return:
+                lines.append(current)
+                current = []
+        if not current:
+            band_bottom, band_top = bottom, top
+        else:
+            band_bottom, band_top = min(band_bottom, bottom), max(band_top, top)
+        current.append(box)
+        prev_left = left
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _union_to_rect(line: list[_CharBox], width: float, height: float) -> NormRect:
+    """Union one line's char boxes into a single normalized, top-origin Rect."""
+    left = min(box[0] for box in line)
+    bottom = min(box[1] for box in line)
+    right = max(box[2] for box in line)
+    top = max(box[3] for box in line)
+    # pypdfium2 is bottom-origin; canvas / pdf.js is top-origin → flip via (H - y)/H.
+    return {
+        "x0": left / width,
+        "y0": (height - top) / height,
+        "x1": right / width,
+        "y1": (height - bottom) / height,
+    }
+
+
+def _quote_to_rects_sync(pdf_path: str | Path, page: int, quote: str) -> list[NormRect]:
+    """Synchronous, CPU-bound core of :func:`quote_to_rects`."""
+    if not quote.strip():
+        return []
+
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    try:
+        page_index = page - 1  # contract: `page` is 1-indexed; pypdfium2 is 0-indexed
+        if page_index < 0 or page_index >= len(pdf):
+            return []
+        pdf_page = pdf[page_index]
+        try:
+            width, height = pdf_page.get_size()
+            textpage = pdf_page.get_textpage()
+            try:
+                searcher = textpage.search(quote, match_case=False)
+                try:
+                    # First occurrence only — one highlight per call is sufficient.
+                    match = searcher.get_next()
+                finally:
+                    searcher.close()
+                if match is None:
+                    return []
+                start, count = match
+                # Tight char boxes for the match; drop zero-area boxes (control
+                # chars / collapsed line breaks contribute no visible glyph).
+                boxes: list[_CharBox] = []
+                for i in range(start, start + count):
+                    left, bottom, right, top = textpage.get_charbox(i)
+                    if right - left > 0 and top - bottom > 0:
+                        boxes.append((left, bottom, right, top))
+                if not boxes:
+                    return []
+                return [_union_to_rect(line, width, height) for line in _group_into_lines(boxes)]
+            finally:
+                textpage.close()
+        finally:
+            pdf_page.close()
+    finally:
+        pdf.close()
+
+
+async def quote_to_rects(pdf_path: str | Path, page: int, quote: str) -> list[NormRect]:
+    """Locate a verbatim ``quote`` on a 1-indexed ``page`` and return its
+    on-screen highlight rectangles.
+
+    Returns one :class:`Rect` per text line of the *first* match, each
+    normalized to ``[0, 1]`` with the PDF→canvas y-flip applied. An absent
+    quote — or one pypdfium2's literal substring search cannot match exactly —
+    yields ``[]``; no fuzzy repair is attempted, so a highlight is only ever
+    drawn at a real location. Runs the sync pypdfium2 work off the event loop.
+    """
+    return await asyncio.to_thread(_quote_to_rects_sync, pdf_path, page, quote)

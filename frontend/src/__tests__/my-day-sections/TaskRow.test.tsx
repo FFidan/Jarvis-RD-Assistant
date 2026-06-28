@@ -140,4 +140,14 @@ describe('TaskRow', () => {
       'Failed to delete task: Server error',
     );
   });
+
+  it('the "Mark task done" control carries data-touch-target (44px tap uplift)', () => {
+    renderRow();
+    expect(screen.getByRole('button', { name: /Mark task done/i })).toHaveAttribute('data-touch-target');
+  });
+
+  it('the delete button becomes visible on keyboard focus', () => {
+    renderRow();
+    expect(screen.getByRole('button', { name: /Delete task/i })).toHaveClass('focus-visible:opacity-100');
+  });
 });

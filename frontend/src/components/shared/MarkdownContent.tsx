@@ -113,7 +113,7 @@ export function MarkdownContent({ children, className, unverifiedSentences }: Ma
     <div className={className ?? 'prose prose-sm dark:prose-invert max-w-none break-words'}>
       <ReactMarkdown
         remarkPlugins={[remarkMath]}
-        rehypePlugins={[rehypeKatex, [rehypeSanitize, sanitizeSchema]]}
+        rehypePlugins={[[rehypeSanitize, sanitizeSchema], rehypeKatex]}
         urlTransform={urlTransform}
         components={{
           a: ({ node: _node, href, children, ...props }) => {

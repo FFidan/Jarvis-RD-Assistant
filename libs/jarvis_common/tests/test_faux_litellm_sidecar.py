@@ -1,6 +1,6 @@
 """Boundary-adapter tests for FauxLiteLLMServer sidecar.
 
-Shape: boundary-adapter (§1.3 of docs/contracts/07-testing.md).
+Shape: boundary-adapter.
 Each test verifies OUR adapter (the faux sidecar) behaves correctly for
 OpenAI-compatible clients, exercising real HTTP over loopback.
 """

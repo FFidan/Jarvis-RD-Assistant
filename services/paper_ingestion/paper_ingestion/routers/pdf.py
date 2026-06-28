@@ -16,6 +16,7 @@ from fastapi import (
     UploadFile,
 )
 from jarvis_common import JobCreateResponse, assert_paper_ownership, current_user_id_strict
+from jarvis_common.auth import require_admin
 from jarvis_common.library import add_to_library
 from jarvis_common.settings import get_core_settings
 
@@ -353,7 +354,12 @@ async def upload_pdf(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/scan-local-pdfs", response_model=JobCreateResponse, status_code=202)
+@router.post(
+    "/scan-local-pdfs",
+    response_model=JobCreateResponse,
+    status_code=202,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("2/minute")
 async def scan_local_pdfs(
     request: Request,

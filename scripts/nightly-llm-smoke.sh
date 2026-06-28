@@ -13,7 +13,7 @@
 #      pipelines against the real deployed model and asserts a parsed result.
 #
 # Assumes the Docker stack (ollama + litellm) is already running on the
-# self-hosted runner (it is on REDACTED-HOST).
+# self-hosted runner.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

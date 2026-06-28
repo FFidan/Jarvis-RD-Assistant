@@ -38,6 +38,10 @@ def _paper(
         url=url,
         metadata=metadata if metadata is not None else {"doi": "10.1/x", "journal": "NeurIPS"},
         zotero_citation_key=zotero_citation_key,
+        # Per-user citation key the get_paper_citation JOIN aliases from
+        # paper_user_zotero_links; mirror zotero_citation_key so the endpoint
+        # tests' stem expectations are unchanged.
+        link_citation_key=zotero_citation_key,
     )
 
 

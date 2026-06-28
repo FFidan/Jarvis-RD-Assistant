@@ -149,7 +149,7 @@ def _make_pi_contract_app_with_litellm_sidecar():
 
     Future extension: a parallel ``_make_le_contract_app_with_litellm_sidecar``
     can be added here with the same pattern once the LE app fixture is stable.
-    See §6.2 of docs/contracts/07-testing.md for the full rollout plan.
+    See docs/contracts/07-testing.md for the full rollout plan.
     """
     import pytest_asyncio
 

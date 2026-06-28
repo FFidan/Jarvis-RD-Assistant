@@ -59,6 +59,40 @@ Limitations and caveats noted by the paper or inferred by the analysis pipeline.
 
 A list of key findings and evidence items extracted from the paper. A snapshot shows the most important findings inline; a full structured list provides every finding with source-chunk references.
 
+### PDF Reader
+
+An in-page PDF reader that renders the source PDF and lets you annotate it with spatial highlights. The reader becomes available once the PDF has been downloaded; until then the section shows a prompt to download it.
+
+<!-- screenshot: /paper/:paperId — PDF Reader section showing the rendered PDF with a highlight popup open -->
+
+**Reading the PDF**
+
+The PDF renders directly in the browser. Scroll through pages as you would in any PDF viewer.
+
+**Adding a highlight**
+
+Select any text in the PDF with your pointer. A popup appears above the selection with:
+
+- An optional note field.
+- A color picker with four preset colors: Yellow, Green, Blue, and Pink. Yellow is the default.
+- **Save** and **Cancel** buttons.
+
+Click **Save** to store the highlight. It is immediately overlaid on the PDF.
+
+**Editing a highlight**
+
+Click an existing highlight to open the inline editor below the PDF controls. The editor shows the selected quote (read-only), the note field, and the color picker. Change the note or color and click **Save** to update.
+
+**Deleting a highlight**
+
+Open the inline editor for the highlight and click **Delete**. A confirmation dialog asks you to confirm before the highlight is permanently removed.
+
+**Exporting highlights to Zotero**
+
+The **Sync highlights to Zotero** button pushes this paper's not-yet-synced highlights to Zotero as annotations (already-synced highlights are skipped). The button is only active when the paper has already been sent to Zotero (via **Send to Zotero** in the right pane). If the paper is not yet linked, hover the button to see the prompt to push it first.
+
+> **Offline:** The PDF reader loads the PDF over an authenticated request and requires an active connection. Highlight edits also require a connection.
+
 ### Cross-references
 
 Papers that this paper references or is referenced by, drawn from citation data. Each cross-reference links to that paper's detail page.
@@ -141,7 +175,7 @@ A form titled **Quick Rating** with three fields persisted per user:
 
 ### Zotero sync
 
-Shows the sync status with Zotero (not synced / synced / error). Provides a **Push to Zotero** shortcut; also accessible via the individual pipeline action button above.
+Shows the sync status with Zotero (not synced / synced / error). Provides a **Send to Zotero** shortcut; also accessible via the individual pipeline action button above.
 
 ### Contradictions
 

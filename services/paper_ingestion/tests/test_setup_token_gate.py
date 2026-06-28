@@ -1,4 +1,4 @@
-"""Bootstrap setup-token gate (B3 / SEC-1).
+"""Bootstrap setup-token gate.
 
 The first-run setup wizard's WRITE endpoints must require a valid
 ``X-Setup-Token`` while no admin exists when a token is configured, while the
@@ -7,6 +7,7 @@ read-only probes (and the whole surface when no token is configured) stay open.
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -94,8 +95,28 @@ async def test_bootstrap_write_open_when_token_unset(_token_unset) -> None:
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_write_without_token_logs_warning(_token_unset, caplog) -> None:
+    """The open-window write is allowed but must warn that it is unprotected."""
+    request = _bootstrap_request(method="POST", token=None)
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.setup"):
+        assert await setup_router.require_unconfigured_or_admin(request) is None
+    assert any("unprotected" in r.message for r in caplog.records), (
+        "expected an unprotected-first-admin WARNING when no setup token is configured"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_write_with_token_does_not_warn(_token_set, caplog) -> None:
+    """A configured token closes the window — the no-op warning must not fire."""
+    request = _bootstrap_request(method="POST", token=_TOKEN)
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.routers.setup"):
+        assert await setup_router.require_unconfigured_or_admin(request) is None
+    assert not any("unprotected" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_create_first_admin_rejects_missing_token_in_bootstrap(_token_set) -> None:
-    """The first-admin endpoint is the B3 surface: token-gated in bootstrap mode."""
+    """The first-admin endpoint is token-gated in bootstrap mode."""
     conn = AsyncMock()
     conn.execute = AsyncMock(return_value=None)
     # outer guard count, inner advisory-locked count — both 0 (bootstrap).

@@ -4,10 +4,12 @@
  * Accessible at /admin/backups (admin role; AdminOnlyRoute guards the route).
  * Shows sidecar status, restore points grouped from GET /api/admin/backups/restore-points,
  * allows an on-demand backup (confirm), per-file download (expandable per card),
- * and a read-only restore runbook (no in-app restore execution).
+ * a guided one-click restore (typed-RESTORE confirm + polled progress that degrades
+ * gracefully while the app is briefly unreachable mid-restore), and the manual host
+ * runbook as the advanced fallback.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   useQuery,
   useMutation,
@@ -20,10 +22,13 @@ import {
   getRestorePoints,
   triggerBackup,
   downloadBackup,
+  requestRestore,
+  getRestoreStatus,
   type RestorePoint,
 } from '@/lib/api/backups';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 import { RestoreRunbook } from '@/components/admin/RestoreRunbook';
+import { TypedConfirmDialog } from '@/components/admin/TypedConfirmDialog';
 
 const STORE_LABELS: Record<string, string> = {
   jarvis: 'Main database',
@@ -54,12 +59,19 @@ function RestorePointCard({
   point,
   retentionDays,
   onDownload,
+  onRestore,
+  restoringTimestamp,
 }: {
   point: RestorePoint;
   retentionDays: number | null;
   onDownload: (name: string) => void;
+  onRestore: (timestamp: string) => void;
+  restoringTimestamp: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const isNewer = point.compat === 'newer';
+  const isThisRestoring = restoringTimestamp === point.timestamp;
+  const restoreDisabled = isNewer || !point.complete || restoringTimestamp !== null;
   const storeBadges = [
     ...point.stores.map(storeLabel),
     ...point.qdrant_collections.map((c) => `Qdrant: ${c}`),
@@ -152,6 +164,22 @@ function RestorePointCard({
           </table>
         )}
       </div>
+
+      <div className="flex flex-col gap-1.5">
+        <button
+          type="button"
+          className="self-start rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
+          disabled={restoreDisabled}
+          onClick={() => onRestore(point.timestamp)}
+        >
+          {isThisRestoring ? 'Restoring…' : 'Restore to this point'}
+        </button>
+        {isNewer && (
+          <span className="text-xs text-muted-foreground">
+            This backup is newer than the current app version — update first.
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -159,6 +187,8 @@ function RestorePointCard({
 export function AdminBackupsPage() {
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
+  const [confirmTs, setConfirmTs] = useState<string | null>(null);
+  const [restoringTimestamp, setRestoringTimestamp] = useState<string | null>(null);
 
   const {
     data: status,
@@ -194,6 +224,50 @@ export function AdminBackupsPage() {
     },
   });
 
+  // Poll restore progress only while a restore is being tracked. A numeric
+  // refetchInterval keeps polling even when the query errors, so the brief
+  // app-down window mid-restore degrades (below) instead of dropping out.
+  const restoreStatus = useQuery({
+    queryKey: ['admin', 'restore-status'],
+    queryFn: getRestoreStatus,
+    enabled: restoringTimestamp !== null,
+    refetchInterval: restoringTimestamp ? 3000 : false,
+    retry: false,
+  });
+
+  const restoreState = restoreStatus.data?.state;
+  useEffect(() => {
+    if (!restoringTimestamp) return;
+    // Only a terminal state stops tracking. 'pending' (queued — the sidecar
+    // polls every few seconds before it writes the first status), 'running', and
+    // a transient 'idle'/undefined all keep the poll alive. The backend reports
+    // 'pending' whenever the request sentinel exists, so a freshly-requested
+    // restore never reads as 'idle' and a leftover status file from a prior run
+    // can never end tracking early.
+    if (restoreState === 'done') {
+      toast.success('Restore complete. Your data has been restored.');
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'restore-points'] });
+      setRestoringTimestamp(null);
+    } else if (restoreState === 'failed') {
+      setRestoringTimestamp(null);
+    }
+  }, [restoreState, restoringTimestamp, queryClient]);
+
+  const restoreMutation = useMutation({
+    mutationFn: (timestamp: string) => requestRestore(timestamp, 'RESTORE'),
+    onSuccess: (_data, timestamp) => {
+      // Evict any terminal state (e.g. 'done') left by a previous restore so the
+      // new restore starts from a clean fetch rather than the stale cached state.
+      queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] });
+      setRestoringTimestamp(timestamp);
+      setConfirmTs(null);
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof Error ? e.message : 'Could not start the restore.');
+      setConfirmTs(null);
+    },
+  });
+
   const handleDownload = async (name: string) => {
     try {
       await downloadBackup(name);
@@ -203,6 +277,9 @@ export function AdminBackupsPage() {
   };
 
   const points = restore?.restore_points ?? [];
+  const confirmPoint = confirmTs ? (points.find((p) => p.timestamp === confirmTs) ?? null) : null;
+  const restoreData = restoreStatus.data;
+  const showRestorePanel = restoringTimestamp !== null || restoreData?.state === 'failed';
 
   return (
     <div className="p-6 space-y-6">
@@ -281,11 +358,103 @@ export function AdminBackupsPage() {
                 point={point}
                 retentionDays={restore?.retention_days ?? null}
                 onDownload={(name) => void handleDownload(name)}
+                onRestore={(ts) => setConfirmTs(ts)}
+                restoringTimestamp={restoringTimestamp}
               />
             ))
           )}
         </div>
       )}
+
+      {showRestorePanel && (
+        <div
+          data-testid="restore-progress"
+          role="status"
+          aria-live="polite"
+          className="rounded-md border p-4 space-y-3"
+        >
+          {restoringTimestamp !== null && restoreStatus.isError ? (
+            <div data-testid="restore-degraded" className="space-y-1">
+              <div className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                Restoring…
+              </div>
+              <p className="text-sm text-muted-foreground">
+                The app is briefly unavailable while the database is restored — this can take a few
+                minutes. This page keeps checking automatically.
+              </p>
+            </div>
+          ) : restoreData?.state === 'failed' ? (
+            <div data-testid="restore-failed" className="space-y-2">
+              <div className="text-sm font-medium text-destructive">Restore failed</div>
+              <p className="text-sm text-muted-foreground">
+                {restoreData.error ?? 'The restore did not finish.'}
+              </p>
+              {restoreData.safety_backup_ts && (
+                <p className="text-xs text-muted-foreground">
+                  A safety backup was taken before this restore ({restoreData.safety_backup_ts}). You
+                  can restore from it if needed.
+                </p>
+              )}
+              <button
+                type="button"
+                className="self-start rounded-md border px-3 py-1.5 text-sm"
+                onClick={() => queryClient.removeQueries({ queryKey: ['admin', 'restore-status'] })}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : restoreData ? (
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Restoring…</div>
+              {restoreData.current_step && (
+                <p className="text-sm text-muted-foreground">{restoreData.current_step}</p>
+              )}
+              <ol className="space-y-1">
+                {restoreData.steps.map((step) => (
+                  <li key={step.name} className="flex items-center gap-2 text-sm">
+                    <span aria-hidden className="w-4 text-center">
+                      {step.status === 'done'
+                        ? '✓'
+                        : step.status === 'failed'
+                          ? '✗'
+                          : step.status === 'running'
+                            ? '…'
+                            : '•'}
+                    </span>
+                    <span className={step.status === 'done' ? 'text-muted-foreground' : undefined}>
+                      {step.name}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">Starting the restore…</div>
+          )}
+        </div>
+      )}
+
+      <TypedConfirmDialog
+        requiredWord="RESTORE"
+        open={confirmTs !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmTs(null);
+        }}
+        title="Restore from this backup?"
+        confirmLabel="Restore"
+        description={
+          <span>
+            This replaces the current databases, search index, and provider keys with the contents
+            of this backup
+            {confirmPoint ? ` from ${new Date(confirmPoint.created_at).toLocaleString()}` : ''}. A
+            safety backup is taken first, and the app is briefly unavailable while it restores. Type{' '}
+            <span className="font-mono font-semibold">RESTORE</span> to confirm.
+          </span>
+        }
+        onConfirm={() => {
+          if (confirmTs) restoreMutation.mutate(confirmTs);
+        }}
+      />
 
       <RestoreRunbook />
     </div>

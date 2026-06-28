@@ -7,10 +7,11 @@
  *
  * Chunks are lazy/collapsed — hidden behind a toggle by default.
  */
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { type Paper, type Summary, type Chunk, type UserState } from '@/types';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import { SOURCE_LABELS } from '@/components/feed/source-labels';
 import { Button } from '@/components/ui/button';
 import { EvidenceTab } from './EvidenceTab';
@@ -22,6 +23,12 @@ import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { formatDate, formatAuthors, cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, ExternalLink, AlertTriangle, ShieldCheck, Wand2 } from 'lucide-react';
 import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
+
+// The in-PDF reader pulls in pdf.js (~heavy); load it on demand so it only ships
+// to (and renders on) papers that actually have a downloaded PDF.
+const PdfReaderPane = lazy(() =>
+  import('./PdfReaderPane').then((m) => ({ default: m.PdfReaderPane })),
+);
 
 // Reuse the canonical discovery-source labels; add the paper-only source types.
 const PAPER_SOURCE_LABELS: Record<string, string> = {
@@ -326,6 +333,21 @@ export function PaperResearchLog({
         title={`Evidence / Key Findings${evidenceCount > 0 ? ` (${evidenceCount})` : ''}`}
       >
         <EvidenceTab summary={summary} paperId={paperId} />
+      </ResearchSection>
+
+      {/* ── § PDF Reader ─────────────────────────────────────────────── */}
+      {/* In-PDF reader with spatial highlight annotation. Renders only when the
+          PDF is present; PdfReaderPane itself degrades honestly on load errors. */}
+      <ResearchSection id="section-pdf" title="PDF Reader">
+        {paper.pdf_downloaded ? (
+          <Suspense fallback={<Skeleton className="h-[70vh] w-full" />}>
+            <PdfReaderPane paperId={paperId} />
+          </Suspense>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Download the PDF to read and annotate it inline.
+          </p>
+        )}
       </ResearchSection>
 
       {/* ── § Cross-references ───────────────────────────────────────── */}

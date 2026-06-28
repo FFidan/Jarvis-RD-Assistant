@@ -2,7 +2,7 @@
 
 Thin shim over :func:`jarvis_common.jobs_router.build_jobs_router` — see that
 module for endpoint contracts and shared invariants (LE-002 ownership
-coercion, SYM-002 mutable-default fix, ``noop.test`` toggle).
+coercion, mutable-default fix, ``noop.test`` toggle).
 
 Internal-only kinds (``paper.download``, ``papers.scan_local``,
 ``extraction.single``, ``citations.batch_fetch``, ``digest.weekly``,
@@ -11,7 +11,7 @@ they are only triggered by the service itself.
 
 Per-kind payloads are validated through a Pydantic discriminated union, so
 unknown kinds and missing / wrong-typed required fields are rejected with
-HTTP 422 before the handler runs (PI-EDGE-002).
+HTTP 422 before the handler runs.
 """
 
 from __future__ import annotations

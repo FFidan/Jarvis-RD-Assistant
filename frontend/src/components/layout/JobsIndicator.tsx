@@ -8,33 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { useJobStore, type Job } from '@/stores/job-store';
-
-const KIND_LABELS: Record<string, string> = {
-  'pulse.generate': 'Generating Pulse',
-  'pulse.train_classifier': 'Training Pulse',
-  'paper.process': 'Processing PDF',
-  'paper.analyze': 'Analyzing Paper',
-  'paper.download': 'Downloading PDF',
-  'paper.summarize': 'Summarizing',
-  'papers.batch_summarize': 'Batch Summarize',
-  'papers.batch_process': 'Batch Process',
-  'papers.scan_local': 'Scanning Local PDFs',
-  'extraction.single': 'Extracting',
-  'extraction.batch': 'Batch Extraction',
-  'citations.batch_fetch': 'Fetching Citations',
-  'contradictions.scan': 'Scanning Contradictions',
-  'digest.weekly': 'Weekly Digest',
-  'card.generate': 'Generating Cards',
-  'card.generate_batch': 'Batch Card Generation',
-  'zotero.push': 'Pushing to Zotero',
-  'zotero.resync': 'Resyncing Zotero',
-  'zotero.sync_from_zotero': 'Syncing Zotero',
-  'zotero.sync_annotations': 'Syncing Highlights',
-};
-
-function kindLabel(kind: string): string {
-  return KIND_LABELS[kind] ?? kind;
-}
+import { kindLabel } from '@/lib/labels/jobKinds';
 
 function statusColor(status: Job['status']): string {
   switch (status) {

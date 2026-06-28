@@ -27,6 +27,7 @@ import socket
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import asyncpg
 import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, ORJSONResponse
@@ -46,10 +47,11 @@ from jarvis_common.app_factory import (
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
 )
+from jarvis_common.auth import validate_runtime_config
 from jarvis_common.cached_transport import CachingTransport
 from jarvis_common.db_helpers import _ALIAS_MODELS
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
-from jarvis_common.settings import get_core_settings
+from jarvis_common.settings import get_core_settings, get_secrets_settings
 from jarvis_common.verify import QuoteVerifier
 from jarvis_common.warmup import make_warmup_hook, warm_chat_model, warm_embedding_model
 from qdrant_client import AsyncQdrantClient
@@ -57,6 +59,7 @@ from qdrant_client import AsyncQdrantClient
 # Trigger source registration via imports
 import paper_ingestion.sources  # noqa: F401
 from paper_ingestion.config import get_paper_ingestion_settings
+from paper_ingestion.constants import FAST_MODEL_DEFAULT, SMART_MODEL_DEFAULT
 from paper_ingestion.deps import limiter
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.ingestion.embedding_config import EMBEDDING_MODEL, EMBEDDING_MODEL_NAME
@@ -114,7 +117,7 @@ def _set_openai_client(openai_client: Any) -> None:
 
 
 async def _validate_bbt_url_hook(app: FastAPI) -> None:
-    """PI-EDGE-008: validate ``BBT_BASE_URL`` to block file:// + unknown private IPs.
+    """Validate ``BBT_BASE_URL`` to block file:// + unknown private IPs.
 
     Must run before any Zotero integration touches the URL — the SSRF surface
     area is the BBT translator endpoint.
@@ -125,6 +128,30 @@ async def _validate_bbt_url_hook(app: FastAPI) -> None:
 async def _run_migrations_hook(app: FastAPI) -> None:
     """Apply DB migrations idempotently before any other init touches the schema."""
     await run_migrations(app.state.db_pool)
+
+
+async def _validate_runtime_config_hook(app: FastAPI) -> None:
+    """Post-migration boot gate keyed on live DB state — fail loudly on a
+    multi-user box without a real Pulse HMAC key, a production box with no admin
+    and no setup token, or a multi-user production box with no deliverable SMTP.
+
+    Runs immediately after migrations so ``users``/``user_config`` exist; a fresh
+    pre-migration DB is skipped defensively (mirrors validate_encrypted_config_rows).
+    """
+    secrets = get_secrets_settings()
+    hmac_key = secrets.jarvis_model_hmac_key
+    model_hmac_ok = hmac_key is not None and len(hmac_key.get_secret_value()) >= 32
+    setup_token = secrets.jarvis_setup_token
+    setup_token_set = setup_token is not None and bool(setup_token.get_secret_value().strip())
+    try:
+        await validate_runtime_config(
+            app.state.db_pool,
+            environment=get_core_settings().environment,
+            setup_token_set=setup_token_set,
+            model_hmac_ok=model_hmac_ok,
+        )
+    except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
+        logger.warning("validate_runtime_config skipped: schema not yet available (fresh DB)")
 
 
 async def _run_hw_probe_hook(app: FastAPI) -> None:
@@ -247,8 +274,8 @@ _LITELLM_RECONCILE_INTERVAL_SECONDS = 30.0
 # wins; else the setup-chosen .env value when the env var is present in this
 # process; else the static always-pulled default (OLLAMA_MODELS coherence).
 _LITELLM_ROLE_FALLBACKS: dict[str, tuple[str, str]] = {
-    "llm.smart_model": ("JARVIS_SMART_MODEL", "qwen3:8b"),
-    "llm.fast_model": ("JARVIS_FAST_MODEL", "qwen3:4b"),
+    "llm.smart_model": ("JARVIS_SMART_MODEL", SMART_MODEL_DEFAULT),
+    "llm.fast_model": ("JARVIS_FAST_MODEL", FAST_MODEL_DEFAULT),
 }
 
 # Transition-aware failure logging for the persistent reconciler. A degraded
@@ -685,6 +712,7 @@ _lifespan_config = ServiceLifespanConfig(
         make_init_langfuse_hook(_set_openai_client),
         _validate_bbt_url_hook,
         _run_migrations_hook,
+        _validate_runtime_config_hook,
         _run_hw_probe_hook,
         _migrate_plaintext_secrets_hook,
         _init_qdrant_and_pdf_pipeline,
@@ -706,6 +734,7 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # init_langfuse_hook (Langfuse SDK auto-flushes on process exit)
         None,  # _validate_bbt_url_hook
         None,  # _run_migrations_hook
+        None,  # _validate_runtime_config_hook
         None,  # _run_hw_probe_hook
         None,  # _migrate_plaintext_secrets_hook
         _shutdown_qdrant,  # _init_qdrant_and_pdf_pipeline
@@ -776,7 +805,7 @@ from paper_ingestion.routers import (  # noqa: E402
     dashboard_api,
     discovery,
     extractions,
-    feed,
+    highlights,
     infra_events,
     jobs,
     knowledge_graph,
@@ -785,6 +814,7 @@ from paper_ingestion.routers import (  # noqa: E402
     notes,
     papers,
     pdf,
+    pdfs,
     priority,
     rag,
     recommendation_feedback,
@@ -838,9 +868,10 @@ app.include_router(recommendations.router)
 app.include_router(recommendation_feedback.router)
 app.include_router(search.router)
 app.include_router(discovery.router)
-app.include_router(feed.router)
 app.include_router(papers.router)
 app.include_router(pdf.router)
+app.include_router(pdfs.router)
+app.include_router(highlights.router)
 app.include_router(rag.router)
 app.include_router(pulse_router.router)
 app.include_router(zotero_router.router)
@@ -851,14 +882,14 @@ app.include_router(logs.router)
 app.include_router(audit_admin_router.router)
 app.include_router(source_config_router.router)
 app.include_router(infra_events.router)
-# UI_v3 §I Account — self-service current-user profile (GET/PATCH /api/account
+# Account — self-service current-user profile (GET/PATCH /api/account
 # + verified email change). Distinct from admin user-mgmt (/api/admin/*).
 app.include_router(account_router.router)
 
 
 # ---------------------------------------------------------------------------
 # Health check — probes are service-owned; aggregator + routes live in
-# jarvis_common.health (DOM-J-03).
+# jarvis_common.health.
 # ---------------------------------------------------------------------------
 
 

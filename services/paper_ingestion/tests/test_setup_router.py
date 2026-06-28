@@ -176,7 +176,7 @@ async def test_setup_status_returns_503_on_db_failure() -> None:
 
 
 # ---------------------------------------------------------------------------
-# PI-AUTH-02: first-admin creation log must not contain raw email
+# First-admin creation log must not contain raw email
 # ---------------------------------------------------------------------------
 
 
@@ -418,7 +418,7 @@ async def test_configure_smtp_persists_reply_to_and_from_name(monkeypatch) -> No
 
     persisted: dict[str, object] = {}
 
-    async def fake_persist(pool, key, value, *, encrypted):
+    async def fake_persist(pool, key, value):
         persisted[key] = value
 
     monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
@@ -450,7 +450,7 @@ async def test_configure_smtp_reply_to_none_not_persisted(monkeypatch) -> None:
 
     persisted: dict[str, object] = {}
 
-    async def fake_persist(pool, key, value, *, encrypted):
+    async def fake_persist(pool, key, value):
         persisted[key] = value
 
     monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
@@ -485,7 +485,7 @@ async def test_configure_smtp_empty_reply_to_persisted_as_clear(monkeypatch) -> 
 
     persisted: dict[str, object] = {}
 
-    async def fake_persist(pool, key, value, *, encrypted):
+    async def fake_persist(pool, key, value):
         persisted[key] = value
 
     monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
@@ -518,7 +518,7 @@ async def test_configure_smtp_bootstrap_test_send_forces_recipient(monkeypatch) 
     """When no admin exists and test_send=True, recipient is forced to from_email."""
     monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
 
-    async def fake_persist(pool, key, value, *, encrypted):
+    async def fake_persist(pool, key, value):
         pass
 
     monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
@@ -564,7 +564,7 @@ async def test_configure_smtp_bootstrap_test_send_forces_recipient(monkeypatch) 
 
 
 # ---------------------------------------------------------------------------
-# S1 (F1): /api/system/readiness reports SMTP via the DB-aware probe
+# S1: /api/system/readiness reports SMTP via the DB-aware probe
 # ---------------------------------------------------------------------------
 
 
@@ -617,7 +617,7 @@ async def test_system_readiness_smtp_check_present_and_db_aware(monkeypatch) -> 
 
 
 # ---------------------------------------------------------------------------
-# S1 (F1): test_send uses the stored password when body.password is blank
+# S1: test_send uses the stored password when body.password is blank
 # ---------------------------------------------------------------------------
 
 
@@ -626,7 +626,7 @@ async def test_configure_smtp_test_send_uses_stored_password_when_blank(monkeypa
     """When body.password is blank but a password is stored, the test send uses the stored one."""
     monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
 
-    async def fake_persist(pool, key, value, *, encrypted):
+    async def fake_persist(pool, key, value):
         pass
 
     monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
@@ -677,7 +677,7 @@ async def test_configure_smtp_test_send_uses_body_password_when_provided(monkeyp
     """When body.password is provided, the test send uses it (not the stored one)."""
     monkeypatch.setenv("ALLOW_PRIVATE_SMTP_HOST", "true")
 
-    async def fake_persist(pool, key, value, *, encrypted):
+    async def fake_persist(pool, key, value):
         pass
 
     monkeypatch.setattr("paper_ingestion.routers.setup._persist_config", fake_persist)
@@ -860,3 +860,67 @@ async def test_configure_cloud_llm_keys_push_failure_no_restart_required(monkeyp
 
     assert result.restart_required is False
     assert result.applied_now == []
+
+
+# ---------------------------------------------------------------------------
+# _persist_config derives encryption from the canonical secret set
+# ---------------------------------------------------------------------------
+
+
+def test_persist_config_derives_encryption_from_canonical_set(monkeypatch):
+    """_persist_config must route secret keys to encrypted_value purely from
+    config_metadata._ENCRYPTED_KEYS — no per-call-site flag."""
+    import asyncio
+
+    from paper_ingestion.routers import setup as setup_router
+
+    captured: list[tuple[str, tuple]] = []
+
+    class _Conn:
+        async def execute(self, query, *args):
+            captured.append((query, args))
+
+    class _CM:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _CM()
+
+    monkeypatch.setattr(setup_router, "encrypt_secret", lambda s: f"ENC({s})")
+
+    # Secret key → encrypted_value column, ciphertext bytes, value NULL.
+    asyncio.run(setup_router._persist_config(_Pool(), "smtp.pass", "hunter2"))
+    q_secret, args_secret = captured[-1]
+    assert "encrypted_value" in q_secret
+    assert args_secret[1] == b"ENC(hunter2)"
+
+    # Plaintext key → value jsonb column, raw value.
+    asyncio.run(setup_router._persist_config(_Pool(), "smtp.host", "mail.example.com"))
+    q_plain, args_plain = captured[-1]
+    assert "encrypted_value" not in q_plain
+    assert args_plain[1] == "mail.example.com"
+
+
+def test_wizard_smtp_keys_stay_bound_to_canonical_config_sets():
+    """Drift-guard: the wizard's duplicated SMTP key tuples must agree with the
+    canonical allow-list / encryption set in config_metadata."""
+    from paper_ingestion.routers.setup import _SMTP_ENCRYPTED_KEYS, _SMTP_PLAINTEXT_KEYS
+    from paper_ingestion.services.config_metadata import (
+        _ALLOWED_CONFIG_KEYS,
+        _ENCRYPTED_KEYS,
+    )
+
+    assert set(_SMTP_ENCRYPTED_KEYS) <= _ENCRYPTED_KEYS, (
+        "every wizard-encrypted SMTP key must be in the canonical _ENCRYPTED_KEYS"
+    )
+    assert not (set(_SMTP_PLAINTEXT_KEYS) & _ENCRYPTED_KEYS), (
+        "a wizard plaintext SMTP key must NOT be a canonical secret key"
+    )
+    assert (set(_SMTP_PLAINTEXT_KEYS) | set(_SMTP_ENCRYPTED_KEYS)) <= _ALLOWED_CONFIG_KEYS, (
+        "every wizard SMTP key must be in the canonical _ALLOWED_CONFIG_KEYS"
+    )

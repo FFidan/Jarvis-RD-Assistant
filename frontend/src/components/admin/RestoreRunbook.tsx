@@ -64,11 +64,12 @@ export function RestoreRunbook() {
     <section aria-labelledby="restore-runbook-heading" className="space-y-4">
       <div>
         <h2 id="restore-runbook-heading" className="text-base font-semibold">
-          Restore (manual host procedure)
+          Manual restore (advanced)
         </h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Restore is destructive and runs on the host, not in the app. Download the archives above,
-          then run these commands on the deployment host. See the{' '}
+          Most restores are handled by the one-click flow above. This manual host procedure is the
+          documented fallback: it is destructive and runs on the host, not in the app. Download the
+          archives above, then run these commands on the deployment host. See the{' '}
           <a
             href="/docs/DEPLOYMENT/#restore"
             className="underline"

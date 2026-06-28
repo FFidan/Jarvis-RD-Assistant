@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-rd-assistant"
-version = "0.9.2"
+version = "1.0.0"
 description = "Self-hosted AI-powered research assistant"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
 requires-python = ">=3.12"
@@ -135,6 +135,14 @@ select = ["E", "F", "I", "N", "W", "UP"]
 "services/learning_engine/learning_engine/converters.py" = ["E501"]
 "libs/jarvis_common/jarvis_common/error_handlers.py" = ["E501"]
 
+[tool.complexity-budget]
+# Frozen no-growth ratchet for cyclomatic/branch/argument/statement complexity.
+# These ruff rules are deliberately NOT in [tool.ruff.lint] select (that would
+# fail the main lint on the pre-existing violations and bury actionable
+# findings). scripts/check-complexity-budget.py fails only when a count GROWS;
+# lower a cap whenever a refactor reduces the real number.
+max = { C901 = 75, PLR0911 = 10, PLR0912 = 39, PLR0913 = 101, PLR0915 = 29 }
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = [
@@ -166,4 +174,5 @@ testpaths = [
     "services/learning_engine/tests",
     "services/telegram_bot/tests",
     "libs/jarvis_common/tests",
+    "scripts/tests",
 ]

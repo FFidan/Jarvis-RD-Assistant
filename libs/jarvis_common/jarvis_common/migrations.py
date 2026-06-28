@@ -23,9 +23,73 @@ logger = logging.getLogger(__name__)
 
 _TXN_LINE_RE = re.compile(r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$", re.IGNORECASE)
 
-# Wave-1 squash (2026-05-19): chain 1..88 retired into db/init.sql; all false-applied
-# probe data was chain-coupled and is no longer needed. Runner kept for migrations 89+.
+# db/init.sql is the full schema baseline through migration 101; db/migrations/ is
+# empty, so the runner is a no-op on a fresh install.  New migrations start at 0102.
 _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = ()
+
+# Used only when db/SCHEMA_VERSION cannot be read (packaging glitch); keep in
+# sync with that file, which is the single source of the baseline floor.
+_REQUIRED_CODE_SCHEMA_FALLBACK = 101
+
+
+def _schema_version_path() -> Path:
+    """Resolve ``db/SCHEMA_VERSION``: the container path when present, else the
+    repo's dev path.
+
+    Mirrors the migrations-directory resolution in ``run_migrations`` so both
+    read from the same baseline regardless of where the code runs.
+    """
+    container = Path("/app/db/SCHEMA_VERSION")
+    if container.exists():
+        return container
+    return Path(__file__).resolve().parents[3] / "db" / "SCHEMA_VERSION"
+
+
+def required_code_schema() -> int:
+    """Return the minimum schema version this build requires to run.
+
+    Reads ``db/SCHEMA_VERSION`` — the single source of the baseline floor,
+    bumped only when migrations are next squashed into ``init.sql``. Falls back
+    to a module constant (with a warning) when that file is missing or
+    unparseable, so a packaging glitch degrades to the known floor rather than
+    crashing startup.
+    """
+    path = _schema_version_path()
+    try:
+        return int(path.read_text().strip())
+    except FileNotFoundError:
+        # The file is not shipped into every image; there the app falls back to
+        # the in-code baseline. Absence is expected, not a misconfiguration, so
+        # it must not emit a warning on every boot.
+        return _REQUIRED_CODE_SCHEMA_FALLBACK
+    except (OSError, ValueError):
+        logger.warning(
+            "could not read %s; using built-in schema floor %d",
+            path,
+            _REQUIRED_CODE_SCHEMA_FALLBACK,
+        )
+        return _REQUIRED_CODE_SCHEMA_FALLBACK
+
+
+async def _assert_schema_floor(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+) -> None:
+    """Fail closed when the live schema is below the baseline this build requires.
+
+    Runs after the apply loop inside the migration transaction. A fresh install
+    premarks 1..N via ``init.sql`` before this runs, so it passes; only a
+    genuinely under-baseline database fails — loudly, before serving traffic.
+    """
+    floor = required_code_schema()
+    max_applied = int(
+        await conn.fetchval("SELECT COALESCE(MAX(version), 0) FROM schema_migrations") or 0
+    )
+    if max_applied < floor:
+        raise RuntimeError(
+            f"refusing to start: database schema is at version {max_applied}, but this "
+            f"build requires at least {floor}. Apply the missing migrations or restore "
+            "from a compatible backup."
+        )
 
 
 def _strip_outer_transaction_control(sql: str) -> str:
@@ -232,3 +296,7 @@ async def run_migrations(
                         "INSERT INTO schema_migrations (version) VALUES ($1)", version
                     )
                 logger.info("Migration %s applied successfully", version)
+
+            # Still inside the advisory-locked transaction: refuse to serve on a
+            # schema below the baseline this build was packaged with.
+            await _assert_schema_floor(conn)

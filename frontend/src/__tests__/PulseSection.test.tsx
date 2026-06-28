@@ -115,8 +115,8 @@ const baseStats: PulseStats = {
   degraded_reason: null,
 };
 
-const capableSystem: SystemCapabilities = { networkx: true, scikit_learn: true };
-const incapableSystem: SystemCapabilities = { networkx: false, scikit_learn: false };
+const capableSystem: SystemCapabilities = { networkx: true, scikit_learn: true, structured_output_enforced: true };
+const incapableSystem: SystemCapabilities = { networkx: false, scikit_learn: false, structured_output_enforced: false };
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -279,7 +279,7 @@ describe('PulseSection', () => {
   // ── Capability-driven gate: nag when capability missing ───────────────────
 
   it('renders gate-tooltip trigger for classifier when scikit_learn is FALSE', async () => {
-    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: true, scikit_learn: false });
+    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: true, scikit_learn: false, structured_output_enforced: false });
     renderSection();
     await openAdvancedTuning();
     await waitFor(() => {
@@ -288,7 +288,7 @@ describe('PulseSection', () => {
   });
 
   it('renders gate-tooltip trigger for citation_pagerank when networkx is FALSE', async () => {
-    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: false, scikit_learn: true });
+    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: false, scikit_learn: true, structured_output_enforced: false });
     renderSection();
     await openAdvancedTuning();
     await waitFor(() => {
@@ -297,7 +297,7 @@ describe('PulseSection', () => {
   });
 
   it('gate tooltip for classifier contains plain-language message about scikit-learn', async () => {
-    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: true, scikit_learn: false });
+    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: true, scikit_learn: false, structured_output_enforced: false });
     const user = userEvent.setup();
     renderSection();
     await openAdvancedTuning(user);
@@ -309,7 +309,7 @@ describe('PulseSection', () => {
   });
 
   it('gate tooltip for citation_pagerank contains plain-language message about networkx', async () => {
-    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: false, scikit_learn: true });
+    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: false, scikit_learn: true, structured_output_enforced: false });
     const user = userEvent.setup();
     renderSection();
     await openAdvancedTuning(user);

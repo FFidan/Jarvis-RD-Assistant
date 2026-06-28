@@ -1,6 +1,6 @@
-"""Regression: the new optional ``note`` field on JournalPrompts (UI_v3 EOD).
+"""Regression: the new optional ``note`` field on JournalPrompts (EOD).
 
-Spec §3.10/§4.3 adds one optional free-note escape hatch to the EOD shutdown
+An additive change adds one optional free-note escape hatch to the EOD shutdown
 ritual. It is an additive JSONB key — NO migration. These tests assert the new
 field round-trips through the existing GET + POST-upsert journal route and that
 omitting it is still valid (existing callers unaffected).

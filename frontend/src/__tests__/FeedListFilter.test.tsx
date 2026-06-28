@@ -1,5 +1,5 @@
 /**
- * FeedListFilter component tests — F1 Feed IA Redesign (spec §3.4)
+ * FeedListFilter component tests — Feed IA Redesign
  *
  * This is a scoped list-filter, NOT intent-routing and NOT global ⌘K search.
  * It filters title/author within the current faceted view.

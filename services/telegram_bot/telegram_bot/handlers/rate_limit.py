@@ -35,7 +35,7 @@ _MAX_HORIZON_SECONDS = 3600
 
 
 def _evict_idle_keys(now: float, active_key: str) -> None:
-    """Evict keys with no recent activity to bound dict growth (TG-SEC-01).
+    """Evict keys with no recent activity to bound dict growth.
 
     The GC prunes stale timestamps in place but never removed the now-empty
     keys, so ``_timestamps`` grew one entry per unique ``chat:command`` forever
@@ -76,7 +76,7 @@ def rate_limit(
 
     Thread/coroutine safety: all timestamp mutations happen under a per-key
     ``asyncio.Lock`` so that concurrent invocations cannot interleave between
-    the window check and the append (TOCTOU fix, DOM-D-06).
+    the window check and the append (TOCTOU fix).
 
     Parameters
     ----------
@@ -147,7 +147,7 @@ def rate_limit(
                         )
                     else:
                         stamps.append(now)
-                        # TG-SEC-01: bound dict growth by evicting long-idle keys.
+                        # Bound dict growth by evicting long-idle keys.
                         _evict_idle_keys(now, key)
 
             if denial is not None:

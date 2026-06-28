@@ -86,7 +86,7 @@ describe('PulseCard', () => {
     expect(screen.getByRole('button', { name: /why/i })).toBeInTheDocument();
   });
 
-  it('renders FeedbackButtons (always — pulse-origin per spec §5.2)', () => {
+  it('renders FeedbackButtons (always — pulse-origin)', () => {
     renderCard();
     // FeedbackButtons renders thumbs up/down with these aria-labels
     expect(screen.getByRole('button', { name: /recommend more like this/i })).toBeInTheDocument();
@@ -157,7 +157,7 @@ describe('PulseCard', () => {
     expect(screen.queryByRole('button', { name: /^thumbs down$/i })).not.toBeInTheDocument();
   });
 
-  describe('DOM-F-03 — Save button disabled during pending save', () => {
+  describe('Save button disabled during pending save', () => {
     it('disables save button when savePending=true', () => {
       const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

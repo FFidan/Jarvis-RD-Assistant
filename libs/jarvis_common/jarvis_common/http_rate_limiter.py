@@ -14,14 +14,12 @@ from jarvis_common.config import get_jarvis_common_settings
 logger = logging.getLogger(__name__)
 
 # Trusted proxy CIDRs loaded once at import time.
-# Override / extend via TRUSTED_PROXY_CIDRS env var (comma-separated CIDRs).
-# Defaults include Docker bridge / RFC-1918 ranges so Docker-internal hops are
-# always skipped when walking X-Forwarded-For right-to-left.
+# Default trusts loopback only, so a container on a Docker bridge cannot spoof
+# X-Forwarded-For to control the rate-limit key. Deployments behind a reverse
+# proxy must set TRUSTED_PROXY_CIDRS to their bridge subnet (the compose default
+# tracks JARVIS_NET_SUBNET); a non-empty value overrides this list exclusively.
 _DEFAULT_PROXY_CIDRS = [
     "127.0.0.0/8",
-    "10.0.0.0/8",
-    "172.16.0.0/12",  # Docker default bridge
-    "192.168.0.0/16",
 ]
 
 
@@ -63,16 +61,16 @@ def _real_ip(request: Request) -> str:
 
     Algorithm:
     1. If JARVIS_TRUST_CF_CONNECTING_IP=true and CF-Connecting-IP header is set, use it.
-       (SEC-006: header is only trusted when the operator has explicitly opted in,
+       (The header is only trusted when the operator has explicitly opted in,
         preventing LAN attackers from forging it when Cloudflare is not in the path.)
     2. Else walk X-Forwarded-For right-to-left, skipping contiguous trusted proxies
        at the tail.  Return the first non-trusted entry (the real client).
-       (SEC-001: left-to-right walk allowed a LAN attacker to prepend a fake IP and
+       (A left-to-right walk let a LAN attacker prepend a fake IP and
         bypass rate limiting; right-to-left is immune to that spoofing.)
     3. If all entries in XFF are trusted (pathological), return request.client.host.
     4. If no XFF header, return request.client.host.
     """
-    # SEC-006: CF-Connecting-IP only trusted when operator explicitly enables it,
+    # CF-Connecting-IP only trusted when operator explicitly enables it,
     # and only when it is a single well-formed IP. A malformed value (e.g. a
     # forged comma-separated list) must not be trusted — fall through to the
     # validated XFF walk instead of crashing or honouring the bad value.
@@ -97,7 +95,7 @@ def _real_ip(request: Request) -> str:
     if not xff:
         return request.client.host if request.client else "unknown"
 
-    # Parse and walk right-to-left (SEC-001 fix).
+    # Parse and walk right-to-left.
     hops = [h.strip() for h in xff.split(",") if h.strip()]
     for hop in reversed(hops):
         try:
@@ -162,7 +160,7 @@ def create_limiter(
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     """Handle rate limit exceeded errors with a JSON 429 response.
 
-    RFC 6585 §4 requires Retry-After header on 429 responses to indicate
+    RFC 6585, section 4 requires Retry-After header on 429 responses to indicate
     when the client may retry. We extract the granularity period from the
     limit's GRANULARITY.seconds (e.g. 60 for "5/minute").
     """

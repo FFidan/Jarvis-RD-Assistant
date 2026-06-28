@@ -18,7 +18,7 @@ export function ProjectsPage() {
     queryFn: () => fetchProjects(),
   });
 
-  // §3.7 — deep-link from My-Day ProjectPulse or auto-select first chapter
+  // Deep-link from My-Day ProjectPulse or auto-select first chapter
   useEffect(() => {
     const pid = (location.state as { projectId?: number } | null)?.projectId;
     if (pid != null && projects?.some((p: { id: number }) => p.id === pid)) {

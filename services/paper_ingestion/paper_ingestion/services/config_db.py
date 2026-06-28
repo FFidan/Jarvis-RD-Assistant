@@ -37,7 +37,7 @@ async def _fetch_effective_config_row(
 
     For personal keys the NULL-row (system default) is only returned when the
     caller is an admin; regular authenticated users see only their own row
-    (404 if absent) to prevent system-default leakage (DOM-A-09).
+    (404 if absent) to prevent system-default leakage.
     System/unknown keys always use the NULL-row path regardless of role.
     """
     scope = _classify_config_key(key)

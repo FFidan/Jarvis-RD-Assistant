@@ -10,7 +10,7 @@ from jarvis_common.testing import make_pool_and_conn
 
 @pytest.fixture(autouse=True)
 def _dev_mode_for_validation_assertions(monkeypatch):
-    """SEC-107 redacts pydantic loc/errors in production mode; tests in this
+    """Production mode redacts pydantic loc/errors; tests in this
     file assert on those details, so force DEV_MODE=true."""
     monkeypatch.setenv("DEV_MODE", "true")
 
@@ -23,7 +23,7 @@ def app_with_pool():
     Override it alongside verify_api_key so validation tests reach the
     discriminator/allowlist logic instead of getting a 401 first.
     """
-    from jarvis_common.auth import current_user_id_strict, verify_api_key
+    from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -33,6 +33,7 @@ def app_with_pool():
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[current_user_id_strict] = lambda: 42
+    app.dependency_overrides[require_admin] = lambda: None
     yield app, pool
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
@@ -141,8 +142,27 @@ async def test_scan_local_pdfs_endpoint_enqueues_job(app_with_pool):
     assert "user_id" in call_kwargs
 
 
+async def test_scan_local_pdfs_non_admin_gets_403(app_with_pool):
+    """POST /api/scan-local-pdfs returns 403 for non-admin callers."""
+    from fastapi import HTTPException
+    from jarvis_common.auth import require_admin
+
+    app, _pool = app_with_pool
+
+    def _deny_admin():
+        raise HTTPException(status_code=403, detail="Admin required")
+
+    app.dependency_overrides[require_admin] = _deny_admin
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/scan-local-pdfs")
+
+    assert resp.status_code == 403
+
+
 # ---------------------------------------------------------------------------
-# PI-EDGE-002 — discriminated-union payload validation tests
+# Discriminated-union payload validation tests
 # ---------------------------------------------------------------------------
 
 

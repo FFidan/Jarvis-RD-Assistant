@@ -490,7 +490,7 @@ make up-build            # full docker compose up -d --build
 
 `scripts/backup.sh` runs by default in the `postgres-backup` sidecar (a daily run plus on-demand triggers). It is on out of the box and archives are encrypted with the auto-generated `backup_encrypt_key`; if you back up externally, opt out with `docker compose stop postgres-backup`.
 
-Admins can list, download, and trigger an on-demand backup from the WebUI at **Admin → Backups** (the on-demand button signals the sidecar to run immediately). Restore stays a manual host procedure — the page surfaces the commands below as a read-only runbook but never executes them.
+Admins can list, download, trigger an on-demand backup, and restore from any listed backup point in the WebUI at **Admin → Backups**. The on-demand backup button signals the sidecar to run immediately. Restore can be performed either from the admin UI (one-click) or from the host command line (manual, for situations where the app itself cannot run).
 
 JARVIS state lives in more than one place, so each run captures **all four** of the durable stores (per-store files are timestamped together so a single run is internally consistent):
 
@@ -498,7 +498,7 @@ JARVIS state lives in more than one place, so each run captures **all four** of 
 |---|---|---|
 | `jarvis` Postgres DB | `jarvis_<ts>.sql.gz[.enc]` | Papers, users, config, jobs |
 | `litellm` Postgres DB | `litellm_<ts>.sql.gz[.enc]` | API keys, virtual keys, spend ledger |
-| Qdrant vectors | `qdrant_<collection>_<ts>.snapshot` | One per collection via Qdrant's snapshot REST API; **best-effort** — if Qdrant is unreachable this is skipped and the Postgres/secrets backups still succeed |
+| Qdrant vectors | `qdrant_<collection>_<ts>.snapshot[.enc]` | One per collection via Qdrant's snapshot REST API; **best-effort** — if Qdrant is unreachable this is skipped and the Postgres/secrets backups still succeed |
 | `secrets/` directory | `secrets_<ts>.tar.gz[.enc]` | The Docker-secret source files — without these an encrypted DB backup cannot be decrypted |
 
 | Env var | Default | Purpose |
@@ -507,7 +507,7 @@ JARVIS state lives in more than one place, so each run captures **all four** of 
 | `BACKUP_RETENTION_DAYS` | `7` | Prune interval (applies to every store above) |
 | `BACKUP_S3_BUCKET` | empty | Optional S3 destination (skipped if unset; uploads every archive) |
 | `BACKUP_INTERVAL_SECONDS` | `86400` | Sleep between backup runs |
-| `BACKUP_ENCRYPT_KEYFILE` | `/run/secrets/backup_encrypt_key` | When the file is non-empty, DB dumps and the secrets archive are encrypted at rest (`.enc` suffix) |
+| `BACKUP_ENCRYPT_KEYFILE` | `/run/secrets/backup_encrypt_key` | When the file is non-empty, DB dumps, Qdrant snapshots, and the secrets archive are encrypted at rest (`.enc` suffix) |
 | `LITELLM_DATABASE` | `litellm` | Name of the LiteLLM DB to dump |
 | `QDRANT_URL` | `http://qdrant:6333` | Qdrant base URL for the snapshot API |
 | `QDRANT_API_KEYFILE` | `/run/secrets/qdrant_api_key` | Qdrant API key (sent as the `api-key` header) |
@@ -515,7 +515,7 @@ JARVIS state lives in more than one place, so each run captures **all four** of 
 
 The `litellm` DB is owned by the same superuser (`POSTGRES_USER`) that created it, so the same credentials dump both DBs. A failed `pg_dump` aborts the run (non-zero exit) rather than leaving a tiny but well-formed empty archive. The encryption key, Qdrant API key, and `./secrets` source are already wired into the `postgres-backup` sidecar in `docker-compose.yml`. S3 credentials: `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (or IAM instance role) scoped to `s3:PutObject`.
 
-> **Without an encryption key the secrets archive is written in the clear** and the script logs a warning — set `BACKUP_ENCRYPT_KEYFILE` (default already points at the `backup_encrypt_key` Docker Secret) for production.
+> **In production (`ENVIRONMENT=production`) the backup hard-fails if `BACKUP_ENCRYPT_KEYFILE` is unset** — the script exits immediately and no secrets archive is written. In non-production the secrets archive is skipped (not written in the clear) and the script logs a warning. Set `BACKUP_ENCRYPT_KEYFILE` (the default already points at the `backup_encrypt_key` Docker Secret) before running in production.
 
 > **Store the backup encryption key OFF-SITE, separately from the `.enc`
 > archives.** The secrets archive is encrypted with `backup_encrypt_key` and
@@ -526,6 +526,27 @@ The `litellm` DB is owned by the same superuser (`POSTGRES_USER`) that created i
 > key makes every encrypted backup permanently unrecoverable.
 
 ### Restore
+
+#### One-click restore (admin UI)
+
+From **Admin → Backups**, choose a backup set from the archive table and click **Restore**. Type **RESTORE** in the confirmation dialog to proceed. The sidecar:
+
+1. Takes a **safety pre-backup** of the current live data before making any destructive change.
+2. Checks that the backup is not **newer** than the running app version — if it is, the restore is refused and you must update the app first (`./update.sh`).
+3. Drops and recreates both databases behind a **maintenance gate** (the app returns "restore in progress" to all users while this runs).
+4. Recovers the Qdrant search index best-effort — if the Qdrant step fails, the database restore still completes. The search index re-embeds automatically from the restored data on next use; no paper data is lost.
+
+After the restore, all users are signed out (the session store was replaced) and will need to sign in again.
+
+**Security posture:** the app container holds no new privilege — it only writes a small JSON sentinel file to the `backup_trigger` volume. All destructive work (DROP/CREATE DATABASE, pg_restore, Qdrant recovery) runs exclusively inside the already-privileged `postgres-backup` sidecar. The `/backups` volume remains read-only to the app container. The restore can only be triggered by an active admin browser session (not the ops API key), and requires typing the word RESTORE to confirm.
+
+**Residual risk:** a compromised admin browser session can trigger a restore, replacing live data with the chosen backup point (a safety pre-backup is always taken first, so the prior state remains recoverable). See [SECURITY.md](SECURITY.md) and `docs/known-residual-risks.md` for the full residual-risk register.
+
+---
+
+#### Manual restore (fallback)
+
+Use the steps below when the app itself cannot start — for example, after a total host failure where you are starting fresh on a new machine. The one-click path is unavailable in that case; this procedure does the same work from the host.
 
 **Step 0 — decrypt** (if the archive ends in `.enc`):
 
@@ -565,14 +586,109 @@ docker compose up -d paper_ingestion learning_engine
 **Step 3 — Qdrant** — stop the container first so the snapshot restore doesn't race an active index write:
 
 ```bash
+# JARVIS uses TWO Qdrant collections — restore both.
 docker compose stop qdrant
-docker compose cp qdrant_papers_YYYYMMDD_HHMMSS.snapshot qdrant:/qdrant/snapshots/restore.snapshot
+docker compose cp qdrant_paper_chunks_YYYYMMDD_HHMMSS.snapshot qdrant:/qdrant/snapshots/paper_chunks.snapshot
+docker compose cp qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot qdrant:/qdrant/snapshots/kg_entities.snapshot
 docker compose start qdrant
+
+# Recover paper_chunks (paper embeddings):
 docker compose exec qdrant sh -c 'curl -s -X PUT \
   -H "api-key: $(cat /run/secrets/qdrant_api_key)" \
-  "http://localhost:6333/collections/papers/snapshots/recover" \
+  "http://localhost:6333/collections/paper_chunks/snapshots/recover" \
   -H "Content-Type: application/json" \
-  -d "{\"location\":\"file:///qdrant/snapshots/restore.snapshot\"}"'
+  -d "{\"location\":\"file:///qdrant/snapshots/paper_chunks.snapshot\"}"'
+
+# Recover kg_entities (knowledge-graph entities):
+docker compose exec qdrant sh -c 'curl -s -X PUT \
+  -H "api-key: $(cat /run/secrets/qdrant_api_key)" \
+  "http://localhost:6333/collections/kg_entities/snapshots/recover" \
+  -H "Content-Type: application/json" \
+  -d "{\"location\":\"file:///qdrant/snapshots/kg_entities.snapshot\"}"'
+```
+
+---
+
+#### Off-host / total-host-loss recovery (inbox restore)
+
+Use this when you are recovering on a **fresh host** from an off-site copy of the backups — the original machine (and its `./secrets`) is gone. Unlike the manual fallback above (which you run statement-by-statement), this path reuses the same hardened `restore.sh` that the one-click restore uses, driven by a request you write yourself. It is the only restore path that materializes secrets and rebinds the database role, because a fresh cluster starts with a different role password than the backup was taken with.
+
+**What is automated vs operator-run.** `restore.sh` (in the `postgres-backup` sidecar) automatically: takes a safety pre-backup, runs the compat + decrypt-probe gates, drops/recreates/reloads both databases, recovers Qdrant, **rebinds the `jarvis` role password** (`ALTER ROLE … WITH PASSWORD`, the chosen path — see below), and **shreds the one-time operator key + the plaintext secrets staging on exit**. You (the operator) run: dropping the archive set + key into the inbox, writing the trigger, and afterwards materializing the host `./secrets`, recreating the app containers + the `postgres-backup` sidecar, and clearing the maintenance gate.
+
+**Prerequisites:** the off-site **archive set** for one timestamp (`jarvis_<ts>.sql.gz.enc`, `litellm_<ts>.sql.gz.enc`, `secrets_<ts>.tar.gz.enc`, any `qdrant_*_<ts>.snapshot.enc`, and `manifest_<ts>.json`), plus the **backup encryption key** you kept out-of-band (the key is excluded from its own archive, so you must hold a separate copy — see the off-site-key warning above).
+
+The drop zone is the **`restore_inbox`** Docker volume, mounted **read-write** into the sidecar at `/restore-inbox`. It is the only writable cross-host secrets-staging surface and is **never** under the read-only `/secrets` mount.
+
+1. **Bring up a fresh stack** on the new host (`./setup.sh` / `docker compose up -d`). This initialises Postgres with a fresh role password; the restore rebinds it in step 4.
+
+2. **Place the archive set into the inbox.** Either copy it from your off-site store, or pull it from S3 with the built-in helper (S3-pull is optional and aws-guarded; it does nothing and prints a notice if `aws`/`BACKUP_S3_BUCKET` are absent):
+
+   ```bash
+   # Option A — copy a local off-site set into the volume:
+   docker compose cp ./offsite/. postgres-backup:/restore-inbox/
+
+   # Option B — pull one timestamp's set from S3 into the inbox:
+   docker compose exec -e BACKUP_PULL_TS=<ts> -e BACKUP_PULL_DEST=/restore-inbox \
+     postgres-backup /usr/local/bin/backup.sh
+   ```
+
+3. **Place the one-time backup key** into the inbox as the file **`operator_key`** (fixed name), then write the restore trigger. `restore.sh` validates the key exists before any destructive step and verifies it actually decrypts the database archives before any `DROP` (a wrong key fails safe, destroying nothing):
+
+   ```bash
+   docker compose cp /path/to/backup_encrypt_key.txt postgres-backup:/restore-inbox/operator_key
+   docker compose exec postgres-backup sh -c \
+     'printf "{\"source\":\"inbox\",\"timestamp\":\"<ts>\"}" > /backup-trigger/.restore_request.json'
+   ```
+
+   The sidecar's poll loop runs `restore.sh` within a few seconds. Watch progress in `/backup-trigger/.restore_status.json` (or the sidecar logs).
+
+4. **Password binding (chosen path):** on a fresh cluster the `jarvis` role's password was fixed at first-init from the new host's `POSTGRES_PASSWORD`, but the restored databases (dumped `--no-owner --no-acl`) do not carry roles, and the app will read the **old** restored `postgres_password.txt`. So `restore.sh` runs `ALTER ROLE "jarvis" WITH PASSWORD '<restored>'` against the running Postgres after the database reload, making the live role match the restored secret. *Alternative (for operators who hold `./secrets` out-of-band):* materialize the host `./secrets` from the backup **before** the stack's `postgres` first-init on an empty data directory — then the role is created with the restored password and no rebind is needed. Do not wipe the Postgres data volume after the inbox restore, or the rebind is lost.
+
+5. **Materialize the host `./secrets` and recreate the app + sidecar.** `restore.sh` decrypts the secrets archive only internally (to read the role password for the rebind) and then **shreds that staging** on exit (`shred` per file, then remove) — it does not leave the decrypted bundle on the volume. Populate the host `./secrets` yourself from the same archive so the app can decrypt the restored config-key Fernet rows, then **recreate** (not merely restart) every container that authenticates with `postgres_password`, **including the `postgres-backup` sidecar** — Docker file-secrets are re-read only when a container is recreated, so a sidecar left running would keep the stale new-host password and its scheduled backups would start failing authentication:
+
+   ```bash
+   openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -d \
+     -kfile /path/to/backup_encrypt_key.txt \
+     -in secrets_<ts>.tar.gz.enc | tar -xzf - -C ./secrets
+   docker compose up -d --force-recreate \
+     paper_ingestion learning_engine litellm dashboard postgres-backup
+   ```
+
+6. **Clear maintenance.** Unlike the same-host one-click restore, the off-host path deliberately leaves the stack in maintenance (HTTP 503) until you finish — the app boots with the new-host password while the role was rebound to the restored one, so it is not servable until step 5 completes. Once the recreated containers are healthy, lift the gate:
+
+   ```bash
+   docker compose exec postgres-backup rm -f /backup-trigger/.maintenance /backup-trigger/.destructive
+   ```
+
+   The off-host path opens the destructive window (it drops and reloads the databases), so it holds a **durable** `.destructive` sentinel that — unlike the soft `.maintenance` sentinel — does **not** auto-expire after `MAINTENANCE_MAX_AGE_S`. You **must** clear both sentinels explicitly with the command above; skipping it leaves the stack at HTTP 503 indefinitely.
+
+7. **Cleanup.** The operator key is one-time: `restore.sh` shreds `/restore-inbox/operator_key` (and shreds + removes the plaintext staging) on every clean or recorded-failure exit. Remove the archive set from the inbox once recovery is confirmed.
+
+---
+
+#### Sentinel cleanup reference
+
+The app returns HTTP 503 during and after a restore via two sentinel files in the `backup_trigger` volume:
+
+| Sentinel | Env var | Default path | Expiry |
+|---|---|---|---|
+| Soft | `MAINTENANCE_SENTINEL` | `/backup-trigger/.maintenance` | Auto-expires after `MAINTENANCE_MAX_AGE_S` (default 1800 s) |
+| Durable | `MAINTENANCE_DESTRUCTIVE_SENTINEL` | `/backup-trigger/.destructive` | Never auto-expires; written at the DROP boundary |
+
+**A clean same-host one-click restore** clears both sentinels automatically at the end of the restore — no operator action needed.
+
+**The following situations leave the stack at HTTP 503 after `restore.sh` exits.** Complete the required step first, then clear both sentinels:
+
+| Situation | Required step before clearing |
+|---|---|
+| Off-host (inbox) restore | Materialize `./secrets` and recreate app containers (step 5 above) |
+| Older-than-code restore (backup schema < current code) | Recreate app containers so forward migrations run on startup |
+| Crash after the DROP boundary | Restore from the safety backup the sidecar took before the destructive step |
+
+Once the required step is done, clear both sentinels:
+
+```bash
+docker compose exec postgres-backup rm -f /backup-trigger/.maintenance /backup-trigger/.destructive
 ```
 
 ---

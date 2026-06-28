@@ -1,4 +1,4 @@
-"""Origin immutability guard test (spec §3.2).
+"""Origin immutability guard tests.
 
 No production code under services/paper_ingestion/paper_ingestion/ should
 contain SQL that mutates papers.discovery_origin via UPDATE.
@@ -37,6 +37,6 @@ def test_no_update_papers_set_discovery_origin() -> None:
             violations.append((py_file, line_no, match.group()[:200]))
 
     assert not violations, (
-        "Found UPDATE-discovery_origin paths (spec §3.2 violation):\n"
+        "Found UPDATE-discovery_origin paths (origin-immutability violation):\n"
         + "\n".join(f"  {p}:{ln}\n    {snippet}" for p, ln, snippet in violations)
     )

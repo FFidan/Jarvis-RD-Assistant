@@ -22,12 +22,18 @@ Auth wiring:
 Carve-out: send_magic_link (SMTP) is patched out — outbound email boundary exempt.
 """
 
+# Verified: services/paper_ingestion/paper_ingestion/routers/admin.py:263 update_user_role,
+#           :331 soft_delete_user — last-administrator guard serialized via
+#           pg_advisory_xact_lock(hashtext('admin_role_mutation')) inside conn.transaction().
+
 from __future__ import annotations
 
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, patch
 from jarvis_common.testing import SharedConnPool
+
+from paper_ingestion.routers.audit_admin import _build_audit_query
 
 pytestmark = [
     pytest.mark.contract,
@@ -224,6 +230,45 @@ async def test_a4_list_users_non_admin_gets_403(plain_client):
     )
 
 
+async def test_a4_include_deleted_surfaces_restorable_soft_deleted_users(
+    admin_client, contract_conn
+):
+    """Covers map row A4: ``include_deleted=true`` surfaces restorable soft-deleted
+    users (non-null ``deleted_at``) so the admin UI can restore them; the default
+    list omits them.
+
+    Verified: admin.py list_users include_deleted branch at HEAD.
+    """
+    target_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        "include-deleted-target@example.com",
+    )
+    await contract_conn.execute(
+        "UPDATE users SET deleted_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
+        target_id,
+    )
+
+    # Default list must omit the soft-deleted user.
+    default_resp = await admin_client.get("/api/admin/users")
+    assert default_resp.status_code == 200, (
+        f"Expected 200 from default list; got {default_resp.status_code}: {default_resp.text[:300]}"
+    )
+    assert target_id not in {u["id"] for u in default_resp.json()}, (
+        "Default list must omit soft-deleted users"
+    )
+
+    # include_deleted=true must surface it with a non-null deleted_at.
+    resp = await admin_client.get("/api/admin/users?include_deleted=true")
+    assert resp.status_code == 200, (
+        f"Expected 200 from include_deleted list; got {resp.status_code}: {resp.text[:300]}"
+    )
+    deleted_row = next((u for u in resp.json() if u["id"] == target_id), None)
+    assert deleted_row is not None, "include_deleted=true must surface the soft-deleted user"
+    assert deleted_row["deleted_at"] is not None, (
+        "soft-deleted row must carry a non-null deleted_at"
+    )
+
+
 # ---------------------------------------------------------------------------
 # A5: POST /api/admin/users — admin invites a new user
 # ---------------------------------------------------------------------------
@@ -321,6 +366,62 @@ async def test_a5_invite_soft_deleted_email_returns_409(admin_client, contract_c
     )
 
 
+async def test_invite_user_token_insert_failure_rolls_back_user(admin_client, contract_conn):
+    """Users row must be absent when the magic_link_tokens INSERT fails.
+
+    Verifies atomicity: both the users INSERT and the magic_link_tokens INSERT
+    must share one transaction so a token failure cannot leave an orphan user.
+    """
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.main import app
+
+    email = "atomicity-invite@example.com"
+
+    class _FailingConn:
+        """Wraps contract_conn but raises on the magic_link_tokens INSERT."""
+
+        async def execute(self, query, *args, **kwargs):
+            if "magic_link_tokens" in query:
+                raise RuntimeError("Simulated token INSERT failure")
+            return await contract_conn.execute(query, *args, **kwargs)
+
+        def transaction(self):
+            return contract_conn.transaction()
+
+        async def fetchrow(self, *args, **kwargs):
+            return await contract_conn.fetchrow(*args, **kwargs)
+
+        async def fetchval(self, *args, **kwargs):
+            return await contract_conn.fetchval(*args, **kwargs)
+
+        async def fetch(self, *args, **kwargs):
+            return await contract_conn.fetch(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(contract_conn, name)
+
+    failing_pool = SharedConnPool(_FailingConn())
+    original_pool = app.state.db_pool
+    app.state.db_pool = failing_pool
+    try:
+        # The unhandled RuntimeError propagates through the httpx ASGI transport
+        # in test mode — catching it is expected; the key assertion is row state.
+        await admin_client.post(
+            "/api/admin/users",
+            json={"email": email, "role": "user"},
+        )
+    except RuntimeError:
+        pass
+    finally:
+        app.state.db_pool = original_pool
+
+    row = await contract_conn.fetchrow(
+        "SELECT id FROM users WHERE email = $1",
+        email,
+    )
+    assert row is None, "users row must be rolled back when token INSERT fails"
+
+
 # ---------------------------------------------------------------------------
 # A6: PATCH /api/admin/users/{id}/role — admin updates user role
 # ---------------------------------------------------------------------------
@@ -413,6 +514,98 @@ async def test_a7_self_delete_returns_400(admin_client):
     assert resp.status_code == 400, (
         f"Expected 400 when admin deletes self; got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ≥1-admin invariant — the last admin can't be demoted or deleted.
+# Both endpoints serialise the recheck on pg_advisory_xact_lock('admin_role_mutation')
+# acquired INSIDE an open conn.transaction().
+# ---------------------------------------------------------------------------
+
+
+async def test_demote_last_admin_returns_400_and_keeps_role(admin_client, contract_conn):
+    """Demoting the sole surviving admin is refused with 400; the role is unchanged.
+
+    Regression proof: remove the last-admin guard in update_user_role and this
+    demotion succeeds (200) with the DB role flipped to 'user'.
+
+    Verified: admin.py update_user_role last-admin guard at HEAD.
+    """
+    admin_id = admin_client.admin_user_id  # type: ignore[attr-defined]
+
+    resp = await admin_client.patch(
+        f"/api/admin/users/{admin_id}/role",
+        json={"role": "user"},
+    )
+
+    assert resp.status_code == 400, (
+        f"Expected 400 demoting the last admin; got {resp.status_code}: {resp.text[:300]}"
+    )
+    db_role = await contract_conn.fetchval("SELECT role FROM users WHERE id = $1", admin_id)
+    assert db_role == "admin", (
+        f"Last admin must stay admin after a blocked demotion; got {db_role!r}"
+    )
+
+
+async def test_demote_non_last_admin_succeeds(admin_client, contract_conn):
+    """With more than one admin, demoting another admin is allowed (cross-admin path).
+
+    Verified: admin.py update_user_role last-admin guard at HEAD.
+    """
+    second_admin_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        "second-admin-demote@example.com",
+    )
+
+    resp = await admin_client.patch(
+        f"/api/admin/users/{second_admin_id}/role",
+        json={"role": "user"},
+    )
+
+    assert resp.status_code == 200, (
+        f"Expected 200 demoting a non-last admin; got {resp.status_code}: {resp.text[:300]}"
+    )
+    db_role = await contract_conn.fetchval("SELECT role FROM users WHERE id = $1", second_admin_id)
+    assert db_role == "user", f"Demoted admin must be 'user' in DB; got {db_role!r}"
+
+
+async def test_delete_last_admin_returns_400_and_keeps_row(admin_client, contract_conn):
+    """Deleting the sole surviving admin is refused with 400; the row is not soft-deleted.
+
+    Verified: admin.py soft_delete_user self + last-admin guards at HEAD.
+    """
+    admin_id = admin_client.admin_user_id  # type: ignore[attr-defined]
+
+    resp = await admin_client.delete(f"/api/admin/users/{admin_id}")
+
+    assert resp.status_code == 400, (
+        f"Expected 400 deleting the last admin; got {resp.status_code}: {resp.text[:300]}"
+    )
+    deleted_at = await contract_conn.fetchval(
+        "SELECT deleted_at FROM users WHERE id = $1", admin_id
+    )
+    assert deleted_at is None, "Last admin must not be soft-deleted after a blocked delete"
+
+
+async def test_delete_non_last_admin_succeeds(admin_client, contract_conn):
+    """With more than one admin, soft-deleting another admin is allowed (cross-admin path).
+
+    Verified: admin.py soft_delete_user last-admin guard at HEAD.
+    """
+    second_admin_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'admin') RETURNING id",
+        "second-admin-delete@example.com",
+    )
+
+    resp = await admin_client.delete(f"/api/admin/users/{second_admin_id}")
+
+    assert resp.status_code == 204, (
+        f"Expected 204 deleting a non-last admin; got {resp.status_code}: {resp.text[:300]}"
+    )
+    deleted_at = await contract_conn.fetchval(
+        "SELECT deleted_at FROM users WHERE id = $1", second_admin_id
+    )
+    assert deleted_at is not None, "Non-last admin must be soft-deleted in DB"
 
 
 # ---------------------------------------------------------------------------
@@ -516,3 +709,52 @@ async def test_a14_audit_log_non_admin_gets_403(plain_client):
     assert resp.status_code == 403, (
         f"Expected 403 for non-admin on audit-log; got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# _build_audit_query unit tests — pure-function, no DB required
+# ---------------------------------------------------------------------------
+
+_AUDIT_COLS = (
+    'SELECT id, user_id, action, resource, metadata, "timestamp" AS created_at FROM audit_log '
+)
+
+
+def test_build_audit_query_no_filters():
+    """No filters: a single LIMIT placeholder and no user-supplied bound values."""
+    sql, params = _build_audit_query(None, None, 50)
+    assert params == [51]
+    assert sql.count("$") == 1
+    assert sql.startswith(_AUDIT_COLS)
+
+
+def test_build_audit_query_before_id_only():
+    """before_id is bound as a param (never interpolated); LIMIT is the second placeholder."""
+    sql, params = _build_audit_query(100, None, 50)
+    assert params == [100, 51]
+    assert sql.count("$") == 2
+    assert sql.startswith(_AUDIT_COLS)
+
+
+def test_build_audit_query_action_prefix_only():
+    """action_prefix is escaped and bound as a param; LIMIT is the second placeholder."""
+    sql, params = _build_audit_query(None, "user.login", 10)
+    assert params == ["user.login%", 11]
+    assert sql.count("$") == 2
+
+
+def test_build_audit_query_both_filters():
+    """Both filters bind in order: before_id, action_prefix, then LIMIT."""
+    sql, params = _build_audit_query(100, "user.login", 10)
+    assert params == [100, "user.login%", 11]
+    assert sql.count("$") == 3
+
+
+def test_build_audit_query_action_prefix_special_chars_are_escaped():
+    """%, _, and backslash in action_prefix are LIKE-escaped in the bound param."""
+    sql, params = _build_audit_query(None, "admin%_op\\x", 5)
+    # Each special char must be escaped with a leading backslash; the value is a
+    # bound param, so the placeholder count is unchanged by its content.
+    assert params[0] == "admin\\%\\_op\\\\x%"
+    assert params[1] == 6
+    assert sql.count("$") == 2

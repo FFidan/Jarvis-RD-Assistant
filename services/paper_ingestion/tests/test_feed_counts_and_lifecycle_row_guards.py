@@ -1,6 +1,6 @@
 """Guard tests: assert→RuntimeError replacements in papers_service and papers_lifecycle.
 
-Two production sites replaced (audit finding H4):
+Two production sites replaced:
   1. papers_service.get_feed_counts — aggregate SELECT always returns a row.
   2. routers.papers_lifecycle.annotate_paper — RETURNING always returns a row.
 
@@ -25,7 +25,7 @@ from jarvis_common.testing import make_pool_and_conn
 # ---------------------------------------------------------------------------
 # 1. papers_service.get_feed_counts — aggregate SELECT row is None
 #
-# Shape: boundary-adapter unit test (§1.3). get_feed_counts is a plain service
+# Shape: boundary-adapter unit test. get_feed_counts is a plain service
 # function — called directly with a mocked pool/conn; no route dispatch needed.
 # ---------------------------------------------------------------------------
 
@@ -52,7 +52,7 @@ async def test_get_feed_counts_raises_runtime_error_when_fetchrow_returns_none()
 # ---------------------------------------------------------------------------
 # 2. routers.papers_lifecycle.annotate_paper — RETURNING row is None
 #
-# Shape: boundary-adapter ASGI test (§1.3). The RuntimeError lives inside the
+# Shape: boundary-adapter ASGI test. The RuntimeError lives inside the
 # route handler; the route is exercised through a minimal FastAPI app (no
 # exception middleware) so the RuntimeError propagates through httpx with
 # raise_app_exceptions=True (default).

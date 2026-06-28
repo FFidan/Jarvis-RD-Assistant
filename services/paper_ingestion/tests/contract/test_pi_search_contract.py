@@ -7,7 +7,7 @@ with survivor citations.
 
 Sources are mocked at the plugin layer via monkeypatching
 ``paper_ingestion.routers.search._resolve_sources_for_search`` — the source
-plugin instances themselves are the §5.1 carve-out boundary; mocking at the
+plugin instances themselves are the carve-out boundary; mocking at the
 adapter edge is canonical.
 
 Deferred: SR-05 (respx S2 rate-limit boundary-adapter) — kept as rot-on-touch
@@ -154,7 +154,7 @@ async def test_sr01_search_preview_merged_dedup_response_shape(
 async def test_sr02_search_preview_has_project_links_not_leaked_across_users(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key, monkeypatch
 ):
-    """PI-SEC-01/05: search-preview's per-result has_project_links must be scoped
+    """search-preview's per-result has_project_links must be scoped
     to the caller's own projects.
 
     A preview result matches user A's owned paper (paper_id_a) by external_id.
@@ -408,3 +408,90 @@ async def test_search_multi_source_post_dedupes_across_sources(
     assert "Shared Paper" in titles
     assert "Arxiv Only Paper" in titles
     assert "S2 Only Paper" in titles
+
+
+# ---------------------------------------------------------------------------
+# SR-07: search-preview library_match.zotero_item_key must be per-user.
+# The indicator now comes from paper_user_zotero_links keyed on the caller,
+# not the vestigial global papers.zotero_item_key.
+# ---------------------------------------------------------------------------
+
+
+async def test_sr07_search_preview_zotero_item_key_is_per_user(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key, monkeypatch
+):
+    """search-preview's per-result zotero_item_key must be scoped to the caller.
+
+    A preview result matches user A's owned paper (paper_id_a). Both A and B hold a
+    paper_user_zotero_links row for that paper with DIFFERENT keys, and the paper
+    still carries a distinct vestigial global papers.zotero_item_key. When A runs
+    the preview, library_match.zotero_item_key must be A's link key -- never B's and
+    never the global column. Reverting the relocated read to p.zotero_item_key (or
+    keying the link join on the wrong user) returns the global/other value -> RED.
+
+    Runs the REAL _load_local_library_matches (not stubbed) against live PG.
+
+    # Verified: services/paper_ingestion/paper_ingestion/routers/search_helpers.py:455
+    # (l.zotero_item_key AS zotero_item_key, joined on the resolved caller id, not
+    # the global papers.zotero_item_key column).
+    """
+    from datetime import date
+
+    from paper_ingestion.models import PaperCreate, SourceType
+
+    paper_id_a = contract_two_users.paper_id_a
+    user_a_id = contract_two_users.user_a_id
+    user_b_id = contract_two_users.user_b_id
+
+    await contract_conn.execute(
+        "UPDATE papers SET zotero_item_key = 'GLOBAL-STALE-KEY' WHERE id = $1",
+        paper_id_a,
+    )
+    await contract_conn.execute(
+        """INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key)
+           VALUES ($1, $2, 'ZOT-A-KEY'), ($1, $3, 'ZOT-B-KEY')""",
+        paper_id_a,
+        user_a_id,
+        user_b_id,
+    )
+
+    matching_paper = PaperCreate(
+        external_id="iso-ext-a",
+        source_type="arxiv",
+        title="Some Other Title",
+        authors=["A. Author"],
+        abstract="abstract",
+        url="https://example.test/a",
+        published_date=date(2024, 1, 1),
+    )
+
+    async def _stub_resolver(source_types, db_pool, http_client, request):
+        return {SourceType.ARXIV: _stub_plugin_returning([matching_paper])}, {}
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.search._resolve_sources_for_search",
+        _stub_resolver,
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            "/api/search-preview",
+            json={"query": "test", "source_types": ["arxiv"], "max_results": 5},
+        )
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    matched = [
+        r
+        for r in body["results"]
+        if r.get("library_match") and r["library_match"].get("paper_id") == paper_id_a
+    ]
+    assert matched, (
+        f"Expected the preview result to match A's library paper {paper_id_a}; "
+        f"results: {[r.get('library_match') for r in body['results']]}"
+    )
+    surfaced_key = matched[0]["library_match"]["zotero_item_key"]
+    assert surfaced_key == "ZOT-A-KEY", (
+        "search-preview must surface user A's own Zotero link key, not user B's key "
+        f"and not the global papers.zotero_item_key; got {surfaced_key!r}"
+    )

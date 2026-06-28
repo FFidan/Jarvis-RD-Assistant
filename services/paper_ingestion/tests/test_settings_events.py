@@ -1,4 +1,4 @@
-"""Tests for LG-B4 B2: set_config emits config-change events.
+"""Tests that set_config emits config-change events.
 
 Verifies that ``PUT /api/config/{key}`` calls ``log_event`` with
 category='config', message='setting_changed' after a successful UPSERT.

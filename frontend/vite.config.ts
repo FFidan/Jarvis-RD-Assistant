@@ -39,6 +39,12 @@ export default defineConfig({
           groups: [
             { name: 'vendor-cytoscape', test: /node_modules\/cytoscape/ },
             {
+              // PDF reader stack (Paper Detail only) — keep pdf.js out of the
+              // shared/index bundle.
+              name: 'vendor-pdf',
+              test: /node_modules\/(pdfjs-dist|react-pdf-highlighter-extended|react-rnd)/,
+            },
+            {
               name: 'vendor-recharts',
               test: /node_modules\/(recharts|react-smooth|victory-vendor|d3-|decimal\.js-light|internmap|robust-predicates|delaunator)/,
             },
@@ -76,5 +82,16 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/__tests__/setup.ts'],
     exclude: ['e2e/**', 'node_modules/**'],
+    // react-pdf-highlighter-extended ships only a `module` field (no main/exports),
+    // which vitest's resolver can't resolve from a bare specifier (the Rolldown
+    // build resolver can). Tests mock the module anyway, so point the bare
+    // specifier at its ESM entry purely to satisfy resolution. Test-scoped — no
+    // effect on dev/build.
+    alias: {
+      'react-pdf-highlighter-extended': path.resolve(
+        __dirname,
+        'node_modules/react-pdf-highlighter-extended/dist/esm/index.js',
+      ),
+    },
   },
 });

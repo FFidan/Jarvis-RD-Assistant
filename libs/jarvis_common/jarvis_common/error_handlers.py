@@ -48,7 +48,7 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """Handle Pydantic/FastAPI validation errors.
 
-    SEC-107: In production (DEV_MODE=false) the response body is redacted to
+    In production (DEV_MODE=false) the response body is redacted to
     avoid leaking internal field names or input values.  Full pydantic error
     details are logged server-side, keyed by request_id for correlation.
     """

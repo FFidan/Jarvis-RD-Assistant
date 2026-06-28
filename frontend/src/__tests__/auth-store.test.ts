@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { QueryClient } from '@tanstack/react-query';
+import type { SessionUser } from '@/stores/auth-store';
 
 // Mock fetch for the API-key→session mint endpoint
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-// Spy on the cross-user-hygiene purges logout fans out to. These are mocked at
-// the module boundary so the test asserts the contract (logout calls them)
-// without driving real IndexedDB.
+// Spy on the cross-user-hygiene purges the auth flows fan out to. These are
+// mocked at the module boundary so the test asserts the contract (the auth
+// flow calls them) without driving real IndexedDB.
 const mockClearReviewOutbox = vi.fn().mockResolvedValue(undefined);
 const mockClearPersistedQueryCache = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/lib/review-outbox', () => ({
@@ -16,13 +18,27 @@ vi.mock('@/lib/query-persister', () => ({
   clearPersistedQueryCache: () => mockClearPersistedQueryCache(),
 }));
 
-const { useAuthStore } = await import('@/stores/auth-store');
+const { useAuthStore, registerQueryClient } = await import('@/stores/auth-store');
+
+// A real QueryClient with spied methods so the purge's cancel→clear path is
+// observable. clear() runs synchronously; cancelQueries is fire-and-forget.
+const mockQueryClient = new QueryClient();
+const mockQueryClientClear = vi.spyOn(mockQueryClient, 'clear');
+const mockCancelQueries = vi
+  .spyOn(mockQueryClient, 'cancelQueries')
+  .mockResolvedValue(undefined);
+
+const flushMicrotasks = async (): Promise<void> => {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+};
 
 const OWNER = { id: 7, email: 'owner@example.com', role: 'admin' as const };
 
 describe('auth-store', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    registerQueryClient(mockQueryClient);
     useAuthStore.setState({
       isAuthenticated: false,
       authTime: null,
@@ -88,6 +104,25 @@ describe('auth-store', () => {
     expect(result).toBe(false);
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
     expect(useAuthStore.getState().lastError).toContain('Network error');
+  });
+
+  it('login still succeeds when localStorage.removeItem throws during the purge', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => OWNER });
+    const removeItemSpy = vi
+      .spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(() => {
+        throw new DOMException('localStorage disabled', 'SecurityError');
+      });
+
+    // Before the fix this throws out of loginWithSession → login()'s catch →
+    // returns false with a misleading 'Network error' message.
+    const result = await useAuthStore.getState().login('valid-key-32chars-xxxxxxxxxx');
+
+    expect(result).toBe(true);
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().getUser()).toEqual(OWNER);
+    expect(useAuthStore.getState().lastError).toBeNull();
+    removeItemSpy.mockRestore();
   });
 
   it('logout clears authentication and the session user', async () => {
@@ -252,5 +287,145 @@ describe('auth-store', () => {
 
     vi.unstubAllGlobals();
     vi.stubGlobal('fetch', mockFetch);
+  });
+
+  // -----------------------------------------------------------------------
+  // cross-user purge on re-login: session expiry and re-login must run the same cross-user purge
+  // fan-out as logout, or the next user on a shared browser inherits the prior
+  // user's IndexedDB-persisted + SW-cached private data.
+  // -----------------------------------------------------------------------
+  it('expireSession purges identity caches (query cache, outbox, query client, SW)', async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        controller: { postMessage },
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      apiKey: null,
+      user: OWNER,
+    });
+
+    useAuthStore.getState().expireSession();
+
+    // Same fan-out as logout — without it the expired session's data leaks.
+    expect(mockClearPersistedQueryCache).toHaveBeenCalledTimes(1);
+    expect(mockClearReviewOutbox).toHaveBeenCalledTimes(1);
+    expect(postMessage).toHaveBeenCalledWith({ type: 'JARVIS_LOGOUT' });
+    // Auth fields are still cleared; the purge is additive.
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    expect(useAuthStore.getState().user).toBeNull();
+    // In-memory cache clear is synchronous; cancel is fire-and-forget.
+    expect(mockCancelQueries).toHaveBeenCalledTimes(1);
+    expect(mockQueryClientClear).toHaveBeenCalledTimes(1);
+
+    await flushMicrotasks();
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', mockFetch);
+  });
+
+  it('loginWithSession awaits an acknowledged SW cache clear, then exposes the new identity', async () => {
+    const PREV: SessionUser = { id: 1, email: 'prev@example.com', role: 'user' };
+    const NEXT: SessionUser = { id: 2, email: 'next@example.com', role: 'user' };
+    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: null, user: PREV });
+
+    // The SW mock replies on the transferred MessageChannel port (simulating
+    // caches.delete completing), which is what unblocks set({...NEXT}).
+    let swSeenIdentity: SessionUser | null = null;
+    const postMessage = vi.fn((_msg: unknown, transfer?: MessagePort[]) => {
+      swSeenIdentity = useAuthStore.getState().user; // store still holds PREV here
+      transfer?.[0]?.postMessage({ type: 'JARVIS_LOGOUT_DONE' });
+    });
+    vi.stubGlobal('navigator', {
+      serviceWorker: { controller: { postMessage }, addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    });
+
+    let clearIdentity: SessionUser | null = null;
+    mockQueryClientClear.mockImplementationOnce(() => { clearIdentity = useAuthStore.getState().user; });
+
+    await useAuthStore.getState().loginWithSession(NEXT);
+
+    expect(useAuthStore.getState().user).toEqual(NEXT);          // exposed only after the await
+    expect(swSeenIdentity).toEqual(PREV);                        // SW notified while PREV live
+    expect(clearIdentity).toEqual(PREV);                        // in-memory clears ran before set
+    expect(postMessage).toHaveBeenCalledWith({ type: 'JARVIS_LOGOUT' }, expect.any(Array));
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', mockFetch);
+  });
+
+  it('loginWithSession still resolves (and exposes the identity) when no SW controls the page', async () => {
+    vi.stubGlobal('navigator', { serviceWorker: { controller: null, addEventListener: vi.fn(), removeEventListener: vi.fn() } });
+    await useAuthStore.getState().loginWithSession({ id: 5, email: 'x@y.com', role: 'user' });
+    expect(useAuthStore.getState().user).toEqual({ id: 5, email: 'x@y.com', role: 'user' });
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', mockFetch);
+  });
+
+  it('loginWithSession resolves on timeout when the SW never acks', async () => {
+    vi.useFakeTimers();
+    const postMessage = vi.fn(); // never replies
+    vi.stubGlobal('navigator', { serviceWorker: { controller: { postMessage }, addEventListener: vi.fn(), removeEventListener: vi.fn() } });
+    const p = useAuthStore.getState().loginWithSession({ id: 6, email: 'z@z.com', role: 'user' });
+    await vi.advanceTimersByTimeAsync(1600);
+    await p;
+    expect(useAuthStore.getState().user).toEqual({ id: 6, email: 'z@z.com', role: 'user' });
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', mockFetch);
+  });
+
+  it('loginWithSession awaits IDB cache purge before exposing the new identity', async () => {
+    // Hold the IDB purge promise open so we can verify the ordering guarantee:
+    // isAuthenticated must remain false until the IDB clear resolves.
+    let resolveIdb!: () => void;
+    const idbPending = new Promise<void>((resolve) => {
+      resolveIdb = resolve;
+    });
+    mockClearPersistedQueryCache.mockImplementationOnce(() => idbPending);
+
+    const USER: SessionUser = { id: 99, email: 'new@example.com', role: 'user' };
+    const loginPromise = useAuthStore.getState().loginWithSession(USER);
+
+    // Drain the microtask queue so loginWithSession runs as far as it can
+    // without the IDB promise resolving (past the SW-clear await which is a
+    // no-op — no SW controller in the test environment).
+    await flushMicrotasks();
+
+    // IDB purge still pending — the new identity must NOT be exposed yet.
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    expect(useAuthStore.getState().user).toBeNull();
+
+    // Unblock the IDB clear and let loginWithSession finish.
+    resolveIdb();
+    await loginPromise;
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().user).toEqual(USER);
+  });
+
+  it('loginWithSession completes even if the IDB purge never settles', async () => {
+    // A stuck IndexedDB transaction (e.g. another tab holds the DB open) must not
+    // block login forever: the awaited purge is bounded by a timeout.
+    vi.useFakeTimers();
+    try {
+      mockClearPersistedQueryCache.mockImplementationOnce(
+        () => new Promise<void>(() => {}),
+      );
+      const USER: SessionUser = { id: 7, email: 'stuck@example.com', role: 'user' };
+      const loginPromise = useAuthStore.getState().loginWithSession(USER);
+
+      // Past the IDB bound (2000ms) and any SW-clear bound (1500ms).
+      await vi.advanceTimersByTimeAsync(4000);
+      await loginPromise;
+
+      expect(useAuthStore.getState().isAuthenticated).toBe(true);
+      expect(useAuthStore.getState().user).toEqual(USER);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

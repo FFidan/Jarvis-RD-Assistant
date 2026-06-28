@@ -42,3 +42,32 @@ class ContradictionListResponse(BaseModel):
 
     contradictions: list[PaperContradictionResponse]
     total: int
+
+
+class ConsensusAssessment(BaseModel):
+    """One verified agreement/disagreement underlying a consensus claim."""
+
+    stance: str
+    paper_a_title: str
+    paper_b_title: str
+    quote_a: str
+    quote_b: str
+    page_a: int | None = None
+    page_b: int | None = None
+
+
+class ConsensusClaim(BaseModel):
+    """Agreement/disagreement among related papers on one shared claim."""
+
+    claim_topic: str
+    supports: int
+    opposes: int
+    paper_ids: list[int]
+    assessments: list[ConsensusAssessment]
+
+
+class ConsensusResponse(BaseModel):
+    """Consensus view: stance counts per shared claim across the library."""
+
+    claims: list[ConsensusClaim]
+    total: int

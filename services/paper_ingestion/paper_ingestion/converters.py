@@ -14,6 +14,7 @@ from paper_ingestion.models import (
     FeedPaper,
     KeyFinding,
     PaperResponse,
+    RecentFeedback,
     SourceType,
     SummaryResponse,
 )
@@ -52,6 +53,13 @@ def row_to_paper_response(row: asyncpg.Record) -> PaperResponse:
 
 def row_to_feed_paper(row: asyncpg.Record) -> FeedPaper:
     """Convert a joined papers+summaries+user_state row to FeedPaper."""
+    recent_feedback = None
+    if row.get("recent_feedback_signal") is not None:
+        recent_feedback = RecentFeedback(
+            signal=row["recent_feedback_signal"],
+            source=row["recent_feedback_source"],
+            created_at=row["recent_feedback_created_at"],
+        )
     return FeedPaper(
         id=row["id"],
         external_id=row["external_id"],
@@ -69,6 +77,7 @@ def row_to_feed_paper(row: asyncpg.Record) -> FeedPaper:
         discovered_at=row.get("discovered_at"),
         created_at=row["created_at"],
         priority_score=row.get("priority_score"),
+        discovery_origin=row.get("discovery_origin", "user_initiated"),
         summary_brief=row.get("summary_brief"),
         tldr=row.get("tldr"),
         confidence=row.get("confidence"),
@@ -83,6 +92,7 @@ def row_to_feed_paper(row: asyncpg.Record) -> FeedPaper:
         recommendation_modes=row.get("recommendation_modes"),
         note_match_count=row.get("note_match_count", 0) or 0,
         note_snippet=row.get("note_snippet"),
+        recent_feedback=recent_feedback,
     )
 
 
@@ -124,34 +134,50 @@ def row_to_summary_response(row: asyncpg.Record) -> SummaryResponse:
     )
 
 
-async def hybrid_dict_to_paper_response(
-    result: dict,
+async def batch_hybrid_results_to_paper_responses(
+    results: list[dict],
     db_pool: asyncpg.Pool,
-) -> PaperResponse:
-    """Convert a hybrid-search result dict to a full ``PaperResponse``.
+) -> list[PaperResponse]:
+    """Convert a list of hybrid-search result dicts to ``PaperResponse`` objects.
 
-    The hybrid search returns a lightweight dict.  This helper fetches
-    the remaining columns (pdf_local_path, pdf_downloaded, etc.) so the
-    response matches the ``PaperResponse`` schema.
+    Issues a single ``SELECT … WHERE id = ANY($1)`` instead of one query per
+    result (eliminates the N+1 that ``hybrid_dict_to_paper_response`` had).
+    RRF rank order from the ``results`` input is preserved.  Papers deleted
+    between the search and the fetch fall back to a minimal ``PaperResponse``
+    built from the lightweight search dict.
     """
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", result["id"])
-    if row is None:
-        # Defensive: paper deleted between search and fetch
-        from datetime import datetime
+    from datetime import datetime
 
-        return PaperResponse(
-            id=result["id"],
-            external_id="",
-            source_type=SourceType.ARXIV,
-            title=result.get("title", ""),
-            authors=result.get("authors", []),
-            abstract=result.get("abstract"),
-            published_date=result.get("published_date"),
-            url=result.get("url", "https://unknown"),
-            created_at=datetime.now(UTC),
-        )
-    return row_to_paper_response(row)
+    ids = [r["id"] for r in results]
+    if not ids:
+        return []
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM papers WHERE id = ANY($1::bigint[])", ids)
+
+    by_id: dict[int, asyncpg.Record] = {row["id"]: row for row in rows}
+
+    responses: list[PaperResponse] = []
+    for result in results:
+        row = by_id.get(result["id"])
+        if row is not None:
+            responses.append(row_to_paper_response(row))
+        else:
+            # Defensive: paper deleted between search and fetch
+            responses.append(
+                PaperResponse(
+                    id=result["id"],
+                    external_id="",
+                    source_type=SourceType.ARXIV,
+                    title=result.get("title", ""),
+                    authors=result.get("authors", []),
+                    abstract=result.get("abstract"),
+                    published_date=result.get("published_date"),
+                    url=result.get("url", "https://unknown"),
+                    created_at=datetime.now(UTC),
+                )
+            )
+    return responses
 
 
 def deduplicate_by_paper_id(results: list[dict]) -> list[dict]:

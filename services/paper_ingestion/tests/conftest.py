@@ -244,9 +244,9 @@ from tests.pulse_helpers import (  # noqa: F401
 async def test_db_pool(live_pg_dsn):
     """Provide a real asyncpg pool against the live PostgreSQL fixture.
 
-    Applies db/init.sql (the full single-baseline schema)
-    + run_migrations() (no-op against the empty db/migrations/ today;
-    future-proofs for 0089+).
+    Applies db/init.sql (the full schema baseline through migration 101)
+    then run_migrations(), which is a no-op while db/migrations/ is empty.
+    New migrations (0102+) will be picked up automatically when they land.
     """
     import asyncio
     from pathlib import Path

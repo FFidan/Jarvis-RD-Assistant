@@ -131,7 +131,7 @@ export function AnalyticsPage() {
       {/* ── § REVIEW · N DAYS marker + DateRangeFilter ─────────────────── */}
       {/*
         DateRangeFilter placement decision:
-        The spec (§3.1) offers two options: (a) in the § REVIEW marker row or
+        Two options: (a) in the § REVIEW marker row or
         (b) below the hero as today. The marker-row variant is more compact and
         matches the mockup's "30 DAYS" label in the section header. However the
         button-group DateRangeFilter is wider than a compact dropdown and would

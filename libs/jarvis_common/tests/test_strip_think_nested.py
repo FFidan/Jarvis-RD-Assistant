@@ -1,4 +1,4 @@
-"""Tests for strip_think_blocks nested-tag handling (audit finding F-01).
+"""Tests for strip_think_blocks nested-tag handling.
 
 Covers: nested tags, unterminated blocks, empty blocks, idempotence, no-residual
 property, and parity with the streaming variant for non-nested inputs.

@@ -22,10 +22,10 @@ export interface FeedbackButtonsProps {
   className?: string;
   /**
    * When true, after a thumb click an optional free-text reason input slides in
-   * (Paper Detail sidebar only — spec §5.2 line 349). The reason is saved by
+   * (Paper Detail sidebar only). The reason is saved by
    * an UPSERT (the immediate thumb click submits without reason; the "Save reason"
    * button updates the existing row via ON CONFLICT (paper_id, user_id, source)
-   * DO UPDATE on the backend). Reason is collected for future analysis (spec §10);
+   * DO UPDATE on the backend). Reason is collected for future analysis;
    * does not influence L1/L2/L3 today.
    */
   showReasonInput?: boolean;
@@ -69,7 +69,7 @@ export function FeedbackButtons({
       }),
   });
 
-  // Spec §5.2 origin gate — hidden for user-initiated papers. MUST stay below all
+  // Origin gate — hidden for user-initiated papers. MUST stay below all
   // hook calls so hook order is identical on every render (react-hooks/rules-of-hooks).
   if (discoveryOrigin === 'user_initiated') return null;
 

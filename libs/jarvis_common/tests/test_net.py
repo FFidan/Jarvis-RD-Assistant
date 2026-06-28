@@ -60,7 +60,7 @@ async def test_rejects_on_resolution_failure() -> None:
 
 
 # ---------------------------------------------------------------------------
-# parse_retry_after — canonical Retry-After parser (ARCH-01)
+# parse_retry_after — canonical Retry-After parser
 # ---------------------------------------------------------------------------
 
 

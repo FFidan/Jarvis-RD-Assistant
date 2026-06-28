@@ -247,7 +247,7 @@ async def test_fetch_new_since_writes_run_history_on_success():
 
     # _insert_run_history should have been called; check execute was called
     assert mock_conn.execute.called
-    # LG-B3 adds a log_event call after _insert_run_history; search all calls.
+    # The source pipeline adds a log_event call after _insert_run_history; search all calls.
     all_calls = mock_conn.execute.call_args_list
     run_history_calls = [c for c in all_calls if "source_run_history" in c.args[0]]
     assert run_history_calls, "Expected at least one execute call to source_run_history"
@@ -305,7 +305,7 @@ async def test_fetch_new_since_writes_run_history_on_429_with_cooldown(monkeypat
 
     # run_history insert called with rate_limit status
     assert mock_conn.execute.called
-    # LG-B3 adds a log_event call after _insert_run_history; search all calls.
+    # The source pipeline adds a log_event call after _insert_run_history; search all calls.
     all_calls = mock_conn.execute.call_args_list
     run_history_calls = [c for c in all_calls if "source_run_history" in c.args[0]]
     assert run_history_calls, "Expected at least one execute call to source_run_history"

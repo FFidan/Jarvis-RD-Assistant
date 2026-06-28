@@ -146,7 +146,7 @@ async def test_compute_citation_signals_normalizes_small_graph(
 async def test_compute_citation_signals_scopes_liked_to_user(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Liked CTE must be scoped to the caller's user_id (DOM-B-02).
+    """Liked CTE must be scoped to the caller's user_id.
 
     User A likes paper P (paper_id=10).  When pulse runs for user B (user_id=2),
     the ``liked`` CTE query must bind user B's user_id, so user A's feedback

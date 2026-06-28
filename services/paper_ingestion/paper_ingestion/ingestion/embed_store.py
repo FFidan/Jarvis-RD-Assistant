@@ -315,7 +315,7 @@ class EmbeddingStoreMixin:
         return completed_point_ids
 
     async def delete_paper_vectors(self, paper_id: int) -> None:
-        """Delete all chunk vectors for a paper. Used by hard-delete (B1.1).
+        """Delete all chunk vectors for a paper. Used by the hard-delete path.
 
         Failures propagate — callers are responsible for transaction coordination.
 

@@ -1,5 +1,5 @@
 /**
- * SEC-XSS-001: Verify that preboot.js only applies allowlisted appearance
+ * Verify that preboot.js only applies allowlisted appearance
  * values to classList — arbitrary localStorage values must not be reflected.
  *
  * Strategy: read the raw script text, eval it inside the jsdom document
@@ -30,7 +30,7 @@ function runPreboot(appearance: Record<string, string> | null): DOMTokenList {
   return document.documentElement.classList;
 }
 
-describe('preboot.js — localStorage allowlist (SEC-XSS-001)', () => {
+describe('preboot.js — localStorage allowlist', () => {
   beforeEach(() => {
     document.documentElement.className = '';
     localStorage.clear();

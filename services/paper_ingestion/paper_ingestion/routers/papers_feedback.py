@@ -116,7 +116,7 @@ async def delete_paper_feedback(
 
 
 # ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/trash_and_reject  — combined action (spec §4.4)
+# PUT /api/papers/{paper_id}/trash_and_reject  — combined action
 # ---------------------------------------------------------------------------
 
 
@@ -130,7 +130,7 @@ async def trash_and_reject_paper(
 ):
     """Trash the paper AND record negative feedback (``source='dismiss_combined'``).
 
-    Single transaction. The only combined action in the system per spec §4.4.
+    Single transaction. The only combined action in the system.
     """
     async with db_pool.acquire() as conn:
         await papers_service.assert_paper_ownership(conn, paper_id, user_id)

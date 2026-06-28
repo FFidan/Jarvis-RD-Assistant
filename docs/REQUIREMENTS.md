@@ -56,7 +56,6 @@ Ollama is loopback-only by default. Security posture: [docs/SECURITY.md](SECURIT
 |----------|-----|-------|
 | `OPENALEX_API_KEY` | OpenAlex | Optional; improves rate limits, not required |
 | `PUBMED_API_KEY` | PubMed E-utilities | Optional; upgrades rate limit 3→10 req/s |
-| `UNPAYWALL_EMAIL` | Unpaywall | Any email; required by ToS |
 
 **Optional citation management:** Zotero Web API (see variables below).
 
@@ -103,7 +102,6 @@ Changes require rebuilding affected Docker containers.
 | `SEMANTIC_SCHOLAR_API_KEY` | — | Optional; increases S2 rate limit |
 | `OPENALEX_API_KEY` | — | Optional; improves OpenAlex rate limits, not required |
 | `PUBMED_API_KEY` | — | Optional NCBI key; upgrades PubMed rate limit |
-| `UNPAYWALL_EMAIL` | — | Any email; required by Unpaywall ToS |
 | `OPENALEX_EMAIL` | — | Optional; included in OpenAlex requests for the polite pool (blank = anonymous tier) |
 
 Zotero integration (API key, user/library ID, library type) is configured per-user

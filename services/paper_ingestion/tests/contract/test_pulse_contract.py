@@ -695,7 +695,7 @@ async def test_rate_card_up_writes_positive_feedback(
 async def test_e1_persist_deck_degraded_reason_stored(contract_conn, contract_two_users):
     """persist_deck stores degraded_reason='no_candidates' in pulse_decks row.
 
-    Exercises the degraded_reason column write (spec §7.3).  An empty card list
+    Exercises the degraded_reason column write.  An empty card list
     simulates the stage2-timeout-degraded path where no candidates pass scoring.
     Verified: pulse/deck.py:70-92 (_persist_deck_inner INSERT degraded_reason=$3).
     Survivor-of: test_pulse_deck.py::test_degraded_reason_persisted mock tests.
@@ -817,7 +817,7 @@ async def test_e1_rate_card_down_writes_negative_feedback(
 # ---------------------------------------------------------------------------
 
 
-# §C14-01 — POST /api/pulse/generate: job_id shape + job enqueued
+# POST /api/pulse/generate: job_id shape + job enqueued
 # Verified: routers/pulse.py:75-133 (generate_pulse — defer_async + PulseGenerateResponse)
 # Verified: task_registry.py:179-180 (_TASK_MAP / KIND_TO_TASK)
 # Survivor-of: test_pulse_router.py::test_generate_pulse_* mock-units
@@ -884,7 +884,7 @@ async def test_pulse_generate_endpoint_enqueues_job_and_returns_job_id_shape(
     )
 
 
-# §C14-02 — run_pulse: degraded_reason persisted when LLM returns 502
+# run_pulse: degraded_reason persisted when LLM returns 502
 # Verified: pulse/job.py:247-268 (stage2 exception → degraded_reason set + passed to persist_deck)
 # Verified: pulse/deck.py:73-89 (INSERT ... degraded_reason=$3)
 # Verified: db/init.sql:1093 (pulse_decks.degraded_reason text column)
@@ -1002,7 +1002,7 @@ async def test_pulse_run_degraded_path_persists_degraded_reason_to_db(
     )
 
 
-# §C14-03 — savepoint isolation: single-card upsert failure does not abort the deck
+# savepoint isolation: single-card upsert failure does not abort the deck
 # Verified: pulse/job.py:387-420 (async with conn.transaction() outer + inner savepoint per card)
 # Survivor-of: test_pulse_job.py::test_run_pulse_savepoint_isolates_per_card_failure
 #              test_pulse_job.py::test_upsert_persist_atomic_on_failure
@@ -1152,7 +1152,7 @@ async def test_pulse_run_savepoint_isolation_card_failure_does_not_abort_deck(
     )
 
 
-# §C14-04 — advisory lock: concurrent calls to _pulse_generate_job are short-circuited
+# advisory lock: concurrent calls to _pulse_generate_job are short-circuited
 # Verified: pulse/job.py:500-504 (AdvisoryLock → if not locked: return {"status": "blocked"})
 # Verified: advisory_lock.py:46-81 (pg_try_advisory_lock non-blocking)
 # Survivor-of: test_pulse_job.py::test_pulse_generate_job_happy_path (lock-held path)
@@ -1230,7 +1230,7 @@ async def test_pulse_generate_job_advisory_lock_skips_concurrent_calls(
     )
 
 
-# §C14-05 — user_id threading: generate as user B creates deck owned by user B
+# user_id threading: generate as user B creates deck owned by user B
 # Verified: routers/pulse.py:126 (defer_async job_id=jarvis_job_id, user_id=current_uid)
 # Verified: pulse/job.py:496-498 (user_id_raw = payload.get("user_id"))
 # Survivor-of: test_pulse_job.py::test_run_pulse_threads_user_id_to_profile_and_persistence
@@ -1291,7 +1291,7 @@ async def test_pulse_generate_user_id_threading_deck_is_user_scoped(
     )
 
 
-# §C14-06 — POST /api/pulse/generate: non-admin caller is rejected with 403
+# POST /api/pulse/generate: non-admin caller is rejected with 403
 # Verified: routers/pulse.py generate_pulse — Depends(require_admin)
 # Verified: libs/jarvis_common/jarvis_common/auth.py:206 (require_admin → 403)
 
@@ -1314,7 +1314,7 @@ async def test_pulse_generate_non_admin_returns_403(
     )
 
 
-# §C14-07 — POST /api/pulse/generate: 409 in-flight body never leaks another user's job id
+# POST /api/pulse/generate: 409 in-flight body never leaks another user's job id
 # Verified: routers/pulse.py generate_pulse — in-flight lookup scoped to args->>'user_id' = current_uid
 
 
@@ -1892,7 +1892,7 @@ async def test_pulse_routes_match_null_user_legacy_rows(contract_conn):
     assert idnf_count == 1
 
 
-# §C14-06 — H1 characterization: session- and transaction-level advisory locks
+# advisory lock characterization: session- and transaction-level advisory locks
 # share ONE Postgres lock space (PG docs §13.3.5) and conflict with each other.
 # Verified: pulse/job.py:577-579 — AdvisoryLock(pool,
 #           key1=_kind_lock_key("pulse.generate"), key2=user_id_or_zero)
@@ -1903,7 +1903,7 @@ async def test_pulse_routes_match_null_user_legacy_rows(contract_conn):
 
 
 async def test_scheduler_xact_probe_sees_pulse_session_advisory_lock(_contract_pool):
-    """Characterization guard for falsified audit finding H1 (2026-06-10).
+    """Characterization (2026-06-10).
 
     The audit claimed session-level (pulse job) and transaction-level (scheduler
     probe) advisory locks live in separate namespaces, so the probe could never

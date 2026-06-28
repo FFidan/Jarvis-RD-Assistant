@@ -22,6 +22,17 @@ import pytest
 from paper_ingestion.pipelines import auto_fetch as af
 
 
+def test_resolve_topic_pairs_defaults_and_coerces_ids():
+    from paper_ingestion.pipelines.auto_fetch import _resolve_topic_pairs
+
+    assert _resolve_topic_pairs([]) == [(None, "machine learning")]
+    assert _resolve_topic_pairs([{"id": 7, "name": "graphs"}]) == [(7, "graphs")]
+    # nameless rows are dropped; non-int id coerces to None
+    assert _resolve_topic_pairs([{"id": None, "name": "nlp"}, {"id": 3, "name": ""}]) == [
+        (None, "nlp")
+    ]
+
+
 def _make_app(conn) -> SimpleNamespace:
     pool = MagicMock()
     ctx = MagicMock()

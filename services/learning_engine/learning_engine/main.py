@@ -195,7 +195,7 @@ app.include_router(jobs.router)
 
 # ---------------------------------------------------------------------------
 # Health check — probes are service-owned; aggregator + routes live in
-# jarvis_common.health (DOM-J-03).
+# jarvis_common.health.
 # ---------------------------------------------------------------------------
 
 

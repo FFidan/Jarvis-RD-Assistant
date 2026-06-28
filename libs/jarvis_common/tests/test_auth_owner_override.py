@@ -1,4 +1,4 @@
-"""Tests for X-Owner-User-Id override audit-log emission (SEC-OWNER-2).
+"""Tests for X-Owner-User-Id override audit-log emission.
 
 Verified identifiers:
 - libs/jarvis_common/jarvis_common/auth.py:453-464 — audit-log success block in

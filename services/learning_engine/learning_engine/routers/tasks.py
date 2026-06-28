@@ -148,9 +148,10 @@ async def create_task(
 
         if body.parent_task_id is not None:
             parent = await conn.fetchval(
-                "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
+                "SELECT id FROM tasks WHERE id = $1 AND user_id = $2 AND project_id = $3",
                 body.parent_task_id,
                 user_id,
+                project_id,
             )
             if parent is None:
                 raise HTTPException(status_code=404, detail="Parent task not found")

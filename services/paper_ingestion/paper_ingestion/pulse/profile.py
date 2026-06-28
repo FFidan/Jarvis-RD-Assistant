@@ -231,7 +231,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
 
         # Read l2_lambda — validated by A2 config validator ([0.0, 2.0]); default 0.5.
         # Stored as a dedicated UserProfile field, NOT inside weights, so that
-        # stage3_combine never iterates it as a scoring signal (DOM-B-01).
+        # stage3_combine never iterates it as a scoring signal.
         raw_l2 = cfg.get("pulse.l2_lambda")
         l2_lambda: float = float(raw_l2) if raw_l2 is not None else 0.5
 
@@ -322,7 +322,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         )
         negative_authors: list[str] = [r["author"] for r in neg_author_rows]
 
-        # 9. L3 — dampened topics (≥5 negatives in 90d window), per spec §7.3.2.
+        # 9. L3 — dampened topics (≥5 negatives in 90d window).
         dampened_rows = await conn.fetch(
             """
             SELECT t.id, COUNT(*) AS neg_count
@@ -341,7 +341,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         # rows ordered by neg_count desc for deterministic cap truncation
         dampened_rows_sorted = sorted(dampened_rows, key=lambda r: r["neg_count"], reverse=True)
 
-        # 10. L3 dampening cap (spec §7.3.4): dampened_topics must not exceed
+        # 10. L3 dampening cap: dampened_topics must not exceed
         # 50% of all topic slots — prevents over-dampening a sparse topic list.
         topic_count = len(topics)
         dampened_set: set[int] = set()

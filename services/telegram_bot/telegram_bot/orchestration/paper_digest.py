@@ -109,7 +109,7 @@ logger = logging.getLogger(__name__)
 async def _fetch_digest_from_api(
     http_client: httpx.AsyncClient,
     config: BotConfig,
-    user_id: int | None = None,
+    user_id: int,
 ) -> dict | None:
     """Call the paper_ingestion digest endpoint.
 
@@ -119,8 +119,8 @@ async def _fetch_digest_from_api(
         Shared HTTP client.
     config : BotConfig
         Bot configuration (for service URL and API key).
-    user_id : int or None
-        DB user PK.  When set, adds ``X-Owner-User-Id`` header so the backend
+    user_id : int
+        DB user PK.  Adds ``X-Owner-User-Id`` header so the backend
         scopes the digest to that user's paper_user_state rows.
 
     Returns

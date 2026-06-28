@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import asyncpg
 import pytest
 from paper_ingestion.migrations_runner import (
     _MIGRATION_SCHEMA_PROBES,
@@ -39,20 +40,16 @@ def test_no_duplicate_migration_versions() -> None:
 
 
 _BOOTSTRAP_SEED_LO = 1
-_BOOTSTRAP_SEED_HI = 96  # next runner-owned migration; init.sql owns 1..(HI-1)
+_BOOTSTRAP_SEED_HI = 102  # next runner-owned migration; init.sql owns 1..(HI-1)
 
 
 def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     """init.sql bootstrap must use an explicit version list, not generate_series.
 
-    Post-squash (2026-05-19) + fold-ins (89=pdf_resolutions drop;
-    90=audit_log append-only; 91=author_alert_log per-user dedupe;
-    92=NULL-owner backfill; 93=papers.zotero_citation_key;
-    94=per-user extractions/entities/zotero notes; 95=user-FK CASCADE;
-    all folded into init.sql per db/migrations/README.md):
-    the seeded set must be exactly set(range(_BOOTSTRAP_SEED_LO,
-    _BOOTSTRAP_SEED_HI)) — contiguous, no gaps. The runner owns
-    _BOOTSTRAP_SEED_HI+.
+    init.sql embodies the complete schema baseline through version 101 (the
+    db/migrations/ directory is empty); the runner owns versions 102+.
+    The seeded set must be exactly set(range(_BOOTSTRAP_SEED_LO,
+    _BOOTSTRAP_SEED_HI)) — contiguous, no gaps.
     """
     repo_root = Path(__file__).resolve().parents[3]
     init_sql = (repo_root / "db" / "init.sql").read_text(encoding="utf-8")
@@ -74,10 +71,10 @@ def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
 
 
 def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
-    """The schema_migrations seed in init.sql must own the squashed + folded-in
-    versions; any on-disk migration file must use a higher number.
+    """The schema_migrations seed in init.sql must own the full consolidated baseline.
 
-    Post-squash (2026-05-19) + fold-ins:
+    init.sql embodies the complete schema baseline through version 101 (the
+    db/migrations/ directory is empty); the runner owns versions 102+.
     - init.sql owns _BOOTSTRAP_SEED_LO.._BOOTSTRAP_SEED_HI-1.
     - Any on-disk migration file in db/migrations/ must have version
       >= _BOOTSTRAP_SEED_HI (runner-applied, never pre-seeded).
@@ -214,3 +211,41 @@ async def test_repair_false_applied_migrations_treats_missing_dependencies_as_fa
 
 # test_migration_058_probe_requires_job_terminal_columns — DELETED
 # (db/migrations squash 2026-05-19): chain-coupled probe test; probes[58] KeyErrors on empty tuple.
+
+
+async def test_zotero_links_additive_structure_on_live_db(test_db_pool: asyncpg.Pool) -> None:
+    """ADDITIVE structural assertion against a live DB: the link table + per-user
+    indexes + kept global column come from the consolidated db/init.sql baseline
+    (not from run_migrations()). Confirms paper_user_zotero_links, uq_pu_zotero_item,
+    the re-scoped highlight index, and papers.zotero_item_key are all present.
+
+    Gated by the test_db_pool fixture, which pytest.skips without JARVIS_RUN_LIVE_PG=1.
+    """
+    async with test_db_pool.acquire() as conn:
+        assert (
+            await conn.fetchval("SELECT to_regclass('public.paper_user_zotero_links')") is not None
+        ), "paper_user_zotero_links table must exist"
+
+        indexes = {
+            r["indexname"]
+            for r in await conn.fetch(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' "
+                "AND tablename IN ('paper_user_zotero_links', 'paper_highlights')"
+            )
+        }
+        assert "uq_pu_zotero_item" in indexes, "per-user Zotero item unique index must exist"
+        assert "uq_paper_highlights_zotero_key" in indexes, (
+            "re-scoped per-user highlight annotation index must exist"
+        )
+        assert "idx_paper_highlights_zotero_key" not in indexes, (
+            "the old GLOBAL highlight annotation index must be dropped"
+        )
+
+        # ADDITIVE: the global source column is KEPT (vestigial), never dropped.
+        assert (
+            await conn.fetchval(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                "AND table_name = 'papers' AND column_name = 'zotero_item_key'"
+            )
+            == 1
+        ), "papers.zotero_item_key must still exist (additive-only migration)"

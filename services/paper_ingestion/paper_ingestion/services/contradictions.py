@@ -51,24 +51,34 @@ from paper_ingestion.services.contradictions_extract import (
 from paper_ingestion.services.contradictions_persist import (
     SCANNER_VERSION,
     _persist_contradiction,
+    aggregate_consensus,
     list_contradictions,
 )
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_CONTRADICTIONS = """\
-You are checking whether two quote-backed research findings contradict each other.
+You are comparing two quote-backed research findings about a shared claim.
 
 Rules:
 1. Decide only from the provided findings and quotes.
-2. Return is_contradiction=false when the papers merely differ in scope,
-   method, dataset, or emphasis.
-3. If is_contradiction=true, quote_a and quote_b must be copied exactly from the provided quotes.
-4. Do not invent supporting text.
+2. Set claim_topic to the shared claim both findings address, as a short
+   normalized noun phrase (e.g. "effect of caffeine on memory"). Use the same
+   wording when the same claim recurs so related findings group together.
+3. Set stance:
+   - "supports": both findings agree on the claim.
+   - "opposes": the findings make conflicting claims (a contradiction).
+   - "neutral": they merely differ in scope, method, dataset, or emphasis, or
+     are unrelated.
+4. Set is_contradiction=true only when stance is "opposes".
+5. For "supports" or "opposes", quote_a and quote_b must be copied exactly from
+   the provided quotes. Do not invent supporting text.
 
 Respond as JSON:
 {
   "is_contradiction": true,
+  "stance": "supports|opposes|neutral",
+  "claim_topic": "short shared claim",
   "contradiction_type": "direct|methodological|result|interpretation",
   "explanation": "one concise sentence",
   "quote_a": "exact copied quote from Paper A",
@@ -274,7 +284,7 @@ async def _classify_candidate(
             system=_SYSTEM_CONTRADICTIONS,
         ),
     )
-    if not result.is_contradiction:
+    if result.stance == "neutral":
         return None
     return result
 
@@ -396,6 +406,7 @@ __all__ = [
     "_quotes_verify",
     "_score_pair",
     "_terms",
+    "aggregate_consensus",
     "build_contradiction_candidates",
     "list_contradictions",
     "scan_contradictions",

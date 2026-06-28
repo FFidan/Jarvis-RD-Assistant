@@ -52,7 +52,11 @@ class FSRSManager:
         return dict(card.to_dict()), card.due
 
     def schedule_review(
-        self, fsrs_state: dict, rating: int, card_id: int | str | None = None
+        self,
+        fsrs_state: dict,
+        rating: int,
+        card_id: int | str | None = None,
+        review_datetime: datetime | None = None,
     ) -> tuple[dict, dict, datetime]:
         """Schedule a review and return updated state.
 
@@ -62,6 +66,11 @@ class FSRSManager:
             Current card state from database (JSONB).
         rating : int
             User rating: 1=Again, 2=Hard, 3=Good, 4=Easy.
+        review_datetime : datetime | None
+            UTC-aware timestamp of the review event.  When provided (offline
+            replay), FSRS anchors the interval calculation to this time rather
+            than the current clock, yielding correct next-due dates for delayed
+            reviews.  Must be timezone-aware and set to UTC (py-fsrs requirement).
 
         Returns
         -------
@@ -76,5 +85,7 @@ class FSRSManager:
             )
             card = Card()
         fsrs_rating = Rating(rating)
-        new_card, review_log = self.scheduler.review_card(card, fsrs_rating)
+        new_card, review_log = self.scheduler.review_card(
+            card, fsrs_rating, review_datetime=review_datetime
+        )
         return dict(new_card.to_dict()), dict(review_log.to_dict()), new_card.due

@@ -238,6 +238,32 @@ async def test_put_config_ghost_key_does_not_write_db(contract_conn, pi_settings
     assert row is None, "Ghost key must not write to user_config"
 
 
+async def test_owner_user_id_not_admin_writable(contract_conn, pi_settings_client):
+    """The owner.user_id system row is writable ONLY by create_first_admin.
+
+    It is absent from the config allow-list, so PUT /api/config/owner.user_id is
+    rejected (400) and never reaches the DB. Pins the invariant that the owner
+    record cannot be reassigned through the admin config surface.
+    """
+    from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
+    from paper_ingestion.services.config_metadata import _ALLOWED_CONFIG_KEYS
+
+    assert OWNER_USER_ID_CONFIG_KEY not in _ALLOWED_CONFIG_KEYS
+
+    resp = await pi_settings_client.put(
+        f"/api/config/{OWNER_USER_ID_CONFIG_KEY}",
+        json={"key": OWNER_USER_ID_CONFIG_KEY, "value": 999},
+    )
+    assert resp.status_code == 400
+    assert "Unknown config key" in resp.json()["detail"]
+
+    row = await contract_conn.fetchrow(
+        "SELECT 1 FROM user_config WHERE key = $1",
+        OWNER_USER_ID_CONFIG_KEY,
+    )
+    assert row is None, "owner.user_id must not be writable via PUT /api/config"
+
+
 # ---------------------------------------------------------------------------
 # E1.PI extensions — FSRS / L2 / weights / setup.completed / telegram.owner_chat_id
 #
@@ -1060,7 +1086,7 @@ async def test_get_my_export_excludes_other_users_papers(
 ):
     """A130 — cross-user isolation: user A's export ZIP must not contain user B's papers.
 
-    Closes a GDPR export-correctness audit finding: the
+    Closes a GDPR export-correctness gap: the
     happy-path test only checks status / content-type / non-empty body. A
     regression that passed the wrong user_id to ``build_export_zip`` (e.g.
     ``None`` or a hardcoded constant) would not be caught. Here we leverage the

@@ -486,7 +486,7 @@ async def test_check_authors_returns_matches_shape(_int_pool, _seed, monkeypatch
 async def test_fetch_new_paper_count_no_422(_int_pool, _seed, monkeypatch):
     """services_client.fetch_new_paper_count drives GET /api/papers/feed.
 
-    Regression guard for audit finding C2: the feed's date_from is a DATE query
+    Regression guard: the feed's date_from is a DATE query
     param; sending a full datetime ISO string is rejected with HTTP 422. The
     client must send a date string. This hits the REAL endpoint, so a regression
     to datetime would raise_for_status (422) here — a failure the mock-based unit

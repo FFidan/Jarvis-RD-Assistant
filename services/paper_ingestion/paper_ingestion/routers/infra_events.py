@@ -27,7 +27,7 @@ router = APIRouter(prefix="/infra-events", tags=["infra"])
 
 _INFRA_CACHED_ALLOWED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None
 
-# PI-SEC-03: cap the number of events accepted per request. The Vector sidecar
+# Cap the number of events accepted per request. The Vector sidecar
 # retries on any non-2xx, so a hard 413 on an oversized batch would trigger an
 # infinite retry storm. Instead we accept up to this many events, count the
 # overflow as ``skipped``, and still return 200 — Vector sees a successful
@@ -178,7 +178,7 @@ async def ingest_infra_events(
     if skipped:
         logger.warning("infra-events: skipped %d malformed NDJSON lines", skipped)
 
-    # PI-SEC-03: cap the batch. Count the overflow as skipped and return 200 so
+    # Cap the batch. Count the overflow as skipped and return 200 so
     # Vector (which retries on any non-2xx) does not enter a retry storm.
     if len(parsed) > _MAX_INFRA_BATCH:
         overflow = len(parsed) - _MAX_INFRA_BATCH

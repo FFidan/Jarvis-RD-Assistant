@@ -19,6 +19,7 @@ import { queryClient } from '@/lib/query-client';
 import { getNavigate } from '@/lib/navigate-bridge';
 import { isSafeRelativeHref } from '@/lib/safe-href';
 import { QUERY_KEYS } from '@/lib/query-keys';
+import { kindLabel } from '@/lib/labels/jobKinds';
 import { errorMessage } from '@/lib/errors';
 import type { PaperDetail } from '@/types';
 
@@ -58,7 +59,7 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => readonly (readonly unk
   'contradictions.scan':    (j) => {
     const paperId = getPaperIdFromJob(j);
     return paperId == null
-      ? [['contradictions']] // Note: bare prefix — no registry factory for all contradictions entries
+      ? [['contradictions'], QUERY_KEYS.consensus.all()] // Note: bare 'contradictions' prefix — no registry factory for all entries
       : [QUERY_KEYS.contradictions.verified(paperId), QUERY_KEYS.papers.detail(paperId)];
   },
   'zotero.push':            (j) => {
@@ -73,9 +74,29 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => readonly (readonly unk
     const paperId = getPaperIdFromJob(j);
     return paperId == null ? [] : [QUERY_KEYS.notes.user(paperId), QUERY_KEYS.notes.zotero(paperId)];
   },
+  'zotero.push_highlights': (j) => {
+    const paperId = getPaperIdFromJob(j);
+    return paperId == null ? [] : [QUERY_KEYS.highlights.list(paperId)];
+  },
   'zotero.poll':            () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts()],
   'zotero.sync_from_zotero': () => [QUERY_KEYS.papers.feedAll(), QUERY_KEYS.feed.counts()],
 };
+
+/**
+ * A `zotero.push_highlights` job reaches `succeeded` even when the export only
+ * partially worked — the handler returns a result `status` rather than raising —
+ * so a green "completed" toast would misreport a failure. Any non-`ok` status
+ * gets a warning that names the reason instead.
+ */
+const ZOTERO_PUSH_FAILURE_MESSAGES: Record<string, string> = {
+  not_linked: 'Link this paper to Zotero before exporting highlights.',
+  pdf_unavailable: 'The PDF is unavailable, so highlights could not be exported.',
+  quota_exceeded: 'Your Zotero storage is full — free up space and try again.',
+  config_decrypt_failed: 'Re-save your Zotero API key in Settings, then try again.',
+  disabled: 'Connect Zotero in Settings to export highlights.',
+};
+const zoteroPushWarning = (status: string): string =>
+  ZOTERO_PUSH_FAILURE_MESSAGES[status] ?? 'Some highlights could not be exported to Zotero.';
 
 /** Terminal statuses — job will not receive more events. */
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
@@ -295,7 +316,17 @@ export const useJobStore = create<JobStore>()(
             const zeroCards =
               job.kind === 'card.generate' &&
               (job.result as { cards_created?: number } | null)?.cards_created === 0;
-            if (!zeroCards) toast.success(`${job.kind} completed`);
+            // A highlight export can succeed-with-failures; warn instead of a
+            // green toast when the export status is anything but "ok".
+            const zoteroPushStatus =
+              job.kind === 'zotero.push_highlights'
+                ? (job.result as { status?: string } | null)?.status
+                : undefined;
+            if (zoteroPushStatus && zoteroPushStatus !== 'ok') {
+              toast.warning(zoteroPushWarning(zoteroPushStatus));
+            } else if (!zeroCards) {
+              toast.success(`${kindLabel(job.kind)} completed`);
+            }
             // Patch coverage/passes into the paper-detail cache BEFORE invalidating:
             // the refetched GET never carries them, so the banner state must be
             // merged from the job result here.
@@ -307,7 +338,7 @@ export const useJobStore = create<JobStore>()(
               }
             }
           } else if (job.status === 'failed') {
-            const msg = job.error?.message ?? `${job.kind} failed`;
+            const msg = job.error?.message ?? `${kindLabel(job.kind)} failed`;
             const actionLink = job.error?.action_link;
             if (actionLink) {
               toast.error(msg, {

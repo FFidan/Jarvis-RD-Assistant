@@ -6,6 +6,8 @@ All tests are async (asyncio_mode = auto in pyproject.toml).
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -313,7 +315,7 @@ async def test_fetch_bbt_citation_key_connection_error(client):
 
 
 # ---------------------------------------------------------------------------
-# fetch_items_since — PI-EDGE-001 pagination
+# fetch_items_since — pagination
 # ---------------------------------------------------------------------------
 
 
@@ -397,42 +399,42 @@ async def test_test_connection_failure(client):
 
 
 # ---------------------------------------------------------------------------
-# PI-EDGE-008: validate_bbt_base_url() — scheme + private-IP guard
+# validate_bbt_base_url() — scheme + private-IP guard
 # ---------------------------------------------------------------------------
 
 
 def test_validate_bbt_base_url_rejects_file_scheme():
-    """PI-EDGE-008: file:// scheme must be rejected by validate_bbt_base_url."""
+    """file:// scheme must be rejected by validate_bbt_base_url."""
     with pytest.raises(ValueError, match="unsupported scheme"):
         validate_bbt_base_url("file:///etc/passwd")
 
 
 def test_validate_bbt_base_url_rejects_ftp_scheme():
-    """PI-EDGE-008: ftp:// scheme must be rejected by validate_bbt_base_url."""
+    """ftp:// scheme must be rejected by validate_bbt_base_url."""
     with pytest.raises(ValueError, match="unsupported scheme"):
         validate_bbt_base_url("ftp://host.docker.internal:23119")
 
 
 def test_validate_bbt_base_url_rejects_private_ip():
-    """PI-EDGE-008: private IP addresses not in the allow-list are rejected."""
+    """Private IP addresses not in the allow-list are rejected."""
     with pytest.raises(ValueError, match="private/loopback"):
         validate_bbt_base_url("http://192.168.1.1:23119")
 
 
 def test_validate_bbt_base_url_rejects_loopback_ip():
-    """PI-EDGE-008: loopback IP 127.0.0.1 is rejected (not the docker alias)."""
+    """Loopback IP 127.0.0.1 is rejected (not the docker alias)."""
     with pytest.raises(ValueError, match="private/loopback"):
         validate_bbt_base_url("http://127.0.0.1:23119")
 
 
 def test_validate_bbt_base_url_accepts_host_docker_internal():
-    """PI-EDGE-008: host.docker.internal is explicitly allowed (Docker-Desktop standard)."""
+    """host.docker.internal is explicitly allowed (Docker-Desktop standard)."""
     # Must not raise — this is the default BBT_BASE_URL hostname.
     validate_bbt_base_url("http://host.docker.internal:23119")
 
 
 def test_validate_bbt_base_url_accepts_https_public_host():
-    """PI-EDGE-008: https:// with a public hostname is accepted."""
+    """https:// with a public hostname is accepted."""
     validate_bbt_base_url("https://my-zotero-bbt.example.com:23119")
 
 
@@ -578,3 +580,44 @@ async def test_get_item_children_raises_on_runaway_pagination(client):
 
     with pytest.raises(RuntimeError, match="paginator exceeded"):
         await client.get_item_children(item_key)
+
+
+# ---------------------------------------------------------------------------
+# add_item_to_collections
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_add_item_to_collections_merges_and_patches(client):
+    """GETs the item for its version, unions in the new collection keys, and PATCHes
+    only the grown set with an If-Unmodified-Since-Version precondition."""
+    item_key = "ITEMABC"
+    get_route = respx.get(f"{BASE}/items/{item_key}").mock(
+        return_value=httpx.Response(
+            200, json={"key": item_key, "version": 41, "data": {"collections": ["COLLA"]}}
+        )
+    )
+    patch_route = respx.patch(f"{BASE}/items/{item_key}").mock(return_value=httpx.Response(204))
+
+    await client.add_item_to_collections(item_key, ["COLLB", "COLLA"])
+
+    assert get_route.called and patch_route.called
+    sent = json.loads(patch_route.calls.last.request.content)
+    assert sorted(sent["collections"]) == ["COLLA", "COLLB"]
+    assert patch_route.calls.last.request.headers["If-Unmodified-Since-Version"] == "41"
+
+
+@respx.mock
+async def test_add_item_to_collections_noop_when_already_member(client):
+    """No PATCH when the item is already in every requested collection."""
+    item_key = "ITEMXYZ"
+    respx.get(f"{BASE}/items/{item_key}").mock(
+        return_value=httpx.Response(
+            200, json={"key": item_key, "version": 7, "data": {"collections": ["C1", "C2"]}}
+        )
+    )
+    patch_route = respx.patch(f"{BASE}/items/{item_key}").mock(return_value=httpx.Response(204))
+
+    await client.add_item_to_collections(item_key, ["C1"])
+
+    assert not patch_route.called

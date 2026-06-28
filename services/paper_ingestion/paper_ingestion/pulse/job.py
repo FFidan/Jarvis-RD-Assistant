@@ -477,7 +477,7 @@ async def _persist_pipeline(
                 successes = 0
                 for card in deck:
                     try:
-                        # B1.1: nested transaction issues SAVEPOINT/ROLLBACK TO SAVEPOINT
+                        # Nested transaction issues SAVEPOINT/ROLLBACK TO SAVEPOINT
                         # so a single-card failure cannot poison the outer transaction.
                         async with conn.transaction():
                             card.paper.discovery_origin = "pulse"
@@ -494,7 +494,7 @@ async def _persist_pipeline(
                             exc,
                         )
                         stats["last_error"] = f"upsert_paper: {exc}"
-                # B1.2: 0-card deck is observable
+                # A 0-card deck is observable
                 if successes == 0 and len(deck) > 0:
                     logger.warning(
                         "pulse.zero_card_deck: all %d upserts failed; 0-card deck will be "

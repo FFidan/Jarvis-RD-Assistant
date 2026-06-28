@@ -24,7 +24,8 @@ import { PriorityBadge } from '@/components/paper/PriorityBadge';
 import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
 import { CitationMenu } from '@/components/citation/CitationMenu';
 import { formatAuthors, formatDate } from '@/lib/utils';
-import { type FeedPaper, type SurfaceView, priorityLevel } from '@/types';
+import { type FeedPaper, type SurfaceView } from '@/types';
+import { priorityLevel } from '@/lib/priority';
 
 // Map lifecycle state to badge colour classes (B.2)
 const STATE_BADGE_CLASSES: Record<string, string> = {
@@ -158,7 +159,7 @@ function FeedPaperRowInner({
 
         <div className="flex flex-row flex-wrap items-center gap-2 sm:shrink-0 sm:flex-col sm:items-end sm:gap-1">
           <Badge variant="outline">{paper.source_type.toUpperCase()}</Badge>
-          {/* Spec §5.5: Pulse-origin papers also appear in Inbox; this badge makes the
+          {/* Pulse-origin papers also appear in Inbox; this badge makes the
               overlap legible without separating the data models. */}
           {(paper.discovery_origin === 'pulse' || paper.discovery_origin === 'recommender') && (
             <Badge
@@ -669,7 +670,7 @@ function FeedPaperRowInner({
 }
 
 /**
- * DOM-F-02: memoized to prevent re-renders of unrelated rows when sibling
+ * Memoized to prevent re-renders of unrelated rows when sibling
  * row state changes (e.g. one row's mutation fires → only that row re-renders).
  */
 export const FeedPaperRow = memo(FeedPaperRowInner);

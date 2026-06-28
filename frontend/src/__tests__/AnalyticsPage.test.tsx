@@ -230,7 +230,7 @@ describe('AnalyticsPage — Analytics IA', () => {
   it('renders all six chart card titles (regression guard)', async () => {
     renderPage();
     await waitFor(() => {
-      // ActivityChart is now titled "Daily Activity" per spec §3.3
+      // ActivityChart is now titled "Daily Activity"
       expect(screen.getByText('Daily Activity')).toBeInTheDocument();
       expect(screen.getByText('Retention Trend')).toBeInTheDocument();
       expect(screen.getByText('Papers by Source')).toBeInTheDocument();

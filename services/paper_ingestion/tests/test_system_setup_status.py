@@ -397,11 +397,13 @@ async def test_compute_model_warnings_not_pulled(monkeypatch):
 
     async def _fake_deployments():
         return [
-            {
-                "model_name": "smart",
-                "litellm_params": {"model": "ollama_chat/qwen3:8b"},
-                "model_info": {"id": "dep-1", "db_model": True},
-            }
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    "litellm_params": {"model": "ollama_chat/qwen3:8b"},
+                    "model_info": {"id": "dep-1", "db_model": True},
+                }
+            )
         ]
 
     monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
@@ -444,16 +446,20 @@ async def test_compute_model_warnings_empty_when_all_match(monkeypatch):
 
     async def _fake_deployments():
         return [
-            {
-                "model_name": "smart",
-                "litellm_params": {"model": "ollama_chat/qwen3:8b"},
-                "model_info": {"id": "dep-smart", "db_model": True},
-            },
-            {
-                "model_name": "fast",
-                "litellm_params": {"model": "ollama_chat/qwen3:4b"},
-                "model_info": {"id": "dep-fast", "db_model": True},
-            },
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    "litellm_params": {"model": "ollama_chat/qwen3:8b"},
+                    "model_info": {"id": "dep-smart", "db_model": True},
+                }
+            ),
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "fast",
+                    "litellm_params": {"model": "ollama_chat/qwen3:4b"},
+                    "model_info": {"id": "dep-fast", "db_model": True},
+                }
+            ),
         ]
 
     monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
@@ -497,12 +503,14 @@ async def test_compute_model_warnings_latest_tolerant(monkeypatch):
 
     async def _fake_deployments():
         return [
-            {
-                "model_name": "smart",
-                # LiteLLM reports with :latest
-                "litellm_params": {"model": "ollama_chat/qwen3:8b:latest"},
-                "model_info": {"id": "dep-smart", "db_model": True},
-            }
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    # LiteLLM reports with :latest
+                    "litellm_params": {"model": "ollama_chat/qwen3:8b:latest"},
+                    "model_info": {"id": "dep-smart", "db_model": True},
+                }
+            )
         ]
 
     monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
@@ -549,12 +557,14 @@ async def test_compute_model_warnings_excludes_embed_role(monkeypatch):
 
     async def _fake_deployments():
         return [
-            {
-                "model_name": "embed",
-                # embed routes a model that is NOT installed in Ollama.
-                "litellm_params": {"model": "ollama/qwen3-embedding:0.6b"},
-                "model_info": {"id": "dep-embed", "db_model": True},
-            }
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "embed",
+                    # embed routes a model that is NOT installed in Ollama.
+                    "litellm_params": {"model": "ollama/qwen3-embedding:0.6b"},
+                    "model_info": {"id": "dep-embed", "db_model": True},
+                }
+            )
         ]
 
     monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)

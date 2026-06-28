@@ -200,7 +200,7 @@ async def test_pull_model_admin_only(_base_app):
 
 
 # ---------------------------------------------------------------------------
-# 3. GET /api/system/hardware — SEC-D4-002
+# 3. GET /api/system/hardware
 # ---------------------------------------------------------------------------
 
 
@@ -236,7 +236,7 @@ async def test_hardware_admin_only(_base_app):
 
 
 # ---------------------------------------------------------------------------
-# 4. GET /api/system/models/recommendations — SEC-D4-002
+# 4. GET /api/system/models/recommendations
 # ---------------------------------------------------------------------------
 
 

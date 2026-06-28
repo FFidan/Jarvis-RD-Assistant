@@ -108,7 +108,7 @@ async def post_shutdown(application: Application) -> None:
     """
     import telegram_bot.internal_api as _iapi  # local import to avoid circular refs
 
-    # Gracefully stop the internal uvicorn server (D-01 / H-02)
+    # Gracefully stop the internal uvicorn server
     if _iapi._server_state.server is not None:
         _iapi._server_state.server.should_exit = True
     if _iapi._server_state.task is not None:

@@ -37,7 +37,7 @@ const SYSTEM_SECTIONS = new Set(['sources', 'models', 'system']);
 
 const ALL_VALID_SECTIONS = new Set([...PERSONAL_SECTIONS, ...SYSTEM_SECTIONS]);
 
-// Default landing per spec §3.5: §VI Research → Topics
+// Default landing: Research → Topics
 const DEFAULT_SECTION = 'research';
 const DEFAULT_ITEM = 'topics';
 

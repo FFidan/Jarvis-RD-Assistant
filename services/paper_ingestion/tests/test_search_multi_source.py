@@ -739,7 +739,10 @@ async def test_load_local_library_matches_filters_candidate_rows_by_args():
         "has_project_links": False,
     }
 
-    def filter_rows(_query, _user_id, dois, arxiv_ids, urls, external_ids, titles, years):
+    def filter_rows(_query, *params):
+        if not params:  # _resolve_zotero_user_id's sole-active-user lookup
+            return [{"id": 1}]
+        _user_id, dois, arxiv_ids, urls, external_ids, titles, years, _link_user_id = params
         selected = []
         for row in [matching_row, unrelated_row]:
             metadata = row["metadata"]
@@ -764,6 +767,67 @@ async def test_load_local_library_matches_filters_candidate_rows_by_args():
     assert indexes[("doi", "10.1000/key")].paper_id == 11
     assert ("doi", "10.1000/other") not in indexes
     assert title_year_candidates[("doi match paper", 2024)][0].match.paper_id == 11
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_single_user_zotero_indicator_survives_per_user_relocation(contract_conn):
+    """Single-user (None requester) must still see the Zotero indicator after 0101.
+
+    The migration-0101 backfill stored every link row under a CONCRETE owner. A
+    None requester must resolve to the sole active user so the link join keys on a
+    real id, not a NULL $1 (which would match no link row and silently drop the
+    indicator). The paper also carries a distinct vestigial global
+    papers.zotero_item_key so a regression that reverts to the global read — or
+    keys the join on $1 (NULL) — turns this RED instead of returning the link key.
+
+    # Verified: search_helpers.py:441 (link owner resolved via _resolve_zotero_user_id)
+    """
+    from jarvis_common.testing import SharedConnPool
+    from paper_ingestion.routers.search import _match_preview_result
+
+    sole_user_id = await contract_conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ('solo@single.example.com', 'user') RETURNING id"
+    )
+    paper_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers
+            (external_id, source_type, title, authors, url, published_date, metadata,
+             zotero_item_key, discovered_by)
+        VALUES ($1, 'arxiv', $2, ARRAY['Solo Author'], $3, '2024-01-01',
+                '{"doi": "10.1/solo"}'::jsonb, 'GLOBAL-STALE-KEY', $4)
+        RETURNING id
+        """,
+        "solo-ext",
+        "Solo Single-User Paper",
+        "https://example.test/solo",
+        sole_user_id,
+    )
+    await contract_conn.execute(
+        """
+        INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key)
+        VALUES ($1, $2, 'ZOT-SOLE-USER-KEY')
+        """,
+        paper_id,
+        sole_user_id,
+    )
+
+    preview = _make_paper(
+        "preview:solo",
+        "Solo Single-User Paper",
+        SourceType.ARXIV,
+        doi="10.1/solo",
+        pub_year=2024,
+        authors=["Solo Author"],
+    )
+    indexes, title_year_candidates = await _load_local_library_matches(
+        SharedConnPool(contract_conn), [preview], user_id=None
+    )
+    match = _match_preview_result(preview, indexes, title_year_candidates)
+
+    assert match is not None
+    assert match.paper_id == paper_id
+    expected_link_key = "ZOT-SOLE-USER-KEY"
+    assert match.zotero_item_key == expected_link_key
 
 
 # Cluster 2 deletion (2026-05-22): superseded by test_pi_search_contract.py (SR-01..SR-05).

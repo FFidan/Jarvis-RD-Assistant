@@ -91,7 +91,7 @@ function BatchButton<T>({
 
 export function HomePage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const { data: metrics, isLoading } = useQuery({
+  const { data: metrics, isLoading, isError, isSuccess } = useQuery({
     queryKey: QUERY_KEYS.dashboard.metrics(),
     queryFn: fetchDashboardMetrics,
     refetchInterval: 60_000,
@@ -105,7 +105,7 @@ export function HomePage() {
   const hasPapers = hasTopics && stage !== 'needs_papers';
   const hasProcessedPapers = hasPapers && stage === 'complete';
 
-  const showChecklist = !checklistDismissed && metrics?.onboarding_stage !== 'complete' && !isLoading;
+  const showChecklist = !checklistDismissed && metrics?.onboarding_stage !== 'complete' && isSuccess;
 
   // One-time onboarding-complete celebration. Visibility is latched into local
   // state BEFORE the persisted flag flips: marking celebrated immediately makes
@@ -206,7 +206,7 @@ export function HomePage() {
         </>
       )}
 
-      <MetricTileGrid metrics={metrics} isLoading={isLoading} />
+      <MetricTileGrid metrics={metrics} isLoading={isLoading} isError={isError} />
 
       <Card className="rounded-md border-hair shadow-none">
         <CardHeader>

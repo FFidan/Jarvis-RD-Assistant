@@ -51,6 +51,9 @@ jobs:
       - name: Ruff
         run: uv run ruff check services/ libs/ scripts/
 
+      - name: Guard - complexity budget (no-growth ratchet)
+        run: uv run python scripts/check-complexity-budget.py
+
       - name: Tach (module boundaries)
         run: uv run tach check
 
@@ -174,17 +177,23 @@ jobs:
       - name: Guard — exit 5 (no tests collected) is a failure
         if: always()
         run: |
-          # Re-run collection-only to confirm >0 tests were collected.
-          # If pytest --collect-only exits 5 the gate fails rather than
-          # silently passing with zero assertions.
-          COUNT=$(uv run pytest \
+          # Re-run collection-only and parse the N/M summary line.
+          # grep -c "test_user_b_cannot_reach" is rename-fragile: a renamed test
+          # drops the count to 0 and silently makes this gate vacuously green.
+          # The N/M collected footer is stable across test-name changes.
+          OUTPUT=$(uv run pytest \
             --override-ini="addopts=--import-mode=importlib" \
             -m "integration and live_pg" \
             services/paper_ingestion/tests/integration/test_cross_user_isolation.py \
-            --collect-only -q 2>&1 | grep -c "test_user_b_cannot_reach" || true)
-          echo "Collected $COUNT cross-user isolation test cases"
-          if [ "$COUNT" -eq 0 ]; then
-            echo "ERROR: zero tests collected — gate would pass vacuously. Fix the pytest invocation."
+            --collect-only -q 2>&1 || true)
+          echo "$OUTPUT" | tail -5
+          # Pytest prints "N/M tests collected" when a marker selects a subset, but
+          # "N tests collected" (no slash) when ALL collected tests match the marker
+          # (single-file invocation). Match both forms; extract the leading integer.
+          N=$(echo "$OUTPUT" | grep -oE '([0-9]+/[0-9]+|[0-9]+) tests collected' | head -1 | grep -oE '^[0-9]+')
+          echo "Cross-user isolation tests collected: ${N:-0}"
+          if [ -z "$N" ] || [ "$N" -eq 0 ]; then
+            echo "ERROR: zero cross-user isolation tests collected — gate would pass vacuously."
             exit 1
           fi
 
@@ -290,11 +299,12 @@ jobs:
 
   e2e-mocked:
     name: E2E mocked smoke (non-blocking)
-    # NOT listed in gate.needs — failures are informational only (continue-on-error).
+    # NOT listed in gate.needs — failures are informational only (continue-on-error: true).
     # The mocked suite is green as of 2026-06; it was previously red/cancelled due to a
     # Service-Worker-vs-page.route bypass, fixed via serviceWorkers:'block' in playwright.config.ts.
-    # Promote to required once it has >=2 consecutive green runs on master:
-    # flip continue-on-error:false AND add "e2e-mocked" to gate.needs.
+    # Promote to required after >=2 consecutive green e2e-mocked runs on master. Two edits required:
+    #   1. Set `continue-on-error: false` on this job (line below).
+    #   2. Add "e2e-mocked" to gate.needs (the list in the gate job below).
     timeout-minutes: 15
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
     # Run only after the frontend build succeeds so we know the bundle is healthy.
@@ -351,4 +361,4 @@ jobs:
     needs: [lint-test, cross-user-isolation, contract-tests, frontend]
     steps:
       - name: All required jobs passed
-        run: echo "lint-test + cross-user-isolation + frontend all green"
+        run: echo "lint-test + cross-user-isolation + contract-tests + frontend all green"

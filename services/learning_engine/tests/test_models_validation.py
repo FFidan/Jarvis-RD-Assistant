@@ -1,4 +1,4 @@
-"""Model-level validation bounds (LE-SEC-02).
+"""Model-level validation bounds.
 
 review_duration_ms is an untrusted client-supplied integer. It must be bounded
 to a sane range (0 .. 86_400_000 ms == one day) so a hostile or buggy client
@@ -64,3 +64,32 @@ def test_review_sync_event_duration_below_lower_bound_rejected():
             reviewed_at=datetime.now(UTC),
             review_duration_ms=-1,
         )
+
+
+def test_review_sync_event_far_future_reviewed_at_clamped_to_now():
+    """A far-future reviewed_at is clamped to ~now so it cannot push due_at forward."""
+    from datetime import timedelta
+
+    far_future = datetime.now(UTC) + timedelta(days=365)
+    event = ReviewSyncEvent(
+        idempotency_key="k1", card_id=1, rating=Rating.GOOD, reviewed_at=far_future
+    )
+    assert event.reviewed_at <= datetime.now(UTC) + timedelta(seconds=5)
+
+
+def test_review_sync_event_past_reviewed_at_unchanged():
+    """A past reviewed_at passes through untouched."""
+    from datetime import timedelta
+
+    past = datetime.now(UTC) - timedelta(hours=3)
+    event = ReviewSyncEvent(idempotency_key="k1", card_id=1, rating=Rating.GOOD, reviewed_at=past)
+    assert event.reviewed_at == past
+
+
+def test_review_sync_event_minor_future_skew_within_tolerance_unchanged():
+    """A reviewed_at a minute ahead (client clock skew) is within tolerance, not clamped."""
+    from datetime import timedelta
+
+    near = datetime.now(UTC) + timedelta(seconds=60)
+    event = ReviewSyncEvent(idempotency_key="k1", card_id=1, rating=Rating.GOOD, reviewed_at=near)
+    assert event.reviewed_at == near

@@ -4,13 +4,21 @@ Maps to the PostgreSQL schema defined in db/init.sql and provides
 request/response schemas for all API endpoints.
 """
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 _MAX_REVIEW_DURATION_MS = 86_400_000  # 24h in ms — upper bound for a single review's duration
+_MAX_FUTURE_SKEW = timedelta(minutes=5)  # tolerate client clock skew; clamp anything further ahead
 
 # --- Enums ---
 
@@ -167,6 +175,17 @@ class ReviewSyncEvent(BaseModel):
     reviewed_at: datetime
     review_duration_ms: int | None = Field(default=None, ge=0, le=_MAX_REVIEW_DURATION_MS)
 
+    @field_validator("reviewed_at")
+    @classmethod
+    def _clamp_future_reviewed_at(cls, value: datetime) -> datetime:
+        """Clamp a future reviewed_at to server-now so a client cannot push its
+        own card prompts forward; a small skew window absorbs honest clock drift."""
+        now = datetime.now(UTC)
+        aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        if aware > now + _MAX_FUTURE_SKEW:
+            return now
+        return value
+
 
 class ReviewSyncRequest(BaseModel):
     """Batch of offline reviews to reconcile, oldest-first."""
@@ -249,7 +268,7 @@ class ProjectResponse(BaseModel):
     color: str | None = None
     created_at: datetime
     updated_at: datetime
-    # Projects IA redesign §3.6/§4c — chapter-rail row counts. LEFT JOIN
+    # Chapter-rail row counts. LEFT JOIN
     # aggregations in list_projects; 0 when nothing linked.
     paper_count: int = 0
     open_question_count: int = 0
@@ -432,7 +451,7 @@ class ProjectDetailResponse(BaseModel):
     done_tasks: int = 0
     total_milestones: int = 0
     completed_milestones: int = 0
-    # Projects IA redesign §4c — parity with the widened list response.
+    # Parity with the widened list response.
     paper_count: int = 0
     open_question_count: int = 0
 

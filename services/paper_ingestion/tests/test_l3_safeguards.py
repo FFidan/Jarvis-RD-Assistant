@@ -1,4 +1,4 @@
-"""L3 safeguard contract tests (spec §7.3.1–7.3.4).
+"""L3 safeguard contract tests.
 
 Tests:
 1. _filter_unread 60d boundary  — papers with rec_feedback at 59d (excluded),

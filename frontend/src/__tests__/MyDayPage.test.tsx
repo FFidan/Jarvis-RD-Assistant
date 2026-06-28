@@ -168,7 +168,7 @@ describe('MyDayPage', () => {
   it('hides Yesterday section when there was no recorded activity', async () => {
     renderWithProviders();
     await screen.findByText(/RESEARCH LOG/);
-    // YesterdaySection is an on-the-fly rollup (UI_v3); it stays silent when
+    // YesterdaySection is an on-the-fly rollup; it stays silent when
     // completed+deferred are both empty (default mock).
     expect(screen.queryByText(/Yesterday/i)).not.toBeInTheDocument();
   });

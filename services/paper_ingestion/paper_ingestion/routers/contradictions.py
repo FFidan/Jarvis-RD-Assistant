@@ -13,8 +13,12 @@ from jarvis_common import (
 from jarvis_common.task_registry import KIND_TO_TASK
 
 from paper_ingestion.deps import get_db_pool, limiter
-from paper_ingestion.models import ContradictionListResponse, ContradictionScanRequest
-from paper_ingestion.services.contradictions import list_contradictions
+from paper_ingestion.models import (
+    ConsensusResponse,
+    ContradictionListResponse,
+    ContradictionScanRequest,
+)
+from paper_ingestion.services.contradictions import aggregate_consensus, list_contradictions
 
 router = APIRouter(
     prefix="/api",
@@ -47,6 +51,20 @@ async def get_contradictions(
             limit=limit,
         )
     return ContradictionListResponse(contradictions=contradictions, total=total)
+
+
+@router.get("/consensus", response_model=ConsensusResponse)
+@limiter.limit("30/minute")
+async def get_consensus(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
+) -> ConsensusResponse:
+    """Aggregate supports/opposes per shared claim across the caller's library."""
+    async with db_pool.acquire() as conn:
+        claims = await aggregate_consensus(conn, user_id=user_id, limit=limit)
+    return ConsensusResponse(claims=claims, total=len(claims))
 
 
 @router.post("/contradictions/scan", response_model=JobCreateResponse, status_code=202)

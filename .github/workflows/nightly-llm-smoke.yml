@@ -7,7 +7,7 @@ name: Nightly LLM smoke
 #
 # The offline cassette leg (respx-mocked /v1/chat/completions) runs always so
 # the smoke is meaningful even without a live model; the live leg runs only when
-# LITELLM_BASE_URL is set (it is on the self-hosted REDACTED-HOST runner, where the Docker
+# LITELLM_BASE_URL is set (it is on the self-hosted runner, where the Docker
 # stack with ollama + litellm is already up).
 
 on:

@@ -26,7 +26,7 @@ PULSE_TELEGRAM_TOP_N = 5
 def _pulse_keyboard(paper_id: int) -> InlineKeyboardMarkup:
     """Pulse-delivery keyboard.
 
-    Spec §5.3 callback name convention. The legacy ``pulse_(up|down|save)_<id>``
+    Callback name convention. The legacy ``pulse_(up|down|save)_<id>``
     handler was deleted; thumbs map to the per-paper feedback flow and Save
     uses the lifecycle endpoint.
     """
@@ -64,7 +64,7 @@ async def _deliver_pulse_to_chat(
     bot: Bot,
     config: BotConfig,
     chat_id: int,
-    user_id: int | None = None,
+    user_id: int,
 ) -> None:
     """Fetch today's Pulse deck and deliver to a single chat.
 
@@ -78,8 +78,8 @@ async def _deliver_pulse_to_chat(
         Bot configuration.
     chat_id : int
         Target Telegram chat ID.
-    user_id : int | None
-        DB user PK. When set, adds ``X-Owner-User-Id`` header so the backend
+    user_id : int
+        DB user PK. Adds ``X-Owner-User-Id`` header so the backend
         returns per-user Pulse data.
     """
     headers = _owner_headers(config, user_id)

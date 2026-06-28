@@ -1,6 +1,6 @@
 /**
  * HeroNow — 3-mode picker + smart default.
- * UI_v3 (spec §3.3): heroMode is persisted to localStorage('myday.heroMode')
+ * heroMode is persisted to localStorage('myday.heroMode')
  * (not the shared ui-store), matching the runnable prototype.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';

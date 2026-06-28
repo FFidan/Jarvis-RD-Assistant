@@ -212,7 +212,7 @@ def test_compute_vram_fit_qwen3_14b_unfit_at_32768_on_16gb() -> None:
 
     result = compute_vram_fit(entry, 32768, _hw_16gb())
 
-    # Contract §4 sanity table: required ~19.83 GB > 1.20 * 16 = 19.2 GB → unfit
+    # Sanity check: required ~19.83 GB > 1.20 * 16 = 19.2 GB → unfit
     assert result["default"] == "unfit", (
         f"Expected 'unfit' but got {result['default']!r}; "
         f"required_vram_gb={result['required_vram_gb']}"
@@ -232,7 +232,7 @@ def test_compute_vram_fit_qwen3_14b_fits_at_8192_on_16gb() -> None:
 
     result = compute_vram_fit(entry, 8192, _hw_16gb())
 
-    # Contract §4 sanity table: required ~10.0 GB ≤ 0.85 * 16 = 13.6 GB → fits
+    # Sanity check: required ~10.0 GB ≤ 0.85 * 16 = 13.6 GB → fits
     assert result["default"] == "fits", (
         f"Expected 'fits' but got {result['default']!r}; "
         f"required_vram_gb={result['required_vram_gb']}"
@@ -356,14 +356,14 @@ def test_build_model_statuses_uses_num_ctx_per_role() -> None:
 
 
 # ---------------------------------------------------------------------------
-# DOM-J-07: async_get_cached_hardware uses asyncio.to_thread on cache miss
+# async_get_cached_hardware uses asyncio.to_thread on cache miss
 # ---------------------------------------------------------------------------
 
 
 async def test_async_get_cached_hardware_uses_to_thread_on_cache_miss() -> None:
     """async_get_cached_hardware must delegate to asyncio.to_thread(detect_hardware)
     when no valid cache entry is present, ensuring the event loop is not blocked
-    by the nvidia-smi subprocess call (DOM-J-07)."""
+    by the nvidia-smi subprocess call."""
     fake_hw = _hw_16gb()
 
     async def _fake_to_thread(fn, *args, **kwargs):  # noqa: ARG001

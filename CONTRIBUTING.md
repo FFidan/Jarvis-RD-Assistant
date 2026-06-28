@@ -11,8 +11,9 @@ isolation expectation that every contributor must follow.
 - `master` is the main branch. All merged changes land here.
 - Work on a feature branch: `git checkout -b feat/<short-description>` or
   `fix/<short-description>`.
-- Open a Pull Request against `master`. One approving review is required before
-  merging.
+- Open a Pull Request against `master`. The project is currently maintained solo;
+  no approving review is required. Branch protection enforces the CI gate (`gate`
+  job) before merging.
 - Squash-merge or rebase-merge to keep `master` history linear.
 - Delete the branch after merging.
 
@@ -42,7 +43,7 @@ agreement is required.
 
 ## AI-Assisted Contributions
 
-This project was built with substantial AI assistance, and AI-assisted contributions are welcome — but every PR, human- or agent-authored, must pass the full gate (`make check`: ruff, ruff-format, pyright, tach, the Python + frontend test suites, and the build) before review.
+This project was built with substantial AI assistance, and AI-assisted contributions are welcome — but every PR, human- or agent-authored, must pass the full gate (`make check`: ruff lint, pyright, tach, the Python + frontend test suites, and the build) before review.
 
 ---
 

@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
  * This is NOT intent-routing and is NOT the global ⌘K search.
  * It filters by title/author within the already-active facet selection.
  *
- * spec §3.4: "scoped list-filter only for the current faceted view
+ * Scoped list-filter: only for the current faceted view
  * (title/author within active facets). It does NOT do intent-routing."
  */
 interface FeedListFilterProps {

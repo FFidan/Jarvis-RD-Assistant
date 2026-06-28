@@ -1,6 +1,6 @@
 """Characterization tests for the (pre-consolidation) Retry-After parsers.
 
-W5/ARCH-01 pins the CURRENT behaviour of the four divergent ``Retry-After``
+This module pins the CURRENT behaviour of the four divergent ``Retry-After``
 parsers BEFORE they are consolidated onto a single ``jarvis_common.net``
 helper, then is updated to reflect the now-unified behaviour.
 
@@ -16,7 +16,7 @@ The four parsers under characterization:
 
 Pre-consolidation, the two ``base`` parsers handle ONLY delta-seconds and
 return ``None`` on an HTTP-date input; the arXiv and Zotero parsers handle
-BOTH RFC-7231 forms. After ARCH-01 all four understand BOTH forms.
+BOTH RFC-7231 forms. After consolidation all four understand BOTH forms.
 """
 
 from __future__ import annotations
@@ -96,14 +96,14 @@ def test_base_exc_parser_none_and_garbage() -> None:
 
 
 def test_base_exc_parser_http_date_now_supported() -> None:
-    # ARCH-01: post-consolidation the exception parser ALSO understands HTTP-date.
+    # Post-consolidation, the exception parser ALSO understands HTTP-date.
     result = base_parse_exc(_exc_with_retry_after(_HTTP_DATE_FUTURE))
     assert result is not None
     assert result <= BASE_CAP
 
 
 def test_base_exc_parser_caps_over_cap_value() -> None:
-    # ARCH-01: the exception parser now caps at _MAX_RETRY_AFTER_S (was uncapped).
+    # The exception parser now caps at _MAX_RETRY_AFTER_S (was uncapped).
     assert base_parse_exc(_exc_with_retry_after(_OVER_CAP)) == BASE_CAP
 
 
@@ -124,7 +124,7 @@ def test_base_response_parser_none_and_garbage(stub_source) -> None:
 
 
 def test_base_response_parser_http_date_now_supported(stub_source) -> None:
-    # ARCH-01: the response parser ALSO understands HTTP-date and stays capped.
+    # The response parser ALSO understands HTTP-date and stays capped.
     result = stub_source._retry_after_seconds(_response_with_retry_after(_HTTP_DATE_FUTURE))
     assert result is not None
     assert result <= BASE_CAP

@@ -243,9 +243,9 @@ describe('FeedPaperRow', () => {
   });
 });
 
-// DOM-F-02 (regression): stable onHardDelete — FeedPaperRow must be memo'd and
+// Regression: stable onHardDelete — FeedPaperRow must be memo'd and
 // accept a stable onHardDelete reference without re-rendering.
-describe('FeedPaperRow onHardDelete stable callback (DOM-F-02 regression)', () => {
+describe('FeedPaperRow onHardDelete stable callback (regression)', () => {
   it('FeedPaperRow is memo-wrapped so a stable onHardDelete does not trigger spurious re-renders', () => {
     // Strategy: use a memo-wrapped spy that delegates to FeedPaperRow.
     // React.memo compares props by reference. If FeedPaperRow's own memo layer
@@ -300,7 +300,7 @@ describe('FeedPaperRow onHardDelete stable callback (DOM-F-02 regression)', () =
   });
 });
 
-// DOM-F-02: verify FeedPaperRow is wrapped in React.memo so unrelated rows do
+// Verify FeedPaperRow is wrapped in React.memo so unrelated rows do
 // not re-render when sibling state changes.
 describe('FeedPaperRow memoization', () => {
   it('test_feed_paper_row_is_memoized: is exported as a React.memo component', () => {

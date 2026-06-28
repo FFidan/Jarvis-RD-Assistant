@@ -47,7 +47,16 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
         " (ps.id IS NOT NULL) AS has_summary,"
         " pr.score AS recommendation_score,"
         " pr.explanation AS recommendation_reason,"
-        " pr.modes AS recommendation_modes"
+        " pr.modes AS recommendation_modes,"
+        " (SELECT rf.signal FROM recommendation_feedback rf"
+        "  WHERE rf.paper_id = p.id AND rf.user_id IS NOT DISTINCT FROM $1"
+        "  ORDER BY rf.created_at DESC, rf.id DESC LIMIT 1) AS recent_feedback_signal,"
+        " (SELECT rf.source FROM recommendation_feedback rf"
+        "  WHERE rf.paper_id = p.id AND rf.user_id IS NOT DISTINCT FROM $1"
+        "  ORDER BY rf.created_at DESC, rf.id DESC LIMIT 1) AS recent_feedback_source,"
+        " (SELECT rf.created_at FROM recommendation_feedback rf"
+        "  WHERE rf.paper_id = p.id AND rf.user_id IS NOT DISTINCT FROM $1"
+        "  ORDER BY rf.created_at DESC, rf.id DESC LIMIT 1) AS recent_feedback_created_at"
     )
 
 

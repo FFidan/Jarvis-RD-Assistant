@@ -116,9 +116,8 @@ async def extract_entities_for_paper(
     """Extract and persist entities and relationships for one paper.
 
     ``user_id`` is stamped onto every ``paper_entities`` row written by this
-    call so the KG read endpoints can scope results per-user (H3 +
-    M-01..M-04). Passing ``None`` writes a system-shared row, matching the
-    project convention from migs 062–076.
+    call so the KG read endpoints can scope results per-user. Passing ``None``
+    writes a system-shared row, matching the project convention from migs 062–076.
     """
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)

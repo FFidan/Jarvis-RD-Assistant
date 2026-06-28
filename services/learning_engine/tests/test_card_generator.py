@@ -249,7 +249,7 @@ async def test_generate_cards_filters_unverified_quotes_and_keeps_counts():
 def test_card_generation_data_template_escapes_title_injection() -> None:
     """</paper_text> in paper title must not break the prompt delimiter structure.
 
-    SEC-C01 regression: card_generator must use wrap_delimited, not fmt_safe.
+    Regression: card_generator must use wrap_delimited, not fmt_safe.
     """
     from jarvis_common.prompt_safety import wrap_delimited
     from learning_engine.card_generator import _CARD_DATA_TEMPLATE
@@ -382,7 +382,7 @@ async def test_generate_cards_all_generic_fronts_returns_empty_low(monkeypatch, 
 async def test_card_generation_succeeds_with_brace_in_paper_text() -> None:
     """{x ∈ ℝⁿ} in paper body must not cause KeyError from str.format().
 
-    H1 regression: literal { and } in paper text were interpreted as
+    brace-escape regression: literal { and } in paper text were interpreted as
     str.format() placeholders before the brace-escape fix was applied.
     """
     generator, _ = _make_generator()

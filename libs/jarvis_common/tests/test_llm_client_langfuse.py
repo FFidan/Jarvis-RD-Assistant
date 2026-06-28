@@ -1,4 +1,4 @@
-"""Tests for _langfuse_lifespan_hook — OBSERVABILITY_ENABLED gate (DOM-J-02).
+"""Tests for _langfuse_lifespan_hook — OBSERVABILITY_ENABLED gate.
 
 Covers three gate behaviours of :func:`jarvis_common.llm_client._langfuse_lifespan_hook`:
 1. No-op when OBSERVABILITY_ENABLED is false (the default).

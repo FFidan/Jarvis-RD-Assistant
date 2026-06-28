@@ -49,7 +49,7 @@ interface ActionsSidebarProps {
   pulseProcessButton?: boolean;
   /** Briefly pulse the Analyze Paper button (triggered by ?action=analyze query param) */
   pulseAnalyzeButton?: boolean;
-  /** discovery_origin used to gate the Recommendation Feedback section (spec §5.2). */
+  /** discovery_origin used to gate the Recommendation Feedback section. */
   discoveryOrigin?: 'user_initiated' | 'pulse' | 'recommender' | 'citation_batch';
   /** Last feedback signal (highlights the active thumb). */
   recentFeedback?: RecentFeedback | null;
@@ -494,7 +494,7 @@ export function ActionsSidebar({
 
       <Separator />
 
-      {/* Recommendation Feedback section — spec §5.2 line 349. */}
+      {/* Recommendation Feedback section. */}
       {/* FeedbackButtons self-gates on discoveryOrigin === 'user_initiated'; this section
           hides entirely when state='trash' (no double-prompt for trashed papers). */}
       {state !== 'trash' && discoveryOrigin !== 'user_initiated' && (

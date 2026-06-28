@@ -18,7 +18,7 @@ Behavioural contracts preserved (do not change without updating both
 service test suites):
 
 * ``LE-002`` — unknown kinds in permissive mode return ``400`` (not ``422``).
-* ``SYM-002`` — ``CreateJobRequest.payload`` uses
+* ``CreateJobRequest.payload`` uses
   ``Field(default_factory=dict)``; the default is never a shared mutable.
 * ``LE-002`` — ownership comparisons coerce both sides to ``str``
   so that asyncpg-returned ``user_id='42'`` matches caller ``user_id=42``.
@@ -119,7 +119,7 @@ def _owner_matches(row_user_id: Any, caller_user_id: int | None) -> bool:
     NULL-row jobs are system-only and require an authenticated caller.
     Anonymous callers (caller_user_id is None) are always rejected — this
     closes the SSE auth bypass where NULL-row jobs matched unauthenticated
-    requests (SEC-CRIT-01 / H-05).
+    requests.
     """
     if caller_user_id is None:
         return False
@@ -390,8 +390,7 @@ def _build_request_model(
     * ``payload_schemas`` falsy → permissive validation: ``kind`` non-empty,
       ``payload`` is an arbitrary dict.
 
-    Both variants use ``Field(default_factory=dict)`` to avoid SYM-002
-    (mutable default sharing).
+    Both variants use ``Field(default_factory=dict)`` to avoid mutable default sharing.
     """
     if not payload_schemas:
         return _build_permissive_request_model()

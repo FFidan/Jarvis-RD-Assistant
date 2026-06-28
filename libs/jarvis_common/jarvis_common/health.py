@@ -1,6 +1,6 @@
 """Shared FastAPI health-check route registration.
 
-DOM-J-03: Both ``paper_ingestion`` and ``learning_engine`` had hand-rolled
+Both ``paper_ingestion`` and ``learning_engine`` had hand-rolled
 ``_run_health_checks`` aggregators + ``/health`` + ``/health/internal`` route
 handlers that diverged only in their dependency probes.  This module extracts
 the aggregator and both route handlers so each service supplies its own list
@@ -179,7 +179,7 @@ def register_health_routes(
       use ``/health`` for the load-balancer's readiness probe.
     * ``GET /health`` (no auth) returns only ``{"status": "ok"|"degraded"}``.
       HTTP 200 when status is ``"ok"``, HTTP 503 when ``"degraded"``.  Never
-      exposes dependency details to unauthenticated callers (SEC-H09).
+      exposes dependency details to unauthenticated callers.
     * ``GET /health/internal`` requires ``verify_api_key`` and returns the
       full :class:`HealthCheckResponse` body.  Same 200/503 split.
 

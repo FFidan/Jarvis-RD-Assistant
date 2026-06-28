@@ -1,4 +1,4 @@
-"""Tests for M12 — list/string param caps on feed and discovery endpoints.
+"""Tests for list/string param caps on feed and discovery endpoints.
 
 Verifies that:
 - GET /api/papers/feed rejects CSV string params exceeding 500 characters (422).
@@ -59,7 +59,7 @@ def api_client():
 
 
 # ---------------------------------------------------------------------------
-# M12 — feed CSV param caps
+# feed CSV param caps
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +128,7 @@ class TestFeedStringParamCaps:
 
 
 # ---------------------------------------------------------------------------
-# M12 — discover paper_ids list cap
+# discover paper_ids list cap
 # ---------------------------------------------------------------------------
 
 

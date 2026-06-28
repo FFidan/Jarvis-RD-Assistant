@@ -125,7 +125,7 @@ async def test_stream_job_with_user_id_and_no_caller_returns_401(_app_with_pool)
 
     stream_job uses current_user_id_strict which raises 401 before the
     ownership check runs, so an anonymous caller is rejected at the auth
-    layer regardless of the job's user_id (SEC-CRIT-01 / H-05).
+    layer regardless of the job's user_id.
     """
     app, _pool = _app_with_pool(job_user_id=42, caller_user_id=None)
 
@@ -145,7 +145,7 @@ async def test_stream_job_with_null_user_id_and_no_caller_returns_401(_app_with_
 
     current_user_id_strict raises 401 before ownership is checked.
     System-only (NULL-row) jobs require an authenticated caller; even then
-    _owner_matches returns False for NULL row_user_id (SEC-CRIT-01).
+    _owner_matches returns False for NULL row_user_id.
     """
     app, _pool = _app_with_pool(job_user_id=None, caller_user_id=None)
 

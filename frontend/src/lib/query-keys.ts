@@ -112,10 +112,20 @@ export const QUERY_KEYS = {
     zotero: (paperId: number) => ["notes", paperId, "zotero"] as const,
   },
 
+  // ── Highlights (in-PDF annotation reader) ─────────────────────────────────
+  highlights: {
+    list: (paperId: number) => ["highlights", paperId] as const,
+  },
+
   // ── Contradictions ────────────────────────────────────────────────────────
   contradictions: {
     verified: (paperId: number) =>
       ["contradictions", paperId, "verified"] as const,
+  },
+
+  // ── Consensus ─────────────────────────────────────────────────────────────
+  consensus: {
+    all: () => ["consensus"] as const,
   },
 
   // ── Zotero ────────────────────────────────────────────────────────────────

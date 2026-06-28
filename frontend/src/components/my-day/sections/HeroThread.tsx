@@ -18,7 +18,7 @@ function formatLastAt(iso: string): string {
 
 /**
  * Hero "Resume thread" mode (prototype :475-499). Surfaces the
- * most-recently-touched open thread (smart-hero "thread" mode per SPEC §4).
+ * most-recently-touched open thread (smart-hero "thread" mode).
  */
 export function HeroThread() {
   const queryClient = useQueryClient();

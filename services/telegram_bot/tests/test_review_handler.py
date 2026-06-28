@@ -3,7 +3,7 @@
 Covers: review_start, show_answer, rate_card, cancel_review.
 Each handler is tested directly with mocked Update + Context objects.
 
-SEC-RATING-1 tests are at the bottom of this module.
+Regex-guard tests are at the bottom of this module.
 Verified: handlers/review_handler.py:204 (_RATING_RE guard in rate_card)
 """
 
@@ -322,7 +322,7 @@ async def test_cancel_review():
 
 
 # ---------------------------------------------------------------------------
-# Tests: SEC-RATING-1 — regex guard on query.data
+# Tests: regex guard on query.data
 # ---------------------------------------------------------------------------
 
 # Use a distinct chat_id so the rate-limiter bucket for these tests is
@@ -337,7 +337,7 @@ _SEC_CHAT_ID = 55555
 async def test_rate_card_rejects_malformed_query_data() -> None:
     """Non-integer / out-of-range rating in query.data must not raise ValueError.
 
-    SEC-RATING-1: bare int(query.data.split('_')[1]) replaced with _RATING_RE guard.
+    Bare int(query.data.split('_')[1]) replaced with _RATING_RE guard.
     """
     user_data = {"current_card": _sample_card(), "cards_reviewed": 0}
     update, context, _mock_http = _make_callback_update_and_context(
@@ -380,14 +380,14 @@ async def test_rate_card_rejects_injected_prefix() -> None:
 
 
 # Distinct chat_id bucket so this test doesn't tip the 5-call rate-limiter
-# quota shared by the three SEC-RATING-1 regex-guard tests above (which would
+# quota shared by the three regex-guard tests above (which would
 # bleed quota exhaustion into test_review_handler_reauth.py order-dependent).
 _W2_CF4_CHAT_ID = 77777
 
 
 @pytest.mark.asyncio
 async def test_rate_card_malformed_data_answers_with_text() -> None:
-    """Malformed query.data must answer with user-facing text (SEC-RATING-1).
+    """Malformed query.data must answer with user-facing text.
 
     Bare query.answer() leaves Telegram UI showing live (now non-functional) buttons.
     The fix passes text= so Telegram dismisses the spinner with a visible message.
@@ -440,7 +440,7 @@ async def test_rate_card_valid_rating_parses_correctly() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tests: SEC-RATING-1 behavioral coverage for ratings 1 and 2
+# Tests: behavioral coverage for ratings 1 and 2
 # ---------------------------------------------------------------------------
 
 # Separate chat_id bucket so the 5-call rate-limiter quota from _TEST_CHAT_ID
@@ -504,7 +504,7 @@ async def test_rate_card_ratings_1_and_2_send_correct_payload(
 
 
 # ---------------------------------------------------------------------------
-# Tests: H6 — review_start via the inline "Start Review" button must answer
+# Tests: review_start via the inline "Start Review" button must answer
 # the callback query (otherwise the Telegram client spins forever)
 # ---------------------------------------------------------------------------
 
@@ -561,7 +561,7 @@ async def test_review_start_callback_answers_query_on_auth_fail() -> None:
 
 @pytest.mark.asyncio
 async def test_review_start_command_path_does_not_touch_callback_query() -> None:
-    """/review (command entry) has no callback query — the H6 ack must be a
+    """/review (command entry) has no callback query — the ack must be a
     no-op there and the first card still renders."""
     update, context, mock_http = _make_command_update_and_context()
     card = _sample_card()

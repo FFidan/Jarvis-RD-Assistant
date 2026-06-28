@@ -1,5 +1,5 @@
 /**
- * /ask — Cross-paper reasoning workspace (nav group Ⅳ, Shell/Sidebar spec §3.4).
+ * /ask — Cross-paper reasoning workspace (nav group Ⅳ).
  *
  * Ask is its own dedicated surface reached via the "Ⅳ Ask" sidebar group.
  * It is NOT folded into the Research Feed tab set.

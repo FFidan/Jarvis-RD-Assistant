@@ -30,7 +30,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 #
 # Maps each job kind to the procrastinate queue (= service name) that handles it.
-# Used by task_registry.py to set task.queue, and by tests to verify routing.
+# Single source of truth for queue routing: cross-service ``defer`` targets AND
+# each service's worker consume-queue (in ``register_*_tasks``) resolve from this
+# map via ``queue_for_kind``, so a queue rename changes exactly one place.
+# ``test_queue_assignments_match_owner_map`` binds the real registration back to
+# this map; ``register_tasks`` itself takes ``queue`` as an explicit arg.
 #
 # Ownership map:
 JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "telegram_bot"]] = {
@@ -53,10 +57,23 @@ JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "tele
     "zotero.resync": "paper_ingestion",
     "zotero.sync_from_zotero": "paper_ingestion",
     "zotero.sync_annotations": "paper_ingestion",
+    "zotero.push_highlights": "paper_ingestion",
     # learning_engine handlers
     "card.generate": "learning_engine",
     "card.generate_batch": "learning_engine",
 }
+
+
+def queue_for_kind(kind: str) -> str:
+    """Return the procrastinate queue (owning service name) that handles *kind*.
+
+    Use at cross-service enqueue sites and in each service's ``register_*_tasks``
+    instead of a bare queue literal so a queue rename propagates from
+    ``JOB_HANDLER_OWNER`` alone. Raises ``KeyError`` for an unknown kind
+    (fail-fast: a typo must not silently route to a never-consumed queue).
+    """
+    return JOB_HANDLER_OWNER[kind]
+
 
 # ---------------------------------------------------------------------------
 # Protocols

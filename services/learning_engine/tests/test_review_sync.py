@@ -1,6 +1,6 @@
 """Pure unit tests for ReviewSyncResponse schema (CFG-SYNCSTATS-1),
 _build_fsrs_manager_from_db single-step warning path (CFG-RECVAL-1),
-and the skipped-card idempotency fix (M11d).
+the skipped-card idempotency fix (M11d), and FSRS event-time threading.
 
 These tests assert only on schema and unit-level behaviour, with no
 mock-units patching router internals. Shape: pure-unit (no DB, no HTTP).
@@ -9,7 +9,7 @@ mock-units patching router internals. Shape: pure-unit (no DB, no HTTP).
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -188,4 +188,174 @@ async def test_duplicate_key_for_missing_card_counts_as_skipped_then_already_syn
     )
     assert result.synced == 0, (
         f"Expected synced=0 (no card exists to write); got synced={result.synced}."
+    )
+
+
+# ---------------------------------------------------------------------------
+# FSRS event-time threading
+# ---------------------------------------------------------------------------
+
+
+def test_schedule_review_event_time_shifts_next_due():
+    """Passing review_datetime anchors FSRS intervals to the event time, not now.
+
+    A review timestamped 48 hours in the past must produce a next_due that is
+    ~48 hours earlier than scheduling without review_datetime (which anchors to
+    the current clock).
+    """
+    from fsrs import Card
+
+    from learning_engine.fsrs_manager import FSRSManager
+
+    manager = FSRSManager()
+    card_state = dict(Card().to_dict())
+    past_time = datetime.now(UTC) - timedelta(hours=48)
+
+    _, _, due_event_time = manager.schedule_review(card_state, rating=3, review_datetime=past_time)
+    _, _, due_sync_time = manager.schedule_review(card_state, rating=3)
+
+    assert due_event_time != due_sync_time, (
+        "schedule_review with review_datetime must anchor next_due to the event time; "
+        "got identical next_due for a 48-hour-old event vs. sync-time scheduling"
+    )
+    # Event-time next_due must precede sync-time next_due (interval starts earlier).
+    assert due_event_time < due_sync_time, (
+        f"Event-time next_due ({due_event_time}) must be earlier than sync-time "
+        f"next_due ({due_sync_time}) for a 48-hour-delayed review"
+    )
+
+
+def test_schedule_review_no_review_datetime_anchors_to_now():
+    """Regression: omitting review_datetime anchors next_due to the current clock.
+
+    Without the fix (drop review_datetime arg), due_at is relative to now, not
+    to the original review time.  This test captures the pre-fix baseline so that
+    reverting the sync_reviews change causes test_schedule_review_event_time_shifts_next_due
+    to collapse (both calls would then produce sync-time-relative results).
+    """
+    from fsrs import Card
+
+    from learning_engine.fsrs_manager import FSRSManager
+
+    manager = FSRSManager()
+    card_state = dict(Card().to_dict())
+
+    _, _, due = manager.schedule_review(card_state, rating=3)
+    now = datetime.now(UTC)
+
+    # Without review_datetime, the interval is anchored to "now", so due > now.
+    assert due > now - timedelta(minutes=1), (
+        "Without review_datetime, next_due must be relative to the current time"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Atomic daily_log write inside the per-event transaction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_today_event_writes_daily_log_inside_per_event_transaction():
+    """A today-dated synced event increments daily_log inside its per-event
+    transaction — NOT in a separate trailing connection.
+
+    Pre-fix the handler did one extra pool.acquire() after the loop to apply a
+    batched daily_log UPSERT; a crash before it (or an already-synced retry)
+    permanently lost the count. The atomic write keeps acquires to: pre-flight (1)
+    + one chunk (1) = 2.
+
+    Shape: pure-unit — mocked pool, no HTTP, no DB.
+    """
+    from jarvis_common.testing import make_pool_and_conn
+
+    from learning_engine.routers.review import sync_reviews
+
+    body = ReviewSyncRequest(
+        reviews=[
+            {  # type: ignore[list-item]
+                "idempotency_key": "today-atomic-1",
+                "card_id": 1,
+                "rating": 3,
+                "reviewed_at": datetime.now(UTC).isoformat(),
+            }
+        ]
+    )
+    # fetch -> [] (no applied keys, no fsrs config rows); fetchrow -> owned card;
+    # fetchval -> inserted log id (insert won the row).
+    pool, conn = make_pool_and_conn(
+        fetch_return=[],
+        fetchrow_return={"fsrs_state": {}},
+        fetchval_return=123,
+    )
+    handler = getattr(sync_reviews, "__wrapped__", sync_reviews)
+
+    result = await handler(request=MagicMock(), body=body, db_pool=pool, user_id=1)
+
+    assert result.synced == 1, f"expected synced=1; got {result!r}"
+    assert pool.acquire.call_count == 2, (
+        "daily_log must be written inside the per-event transaction; a trailing "
+        f"acquire signals a non-atomic batched update (got {pool.acquire.call_count})"
+    )
+    daily_log_writes = [c for c in conn.execute.await_args_list if "daily_log" in c.args[0]]
+    assert len(daily_log_writes) == 1, (
+        f"expected exactly one daily_log upsert; got {len(daily_log_writes)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_replays_events_oldest_first(monkeypatch):
+    """Out-of-order events are replayed by ascending reviewed_at (oldest-first),
+    so per-card FSRS state advances chronologically.
+
+    Shape: pure-unit — mocked pool, FSRS scheduling intercepted to record order.
+    """
+    from jarvis_common.testing import make_pool_and_conn
+
+    import learning_engine.routers.review as review_mod
+    from learning_engine.routers.review import sync_reviews
+
+    older = datetime(2024, 6, 1, 8, 0, 0, tzinfo=UTC)
+    newer = datetime(2024, 6, 1, 20, 0, 0, tzinfo=UTC)
+    # Submitted NEWEST-first (violating the contract) to prove server-side sort.
+    body = ReviewSyncRequest(
+        reviews=[
+            {  # type: ignore[list-item]
+                "idempotency_key": "ord-newer",
+                "card_id": 1,
+                "rating": 3,
+                "reviewed_at": newer.isoformat(),
+            },
+            {  # type: ignore[list-item]
+                "idempotency_key": "ord-older",
+                "card_id": 1,
+                "rating": 3,
+                "reviewed_at": older.isoformat(),
+            },
+        ]
+    )
+
+    seen: list[datetime] = []
+
+    class _RecordingManager:
+        def schedule_review(self, state, rating, review_datetime=None):
+            seen.append(review_datetime)
+            return ({"s": 1}, {"l": 1}, datetime.now(UTC))
+
+    async def _fake_build(conn, user_id=None):
+        return _RecordingManager()
+
+    monkeypatch.setattr(review_mod, "_build_fsrs_manager_from_db", _fake_build)
+
+    pool, _ = make_pool_and_conn(
+        fetch_return=[],
+        fetchrow_return={"fsrs_state": {}},
+        fetchval_return=123,
+    )
+    handler = getattr(sync_reviews, "__wrapped__", sync_reviews)
+    result = await handler(request=MagicMock(), body=body, db_pool=pool, user_id=1)
+
+    assert result.synced == 2, f"both events should sync; got {result!r}"
+    assert seen == sorted(seen), f"FSRS must see reviews oldest-first; got replay order {seen}"
+    assert seen[0].astimezone(UTC) == older, (
+        f"first replayed event must be the older one; got {seen[0]}"
     )

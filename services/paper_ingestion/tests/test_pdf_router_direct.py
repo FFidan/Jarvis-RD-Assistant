@@ -513,7 +513,7 @@ def test_process_pdf_async_response_model_no_500():
 
 
 # ---------------------------------------------------------------------------
-# DOM-A-04: download_pdf null-row guard must run before ownership check
+# download_pdf null-row guard must run before ownership check
 # ---------------------------------------------------------------------------
 
 # Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).

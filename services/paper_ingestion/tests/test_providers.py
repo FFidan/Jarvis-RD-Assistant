@@ -458,7 +458,7 @@ async def test_test_provider_connection_error_returns_ok_false(_app):
 @respx.mock
 @pytest.mark.usefixtures("fernet_key")
 async def test_google_probe_uses_header_not_url_param(_app):
-    """SEC-003: Google probe must send key via x-goog-api-key header, never as URL param."""
+    """Google probe must send key via x-goog-api-key header, never as URL param."""
     from jarvis_common.crypto import encrypt_secret
 
     app, conn = _app
@@ -486,7 +486,7 @@ async def test_google_probe_uses_header_not_url_param(_app):
     assert len(captured) == 1, "Expected exactly one outbound Google request"
     req = captured[0]
 
-    # Key must NOT appear in the URL query string (SEC-003)
+    # Key must NOT appear in the URL query string
     assert "key=" not in str(req.url), f"API key leaked in URL: {req.url}"
     # Key must be in the request header
     assert req.headers.get("x-goog-api-key") == plaintext_key, (

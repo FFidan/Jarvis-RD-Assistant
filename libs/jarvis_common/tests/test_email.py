@@ -538,7 +538,7 @@ async def test_effective_smtp_status_empty_string_required_field(monkeypatch) ->
 
 
 # ---------------------------------------------------------------------------
-# S1 (F1): auth-consistency signal in effective_smtp_status
+# Auth-consistency signal in effective_smtp_status
 # ---------------------------------------------------------------------------
 
 
@@ -674,7 +674,7 @@ async def test_effective_smtp_absent_db_row_falls_back_to_env(monkeypatch) -> No
 
 
 # ---------------------------------------------------------------------------
-# S1 (F1): delivery-failure observability (magic_link_delivery_failed event)
+# Delivery-failure observability (magic_link_delivery_failed event)
 # ---------------------------------------------------------------------------
 
 

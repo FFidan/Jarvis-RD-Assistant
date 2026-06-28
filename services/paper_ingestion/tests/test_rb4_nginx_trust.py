@@ -1,4 +1,4 @@
-"""RB4-1 regression: pinned jarvis subnet + Caddy /32 nginx real_ip trust.
+"""Regression test: pinned jarvis subnet + Caddy /32 nginx real_ip trust.
 
 Verifies that:
   (a) nginx.conf trusts exactly 10.137.241.2/32, 10.137.241.3/32, and 127.0.0.1

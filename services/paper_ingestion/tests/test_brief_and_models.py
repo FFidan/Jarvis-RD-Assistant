@@ -769,11 +769,13 @@ async def test_system_models_routing_mismatch_surfaces_inconsistency(_app, monke
     # LiteLLM routes smart → "ollama_chat/qwen3:8b" (normalized: "qwen3:8b")
     async def _fake_deployments():
         return [
-            {
-                "model_name": "smart",
-                "litellm_params": {"model": "ollama_chat/qwen3:8b"},
-                "model_info": {"id": "dep-1", "db_model": True},
-            }
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    "litellm_params": {"model": "ollama_chat/qwen3:8b"},
+                    "model_info": {"id": "dep-1", "db_model": True},
+                }
+            )
         ]
 
     monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
@@ -834,16 +836,20 @@ async def test_system_models_routing_consistent_when_litellm_matches(_app, monke
 
     async def _fake_deployments():
         return [
-            {
-                "model_name": "smart",
-                "litellm_params": {"model": "ollama_chat/qwen3:8b"},
-                "model_info": {"id": "dep-smart", "db_model": True},
-            },
-            {
-                "model_name": "fast",
-                "litellm_params": {"model": "ollama_chat/qwen3:4b"},
-                "model_info": {"id": "dep-fast", "db_model": True},
-            },
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    "litellm_params": {"model": "ollama_chat/qwen3:8b"},
+                    "model_info": {"id": "dep-smart", "db_model": True},
+                }
+            ),
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "fast",
+                    "litellm_params": {"model": "ollama_chat/qwen3:4b"},
+                    "model_info": {"id": "dep-fast", "db_model": True},
+                }
+            ),
         ]
 
     monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)
@@ -881,11 +887,13 @@ async def test_system_models_routing_consistent_with_latest_suffix(_app, monkeyp
     # LiteLLM reports with :latest appended (common when created via direct API)
     async def _fake_deployments():
         return [
-            {
-                "model_name": "smart",
-                "litellm_params": {"model": "ollama_chat/qwen3:8b:latest"},
-                "model_info": {"id": "dep-smart", "db_model": True},
-            }
+            _lc.LiteLLMDeployment.model_validate(
+                {
+                    "model_name": "smart",
+                    "litellm_params": {"model": "ollama_chat/qwen3:8b:latest"},
+                    "model_info": {"id": "dep-smart", "db_model": True},
+                }
+            )
         ]
 
     monkeypatch.setattr(_lc, "get_litellm_deployments", _fake_deployments)

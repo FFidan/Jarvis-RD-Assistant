@@ -192,14 +192,23 @@ async def data_purge_task(app: Any) -> None:
                 # Qdrant is available and vectors can be removed first.
                 failed_uids = set(expired_ids)
 
-            # Only delete users whose Qdrant vectors were successfully purged.
-            # Passing an empty list deletes all expired rows (regression-equivalent).
-            result = await conn.execute(_DELETE_EXPIRED_USERS_EXCLUDING, list(failed_uids))
+            # The hard-delete and the audit-log anonymization must be one atomic
+            # unit: audit_log has no FK to users, so if the process crashes (or a
+            # lock times out) between the autocommit DELETE and the anonymize, the
+            # purged users' audit-log PII is permanently retained (GDPR breach).
+            # Wrapping both in a single transaction makes them commit or roll back
+            # together. The inner conn.transaction() in _anonymize_audit_log_for_users
+            # auto-demotes to a SAVEPOINT here, and the ALTER TABLE DISABLE/ENABLE
+            # RULE DDL participates in it, so a failure rolls the DISABLE back too.
+            async with conn.transaction():
+                # Only delete users whose Qdrant vectors were successfully purged.
+                # Passing an empty list deletes all expired rows (regression-equivalent).
+                result = await conn.execute(_DELETE_EXPIRED_USERS_EXCLUDING, list(failed_uids))
 
-            # GDPR erasure: anonymize the hard-deleted users' audit_log rows
-            # (audit_log has no FK to users, so the DELETE above does not reach it).
-            purged_uids = [uid for uid in expired_ids if uid not in failed_uids]
-            audit_rows_anonymized = await _anonymize_audit_log_for_users(conn, purged_uids)
+                # GDPR erasure: anonymize the hard-deleted users' audit_log rows
+                # (audit_log has no FK to users, so the DELETE above does not reach it).
+                purged_uids = [uid for uid in expired_ids if uid not in failed_uids]
+                audit_rows_anonymized = await _anonymize_audit_log_for_users(conn, purged_uids)
 
         try:
             deleted: int | None = int(result.split()[-1])

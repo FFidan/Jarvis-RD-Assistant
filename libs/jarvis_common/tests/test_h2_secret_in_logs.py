@@ -15,12 +15,12 @@ from __future__ import annotations
 import hashlib
 import logging
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from jarvis_common.app_factory import configure_middleware_and_errors
-from jarvis_common.auth import validate_production_config
+from jarvis_common.auth import validate_production_config, validate_runtime_config
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -68,9 +68,9 @@ def _minimal_prod_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JARVIS_API_KEY", "a" * 32)
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "b" * 32)
     monkeypatch.setenv("JARVIS_CONFIG_KEY", "c" * 44)  # valid Fernet-length
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "d" * 40)  # SEC-A
-    monkeypatch.setenv("POSTGRES_PASSWORD", "e" * 24)  # SEC-A
-    monkeypatch.setenv("APP_BASE_URL", "https://jarvis.example.com")  # SEC-B
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "d" * 40)  # requires strength validation
+    monkeypatch.setenv("POSTGRES_PASSWORD", "e" * 24)  # requires strength validation
+    monkeypatch.setenv("APP_BASE_URL", "https://jarvis.example.com")  # required in production
 
 
 # ---------------------------------------------------------------------------
@@ -196,89 +196,146 @@ class TestSendMagicLinkTokenNotLogged:
 
 
 # ---------------------------------------------------------------------------
-# validate_production_config — SMTP gate
+# SMTP deliverability gate — moved out of the env-only validate_production_config
+# into the post-pool validate_runtime_config (multi-user PRODUCTION only).
 # ---------------------------------------------------------------------------
 
 
-class TestValidateProductionConfigSmtpGate:
-    """SMTP fields must be required when ENVIRONMENT=production and DEV_SMTP_LOG_ONLY=false."""
+def _runtime_pool(*, user_count: int, admin_count: int) -> MagicMock:
+    """asyncpg-pool-shaped mock whose connection returns the given user counts."""
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(side_effect=[user_count, admin_count])
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+    return pool
 
-    def test_production_no_smtp_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Production + no SMTP → RuntimeError mentioning missing SMTP fields."""
+
+class TestSmtpDeliverabilityGate:
+    """The SMTP deliverability check is DB-aware and only evaluates a multi-user
+    production box. When such a box has no deliverable relay it emits a startup
+    WARNING rather than failing to boot, because an admin can still share manual
+    sign-in links for non-owner users. A single-user owner box is never checked,
+    and ``validate_production_config`` no longer gates SMTP at all (no false
+    sync-gate crash on a DB-only-SMTP deployment)."""
+
+    def test_validate_production_config_no_longer_gates_smtp(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Production + no SMTP env → ``validate_production_config`` must NOT raise
+        (the env-only gate was removed; a DB-configured relay must not crash boot)."""
         _minimal_prod_env(monkeypatch)
-        # No SMTP env vars set
+        # No SMTP env vars set.
+        validate_production_config()  # must not raise
 
-        with pytest.raises(RuntimeError, match="SMTP"):
-            validate_production_config()
+    async def test_multi_user_production_no_smtp_warns_not_raises(self) -> None:
+        """Production + >1 user + no deliverable relay → a startup WARNING, not a hard
+        failure (admins can still share manual sign-in links when SMTP is absent)."""
+        pool = _runtime_pool(user_count=2, admin_count=1)
+        with (
+            patch(
+                "jarvis_common.email.effective_smtp_status",
+                new=AsyncMock(return_value=(False, ["no relay configured"])),
+            ),
+            patch("jarvis_common.auth.logger") as mock_logger,
+        ):
+            await validate_runtime_config(
+                pool,
+                environment="production",
+                setup_token_set=True,
+                model_hmac_ok=True,
+            )
+        mock_logger.warning.assert_called_once()
+        assert "SMTP" in mock_logger.warning.call_args.args[0]
 
-    def test_production_partial_smtp_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Production + only SMTP_HOST set (missing PORT + FROM) → RuntimeError."""
-        _minimal_prod_env(monkeypatch)
-        monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
-        # SMTP_PORT and SMTP_FROM missing
+    async def test_single_user_production_no_smtp_passes(self) -> None:
+        """A single-user production box boots without SMTP (owner uses an API key)."""
+        pool = _runtime_pool(user_count=1, admin_count=1)
+        # SMTP branch is multi-user-only — effective_smtp_status is never consulted.
+        await validate_runtime_config(
+            pool,
+            environment="production",
+            setup_token_set=True,
+            model_hmac_ok=True,
+        )
 
-        with pytest.raises(RuntimeError, match="SMTP"):
-            validate_production_config()
-
-    def test_production_with_full_smtp_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Production + SMTP_HOST + SMTP_PORT + SMTP_FROM → no error."""
-        _minimal_prod_env(monkeypatch)
-        monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
-        monkeypatch.setenv("SMTP_PORT", "587")
-        monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
-
-        # Must not raise
-        validate_production_config()
+    async def test_multi_user_production_deliverable_smtp_passes(self) -> None:
+        """Production + >1 user + a deliverable relay → no error."""
+        pool = _runtime_pool(user_count=2, admin_count=1)
+        with patch(
+            "jarvis_common.email.effective_smtp_status",
+            new=AsyncMock(return_value=(True, [])),
+        ):
+            await validate_runtime_config(
+                pool,
+                environment="production",
+                setup_token_set=True,
+                model_hmac_ok=True,
+            )
 
     def test_development_without_smtp_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Non-production environments are not affected by the SMTP gate."""
+        """Non-production boots are never gated on SMTP."""
         _clear_env(monkeypatch)
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.setenv("DEV_MODE", "true")
-        # No SMTP vars, no API key — all fine in dev
+        # No SMTP vars, no API key — all fine in dev.
+        validate_production_config()  # must not raise
 
-        # Must not raise
-        validate_production_config()
 
-    def test_staging_without_smtp_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Staging environment is not subject to the SMTP gate."""
-        _clear_env(monkeypatch)
-        monkeypatch.setenv("ENVIRONMENT", "staging")
-        monkeypatch.setenv("DEV_MODE", "true")
+class TestFirstAdminSetupTokenGate:
+    """A box with no admin yet and no setup token has an unprotected first-admin
+    window. Production keeps failing to boot (the message is part of the contract);
+    non-production only emits a startup WARNING so first-run ``docker compose up``
+    is never broken."""
 
-        # Must not raise
-        validate_production_config()
+    _PROD_MESSAGE = (
+        "JARVIS_SETUP_TOKEN must be set on a production deployment with no "
+        "admin yet (prevents unauthenticated first-admin takeover)."
+    )
 
-    def test_production_smtp_error_message_names_missing_fields(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Error message must name the specific missing fields."""
-        _minimal_prod_env(monkeypatch)
-        monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
-        # SMTP_PORT and SMTP_FROM missing
-
+    async def test_production_no_admin_no_token_still_raises(self) -> None:
+        """Production behaviour is byte-identical: still raises the same message."""
+        pool = _runtime_pool(user_count=0, admin_count=0)
         with pytest.raises(RuntimeError) as exc_info:
-            validate_production_config()
+            await validate_runtime_config(
+                pool,
+                environment="production",
+                setup_token_set=False,
+                model_hmac_ok=True,
+            )
+        assert str(exc_info.value) == self._PROD_MESSAGE
 
-        msg = str(exc_info.value)
-        assert "SMTP_PORT" in msg, f"Expected SMTP_PORT in error message: {msg!r}"
-        assert "SMTP_FROM" in msg, f"Expected SMTP_FROM in error message: {msg!r}"
-        # SMTP_HOST was set — it must not appear in the "(missing: ...)" section.
-        # The static hint text may still reference the field names, so we extract
-        # just the parenthesised missing-fields fragment for this check.
-        import re
+    async def test_development_no_admin_no_token_warns_not_raises(self) -> None:
+        """Non-production warns about the unprotected window and boots anyway."""
+        pool = _runtime_pool(user_count=0, admin_count=0)
+        with patch("jarvis_common.auth.logger") as mock_logger:
+            await validate_runtime_config(
+                pool,
+                environment="development",
+                setup_token_set=False,
+                model_hmac_ok=True,
+            )
+        mock_logger.warning.assert_called_once()
+        assert "unprotected" in mock_logger.warning.call_args.args[0]
 
-        missing_section = re.search(r"\(missing: ([^)]+)\)", msg)
-        assert missing_section is not None, f"Expected '(missing: ...)' in message: {msg!r}"
-        missing_fields = missing_section.group(1)
-        assert "SMTP_HOST" not in missing_fields, (
-            f"SMTP_HOST should not be listed as missing: {missing_fields!r}"
-        )
+    async def test_development_with_token_does_not_warn(self) -> None:
+        """A configured setup token closes the window — no warning, no raise."""
+        pool = _runtime_pool(user_count=0, admin_count=0)
+        with patch("jarvis_common.auth.logger") as mock_logger:
+            await validate_runtime_config(
+                pool,
+                environment="development",
+                setup_token_set=True,
+                model_hmac_ok=True,
+            )
+        mock_logger.warning.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-# validate_production_config — SEC-A: LITELLM_MASTER_KEY / POSTGRES_PASSWORD
-# strength, SEC-B: APP_BASE_URL required
+# validate_production_config — LITELLM_MASTER_KEY / POSTGRES_PASSWORD
+# strength, APP_BASE_URL required
 # ---------------------------------------------------------------------------
 
 
@@ -291,7 +348,7 @@ def _prod_env_with_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestValidateProductionConfigLitellmMasterKey:
-    """SEC-A — LITELLM_MASTER_KEY must be present, strong, and not a placeholder."""
+    """LITELLM_MASTER_KEY must be present, strong, and not a placeholder."""
 
     def test_all_strong_prod_config_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Baseline: a fully-strong production config must not raise."""
@@ -335,7 +392,7 @@ class TestValidateProductionConfigLitellmMasterKey:
 
 
 class TestValidateProductionConfigPostgresPassword:
-    """SEC-A — POSTGRES_PASSWORD must be present, strong, and not a placeholder."""
+    """POSTGRES_PASSWORD must be present, strong, and not a placeholder."""
 
     def test_missing_postgres_password_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _prod_env_with_smtp(monkeypatch)
@@ -380,7 +437,7 @@ class TestValidateProductionConfigPostgresPassword:
 
 
 class TestValidateProductionConfigAppBaseUrl:
-    """SEC-B — APP_BASE_URL must be set in production (host-poisoning guard)."""
+    """APP_BASE_URL must be set in production (host-poisoning guard)."""
 
     def test_missing_app_base_url_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _prod_env_with_smtp(monkeypatch)
@@ -485,7 +542,7 @@ def test_non_production_unaffected_parametrized(
 
 
 # ---------------------------------------------------------------------------
-# H-06: CORS wildcard guard — fail-fast BEFORE middleware install
+# CORS wildcard guard — fail-fast BEFORE middleware install
 # ---------------------------------------------------------------------------
 
 

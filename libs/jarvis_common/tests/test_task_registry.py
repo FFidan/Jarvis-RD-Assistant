@@ -151,36 +151,44 @@ def test_no_service_tasks_at_import_time() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_queue_for_kind_matches_owner_map() -> None:
+    """queue_for_kind is the cross-service enqueue source of truth (mirrors the owner map)."""
+    import pytest
+    from jarvis_common.jobs import JOB_HANDLER_OWNER, queue_for_kind
+
+    for kind, queue in JOB_HANDLER_OWNER.items():
+        assert queue_for_kind(kind) == queue
+
+    # zotero.push is the cross-service defer target used by learning_engine.
+    assert queue_for_kind("zotero.push") == "paper_ingestion"
+
+    with pytest.raises(KeyError):
+        queue_for_kind("definitely.not.a.kind")
+
+
 def test_queue_assignments_match_owner_map() -> None:
-    """register_tasks with JOB_HANDLER_OWNER keys and matching queues passes assertion."""
+    """The REAL register_*_tasks must bind every task's queue to JOB_HANDLER_OWNER.
+
+    Drives the actual service registrars (not a hand-built mapping) so a queue
+    literal that drifts from the owner map fails here.
+    """
     import procrastinate
     from jarvis_common.jobs import JOB_HANDLER_OWNER
-    from jarvis_common.task_registry import register_tasks
+    from learning_engine._task_register import register_learning_engine_tasks
+    from paper_ingestion._task_register import register_paper_ingestion_tasks
     from procrastinate.contrib.aiopg import AiopgConnector
 
     fresh_app = procrastinate.App(connector=AiopgConnector())
-
-    async def _dummy(pool, http_client, payload, ctx):
-        return {}
-
-    # Group by queue and register each group, then verify queue assignments.
-
-    by_queue: dict[str, dict] = {}
-    for kind, queue in JOB_HANDLER_OWNER.items():
-        by_queue.setdefault(queue, {})[kind] = _dummy
-
-    for queue, mapping in by_queue.items():
-        register_tasks(fresh_app, mapping=mapping, queue=queue)
+    register_paper_ingestion_tasks(fresh_app)
+    register_learning_engine_tasks(fresh_app)
 
     for name, task in fresh_app.tasks.items():
-        if task.queue == "builtin":
-            continue
-        if name == "noop.test":
+        if task.queue == "builtin" or name == "noop.test":
             continue
         assert name in JOB_HANDLER_OWNER, f"task {name!r} not in JOB_HANDLER_OWNER"
-        expected_queue = JOB_HANDLER_OWNER[name]
-        assert task.queue == expected_queue, (
-            f"task {name!r} has queue={task.queue!r} but owner map says {expected_queue!r}"
+        assert task.queue == JOB_HANDLER_OWNER[name], (
+            f"task {name!r} registered on queue={task.queue!r} but owner map says "
+            f"{JOB_HANDLER_OWNER[name]!r} — the worker would consume the wrong queue"
         )
 
 

@@ -117,26 +117,39 @@ async def fetch_and_process_foundational(
         )
 
     if paper["pdf_downloaded"] and paper["pdf_local_path"]:
-        jarvis_job_id = str(uuid.uuid4())
-        await KIND_TO_TASK["paper.process"].defer_async(
+        kind = "paper.process"
+    elif paper["pdf_url"]:
+        kind = "paper.analyze"
+    else:
+        return FetchAndProcessResponse(
+            paper_id=body.paper_id,
+            status="no_pdf",
+            message="No PDF URL is available for this citation stub.",
+        )
+
+    jarvis_job_id = str(uuid.uuid4())
+    try:
+        await KIND_TO_TASK[kind].defer_async(
             job_id=jarvis_job_id, user_id=user_id, paper_id=body.paper_id
         )
-        return FetchAndProcessResponse(
-            paper_id=body.paper_id, status="queued", job_id=jarvis_job_id
-        )
-    if paper["pdf_url"]:
-        jarvis_job_id = str(uuid.uuid4())
-        await KIND_TO_TASK["paper.analyze"].defer_async(
-            job_id=jarvis_job_id, user_id=user_id, paper_id=body.paper_id
-        )
-        return FetchAndProcessResponse(
-            paper_id=body.paper_id, status="queued", job_id=jarvis_job_id
-        )
-    return FetchAndProcessResponse(
-        paper_id=body.paper_id,
-        status="no_pdf",
-        message="No PDF URL is available for this citation stub.",
-    )
+    except Exception as exc:
+        # The promotion already committed (auto-commit on the connection block
+        # above); procrastinate enqueues on its own pool and cannot share that
+        # txn. Revert the flag so the stub still matches the opening predicate
+        # and the caller can retry instead of hitting a permanent 404.
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE papers
+                SET metadata = COALESCE(metadata, '{}'::jsonb) || '{"stub": "true"}'::jsonb
+                WHERE id = $1
+                """,
+                body.paper_id,
+            )
+        raise HTTPException(
+            status_code=503, detail="Could not enqueue processing; please retry."
+        ) from exc
+    return FetchAndProcessResponse(paper_id=body.paper_id, status="queued", job_id=jarvis_job_id)
 
 
 @router.get("/feedback-summary")

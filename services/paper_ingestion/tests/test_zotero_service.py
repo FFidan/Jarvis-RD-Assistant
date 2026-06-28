@@ -6,11 +6,19 @@ ZoteroClient methods are patched at the class level.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs
 
+import asyncpg
 import httpx
+import respx
 from paper_ingestion.integrations.zotero_service import (
     poll_zotero_library,
+    push_highlight_to_zotero,
+    push_highlights_for_paper,
     push_paper_to_zotero,
     resync_paper_to_zotero,
     sync_annotations_for_paper,
@@ -193,7 +201,9 @@ async def test_push_paper_filters_project_collections_by_owner_user():
     project_sql = push_conn.fetchrow.await_args_list[1].args[0]
     assert "projects owner_project" in paper_sql
     assert "owner_project.user_id IS NOT DISTINCT FROM $2" in paper_sql
-    assert push_conn.fetchrow.await_args_list[0].args[1:] == (1, 42)
+    # Zotero linkage is now read per-user from paper_user_zotero_links ($3 = owner).
+    assert "paper_user_zotero_links l" in paper_sql
+    assert push_conn.fetchrow.await_args_list[0].args[1:] == (1, 42, 42)
     assert "user_id IS NOT DISTINCT FROM $2" in project_sql
     assert push_conn.fetchrow.await_args_list[1].args[1:] == (10, 42)
     mock_zotero.ensure_collection.assert_awaited_once_with("Owner Project")
@@ -231,7 +241,7 @@ async def test_push_paper_no_project_links():
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
-        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http)
+        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
         mock_client.return_value.create_item.assert_not_called()
 
 
@@ -243,7 +253,7 @@ async def test_push_paper_no_project_links():
 async def test_push_paper_happy_path():
     """push_paper_to_zotero creates item, stores key, and attempts BBT key fetch.
 
-    PI-EDGE-013: push now acquires a single connection for all sub-queries.
+    Push acquires a single connection for all sub-queries.
     Connection sequence:
       1. acquire() for _get_zotero_config fetch (config_conn)
       2. acquire() for entire push body (push_conn — handles paper fetch, topics,
@@ -255,11 +265,12 @@ async def test_push_paper_happy_path():
 
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
 
-    # Single connection used for all push sub-queries; configure it to return
-    # appropriate values for successive fetchrow / fetch calls.
+    # Single connection used for all push sub-queries. owner_user_id is None
+    # (single-user mode), so the push resolves None -> the sole active user via
+    # _resolve_zotero_user_id's conn.fetch (first .fetch), then fetches topics.
     push_conn = AsyncMock()
     push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
-    push_conn.fetch = AsyncMock(return_value=topic_rows)
+    push_conn.fetch = AsyncMock(side_effect=[[FakeRecord({"id": 7})], topic_rows])
     push_conn.execute = AsyncMock(return_value=None)
 
     pool = MagicMock()
@@ -288,8 +299,13 @@ async def test_push_paper_happy_path():
         assert "project_papers" in sql
         assert "paper_projects" not in sql
 
-        # Check that the zotero_item_key was persisted via execute
-        assert any("ABCD1234" in str(c) for c in push_conn.execute.call_args_list)
+        # The item key is persisted into the per-user link table, keyed by the
+        # resolved sole user (id=7) — never the global papers.zotero_* columns.
+        link_upserts = [
+            c for c in push_conn.execute.call_args_list if "paper_user_zotero_links" in str(c)
+        ]
+        assert link_upserts, "item key must upsert into paper_user_zotero_links"
+        assert any("ABCD1234" in str(c) and 7 in c.args for c in link_upserts)
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +316,7 @@ async def test_push_paper_happy_path():
 async def test_push_paper_doi_dedupe():
     """push_paper_to_zotero reuses existing Zotero item found by DOI search.
 
-    PI-EDGE-013: push now acquires a single connection for all sub-queries.
+    Push acquires a single connection for all sub-queries.
     Connection sequence:
       1. acquire() for _get_zotero_config fetch (config_conn)
       2. acquire() for entire push body (push_conn — handles paper fetch + key persist)
@@ -326,12 +342,66 @@ async def test_push_paper_doi_dedupe():
         mock_zotero.create_item = AsyncMock()
         mock_zotero.fetch_bbt_citation_key = AsyncMock(return_value=None)
 
-        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http)
+        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
 
         # create_item must NOT be called when DOI match is found
         mock_zotero.create_item.assert_not_called()
         # The existing key should be persisted
         assert any("EXISTING_KEY" in str(c) for c in push_conn.execute.call_args_list)
+
+
+async def test_push_paper_duplicate_link_does_not_abort_job():
+    """A same-DOI sibling paper resolving to an already-linked Zotero item must NOT
+    raise out of the push (job-safe).
+
+    papers are deduped by external_id, not DOI, so two rows can share a DOI. When
+    the DOI-dedup branch resolves a Zotero item the user already linked to the
+    sibling row, the per-user item-key persist violates the partial unique index
+    uq_pu_zotero_item(user_id, zotero_item_key) — which ON CONFLICT (paper_id,
+    user_id) does NOT arbitrate. The push must swallow that as "already linked"
+    rather than abort the unwrapped _zotero_push_job / _zotero_resync_job.
+
+    Regression: removing the try/except asyncpg.UniqueViolationError around the
+    item-key persist makes the violation propagate and this test fails.
+    """
+    paper = _paper_row(project_ids=[10], doi="10.1234/dup")
+
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+
+    def _raise_on_item_link(sql, *args):
+        # Only the item-key link persist can hit uq_pu_zotero_item; emulate the
+        # secondary-index violation that ON CONFLICT (paper_id, user_id) can't catch.
+        if "INSERT INTO paper_user_zotero_links" in sql and "zotero_item_key" in sql:
+            raise asyncpg.UniqueViolationError("uq_pu_zotero_item")
+        return None
+
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(return_value=paper)
+    push_conn.fetch = AsyncMock(return_value=[])
+    push_conn.execute = AsyncMock(side_effect=_raise_on_item_link)
+
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mock_zotero = mock_client.return_value
+        mock_zotero.search_by_doi = AsyncMock(
+            return_value={"key": "DUPITEM", "data": {"DOI": "10.1234/dup"}}
+        )
+        mock_zotero.create_item = AsyncMock()
+        mock_zotero.fetch_bbt_citation_key = AsyncMock(return_value=None)
+
+        # Must NOT raise — the job runner survives the duplicate-link violation.
+        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
+
+        mock_zotero.create_item.assert_not_called()
+        # The item-key persist was attempted (and swallowed, not propagated).
+        assert any(
+            "INSERT INTO paper_user_zotero_links" in str(c) and "zotero_item_key" in str(c)
+            for c in push_conn.execute.call_args_list
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +412,7 @@ async def test_push_paper_doi_dedupe():
 async def test_push_paper_bbt_fallback():
     """push_paper_to_zotero succeeds even when BBT returns None (non-fatal).
 
-    PI-EDGE-013: push now acquires a single connection for all sub-queries.
+    Push acquires a single connection for all sub-queries.
     Connection sequence:
       1. acquire() for _get_zotero_config fetch (config_conn)
       2. acquire() for entire push body (push_conn)
@@ -375,7 +445,7 @@ async def test_push_paper_bbt_fallback():
         mock_zotero.fetch_bbt_citation_key = AsyncMock(return_value=None)
 
         # Should not raise
-        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http)
+        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
 
         mock_zotero.create_item.assert_called_once()
         # zotero_citation_key update should NOT be called when bbt_key is None
@@ -385,34 +455,56 @@ async def test_push_paper_bbt_fallback():
 
 
 # ---------------------------------------------------------------------------
-# Test: resync clears key then re-pushes
+# Test: resync delegates to push (clear happens inside the locked push body)
 # ---------------------------------------------------------------------------
 
 
-async def test_resync_clears_and_repushes():
-    """resync_paper_to_zotero clears zotero_item_key before delegating to push."""
-    clear_conn = _make_conn()
-
+async def test_resync_delegates_force_repush():
+    """resync delegates to push with force=True; the NULL-clear now happens inside
+    the locked push body, not on a separate connection."""
     pool = MagicMock()
-    pool.acquire = MagicMock(return_value=_cm(clear_conn))
-
     http = AsyncMock(spec=httpx.AsyncClient)
-
-    # Patch push_paper_to_zotero to confirm it's called after clear
     with patch(
         "paper_ingestion.integrations.zotero_service.push_paper_to_zotero",
         new=AsyncMock(),
     ) as mock_push:
-        await resync_paper_to_zotero(paper_id=42, db_pool=pool, http_client=http)
+        await resync_paper_to_zotero(paper_id=42, db_pool=pool, http_client=http, owner_user_id=5)
+    mock_push.assert_awaited_once_with(42, pool, http, owner_user_id=5, force=True)
 
-        # The clear execute must be called with NULL
-        clear_conn.execute.assert_called_once()
-        sql_call = clear_conn.execute.call_args
-        assert "NULL" in sql_call[0][0]
-        assert 42 in sql_call[0]
 
-        # push must be called afterwards
-        mock_push.assert_called_once_with(42, pool, http, owner_user_id=None)
+async def test_push_force_clears_key_under_advisory_lock():
+    """force=True nulls the owner's link item_key (bypassing the already-pushed
+    early-return) and runs the push body under a session advisory lock."""
+    paper = _paper_row(project_ids=[10], zotero_item_key=None)
+    project = _project_row(col_key="PRECOLL")
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
+    push_conn.fetch = AsyncMock(
+        return_value=[]
+    )  # explicit owner 7 -> no resolve fetch; topics empty
+    push_conn.execute = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    http = AsyncMock(spec=httpx.AsyncClient)
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mz = mock_client.return_value
+        mz.search_by_doi = AsyncMock(return_value=None)
+        mz.create_item = AsyncMock(
+            return_value={"successful": {"0": {"key": "NEWK"}}, "unchanged": {}, "failed": {}}
+        )
+        mz.fetch_bbt_citation_key = AsyncMock(return_value=None)
+        await push_paper_to_zotero(
+            paper_id=42, db_pool=pool, http_client=http, owner_user_id=7, force=True
+        )
+    executed = [str(c) for c in push_conn.execute.call_args_list]
+    assert any(
+        "paper_user_zotero_links" in s and "zotero_item_key = NULL" in s for s in executed
+    ), executed
+    assert any("pg_advisory_lock" in s for s in executed), executed
+    assert any("pg_advisory_unlock" in s for s in executed), executed
+    # single push connection preserved (config + push only).
+    assert pool.acquire.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +638,7 @@ async def test_poll_library_enqueues_new_items():
     new_item = _zotero_item(key="NEWITEM1", title="New Paper", doi="")
     # No DOI → no DOI-lookup conn needed.
     # upsert conn: fetchrow returns the upserted paper row; execute for zotero_item_key update.
-    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 99}))
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 99, "is_insert": True}))
     # version conn: persist new version (10 != 0)
     version_conn = _make_conn()
     pool = _make_poll_pool(upsert_conn, version_conn)
@@ -575,6 +667,37 @@ async def test_poll_library_enqueues_new_items():
     assert result["new_items"] == 1
 
 
+async def test_poll_repoll_existing_paper_does_not_enqueue():
+    """Re-polling an already-imported item (is_insert=False) must not enqueue or count.
+
+    upsert_paper returns is_insert=False for a row that already existed.
+    The enqueue and counter must be skipped so cap slots are not wasted on re-polls.
+
+    Regression: without the ``if is_new_paper`` guard the analyze job would be
+    deferred and enqueued==1, causing this test to fail.
+    """
+    existing_item = _zotero_item(key="EXIST001", title="Existing Paper", doi="")
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 42, "is_insert": False}))
+    version_conn = _make_conn()
+    pool = _make_poll_pool(upsert_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([existing_item], 10))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock()
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    mock_analyze_defer.assert_not_awaited()
+    assert result["enqueued"] == 0
+
+
 async def test_poll_library_updates_version():
     """zotero.last_library_version updated in user_config after poll (user-scoped row).
 
@@ -582,7 +705,7 @@ async def test_poll_library_updates_version():
     """
     item = _zotero_item(key="VER0001", doi="")
     # upsert conn for the item
-    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 55}))
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 55, "is_insert": True}))
     # version conn: persists new version
     version_conn = _make_conn()
     pool = _make_poll_pool(upsert_conn, version_conn)
@@ -618,7 +741,7 @@ async def test_poll_library_updates_version_for_null_user():
     upserts cleanly. The persisted user_id arg must be None.
     """
     item = _zotero_item(key="VERNULL1", doi="")
-    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 56}))
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 56, "is_insert": True}))
     version_conn = _make_conn()
     pool = _make_poll_pool(upsert_conn, version_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
@@ -706,13 +829,69 @@ async def test_sync_annotations_for_paper_imports_zotero_highlights_idempotently
     assert persist_conn.execute.await_args_list[0].args[7] == syncing_user_id
 
 
+async def test_sync_annotations_binds_resolved_owner_for_none_user():
+    """With owner_user_id=None (single-user), the paper_notes INSERT binds the
+    RESOLVED sole-user id ($7), not raw None — matching the link row the JOIN used."""
+    config_conn = _make_conn(fetch=_zotero_enabled_with_annotations_rows())
+    # paper_conn handles _resolve_zotero_user_id (fetch -> sole user 8) + paper fetchrow.
+    paper_conn = _make_conn(
+        fetchrow=FakeRecord({"id": 7, "zotero_item_key": "ITEM1"}),
+        fetch=[FakeRecord({"id": 8})],
+    )
+    persist_conn = _make_conn()
+    pool = _make_pool(config_conn, paper_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    annotations = [
+        {
+            "key": "ANN1",
+            "data": {"annotationText": "x", "annotationComment": "c", "annotationPageLabel": "1"},
+        }
+    ]
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_cls:
+        mock_cls.return_value.get_item_children = AsyncMock(return_value=annotations)
+        result = await sync_annotations_for_paper(
+            paper_id=7, db_pool=pool, http_client=http, owner_user_id=None
+        )
+    assert result["status"] == "ok"
+    assert persist_conn.execute.await_args_list[0].args[7] == 8
+
+
+async def test_poll_doi_link_dispatches_annotations_with_resolved_owner():
+    """The DOI-link branch dispatches zotero.sync_annotations with the RESOLVED owner,
+    not raw polling_user_id (None in single-user mode)."""
+    # doi_conn: resolve sole user (fetch -> id 8), then DOI fetchrow with NO item key.
+    doi_conn = _make_conn(
+        fetchrow=FakeRecord({"id": 90, "zotero_item_key": None, "discovered_by": 3}),
+        fetch=[FakeRecord({"id": 8})],
+    )
+    link_conn = _make_conn()  # the link-insert acquire
+    version_conn = _make_conn()
+    pool = _make_poll_pool(doi_conn, link_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    doi_item = _zotero_item(key="DOIRES1", doi="10.5555/res")
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(return_value=([doi_item], 1))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_ann_task = MagicMock()
+        mock_ann_defer = AsyncMock()
+        mock_ann_task.defer_async = mock_ann_defer
+        with patch.dict(task_registry._TASK_MAP, {"zotero.sync_annotations": mock_ann_task}):
+            await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=None)
+
+    mock_ann_defer.assert_awaited_once()
+    assert mock_ann_defer.await_args.kwargs["user_id"] == 8
+    assert mock_ann_defer.await_args.kwargs["paper_id"] == 90
+
+
 # ---------------------------------------------------------------------------
 # _get_zotero_config — decrypt roundtrip tests
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# PI-EDGE-003: per-sync enqueue cap
+# Per-sync enqueue cap
 # ---------------------------------------------------------------------------
 
 
@@ -728,7 +907,9 @@ async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
     items = [_zotero_item(key=f"BULK{i:04d}", doi="") for i in range(50)]
 
     # Build enough upsert conns for the cap + some headroom (should only use 20).
-    upsert_conns = [_make_conn(fetchrow=FakeRecord({"id": 1000 + i})) for i in range(25)]
+    upsert_conns = [
+        _make_conn(fetchrow=FakeRecord({"id": 1000 + i, "is_insert": True})) for i in range(25)
+    ]
 
     pool = _make_poll_pool(*upsert_conns)
     http = AsyncMock(spec=httpx.AsyncClient)
@@ -769,6 +950,70 @@ async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
     assert result["version_to"] == 0, (
         f"version_to should remain at 0 when capped, got {result['version_to']}"
     )
+
+
+async def test_poll_multi_sync_advances_cursor_without_reenqueue(monkeypatch):
+    """25 items, MAX_ENQUEUE_PER_SYNC=20. Poll once → enqueue the first 20 and pin
+    the cursor (capped). Poll again on the same (re-fetched) batch → the first 20
+    are now is_insert=False and MUST NOT be re-enqueued; the poll MUST advance to
+    items 21-25 and move the cursor forward. Guards against gating the enqueue on
+    an analysis-completion marker (e.g. pdf_downloaded), which never flips for
+    pdf-url-less Zotero papers and would re-enqueue every imported item forever."""
+    from paper_ingestion.integrations import zotero_service
+
+    items = [_zotero_item(key=f"ITEM{i:02d}", title=f"P{i}", doi="") for i in range(1, 26)]
+
+    seen: dict[str, int] = {}
+    counter = {"next": 1}
+
+    async def _stateful_upsert(conn, paper_create, *, discovered_by=None):
+        ext = paper_create.external_id
+        if ext in seen:
+            return FakeRecord({"id": seen[ext], "is_insert": False})
+        pid = counter["next"]
+        counter["next"] += 1
+        seen[ext] = pid
+        return FakeRecord({"id": pid, "is_insert": True})
+
+    monkeypatch.setattr(zotero_service, "upsert_paper", _stateful_upsert)
+    monkeypatch.setattr(zotero_service, "add_to_library", AsyncMock())
+    monkeypatch.setattr(zotero_service, "_upsert_paper_user_state", AsyncMock())
+    monkeypatch.setattr(zotero_service, "_resolve_zotero_user_id", AsyncMock(return_value=None))
+
+    # One uniform conn for every acquire: .fetch → config rows (for _get_zotero_config),
+    # .execute → no-op (version persist). upsert/resolve/library/state are monkeypatched,
+    # so the conn is a passthrough and a single reused object suffices for both polls.
+    conn = _make_conn(fetch=_zotero_poll_enabled_config_rows())
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=lambda *a, **k: _cm(conn))
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        # Cursor pinned on poll 1 (capped) → poll 2 re-fetches the identical batch.
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(return_value=(items, 99))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock()
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            first = await poll_zotero_library(db_pool=pool, http_client=http)
+            first_ids = [c.kwargs["paper_id"] for c in mock_analyze_defer.await_args_list]
+
+            mock_analyze_defer.reset_mock()
+            second = await poll_zotero_library(db_pool=pool, http_client=http)
+            second_ids = [c.kwargs["paper_id"] for c in mock_analyze_defer.await_args_list]
+
+    # Poll 1: first 20 enqueued; cursor pinned (capped → version_to == version_from).
+    assert first["enqueued"] == 20
+    assert first_ids == list(range(1, 21))
+    assert first["version_to"] == first["version_from"]
+    # Poll 2: only the NEW tail (21-25) enqueued; none of 1-20 re-enqueued; cursor advances.
+    assert second["enqueued"] == 5
+    assert second_ids == list(range(21, 26))
+    assert not (set(second_ids) & set(range(1, 21)))
+    assert second["version_to"] == 99 and second["version_to"] > second["version_from"]
 
 
 # ---------------------------------------------------------------------------
@@ -823,6 +1068,90 @@ async def test_doi_match_adds_paper_to_polling_users_library(monkeypatch):
     )
 
 
+async def test_doi_match_with_malformed_url_links_without_validation(monkeypatch):
+    """A DOI-linking item with a malformed url must link cleanly.
+
+    The poll resolves the DOI link before projecting the item into a PaperCreate
+    model, so a Zotero item carrying an unparseable url (or an over-long title)
+    that simply matches a paper already in the library links without ever hitting
+    url validation. Building PaperCreate up-front would raise here and abort the
+    whole poll, pinning the cursor and wedging every subsequent sync.
+    """
+    from paper_ingestion.integrations import zotero_service
+
+    async def _spy_add_to_library(conn, *, user_id, paper_id, added_via):
+        pass
+
+    async def _spy_upsert_state(conn, paper_id, user_id, *, state, starred, on_conflict):
+        pass
+
+    monkeypatch.setattr(zotero_service, "add_to_library", _spy_add_to_library)
+    monkeypatch.setattr(zotero_service, "_upsert_paper_user_state", _spy_upsert_state)
+
+    doi_conn = _make_conn(
+        fetchrow=FakeRecord({"id": 91, "zotero_item_key": "EXISTING", "discovered_by": 5})
+    )
+    library_conn = _make_conn()
+    version_conn = _make_conn()
+    pool = _make_poll_pool(doi_conn, library_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    # url has no scheme → PaperCreate.validate_url would raise if constructed.
+    bad_item = _zotero_item(key="BADURL01", doi="10.1234/match", url="www.no-scheme.example")
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([bad_item], 1))
+
+        result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=42)
+
+    assert result["status"] == "ok", result
+    assert result["linked"] == 1, result
+
+
+async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
+    """A non-DOI item whose url fails PaperCreate validation must not escape the poll loop.
+
+    Without a guard, _parse_zotero_item raises ValidationError which exits
+    poll_zotero_library before the failed_keys / cursor-pin logic, permanently
+    wedging every subsequent sync. With the guard, the bad item is skipped
+    (cursor stays at last_version so the batch retries), while a valid item in
+    the same batch is still passed to _ingest_new_item.
+    """
+    from paper_ingestion.integrations import zotero_service
+
+    enqueued_keys: list[str] = []
+
+    async def _spy_ingest(db_pool, paper_create, item_key, polling_user_id):
+        enqueued_keys.append(item_key)
+        return True
+
+    monkeypatch.setattr(zotero_service, "_ingest_new_item", _spy_ingest)
+
+    # Config conn only — _persist_poll_cursor is not called when cursor is pinned.
+    pool = _make_poll_pool()
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    bad_item = _zotero_item(key="BADURL99", doi="", url="ftp://not-http")
+    good_item = _zotero_item(key="GOODITEM", doi="", url="https://valid.example.com/paper")
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(
+            return_value=([bad_item, good_item], 10)
+        )
+
+        result = await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=42)
+
+    assert result["status"] == "ok", result
+    # Cursor must be pinned because the bad item landed in failed_keys.
+    assert result["version_from"] == result["version_to"], (
+        f"Cursor must not advance when a parse failure occurs: {result}"
+    )
+    # The valid item must still be enqueued despite the bad item.
+    assert "GOODITEM" in enqueued_keys, f"Valid item was not enqueued: {enqueued_keys}"
+    assert "BADURL99" not in enqueued_keys, f"Bad item must not reach ingest: {enqueued_keys}"
+
+
 async def test_doi_match_no_polling_user_skips_library_link(monkeypatch):
     """When polling_user_id is None the DOI-match branch must not call add_to_library."""
     from paper_ingestion.integrations import zotero_service
@@ -852,6 +1181,37 @@ async def test_doi_match_no_polling_user_skips_library_link(monkeypatch):
     assert add_library_calls == [], (
         f"add_to_library must not run when polling_user_id=None: {add_library_calls}"
     )
+
+
+async def test_poll_new_paper_none_user_skips_state_seed(monkeypatch):
+    """The new-paper upsert branch must not seed paper_user_state when polling_user_id
+    is None — a NULL user_id state row is an orphan (mirrors the DOI branch guard)."""
+    from paper_ingestion.integrations import zotero_service
+
+    state_calls: list = []
+
+    async def _spy_state(conn, paper_id, user_id, *, state, starred, on_conflict):
+        state_calls.append((paper_id, user_id, on_conflict))
+
+    monkeypatch.setattr(zotero_service, "_upsert_paper_user_state", _spy_state)
+
+    item = _zotero_item(key="NOUSER1", doi="")
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 12, "is_insert": True}))
+    version_conn = _make_conn()
+    pool = _make_poll_pool(upsert_conn, version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.fetch_items_since = AsyncMock(return_value=([item], 5))
+
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_task.defer_async = AsyncMock()
+        with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
+            await poll_zotero_library(db_pool=pool, http_client=http, polling_user_id=None)
+
+    assert state_calls == [], f"state seed must be skipped for None user, got {state_calls}"
 
 
 async def test_get_zotero_config_encrypted_api_key(monkeypatch):
@@ -976,12 +1336,12 @@ async def test_get_zotero_config_handles_memoryview_encrypted_value(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# PI-EDGE-009: sync_annotations_for_paper — transaction rollback on mid-loop failure
+# sync_annotations_for_paper — transaction rollback on mid-loop failure
 # ---------------------------------------------------------------------------
 
 
 async def test_sync_annotations_rolls_back_on_mid_loop_failure():
-    """PI-EDGE-009: if conn.execute raises mid-loop, the whole transaction rolls back.
+    """If conn.execute raises mid-loop, the whole transaction rolls back.
 
     We simulate 5 annotations where the 3rd upsert raises RuntimeError. The
     transaction context manager should propagate the exception, rolling back all
@@ -1028,12 +1388,12 @@ async def test_sync_annotations_rolls_back_on_mid_loop_failure():
 
 
 # ---------------------------------------------------------------------------
-# PI-EDGE-011: _get_zotero_config — decrypt failure returns {} and logs warning
+# _get_zotero_config — decrypt failure returns {} and logs warning
 # ---------------------------------------------------------------------------
 
 
 async def test_get_zotero_config_raises_on_decrypt_failure(caplog):
-    """PI-EDGE-011: if decrypt_secret raises, _get_zotero_config raises ZoteroConfigDecryptError and warns."""
+    """If decrypt_secret raises, _get_zotero_config raises ZoteroConfigDecryptError and warns."""
     import logging
 
     import pytest
@@ -1162,12 +1522,12 @@ async def test_get_zotero_config_does_not_log_exc_string(caplog):
 
 
 # ---------------------------------------------------------------------------
-# PI-EDGE-013: push_paper_to_zotero — single connection acquisition
+# push_paper_to_zotero — single connection acquisition
 # ---------------------------------------------------------------------------
 
 
 async def test_push_paper_to_zotero_acquires_single_connection():
-    """PI-EDGE-013: push_paper_to_zotero acquires exactly one DB connection for the push body.
+    """push_paper_to_zotero acquires exactly one DB connection for the push body.
 
     The config connection (_get_zotero_config) is a separate acquire that is
     always present. The push body must use exactly one additional acquire.
@@ -1195,12 +1555,34 @@ async def test_push_paper_to_zotero_acquires_single_connection():
         )
         mock_zotero.fetch_bbt_citation_key = AsyncMock(return_value=None)
 
-        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http)
+        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
 
     # Exactly 2 acquire() calls: config + push body.
     assert pool.acquire.call_count == 2, (
         f"Expected 2 pool.acquire() calls (config + push), got {pool.acquire.call_count}"
     )
+
+
+async def test_push_already_pushed_syncs_new_project_collection():
+    """An already-pushed paper newly linked to a project files the existing Zotero
+    item into that project's collection instead of returning a no-op."""
+    paper = _paper_row(project_ids=[10], zotero_item_key="EXISTINGKEY")
+    project = _project_row(col_key="COLLNEW")
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
+    push_conn.fetch = AsyncMock(return_value=[])  # explicit owner 7 -> no resolve fetch
+    push_conn.execute = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    http = AsyncMock(spec=httpx.AsyncClient)
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mz = mock_client.return_value
+        mz.create_item = AsyncMock()
+        mz.add_item_to_collections = AsyncMock()
+        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http, owner_user_id=7)
+    mz.create_item.assert_not_called()
+    mz.add_item_to_collections.assert_awaited_once_with("EXISTINGKEY", ["COLLNEW"])
 
 
 # ---------------------------------------------------------------------------
@@ -1237,7 +1619,7 @@ async def test_poll_zotero_library_sets_source_type_zotero():
 
     async def _fake_upsert(conn, paper_create, *, discovered_by=None):
         captured.append(paper_create)
-        return {"id": 77}
+        return {"id": 77, "is_insert": True}
 
     with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
         mock_client = mock_client_cls.return_value
@@ -1459,7 +1841,7 @@ async def test_poll_library_persists_version_for_null_user_no_skip_log(caplog):
     import logging
 
     new_item = _zotero_item(key="NULLUSER1", doi="")
-    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 101}))
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 101, "is_insert": True}))
     version_conn = _make_conn()
 
     # _make_poll_pool prepends a config conn; remaining conns go to poll body.
@@ -1504,3 +1886,857 @@ async def test_poll_library_persists_version_for_null_user_no_skip_log(caplog):
 
     assert result["status"] == "ok"
     assert result["version_to"] == 99
+
+
+# ---------------------------------------------------------------------------
+# push_highlight_to_zotero — one-way spatial-highlight push
+# ---------------------------------------------------------------------------
+
+
+# The Section-3 worked-example stored rect: US-Letter page 3, denormalizes to
+# Zotero rect [[72.0, 690.0, 300.0, 705.0]] against a (612, 792) page.
+def _worked_rect() -> dict:
+    coords = {"x0": 0.1176, "y0": 0.1098, "x1": 0.4902, "y1": 0.1287}
+    return {"boundingRect": dict(coords), "rects": [dict(coords)]}
+
+
+def _highlight_row(
+    *,
+    paper_id: int = 7,
+    page: int = 3,
+    note: str | None = "interesting",
+    color: str | None = "#34D399",
+    quote: str | None = "a quoted span",
+    zotero_annotation_key: str | None = None,
+    zotero_item_key: str | None = "ITEM1234",
+    zotero_attachment_key: str | None = "ATTACH1",
+    rect: dict | None = None,
+):
+    """Build the joined paper_highlights + paper_user_zotero_links row push_highlight expects.
+
+    The ``zotero_item_key`` / ``zotero_attachment_key`` columns now come from the
+    per-user link table (LEFT JOIN ``l``), not the global papers row — the record
+    keys are identical so the mock models the joined result either way.
+
+    Defaults ``zotero_attachment_key`` to a resolved key so the ensure-attachment
+    step short-circuits (the attachment lifecycle has its own dedicated tests).
+    """
+    return FakeRecord(
+        {
+            "paper_id": paper_id,
+            "page": page,
+            "rect": rect if rect is not None else _worked_rect(),
+            "note": note,
+            "color": color,
+            "quote": quote,
+            "zotero_annotation_key": zotero_annotation_key,
+            "zotero_item_key": zotero_item_key,
+            "zotero_attachment_key": zotero_attachment_key,
+        }
+    )
+
+
+# Page-size resolver patch target: a (612, 792) US-Letter page for page 3.
+def _patch_page_sizes(sizes: dict[int, tuple[float, float]] | None = None):
+    """Patch the off-disk page-size resolver with a fixed mapping."""
+    return patch(
+        "paper_ingestion.integrations.zotero_service._get_page_sizes",
+        AsyncMock(return_value=sizes if sizes is not None else {3: (612.0, 792.0)}),
+    )
+
+
+async def test_push_highlight_parents_on_attachment_not_bibliographic():
+    """The annotation parents on the PDF ATTACHMENT key, never the bibliographic item."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key="ATTACH1"))
+    persist_conn = _make_conn()
+    pool = _make_pool(config_conn, load_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes(),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock(return_value={"successful": {"0": {"key": "ANN123"}}})
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "ok"
+    assert result["zotero_annotation_key"] == "ANN123"
+
+    mock_zotero.create_item.assert_awaited_once()
+    item_data = mock_zotero.create_item.await_args.args[0]
+    assert item_data["itemType"] == "annotation"
+    # The central correction: parent is the ATTACHMENT key, NOT the bibliographic key.
+    assert item_data["parentItem"] == "ATTACH1"
+    assert item_data["parentItem"] != "ITEM1234"
+    assert item_data["annotationType"] == "highlight"
+    assert item_data["annotationText"] == "a quoted span"
+    assert item_data["annotationComment"] == "interesting"
+    assert item_data["annotationPageLabel"] == "3"
+    assert item_data["annotationColor"] == "#34D399"
+
+    # Load query is user-scoped (tenancy); key is persisted on the highlight row.
+    load_sql = load_conn.fetchrow.await_args.args[0]
+    assert "h.user_id = $2" in load_sql
+    # Zotero linkage is read per-user from paper_user_zotero_links ($3 = resolved owner).
+    assert "paper_user_zotero_links l" in load_sql
+    assert load_conn.fetchrow.await_args.args[1:] == (55, 42, 42)
+    assert any("ANN123" in str(c) for c in persist_conn.execute.call_args_list)
+
+
+async def test_push_highlight_emits_denormalized_position_and_sort_index():
+    """The annotation carries a string-encoded annotationPosition + annotationSortIndex.
+
+    The stored Section-3 worked-example rect on a (612, 792) page must decode to
+    ``{"pageIndex": 2, "rects": [[72.0, 690.0, 300.0, 705.0]]}``.
+    """
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key="ATTACH1"))
+    persist_conn = _make_conn()
+    pool = _make_pool(config_conn, load_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes({3: (612.0, 792.0)}),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock(return_value={"successful": {"0": {"key": "ANN123"}}})
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "ok"
+    item_data = mock_zotero.create_item.await_args.args[0]
+
+    # annotationPosition is a JSON STRING, not a native object.
+    raw_position = item_data["annotationPosition"]
+    assert isinstance(raw_position, str)
+    position = json.loads(raw_position)
+    assert position == {"pageIndex": 2, "rects": [[72.0, 690.0, 300.0, 705.0]]}
+
+    # annotationSortIndex: zero-padded pageIndex|0|yTop, with the page-2 field.
+    sort_index = item_data["annotationSortIndex"]
+    assert re.fullmatch(r"\d{5}\|\d{6}\|\d{5}", sort_index)
+    assert sort_index.split("|")[0] == "00002"
+    # The third field is the bounding top edge in PDF points (705 from the rect above).
+    assert sort_index.split("|")[2] == "00705"
+
+
+async def test_push_highlight_default_color_when_unset():
+    """A highlight with no color falls back to Zotero's default highlight color."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(
+        fetchrow=_highlight_row(color=None, note=None, quote=None, zotero_attachment_key="ATTACH1")
+    )
+    persist_conn = _make_conn()
+    pool = _make_pool(config_conn, load_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes(),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock(return_value={"successful": {"0": {"key": "ANN9"}}})
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "ok"
+    item_data = mock_zotero.create_item.await_args.args[0]
+    assert item_data["annotationColor"] == "#ffd400"
+    assert item_data["annotationText"] == ""
+    assert item_data["annotationComment"] == ""
+
+
+async def test_push_highlight_already_synced_is_noop():
+    """A highlight that already carries a Zotero key is a no-op (no create_item)."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_annotation_key="EXISTING"))
+    pool = _make_pool(config_conn, load_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock()
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "already_synced"
+    assert result["zotero_annotation_key"] == "EXISTING"
+    mock_zotero.create_item.assert_not_called()
+
+
+async def test_push_highlight_not_linked_is_noop():
+    """Paper not in Zotero (zotero_item_key NULL) → not_linked no-op, no create_item."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_item_key=None))
+    pool = _make_pool(config_conn, load_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock()
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "not_linked"
+    mock_zotero.create_item.assert_not_called()
+
+
+async def test_push_highlight_tenancy_scoped_to_owner():
+    """A user cannot push another user's highlight — the load is scoped by user_id."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    # The user-scoped query returns no row for a highlight owned by someone else.
+    load_conn = _make_conn(fetchrow=None)
+    pool = _make_pool(config_conn, load_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock()
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=99
+        )
+
+    assert result["status"] == "not_found"
+    mock_zotero.create_item.assert_not_called()
+    load_sql = load_conn.fetchrow.await_args.args[0]
+    assert "h.user_id = $2" in load_sql
+    assert load_conn.fetchrow.await_args.args[1:] == (55, 99, 99)
+
+
+async def test_push_highlight_unique_violation_treated_as_synced():
+    """A concurrent double-push collides on the partial unique index → already_synced."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row())
+    persist_conn = _make_conn()
+    persist_conn.execute = AsyncMock(side_effect=asyncpg.UniqueViolationError("duplicate key"))
+    pool = _make_pool(config_conn, load_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes(),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock(return_value={"successful": {"0": {"key": "ANN123"}}})
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "already_synced"
+    assert result["zotero_annotation_key"] == "ANN123"
+
+
+async def test_push_highlight_disabled_when_no_credentials():
+    """Missing Zotero credentials → disabled no-op, never touches the highlights table."""
+    config_conn = _make_conn(fetch=_zotero_disabled_config_rows())
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=_cm(config_conn))
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "disabled"
+    mock_client.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Attachment lifecycle — find-or-create the parent PDF attachment
+# ---------------------------------------------------------------------------
+
+
+async def test_push_highlight_reuses_existing_pdf_attachment():
+    """An existing imported_file PDF child is reused — no upload, parent is its key."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key=None))
+    persist_conn = _make_conn()
+    pool = _make_pool(config_conn, load_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes(),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.get_item_children = AsyncMock(
+            return_value=[
+                {
+                    "key": "ATTACHX",
+                    # md5 present == the attachment holds a stored, openable file.
+                    "data": {
+                        "contentType": "application/pdf",
+                        "linkMode": "imported_file",
+                        "md5": "d41d8cd98f00b204e9800998ecf8427e",
+                    },
+                },
+            ]
+        )
+        mock_zotero.upload_attachment = AsyncMock()
+        mock_zotero.create_item = AsyncMock(return_value={"successful": {"0": {"key": "ANN1"}}})
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "ok"
+    mock_zotero.get_item_children.assert_awaited_once()
+    # Reuse path: the PDF bytes are NOT re-uploaded.
+    mock_zotero.upload_attachment.assert_not_called()
+    item_data = mock_zotero.create_item.await_args.args[0]
+    assert item_data["parentItem"] == "ATTACHX"
+    # The discovered key is persisted on the paper row.
+    assert any("ATTACHX" in str(c) for c in load_conn.execute.call_args_list)
+
+
+async def test_push_highlight_skips_fileless_orphan_attachment():
+    """A PDF child with no stored file (no md5) is NOT reused — a failed prior
+
+    upload can leave a fileless attachment item; parenting annotations to it
+    would point the reader at an unopenable file. The export must fall through to
+    re-create/upload instead, so the orphan key is never adopted.
+    """
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key=None))
+    persist_conn = _make_conn()
+    pool = _make_pool(config_conn, load_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes(),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.get_item_children = AsyncMock(
+            return_value=[
+                {
+                    "key": "ORPHAN",  # imported_file PDF item but md5 absent => no file
+                    "data": {"contentType": "application/pdf", "linkMode": "imported_file"},
+                },
+            ]
+        )
+        mock_zotero.upload_attachment = AsyncMock()
+        mock_zotero.create_item = AsyncMock(return_value={"successful": {"0": {"key": "ANN1"}}})
+
+        # No PDF on disk in this test, so the re-create path stops at pdf_unavailable —
+        # the point is that the orphan was skipped rather than adopted (which would be "ok").
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "pdf_unavailable"
+    assert not any("ORPHAN" in str(c) for c in load_conn.execute.call_args_list)
+    mock_zotero.create_item.assert_not_called()
+
+
+async def test_push_highlight_creates_and_uploads_attachment_when_absent(tmp_path):
+    """No persisted/found attachment → create an imported_file item + upload the PDF."""
+    pdf_path = tmp_path / "7.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7 fake")
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key=None))
+    persist_conn = _make_conn()
+    pool = _make_pool(config_conn, load_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations.zotero_service._paper_pdf_path",
+            return_value=pdf_path,
+        ),
+        _patch_page_sizes(),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.get_item_children = AsyncMock(return_value=[])  # no PDF child exists
+        mock_zotero.upload_attachment = AsyncMock()
+        mock_zotero.create_item = AsyncMock(
+            side_effect=[
+                {"successful": {"0": {"key": "ATTACHNEW"}}},  # attachment item create
+                {"successful": {"0": {"key": "ANN1"}}},  # annotation create
+            ]
+        )
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "ok"
+    # Attachment uploaded once, to the newly created attachment key.
+    mock_zotero.upload_attachment.assert_awaited_once_with("ATTACHNEW", str(pdf_path))
+    # The attachment-create body declares an annotatable imported_file PDF.
+    attach_body = mock_zotero.create_item.await_args_list[0].args[0]
+    assert attach_body["itemType"] == "attachment"
+    assert attach_body["linkMode"] == "imported_file"
+    assert attach_body["parentItem"] == "ITEM1234"
+    # The annotation parents on the new attachment, not the bibliographic item.
+    annotation_body = mock_zotero.create_item.await_args_list[1].args[0]
+    assert annotation_body["parentItem"] == "ATTACHNEW"
+
+
+async def test_push_highlight_quota_exceeded_maps_to_failure(tmp_path):
+    """A 413 on upload (storage quota) surfaces as a quota_exceeded status, no raise."""
+    pdf_path = tmp_path / "7.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7 fake")
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key=None))
+    pool = _make_pool(config_conn, load_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    req = httpx.Request("POST", "https://api.zotero.org/users/123456/items/ATTACHNEW/file")
+    too_large = httpx.HTTPStatusError(
+        "quota", request=req, response=httpx.Response(413, request=req)
+    )
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        patch(
+            "paper_ingestion.integrations.zotero_service._paper_pdf_path",
+            return_value=pdf_path,
+        ),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.get_item_children = AsyncMock(return_value=[])
+        mock_zotero.create_item = AsyncMock(
+            return_value={"successful": {"0": {"key": "ATTACHNEW"}}}
+        )
+        mock_zotero.upload_attachment = AsyncMock(side_effect=too_large)
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "quota_exceeded"
+
+
+async def test_push_highlight_pdf_unavailable_when_page_sizes_missing():
+    """An absent on-disk PDF (no page sizes) → pdf_unavailable, no annotation created."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key="ATTACH1"))
+    pool = _make_pool(config_conn, load_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes({}),  # PDF missing on disk
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock()
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "pdf_unavailable"
+    mock_zotero.create_item.assert_not_called()
+
+
+async def test_push_highlight_push_failed_when_no_key_returned():
+    """A create response without successful.0.key maps to push_failed (no persist)."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    load_conn = _make_conn(fetchrow=_highlight_row(zotero_attachment_key="ATTACH1"))
+    pool = _make_pool(config_conn, load_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes(),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock(return_value={"successful": {}, "failed": {"0": {}}})
+
+        result = await push_highlight_to_zotero(
+            highlight_id=55, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "push_failed"
+
+
+# ---------------------------------------------------------------------------
+# push_highlights_for_paper — per-paper batch export
+# ---------------------------------------------------------------------------
+
+
+def _paper_zotero_row(
+    *,
+    paper_id: int = 7,
+    zotero_item_key: str | None = "ITEM1234",
+    zotero_attachment_key: str | None = "ATTACH1",
+):
+    # Models the per-paper SELECT joined to paper_user_zotero_links (l.zotero_*);
+    # the result column names are unchanged so the same keys model the link row.
+    return FakeRecord(
+        {
+            "id": paper_id,
+            "zotero_item_key": zotero_item_key,
+            "zotero_attachment_key": zotero_attachment_key,
+        }
+    )
+
+
+def _batch_highlight_rows(n: int = 2):
+    return [
+        FakeRecord(
+            {
+                "id": 100 + i,
+                "page": 3,
+                "rect": _worked_rect(),
+                "note": f"n{i}",
+                "color": "#34D399",
+                "quote": f"q{i}",
+            }
+        )
+        for i in range(n)
+    ]
+
+
+async def test_push_highlights_for_paper_exports_all_unsynced():
+    """Two unsynced highlights → two annotations, each parented on the attachment key."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    paper_conn = _make_conn(fetchrow=_paper_zotero_row())
+    highlights_conn = _make_conn(fetch=_batch_highlight_rows(2))
+    ensure_conn = _make_conn()
+    persist0 = _make_conn()
+    persist1 = _make_conn()
+    pool = _make_pool(config_conn, paper_conn, highlights_conn, ensure_conn, persist0, persist1)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes(),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock(
+            side_effect=[
+                {"successful": {"0": {"key": "ANN1"}}},
+                {"successful": {"0": {"key": "ANN2"}}},
+            ]
+        )
+
+        result = await push_highlights_for_paper(
+            paper_id=7, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["exported"] == 2
+    assert result["skipped"] == 0
+    assert result["failed"] == 0
+    assert result["status"] == "ok"
+    assert mock_zotero.create_item.await_count == 2
+    for call in mock_zotero.create_item.await_args_list:
+        assert call.args[0]["parentItem"] == "ATTACH1"
+    # The unsynced-only filter is in the highlights query.
+    hl_sql = highlights_conn.fetch.await_args.args[0]
+    assert "zotero_annotation_key IS NULL" in hl_sql
+
+
+async def test_push_highlights_for_paper_idempotent_when_all_synced():
+    """No unsynced highlights → zero create_item calls, ok with exported=0."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    paper_conn = _make_conn(fetchrow=_paper_zotero_row())
+    highlights_conn = _make_conn(fetch=[])  # everything already carries a key
+    pool = _make_pool(config_conn, paper_conn, highlights_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock()
+
+        result = await push_highlights_for_paper(
+            paper_id=7, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "ok"
+    assert result["exported"] == 0
+    mock_zotero.create_item.assert_not_called()
+
+
+async def test_push_highlights_for_paper_not_linked():
+    """A paper with no zotero_item_key short-circuits to not_linked."""
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    paper_conn = _make_conn(fetchrow=_paper_zotero_row(zotero_item_key=None))
+    pool = _make_pool(config_conn, paper_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock()
+
+        result = await push_highlights_for_paper(
+            paper_id=7, db_pool=pool, http_client=http, owner_user_id=42
+        )
+
+    assert result["status"] == "not_linked"
+    mock_zotero.create_item.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# ZoteroClient.upload_attachment — 3-stage upload, mocked at the transport
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_upload_attachment_three_stage_transport_sequence(tmp_path):
+    """Authorize → S3 PUT-bytes → register, with the documented header/body shape."""
+    from paper_ingestion.integrations.zotero_client import ZOTERO_API_BASE, ZoteroClient
+
+    pdf = tmp_path / "7.pdf"
+    pdf_bytes = b"%PDF-1.7\nfake pdf body\n"
+    pdf.write_bytes(pdf_bytes)
+
+    base = f"{ZOTERO_API_BASE}/users/123456"
+    file_url = f"{base}/items/ATTACH1/file"
+    s3_url = "https://zotero-uploads.s3.example.com/put"
+
+    def _file_endpoint(request):
+        # Same URL serves Stage 1 (authorize) and Stage 3 (register) — distinguish by body.
+        if b"upload=" in request.content:
+            return httpx.Response(204)  # Stage 3 register success
+        return httpx.Response(
+            200,
+            json={
+                "url": s3_url,
+                "contentType": "application/octet-stream",
+                "prefix": "PFX",
+                "suffix": "SFX",
+                "uploadKey": "UPKEY42",
+            },
+        )
+
+    file_route = respx.post(file_url).mock(side_effect=_file_endpoint)
+    s3_route = respx.post(s3_url).mock(return_value=httpx.Response(201))
+
+    client = ZoteroClient(api_key="test_key", user_id="123456", http_client=httpx.AsyncClient())
+    await client.upload_attachment("ATTACH1", str(pdf))
+
+    assert file_route.call_count == 2  # authorize + register
+    assert s3_route.call_count == 1
+
+    stage1 = file_route.calls[0].request
+    stage3 = file_route.calls[1].request
+    s3 = s3_route.calls[0].request
+
+    assert stage1.headers["If-None-Match"] == "*"
+    assert b"params=1" in stage1.content
+    assert stage1.headers["Zotero-API-Key"] == "test_key"
+    # Stage-1 fingerprints the bytes: md5 hex, byte length, and mtime in MS.
+    stage1_body = parse_qs(stage1.content.decode())
+    assert stage1_body["md5"][0] == hashlib.md5(pdf_bytes, usedforsecurity=False).hexdigest()
+    assert int(stage1_body["filesize"][0]) == len(pdf_bytes)
+    assert int(stage1_body["mtime"][0]) == int(pdf.stat().st_mtime * 1000)
+    assert b"upload=UPKEY42" in stage3.content
+    assert stage3.headers["If-None-Match"] == "*"
+
+    # Stage 2 (S3) carries NO Zotero auth header; body is prefix + bytes + suffix.
+    assert "Zotero-API-Key" not in s3.headers
+    assert s3.content == b"PFX" + pdf_bytes + b"SFX"
+    assert s3.headers["content-type"] == "application/octet-stream"
+
+
+@respx.mock
+async def test_upload_attachment_exists_short_circuits(tmp_path):
+    """A Stage-1 {"exists": 1} response means the bytes are already stored — skip 2 & 3."""
+    from paper_ingestion.integrations.zotero_client import ZOTERO_API_BASE, ZoteroClient
+
+    pdf = tmp_path / "7.pdf"
+    pdf.write_bytes(b"already-uploaded")
+
+    base = f"{ZOTERO_API_BASE}/users/123456"
+    file_url = f"{base}/items/ATTACH1/file"
+    s3_url = "https://zotero-uploads.s3.example.com/put"
+
+    file_route = respx.post(file_url).mock(return_value=httpx.Response(200, json={"exists": 1}))
+    s3_route = respx.post(s3_url).mock(return_value=httpx.Response(201))
+
+    client = ZoteroClient(api_key="test_key", user_id="123456", http_client=httpx.AsyncClient())
+    await client.upload_attachment("ATTACH1", str(pdf))
+
+    assert file_route.call_count == 1  # only authorize; no register
+    assert not s3_route.called
+
+
+# ---------------------------------------------------------------------------
+# Highlight-export authz: safety invariant + view-level job re-validation
+# ---------------------------------------------------------------------------
+
+
+async def test_push_highlights_for_paper_scopes_export_to_owner_user():
+    """No cross-user leak: the per-paper export binds the highlights load to the
+    caller's user_id, so a co-owner's highlights on the same shared paper are
+    never read or pushed.
+
+    This is the invariant that makes view-level export authz safe: even when a
+    public-source paper carries highlights from several users, an exporter only
+    ever sees their own. The query parameters (paper_id, user_id) are asserted
+    directly — the WHERE clause is keyed to ``user_id = $2`` so binding $2 to the
+    caller (here user 99) excludes any other user's rows (e.g. user 42).
+    """
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    paper_conn = _make_conn(fetchrow=_paper_zotero_row())
+    # The DB returns only user 99's two unsynced highlights because the load is
+    # scoped by user_id; a co-owner's rows on the same paper are filtered out.
+    highlights_conn = _make_conn(fetch=_batch_highlight_rows(2))
+    ensure_conn = _make_conn()
+    persist0 = _make_conn()
+    persist1 = _make_conn()
+    pool = _make_pool(config_conn, paper_conn, highlights_conn, ensure_conn, persist0, persist1)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with (
+        patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
+        _patch_page_sizes(),
+    ):
+        mock_zotero = mock_client.return_value
+        mock_zotero.create_item = AsyncMock(
+            side_effect=[
+                {"successful": {"0": {"key": "ANN1"}}},
+                {"successful": {"0": {"key": "ANN2"}}},
+            ]
+        )
+
+        result = await push_highlights_for_paper(
+            paper_id=7, db_pool=pool, http_client=http, owner_user_id=99
+        )
+
+    assert result["exported"] == 2
+    # Load-bearing: the highlights load is parameterized to the caller (user 99)
+    # as positional $2. Another user's highlights (user_id != 99) cannot match.
+    assert highlights_conn.fetch.await_args.args[1:] == (7, 99)
+    assert mock_zotero.create_item.await_count == 2
+
+
+async def test_push_highlights_job_allows_visible_not_owned_public_paper():
+    """Job authz parity: re-validation passes for a public-source paper the caller
+    can view but does not own (discovered by another user, not in the caller's
+    library), matching the loosened router authz. The export then runs scoped to
+    the caller's own highlights."""
+    from paper_ingestion.integrations.zotero_service import _zotero_push_highlights_job
+
+    visible_conn = _make_conn(
+        fetchrow=FakeRecord({"source_type": "arxiv", "discovered_by": 999, "in_library": False})
+    )
+    pool = _make_pool(visible_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    ctx = AsyncMock()
+    sentinel = {"paper_id": 7, "status": "ok", "exported": 0}
+
+    with patch(
+        "paper_ingestion.integrations.zotero_service.push_highlights_for_paper",
+        AsyncMock(return_value=sentinel),
+    ) as mock_push:
+        result = await _zotero_push_highlights_job(pool, http, {"paper_id": 7, "user_id": 42}, ctx)
+
+    assert result == sentinel
+    mock_push.assert_awaited_once_with(7, pool, http, owner_user_id=42)
+
+
+async def test_push_highlights_job_404s_foreign_private_paper():
+    """Job authz parity (deny side): a private-origin (LOCAL) paper owned by another
+    user and not in the caller's library is still rejected with 404 at job
+    re-validation — view-level authz only widens access to the shared public
+    corpus, never to private uploads."""
+    import pytest
+    from fastapi import HTTPException
+
+    from paper_ingestion.integrations.zotero_service import _zotero_push_highlights_job
+
+    private_conn = _make_conn(
+        fetchrow=FakeRecord({"source_type": "local", "discovered_by": 999, "in_library": False})
+    )
+    pool = _make_pool(private_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    ctx = AsyncMock()
+
+    with patch(
+        "paper_ingestion.integrations.zotero_service.push_highlights_for_paper",
+        AsyncMock(),
+    ) as mock_push:
+        with pytest.raises(HTTPException) as exc_info:
+            await _zotero_push_highlights_job(pool, http, {"paper_id": 7, "user_id": 42}, ctx)
+
+    assert exc_info.value.status_code == 404
+    mock_push.assert_not_awaited()
+
+
+async def test_push_highlights_job_single_user_skips_visibility_check():
+    """Single-user mode (user_id=None): the view-level visibility check is skipped
+    (no-op parity with the prior assert_paper_ownership(None)), and the export still
+    runs. Removing the ``if user_id is not None`` guard would run
+    assert_paper_pdf_visible(conn, paper_id, None) and spuriously 404 the export."""
+    from paper_ingestion.integrations.zotero_service import _zotero_push_highlights_job
+
+    # No conn supplied: the visibility branch is skipped, so pool.acquire() must
+    # never be called. A regression that drops the guard would acquire here.
+    pool = _make_pool()
+    http = AsyncMock(spec=httpx.AsyncClient)
+    ctx = AsyncMock()
+    sentinel = {"paper_id": 7, "status": "ok", "exported": 0}
+
+    with (
+        patch(
+            "paper_ingestion.routers.pdfs.assert_paper_pdf_visible",
+            AsyncMock(),
+        ) as mock_visible,
+        patch(
+            "paper_ingestion.integrations.zotero_service.push_highlights_for_paper",
+            AsyncMock(return_value=sentinel),
+        ) as mock_push,
+    ):
+        result = await _zotero_push_highlights_job(
+            pool, http, {"paper_id": 7, "user_id": None}, ctx
+        )
+
+    assert result == sentinel
+    # Single-user mode: the visibility check is skipped entirely.
+    mock_visible.assert_not_awaited()
+    # The export still proceeds, scoped to owner_user_id=None.
+    mock_push.assert_awaited_once_with(7, pool, http, owner_user_id=None)
+
+
+def test_parse_zotero_item_builds_authors_url_fallback_and_skips_jarvis_origin():
+    from paper_ingestion.integrations.zotero_service import _parse_zotero_item
+
+    # jarvis-origin skip uses data["extra"]
+    assert _parse_zotero_item({"extra": "jarvis_paper_id=42", "key": "ABC"}, {}) is None
+
+    # key resolved from data first; fallback to outer_item["key"]
+    parsed_with_data_key = _parse_zotero_item(
+        {
+            "key": "ITEMKEY",
+            "title": "Attention Is All You Need",
+            "DOI": "10.1/x",
+            "creators": [{"firstName": "Ada", "lastName": "Lovelace"}, {"lastName": "Hopper"}],
+        },
+        {"key": "OUTER"},  # outer_item; data["key"] takes precedence
+    )
+    assert parsed_with_data_key is not None
+    assert parsed_with_data_key.item_key == "ITEMKEY"
+    assert parsed_with_data_key.authors == ["Ada Lovelace", "Hopper"]
+    assert (
+        parsed_with_data_key.url == "https://www.zotero.org/items/ITEMKEY"
+    )  # fallback when no url
+    assert parsed_with_data_key.metadata == {"zotero_item_key": "ITEMKEY", "doi": "10.1/x"}
+
+    # key falls back to outer_item when data has no "key"
+    parsed_outer_key = _parse_zotero_item(
+        {"title": "Fallback title"},
+        {"key": "OUTERKEY"},
+    )
+    assert parsed_outer_key is not None
+    assert parsed_outer_key.item_key == "OUTERKEY"

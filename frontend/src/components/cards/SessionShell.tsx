@@ -27,7 +27,7 @@ export interface SessionProgress {
 export function useSessionProgress(currentTotal: number): SessionProgress {
   const [sessionReviewed, setSessionReviewed] = useState(0);
   // sessionTotal is seeded once from the first non-zero currentTotal value,
-  // then frozen for the remainder of the session (spec §5 Conflict C).
+  // then frozen for the remainder of the session.
   const [frozenTotal, setFrozenTotal] = useState(0);
 
   useEffect(() => {

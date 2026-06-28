@@ -30,6 +30,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.audit import log_audit
 from jarvis_common.email import send_magic_link
+from jarvis_common.owner import resolve_owner_user_id
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
 from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
@@ -390,9 +391,8 @@ async def api_key_session(
 
     from jarvis_common.auth import api_key_login_enabled  # noqa: PLC0415
 
-    core = get_core_settings()
-
     async with pool.acquire() as conn:
+        resolved_owner_id = await resolve_owner_user_id(conn)
         # Guardrail 3: single-tenant gate.
         user_count = await conn.fetchval("SELECT count(*) FROM users WHERE deleted_at IS NULL")
         multi_user = int(user_count or 0) != 1
@@ -405,11 +405,11 @@ async def api_key_session(
         # SAME role='admin' lookup the explicit-owner branch uses; members never
         # match (the lookup requires admin), so this exempts the owner only.
         owner: Any = None
-        if core.owner_user_id is not None:
+        if resolved_owner_id is not None:
             owner = await conn.fetchrow(
                 "SELECT id, email, role FROM users "
                 "WHERE id = $1 AND deleted_at IS NULL AND role = 'admin'",
-                int(core.owner_user_id),
+                int(resolved_owner_id),
             )
         owner_exempt = owner is not None
 
@@ -419,49 +419,53 @@ async def api_key_session(
                 detail=("API-key login disabled for multi-tenant deployments; use magic-link"),
             )
 
-        # SEC-2 (fallback gate): when the gate passed ONLY because the flag is on
+        # Fallback gate: when the gate passed ONLY because the flag is on
         # (multi-user box, flag enabled, no exempt owner), an explicit
         # OWNER_USER_ID is mandatory — binding the session to an arbitrary
         # lowest-id admin on a shared box is a silent privilege grant. Refuse the
         # fallback; the explicit-owner branch below handles a set-but-unresolved
         # OWNER_USER_ID with its own 409s. Single-user keeps the fallback.
-        if multi_user and flag_enabled and not owner_exempt and core.owner_user_id is None:
+        if multi_user and flag_enabled and not owner_exempt and resolved_owner_id is None:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "set OWNER_USER_ID for multi-user API-key login; refusing to "
-                    "bind the session to an arbitrary admin"
+                    "set OWNER_USER_ID (or create the first admin via the setup "
+                    "wizard) for multi-user API-key login; refusing to bind the "
+                    "session to an arbitrary admin"
                 ),
             )
 
         # Guardrail 1: resolve the single explicit owner. Never create one.
-        if core.owner_user_id is not None:
+        if resolved_owner_id is not None:
             # A-3 (defense-in-depth): the explicit-owner lookup (pre-resolved as
             # ``owner`` above) enforces role='admin' symmetrically with the
-            # fallback branch below. A configured OWNER_USER_ID that resolves to a
+            # fallback branch below. A configured owner that resolves to a
             # non-admin must NOT silently mint a member "owner" session —
             # distinguish "missing" (deleted/absent) from "exists but not admin"
             # so the operator gets an actionable error instead of a privilege
-            # downgrade.
+            # downgrade. The owner is sourced from either OWNER_USER_ID env or the
+            # first-admin owner record, so both are named in the errors below.
             if owner is None:
                 non_admin = await conn.fetchrow(
                     "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL",
-                    int(core.owner_user_id),
+                    int(resolved_owner_id),
                 )
                 if non_admin is not None:
                     raise HTTPException(
                         status_code=409,
                         detail=(
-                            "OWNER_USER_ID references a non-admin user; "
-                            "no session minted (promote the user to admin "
-                            "or unset OWNER_USER_ID)"
+                            "the configured owner (OWNER_USER_ID env or the "
+                            "first-admin owner record) references a non-admin "
+                            "user; no session minted (promote the user to admin "
+                            "or set OWNER_USER_ID to a live admin)"
                         ),
                     )
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "OWNER_USER_ID references a missing or deleted user; "
-                        "no session minted (no user is created)"
+                        "the configured owner (OWNER_USER_ID env or the "
+                        "first-admin owner record) references a missing or "
+                        "deleted user; no session minted (no user is created)"
                     ),
                 )
         else:

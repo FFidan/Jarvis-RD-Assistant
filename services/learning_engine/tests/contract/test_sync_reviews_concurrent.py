@@ -224,11 +224,10 @@ async def test_sync_reviews_concurrent_different_keys_all_synced(
 # naive reviewed_at counts on the correct UTC day (end-to-end _to_utc proof)
 # ---------------------------------------------------------------------------
 #
-# Verified: services/learning_engine/learning_engine/routers/review.py:279-281 —
-#   reviewed_at_utc = _to_utc(event.reviewed_at).astimezone(UTC); compared to
-#   datetime.now(UTC).date() to drive the new_today daily_log increment.
-# Verified: services/learning_engine/learning_engine/routers/review.py:285-296 —
-#   new_today > 0 → INSERT INTO daily_log (..., log_date=CURRENT_DATE, ...).
+# Verified: services/learning_engine/learning_engine/routers/review.py (sync_reviews) —
+#   reviewed_at_utc = _to_utc(event.reviewed_at).astimezone(UTC); the daily_log
+#   upsert runs inside the per-event transaction, keyed by reviewed_at_utc.date(),
+#   so each event increments daily_log.cards_reviewed for the UTC day it occurred on.
 
 
 async def test_sync_reviews_naive_reviewed_at_counts_on_utc_day(

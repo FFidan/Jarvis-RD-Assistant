@@ -243,6 +243,100 @@ else
   pass "backup sidecar runs by default (postgres-backup has no profiles: gate)"
 fi
 
+# P6.1 (manifest): each run emits a manifest_<ts>.json listing every archive with
+# its sha256 + the applied schema_version, so the restore UI can show per-point
+# version compatibility. It must be written, hashed, schema-versioned, run BEFORE
+# the S3 upload (so S3 carries it), and pruned WITH its archives.
+check "defines a write_manifest stage" '^write_manifest\(\)'
+check "writes a per-run manifest_<ts>.json" 'manifest_\$\{TIMESTAMP\}\.json'
+check "records the applied schema_version in the manifest" 'schema_migrations'
+check "sha256-hashes each archive for the manifest" 'sha256sum'
+check "prunes manifests with their archives" 'manifest_\*\.json'
+
+# write_manifest must run AFTER the archives exist and BEFORE the S3 upload block,
+# so the manifest reflects every archive and off-host DR carries it too.
+if awk '/^write_manifest \|\| true/{c=NR} /Optional S3 upload/{s=NR} END{exit !(c && s && c<s)}' \
+     "$BACKUP_SCRIPT"; then
+  pass "write_manifest runs before the S3 upload block"
+else
+  printf 'FAIL: write_manifest is not invoked before the S3 upload block\n' >&2
+  fail=1
+fi
+
+# write_manifest (behavioral): run the actual function against a fixture backup
+# dir (no psql/JARVIS_VERSION) and prove it emits a manifest_<ts>.json that lists
+# every archive carrying this run's TIMESTAMP — excluding itself and .tmp/.raw —
+# with a real sha256 per file. Source-grep alone can't catch a manifest that is
+# silently empty or that hashes the wrong files.
+man_dir="$(mktemp -d)"
+man_ts="20260626_120000"
+printf 'J' > "${man_dir}/jarvis_${man_ts}.sql.gz"
+printf 'L' > "${man_dir}/litellm_${man_ts}.sql.gz"
+printf 'S' > "${man_dir}/secrets_${man_ts}.tar.gz"
+printf 'Q' > "${man_dir}/qdrant_kg_entities_${man_ts}.snapshot"
+printf 'stale' > "${man_dir}/qdrant_kg_entities_${man_ts}.snapshot.raw"  # must be excluded
+# Extract write_manifest's body from backup.sh and run it in isolation with the
+# fixture env (single source of truth — a change to the builder is exercised here).
+man_out="$(
+  BACKUP_DIR="$man_dir" TIMESTAMP="$man_ts" PGHOST=/nonexistent \
+  bash -c '
+    set -euo pipefail
+    '"$(sed -n '/^write_manifest()/,/^}/p' "$BACKUP_SCRIPT")"'
+    write_manifest || true
+    cat "${BACKUP_DIR}/manifest_${TIMESTAMP}.json"
+  ' 2>/dev/null
+)"
+if printf '%s' "$man_out" | grep -q '"filename":"jarvis_'"${man_ts}"'.sql.gz"' \
+   && printf '%s' "$man_out" | grep -q '"filename":"qdrant_kg_entities_'"${man_ts}"'.snapshot"' \
+   && ! printf '%s' "$man_out" | grep -q '\.snapshot\.raw' \
+   && ! printf '%s' "$man_out" | grep -q '"filename":"manifest_' \
+   && printf '%s' "$man_out" \
+        | grep -qE '"sha256":"[0-9a-f]{64}"'; then
+  pass "write_manifest lists every archive (sha256'd), excludes itself + .raw/.tmp"
+else
+  printf 'FAIL: write_manifest did not emit a correct manifest (%s)\n' "$man_out" >&2
+  fail=1
+fi
+rm -rf "$man_dir"
+
+# DATA-RESTORE-PRUNE-RACE: the retention prune at the tail must be gated on
+# BACKUP_SKIP_PRUNE so restore.sh's safety pre-backup cannot delete the very
+# archive being restored (a `local` target older than RETENTION_DAYS).
+check "gates the retention prune on BACKUP_SKIP_PRUNE" \
+  'if \[ -z "\$\{BACKUP_SKIP_PRUNE:-\}" \]; then'
+
+# DATA-RESTORE-PRUNE-RACE (behavioral): replay backup.sh's OWN prune block against
+# a fixture archive older than retention. With BACKUP_SKIP_PRUNE=1 the old archive
+# must SURVIVE; with the gate unset the prune must still delete it. Single-sourced
+# from backup.sh (a change to the gate or the find globs is exercised here too).
+prune_block="$(sed -n '/^# --- Prune old backups/,/^fi$/p' "$BACKUP_SCRIPT")"
+if [ -z "$prune_block" ]; then
+  printf 'FAIL: could not extract the BACKUP_SKIP_PRUNE-gated prune block from backup.sh\n' >&2
+  fail=1
+else
+  # (a) gate SET -> an over-retention archive survives the prune.
+  sp_dir="$(mktemp -d)"
+  touch -d '2000-01-01 00:00:00' "${sp_dir}/jarvis_20000101_000000.sql.gz"
+  BACKUP_DIR="$sp_dir" RETENTION_DAYS=7 BACKUP_SKIP_PRUNE=1 \
+    bash -c 'set -euo pipefail; '"$prune_block" >/dev/null 2>&1 || true
+  sp_kept=0; [ -f "${sp_dir}/jarvis_20000101_000000.sql.gz" ] && sp_kept=1
+  rm -rf "$sp_dir"
+  # (b) gate UNSET -> the same over-retention archive is pruned.
+  np_dir="$(mktemp -d)"
+  touch -d '2000-01-01 00:00:00' "${np_dir}/jarvis_20000101_000000.sql.gz"
+  BACKUP_DIR="$np_dir" RETENTION_DAYS=7 \
+    bash -c 'set -euo pipefail; unset BACKUP_SKIP_PRUNE; '"$prune_block" >/dev/null 2>&1 || true
+  np_deleted=0; [ -f "${np_dir}/jarvis_20000101_000000.sql.gz" ] || np_deleted=1
+  rm -rf "$np_dir"
+  if [ "$sp_kept" -eq 1 ] && [ "$np_deleted" -eq 1 ]; then
+    pass "BACKUP_SKIP_PRUNE=1 keeps an over-retention archive; unset still prunes it"
+  else
+    printf 'FAIL: BACKUP_SKIP_PRUNE gating wrong (skip_kept=%s unset_deleted=%s)\n' \
+      "$sp_kept" "$np_deleted" >&2
+    fail=1
+  fi
+fi
+
 if [ "$fail" -ne 0 ]; then
   printf '\nbackup coverage: FAILED\n' >&2
   exit 1

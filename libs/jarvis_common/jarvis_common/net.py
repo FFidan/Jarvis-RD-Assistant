@@ -29,7 +29,7 @@ def parse_retry_after(
 ) -> int | None:
     """Parse an HTTP ``Retry-After`` header value into a whole number of seconds.
 
-    Handles both RFC 7231 §7.1.3 forms:
+    Handles both RFC 7231, section 7.1.3 forms:
 
     * **delta-seconds** — a non-negative number of seconds (e.g. ``"120"``).
     * **HTTP-date** — an absolute timestamp (e.g.

@@ -28,11 +28,12 @@ async def reload_telegram_nudges() -> None:
     api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
     try:
         async with httpx.AsyncClient() as client:
-            await client.post(
+            resp = await client.post(
                 f"{telegram_url}/internal/reload-nudges",
                 headers={"X-API-Key": api_key},
                 timeout=2.0,
             )
+            resp.raise_for_status()
     except httpx.HTTPError:
         logger.warning("Telegram nudge-reload failed (non-fatal)", exc_info=True)
 

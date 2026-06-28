@@ -212,7 +212,7 @@ class TestProcrastinateWorkerLifespan:
 
 
 # ---------------------------------------------------------------------------
-# SEC-4 boot gate: multi-user non-prod boot requires JARVIS_MODEL_HMAC_KEY
+# Boot gate: multi-user non-prod boot requires JARVIS_MODEL_HMAC_KEY
 # ---------------------------------------------------------------------------
 
 
@@ -786,18 +786,18 @@ async def test_reconcile_missing_rows_use_env_then_static_default(
 
 
 # ---------------------------------------------------------------------------
-# SEC-1 production path: cached singletons must carry db_pool
+# Production path: cached singletons must carry db_pool
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_init_source_singletons_passes_db_pool_to_ctor() -> None:
-    """SEC-1 regression: _init_source_singletons must pass db_pool= to the source ctor.
+    """Regression: _init_source_singletons must pass db_pool= to the source ctor.
 
     This guards the PRODUCTION pulse path: discover_candidates is called with
     source_cache=services.sources (pre-built singletons), so any db_pool omission
     in _init_source_singletons silently makes PersistentSourceRateLimiter inert
-    across all real pulse runs.  If this test turns red, SEC-1 has regressed.
+    across all real pulse runs.  If this test turns red, this invariant has regressed.
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -859,7 +859,7 @@ async def test_init_source_singletons_passes_db_pool_to_ctor() -> None:
         )
         assert received_db_pools[st.value] is pool, (
             f"source '{st.value}' singleton was built without db_pool; "
-            "PersistentSourceRateLimiter is inert on the production pulse path (SEC-1 regression)"
+            "PersistentSourceRateLimiter is inert on the production pulse path (regression)"
         )
 
 
@@ -1139,3 +1139,65 @@ async def test_start_and_shutdown_reconciler_hooks_cancel_cleanly() -> None:
         await _shutdown_litellm_reconciler(app)
         assert task.done()
         assert task.cancelled()
+
+
+# ---------------------------------------------------------------------------
+# Registration guard: assert→RuntimeError (survives python -O)
+# ---------------------------------------------------------------------------
+
+
+def test_register_paper_ingestion_tasks_raises_when_kind_unregistered(monkeypatch):
+    """A registration gap must raise a real (non-assert, -O-proof) exception."""
+    import procrastinate
+    import pytest
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    import paper_ingestion._task_register as reg
+
+    app = procrastinate.App(connector=AiopgConnector())
+    # Stub register_tasks so NO kinds get added → every kind is "missing".
+    monkeypatch.setattr(reg, "register_tasks", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="failed to register kinds"):
+        reg.register_paper_ingestion_tasks(app)
+
+
+# ---------------------------------------------------------------------------
+# C.1 post-pool runtime-config boot gate: wiring + fresh-DB skip
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_config_includes_runtime_validator_hook() -> None:
+    """_validate_runtime_config_hook runs right after migrations, with a None teardown."""
+    from paper_ingestion.main import (
+        _lifespan_config,
+        _run_migrations_hook,
+        _validate_runtime_config_hook,
+    )
+
+    init = _lifespan_config.custom_init_tasks
+    assert _validate_runtime_config_hook in init
+    idx = init.index(_validate_runtime_config_hook)
+    # Must run immediately after migrations so users/user_config exist.
+    assert init[idx - 1] is _run_migrations_hook
+    # Paired None teardown at the same index; the two lists stay equal-length.
+    assert _lifespan_config.custom_teardown_tasks[idx] is None
+    assert len(init) == len(_lifespan_config.custom_teardown_tasks)
+
+
+@pytest.mark.asyncio
+async def test_runtime_validator_hook_swallows_fresh_db_undefined_table() -> None:
+    """A fresh pre-migration DB (UndefinedTableError) must not abort boot."""
+    import asyncpg
+    from fastapi import FastAPI
+
+    from paper_ingestion.main import _validate_runtime_config_hook
+
+    app = FastAPI()
+    app.state.db_pool = MagicMock()
+
+    with patch(
+        "paper_ingestion.main.validate_runtime_config",
+        new=AsyncMock(side_effect=asyncpg.UndefinedTableError('relation "users" does not exist')),
+    ):
+        # Must NOT raise — the hook swallows the fresh-DB error and boot proceeds.
+        await _validate_runtime_config_hook(app)

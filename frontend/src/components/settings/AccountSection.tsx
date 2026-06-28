@@ -1,5 +1,5 @@
 /**
- * §I Account — self-service profile + email for the authenticated user.
+ * Account — self-service profile + email for the authenticated user.
  *
  * - Loads profile via GET /api/account (fetchAccount).
  * - display_name edit via PATCH /api/account (updateAccount).

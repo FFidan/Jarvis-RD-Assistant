@@ -21,6 +21,7 @@ EXPECTED_PUBLIC_EXPORTS = frozenset(
     {
         "API_KEY_LOGIN_CONFIG_KEY",
         "CLOUD_PROVIDERS",
+        "ConfigWriteResult",
         "PERSONAL_KEYS",
         "ProviderTestResult",
         "SYSTEM_KEYS",

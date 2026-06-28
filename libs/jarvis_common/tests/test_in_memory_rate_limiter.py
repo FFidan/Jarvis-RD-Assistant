@@ -149,7 +149,7 @@ async def test_rate_limiter_bucket_reset_after_sleep(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rate_limiter_holds_lock_across_sleep_serializing_concurrent_acquirers():
-    """Characterization guard for falsified audit finding M3 (2026-06-10).
+    """Characterization guard (2026-06-10).
 
     acquire() deliberately holds self._lock across asyncio.sleep: N concurrent
     acquirers are served one per 1/rate interval. Releasing the lock before the

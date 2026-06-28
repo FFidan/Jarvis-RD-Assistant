@@ -17,7 +17,7 @@ import { ConfigEntryCard } from './ingestion/ConfigEntryCard';
 // Hardware-Aware Settings helpers (Contract 06)
 // ---------------------------------------------------------------------------
 
-/** Power-of-2 snap steps for the num_ctx slider (§10.2). */
+/** Power-of-2 snap steps for the num_ctx slider. */
 const NUM_CTX_STOPS = [2048, 4096, 8192, 16384, 32768, 65536] as const;
 type NumCtx = (typeof NUM_CTX_STOPS)[number];
 const isNumCtx = (n: number): n is NumCtx => (NUM_CTX_STOPS as readonly number[]).includes(n);
@@ -90,7 +90,7 @@ function computeRequiredVram(
 
 /**
  * Determine fit status for a given required VRAM vs available VRAM.
- * Contract 06 §4 thresholds.
+ * Hardware fit thresholds.
  */
 function fitStatus(
   requiredVramGb: number,
@@ -121,7 +121,7 @@ function largestFittingStop(
 
 /**
  * Clamp a slider value to the highest non-unfit stop (fits or partial).
- * Partial (up to 120%) is allowed; only unfit is blocked (§10.3).
+ * Partial (up to 120%) is allowed; only unfit is blocked.
  */
 function clampToNonUnfit(
   value: number,
@@ -141,7 +141,7 @@ function clampToNonUnfit(
 }
 
 // ---------------------------------------------------------------------------
-// HardwareStrip — §6.2
+// HardwareStrip
 // ---------------------------------------------------------------------------
 
 interface HardwareStripProps {
@@ -297,7 +297,7 @@ function HardwareRecommendationBanner({ recommendation }: HardwareRecommendation
 }
 
 // ---------------------------------------------------------------------------
-// FitBadge — §6.1
+// FitBadge
 // ---------------------------------------------------------------------------
 
 type FitStatus = 'fits' | 'partial' | 'unfit' | 'cloud' | 'unknown';
@@ -467,7 +467,7 @@ function NumCtxSlider({
     const idx = values[0] ?? 0;
     const rawStop = stops[idx] ?? stops[0];
 
-    // Clamp: block unfit stops (§10.3)
+    // Clamp: block unfit stops
     let clampedStop: NumCtx = rawStop;
     if (fitDetail && hasFitBaseline(fitDetail) && vramGb > 0) {
       const clamped = clampToNonUnfit(rawStop, fitDetail, vramGb, stops);
@@ -747,7 +747,7 @@ interface IngestionSectionProps {
    * Optional allow-list of group labels to render (must match the exact
    * strings in {@link GROUP_ORDER}). When omitted the full set of groups is
    * rendered (default, backward-compatible behavior). When provided, only the
-   * listed groups are shown — used by SpacedRepetitionSection to scope §VI
+   * listed groups are shown — used by SpacedRepetitionSection to scope
    * Research → Spaced Repetition to the `fsrs.*` group alone (Conflict-5).
    */
   filterGroups?: string[];
@@ -776,7 +776,7 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
 
   const hardware = systemModels?.hardware;
   const catalog = systemModels?.catalog ?? [];
-  // machine_id from hardware response (Contract 06 §3)
+  // machine_id from hardware response
   const machineId = hardware?.machine_id ?? 'local';
   // per-VRAM advisory recommendation (optional — absent on older backends)
   const hardwareRecommendation = systemModels?.hardware_recommendation;
@@ -890,7 +890,7 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
               defaults for your GPU and apply changes for you.
             </p>
           )}
-          {/* Hardware strip — shown once at top of AI models group (§6.2) */}
+          {/* Hardware strip — shown once at top of AI models group */}
           {group === 'AI models' && hardware && (
             <HardwareStrip hardware={hardware} />
           )}

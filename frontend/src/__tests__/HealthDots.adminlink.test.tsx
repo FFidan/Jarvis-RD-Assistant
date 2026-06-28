@@ -1,6 +1,6 @@
 /**
  * HealthDots.adminlink.test.tsx — tests for the adminLink prop added in the
- * Shell/Sidebar+Admin IA redesign (spec §3.4).
+ * Shell/Sidebar+Admin IA redesign.
  *
  * Covers:
  * - When adminLink is provided: renders a popover trigger pill (not a raw <Link>);

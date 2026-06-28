@@ -49,6 +49,7 @@ lint:
 	python3 scripts/check-no-jsonb-double-encode.py
 	python3 scripts/check-no-unsafe-resolver.py
 	uv run ruff check services/ libs/ scripts/
+	uv run python scripts/check-complexity-budget.py
 
 ## Format all Python code
 format:
@@ -112,6 +113,7 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	uv run python3 scripts/check_agent_docs.py
 	bash scripts/check-burned-secrets.sh
 	bash scripts/tests/test_backup_coverage.sh
+	bash scripts/tests/test_restore_coverage.sh
 	uv run pytest
 	$(MAKE) frontend-check
 

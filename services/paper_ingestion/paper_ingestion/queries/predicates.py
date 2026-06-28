@@ -2,10 +2,10 @@
 
 All fragments assume the alias is `pus`. Fragments use COALESCE so that
 papers without a paper_user_state row (LEFT JOIN NULL) are treated as
-state='inbox' — the freshly-discovered default per spec §6.
+state='inbox' — the freshly-discovered default.
 """
 
-# Per-view predicates (spec §6). Used by routers/feed.py, list_papers,
+# Per-view predicates. Used by routers/feed.py, list_papers,
 # get_feed_counts, and other surface-bound queries.
 VIEW_PREDICATES: dict[str, str] = {
     "inbox": "COALESCE(pus.state, 'inbox') = 'inbox'",
@@ -20,7 +20,7 @@ VIEW_PREDICATES: dict[str, str] = {
     "all_non_trash": "COALESCE(pus.state, 'inbox') != 'trash'",
 }
 
-# Recommender + Pulse exclusion (spec §6 + §7.3.1): papers in trash or done
+# Recommender + Pulse exclusion: papers in trash or done
 # are never recommended again. The 60-day negative-feedback exclusion lives
 # in recommender.py to avoid coupling this constant to the
 # recommendation_feedback table.

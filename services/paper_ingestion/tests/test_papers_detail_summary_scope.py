@@ -71,3 +71,71 @@ async def test_summary_read_binds_caller_user_id(monkeypatch):
     assert conn.fetchrow.await_count == 4
     _sql, *summary_params = conn.fetchrow.call_args_list[1].args
     assert user_id in summary_params, "caller's user_id must be bound to the summary read"
+
+
+@pytest.mark.asyncio
+async def test_processing_failed_single_user_mode(monkeypatch):
+    """Single-user (user_id=None): a failed process job must set processing_failed=True.
+
+    The previous code called str(None) → 'None'. That literal string never matched
+    JSONB null (args->>'user_id' = SQL NULL is always false), so the badge never
+    fired in single-user deployments. The fix passes real SQL NULL as $2.
+    """
+    monkeypatch.setattr(papers_detail.papers_service, "assert_paper_ownership", AsyncMock())
+
+    paper_id = 5
+    pool, conn = make_pool_and_conn()
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            _paper_record(paper_id),
+            None,  # summary
+            None,  # user_state
+            None,  # feedback
+        ]
+    )
+    conn.fetch = AsyncMock(return_value=[])
+    # fetchval[0] = project_link_count, fetchval[1] = last_process_job_status
+    conn.fetchval = AsyncMock(side_effect=[0, "failed"])
+
+    endpoint = papers_detail.get_paper_detail.__wrapped__
+    request = AsyncMock()
+    result = await endpoint(request=request, paper_id=paper_id, db_pool=pool, user_id=None)
+
+    assert result.processing_failed is True
+
+    # The second fetchval call must receive SQL NULL (not the string 'None') for $2.
+    job_call = conn.fetchval.call_args_list[1]
+    assert job_call.args[2] is None, "single-user must pass SQL NULL as $2, not str(None)"
+
+
+@pytest.mark.asyncio
+async def test_processing_failed_multi_user_own_job(monkeypatch):
+    """Multi-user: a failed process job owned by this user → processing_failed=True.
+
+    Ensures multi-user behavior is byte-identical: $2 is str(user_id) (non-null path).
+    """
+    monkeypatch.setattr(papers_detail.papers_service, "assert_paper_ownership", AsyncMock())
+
+    paper_id = 6
+    user_id = 99
+    pool, conn = make_pool_and_conn()
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            _paper_record(paper_id),
+            None,
+            None,
+            None,
+        ]
+    )
+    conn.fetch = AsyncMock(return_value=[])
+    conn.fetchval = AsyncMock(side_effect=[0, "failed"])
+
+    endpoint = papers_detail.get_paper_detail.__wrapped__
+    request = AsyncMock()
+    result = await endpoint(request=request, paper_id=paper_id, db_pool=pool, user_id=user_id)
+
+    assert result.processing_failed is True
+
+    # Multi-user path must bind str(user_id), not None, so SQL filters by user.
+    job_call = conn.fetchval.call_args_list[1]
+    assert job_call.args[2] == str(user_id), "multi-user must bind str(user_id) as $2"

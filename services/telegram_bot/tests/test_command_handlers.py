@@ -1008,13 +1008,13 @@ async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
 
 
 # ---------------------------------------------------------------------------
-# B3: focus_alarm threads X-Owner-User-Id for paired users
+# focus_alarm threads X-Owner-User-Id for paired users
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_focus_alarm_sends_owner_user_id_for_paired_user():
-    """B3: focus_alarm callback sends X-Owner-User-Id for the paired user."""
+    """focus_alarm callback sends X-Owner-User-Id for the paired user."""
     update, context, _, mock_http = _make_focus_update_and_context(args=["25"])
     # Simulate auth_required having stashed the jarvis_user_id
     context.user_data["jarvis_user_id"] = 42

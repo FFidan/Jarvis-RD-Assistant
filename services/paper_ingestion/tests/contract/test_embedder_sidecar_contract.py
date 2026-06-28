@@ -215,7 +215,7 @@ async def _identity_rerank(query, chunks, top_k):  # noqa: ARG001
 
 
 # ---------------------------------------------------------------------------
-# M7 — search_chunks_in_paper defense-in-depth user scope
+# search_chunks_in_paper defense-in-depth user scope
 #
 # Same shared-corpus topology as the PI-RAG-001 cross-paper test above, but at
 # the paper-scoped search boundary:
@@ -318,7 +318,7 @@ async def test_search_chunks_in_paper_user_scope_shared_corpus_exclusion_and_def
 
 
 # ---------------------------------------------------------------------------
-# M7 — prepare_single_paper_rag end-to-end: caller fetches library + threads scope
+# prepare_single_paper_rag end-to-end: caller fetches library + threads scope
 #
 # Verified: services/paper_ingestion/paper_ingestion/rag/streaming.py:124-137
 #   (prepare_single_paper_rag queries user_library for the caller, threads

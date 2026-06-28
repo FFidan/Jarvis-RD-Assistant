@@ -231,7 +231,7 @@ class TestSafeForPrompt:
     def test_escape_mode_strips_bidi_isolate(self) -> None:
         # H19: escape mode now strips BIDI override/isolate chars before HTML-escaping
         result = safe_for_prompt("\u2066text\u2069", mode="escape")
-        # BIDI isolates must be removed (H19 fix: _strip_bidi_zw applied first)
+        # BIDI isolates must be removed (_strip_bidi_zw applied first)
         assert "\u2066" not in result
         assert "\u2069" not in result
         assert "text" in result

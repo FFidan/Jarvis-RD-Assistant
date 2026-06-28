@@ -1,4 +1,4 @@
-"""M3 — URL-encode item_key in Zotero/BBT requests.
+"""URL-encode item_key in Zotero/BBT requests.
 
 Verifies that special characters in item_key are percent-encoded in the URL,
 preventing path injection (e.g. item_key containing '/' could traverse path segments).

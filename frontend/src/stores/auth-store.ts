@@ -27,12 +27,14 @@ export function registerQueryClient(qc: QueryClient): void {
  *    cookie travels on every fetch automatically (credentials:'include' on
  *    apiFetch).
  *
- * 2. API-key sessions (legacy): users sitting in front of the wizard or
- *    self-hosters who haven't set up SMTP can still paste their JARVIS_API_KEY
- *    into the login form. The key is stored in sessionStorage and threaded
- *    through every fetch as X-API-Key. This path is kept working so
- *    Telegram bot + non-browser callers don't break and so dev-mode iteration
- *    on a fresh install still works without an SMTP relay.
+ * 2. API-key sessions (legacy): users at the wizard or self-hosters without
+ *    SMTP can paste their JARVIS_API_KEY into the login form. login() exchanges
+ *    it server-side for a real session cookie (POST /api/auth/api-key-session)
+ *    and then takes the SAME path magic-link uses (loginWithSession), so the
+ *    raw key is never held in the store (apiKey stays null; partialize omits it
+ *    — see the persist config below) and the HttpOnly cookie is the credential.
+ *    getApiKey() is retained for non-browser callers (Telegram bot / direct
+ *    API) and returns null under a cookie session.
  *
  * When both a session cookie AND an X-API-Key are present the backend prefers
  * the session cookie (verify_api_key skips /api/auth/* and the session
@@ -49,11 +51,13 @@ export interface SessionUser {
 interface AuthState {
   isAuthenticated: boolean;
   authTime: number | null;
+  /** Vestigial under cookie sessions: only ever null. Kept so the legacy
+   *  X-API-Key callers (Telegram bot / non-browser) still type-check. */
   apiKey: string | null;
   user: SessionUser | null;
   lastError: string | null;
   login: (apiKey: string) => Promise<boolean>;
-  loginWithSession: (user: SessionUser) => void;
+  loginWithSession: (user: SessionUser) => Promise<void>;
   logout: () => void;
   /**
    * Pure predicate — reads state only, never mutates.
@@ -69,6 +73,130 @@ interface AuthState {
   expireSession: () => void;
   getApiKey: () => string | null;
   getUser: () => SessionUser | null;
+}
+
+function safe(label: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (e) {
+    console.warn(`[auth] ${label} failed`, e);
+  }
+}
+
+/** Fire-and-forget JARVIS_LOGOUT to the controlling SW, deferring via a one-shot
+ *  controllerchange listener when no SW controls the page yet. Used by paths
+ *  that do NOT expose a new identity (logout / session expiry). */
+function notifySwLogout(): void {
+  const sw = navigator.serviceWorker;
+  if (sw?.controller) {
+    sw.controller.postMessage({ type: 'JARVIS_LOGOUT' });
+  } else if (sw) {
+    const onControllerChange = (): void => {
+      sw.removeEventListener('controllerchange', onControllerChange);
+      sw.controller?.postMessage({ type: 'JARVIS_LOGOUT' });
+    };
+    sw.addEventListener('controllerchange', onControllerChange);
+  }
+}
+
+/** Post JARVIS_LOGOUT with a reply port and resolve once the SW acknowledges its
+ *  runtime API cache is cleared — so the next identity is never served the prior
+ *  user's SW-cached data. Resolves immediately when no SW controls the page
+ *  (nothing can be served stale) and after `timeoutMs` if the SW never replies
+ *  (never block login on an unresponsive SW). */
+function awaitSwApiCacheCleared(timeoutMs = 1500): Promise<void> {
+  const controller = navigator.serviceWorker?.controller;
+  if (!controller) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const channel = new MessageChannel();
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    channel.port1.onmessage = finish;
+    try {
+      controller.postMessage({ type: 'JARVIS_LOGOUT' }, [channel.port2]);
+    } catch {
+      finish();
+    }
+  });
+}
+
+/** Resolve when `p` settles or after `timeoutMs`, whichever comes first — so an
+ *  IndexedDB transaction that never settles (e.g. another tab holds the DB open)
+ *  can't block login indefinitely. Mirrors awaitSwApiCacheCleared's bound. */
+function withTimeout(p: Promise<unknown>, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    void Promise.resolve(p).then(finish, finish);
+  });
+}
+
+/**
+ * Cross-user cache hygiene — the in-app half of the logout fan-out, also
+ * invoked on session expiry (8h timeout / tab-close) and on re-login. Drops
+ * every trace of the current identity that lives inside the app: persisted UI
+ * flags, the React-Query cache (in-memory + IndexedDB-persisted), in-memory
+ * user-scoped stores, and the offline review outbox. The service worker's
+ * runtime API cache is cleared separately by the caller (notifySwLogout on
+ * logout/expiry, awaitSwApiCacheCleared on re-login). Without this, the next
+ * user on a shared browser would render the previous user's private data.
+ * Every step is best-effort: a storage or network failure must never block the
+ * auth flow.
+ */
+async function purgeIdentityCaches(): Promise<void> {
+  safe('ui-store key purge', () => localStorage.removeItem(UI_STORE_KEY));
+
+  // Clear the prior identity's in-memory React-Query cache synchronously, before
+  // the caller exposes a new identity — NOT behind an awaited cancel, which
+  // would leave PREV's cache live for the microtask between set(NEXT) and the
+  // cancel resolving. cancelQueries is fire-and-forget; clear() empties the
+  // cache synchronously, and after set(NEXT) the prior observers unmount so a
+  // late in-flight fetch can't re-populate. Best-effort.
+  safe('query cache flush', () => {
+    if (_queryClient != null) {
+      void _queryClient.cancelQueries().catch(() => {});
+      _queryClient.clear();
+    }
+  });
+
+  // Registry-routed so auth-store forms no import cycle with the user-scoped
+  // stores (job-store reads auth state); chat-store's reset aborts its SSE
+  // streams. pomodoro + ui are leaf stores, reset directly. Synchronous,
+  // before the caller exposes a new identity.
+  safe('session resets', runSessionResets);
+  safe('pomodoro reset', () => usePomodoroStore.getState()._reset());
+  safe('ui reset', () => useUIStore.getState()._reset());
+
+  // Both IDB calls are INITIATED synchronously (before the await) so callers
+  // that use fire-and-forget (void purgeIdentityCaches()) still observe them
+  // synchronously. The await lets loginWithSession guarantee both are complete
+  // before exposing the new identity, bounded by a timeout so a stuck IDB
+  // transaction can never block login. logout/expireSession don't await the
+  // returned Promise so the IDB ops are fire-and-forget there.
+  await withTimeout(
+    Promise.all([
+      clearPersistedQueryCache().catch((e: unknown) => {
+        console.warn('[auth] IDB cache purge failed', e);
+      }),
+      // Closes the null-user edge where no identity was resolvable at enqueue time.
+      clearReviewOutbox().catch((e: unknown) => {
+        console.warn('[auth] review outbox purge failed', e);
+      }),
+    ]),
+    2000,
+  );
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -98,7 +226,7 @@ export const useAuthStore = create<AuthState>()(
           });
           if (res.ok) {
             const user = (await res.json()) as SessionUser;
-            get().loginWithSession(user);
+            await get().loginWithSession(user);
             return true;
           }
           // Surface the backend error (esp. the 403 multi-tenant-disabled
@@ -118,13 +246,21 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      loginWithSession(user: SessionUser): void {
+      async loginWithSession(user: SessionUser): Promise<void> {
         // Magic-link path: the session cookie is already set by the backend.
         // We persist nothing security-sensitive here — just the user record so
         // the UI can render. The cookie is HttpOnly so the browser/JS can't
         // read or forge it; isSessionValid() still gates on authTime so a stale
         // tab doesn't pretend to be logged in forever after the cookie
         // expires server-side.
+        //
+        // Purge the previous identity's caches BEFORE exposing the new user.
+        // The in-memory clears run synchronously; the IDB snapshot delete and SW
+        // runtime-API cache clear are both AWAITED so a re-login on a shared
+        // browser can never rehydrate the prior user's persisted or SW-cached
+        // private data.
+        await purgeIdentityCaches();
+        await awaitSwApiCacheCleared();
         set({
           isAuthenticated: true,
           authTime: Date.now(),
@@ -132,83 +268,14 @@ export const useAuthStore = create<AuthState>()(
           user,
           lastError: null,
         });
-        // Defense-in-depth (POMO-01 / UI-STORE-XUSER-LEAK): reset ephemeral
-        // per-session stores so a new user never inherits a prior session's
-        // running timer or dismissed-UI flags. These stores do not import
-        // auth-store, so static imports above are cycle-safe.
-        usePomodoroStore.getState()._reset();
-        useUIStore.getState()._reset();
       },
 
       logout() {
-        // Clear the UI store's persisted localStorage entry so a fresh login
-        // doesn't inherit stale UI state from a previous session.
-        localStorage.removeItem(UI_STORE_KEY);
-
-        // Clear auth state first.
+        // Clear auth state first so the UI reflects logged-out immediately.
         set({ isAuthenticated: false, authTime: null, apiKey: null, user: null, lastError: null });
 
-        // Flush the React-Query cache so the next user doesn't see stale data.
-        // cancelQueries first so in-flight fetches don't repopulate the cache
-        // after clear(). Both are best-effort; a failure must not abort logout.
-        void (async () => {
-          try {
-            if (_queryClient != null) {
-              await _queryClient.cancelQueries();
-              _queryClient.clear();
-            }
-          } catch {
-            // ignore — cache flush is best-effort
-          }
-
-          // Reset in-memory user-scoped stores so the next user starts clean.
-          // Each store registers its own reset via stores/session-reset, so
-          // logout neither imports nor forms an import cycle with the store
-          // modules (job-store reads auth state, so a static import here would
-          // cycle). chat-store's registration aborts its in-flight SSE streams
-          // before clearing. pomodoro + ui are leaf stores also reset on
-          // loginWithSession, so they are reset directly. Each reset is
-          // best-effort (registry catches per-store failures; UI-STORE-XUSER-LEAK
-          // ui reset is belt-and-suspenders alongside the localStorage.removeItem
-          // above which only clears disk).
-          runSessionResets();
-          usePomodoroStore.getState()._reset();
-          useUIStore.getState()._reset();
-        })();
-
-        // Purge the IndexedDB-persisted TanStack Query cache (cross-user hygiene —
-        // P1b contract; also posts JARVIS_LOGOUT to SW for runtime-cache purge).
-        // Non-blocking: a storage failure must not block the logout flow.
-        // The existing SW postMessage below is kept for defense-in-depth (no-op
-        // when clearPersistedQueryCache() already posted it).
-        void clearPersistedQueryCache().catch((e: unknown) => {
-          console.warn('[auth] IDB cache purge failed', e);
-        });
-
-        // FE-A (belt-and-suspenders): wipe the offline review outbox too.
-        // review-outbox already isolates per user via purgeForeignEntries; this
-        // is additive — a clean slate that also closes the null-user edge where
-        // no identity was resolvable at enqueue time. Non-blocking + non-throwing.
-        void clearReviewOutbox().catch((e: unknown) => {
-          console.warn('[auth] review outbox purge failed', e);
-        });
-
-        // Notify the active Service Worker to drop runtime-API caches so
-        // cached responses from the previous user aren't served to the next.
-        // FE-B: if no SW controls this page yet (logout immediately after the
-        // very first install — controller is still null until the new SW
-        // claims), register a one-shot controllerchange listener so the purge
-        // still fires the moment the SW takes control.
-        const sw = navigator.serviceWorker;
-        if (sw?.controller) {
-          sw.controller.postMessage({ type: 'JARVIS_LOGOUT' });
-        } else if (sw) {
-          const onControllerChange = (): void => {
-            sw.removeEventListener('controllerchange', onControllerChange);
-            sw.controller?.postMessage({ type: 'JARVIS_LOGOUT' });
-          };
-          sw.addEventListener('controllerchange', onControllerChange);
-        }
+        void purgeIdentityCaches();
+        notifySwLogout();
 
         // Best-effort backend logout: clear the session cookie + revoke the row.
         // Don't await — UI state is already cleared and a network failure
@@ -232,8 +299,15 @@ export const useAuthStore = create<AuthState>()(
 
       expireSession(): void {
         set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+        // 8h timeout / tab-close on a shared browser: purge the expired
+        // identity's caches so the next user never inherits its persisted or
+        // SW-cached private data.
+        void purgeIdentityCaches();
+        notifySwLogout();
       },
 
+      // Always null under a cookie session; retained for the legacy X-API-Key
+      // callers (Telegram bot / non-browser) that read it via authHeaders().
       getApiKey(): string | null {
         return get().apiKey;
       },

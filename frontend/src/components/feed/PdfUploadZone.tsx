@@ -62,38 +62,36 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
 
   const processFiles = useCallback(async (newFiles: File[]) => {
     const entries: FileEntry[] = newFiles.map(f => ({ uid: crypto.randomUUID(), file: f, status: 'idle' as FileStatus }));
-    setFiles(prev => {
-      void (async () => {
-        for (const entry of entries) {
-          const { uid, file } = entry;
-          try {
-            setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'uploading' as FileStatus } : f)));
-            const paper = await uploadPdf(file, file.name.replace(/\.pdf$/i, ''));
-            setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'processing' as FileStatus } : f)));
-            const job = await processPdf(paper.id);
-            trackExternalJob({
-              jobId: job.job_id,
-              kind: 'paper.process',
-              payload: { paper_id: paper.id },
-              status: 'queued',
-            });
-            setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'done' as FileStatus } : f)));
-          } catch (err) {
-            setFiles(s =>
-              s.map((f) =>
-                f.uid === uid
-                  ? { ...f, status: 'error' as FileStatus, error: errorMessage(err, 'Upload failed') }
-                  : f,
-              ),
-            );
-          }
+    setFiles(prev => [...prev, ...entries]);
+    void (async () => {
+      for (const entry of entries) {
+        const { uid, file } = entry;
+        try {
+          setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'uploading' as FileStatus } : f)));
+          const paper = await uploadPdf(file, file.name.replace(/\.pdf$/i, ''));
+          setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'processing' as FileStatus } : f)));
+          const job = await processPdf(paper.id);
+          trackExternalJob({
+            jobId: job.job_id,
+            kind: 'paper.process',
+            payload: { paper_id: paper.id },
+            status: 'queued',
+          });
+          setFiles(s => s.map((f) => (f.uid === uid ? { ...f, status: 'done' as FileStatus } : f)));
+        } catch (err) {
+          setFiles(s =>
+            s.map((f) =>
+              f.uid === uid
+                ? { ...f, status: 'error' as FileStatus, error: errorMessage(err, 'Upload failed') }
+                : f,
+            ),
+          );
         }
-        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
-        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
-        onComplete?.();
-      })();
-      return [...prev, ...entries];
-    });
+      }
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.papers.feedAll() });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.feed.counts() });
+      onComplete?.();
+    })();
   }, [queryClient, onComplete, trackExternalJob]);
 
   const handleDrop = (e: React.DragEvent) => {
@@ -128,6 +126,9 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
   return (
     <div className="space-y-3">
       <div
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inputRef.current?.click(); } }}
         onDrop={handleDrop}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}

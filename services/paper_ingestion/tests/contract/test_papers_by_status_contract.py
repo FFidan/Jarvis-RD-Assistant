@@ -162,6 +162,48 @@ async def test_admin_papers_by_status_dedups_multi_state_paper(
 
 
 # ---------------------------------------------------------------------------
+# §A-ANALYTICS-01b — admin papers-by-status counts each paper once across buckets
+# Verified: services/paper_ingestion/paper_ingestion/services/analytics_queries.py:44
+# (admin branch must not double-count a paper that appears in multiple buckets)
+# ---------------------------------------------------------------------------
+
+
+async def test_admin_papers_by_status_counts_multi_state_paper_once(
+    contract_conn, _pi_app, _configure_api_key
+):
+    """A paper assigned to two different states by two users counts once in total.
+
+    Seed ONE paper with user A in state='reading' and user B in state='done'. The
+    admin (unscoped) LEFT JOIN on paper_user_state yields two rows for that paper —
+    one per status. Without a DISTINCT ON collapse, the paper lands in both the
+    'reading' AND 'done' buckets, so sum(counts) == 2 despite only 1 paper existing.
+    After the fix, sum(counts) must equal 1.
+    """
+    admin_id, admin_cookie = await _seed_user_with_session(
+        contract_conn, "analytics-cross-admin@contract.example.com", "admin"
+    )
+    other_id, _ = await _seed_user_with_session(
+        contract_conn, "analytics-cross-other@contract.example.com", "user"
+    )
+
+    paper_id = await _seed_paper(contract_conn, "analytics-cross-bucket-1", admin_id)
+    await _set_state(contract_conn, paper_id, admin_id, "reading")
+    await _set_state(contract_conn, paper_id, other_id, "done")
+
+    async with _client(_pi_app, admin_cookie) as c:
+        resp = await c.get("/api/analytics/papers-by-status")
+
+    assert resp.status_code == 200, f"Expected 200; got {resp.status_code}: {resp.text}"
+    counts = {row["status"]: row["count"] for row in resp.json()}
+    total = sum(counts.values())
+    assert total == 1, (
+        "Admin papers-by-status must count each paper once across all buckets. "
+        f"One paper with two different user states yielded sum={total!r}; "
+        f"full counts={counts!r}. Expected sum=1."
+    )
+
+
+# ---------------------------------------------------------------------------
 # §A-ANALYTICS-02 — non-admin papers-by-status scoped to caller's library
 # Verified: services/paper_ingestion/paper_ingestion/services/analytics_queries.py:57
 # (non-admin branch JOIN user_library + paper_user_state.user_id=$1)

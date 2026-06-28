@@ -360,7 +360,7 @@ async def test_digest_includes_reading_active(live_pg_dsn: str) -> None:
 @pytest.mark.asyncio
 @pytest.mark.live_pg
 async def test_digest_excludes_positive_feedback_then_trashed(live_pg_dsn: str) -> None:
-    """NEW-M11 regression guard: positive recommendation_feedback then state='trash'.
+    """Regression guard: positive recommendation_feedback then state='trash'.
 
     Phase-A replacement for test_digest_excludes_pulse_rated_then_archived.
     A paper with a recent 'positive'/'pulse_thumbs' feedback that was subsequently
@@ -391,7 +391,7 @@ async def test_digest_excludes_positive_feedback_then_trashed(live_pg_dsn: str) 
         rows = await _digest_query(conn)
         assert len(rows) == 0, (
             "Trashed paper with positive recommendation_feedback must not appear "
-            "in digest (NEW-M11 regression guard)"
+            "in digest (regression guard)"
         )
 
     finally:

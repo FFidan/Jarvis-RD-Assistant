@@ -145,6 +145,46 @@ export interface Note {
   created_at: string;
 }
 
+// --- Spatial PDF highlights (in-PDF annotation reader) ---
+
+/** Normalized, top-origin rectangle on a PDF page (coordinates in [0, 1]). */
+export interface Rect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** react-pdf-highlighter geometry: union box plus its per-line rectangles. */
+export interface HighlightRect {
+  boundingRect: Rect;
+  rects: Rect[];
+}
+
+export interface Highlight {
+  id: number;
+  paper_id: number;
+  page: number;
+  rect: HighlightRect;
+  note: string | null;
+  color: string | null;
+  quote: string | null;
+  created_at: string;
+}
+
+export interface HighlightCreate {
+  page: number;
+  rect: HighlightRect;
+  note?: string | null;
+  color?: string | null;
+  quote?: string | null;
+}
+
+export interface HighlightUpdate {
+  note?: string | null;
+  color?: string | null;
+}
+
 export interface JobAccepted {
   job_id: string;
   status: 'queued' | string;
@@ -282,6 +322,7 @@ export interface SetupStatus {
   topics_count: number;
   telegram_configured: boolean;
   telegram_paired: boolean;
+  model_warnings?: string[];
 }
 
 // --- Analytics ---
@@ -323,7 +364,7 @@ export interface StatusCountRow {
   count: number;
 }
 
-export type ContradictionStatus = 'candidate' | 'verified' | 'dismissed' | string;
+export type ContradictionStatus = 'verified' | 'dismissed' | 'false_positive';
 
 export interface PaperContradiction {
   id: number;
@@ -346,6 +387,29 @@ export interface PaperContradiction {
 
 export interface PaperContradictionsResponse {
   contradictions: PaperContradiction[];
+  total: number;
+}
+
+export interface ConsensusAssessment {
+  stance: string;
+  paper_a_title: string;
+  paper_b_title: string;
+  quote_a: string;
+  quote_b: string;
+  page_a: number | null;
+  page_b: number | null;
+}
+
+export interface ConsensusClaim {
+  claim_topic: string;
+  supports: number;
+  opposes: number;
+  paper_ids: number[];
+  assessments: ConsensusAssessment[];
+}
+
+export interface ConsensusResponse {
+  claims: ConsensusClaim[];
   total: number;
 }
 
@@ -414,9 +478,9 @@ export interface Project {
   created_at: string;
   updated_at: string;
   /**
-   * Projects IA redesign §3.6/§4c — chapter-rail row counts. Widened on
+   * Chapter-rail row counts. Widened on
    * ProjectResponse (services/learning_engine/learning_engine/models.py:209-210);
-   * backend always emits these (default 0). Optional here so pre-UI_v3
+   * backend always emits these (default 0). Optional here so older clients
    * importers/fixtures that build `Project` literals keep compiling — the
    * runtime payload always carries them.
    */
@@ -682,7 +746,7 @@ export interface ModelFitDetail {
 
 // --- Core enums ---
 
-/** Lifecycle state per spec §2 (post-2026-04-29 redesign).
+/** Lifecycle state (post-2026-04-29 redesign).
  *
  * H.11 cross-ref: this union MUST stay in sync with the ``state`` Literal
  * in services/paper_ingestion/paper_ingestion/models/papers.py
@@ -702,7 +766,7 @@ export type StateBeforeTrash = 'inbox' | 'to_read' | 'reading' | 'done' | null;
 
 // --- User State ---
 
-/** User state per spec §9.1. */
+/** User state. */
 export interface UserState {
   state: LifecycleState;
   state_before_trash: StateBeforeTrash;
@@ -713,7 +777,7 @@ export interface UserState {
   updated_at: string | null;
 }
 
-/** User-state envelope returned by lifecycle endpoints (spec §9.1). */
+/** User-state envelope returned by lifecycle endpoints. */
 export interface UserStateResponse {
   state: LifecycleState;
   state_before_trash: StateBeforeTrash;
@@ -799,7 +863,7 @@ export type BulkAction =
 
 // --- Surface / Filter Views ---
 
-/** Library sub-chip filter per spec §5.4. */
+/** Library sub-chip filter. */
 export type LibraryFilter = 'starred' | 'reading' | 'to_read' | 'done';
 
 /** Library feed corpus scope. */
@@ -808,7 +872,7 @@ export type FeedScope = 'library' | 'corpus';
 /** Inbox source-type sub-chip filter — null means "all sources". */
 export type InboxSourceFilter = 'arxiv' | 'semantic_scholar' | 'openalex' | 'pubmed';
 
-/** Top-level feed surface per spec §5.4 (5 surfaces). */
+/** Top-level feed surface (5 surfaces). */
 export type SurfaceView = 'inbox' | 'library' | 'search' | 'ask' | 'trash';
 
 // --- Feed Counts ---
@@ -825,11 +889,11 @@ export interface TopicFacetCount {
 }
 
 /**
- * Feed counts per spec §6 — 10 named numeric views.
+ * Feed counts — 10 named numeric views.
  *
  * Kept numeric-only so `keyof FeedCountsResponse` consumers (e.g.
  * `CountsBadge`, indexing `data[surface]` arithmetically) stay sound. The
- * UI_v3 facet-rail additions the backend emits on the SAME payload
+ * Facet-rail additions the backend emits on the SAME payload
  * (`by_source` / `by_topic` / `untagged`) are typed on
  * {@link FeedCountsWithFacets} below so the additive fields don't widen the
  * numeric `keyof` surface.
@@ -852,7 +916,7 @@ export interface FeedCountsResponse {
 }
 
 /**
- * UI_v3 § Source / § Topic facet-rail additions. The backend emits these on
+ * § Source / § Topic facet-rail additions. The backend emits these on
  * the same `GET /api/papers/feed/counts` payload as the named views (always
  * present, default-empty when the caller has no library) — grounded against
  * FeedCountsResponse in models/papers.py:646-649.
@@ -913,7 +977,7 @@ export interface JournalPrompts {
   worked?: string;
   blocked?: string;
   /**
-   * UI_v3 EOD "shutdown ritual" one optional free-note escape hatch.
+   * EOD "shutdown ritual" one optional free-note escape hatch.
    * Grounded against JournalPrompts.note in
    * services/paper_ingestion/paper_ingestion/models/journal.py:18.
    */
@@ -928,7 +992,7 @@ export interface JournalEntry {
   updated_at: string;
 }
 
-// --- My Day § Yesterday (UI_v3, on-the-fly rollup) ---
+// --- My Day § Yesterday (on-the-fly rollup) ---
 
 /**
  * A task surfaced in § Yesterday — completed or deferred.
@@ -955,7 +1019,7 @@ export interface YesterdaySummary {
   deferred: YesterdayTask[];
 }
 
-// --- My Day § Open threads (UI_v3 `thread` entity) ---
+// --- My Day § Open threads (`thread` entity) ---
 
 /**
  * A resumable mid-flight line of work.
@@ -984,7 +1048,7 @@ export interface ThreadSeedResponse {
   created: boolean;
 }
 
-// --- §I Account (UI_v3 self-service profile) ---
+// --- Account (self-service profile) ---
 
 /**
  * Shape returned by GET /api/account and (nested) PATCH /api/account.
@@ -1011,7 +1075,7 @@ export interface AccountUpdateResponse {
   email_verification_sent: boolean;
 }
 
-// --- Analytics "Reflect" KPI band (UI_v3) ---
+// --- Analytics "Reflect" KPI band ---
 
 /**
  * Response for GET /api/analytics/summary — current/prior-period totals +
@@ -1027,15 +1091,6 @@ export interface AnalyticsSummaryResponse {
   cards_reviewed_prev: number;
   focus_streak_days: number;
   cards_review_streak_days: number;
-}
-
-// --- Priority Helper ---
-
-export function priorityLevel(score: number | null): PriorityLevel {
-  if (score === null) return 'unscored';
-  if (score > 0.7) return 'must-read';
-  if (score > 0.4) return 'recommended';
-  return 'background';
 }
 
 // --- Pulse ---
@@ -1305,6 +1360,7 @@ export interface SourceConfigPatch {
 export interface SystemCapabilities {
   networkx: boolean;
   scikit_learn: boolean;
+  structured_output_enforced: boolean;
 }
 
 // --- Executive § My Day aggregate bundle (GET /api/executive/my-day-bundle) ---

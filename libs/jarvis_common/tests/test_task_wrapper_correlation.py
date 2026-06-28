@@ -1,4 +1,4 @@
-"""Tests for LG-B1: task wrapper sets correlation_id and emits job lifecycle events.
+"""Tests for the task wrapper: sets correlation_id and emits job lifecycle events.
 
 Verifies that ``_run_legacy_handler`` in ``jarvis_common.task_registry``:
   - Sets ``correlation_id_var`` to a UUID for the duration of the handler call.

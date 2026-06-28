@@ -114,7 +114,7 @@ async def test_create_task_non_owner_project_gets_404(
 async def test_create_task_parent_owned_by_other_user_gets_404(
     contract_two_users, contract_conn, _le_app, _configure_api_key
 ):
-    """User A cannot parent a new task under user B's task — 404, no row written (LE-SEC-01 IDOR).
+    """User A cannot parent a new task under user B's task — 404, no row written (IDOR).
 
     The project FK only proves the parent exists; without an ownership check the
     caller could attach a child under another tenant's task and leak structure.
@@ -156,6 +156,41 @@ async def test_create_task_parent_owned_by_caller_gets_201(
         f"Owner expected 201 parenting under own task {parent_task_id}; "
         f"got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+async def test_create_task_cross_project_parent_same_user_gets_404(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """User A cannot parent a task in project A2 under their own task in project A1 — 404.
+
+    The parent guard must check project_id, not only user_id.  Without the
+    project_id predicate the cross-project parent lookup succeeds and the child
+    is created with a dangling cross-project FK, violating the project boundary.
+    """
+    project_id_a2 = await contract_conn.fetchval(
+        "INSERT INTO projects (name, user_id) VALUES ('A-second-project-parent-guard', $1) RETURNING id",
+        contract_two_users.user_a_id,
+    )
+    task_in_a2 = await contract_conn.fetchval(
+        "INSERT INTO tasks (project_id, title, user_id) VALUES ($1, 'A task in project 2', $2) RETURNING id",
+        project_id_a2,
+        contract_two_users.user_a_id,
+    )
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            f"/api/projects/{contract_two_users.project_id_a}/tasks",
+            json={"title": "Cross-project child", "parent_task_id": task_in_a2},
+        )
+
+    assert resp.status_code == 404, (
+        f"Cross-project parent boundary violated: user A got {resp.status_code} "
+        f"parenting under task {task_in_a2} in different project (expected 404). "
+        f"Body: {resp.text[:300]}"
+    )
+    count = await contract_conn.fetchval(
+        "SELECT count(*) FROM tasks WHERE title = 'Cross-project child'"
+    )
+    assert count == 0, f"Cross-project child task was written despite 404 ({count} rows)"
 
 
 # ---------------------------------------------------------------------------

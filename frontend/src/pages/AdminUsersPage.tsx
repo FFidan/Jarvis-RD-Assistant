@@ -5,10 +5,11 @@
  * to / by the route guard in App.tsx.
  *
  * Features:
- * - Table of all non-deleted users with email, role, created_at, last_login_at, actions.
+ * - Table of users with email, role, created_at, last_login_at, actions. Soft-
+ *   deleted users still inside the 30-day grace are shown with a restore action.
  * - "Invite user" button opens a modal (email + role selector → POST).
  * - Per-row role change (dropdown select).
- * - Per-row soft-delete with confirmation.
+ * - Per-row soft-delete with confirmation; per-row restore for deleted users.
  */
 
 import { useState } from 'react';
@@ -21,6 +22,7 @@ import {
   inviteUser,
   updateUserRole,
   deleteUser,
+  restoreUser,
   sendSignInLink,
   type AdminUser,
   type FirstRunStatus,
@@ -55,7 +57,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
-import { UserPlus, Trash2, Shield, User, Send } from 'lucide-react';
+import { UserPlus, Trash2, Shield, User, Send, RotateCcw } from 'lucide-react';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 
 function formatDate(iso: string | null): string {
@@ -97,7 +99,7 @@ function InviteModal({ open, onClose }: InviteModalProps) {
       // The backend returns invite_link only when the email could not be
       // delivered. Surface it so the admin can share it manually; keep the
       // modal open in that case so the link stays visible.
-      const link = (data as AdminUser & { invite_link?: string | null }).invite_link;
+      const link = data.invite_link;
       if (link) {
         setManualLink(link);
       } else {
@@ -255,12 +257,16 @@ export function AdminUsersPage() {
   const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
   const [pendingRoleUserId, setPendingRoleUserId] = useState<number | null>(null);
-  // DOM-F-07 (delete): track which specific user's delete is in-flight so only
+  // Track which specific user's delete is in-flight so only
   // that row's button is disabled, not all rows (same pattern as pendingRoleUserId).
   const [pendingDeleteUserId, setPendingDeleteUserId] = useState<number | null>(null);
   // Per-row send-link in-flight tracking (same isolation pattern as delete):
   // only the targeted row's button is disabled, not the whole table.
   const [pendingSendLinkUserId, setPendingSendLinkUserId] = useState<number | null>(null);
+  const [pendingRestoreUserId, setPendingRestoreUserId] = useState<number | null>(null);
+  const [manualSignInLink, setManualSignInLink] = useState<{ email: string; link: string } | null>(
+    null,
+  );
 
   const { data: users, isLoading, isError } = useQuery({
     queryKey: QUERY_KEYS.admin.users(),
@@ -299,12 +305,28 @@ export function AdminUsersPage() {
     },
   });
 
+  const restoreMutation = useMutation({
+    mutationFn: (userId: number) => restoreUser(userId),
+    onMutate: (userId) => setPendingRestoreUserId(userId),
+    onSettled: () => setPendingRestoreUserId(null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.admin.users() });
+    },
+    onError: (err) => {
+      toast.error(err instanceof ApiError ? err.detail : 'Failed to restore user.');
+    },
+  });
+
   const sendLinkMutation = useMutation({
     mutationFn: ({ userId }: { userId: number; email: string }) => sendSignInLink(userId),
     onMutate: ({ userId }) => setPendingSendLinkUserId(userId),
     onSettled: () => setPendingSendLinkUserId(null),
-    onSuccess: (_data, { email }) => {
-      toast.success(`Sign-in link sent to ${email}`);
+    onSuccess: (data, { email }) => {
+      if (data.sent_link) {
+        setManualSignInLink({ email, link: data.sent_link });
+      } else {
+        toast.success(`Sign-in link sent to ${email}`);
+      }
     },
     onError: (err) => {
       toast.error(
@@ -361,12 +383,7 @@ export function AdminUsersPage() {
           <tbody>
             {users?.map((user) => {
               const isSelf = currentUser?.id === user.id;
-              // listUsers only returns non-deleted users, but guard defensively
-              // so a soft-deleted row (if ever surfaced) hides the send-link
-              // action. deleted_at is not in the AdminUser contract.
-              const isDeleted = Boolean(
-                (user as AdminUser & { deleted_at?: string | null }).deleted_at,
-              );
+              const isDeleted = Boolean(user.deleted_at);
               return (
                 <tr key={user.id} className="border-b last:border-0">
                   <td className="px-4 py-3">
@@ -412,32 +429,46 @@ export function AdminUsersPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
-                      {!isDeleted && (
+                      {isDeleted ? (
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                          disabled={pendingSendLinkUserId === user.id}
-                          onClick={() =>
-                            sendLinkMutation.mutate({ userId: user.id, email: user.email })
-                          }
-                          aria-label={`Send sign-in link to ${user.email}`}
-                          title={`Send sign-in link to ${user.email}`}
+                          disabled={pendingRestoreUserId === user.id}
+                          onClick={() => restoreMutation.mutate(user.id)}
+                          aria-label={`Restore ${user.email}`}
+                          title={`Restore ${user.email}`}
                         >
-                          <Send className="h-4 w-4" />
+                          <RotateCcw className="h-4 w-4" />
                         </Button>
+                      ) : (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                            disabled={pendingSendLinkUserId === user.id}
+                            onClick={() =>
+                              sendLinkMutation.mutate({ userId: user.id, email: user.email })
+                            }
+                            aria-label={`Send sign-in link to ${user.email}`}
+                            title={`Send sign-in link to ${user.email}`}
+                          >
+                            <Send className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            disabled={isSelf || pendingDeleteUserId === user.id}
+                            onClick={() => setPendingDelete(user)}
+                            aria-label={`Remove ${user.email}`}
+                            title={isSelf ? 'Cannot remove your own account' : `Remove ${user.email}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        disabled={isSelf || pendingDeleteUserId === user.id}
-                        onClick={() => setPendingDelete(user)}
-                        aria-label={`Remove ${user.email}`}
-                        title={isSelf ? 'Cannot remove your own account' : `Remove ${user.email}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -461,6 +492,39 @@ export function AdminUsersPage() {
         onConfirm={() => pendingDelete && deleteMutation.mutate(pendingDelete.id)}
         onCancel={() => setPendingDelete(null)}
       />
+
+      <Dialog
+        open={manualSignInLink !== null}
+        onOpenChange={(v) => !v && setManualSignInLink(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Sign-in link</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground" role="status">
+              SMTP is not configured, so the sign-in email could not be sent. Share
+              this link with {manualSignInLink?.email} manually — it expires in 15 minutes.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="signin-link">Sign-in link</Label>
+              <Input
+                id="signin-link"
+                type="text"
+                readOnly
+                value={manualSignInLink?.link ?? ''}
+                onFocus={(e) => e.currentTarget.select()}
+                aria-label="Sign-in link to share"
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" onClick={() => setManualSignInLink(null)}>
+                Done
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

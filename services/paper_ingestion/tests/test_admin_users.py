@@ -19,7 +19,11 @@ import paper_ingestion.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException, Response
 
-from tests._auth_fakes import build_mock_pool, build_request_admin
+from tests._auth_fakes import (
+    build_mock_pool,
+    build_mock_pool_with_txn,
+    build_request_admin,
+)
 
 # ---------------------------------------------------------------------------
 # Test helpers — pool/request stubs delegated to shared _auth_fakes (D5-03)
@@ -28,6 +32,7 @@ from tests._auth_fakes import build_mock_pool, build_request_admin
 _NOW = datetime.now(UTC)
 
 _build_mock_pool = build_mock_pool
+_build_mock_pool_txn = build_mock_pool_with_txn
 _build_request = build_request_admin
 
 
@@ -106,13 +111,29 @@ async def test_require_admin_rejects_missing_state() -> None:
 @pytest.mark.asyncio
 async def test_update_role_demote_self_last_admin_blocked() -> None:
     conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=1)  # only 1 admin
-    pool = _build_mock_pool(conn)
+    # First fetchval = target's current role; second = admin headcount.
+    conn.fetchval = AsyncMock(side_effect=["admin", 1])
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
 
     body = admin_router.UpdateRoleBody(role="user")
     with pytest.raises(HTTPException) as exc:
         await admin_router.update_user_role(1, body, request)  # demoting self (id=1)
+    assert exc.value.status_code == 400
+    assert "last admin" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_update_role_demote_cross_admin_last_admin_blocked() -> None:
+    """Guard fires for demoting ANY final admin, not only the caller themselves."""
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(side_effect=["admin", 1])  # target is admin; one admin left
+    pool = _build_mock_pool_txn(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+
+    body = admin_router.UpdateRoleBody(role="user")
+    with pytest.raises(HTTPException) as exc:
+        await admin_router.update_user_role(2, body, request)  # caller 1 demotes admin 2
     assert exc.value.status_code == 400
     assert "last admin" in exc.value.detail
 
@@ -139,13 +160,34 @@ async def test_update_role_demote_self_last_admin_blocked() -> None:
 @pytest.mark.asyncio
 async def test_soft_delete_not_found_raises_404() -> None:
     conn = AsyncMock()
-    conn.execute = AsyncMock(return_value="UPDATE 0")
-    pool = _build_mock_pool(conn)
+    conn.fetchval = AsyncMock(return_value=None)  # target missing or already deleted
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
 
     with pytest.raises(HTTPException) as exc:
         await admin_router.soft_delete_user(999, request, Response())
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_last_admin_blocked() -> None:
+    """Deleting the final admin (a non-self target) is refused with 400.
+
+    Regression guard: drop the last-admin check in soft_delete_user and this
+    deletion passes through (204) instead of 400.
+    """
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(side_effect=["admin", 1])  # target admin; one admin left
+    conn.execute = AsyncMock()
+    pool = _build_mock_pool_txn(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+
+    with pytest.raises(HTTPException) as exc:
+        await admin_router.soft_delete_user(2, request, Response())  # caller 1 deletes admin 2
+    assert exc.value.status_code == 400
+    assert "last admin" in exc.value.detail
+    # The guard raises before the soft-delete UPDATE; the row-unchanged behaviour
+    # is verified end-to-end in test_admin_contract.py::test_a7_delete_last_admin.
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +230,7 @@ async def test_send_link_issues_short_token_and_emails(monkeypatch) -> None:
         sent.append((email, link))
 
     monkeypatch.setattr(admin_router, "send_magic_link", fake_send)
+    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
     audit = AsyncMock()
     monkeypatch.setattr(admin_router, "log_audit", audit)
 
@@ -196,7 +239,8 @@ async def test_send_link_issues_short_token_and_emails(monkeypatch) -> None:
 
     result = await admin_router.send_sign_in_link(5, request)
 
-    assert result == {"sent": True}
+    assert result.sent is True
+    assert result.sent_link is None
     # 15-minute magic_link_tokens row inserted (login TTL, not 24h invite).
     conn.execute.assert_awaited_once()
     insert_sql, _hash, uid, expires_at = conn.execute.await_args.args
@@ -222,6 +266,7 @@ async def test_send_link_token_has_pending_email_null(monkeypatch) -> None:
     conn.fetchrow = AsyncMock(return_value={"id": 9, "email": "x@example.com"})
     conn.execute = AsyncMock()
     monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
+    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     pool = _build_mock_pool(conn)
@@ -248,6 +293,45 @@ async def test_send_link_missing_or_deleted_user_raises_404(monkeypatch) -> None
         await admin_router.send_sign_in_link(999, request)
     assert exc.value.status_code == 404
     conn.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_sign_in_link_returns_link_when_smtp_undeliverable(monkeypatch) -> None:
+    monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"id": 5, "email": "bob@example.com"})
+    conn.execute = AsyncMock()
+    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
+    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=False))
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+
+    result = await admin_router.send_sign_in_link(5, request)
+
+    assert result.sent is True
+    assert result.sent_link is not None
+    assert "token=" in result.sent_link
+
+
+@pytest.mark.asyncio
+async def test_send_sign_in_link_hides_link_when_deliverable(monkeypatch) -> None:
+    monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"id": 5, "email": "bob@example.com"})
+    conn.execute = AsyncMock()
+    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
+    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+
+    result = await admin_router.send_sign_in_link(5, request)
+
+    assert result.sent is True
+    assert result.sent_link is None
 
 
 @pytest.mark.asyncio
@@ -287,11 +371,12 @@ def _invite_conn() -> AsyncMock:
 async def test_invite_returns_link_when_smtp_unconfigured(monkeypatch) -> None:
     """SMTP unconfigured → the admin gets the link back to share manually."""
     monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
     monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
     monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=False))
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
-    pool = _build_mock_pool(_invite_conn())
+    pool = _build_mock_pool_txn(_invite_conn())
     request = _build_request(pool, user_id=1, user_role="admin")
     body = admin_router.InviteUserBody(email="bob@example.com", role="user")
 
@@ -305,11 +390,12 @@ async def test_invite_returns_link_when_smtp_unconfigured(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_invite_omits_link_when_smtp_configured(monkeypatch) -> None:
     """SMTP configured + send succeeds → no link leaked in the response."""
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
     monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
     monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
-    pool = _build_mock_pool(_invite_conn())
+    pool = _build_mock_pool_txn(_invite_conn())
     request = _build_request(pool, user_id=1, user_role="admin")
     body = admin_router.InviteUserBody(email="bob@example.com", role="user")
 
@@ -322,6 +408,7 @@ async def test_invite_omits_link_when_smtp_configured(monkeypatch) -> None:
 async def test_invite_returns_link_when_smtp_send_fails(monkeypatch) -> None:
     """SMTP nominally configured but the send raises → still surface the link."""
     monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
 
     async def _failing_send(email, link, *, pool=None):
         raise OSError("SMTP connect refused")
@@ -330,7 +417,7 @@ async def test_invite_returns_link_when_smtp_send_fails(monkeypatch) -> None:
     monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
-    pool = _build_mock_pool(_invite_conn())
+    pool = _build_mock_pool_txn(_invite_conn())
     request = _build_request(pool, user_id=1, user_role="admin")
     body = admin_router.InviteUserBody(email="bob@example.com", role="user")
 
@@ -341,7 +428,7 @@ async def test_invite_returns_link_when_smtp_send_fails(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PI-AUTH-01: invite SMTP failure log must not contain raw email
+# Invite SMTP failure log must not contain raw email
 # ---------------------------------------------------------------------------
 
 
@@ -352,6 +439,7 @@ async def test_invite_smtp_failure_logs_hash_not_raw_email(monkeypatch, caplog) 
     import logging
 
     monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(
         side_effect=[
@@ -373,7 +461,7 @@ async def test_invite_smtp_failure_logs_hash_not_raw_email(monkeypatch, caplog) 
     monkeypatch.setattr(admin_router, "send_magic_link", _failing_send)
     monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
-    pool = _build_mock_pool(conn)
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
     body = admin_router.InviteUserBody(email="bob@example.com", role="user")
 
@@ -388,3 +476,93 @@ async def test_invite_smtp_failure_logs_hash_not_raw_email(monkeypatch, caplog) 
     assert not any("bob@example.com" in r.message for r in caplog.records), (
         "Raw email must not appear in any log record"
     )
+
+
+# ---------------------------------------------------------------------------
+# Invite + restore require a real Pulse model-signing key (multi-user gate)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invite_user_blocked_without_model_hmac_key(monkeypatch) -> None:
+    """No JARVIS_MODEL_HMAC_KEY → invite rejected with 409 before any user row is created."""
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY_FILE", raising=False)
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=None)  # conflict check: no existing user
+    conn.execute = AsyncMock()
+    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool_txn(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+    body = admin_router.InviteUserBody(email="bob@example.com", role="user")
+
+    with pytest.raises(HTTPException) as exc:
+        await admin_router.invite_user(body, request)
+    assert exc.value.status_code == 409
+    assert "JARVIS_MODEL_HMAC_KEY" in exc.value.detail
+    # Gate fires before the INSERT — no magic-link token row written.
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invite_user_allowed_with_model_hmac_key(monkeypatch) -> None:
+    """With a real JARVIS_MODEL_HMAC_KEY the invite proceeds to create the user."""
+    monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
+    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
+    monkeypatch.setattr(admin_router, "smtp_configured", AsyncMock(return_value=True))
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool_txn(_invite_conn())
+    request = _build_request(pool, user_id=1, user_role="admin")
+    body = admin_router.InviteUserBody(email="bob@example.com", role="user")
+
+    result = await admin_router.invite_user(body, request)
+    assert result.email == "bob@example.com"
+
+
+@pytest.mark.asyncio
+async def test_restore_user_blocked_without_model_hmac_key(monkeypatch) -> None:
+    """No JARVIS_MODEL_HMAC_KEY → restore rejected with 409 before the UPDATE."""
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY_FILE", raising=False)
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock()
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+
+    with pytest.raises(HTTPException) as exc:
+        await admin_router.restore_user(7, request)
+    assert exc.value.status_code == 409
+    assert "JARVIS_MODEL_HMAC_KEY" in exc.value.detail
+    # Gate fires before the UPDATE — deleted_at is never cleared.
+    conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_restore_user_allowed_with_model_hmac_key(monkeypatch) -> None:
+    """With a real JARVIS_MODEL_HMAC_KEY the restore proceeds and clears deleted_at."""
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        return_value={
+            "id": 7,
+            "email": "bob@example.com",
+            "role": "user",
+            "created_at": _NOW,
+            "last_login_at": None,
+        }
+    )
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+
+    result = await admin_router.restore_user(7, request)
+    assert result.id == 7
+    assert result.email == "bob@example.com"
+    conn.fetchrow.assert_awaited_once()

@@ -73,7 +73,7 @@ def test_litellm_shim_builds_database_url_from_secret() -> None:
     """DATABASE_URL is built inside the shim from the Docker Secret, never in env.
 
     A compose ``environment:`` entry would expose the postgres password via
-    ``docker inspect`` (SEC-002 reasoning). The URL must target the dedicated
+    ``docker inspect``. The URL must target the dedicated
     ``litellm`` database, not the jarvis application database.
 
     Both the username and password are percent-encoded via python3/urllib.parse

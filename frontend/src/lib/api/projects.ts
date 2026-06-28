@@ -25,7 +25,7 @@ export const updateProject = (id: number, data: Partial<Project>) =>
 export const deleteProject = (id: number) =>
   apiFetch<void>(`/api/projects/${id}`, { method: 'DELETE' });
 
-// --- Project Open Questions (UI_v3 Projects § OPEN QUESTIONS) ---
+// --- Project Open Questions (Projects § OPEN QUESTIONS) ---
 export const fetchProjectQuestions = (projectId: number) =>
   apiFetch<ProjectQuestion[]>(`/api/projects/${projectId}/questions`);
 export const createProjectQuestion = (projectId: number, body: string) =>
@@ -37,7 +37,7 @@ export const createProjectQuestion = (projectId: number, body: string) =>
 export const deleteProjectQuestion = (questionId: number) =>
   apiFetch<void>(`/api/questions/${questionId}`, { method: 'DELETE' });
 
-// --- Project Recent Activity (UI_v3 Projects § RECENT ACTIVITY) ---
+// --- Project Recent Activity (Projects § RECENT ACTIVITY) ---
 export const fetchProjectActivity = (projectId: number, limit?: number) =>
   apiFetch<ProjectActivityItem[]>(
     `/api/projects/${projectId}/activity${limit ? `?limit=${limit}` : ''}`,

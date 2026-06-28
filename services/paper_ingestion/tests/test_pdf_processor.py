@@ -28,6 +28,7 @@ from paper_ingestion.pdf_processor import (
     PDFProcessor,
     _validate_pdf_url,
     check_pdf_path_safe,
+    quote_to_rects,
 )
 
 # ---------------------------------------------------------------------------
@@ -728,6 +729,74 @@ async def test_download_pdf_zero_bytes_raises_and_unlinks(
 
 
 # ---------------------------------------------------------------------------
+# CORE-1: atomic download — a mid-stream failure must not leave a partial that a
+# retry appends to (which would corrupt the file via concatenation).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_retry_after_partial_does_not_concatenate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-stream failure leaves no partial; a retry must not concatenate.
+
+    The first download streams two valid ``%PDF-`` chunks then raises mid-loop:
+    afterwards neither the final ``{paper_id}.pdf`` nor a ``.tmp`` sibling may
+    survive. A second, complete download must yield a file whose bytes are ONLY
+    the second download's content (no stale prefix from the aborted attempt).
+    """
+    import httpx
+
+    first_chunks = [b"%PDF-1.5 first-attempt-partial-A", b"-more-first-attempt-partial-B"]
+    second_pdf = b"%PDF-1.7 complete-second-download\nbody\n%%EOF\n"
+
+    async def fail_midstream(chunk_size: int = 65536):  # type: ignore[override]
+        for chunk in first_chunks:
+            yield chunk
+        raise httpx.StreamError("connection dropped mid-stream")
+
+    async def complete_stream(chunk_size: int = 65536):  # type: ignore[override]
+        yield second_pdf
+
+    head_response = MagicMock()
+    head_response.status_code = 200
+    head_response.raise_for_status = MagicMock()
+
+    def _make_stream_cm(aiter_bytes: Any) -> MagicMock:
+        stream_response = MagicMock()
+        stream_response.raise_for_status = MagicMock()
+        stream_response.aiter_bytes = aiter_bytes
+        stream_cm = MagicMock()
+        stream_cm.__aenter__ = AsyncMock(return_value=stream_response)
+        stream_cm.__aexit__ = AsyncMock(return_value=False)
+        return stream_cm
+
+    http_client = MagicMock()
+    http_client.request = AsyncMock(return_value=head_response)
+    http_client.stream = MagicMock(
+        side_effect=[_make_stream_cm(fail_midstream), _make_stream_cm(complete_stream)]
+    )
+
+    processor = PDFProcessor(http_client=http_client, embedder=MagicMock())
+    monkeypatch.setattr(pdf_processor, "PDF_STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(socket, "getaddrinfo", lambda h, p: _fake_getaddrinfo("151.101.1.1"))
+
+    # First attempt fails mid-stream.
+    with pytest.raises(httpx.StreamError):
+        await processor.download_pdf("https://arxiv.org/pdf/test.pdf", paper_id=7)
+
+    # Neither a partial target nor a stale temp may remain after the failure.
+    assert not (tmp_path / "7.pdf").exists()
+    assert not (tmp_path / "7.tmp").exists()
+
+    # Retry completes; final bytes must equal ONLY the second download.
+    result = await processor.download_pdf("https://arxiv.org/pdf/test.pdf", paper_id=7)
+    assert result == tmp_path / "7.pdf"
+    assert (tmp_path / "7.pdf").read_bytes() == second_pdf
+    assert not (tmp_path / "7.tmp").exists()
+
+
+# ---------------------------------------------------------------------------
 # PI-DISC-005: SSRF guard — CGNAT range (100.64.0.0/10)
 # ---------------------------------------------------------------------------
 
@@ -762,3 +831,132 @@ async def test_public_ip_passes_ssrf_guard(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
     # Should not raise
     await _validate_pdf_url("https://arxiv.org/pdf/test.pdf")
+
+
+# ---------------------------------------------------------------------------
+# P7b.2: quote_to_rects — verified-quote → normalized highlight rectangles
+#
+# Fixture approach: build a one-page PDF *in memory* with pypdfium2's raw
+# text-insertion API and place KNOWN text at KNOWN baselines (reportlab is not
+# installed; pypdfium2 has no high-level text-object helper in 4.30.0). This
+# avoids committing a binary fixture and keeps the known text + positions
+# visible in the test. Assertions are independent of the extractor: we know the
+# baselines/x-offsets we drew, then assert the returned normalized geometry
+# (incl. the bottom-origin → top-origin y-flip).
+# ---------------------------------------------------------------------------
+
+# Single-page geometry shared by the quote_to_rects fixtures (PDF points).
+_FIXTURE_W = 300.0
+_FIXTURE_H = 400.0
+
+
+def _build_text_pdf(path: Path, items: list[tuple[str, float, float]]) -> None:
+    """Write a one-page PDF to `path` containing `items` of (text, x, baseline_y).
+
+    `x`/`baseline_y` are PDF points, bottom-origin (y grows upward) — the native
+    pypdfium2 coordinate system, so a larger `baseline_y` sits higher on the page.
+    """
+    import ctypes
+
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+
+    pdf = pdfium.PdfDocument.new()
+    try:
+        page = pdf.new_page(_FIXTURE_W, _FIXTURE_H)
+        font = raw.FPDFText_LoadStandardFont(pdf, b"Helvetica")
+        for text, x, baseline_y in items:
+            text_obj = raw.FPDFPageObj_CreateTextObj(pdf, font, 14.0)
+            encoded = (text + "\x00").encode("utf-16-le")
+            buffer = ctypes.create_string_buffer(encoded, len(encoded))
+            raw.FPDFText_SetText(text_obj, ctypes.cast(buffer, raw.FPDF_WIDESTRING))
+            raw.FPDFPageObj_Transform(text_obj, 1, 0, 0, 1, x, baseline_y)
+            raw.FPDFPage_InsertObject(page.raw, text_obj)
+        raw.FPDFPage_GenerateContent(page.raw)
+        pdf.save(str(path))
+    finally:
+        pdf.close()
+
+
+@pytest.mark.asyncio
+async def test_quote_to_rects_single_line_normalizes_with_y_flip(tmp_path: Path) -> None:
+    """A single-line quote near the page top → one rect with correct, flipped coords."""
+    pdf_path = tmp_path / "single.pdf"
+    # Drawn at x=60, baseline y=350 (near the TOP in bottom-origin terms).
+    _build_text_pdf(pdf_path, [("Alpha Bravo", 60.0, 350.0)])
+
+    rects = await quote_to_rects(pdf_path, page=1, quote="Alpha")
+
+    assert len(rects) == 1
+    rect = rects[0]
+    # Every coord normalized into [0, 1], ordered, non-degenerate.
+    assert all(0.0 <= rect[k] <= 1.0 for k in ("x0", "y0", "x1", "y1"))
+    assert rect["x0"] < rect["x1"]
+    assert rect["y0"] < rect["y1"]
+    # x0 ≈ drawn x (60) / page width (300) = 0.2.
+    assert rect["x0"] == pytest.approx(60.0 / _FIXTURE_W, abs=0.02)
+    # y-flip: text near the TOP (high bottom-origin y) → SMALL top-origin y.
+    assert rect["y0"] < 0.25
+
+
+@pytest.mark.asyncio
+async def test_quote_to_rects_multi_line_returns_rect_per_line(tmp_path: Path) -> None:
+    """A quote spanning two visual lines → one rect per line, ordered top→bottom."""
+    pdf_path = tmp_path / "multi.pdf"
+    _build_text_pdf(
+        pdf_path,
+        [
+            ("Alpha Bravo", 50.0, 350.0),  # top line
+            ("Charlie Delta", 50.0, 60.0),  # bottom line
+        ],
+    )
+
+    # The match spans the line break (pypdfium2 matches the query space against
+    # the document's line break), so the run covers chars on both bands.
+    rects = await quote_to_rects(pdf_path, page=1, quote="Bravo Charlie")
+
+    assert len(rects) == 2
+    top_rect, bottom_rect = rects
+    # y increases downward: the upper line's whole band sits above the lower one.
+    assert top_rect["y1"] <= bottom_rect["y0"]
+    assert top_rect["y0"] < 0.5 < bottom_rect["y0"]
+
+
+@pytest.mark.asyncio
+async def test_quote_to_rects_runs_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The blocking pypdfium2 search is dispatched via asyncio.to_thread, off the loop."""
+    pdf_path = tmp_path / "offthread.pdf"
+    _build_text_pdf(pdf_path, [("Alpha Bravo", 60.0, 350.0)])
+
+    real_to_thread = pdf_processor.asyncio.to_thread
+    dispatched: list[Any] = []
+
+    async def _spy(fn: Any, *args: Any, **kwargs: Any) -> Any:
+        dispatched.append(fn)
+        return await real_to_thread(fn, *args, **kwargs)
+
+    monkeypatch.setattr(pdf_processor.asyncio, "to_thread", _spy)
+    rects = await quote_to_rects(pdf_path, page=1, quote="Alpha")
+
+    assert dispatched == [pdf_processor._quote_to_rects_sync]
+    assert len(rects) == 1
+
+
+@pytest.mark.asyncio
+async def test_quote_to_rects_absent_quote_returns_empty(tmp_path: Path) -> None:
+    """A quote that does not appear on the page → [] (no fuzzy repair)."""
+    pdf_path = tmp_path / "absent.pdf"
+    _build_text_pdf(pdf_path, [("Alpha Bravo", 50.0, 350.0)])
+
+    assert await quote_to_rects(pdf_path, page=1, quote="Nonexistent phrase") == []
+
+
+@pytest.mark.asyncio
+async def test_quote_to_rects_blank_quote_returns_empty(tmp_path: Path) -> None:
+    """A whitespace-only quote short-circuits to [] without touching the PDF."""
+    pdf_path = tmp_path / "blank.pdf"
+    _build_text_pdf(pdf_path, [("Alpha Bravo", 50.0, 350.0)])
+
+    assert await quote_to_rects(pdf_path, page=1, quote="   ") == []

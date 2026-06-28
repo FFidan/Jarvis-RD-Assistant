@@ -272,7 +272,7 @@ async def hard_delete_paper(
 
     Cascades through FK; Qdrant cleanup is best-effort.
 
-    Order rationale (NEW-H2 — load-bearing): if SQL ``DELETE`` fails,
+    Order rationale (load-bearing — delete-first ordering): if SQL ``DELETE`` fails,
     the txn rolls back and Qdrant is untouched (user retries cleanly). If
     SQL succeeds and Qdrant fails, vectors are orphaned (recoverable). The
     reverse order is data-loss-prone — do not collapse the inside-txn

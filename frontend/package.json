@@ -1,7 +1,7 @@
 {
   "name": "jarvis-frontend",
   "private": true,
-  "version": "0.9.2",
+  "version": "1.0.0",
   "author": "Ferhat Fidan <jarvis-rd@limitcycle.dev>",
   "license": "Apache-2.0",
   "type": "module",
@@ -18,7 +18,7 @@
     "test:e2e:live-mutating": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test e2e/feed/discovery.spec.ts e2e/projects.spec.ts e2e/settings/authors.spec.ts e2e/settings/automation.spec.ts e2e/settings/ingestion.spec.ts e2e/settings/sources.spec.ts e2e/settings/templates.spec.ts e2e/settings/topics.spec.ts",
     "test:e2e:cross-user": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test --grep @cross-user",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 476",
     "codegen:paper": "openapi-typescript http://localhost:${PAPER_INGESTION_HOST_PORT:-8010}/openapi.json -o src/types/paper-ingestion.gen.ts",
     "codegen:learning": "openapi-typescript http://localhost:${LEARNING_ENGINE_HOST_PORT:-8011}/openapi.json -o src/types/learning-engine.gen.ts",
     "codegen": "npm run codegen:paper && npm run codegen:learning"
@@ -56,6 +56,7 @@
     "react-dom": "^19.2.7",
     "react-joyride": "^2.9.3",
     "react-markdown": "^10.1.0",
+    "react-pdf-highlighter-extended": "^8.1.0",
     "react-router-dom": "^7.18.0",
     "recharts": "^3.8.1",
     "rehype-katex": "^7.0.1",
@@ -98,6 +99,10 @@
   },
   "overrides": {
     "@tanstack/query-core": "5.101.0",
-    "js-yaml": "^4.2.0"
+    "js-yaml": "^4.2.0",
+    "react-pdf-highlighter-extended": {
+      "react": "$react",
+      "react-dom": "$react-dom"
+    }
   }
 }

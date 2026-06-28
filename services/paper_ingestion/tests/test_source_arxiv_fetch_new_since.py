@@ -269,7 +269,7 @@ async def test_fetch_new_since_date_format():
 
 @respx.mock
 async def test_arxiv_no_magic_ceiling_in_query_url():
-    """PI-EDGE-014: fetch_new_since must use a full minute-precision ceiling.
+    """fetch_new_since must use a full minute-precision ceiling.
 
     The magic number 99999999 is an invalid arXiv date that may be silently
     rejected by the API.  The implementation should use a far-future sentinel

@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-06-18 | routes: /admin/users, /admin/audit-log, /admin/system-health, /admin/backups, /logs -->
+<!-- verified-against-UI: 2026-06-26 | routes: /admin/users, /admin/audit-log, /admin/system-health, /admin/backups, /logs -->
 
 # Admin & Multi-tenant
 
@@ -68,7 +68,26 @@ The **Admin Backups panel** surfaces the disaster-recovery archives produced by 
 
 **Run backup now:** Requests an immediate on-demand backup (a confirm step guards it); the sidecar runs one right away in addition to its scheduled runs.
 
-**Restore runbook:** A **read-only** guided procedure. Restore is a destructive host operation — it drops and recreates the databases and overwrites live secrets — and the app container cannot perform it, so the panel only **displays** the host commands; it never executes anything. The steps it shows: decrypt `.enc` archives with `openssl`, restore the `secrets/` archive first, restore the `jarvis` and `litellm` databases (drop/create, then `gunzip | psql`), and recover the Qdrant vector snapshots. The same procedure is documented in the Deployment Guide.
+**One-click restore:**
+
+Admins can restore the instance to any listed backup point without leaving the browser.
+
+*How it works:*
+
+1. **Choose a restore point.** The archive table shows each backup set with its timestamp, stores covered, and size. Click **Restore** on the set you want to roll back to.
+2. **Confirm.** A dialog explains that this will overwrite all current data. Type **RESTORE** in the confirmation field to proceed — there is no undo once you confirm.
+3. **Watch progress.** The panel shows live status. The app enters a **maintenance window** while the restore runs: other users see a "restore in progress" message and cannot use the app. You do not need to stay on the Backups page. While the restore runs the whole app is in the maintenance window, so a page reload shows a brief "restore in progress" message rather than the live progress until it finishes. After the restore completes, you may need to sign in again, because the restore replaces the session store along with the rest of the data.
+
+*What happens automatically:*
+
+- **Safety pre-backup.** Before touching any live data, the sidecar captures a snapshot of the current state. If something goes wrong after the destructive step, the safety backup appears in the panel and can be used to recover.
+- **NEWER-version block.** If the chosen backup was made by a newer version of the app than is currently running, the restore is refused. Update the app first (`./update.sh`), then retry.
+- **Maintenance gate.** User-facing requests are blocked during the restore and resume automatically when it is complete.
+- **Qdrant recovery.** The search index is restored best-effort. If the Qdrant step fails, the rest of the restore still completes — your papers and data are intact. The search index rebuilds itself by re-embedding from the restored database; this may take a few minutes on a large library but involves no data loss.
+
+**Manual restore (advanced):**
+
+If the one-click path is unavailable — for example, after a catastrophic host failure where the app itself cannot start — use the host-level procedure documented in the [Deployment Guide](../DEPLOYMENT.md#backup--restore). The steps: decrypt `.enc` archives with `openssl`, restore the `secrets/` archive first, restore the `jarvis` and `litellm` databases (drop/create, then `gunzip | psql`), and recover the Qdrant snapshots.
 
 ---
 

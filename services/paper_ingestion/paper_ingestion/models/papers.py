@@ -89,7 +89,7 @@ class PaperResponse(PaperBase):
 
     id: int
     discovery_origin: Literal["user_initiated", "pulse", "recommender", "citation_batch"] = (
-        "user_initiated"  # NEW per spec §3.2 — immutable after insert
+        "user_initiated"  # immutable after insert
     )
     pdf_local_path: str | None = None
     pdf_downloaded: bool = False
@@ -163,7 +163,7 @@ class SummaryResponse(BaseModel):
 
 
 class UserStateResponse(BaseModel):
-    """User reading state for a paper (post-redesign per spec §9.1).
+    """User reading state for a paper.
 
     H.11 cross-ref: the ``state`` and ``state_before_trash`` literal unions
     below MUST stay in sync with ``LifecycleState`` and ``StateBeforeTrash``
@@ -196,7 +196,7 @@ class PaperDetailResponse(BaseModel):
     summary: SummaryResponse | None = None
     chunks: list[ChunkResponse] = Field(default_factory=list)
     user_state: UserStateResponse | None = None
-    recent_feedback: RecentFeedback | None = None  # NEW per spec §9.1
+    recent_feedback: RecentFeedback | None = None
     has_project_links: bool = False
     # True when the most recent paper.process / paper.analyze job for this
     # paper+user terminated in `failed` (procrastinate_jobs.status). Lets the
@@ -332,6 +332,7 @@ class FeedPaper(PaperResponse):
     recommendation_modes: list[str] | None = None
     note_match_count: int = 0
     note_snippet: str | None = None
+    recent_feedback: RecentFeedback | None = None
 
 
 class FeedResponse(BaseModel):
@@ -459,7 +460,7 @@ class RelevanceScoreResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    """Body for POST /api/papers/{paper_id}/feedback (per spec §4.3)."""
+    """Body for POST /api/papers/{paper_id}/feedback."""
 
     signal: Literal["positive", "negative"]
     source: Literal[
@@ -668,7 +669,7 @@ class TopicFacetCount(BaseModel):
 
 
 class FeedCountsResponse(BaseModel):
-    """Response for GET /api/papers/feed/counts (10 named views per spec §6).
+    """Response for GET /api/papers/feed/counts (10 named views).
 
     UI v3 additive facets (by_source, by_topic, untagged) are scoped to the
     caller's user_library exactly as the named-view counts above.
@@ -691,7 +692,7 @@ class FeedCountsResponse(BaseModel):
 
 
 class AnnotationsRequest(BaseModel):
-    """Body for PUT /api/papers/{paper_id}/annotations (per resolved §3.3)."""
+    """Body for PUT /api/papers/{paper_id}/annotations."""
 
     rating: int | None = Field(default=None, ge=1, le=5)
     user_notes: str | None = None

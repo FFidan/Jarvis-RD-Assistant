@@ -56,6 +56,7 @@ router = APIRouter(
 async def list_templates(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[ExtractionTemplateResponse]:
     """List all extraction templates."""
     async with db_pool.acquire() as conn:

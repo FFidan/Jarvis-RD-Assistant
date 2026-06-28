@@ -218,7 +218,7 @@ async def star_paper(
             was_new_star = bool(upsert_result["is_new_row"]) or not bool(
                 upsert_result["prev_starred"]
             )
-        # PI-SEC-01: scope the link count to the caller's own projects. The
+        # Scope the link count to the caller's own projects. The
         # Zotero auto-push decision below keys off this count; an unscoped count
         # let another user's project link trigger A's push. NULL-safe predicate
         # keeps single-user mode (user_id IS NULL) counting all rows.
@@ -318,7 +318,7 @@ async def restore_paper(
 
 
 # ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/annotations  — rating / notes / flagged (spec §3.3)
+# PUT /api/papers/{paper_id}/annotations  — rating / notes / flagged
 # ---------------------------------------------------------------------------
 
 
@@ -360,7 +360,7 @@ async def annotate_paper(
 
 
 # ---------------------------------------------------------------------------
-# DELETE /api/papers/{paper_id}  — hard delete (preserves NEW-H2 ordering)
+# DELETE /api/papers/{paper_id}  — hard delete (preserves delete-first ordering)
 # ---------------------------------------------------------------------------
 
 

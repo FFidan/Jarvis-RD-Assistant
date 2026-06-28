@@ -301,20 +301,20 @@ describe('ResearchFeedPage', () => {
 
   it('renders §Status facet items (Inbox, Library, Trash) in facet rail — replaces old tab bar', () => {
     renderPage();
-    // F1 3-pane IA: facet rail replaces horizontal tab bar
+    // 3-pane IA: facet rail replaces horizontal tab bar
     // Inbox/Library/Trash appear as §Status facet buttons (aria-pressed)
     expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
     expect(screen.getByTestId('facet-status-library')).toBeInTheDocument();
     expect(screen.getByTestId('facet-status-trash')).toBeInTheDocument();
     // Discover (search surface) is accessible via the Discover link in the rail
     expect(screen.getByTestId('facet-discover')).toBeInTheDocument();
-    // Ask is NOT in the feed page (spec §3.4: Ask is its own nav destination)
+    // Ask is NOT in the feed page (Ask is its own nav destination)
     expect(screen.queryByRole('tab', { name: 'Ask' })).not.toBeInTheDocument();
     // Pulse tab was moved to /my-day; it is not rendered here
     expect(screen.queryByRole('tab', { name: 'Pulse' })).not.toBeInTheDocument();
   });
 
-  it('defaults to Inbox surface active (spec §3.5: Inbox-first)', async () => {
+  it('defaults to Inbox surface active (Inbox-first)', async () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
@@ -322,12 +322,12 @@ describe('ResearchFeedPage', () => {
     });
     renderPage();
     await waitFor(() => {
-      // F1 3-pane IA: §Status facet buttons use aria-pressed (not aria-selected)
+      // 3-pane IA: §Status facet buttons use aria-pressed (not aria-selected)
       expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
     });
   });
 
-  it('does not render Ask inside the feed page — Ask is its own nav destination (spec §3.4)', async () => {
+  it('does not render Ask inside the feed page — Ask is its own nav destination', async () => {
     renderPage();
     await waitFor(() => {
       expect(screen.getByTestId('facet-rail')).toBeInTheDocument();
@@ -810,7 +810,7 @@ describe('ResearchFeedPage', () => {
   it('switches to Library surface on facet click', async () => {
     const user = userEvent.setup();
     renderPage();
-    // F1 IA: Library is a §Status facet button (aria-pressed)
+    // Library is a §Status facet button (aria-pressed)
     const libraryFacet = screen.getByTestId('facet-status-library');
     await user.click(libraryFacet);
     expect(libraryFacet).toHaveAttribute('aria-pressed', 'true');
@@ -1479,7 +1479,7 @@ describe('ResearchFeedPage', () => {
       expect(toast.success).toHaveBeenCalledWith('Saved 1 paper(s). Next: Analyze a paper to unlock Ask.');
     });
 
-    // F1 IA: Discover (search surface) facet uses aria-pressed (not aria-selected)
+    // Discover (search surface) facet uses aria-pressed (not aria-selected)
     expect(screen.getByTestId('facet-discover')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Save Flow Paper')).toBeInTheDocument();
   });
@@ -1845,7 +1845,7 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByText('Search Result Paper')).not.toBeInTheDocument();
   });
 
-  it('Ask is removed from feed — StreamingChat not rendered in feed (spec §3.4)', async () => {
+  it('Ask is removed from feed — StreamingChat not rendered in feed', async () => {
     renderPage();
     await waitFor(() => {
       expect(screen.getByTestId('facet-rail')).toBeInTheDocument();
@@ -1859,7 +1859,7 @@ describe('ResearchFeedPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    // F1 IA: Library is a §Status facet button
+    // Library is a §Status facet button
     const libraryFacet = screen.getByTestId('facet-status-library');
     await user.click(libraryFacet);
 
@@ -1876,7 +1876,7 @@ describe('ResearchFeedPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    // F1 IA: Library §Status facet
+    // Library §Status facet
     const libraryFacet = screen.getByTestId('facet-status-library');
     await user.click(libraryFacet);
 
@@ -1886,7 +1886,7 @@ describe('ResearchFeedPage', () => {
     });
   });
 
-  // F1 3-pane IA: clicking Library §Status facet shows the library surface content
+  // 3-pane IA: clicking Library §Status facet shows the library surface content
   it('clicking Library §Status facet navigates to the library surface and shows section info', async () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
@@ -1908,11 +1908,11 @@ describe('ResearchFeedPage', () => {
     await screen.findByText('Test Paper One');
   });
 
-  // ── F1 3-pane IA — §Status facet items replace surface chips ─────────────
+  // ── 3-pane IA — §Status facet items replace surface chips ─────────────
 
   it('renders §Status facet items: Inbox | Library | Reading | Reading List | Done | Trash', () => {
     renderPage();
-    // F1 3-pane IA: §Status facet buttons (aria-pressed)
+    // 3-pane IA: §Status facet buttons (aria-pressed)
     expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
     expect(screen.getByTestId('facet-status-library')).toBeInTheDocument();
     expect(screen.getByTestId('facet-status-reading')).toBeInTheDocument();
@@ -1947,7 +1947,7 @@ describe('ResearchFeedPage', () => {
     });
   });
 
-  it('default landing redirects to ?surface=inbox (spec §3.5: Inbox-first always)', async () => {
+  it('default landing redirects to ?surface=inbox (Inbox-first always)', async () => {
     const { fetchFeedCounts } = await import('@/lib/api');
     vi.mocked(fetchFeedCounts).mockResolvedValue({
       inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5,
@@ -1955,7 +1955,7 @@ describe('ResearchFeedPage', () => {
     });
     renderPage();
     await waitFor(() => {
-      // F1 §3.5: default landing = Inbox (not library-first)
+      // Default landing = Inbox (not library-first)
       expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
     });
   });
@@ -1977,7 +1977,7 @@ describe('ResearchFeedPage', () => {
     });
   });
 
-  // ── F1 3-pane IA: §Status facet click → surface update ───────────────────
+  // ── 3-pane IA: §Status facet click → surface update ───────────────────
 
   it('clicking §Status facets makes the clicked facet aria-pressed=true', async () => {
     const user = userEvent.setup();
@@ -2036,10 +2036,10 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByTestId('facet-status-library')).toHaveAttribute('aria-pressed', 'false');
   });
 
-  // ── T3.1 Phase-A: Library sub-chips (spec §5.4) ───────────────────────────
+  // ── T3.1 Phase-A: Library sub-chips ───────────────────────────
 
-  it('F1 IA: Library sub-filters are now §Status facet items in the rail (Reading/Reading List/Done)', async () => {
-    // F1 3-pane IA: old Library sub-chips replaced by §Status facets in FacetRail
+  it('Library sub-filters are now §Status facet items in the rail (Reading/Reading List/Done)', async () => {
+    // 3-pane IA: old Library sub-chips replaced by §Status facets in FacetRail
     // Reading, Reading List, Done appear as §Status facet items for all surfaces
     renderPage();
 
@@ -2071,7 +2071,7 @@ describe('ResearchFeedPage', () => {
     );
   });
 
-  // ── T3.1 Phase-A: H5 — surface change clears bulk selection ───────────────
+  // ── T3.1 Phase-A: surface change clears bulk selection ────────────────────
 
   it('H5: switching surface via URL clears bulk selection', async () => {
     const { useBulkSelection } = await import('@/stores/bulk-selection-store');
@@ -2094,7 +2094,7 @@ describe('ResearchFeedPage', () => {
   // ── Inbox source-type filter chips ──────────────────────────────────────────
 
   it('§Source facet in FacetRail replaces old source-type sub-chips', async () => {
-    // F1 3-pane IA: source-type filtering is via §Source facets in FacetRail
+    // 3-pane IA: source-type filtering is via §Source facets in FacetRail
     // Old horizontal sub-chip row is removed; §Source rail is always visible
     renderPage();
     // §Source section header is present in the rail
@@ -2112,14 +2112,14 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('facet-status-library')).toHaveAttribute('aria-pressed', 'true');
     });
-    // Old sub-chip row "Filter by source" is removed in F1 IA
+    // Old sub-chip row "Filter by source" is removed
     expect(screen.queryByRole('tablist', { name: 'Filter by source' })).not.toBeInTheDocument();
     // §Source section is in the persistent rail
     expect(screen.getByText('Source')).toBeInTheDocument();
   });
 
-  it('F1 IA: clicking §Source arXiv facet drives fetchFeed with sourceTypes="arxiv"', async () => {
-    // In the F1 IA, source filtering is via §Source FacetRail facets.
+  it('clicking §Source arXiv facet drives fetchFeed with sourceTypes="arxiv"', async () => {
+    // Source filtering is via §Source FacetRail facets.
     // The FacetRail uses fetchFeedCountsWithFacets; the source facet drives ?facet_source= in URL
     // which feeds into effectiveSourceTypes → FeedView sourceTypes prop.
     // This test verifies the §Source facet renders from by_source data.

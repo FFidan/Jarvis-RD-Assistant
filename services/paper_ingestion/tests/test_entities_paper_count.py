@@ -208,7 +208,7 @@ async def test_paper_count_incremented_once_for_duplicate_entity_in_run():
 
 
 # ---------------------------------------------------------------------------
-# Fix 4 — Axis 4 F1: orchestrator embed-store gate structural assertions
+# Orchestrator embed-store gate structural assertions
 # ---------------------------------------------------------------------------
 
 

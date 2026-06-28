@@ -1,4 +1,4 @@
-"""Recommendation feedback CRUD endpoints (spec §7.3 + §8).
+"""Recommendation feedback CRUD endpoints.
 
 This module ships the read + bulk-delete API surface for the
 ``recommendation_feedback`` table. The router lives in its own module

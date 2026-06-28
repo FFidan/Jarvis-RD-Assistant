@@ -308,7 +308,7 @@ async def trash_paper(
 
     For a paper without a ``paper_user_state`` row, the INSERT branch
     initialises ``state_before_trash`` to ``'inbox'`` (the implicit default
-    per spec §2.3). For an existing row, the UPDATE preserves the prior
+    per the application state machine). For an existing row, the UPDATE preserves the prior
     state into ``state_before_trash`` so the restore endpoint can return
     the paper to where it came from.
 
@@ -380,7 +380,7 @@ async def assert_paper_in_states(
 ) -> None:
     """Raise HTTP 409 if the paper's current state is not in ``allowed``.
 
-    Treats missing rows as ``'inbox'`` (the implicit default per spec §2.3).
+    Treats missing rows as ``'inbox'`` (the implicit default).
     """
     current = (
         await conn.fetchval(

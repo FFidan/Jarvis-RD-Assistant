@@ -25,6 +25,7 @@ async def test_fetch_digest_from_api_returns_payload_and_auth_header():
     result = await paper_digest._fetch_digest_from_api(
         http_client,
         make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+        user_id=1,
     )
 
     assert result == {"topics": [{"name": "LLMs"}]}
@@ -41,6 +42,7 @@ async def test_fetch_digest_from_api_returns_none_on_error():
     result = await paper_digest._fetch_digest_from_api(
         http_client,
         make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=SecretStr("secret")),
+        user_id=1,
     )
 
     assert result is None
@@ -56,12 +58,14 @@ async def test_fetch_digest_from_api_omits_auth_header_without_api_key():
     http_client.get.return_value = response
 
     result = await paper_digest._fetch_digest_from_api(
-        http_client, make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=None)
+        http_client,
+        make_bot_config(BotConfig, telegram_chat_id=1234, jarvis_api_key=None),
+        user_id=1,
     )
 
     assert result == {"topics": []}
     _, kwargs = http_client.get.await_args
-    assert kwargs["headers"] == {}
+    assert "X-API-Key" not in kwargs["headers"]
 
 
 @pytest.mark.asyncio

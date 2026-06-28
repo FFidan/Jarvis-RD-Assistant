@@ -1,7 +1,7 @@
 """Unit tests for the rate_limit decorator.
 
 Covers:
-- TG-004: GC always prunes stale timestamps, not only when len > threshold.
+- GC always prunes stale timestamps, not only when len > threshold.
   Previously an ``if len(stamps) > _GC_THRESHOLD`` guard meant that old
   timestamps for long-idle users were never pruned, skewing rate windows.
 - Basic sliding-window enforcement.
@@ -29,13 +29,13 @@ def _make_context() -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# TG-004: unconditional GC
+# unconditional GC
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_rate_limit_gc_always_prunes_stale_timestamps():
-    """TG-004: stale timestamps are pruned even when count is below the old threshold.
+    """Stale timestamps are pruned even when count is below the old threshold.
 
     Before the fix, GC only ran when ``len(stamps) > _GC_THRESHOLD`` (100).
     A long-idle user with < 100 old stamps would never get them pruned, so a
@@ -77,7 +77,7 @@ async def test_rate_limit_gc_always_prunes_stale_timestamps():
 
 @pytest.mark.asyncio
 async def test_rate_limit_evicts_idle_keys_to_bound_dict_growth():
-    """TG-SEC-01: stale timestamp keys are evicted from _timestamps.
+    """Stale timestamp keys are evicted from _timestamps.
 
     The GC prunes stale timestamps in place but never removed the now-empty
     key, so ``_timestamps`` grew one entry per unique ``chat:command`` forever
@@ -461,13 +461,13 @@ async def test_rate_limit_releases_lock_before_callback_answer_runs():
 
 
 # ---------------------------------------------------------------------------
-# DOM-D-06: TOCTOU under concurrency
+# TOCTOU under concurrency
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_rate_limiter_no_toctou_under_concurrency():
-    """DOM-D-06: concurrent callers cannot race past the sliding-window check.
+    """Concurrent callers cannot race past the sliding-window check.
 
     Without an asyncio.Lock, two coroutines both read ``len(recent) < max_calls``
     before either appends, allowing more than max_calls invocations to succeed.
@@ -510,13 +510,13 @@ async def test_rate_limiter_no_toctou_under_concurrency():
 
 
 # ---------------------------------------------------------------------------
-# DOM-D-03: rate-limit fires before silent-drop auth
+# Rate-limit fires before silent-drop auth
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_rate_limit_fires_before_silent_drop_auth():
-    """DOM-D-03: rate-limiter must shed load BEFORE the silent-drop auth check.
+    """Rate-limiter must shed load BEFORE the silent-drop auth check.
 
     When ``@rate_limit`` is the outer decorator and ``@auth_required`` is inner,
     an unauthenticated flood must hit the rate-limit ceiling (reply_text called)

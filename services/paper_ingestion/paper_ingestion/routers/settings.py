@@ -230,7 +230,7 @@ async def set_config(
 
     # Pass update_litellm_model from the router namespace so monkeypatching
     # ``paper_ingestion.routers.settings.update_litellm_model`` in tests still works.
-    display_value = await write_config(
+    result = await write_config(
         db_pool=db_pool,
         scheduler=scheduler,
         http_client=http_client,
@@ -240,6 +240,7 @@ async def set_config(
         caller_user_id=caller_user_id,
         update_litellm_model_fn=update_litellm_model,
     )
+    display_value = result.display_value
 
     if key in _ENCRYPTED_KEYS:
         await log_audit(
@@ -257,7 +258,15 @@ async def set_config(
             category="config",
             source="settings",
             message="setting_changed",
-            context={"key": key, "new_value": str(display_value)},
+            context={
+                "key": key,
+                "new_value": str(display_value),
+                **(
+                    {"schedule_apply_warnings": result.schedule_apply_warnings}
+                    if result.schedule_apply_warnings
+                    else {}
+                ),
+            },
         )
     except Exception:  # noqa: BLE001
         logger.debug("config event log_event failed (non-fatal)", exc_info=True)

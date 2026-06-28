@@ -89,10 +89,12 @@ async def link_paper(
             # after commit (procrastinate uses its own pool and cannot join this txn).
             row = await conn.fetchrow(
                 """
-                SELECT pus.starred, p.zotero_item_key
+                SELECT pus.starred, l.zotero_item_key
                 FROM papers p
                 LEFT JOIN paper_user_state pus
                   ON pus.paper_id = p.id AND pus.user_id = $2
+                LEFT JOIN paper_user_zotero_links l
+                  ON l.paper_id = p.id AND l.user_id = $2
                 WHERE p.id = $1
                 """,
                 paper_id,
@@ -101,46 +103,39 @@ async def link_paper(
             if row and (row["starred"] or row["zotero_item_key"]):
                 should_push_zotero = True
 
-    # Fire zotero.push after transaction commits so the linked row is visible.
+    # Fire zotero.push after the transaction commits so the linked row is visible.
     # The handler is idempotent: it reads from DB and returns early if conditions
     # are no longer met, so a stale fire is harmless.
     if should_push_zotero:
-        from jarvis_common.task_registry import KIND_TO_TASK
+        # zotero.push is owned by the paper_ingestion worker, not this process,
+        # so it is absent from learning_engine's task registry. Defer it by name
+        # on the shared procrastinate app and target the paper_ingestion queue —
+        # a default/other queue would never be consumed and the push would drop.
+        from jarvis_common.jobs import queue_for_kind
+        from jarvis_common.task_registry import app as procrastinate_app
 
-        # M8c: resolve the task OUTSIDE the enqueue try/except. A missing
-        # registry entry is a process-wiring bug (zotero.push is registered by
-        # the paper_ingestion worker, not by learning_engine's task registry),
-        # not a transient enqueue failure — the old broad except conflated the
-        # two and the push silently never happened.
-        task = KIND_TO_TASK.get("zotero.push")
-        if task is None:
-            logger.error(
-                "zotero.push is not registered in this process's task registry; "
-                "Zotero push skipped after project link (paper=%d project=%d)",
+        try:
+            await procrastinate_app.configure_task(
+                name="zotero.push", queue=queue_for_kind("zotero.push")
+            ).defer_async(
+                job_id=str(uuid.uuid4()),
+                user_id=user_id,
+                paper_id=paper_id,
+            )
+        except Exception:
+            # Enqueue I/O is the only legitimately fallible step here; the link
+            # itself already committed, so log loudly and return 201.
+            logger.exception(
+                "Failed to enqueue zotero.push after project link (paper=%d project=%d)",
                 paper_id,
                 project_id,
             )
         else:
-            try:
-                await task.defer_async(
-                    job_id=str(uuid.uuid4()),
-                    user_id=user_id,
-                    paper_id=paper_id,
-                )
-            except Exception:
-                # Enqueue I/O is the only legitimately fallible step here; the
-                # link itself already committed, so log loudly and return 201.
-                logger.exception(
-                    "Failed to enqueue zotero.push after project link (paper=%d project=%d)",
-                    paper_id,
-                    project_id,
-                )
-            else:
-                logger.debug(
-                    "Enqueued zotero.push for paper %d linked to project %d",
-                    paper_id,
-                    project_id,
-                )
+            logger.debug(
+                "Enqueued zotero.push for paper %d linked to project %d",
+                paper_id,
+                project_id,
+            )
 
     return {"project_id": project_id, "paper_id": paper_id}
 

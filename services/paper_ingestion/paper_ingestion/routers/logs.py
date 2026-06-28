@@ -123,7 +123,7 @@ async def list_events(
         idx += 1
 
     if q is not None:
-        # PI-SEC-02: escape LIKE metacharacters in the user term and pair the
+        # Escape LIKE metacharacters in the user term and pair the
         # predicate with ESCAPE '\' so '%'/'_' match literally instead of acting
         # as wildcards (information disclosure / full-scan DoS).
         conditions.append(f"message ILIKE ${idx} ESCAPE '\\'")

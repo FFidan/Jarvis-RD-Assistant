@@ -23,24 +23,67 @@ def backup_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture()
+def code_max_50(tmp_path, monkeypatch):
+    """Point _code_max_migration at a tmp migrations dir whose highest version is 50."""
+    mig = tmp_path / "_migrations"
+    mig.mkdir()
+    (mig / "0001_init.sql").write_text("-- a")
+    (mig / "0050_latest.sql").write_text("-- b")
+    monkeypatch.setenv("DB_MIGRATIONS_DIR", str(mig))
+    return 50
+
+
 def _touch(path, ts: str) -> None:
     """Set the file mtime to its %Y%m%d_%H%M%S timestamp (as a real backup would)."""
     epoch = datetime.strptime(ts, "%Y%m%d_%H%M%S").timestamp()
     os.utime(path, (epoch, epoch))
 
 
-def _seed_group(d, ts: str, *, encrypted: bool) -> None:
-    """Write a complete restore-point group (jarvis/litellm/secrets + 2 qdrant)."""
+def _seed_group(
+    d,
+    ts: str,
+    *,
+    encrypted: bool,
+    manifest_schema_version: int | None = None,
+    manifest_app_version: str = "0.9.2",
+    manifest_archives: list | None = None,
+) -> None:
+    """Write a complete restore-point group (jarvis/litellm/secrets + 2 qdrant).
+
+    When ``manifest_schema_version`` is given, also writes a ``manifest_<ts>.json``
+    describing the group (or ``manifest_archives`` verbatim, for phantom cases).
+    """
     suffix = ".enc" if encrypted else ""
-    for name, payload in (
-        (f"jarvis_{ts}.sql.gz{suffix}", b"J" * 10),
-        (f"litellm_{ts}.sql.gz{suffix}", b"L" * 20),
-        (f"secrets_{ts}.tar.gz{suffix}", b"S" * 30),
-        (f"qdrant_kg_entities_{ts}.snapshot{suffix}", b"Q" * 40),
-        (f"qdrant_paper_chunks_{ts}.snapshot{suffix}", b"Q" * 50),
-    ):
+    names = [
+        f"jarvis_{ts}.sql.gz{suffix}",
+        f"litellm_{ts}.sql.gz{suffix}",
+        f"secrets_{ts}.tar.gz{suffix}",
+        f"qdrant_kg_entities_{ts}.snapshot{suffix}",
+        f"qdrant_paper_chunks_{ts}.snapshot{suffix}",
+    ]
+    payloads = [b"J" * 10, b"L" * 20, b"S" * 30, b"Q" * 40, b"Q" * 50]
+    for name, payload in zip(names, payloads):
         (d / name).write_bytes(payload)
         _touch(d / name, ts)
+    if manifest_schema_version is not None:
+        archives = manifest_archives
+        if archives is None:
+            archives = [
+                {"filename": n, "sha256": "0" * 64, "size_bytes": len(p)}
+                for n, p in zip(names, payloads)
+            ]
+        (d / f"manifest_{ts}.json").write_text(
+            json.dumps(
+                {
+                    "timestamp": ts,
+                    "app_version": manifest_app_version,
+                    "schema_version": manifest_schema_version,
+                    "created_at": "2026-06-26T12:00:00+00:00",
+                    "archives": archives,
+                }
+            )
+        )
 
 
 def test_restore_points_groups_by_timestamp(backup_dir):
@@ -151,3 +194,80 @@ def test_qdrant_collection_parse_ignores_underscores_in_name():
     ts = bk._TS_RE.search("qdrant_kg_entities_20260624_001234.snapshot.enc")
     assert ts is not None
     assert ts.group(1) == "20260624_001234"
+
+
+def test_manifest_is_not_listed_as_an_archive(backup_dir):
+    """A manifest_<ts>.json must never be enumerated/downloadable as a backup."""
+    _seed_group(backup_dir, "20260624_120000", encrypted=True, manifest_schema_version=50)
+    names = {e.filename for e in bk._list_entries()}
+    assert not any(n.startswith("manifest_") for n in names)
+
+
+def test_restore_point_compat_same_and_versions_populate(backup_dir, code_max_50):
+    _seed_group(
+        backup_dir,
+        "20260624_120000",
+        encrypted=False,
+        manifest_schema_version=50,
+        manifest_app_version="1.0.0",
+    )
+    point = bk._group_restore_points(bk._list_entries())[0]
+    assert point.app_version == "1.0.0"
+    assert point.schema_version == 50
+    assert point.compat == "same"
+
+
+def test_restore_point_compat_newer_when_schema_ahead(backup_dir, code_max_50):
+    _seed_group(backup_dir, "20260624_120000", encrypted=True, manifest_schema_version=999)
+    point = bk._group_restore_points(bk._list_entries())[0]
+    assert point.schema_version == 999
+    assert point.compat == "newer"
+
+
+def test_restore_point_compat_older_when_schema_behind(backup_dir, code_max_50):
+    _seed_group(backup_dir, "20260624_120000", encrypted=True, manifest_schema_version=10)
+    point = bk._group_restore_points(bk._list_entries())[0]
+    assert point.compat == "older"
+
+
+def test_restore_point_absent_manifest_is_unknown(backup_dir, code_max_50):
+    _seed_group(backup_dir, "20260624_120000", encrypted=True)  # no manifest seeded
+    point = bk._group_restore_points(bk._list_entries())[0]
+    assert point.app_version is None
+    assert point.schema_version is None
+    assert point.compat == "unknown"
+
+
+def test_restore_point_malformed_manifest_degrades_to_unknown(backup_dir, code_max_50):
+    _seed_group(backup_dir, "20260624_120000", encrypted=True)
+    (backup_dir / "manifest_20260624_120000.json").write_text("{not json")
+    # Must not raise — a corrupt manifest degrades to unknown, never 500s.
+    point = bk._group_restore_points(bk._list_entries())[0]
+    assert point.compat == "unknown"
+    assert point.schema_version is None
+    assert point.app_version is None
+
+
+def test_restore_point_phantom_manifest_rejected(backup_dir, code_max_50):
+    """A manifest referencing a file not on disk is rejected (no phantom versions)."""
+    _seed_group(
+        backup_dir,
+        "20260624_120000",
+        encrypted=True,
+        manifest_schema_version=50,
+        manifest_archives=[
+            {"filename": "jarvis_20260624_120000.sql.gz.enc", "sha256": "0" * 64, "size_bytes": 10},
+            {"filename": "ghost_20260624_120000.sql.gz.enc", "sha256": "0" * 64, "size_bytes": 1},
+        ],
+    )
+    point = bk._group_restore_points(bk._list_entries())[0]
+    assert point.compat == "unknown"
+    assert point.schema_version is None
+
+
+def test_code_max_migration_returns_floor_when_dir_missing(monkeypatch, tmp_path):
+    # An absent/empty migrations dir falls back to the code's schema floor (the
+    # db/SCHEMA_VERSION baseline) so restore-point compatibility stays armed
+    # instead of degrading to "unknown".
+    monkeypatch.setenv("DB_MIGRATIONS_DIR", str(tmp_path / "does_not_exist"))
+    assert bk._code_max_migration() == 101

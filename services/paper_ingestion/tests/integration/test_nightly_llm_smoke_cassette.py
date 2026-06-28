@@ -126,6 +126,8 @@ _PIPELINE_CASES: list[tuple[str, type[BaseModel] | type[RootModel], object]] = [
         ContradictionClassification,
         {
             "is_contradiction": True,
+            "stance": "opposes",
+            "claim_topic": "whether X holds",
             "contradiction_type": "direct",
             "explanation": "The two findings disagree.",
             "quote_a": "Paper A reports X.",

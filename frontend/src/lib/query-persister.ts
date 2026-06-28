@@ -3,7 +3,7 @@
  *
  * Contract reference:
  *   internal design spec (archived)
- *   "Offline / PWA contract — CANONICAL" §3 (Client cache) + §4 (last-known-good)
+ *   "Offline / PWA contract — CANONICAL" (Client cache + last-known-good)
  *   + "Explicit offline NON-GOALS" + the per-surface offline table.
  *
  * What this does
@@ -34,10 +34,9 @@
  * -------------------------------------------
  *   - `attachQueryPersister(client)` — create + attach the IDB persister to
  *     the existing global QueryClient. Idempotent. Returns an unsubscribe fn.
- *   - `clearPersistedQueryCache(): Promise<void>` — P1c calls this from the
- *     logout path. Purges the IDB-persisted cache AND posts the P1a
- *     `JARVIS_LOGOUT` message so the SW runtime cache is purged too
- *     (cross-user data hygiene — both stores cleared in one call).
+ *   - `clearPersistedQueryCache(): Promise<void>` — called from the logout
+ *     path. Purges the IDB-persisted cache slice; the auth-store logout path
+ *     is the sole `JARVIS_LOGOUT` notifier of the SW (cross-user data hygiene).
  *   - `getPersistedCacheTimestamp(): Promise<number | null>` — epoch ms of the
  *     last successful persist (P1d renders "stale-cached · as of T"); `null`
  *     when nothing has been persisted yet.
@@ -338,13 +337,14 @@ export async function flushPersistedQueryCache(): Promise<void> {
 }
 
 /**
- * Purge the persisted query cache from IndexedDB AND tell the active service
- * worker to drop its runtime API cache (P1a `JARVIS_LOGOUT` contract).
+ * Purge the IndexedDB-persisted query-cache slice (the last-known-good offline
+ * read snapshot, notes included).
  *
- * P1c calls this from the logout path. Both the client cache (IDB) and the SW
- * runtime cache must be cleared together so the next user on a shared device
- * never sees the previous user's cached data (cross-user hygiene — P1a flagged
- * this dependency). Best-effort + non-throwing: a storage failure must not
+ * Called from the auth-store logout path. The service worker is notified
+ * separately by the auth-store, which owns the sole `JARVIS_LOGOUT` post (it
+ * also handles the no-controller deferral); this function only clears the IDB
+ * snapshot so the next user on a shared device never restores the previous
+ * user's cached data. Best-effort + non-throwing: a storage failure must not
  * block logout.
  */
 export async function clearPersistedQueryCache(): Promise<void> {
@@ -353,18 +353,6 @@ export async function clearPersistedQueryCache(): Promise<void> {
     await idbDel(TIMESTAMP_KEY, store());
   } catch (err) {
     console.warn('[query-persister] IDB purge failed', err);
-  }
-  // Mirror the existing auth-store contract: tell the SW to purge its
-  // per-user runtime cache too. Optional-chained — no-op if no SW controls
-  // this page yet (dev / first load).
-  try {
-    if (typeof navigator !== 'undefined') {
-      navigator.serviceWorker?.controller?.postMessage({
-        type: 'JARVIS_LOGOUT',
-      });
-    }
-  } catch (err) {
-    console.warn('[query-persister] SW logout postMessage failed', err);
   }
 }
 

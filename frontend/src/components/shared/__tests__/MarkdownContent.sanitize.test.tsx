@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { MarkdownContent } from '@/components/shared/MarkdownContent';
 
-describe('MarkdownContent — XSS sanitization (SEC-XSS-002)', () => {
+describe('MarkdownContent — XSS sanitization', () => {
   it('blocks javascript: img src — renders no <img> element', () => {
     const { container } = render(
       <MarkdownContent>{'![alt](javascript:alert(1))'}</MarkdownContent>,
@@ -23,7 +23,7 @@ describe('MarkdownContent — XSS sanitization (SEC-XSS-002)', () => {
       expect(img.getAttribute('onerror')).toBeNull();
     }
     // It's also acceptable for the img to be removed entirely (safe fallback).
-    // Either outcome satisfies SEC-XSS-002.
+    // Either outcome satisfies the XSS sanitization requirement.
   });
 
   it('strips onclick from inline <a> tag', () => {
@@ -46,7 +46,7 @@ describe('MarkdownContent — XSS sanitization (SEC-XSS-002)', () => {
     expect(img?.getAttribute('alt')).toBe('ok');
   });
 
-  // SEC-XSS-003: data: URI tightening — only data:image/* is allowed.
+  // data: URI tightening — only data:image/* is allowed.
   it('allows data:image/png;base64 src — renders <img> with the data URI', () => {
     const dataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
     const { container } = render(
@@ -71,5 +71,14 @@ describe('MarkdownContent — XSS sanitization (SEC-XSS-002)', () => {
     );
     const img = container.querySelector('img');
     expect(img).toBeNull();
+  });
+});
+
+describe('MarkdownContent — LaTeX math rendering', () => {
+  it('renders inline LaTeX with KaTeX class attributes intact', () => {
+    const { container } = render(<MarkdownContent>{'$E=mc^2$'}</MarkdownContent>);
+    // KaTeX emits elements with class="katex"; if sanitize ran after KaTeX it
+    // would strip those classes, leaving unstyled plain text.
+    expect(container.querySelector('.katex')).not.toBeNull();
   });
 });

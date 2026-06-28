@@ -258,6 +258,31 @@ async def test_sync_reviews_update_does_not_mutate_cross_user_card(
 
 
 # ---------------------------------------------------------------------------
+# §A218 — POST /api/review/{card_id} — owned-card UPDATE scoped by user_id
+# ---------------------------------------------------------------------------
+
+
+async def test_submit_review_owned_card_advances_and_persists_state(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """POST /api/review/{card_id} on the caller's own card advances fsrs_state and
+    persists it. The cards UPDATE is scoped by user_id (defense-in-depth); this
+    confirms the predicate still matches the owner's row (UPDATE affects 1 row).
+    """
+    card_id_a = contract_two_users.card_id_a
+    before = await contract_conn.fetchval("SELECT fsrs_state FROM cards WHERE id = $1", card_id_a)
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        resp = await c.post(
+            f"/api/review/{card_id_a}", json={"rating": 3, "review_duration_ms": 500}
+        )
+    assert resp.status_code == 200, f"submit_review failed: {resp.status_code}: {resp.text[:300]}"
+    after = await contract_conn.fetchval("SELECT fsrs_state FROM cards WHERE id = $1", card_id_a)
+    assert after != before, (
+        f"owned-card review must advance and persist fsrs_state; before={before!r} after={after!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # §A220 — GET /api/stats — aggregated from caller's cards/review_logs only
 # ---------------------------------------------------------------------------
 

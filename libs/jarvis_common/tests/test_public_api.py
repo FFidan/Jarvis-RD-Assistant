@@ -10,7 +10,7 @@ import jarvis_common
 def test_langfuse_lifespan_hook_not_in_all() -> None:
     """_langfuse_lifespan_hook is an internal hook; must not be in __all__.
 
-    F-7 audit finding: private symbols prefixed with '_' must not be
+    Policy: private symbols prefixed with '_' must not be
     advertised in the public API. app_factory imports it directly from
     jarvis_common.llm_client, not via the jarvis_common top-level package.
     """

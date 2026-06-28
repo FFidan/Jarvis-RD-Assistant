@@ -3,7 +3,7 @@ ARG PYTHON_BASE_IMAGE=python:3.12.9-slim
 # --- Stage 1: build jarvis_common as a wheel so we can install it WITHOUT
 # breaking --require-hashes in the runtime stage. The runtime install uses
 # `--no-deps` so all transitive deps come from constraints.txt (which IS
-# hash-pinned). See SEC-CRIT-02/03/04.
+# hash-pinned).
 FROM ${PYTHON_BASE_IMAGE} AS jarvis-common-builder
 WORKDIR /build
 COPY libs/jarvis_common/ ./jarvis_common/

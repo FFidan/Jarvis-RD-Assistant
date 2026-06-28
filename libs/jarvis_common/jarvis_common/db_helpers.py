@@ -274,6 +274,7 @@ async def dynamic_update(
     allowed_columns: frozenset[str],
     jsonb_columns: frozenset[str] = frozenset(),
     extra_sets: list[str] | None = None,
+    extra_where: tuple[str, Any] | None = None,
 ) -> Any:
     """Build and execute a dynamic UPDATE query.
 
@@ -301,6 +302,11 @@ async def dynamic_update(
         The caller is responsible for including ``updated_at = NOW()`` when the
         table has that column — this function does **not** add it automatically.
         Must be literal SQL fragments from trusted code only — never user-supplied.
+    extra_where:
+        Optional ``(column, value)`` pair appended as ``AND col = $N`` to the
+        WHERE clause. The column name is identifier-quoted; the value is bound as
+        a positional parameter. Default ``None`` ⇒ SQL is identical to the
+        pre-existing ``WHERE id = $1`` form (fully backward-compatible).
 
     Returns
     -------
@@ -363,8 +369,13 @@ async def dynamic_update(
     if extra_sets:
         sets.extend(extra_sets)
 
+    where_sql = "WHERE id = $1"
+    if extra_where is not None:
+        col, val = extra_where
+        params.append(val)
+        where_sql += f" AND {quote_ident(col)} = ${len(params)}"
     row = await db_pool_or_conn.fetchrow(
-        f"UPDATE {quote_ident(table)} SET {', '.join(sets)} WHERE id = $1 RETURNING *",  # nosec B608 - table/columns are identifier-quoted and values remain parameterized
+        f"UPDATE {quote_ident(table)} SET {', '.join(sets)} {where_sql} RETURNING *",  # nosec B608 - identifiers quoted, values parameterized
         *params,
     )
     return row

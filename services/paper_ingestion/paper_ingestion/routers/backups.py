@@ -25,12 +25,14 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from jarvis_common.audit import log_audit
-from jarvis_common.auth import require_admin
-from pydantic import BaseModel
+from jarvis_common.auth import require_admin, require_admin_or_api_key, verify_api_key
+from jarvis_common.migrations import required_code_schema
+from pydantic import BaseModel, ValidationError
 
 from paper_ingestion.deps import limiter
 
@@ -44,6 +46,15 @@ router.auth_exempt = True  # type: ignore[attr-defined]
 _BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/backups"))
 # Sentinel flag-file in a small RW volume the sidecar loop polls each iteration.
 _TRIGGER_SENTINEL = Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".backup_now"
+# Restore request sentinel (this service writes it) + status file (the sidecar's
+# restore.sh writes it). Same RW volume as the backup trigger; the app only ever
+# writes a JSON request and reads a JSON status — it never runs the restore.
+_RESTORE_SENTINEL = (
+    Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".restore_request.json"
+)
+_RESTORE_STATUS = (
+    Path(os.environ.get("BACKUP_TRIGGER_DIR", "/backup-trigger")) / ".restore_status.json"
+)
 
 # Strict allowlist for the four archive shapes scripts/backup.sh emits:
 #   jarvis_<ts>.sql.gz[.enc] · litellm_<ts>.sql.gz[.enc]
@@ -108,6 +119,9 @@ class RestorePoint(BaseModel):
     encrypted: bool
     total_size_bytes: int
     files: list[RestorePointFile]
+    app_version: str | None = None
+    schema_version: int | None = None
+    compat: Literal["same", "older", "newer", "unknown"] = "unknown"
 
 
 class RestoreLastRun(BaseModel):
@@ -120,6 +134,26 @@ class RestorePointsResponse(BaseModel):
     restore_points: list[RestorePoint]
     retention_days: int | None
     last_run: RestoreLastRun | None
+
+
+class RestoreStep(BaseModel):
+    name: str
+    status: str
+
+
+class RestoreRequest(BaseModel):
+    timestamp: str
+    confirm: str
+
+
+class RestoreStatus(BaseModel):
+    state: str
+    current_step: str | None = None
+    steps: list[RestoreStep] = []
+    safety_backup_ts: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: str | None = None
 
 
 def _classify(name: str) -> str:
@@ -180,17 +214,97 @@ def _read_last_run() -> dict | None:
         return None
 
 
+def _read_manifest(ts: str) -> dict | None:
+    """Read manifest_<ts>.json metadata; None if absent/unreadable/malformed.
+
+    Mirrors ``_read_last_run``'s degrade-to-None contract so a missing or corrupt
+    manifest never breaks restore-point listing. The manifest is plaintext
+    metadata (filenames, sha256 hex, version ints) written by ``backup.sh``.
+    """
+    try:
+        return json.loads((_BACKUP_DIR / f"manifest_{ts}.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _code_max_migration() -> int | None:
+    """Highest schema version this build can load.
+
+    Returns the max numbered migration in the mounted db/migrations directory,
+    or — when that directory is empty/absent (the baseline lives in init.sql
+    after a schema squash) — the baseline floor from db/SCHEMA_VERSION, so
+    restore-point compat stays armed instead of degrading to "unknown". Only a
+    genuine I/O/parse error on a present file degrades to None ("unknown").
+    """
+    migrations_dir = Path(os.environ.get("DB_MIGRATIONS_DIR", "/app/db/migrations"))
+    try:
+        versions = [int(p.name.split("_")[0]) for p in migrations_dir.glob("*.sql")]
+    except (OSError, ValueError):
+        return None
+    return max(versions) if versions else required_code_schema()
+
+
+def _compute_compat(
+    schema_version: int | None, code_max: int | None
+) -> Literal["same", "older", "newer", "unknown"]:
+    """Coarse schema-version relation between a restore point and the running code."""
+    if code_max is None or schema_version is None:
+        return "unknown"
+    if schema_version == code_max:
+        return "same"
+    return "older" if schema_version < code_max else "newer"
+
+
+def _manifest_compat(
+    ts: str, member_filenames: set[str], code_max: int | None
+) -> tuple[str | None, int | None, Literal["same", "older", "newer", "unknown"]]:
+    """Derive (app_version, schema_version, compat) from manifest_<ts>.json.
+
+    Yields nulls + "unknown" unless the manifest is present, well-formed, and its
+    archive filename set is a subset of the point's actual files (rejecting a
+    phantom/incomplete manifest whose archives no longer exist on disk). Never
+    raises — a malformed manifest degrades to "unknown".
+    """
+    manifest = _read_manifest(ts)
+    if not isinstance(manifest, dict):
+        return None, None, "unknown"
+    archives = manifest.get("archives")
+    if not isinstance(archives, list):
+        return None, None, "unknown"
+    manifest_names = {a.get("filename") for a in archives if isinstance(a, dict)}
+    if not manifest_names or not manifest_names <= member_filenames:
+        return None, None, "unknown"
+    schema_version = manifest.get("schema_version")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool):
+        schema_version = None
+    app_version = manifest.get("app_version")
+    if not isinstance(app_version, str):
+        app_version = None
+    return app_version, schema_version, _compute_compat(schema_version, code_max)
+
+
 def _group_restore_points(entries: list[BackupEntry]) -> list[RestorePoint]:
-    """Group archive entries by their %Y%m%d_%H%M%S timestamp into restore points."""
+    """Group archive entries by their %Y%m%d_%H%M%S timestamp into restore points.
+
+    Each point is annotated with the app/schema version recorded in its
+    ``manifest_<ts>.json`` (when present, well-formed, and consistent with the
+    point's actual files) plus a coarse ``compat`` vs the running code's migration
+    set. A missing/malformed/incomplete manifest degrades to ``compat="unknown"``
+    with null versions — it never raises.
+    """
     groups: dict[str, list[BackupEntry]] = {}
     for e in entries:
         m = _TS_RE.search(e.filename)
         if m:
             groups.setdefault(m.group(1), []).append(e)
+    code_max = _code_max_migration()
     points: list[RestorePoint] = []
     for ts, members in groups.items():
         stores = sorted({m.store for m in members})
         collections = sorted(qm.group(1) for m in members if (qm := _QDRANT_RE.match(m.filename)))
+        app_version, schema_version, compat = _manifest_compat(
+            ts, {m.filename for m in members}, code_max
+        )
         points.append(
             RestorePoint(
                 timestamp=ts,
@@ -209,6 +323,9 @@ def _group_restore_points(entries: list[BackupEntry]) -> list[RestorePoint]:
                     )
                     for m in members
                 ],
+                app_version=app_version,
+                schema_version=schema_version,
+                compat=compat,
             )
         )
     points.sort(key=lambda p: p.created_at, reverse=True)
@@ -310,6 +427,143 @@ async def trigger_backup(request: Request) -> dict[str, str]:
         user_id=_caller_id(request),
     )
     return {"status": "scheduled"}
+
+
+@router.post(
+    "/restore",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_admin)],
+)
+@limiter.limit("3/minute")
+async def request_restore(req: RestoreRequest, request: Request) -> dict[str, str]:
+    """Schedule a one-click restore by writing a sentinel the sidecar consumes.
+
+    The app gains no new privilege: it only writes a JSON request file into the
+    shared trigger volume; the postgres-backup sidecar's ``restore.sh`` performs
+    the destructive restore. Only the validated ``timestamp`` selects the archive
+    set — a client filename is never accepted, closing path traversal.
+    """
+    if req.confirm != "RESTORE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Type RESTORE to confirm",
+        )
+    pt = next(
+        (p for p in _group_restore_points(_list_entries()) if p.timestamp == req.timestamp),
+        None,
+    )
+    if pt is None or not pt.complete:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No complete backup at that time",
+        )
+    if pt.compat == "newer":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That backup is newer than this deployment",
+        )
+    # Reject a manifest that is present but unparseable: _read_manifest returns
+    # None only on OSError/ValueError, so a present valid-but-no-schema_version
+    # manifest still restores — only a structurally broken one is blocked.
+    if (_BACKUP_DIR / f"manifest_{req.timestamp}.json").exists() and _read_manifest(
+        req.timestamp
+    ) is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That backup's manifest is present but unreadable or incomplete",
+        )
+    # Reject a duplicate request BEFORE auditing: an already-pending sentinel means
+    # a restore is queued or running; no audit row should be produced for a no-op.
+    if _RESTORE_SENTINEL.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A restore is already pending or running. "
+                "Wait for it to complete before requesting another."
+            ),
+        )
+    # Audit the destructive request BEFORE writing the sentinel: if the audit
+    # write fails we 500 without ever queuing a restore (the action stays
+    # consistent with what the operator is told), rather than firing a restore
+    # the client believes failed.
+    await log_audit(
+        request.app.state.db_pool,
+        action="backup.restore_requested",
+        resource=f"backups/{req.timestamp}",
+        user_id=_caller_id(request),
+    )
+    try:
+        _RESTORE_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic exclusive create: O_EXCL catches the TOCTOU race where two
+        # concurrent requests both pass the exists() check above. write_text
+        # would silently overwrite in that window.
+        with _RESTORE_SENTINEL.open("x") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "timestamp": req.timestamp,
+                        "confirm": "RESTORE",
+                        "requested_at": datetime.now(UTC).isoformat(),
+                    }
+                )
+            )
+    except FileExistsError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A restore is already pending or running. "
+                "Wait for it to complete before requesting another."
+            ),
+        )
+    except OSError as exc:
+        logger.error("restore request sentinel write failed: %r", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Restore sidecar trigger is unavailable. "
+                "Ensure the postgres-backup service is running."
+            ),
+        ) from exc
+    return {"status": "scheduled"}
+
+
+@router.get(
+    "/restore/status",
+    response_model=RestoreStatus,
+    dependencies=[Depends(verify_api_key), Depends(require_admin_or_api_key)],
+)
+@limiter.limit("60/minute")
+async def restore_status(request: Request) -> RestoreStatus:
+    """Report live restore progress from the sidecar's status file (NO DB write).
+
+    Polled every few seconds AND must keep answering during the brief window in
+    a restore where ``restore.sh`` drops/recreates the jarvis DB — exactly when a
+    session lookup against that DB fails. So this route does NOT use the
+    session-only ``require_admin`` (which would 403 once the session store is
+    gone); it accepts an admin session OR the ops X-API-Key, whose check
+    (``verify_api_key``) is DB-free and survives the window. It exposes only
+    progress (step names + state), never archive contents, so the wider gate is
+    safe here; the destructive ``POST /restore`` stays session-admin-only.
+
+    When a restore is queued but the sidecar (a few-second poll loop) has not yet
+    written the first status, the request sentinel still exists — report
+    ``state="pending"`` so the UI keeps tracking instead of treating the gap (or a
+    leftover status file from a prior run) as "nothing running". A missing or
+    malformed status file with no pending request degrades to ``state="idle"`` —
+    it never 500s. The sidecar's extra ``drop_started`` key is ignored.
+    """
+    # The sidecar consumes the request sentinel before writing any status, so its
+    # presence means a restore is queued and any existing status file is stale.
+    if _RESTORE_SENTINEL.exists():
+        return RestoreStatus(state="pending", current_step="Queued")
+    try:
+        data = json.loads(_RESTORE_STATUS.read_text())
+    except (OSError, ValueError):
+        return RestoreStatus(state="idle")
+    try:
+        return RestoreStatus.model_validate(data)
+    except ValidationError:
+        return RestoreStatus(state="idle")
 
 
 @router.get("/{name}/download", dependencies=[Depends(require_admin)])

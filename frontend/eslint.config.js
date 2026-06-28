@@ -20,6 +20,13 @@ export default tseslint.config(
   },
   // Global rule overrides — downgrade noisy rules to warnings so CI can
   // block on errors only; individual files can be tightened incrementally.
+  //
+  // A11y rules are set to 'warn' rather than 'error'. The lint script uses
+  // --max-warnings to enforce a no-growth budget: existing warnings pass, but
+  // any new warning (e.g. a new clickable-non-focusable element) fails CI.
+  // Full remediation of the remaining a11y and type-assertion warnings is
+  // tracked as a follow-up task; targeted fixes have been applied to the
+  // clearest card/drop-zone wrappers.
   {
     rules: {
       'react/react-in-jsx-scope': 'off',

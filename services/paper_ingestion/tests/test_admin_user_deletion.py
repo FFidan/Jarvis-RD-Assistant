@@ -12,12 +12,17 @@ import paper_ingestion.routers.admin as admin_router
 import pytest
 from fastapi import HTTPException
 
-from tests._auth_fakes import build_mock_pool, build_request_admin
+from tests._auth_fakes import (
+    build_mock_pool,
+    build_mock_pool_with_txn,
+    build_request_admin,
+)
 
 _NOW = datetime.now(UTC)
 
 # Pool/request stubs delegated to shared _auth_fakes (D5-03).
 _build_mock_pool = build_mock_pool
+_build_mock_pool_txn = build_mock_pool_with_txn
 _build_request = build_request_admin
 
 
@@ -37,7 +42,8 @@ def _user_row(*, id=2, email="a@x.com", role="user") -> dict:
 
 
 @pytest.mark.asyncio
-async def test_restore_clears_deleted_at_within_grace() -> None:
+async def test_restore_clears_deleted_at_within_grace(monkeypatch) -> None:
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=_user_row(id=5))
     pool = _build_mock_pool(conn)
@@ -53,7 +59,8 @@ async def test_restore_clears_deleted_at_within_grace() -> None:
 
 
 @pytest.mark.asyncio
-async def test_restore_not_found_or_past_grace_raises_404() -> None:
+async def test_restore_not_found_or_past_grace_raises_404(monkeypatch) -> None:
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=None)
     pool = _build_mock_pool(conn)
@@ -80,6 +87,7 @@ async def test_restore_is_admin_only() -> None:
 @pytest.mark.asyncio
 async def test_invite_user_writes_audit(monkeypatch) -> None:
     monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "x" * 32)  # multi-user signing key required
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(side_effect=[None, _user_row(id=7, email="bob@x.com", role="user")])
     conn.execute = AsyncMock()
@@ -87,7 +95,7 @@ async def test_invite_user_writes_audit(monkeypatch) -> None:
 
     calls = _patch_audit(monkeypatch)
 
-    pool = _build_mock_pool(conn)
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
     body = admin_router.InviteUserBody(email="bob@x.com", role="user")
     await admin_router.invite_user(body, request)
@@ -101,14 +109,14 @@ async def test_invite_user_writes_audit(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_update_role_writes_audit_with_old_new(monkeypatch) -> None:
     conn = AsyncMock()
-    # caller (1) != target (2) → self-demotion guard skipped, so the only
-    # fetchval is the old-role lookup.
+    # Promotion (user → admin): old-role lookup returns "user", so the
+    # last-admin guard is skipped and admin_count is never read.
     conn.fetchval = AsyncMock(return_value="user")
     conn.fetchrow = AsyncMock(return_value=_user_row(id=2, role="admin"))
 
     calls = _patch_audit(monkeypatch)
 
-    pool = _build_mock_pool(conn)
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
     body = admin_router.UpdateRoleBody(role="admin")
     await admin_router.update_user_role(2, body, request)
@@ -123,11 +131,12 @@ async def test_soft_delete_writes_audit(monkeypatch) -> None:
     from fastapi import Response
 
     conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value="user")  # non-admin target: last-admin guard skipped
     conn.execute = AsyncMock(return_value="UPDATE 1")
 
     calls = _patch_audit(monkeypatch)
 
-    pool = _build_mock_pool(conn)
+    pool = _build_mock_pool_txn(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
     await admin_router.soft_delete_user(5, request, Response())
 

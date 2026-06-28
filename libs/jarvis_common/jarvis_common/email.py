@@ -229,7 +229,7 @@ async def _smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
 async def _required_smtp_empty_string(pool: asyncpg.Pool | None) -> bool:
     """True iff a REQUIRED field (host/from) is present but an empty string.
 
-    This is the ``SMTP-EMPTY-STRING-1`` silent-fail case: ``_effective_smtp``
+    This is the silent-fail case (empty-string SMTP var accepted): ``_effective_smtp``
     coerces empty DB values to absent, and an empty env var is accepted as-is,
     so neither shows up as 'configured'. We inspect the RAW DB system rows and
     raw env values for host/from to surface it as an explicit warning.

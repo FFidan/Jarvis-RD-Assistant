@@ -1,6 +1,5 @@
 """Project open-questions CRUD + recent-activity feed.
 
-Projects IA redesign §3.4 (§ OPEN QUESTIONS) and §3.5 (§ RECENT ACTIVITY).
 Every endpoint is strictly project-owner-scoped: the project row is fetched
 with ``WHERE id = $1 AND user_id = $2`` (IDOR guard reused verbatim from
 ``project_papers.list_project_papers``) and a 404 is raised when absent, so a
@@ -21,7 +20,7 @@ from learning_engine.models import (
 from learning_engine.routers._guards import assert_project_owner as _assert_project_owner
 
 router = APIRouter(prefix="/api/projects", tags=["project-questions"])
-# Spec §4a: DELETE is addressed by question id, not nested under a project,
+# DELETE is addressed by question id, not nested under a project,
 # so it lives on its own /api/questions prefix.
 questions_router = APIRouter(prefix="/api/questions", tags=["project-questions"])
 
@@ -135,7 +134,7 @@ async def list_project_activity(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(current_user_id_strict),
 ) -> list[ProjectActivityItem]:
-    """Recent-activity feed (§3.5): UNION over linked papers, completed
+    """Recent-activity feed: UNION over linked papers, completed
     tasks, and completed milestones — project-scoped via the owner guard,
     newest-first, each row carrying a ``kind`` label.
     """

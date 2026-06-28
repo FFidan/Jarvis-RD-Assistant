@@ -1,5 +1,5 @@
 /**
- * HeaderPomodoro — §1c stop/dismiss affordance plus the existing
+ * HeaderPomodoro — stop/dismiss affordance plus the existing
  * pause/resume toggle. The stop control lets a Pomodoro be ended off
  * the My-Day page.
  */

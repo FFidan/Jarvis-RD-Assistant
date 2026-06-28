@@ -36,7 +36,7 @@ def _filler_paragraph(tag: str) -> str:
 
 
 def test_chunk_text_start_char_offsets_exact_multi_section_multi_paragraph() -> None:
-    r"""Characterization guard for falsified audit finding M11b (2026-06-10).
+    r"""Characterization guard (2026-06-10).
 
     The audit claimed start_char drifts across multi-paragraph/multi-section
     inputs. Reality: the paragraph sub-split ``re.split(r"\n\n(?!\$\$)")``

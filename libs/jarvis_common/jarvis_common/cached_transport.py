@@ -5,7 +5,7 @@ under its stated criteria: short TTL, transparent error behavior (only 200
 GETs to an explicit host allowlist are cached — 429/5xx and every non-source
 host pass straight through), hit/miss counters, env opt-out.
 
-XML bodies from arXiv/NCBI are validated via a hardened lxml parser (SEC-3):
+XML bodies from arXiv/NCBI are validated via a hardened lxml parser:
 entity expansion, DTD loading, and network access are all disabled, and any
 body containing unresolved entity references is rejected rather than cached.
 """
@@ -54,7 +54,7 @@ _SENSITIVE_QUERY_PARAMS = frozenset(
     {"api_key", "apikey", "api-key", "key", "token", "access_token"}
 )
 
-# Hop-by-hop headers (RFC 7230 §6.1) plus content-coding/length: meaningless or
+# Hop-by-hop headers (RFC 7230, section 6.1) plus content-coding/length: meaningless or
 # wrong once the body is buffered and decoded by httpx, so they must not be
 # stored and replayed on a cache hit.
 _STRIP_HEADERS = frozenset(

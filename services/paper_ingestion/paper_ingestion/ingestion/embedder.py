@@ -135,7 +135,7 @@ async def delete_paper_vectors(paper_id: int) -> None:
     the service via ``paper_ingestion._state.svc`` rather than FastAPI
     dependency injection.
 
-    Failures propagate — the caller (B1.1 hard-delete handler) wraps SQL +
+    Failures propagate — the caller (hard-delete handler) wraps SQL +
     Qdrant in a transaction and relies on propagation to trigger a rollback.
 
     Parameters

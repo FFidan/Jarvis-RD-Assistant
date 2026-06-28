@@ -11,6 +11,7 @@ imported by paper_ingestion's lifespan, so there is no cross-service cycle risk.
 from __future__ import annotations
 
 import procrastinate
+from jarvis_common.jobs import queue_for_kind
 from jarvis_common.settings import get_jobs_settings
 from jarvis_common.task_registry import register_tasks
 
@@ -18,6 +19,7 @@ from paper_ingestion.citations_jobs import _citations_batch_fetch_job
 from paper_ingestion.contradiction_jobs import _contradictions_scan_job
 from paper_ingestion.extraction.jobs import _extraction_batch_job, _extraction_single_job
 from paper_ingestion.integrations.zotero_service import (
+    _zotero_push_highlights_job,
     _zotero_push_job,
     _zotero_resync_job,
     _zotero_sync_annotations_job,
@@ -59,21 +61,33 @@ KIND_TO_HANDLER: dict[str, object] = {
     "zotero.resync": _zotero_resync_job,
     "zotero.sync_from_zotero": _zotero_sync_from_zotero_job,
     "zotero.sync_annotations": _zotero_sync_annotations_job,
+    "zotero.push_highlights": _zotero_push_highlights_job,
 }
 
 
 def register_paper_ingestion_tasks(procrastinate_app: procrastinate.App) -> None:
     """Register all paper_ingestion job handlers on ``procrastinate_app``.
 
-    Must be called during lifespan startup before the worker is started.
-    Raises AssertionError if any kind is missing from ``app.tasks`` after
-    registration (startup-hook assertion per adversarial review).
+    Must be called during lifespan startup before the worker is started. The
+    consume-queue is derived from ``JOB_HANDLER_OWNER`` (via ``queue_for_kind``)
+    so a queue rename in the owner map propagates here automatically. Raises
+    ``RuntimeError`` if the handled kinds span multiple owner queues, or if any
+    kind is missing from ``app.tasks`` after registration (fail-fast at startup,
+    -O-proof — a bare assert would be stripped under ``python -O``).
     """
-    register_tasks(procrastinate_app, mapping=KIND_TO_HANDLER, queue="paper_ingestion")  # type: ignore[arg-type]
+    queues = {queue_for_kind(kind) for kind in KIND_TO_HANDLER}
+    if len(queues) != 1:
+        raise RuntimeError(
+            f"register_paper_ingestion_tasks: KIND_TO_HANDLER spans multiple "
+            f"owner queues {sorted(queues)}; each kind must map to one service"
+        )
+    (queue,) = queues
+    register_tasks(procrastinate_app, mapping=KIND_TO_HANDLER, queue=queue)  # type: ignore[arg-type]
 
-    # Startup-hook assertion: every registered kind must appear in app.tasks.
+    # Startup-hook guard: every registered kind must appear in app.tasks.
     missing = [kind for kind in KIND_TO_HANDLER if kind not in procrastinate_app.tasks]
-    assert not missing, f"register_paper_ingestion_tasks: failed to register kinds: {missing}"
+    if missing:
+        raise RuntimeError(f"register_paper_ingestion_tasks: failed to register kinds: {missing}")
 
     # noop.test is registered directly on the app in task_registry (always);
     # wire it into the internal task map when test jobs are enabled.

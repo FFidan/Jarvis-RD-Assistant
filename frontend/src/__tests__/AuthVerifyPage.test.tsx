@@ -8,10 +8,11 @@
  * - Timer cleanup: unmounting within the 2 s error-redirect window cancels the
  *   timer so navigate is NOT called on an unmounted component (L-4 fix).
  */
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { AuthVerifyPage } from '@/pages/AuthVerifyPage';
+import { AuthVerifyPage, __resetVerifyDedupeForTests } from '@/pages/AuthVerifyPage';
 
 const verifyMock = vi.fn();
 const loginWithSessionMock = vi.fn();
@@ -41,6 +42,7 @@ function renderWithRoute(initialUrl: string) {
 describe('AuthVerifyPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetVerifyDedupeForTests();
   });
 
   it('on success, calls loginWithSession with returned user and navigates to /', async () => {
@@ -81,6 +83,24 @@ describe('AuthVerifyPage', () => {
       expect(screen.getByText('LOGIN')).toBeInTheDocument();
     });
     expect(verifyMock).not.toHaveBeenCalled();
+  });
+
+  it('under StrictMode, signs in without sticking on "Verifying" (single POST)', async () => {
+    // mockResolvedValue (not Once): the deduped promise is awaited by both mounts.
+    verifyMock.mockResolvedValue({ id: 7, email: 'a@b.com', role: 'admin' });
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/auth/verify?token=strict-mode-token']}>
+          <Routes>
+            <Route path="/auth/verify" element={<AuthVerifyPage />} />
+            <Route path="/" element={<div>HOME</div>} />
+            <Route path="/login" element={<div>LOGIN</div>} />
+          </Routes>
+        </MemoryRouter>
+      </StrictMode>,
+    );
+    await waitFor(() => expect(screen.getByText('HOME')).toBeInTheDocument());
+    expect(verifyMock).toHaveBeenCalledTimes(1);
   });
 
   describe('timer cleanup (L-4)', () => {

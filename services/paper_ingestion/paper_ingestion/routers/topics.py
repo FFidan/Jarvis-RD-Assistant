@@ -21,6 +21,7 @@ _TOPIC_ALLOWED_COLUMNS: set[str] = {"name", "query_terms", "enabled", "category"
 async def list_topics(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[TopicResponse]:
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM topics ORDER BY name")

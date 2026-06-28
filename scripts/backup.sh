@@ -6,7 +6,7 @@
 #   - PostgreSQL `litellm` DB → /backups/litellm_<timestamp>.sql.gz[.enc]
 #       (API keys, virtual keys, spend ledger; owned by the same superuser that
 #        ran createdb, so the PGUSER dump has rights)
-#   - Qdrant vector store     → /backups/qdrant_<collection>_<timestamp>.snapshot
+#   - Qdrant vector store     → /backups/qdrant_<collection>_<timestamp>.snapshot[.enc]
 #       (one snapshot per collection via Qdrant's snapshot REST API; OPTIONAL
 #        and non-fatal — if Qdrant is down the Postgres/secrets backups still
 #        succeed)
@@ -41,6 +41,38 @@
 
 set -euo pipefail
 
+# --- Optional S3 pull (off-host disaster recovery) ---------------------------
+# When BACKUP_PULL_TS is set this run does NOT take a backup: it downloads the
+# named timestamp's archive set (+ its manifest) from s3://$BACKUP_S3_BUCKET into
+# BACKUP_PULL_DEST (the restore_inbox), then exits. The cross-host DR runbook uses
+# it to fetch an off-site backup onto a fresh host before an `inbox` restore.
+# Guarded by `aws` + a non-empty bucket; never fatal (a missing aws/bucket prints
+# an honest one-line notice and returns). This branch only runs when BACKUP_PULL_TS
+# is set, so the default scheduled-backup behavior below is unchanged.
+pull_from_s3() {
+  local ts="$1" dest="$2"
+  if ! command -v aws >/dev/null 2>&1; then
+    echo "[$(date -Iseconds)] S3 pull requested but the aws CLI is not installed; install awscli or copy the archive set into ${dest} manually" >&2
+    return 0
+  fi
+  if [ -z "${BACKUP_S3_BUCKET:-}" ]; then
+    echo "[$(date -Iseconds)] S3 pull requested but BACKUP_S3_BUCKET is empty; set it to the off-site bucket holding the archive set" >&2
+    return 0
+  fi
+  mkdir -p "$dest"
+  # cp --recursive with include/exclude filters fetches just this timestamp's
+  # archive set + manifest without enumerating the variable .enc / qdrant-collection
+  # filenames. The keys are flat basenames in the bucket.
+  aws s3 cp "s3://${BACKUP_S3_BUCKET}/" "$dest" --recursive \
+    --exclude "*" --include "*_${ts}.*" --include "manifest_${ts}.json"
+  echo "[$(date -Iseconds)] Pulled backup ${ts} from s3://${BACKUP_S3_BUCKET}/ into ${dest}" >&2
+}
+
+if [ -n "${BACKUP_PULL_TS:-}" ]; then
+  pull_from_s3 "$BACKUP_PULL_TS" "${BACKUP_PULL_DEST:-/restore-inbox}"
+  exit 0
+fi
+
 # Read PGPASSWORD from Docker Secret — required; fail fast if missing.
 if [ ! -r /run/secrets/postgres_password ]; then
     echo "FATAL: cannot read /run/secrets/postgres_password" >&2
@@ -52,6 +84,10 @@ export PGPASSWORD
 # Configuration
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
+# When set (e.g. by restore.sh's safety pre-backup) the retention prune at the
+# tail is skipped, so a pre-restore safety backup can never delete the very
+# archive being restored (a `local` archive older than RETENTION_DAYS).
+BACKUP_SKIP_PRUNE="${BACKUP_SKIP_PRUNE:-}"
 ENC_KEYFILE="${BACKUP_ENCRYPT_KEYFILE:-}"
 LITELLM_DATABASE="${LITELLM_DATABASE:-litellm}"
 QDRANT_URL="${QDRANT_URL:-http://qdrant:6333}"
@@ -285,12 +321,69 @@ else
   echo "[$(date -Iseconds)] Qdrant unreachable at $QDRANT_URL; skipping vector snapshot (Postgres/secrets backups unaffected)" >&2
 fi
 
+# --- Backup manifest ---------------------------------------------------------
+# write_manifest — emit ${BACKUP_DIR}/manifest_${TIMESTAMP}.json listing every
+# archive this run produced (filename, sha256, size) plus app_version and the
+# applied schema_version, so the restore UI can show per-restore-point version
+# compatibility. PLAINTEXT METADATA ONLY (filenames, hex digests, integers — no
+# secrets); it is not matched by the router's archive globs, so it is never
+# listed or downloaded as a backup.
+#
+# Failure-tolerant: a failed psql/sha256sum/write WARNs and returns 0 so it can
+# never regress an already-successful backup. Called as `write_manifest || true`
+# below, which also disables errexit for the whole function body.
+write_manifest() {
+  local schema_version app_version created_at manifest manifest_tmp
+  local first f base sum size
+  schema_version="$(psql -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" \
+    -d "${PGDATABASE:-jarvis}" -tAc 'SELECT COALESCE(MAX(version),0) FROM schema_migrations' \
+    2>/dev/null || echo 0)"
+  case "$schema_version" in
+    ''|*[!0-9]*) schema_version=0 ;;
+  esac
+  app_version="${JARVIS_VERSION:-unknown}"
+  created_at="$(date -Iseconds)"
+  manifest="${BACKUP_DIR}/manifest_${TIMESTAMP}.json"
+  manifest_tmp="${manifest}.tmp"
+  {
+    printf '{"timestamp":"%s","app_version":"%s","schema_version":%s,"created_at":"%s","archives":[' \
+      "$TIMESTAMP" "$app_version" "$schema_version" "$created_at"
+    first=1
+    for f in "$BACKUP_DIR"/*"${TIMESTAMP}"*; do
+      [ -f "$f" ] || continue
+      base="$(basename "$f")"
+      case "$base" in
+        manifest_*|*.tmp|*.raw) continue ;;
+      esac
+      sum="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)" || sum=""
+      size="$(stat -c%s "$f" 2>/dev/null)" || size=0
+      [ "$first" -eq 1 ] || printf ','
+      first=0
+      printf '{"filename":"%s","sha256":"%s","size_bytes":%s}' "$base" "$sum" "$size"
+    done
+    printf ']}'
+  } > "$manifest_tmp" 2>/dev/null || {
+    echo "[$(date -Iseconds)] WARNING: manifest write failed; continuing" >&2
+    rm -f "$manifest_tmp"
+    return 0
+  }
+  chmod 644 "$manifest_tmp" 2>/dev/null || true
+  mv -f "$manifest_tmp" "$manifest" 2>/dev/null || {
+    echo "[$(date -Iseconds)] WARNING: manifest promote failed; continuing" >&2
+    rm -f "$manifest_tmp"
+    return 0
+  }
+  echo "[$(date -Iseconds)] Backup manifest written to $manifest" >&2
+}
+write_manifest || true
+
 # --- Optional S3 upload ------------------------------------------------------
 if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   if ! command -v aws >/dev/null 2>&1; then
     echo "[$(date -Iseconds)] aws CLI not available; skipping S3 upload (install awscli or use the amazon/aws-cli sidecar)"
   else
     for f in "$JARVIS_BACKUP_FILE" "$LITELLM_BACKUP_FILE" "$SECRETS_BACKUP_FILE" \
+             "$BACKUP_DIR"/manifest_"${TIMESTAMP}".json \
              "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot \
              "$BACKUP_DIR"/qdrant_*_"${TIMESTAMP}".snapshot.enc; do
       [ -n "$f" ] && [ -f "$f" ] || continue
@@ -301,11 +394,19 @@ if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
 fi
 
 # --- Prune old backups (DB dumps, secrets archives, Qdrant snapshots) --------
-find "$BACKUP_DIR" \( \
-    -name "jarvis_*.sql.gz" -o -name "jarvis_*.sql.gz.enc" \
-    -o -name "litellm_*.sql.gz" -o -name "litellm_*.sql.gz.enc" \
-    -o -name "secrets_*.tar.gz" -o -name "secrets_*.tar.gz.enc" \
-    -o -name "qdrant_*.snapshot" -o -name "qdrant_*.snapshot.enc" \
-    -o -name "*.tmp" -o -name "*.raw" \
-  \) -mtime "+${RETENTION_DAYS}" -delete
-echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"
+# Gated on BACKUP_SKIP_PRUNE: restore.sh's safety pre-backup sets it so the prune
+# can never delete the archive being restored (an old `local` target older than
+# RETENTION_DAYS would otherwise be eligible).
+if [ -z "${BACKUP_SKIP_PRUNE:-}" ]; then
+  find "$BACKUP_DIR" \( \
+      -name "jarvis_*.sql.gz" -o -name "jarvis_*.sql.gz.enc" \
+      -o -name "litellm_*.sql.gz" -o -name "litellm_*.sql.gz.enc" \
+      -o -name "secrets_*.tar.gz" -o -name "secrets_*.tar.gz.enc" \
+      -o -name "qdrant_*.snapshot" -o -name "qdrant_*.snapshot.enc" \
+      -o -name "manifest_*.json" \
+      -o -name "*.tmp" -o -name "*.raw" \
+    \) -mtime "+${RETENTION_DAYS}" -delete
+  echo "[$(date -Iseconds)] Pruned backups older than ${RETENTION_DAYS} days"
+else
+  echo "[$(date -Iseconds)] Retention prune skipped (BACKUP_SKIP_PRUNE set)"
+fi

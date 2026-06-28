@@ -1,9 +1,9 @@
 /**
- * ResearchFeedPage — F1 Feed IA Redesign tests
+ * ResearchFeedPage — Feed IA Redesign tests
  *
  * Coverage:
  *  - FacetRail renders inside the page (3-pane layout)
- *  - Default surface = inbox (spec §3.5: Inbox-first)
+ *  - Default surface = inbox (Inbox-first)
  *  - Trash appears as §Status facet, not a top-level tab
  *  - Ask is NOT rendered inside the feed page (F4 owns /ask route)
  *  - Scoped list-filter renders for inbox/library/trash surfaces
@@ -131,7 +131,7 @@ function renderPage(initialSearch = '?surface=inbox') {
   );
 }
 
-describe('ResearchFeedPage — F1 3-pane IA', () => {
+describe('ResearchFeedPage — 3-pane IA', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -157,7 +157,7 @@ describe('ResearchFeedPage — F1 3-pane IA', () => {
 
   // ── Default landing ───────────────────────────────────────────────────────
 
-  it('defaults to Inbox as active surface (spec §3.5)', async () => {
+  it('defaults to Inbox as active surface', async () => {
     renderPage('?surface=inbox');
     await waitFor(() => {
       expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');

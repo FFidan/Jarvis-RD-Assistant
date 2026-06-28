@@ -443,7 +443,7 @@ describe('PulseDeck', () => {
     ).toBeInTheDocument();
   });
 
-  it('only passes savePending=true to the targeted card while a mutation is in flight (M-13)', async () => {
+  it('only passes savePending=true to the targeted card while a mutation is in flight', async () => {
     const { ratePulseCard } = await import('@/lib/api');
     // Return a never-settling promise to keep the mutation in-flight
     vi.mocked(ratePulseCard).mockReturnValue(new Promise(() => {}));

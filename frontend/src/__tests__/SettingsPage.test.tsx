@@ -8,7 +8,7 @@
  *  - System §-sections (Sources, Models, System) are hidden for non-admin users.
  *  - Non-admin deep-link to a system section → redirected to default (research/topics).
  *  - Admin users see all sections.
- *  - Default landing is research/topics (§VI Research → Topics).
+ *  - Default landing is research/topics (Research → Topics).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -243,8 +243,8 @@ describe('SettingsPage', () => {
 // ---------------------------------------------------------------------------
 // Conflict-5 — IngestionSection filterGroups split
 //
-// §III Models → LLM must render the full IngestionSection (AI models group).
-// §VI Research → Spaced Repetition must render ONLY the Spaced Repetition
+// Models → LLM must render the full IngestionSection (AI models group).
+// Research → Spaced Repetition must render ONLY the Spaced Repetition
 // group via the SpacedRepetitionSection wrapper — no AI models / Preferences.
 // ---------------------------------------------------------------------------
 
@@ -276,7 +276,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
     );
   }
 
-  it('§III Models → LLM renders the AI models group with the advanced backend disclosure', async () => {
+  it('Models → LLM renders the AI models group with the advanced backend disclosure', async () => {
     renderDetail('models', 'llm');
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
@@ -284,7 +284,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
     expect(screen.getByTestId('advanced-backend-disclosure')).toBeInTheDocument();
   });
 
-  it('§III Models → stale ?item=ai deep-link resolves to the consolidated AI models page', async () => {
+  it('Models → stale ?item=ai deep-link resolves to the consolidated AI models page', async () => {
     renderDetail('models', 'ai');
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'AI models', level: 4 })).toBeInTheDocument(),
@@ -292,7 +292,7 @@ describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5
     expect(screen.getByTestId('advanced-backend-disclosure')).toBeInTheDocument();
   });
 
-  it('§VI Research → Spaced Repetition renders ONLY the Spaced Repetition group', async () => {
+  it('Research → Spaced Repetition renders ONLY the Spaced Repetition group', async () => {
     renderDetail('research', 'spaced-repetition');
     await waitFor(() =>
       expect(

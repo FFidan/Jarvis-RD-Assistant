@@ -4,8 +4,7 @@
  *
  * Contract reference:
  *   internal design spec (archived)
- *   "Offline / PWA contract — CANONICAL" §6 (global connectivity banner) + §7
- *   (install affordance).
+ *   "Offline / PWA contract — CANONICAL" (global connectivity banner and install affordance).
  *
  * Behaviour:
  *   - Offline: banner renders with "offline — showing saved data" copy.

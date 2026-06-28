@@ -1,4 +1,4 @@
-"""Unit tests for the on-the-fly § Yesterday rollup (UI_v3 My-Day §3.2/§4.2).
+"""Unit tests for the on-the-fly § Yesterday rollup.
 
 Verifies the day-boundary maths (timezone offset → correct UTC window and
 local yesterday date), user-scoping, and the empty / populated payloads.

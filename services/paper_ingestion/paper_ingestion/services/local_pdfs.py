@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import shutil
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.pdf_processor import MAX_PDF_SIZE, PDF_STORAGE_PATH
 
 LOCAL_PDF_SCAN_DIR = get_paper_ingestion_settings().local_pdf_scan_dir
+
+logger = logging.getLogger(__name__)
 
 
 async def scan_local_pdf_directory(
@@ -89,8 +92,14 @@ async def scan_local_pdf_directory(
                             paper_id=existing["id"],
                             added_via="manual_save",
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(
+                            "failed to add existing paper %s to scanning user %s library: %s",
+                            existing["id"],
+                            user_id,
+                            exc,
+                            exc_info=True,
+                        )
                 skipped += 1
                 continue
 

@@ -161,9 +161,12 @@ Any guard failure returns 403. The mechanism is implemented in
 The bot resolves the `user_id` it injects from `telegram_user_pairings` — the
 durable record written when a user runs `/pair <token>` in the bot. This is
 the bot's sole identity mechanism; it does not rely on a fixed chat-id
-environment variable. The `telegram.owner_chat_id` config key and the
-`TELEGRAM_CHAT_ID` environment variable are retained as inert tombstones (not
-read at runtime) and may be removed in a future cleanup.
+environment variable. The `TELEGRAM_CHAT_ID` environment variable is an inert
+tombstone (not read at runtime) and may be removed in a future cleanup. The
+`telegram.owner_chat_id` config key is active: the scheduler reads it to
+resolve the deployment owner's Telegram chat ID for timezone-based nudge
+scheduling and job failure-alert delivery (see
+`services/telegram_bot/telegram_bot/scheduler.py`).
 
 The bot's product-data tenant isolation (projects, tasks, milestones, papers,
 author alerts) is enforced entirely server-side by the service endpoints it
@@ -316,3 +319,31 @@ The Ollama daemon handles local LLM inference. Key constraints:
 
 Review this posture whenever `OLLAMA_IMAGE` is updated or the Compose network
 topology changes.
+
+---
+
+## One-click Restore — Security Posture
+
+The admin Backups panel (v1.0.0+) allows an admin to restore the instance to a previous backup point from the browser.
+
+**Privilege boundary:** the app container gains no new operating-system privilege. On restore request, it writes a small JSON sentinel file to the `backup_trigger` volume (a minimal RW mount shared only with the backup sidecar). All destructive operations — DROP/CREATE DATABASE, the gunzip-and-psql dump reload, Qdrant snapshot recovery — run exclusively inside the `postgres-backup` sidecar, which already runs with the elevated database credentials it needs for scheduled backups. The `/backups` volume remains read-only to the app container; the app cannot read or overwrite backup archives.
+
+**Access controls:**
+
+- Restore can only be triggered by an **active admin browser session**. The ops API key (`JARVIS_API_KEY`) cannot trigger a restore.
+- A **typed confirmation** (the word RESTORE) is required before the sentinel is written.
+- A **safety pre-backup** is taken before any data is modified. If the restore fails after the destructive step, the safety backup appears in the admin panel and can be used to recover.
+- A **NEWER-version block** prevents restoring a backup that was made by a newer app version than is currently running — the operator must update the app first.
+
+**Residual risk:** an attacker who compromises an admin browser session can trigger a restore, causing data loss (current state is overwritten with the backup). This is equivalent to the existing risk of any admin action that modifies instance state. The safety pre-backup and typed confirmation reduce accidental-trigger risk; they do not prevent a deliberate action by a compromised admin account. For the full residual-risk register, see [docs/known-residual-risks.md](known-residual-risks.md).
+
+### Off-host (cross-host) restore — Security Posture
+
+Off-host disaster recovery (recovering on a fresh host from off-site backups) is **operator-driven via the runbook** in [DEPLOYMENT.md](DEPLOYMENT.md), not a WebUI action — a total-host-loss recovery may have no working UI. It adds **no new application surface or privilege**: the app gains nothing; the same already-privileged `postgres-backup` sidecar runs the same `restore.sh`, triggered by an operator-written request. It is the only restore path that touches secrets, so it is hardened specifically:
+
+- **The backup encryption key is held out-of-band and is one-time.** The operator drops it into the writable `restore_inbox` volume as `operator_key` for a single restore. `restore.sh` **shreds** it (`shred -u`, falling back to `rm`) on every clean or recorded-failure exit, so a failed restore never leaves the key on the volume. A `SIGKILL` of the sidecar cannot run the exit trap; the next run shreds any leftover before re-staging.
+- **No write is ever attempted against the read-only `/secrets` mount.** On a fresh host the script cannot and does not write `/secrets` (it stays `:ro`). The **rw `restore_inbox`** volume is the only writable cross-host secrets-staging surface, and it is never mounted under `/secrets`.
+- **Plaintext secrets are shredded after use.** The script decrypts the secrets archive only into a `chmod 700` staging dir under the inbox, reads the role password to rebind the database role, and then **shreds the staged files (`shred` per file) and removes the staging on exit** (a bare `rm` would leave block-level residue on a journaling/overlay filesystem). A `SIGKILL` mid-restore can leave staged plaintext until the next run shreds it. Materializing the host `./secrets` for the app is a separate, explicit operator step.
+- **A wrong key fails safe.** The operator key is validated (present + non-empty) before any destructive step, and the pre-`DROP` decrypt probe proves it actually decrypts the database archives before anything is dropped — so a wrong or corrupt key destroys nothing.
+- **Role-password rebind is a parameterized-safe SQL literal.** The restored password is embedded in `ALTER ROLE … WITH PASSWORD` with single quotes doubled, so a password containing a quote cannot break the statement or inject SQL.
+- **Same-host rollback is unchanged and never touches secrets.** The one-click (`local`) path leaves `./secrets` read-only and the live config key in place; all of the above applies only to the `inbox` path.

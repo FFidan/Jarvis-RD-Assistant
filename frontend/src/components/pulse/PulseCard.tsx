@@ -25,14 +25,14 @@ export interface PulseCardProps {
   rated?: boolean;
   /**
    * Hide the 🗑+👎 (Trash & Reject) action — used by the My Day Pulse Preview
-   * (top-3 widget) per spec §5.2 lines 345-346 which differentiates the full
+   * (top-3 widget) which differentiates the full
    * Pulse Deck card (👍/👎/💾/🗑+👎) from the My Day Pulse Preview (👍/👎/💾).
    * The full /pulse Pulse Deck page leaves this default (false) → all 4 actions.
    */
   hideTrashAndReject?: boolean;
   /**
    * Whether a save mutation is pending in the parent. When true, disables the
-   * Save button to prevent double-tap firing the save twice (DOM-F-03).
+   * Save button to prevent double-tap firing the save twice.
    */
   savePending?: boolean;
   degraded?: boolean;
@@ -154,6 +154,9 @@ export function PulseCard({
         onOpen && 'cursor-pointer hover:bg-muted/30',
       )}
       onClick={handleBodyClick}
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleBodyClick(); } } : undefined}
     >
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
@@ -234,7 +237,7 @@ export function PulseCard({
           onClick={stop}
         >
           <div className="flex gap-1">
-            {/* Pulse-deck cards are always discovery_origin='pulse' by definition (spec §5.2).
+            {/* Pulse-deck cards are always discovery_origin='pulse' by definition.
                 PulseCardResponse model does not surface the field; we hardcode it for the
                 FeedbackButtons gate. */}
             <FeedbackButtons

@@ -557,24 +557,16 @@ async def test_a67_get_paper_detail_owner_gets_200(
     _configure_api_key,
 ):
     """Covers map row A67: GET /api/papers/{paper_id} returns full PaperDetailResponse for owner.
-    Verified: services/paper_ingestion/paper_ingestion/routers/papers.py:234 at HEAD ba1f8146.
+    Verified: services/paper_ingestion/paper_ingestion/routers/papers_detail.py:59.
 
-    Known SharedConnPool limitation: the $1::text cast in the procrastinate_jobs
-    subquery may hit prepared-statement-cache collision if the same connection ran
-    a query binding $1 as an integer first. On cache collision asyncpg raises
-    DataError → 500. This test accepts 200 (success) or skips with documented reason
-    on 500 to avoid masking real failures while acknowledging the infrastructure
-    limitation documented in the SharedConnPool prereqs.
+    The procrastinate_jobs subquery binds str(paper_id)/str(user_id) at the Python
+    level, so the $1::text/$2::text casts in SQL are no-ops — no integer/text type
+    conflict is possible on the connection pool. The route returns 200 deterministically.
     """
     paper_id = contract_two_users.paper_id_a
     async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
         resp = await c.get(f"/api/papers/{paper_id}")
 
-    if resp.status_code == 500:
-        pytest.skip(
-            "SharedConnPool $1::text prepared-statement-cache collision on "
-            "procrastinate_jobs subquery — known SharedConnPool limitation; skip rather than fail"
-        )
     assert resp.status_code == 200, f"Owner expected 200, got {resp.status_code}: {resp.text[:300]}"
     body = resp.json()
     assert "paper" in body, f"PaperDetailResponse must have 'paper' key; got: {list(body)}"
@@ -1566,7 +1558,7 @@ async def test_paper_detail_has_project_links_flag(
 async def test_paper_detail_has_project_links_not_leaked_across_users(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
 ):
-    """PI-SEC-01: has_project_links must be scoped to the caller's projects.
+    """has_project_links must be scoped to the caller's projects.
 
     User B links A's paper to B's *own* project. When user A views the paper
     detail, has_project_links must be False — B's link must not surface to A
@@ -1600,7 +1592,7 @@ async def test_paper_detail_has_project_links_not_leaked_across_users(
 async def test_star_zotero_autopush_not_triggered_by_other_users_link(
     contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key, monkeypatch
 ):
-    """PI-SEC-01 behavior delta: starring a paper only *another* user has linked
+    """Starring a paper only *another* user has linked
     must NOT trigger the Zotero auto-push.
 
     star_paper enqueues zotero.push iff (off->on star) AND (caller's project

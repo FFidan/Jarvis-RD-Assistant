@@ -78,6 +78,15 @@ describe('HomePage', () => {
     expect(screen.getByText('7 unread · 3 unsummarized')).toBeInTheDocument();
   });
 
+  it('shows a degraded banner and suppresses the onboarding checklist when metrics fail', async () => {
+    localStorage.clear();
+    useUIStore.getState()._reset();
+    vi.mocked(fetchDashboardMetrics).mockRejectedValue(new Error('Network error'));
+    renderHomePage();
+    expect(await screen.findByText(/Dashboard unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText('Welcome to JARVIS Research Assistant')).not.toBeInTheDocument();
+  });
+
   it('does not render Quick Navigation section', () => {
     vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
     renderHomePage();

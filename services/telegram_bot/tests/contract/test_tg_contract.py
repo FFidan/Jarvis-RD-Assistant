@@ -258,11 +258,11 @@ async def test_whoami_command_reads_real_pairing(contract_conn):
     assert re.search(r"\d{4}-\d{2}-\d{2}", reply_text), (
         f"Expected paired-at date in /whoami reply; got: {reply_text!r}"
     )
-    # DOM-D-07: raw DB PK must not leak as a standalone identifier.
+    # Raw DB PK must not leak as a standalone identifier.
     # Use a regex word-boundary check so incidental digit overlaps with dates
     # (e.g. user_id=2 inside "2026-05-21") do not produce false positives.
     assert not re.search(rf"user_id={user_id}\b", reply_text), (
-        f"DOM-D-07: 'user_id={user_id}' must not appear in /whoami reply"
+        f"'user_id={user_id}' must not appear in /whoami reply"
     )
 
 
@@ -406,13 +406,13 @@ async def test_pair_command_rejects_expired_token(contract_conn):
 #                          test_create_project_absent_from_user_b_list
 #         A246 project cross-tenant → test_projects_contract.py::
 #                          test_get_project_cross_tenant_returns_404
-#         A247/A247b TG-SEC-03 → test_tasks_contract.py::
+#         A247/A247b → test_tasks_contract.py::
 #                          test_update_task_user_b_gets_404,
 #                          test_update_task_cross_tenant_returns_404 (404 + row unchanged),
 #                          plus bot-half test_callback_handlers.py::
 #                          test_task_done_non_owned_task_returns_not_found_no_leak.
 #
-# TG-SEC-03 specifically: the old A247b forced auth_check → (True, None) to
+# The old A247b forced auth_check → (True, None) to
 # exercise a consumer-side ``$2 IS NULL`` catch-all in complete_task.  That
 # direct-DB path no longer exists in the bot — the handler PUTs to the LE, which
 # enforces ownership via X-Owner-User-Id and returns 404 for non-owned tasks

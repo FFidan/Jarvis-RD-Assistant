@@ -46,7 +46,7 @@ def test_schedule_review_recovers_from_invalid_state(monkeypatch: pytest.MonkeyP
     fake_log = SimpleNamespace(to_dict=lambda: {"rating": Rating.Good.value})
     captured: dict[str, Card] = {}
 
-    def fake_review_card(card: Card, rating: Rating):
+    def fake_review_card(card: Card, rating: Rating, review_datetime=None):
         captured["card"] = card
         captured["rating"] = rating
         return fallback_card, fake_log

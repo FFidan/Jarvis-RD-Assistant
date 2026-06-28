@@ -107,7 +107,7 @@ async def test_no_negative_centroid_no_penalty():
 
     assert len(result) == 1
     signals = result[0].signals
-    assert "l2_penalty" not in signals, "l2_penalty must not appear in signals (M-06)"
+    assert "l2_penalty" not in signals, "l2_penalty must not appear in signals"
     assert abs(signals["embedding"] - 1.0) < 1e-9, (
         f"Expected embedding_sim==1.0 (no penalty), got {signals['embedding']}"
     )
@@ -140,7 +140,7 @@ async def test_negative_centroid_penalty_applied():
     result = await stage1_embedding_filter([paper], profile, embedder, top_k=10, now=_FIXED_DATE)
 
     signals = result[0].signals
-    assert "l2_penalty" not in signals, "l2_penalty must not appear in signals (M-06)"
+    assert "l2_penalty" not in signals, "l2_penalty must not appear in signals"
     assert abs(signals["embedding"] - (-0.5)) < 1e-9, (
         f"Expected embedding==-0.5 (penalty subtracted), got {signals['embedding']}"
     )
@@ -215,7 +215,7 @@ async def test_default_lambda_applied_when_missing_from_weights():
     result = await stage1_embedding_filter([paper], profile, embedder, top_k=10, now=_FIXED_DATE)
 
     signals = result[0].signals
-    assert "l2_penalty" not in signals, "l2_penalty must not appear in signals (M-06)"
+    assert "l2_penalty" not in signals, "l2_penalty must not appear in signals"
     # Default lambda is 0.5; penalty = 0.5 * 1.0 = 0.5 → embedding = 0.0 - 0.5 = -0.5
     assert abs(signals["embedding"] - (-0.5)) < 1e-9, (
         f"Expected embedding==-0.5 (default lambda penalty applied), got {signals['embedding']}"
@@ -223,13 +223,13 @@ async def test_default_lambda_applied_when_missing_from_weights():
 
 
 # ---------------------------------------------------------------------------
-# Test 5 (M-06): l2_penalty key is absent from signals dict
+# Test 5: l2_penalty key is absent from signals dict
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_l2_penalty_key_absent_from_signals():
-    """M-06: signals dict must NOT contain 'l2_penalty' — key dropped, math stays."""
+    """signals dict must NOT contain 'l2_penalty' — key dropped, math stays."""
     paper = _make_paper(external_id="arxiv:t5")
     profile = _make_profile(
         library_centroid=[1.0, 0.0, 0.0],
@@ -240,4 +240,4 @@ async def test_l2_penalty_key_absent_from_signals():
 
     result = await stage1_embedding_filter([paper], profile, embedder, top_k=10, now=_FIXED_DATE)
 
-    assert "l2_penalty" not in result[0].signals, "l2_penalty key must be absent (M-06)"
+    assert "l2_penalty" not in result[0].signals, "l2_penalty key must be absent"

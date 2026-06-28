@@ -93,7 +93,7 @@ __all__ = [
     "build_database_url",
     "configure_lifespan",
     "configure_middleware_and_errors",
-    # DOM-J-03: shared health-check routes
+    # Shared health-check routes
     "HealthCheck",
     "HealthProbe",
     "register_health_routes",

@@ -4,7 +4,7 @@
  * Extracted from PaperHeader's action cluster during the F2 IA redesign: the
  * new research-log layout dropped PaperHeader, which would otherwise have
  * silently removed reading-state / star / trash / restore / hard-delete from
- * Paper Detail (spec §3.1 "Preserve every live capability").
+ * Paper Detail ("Preserve every live capability").
  *
  * Behaviour mirrors PaperHeader exactly:
  *  - state-contextual primary/secondary buttons (inbox / to_read / reading /

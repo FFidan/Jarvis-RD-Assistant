@@ -110,7 +110,7 @@ def test_hmac_key_file_indirection_byte_identical(monkeypatch, tmp_path):
 def test_hmac_key_prefers_model_hmac_key_over_api_key(monkeypatch):
     """JARVIS_MODEL_HMAC_KEY is used preferentially when both keys are set.
 
-    This is the existing resolution order (audit H14); the test confirms
+    This is the existing resolution order; the test confirms
     the api_key branch is not reached when model_hmac_key is present.
     """
     _isolated_secrets(
@@ -131,7 +131,7 @@ def test_hmac_key_prefers_model_hmac_key_over_api_key(monkeypatch):
 
 
 def test_hmac_key_multi_user_nonprod_refuses_derivation_fallback(monkeypatch):
-    """SEC-4: a multi-user (JARVIS_SETUP_MODE != single) box refuses the
+    """A multi-user (JARVIS_SETUP_MODE != single) box refuses the
     api_key-derivation fallback even outside production — the dedicated
     JARVIS_MODEL_HMAC_KEY must be set."""
     _isolated_secrets(monkeypatch, JARVIS_API_KEY="bearer-only-no-dedicated-key")
@@ -145,7 +145,7 @@ def test_hmac_key_multi_user_nonprod_refuses_derivation_fallback(monkeypatch):
 
 
 def test_hmac_key_multi_user_nonprod_uses_dedicated_key(monkeypatch):
-    """SEC-4: with the dedicated key set, a multi-user box derives no fallback."""
+    """With the dedicated key set, a multi-user box derives no fallback."""
     _isolated_secrets(
         monkeypatch,
         JARVIS_MODEL_HMAC_KEY="dedicated-model-key-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
@@ -160,7 +160,7 @@ def test_hmac_key_multi_user_nonprod_uses_dedicated_key(monkeypatch):
 
 
 def test_hmac_key_single_user_nonprod_allows_derivation_fallback(monkeypatch):
-    """SEC-4 non-regression: single-user dev still derives from JARVIS_API_KEY."""
+    """Non-regression: single-user dev still derives from JARVIS_API_KEY."""
     _isolated_secrets(monkeypatch, JARVIS_API_KEY="single-user-dev-key")
     monkeypatch.setenv("ENVIRONMENT", "development")
     monkeypatch.setenv("JARVIS_SETUP_MODE", "single")

@@ -50,7 +50,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     }),
     createJob: vi.fn().mockResolvedValue({ job_id: 'pulse-job-1', status: 'queued' }),
     listJobs: vi.fn().mockResolvedValue([]),
-    getSystemCapabilities: vi.fn().mockResolvedValue({ networkx: true, scikit_learn: true }),
+    getSystemCapabilities: vi.fn().mockResolvedValue({ networkx: true, scikit_learn: true, structured_output_enforced: true }),
     patchSourceConfig: vi.fn().mockResolvedValue({ ok: true }),
     clearSourceCooldown: vi.fn().mockResolvedValue({ ok: true }),
   };
@@ -107,7 +107,7 @@ describe('PulseSection — pre-decomposition behavioral snapshot', () => {
       { key: 'pulse.stage2_top_k', value: 40 },
     ]);
     vi.mocked(fetchPulseStats).mockResolvedValue(baseStats);
-    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: true, scikit_learn: true });
+    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: true, scikit_learn: true, structured_output_enforced: true });
   });
 
   it('renders all three top-level cards under default config', async () => {

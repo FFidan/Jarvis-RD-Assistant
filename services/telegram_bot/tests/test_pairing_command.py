@@ -86,13 +86,13 @@ async def test_start_paired_chat_sends_welcome():
 
 
 # ---------------------------------------------------------------------------
-# DOM-D-02: /pair rate limit (5/minute per chat)
+# /pair rate limit (5/minute per chat)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_pair_command_rate_limited_after_five_calls() -> None:
-    """DOM-D-02: pair_command is decorated with @rate_limit(max_calls=5, window_seconds=60).
+    """pair_command is decorated with @rate_limit(max_calls=5, window_seconds=60).
 
     Rapid-fire calls from the same chat_id must be silently dropped (return
     None) after the 5th call.  The DB pool is configured to always return a

@@ -9,7 +9,7 @@ Route contracts (from jarvis_common.health.register_health_routes and
 telegram_bot.internal_api):
 
   GET /health/live  — no auth, no probes, always {"status": "ok"}, 200
-  GET /health       — no auth, {"status": "ok"|"degraded"} only (SEC-H09),
+  GET /health       — no auth, {"status": "ok"|"degraded"} only,
                       200 ok / 503 degraded
   GET /health/internal — requires verify_api_key, full HealthCheckResponse
                          {status, service, checks}, same 200/503 split
@@ -175,7 +175,7 @@ async def test_health_public_200_when_ok(rhr_app):
 
 
 async def test_health_public_exposes_only_status(rhr_app):
-    """GET /health must NOT expose service or checks keys (SEC-H09)."""
+    """GET /health must NOT expose service or checks keys."""
     _name, app = rhr_app
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.get("/health")

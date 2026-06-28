@@ -94,7 +94,7 @@ interface ModelCatalogEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Fit-detail helpers (Contract 06 §4 — mirrored from IngestionSection)
+// Fit-detail helpers (mirrored from IngestionSection)
 // ---------------------------------------------------------------------------
 
 /** Find the largest snap-step (power of 2) that stays within 85% VRAM threshold. */
@@ -407,7 +407,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
                     matchesConfiguredValue(m, value);
                   const badge = statusLabel(m, isCurrent);
 
-                  // fit_detail-based disabling (Contract 06 §6, §10.3)
+                  // fit_detail-based disabling
                   const fitDefault = m.fit_detail?.default;
                   const isUnfitByDetail = fitDefault === 'unfit';
                   const isCloud = fitDefault === 'cloud' || m.provider !== 'ollama';
@@ -455,7 +455,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
                               {badge}
                             </span>
                           )}
-                          {/* fit_detail badges (Contract 06 §6.1) */}
+                          {/* fit_detail badges */}
                           {isCloud && fitDefault === 'cloud' && (
                             <span className="text-xs rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground">
                               Cloud

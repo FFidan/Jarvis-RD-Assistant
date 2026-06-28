@@ -4,7 +4,7 @@
  *
  * Contract reference:
  *   internal design spec (archived)
- *   "Offline / PWA contract — CANONICAL" §5 (per-view offline-state indicator
+ *   "Offline / PWA contract — CANONICAL" (per-view offline-state indicator
  *   system) + per-surface table.
  *
  * Three variants:

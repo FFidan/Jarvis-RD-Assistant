@@ -333,7 +333,6 @@ html.density-compact {
 
 @media (hover: none) {
   /* Hover-revealed action affordances must stay visible on touch devices */
-  .group:hover\:opacity-100,
   .group-hover\:opacity-100 {
     opacity: 0.6 !important;
   }

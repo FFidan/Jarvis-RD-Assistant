@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from httpx import ASGITransport  # noqa: E402
@@ -170,6 +172,33 @@ async def test_readiness_smtp_amber_when_username_without_password(_app, monkeyp
     # The remediation/detail must never echo the configured value.
     assert "relay-user" not in resp.text
     get_secrets_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_readiness_smtp_red_on_production_multiuser(_app, monkeypatch):
+    """Production + >1 user + no deliverable SMTP → smtp readiness is red, not amber.
+
+    On a multi-user production box magic-link is the only login path for
+    non-owner users, so a missing relay is a hard failure.
+    """
+    app, conn = _app
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    # >1 non-deleted user → the box is multi-user.
+    conn.fetchval = AsyncMock(return_value=2)
+
+    from jarvis_common.settings import get_secrets_settings
+
+    get_secrets_settings.cache_clear()
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/system/readiness")
+
+    assert resp.status_code == 200
+    by_name = {c["name"]: c for c in resp.json()["checks"]}
+    assert by_name["smtp"]["status"] == "red", by_name["smtp"]
+    assert resp.json()["status"] == "red"
 
 
 @pytest.mark.asyncio

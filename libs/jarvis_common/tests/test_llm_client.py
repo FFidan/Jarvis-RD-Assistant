@@ -361,7 +361,7 @@ async def test_call_llm_structured_rejects_empty_model():
 # Observability decorator coverage (D.6)
 # ---------------------------------------------------------------------------
 #
-# Per docs/contracts/04-observability.md §3, exactly nine functions are
+# Exactly nine functions are
 # trace-boundary roots. Each MUST be wrapped by ``@observe()``.  When the
 # decorator is removed, ``__wrapped__`` disappears — this test is the
 # canary.
@@ -390,7 +390,7 @@ def _resolve(module_path: str, attr_path: str):
 
 
 def test_boundary_functions_are_observed():
-    """Every trace-boundary function in 04-observability.md §3 must carry @observe()."""
+    """Every trace-boundary function in the observability contract must carry @observe()."""
     pytest.importorskip("paper_ingestion", reason="paper_ingestion service not installed")
     missing: list[str] = []
     for module_path, attr_path in _BOUNDARY_FUNCTIONS:

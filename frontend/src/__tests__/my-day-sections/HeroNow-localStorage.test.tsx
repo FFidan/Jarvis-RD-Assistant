@@ -1,5 +1,5 @@
 /**
- * HeroNow — localStorage('myday.heroMode') persistence (spec §3.3).
+ * HeroNow — localStorage('myday.heroMode') persistence.
  * The v3 design persists the user's hero focus choice to a raw
  * localStorage key (matching the runnable prototype + the e2e walk),
  * independent of the shared ui-store.

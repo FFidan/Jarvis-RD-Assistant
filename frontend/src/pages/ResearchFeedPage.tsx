@@ -98,7 +98,7 @@ export function ResearchFeedPage() {
   const rawQ = searchParams.get('q') ?? '';
   const actionUpload = searchParams.get('action') === 'upload';
 
-  // M16: unknown surface → 'inbox' fallback (spec §3.5: default = Inbox)
+  // M16: unknown surface → 'inbox' fallback (default = Inbox)
   // 'ask' is removed from feed; any ?surface=ask URL lands on inbox.
   const surface: SurfaceView =
     rawSurface && VALID_SURFACES.has(rawSurface as SurfaceView)
@@ -156,9 +156,9 @@ export function ResearchFeedPage() {
     staleTime: 5_000,
   });
 
-  // ── default-landing redirect — spec §3.5 + offline contract ─────────────
+  // ── default-landing redirect + offline contract ─────────────
   // Online: default → Inbox. Offline: default → Library (cached read surface).
-  // Feed spec §3.5/offline-contract: "offline, fall back to Library".
+  // Offline contract: "offline, fall back to Library".
   const hasRedirectedRef = useRef(false);
   useEffect(() => {
     if (hasRedirectedRef.current) return;
@@ -410,7 +410,7 @@ export function ResearchFeedPage() {
 
         {/* Right: main list pane */}
         <main className="flex min-w-0 flex-1 flex-col overflow-y-auto px-4 py-3 sm:px-6">
-          {/* Scoped list-filter (spec §3.4 — NOT intent-routing) */}
+          {/* Scoped list-filter (NOT intent-routing) */}
           {(surface === 'inbox' || surface === 'library' || surface === 'trash') && (
             <div className="mb-3 flex items-center gap-3">
               <FeedListFilter

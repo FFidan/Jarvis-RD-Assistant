@@ -15,7 +15,7 @@ Survivor-of:
   test_process_pdf_async_enqueues_job                              → P-07
 
 Retained (boundary-adapter or filesystem-precondition):
-  test_download_pdf_maps_upstream_http_failure_to_502  (§1.3 boundary-adapter)
+  test_download_pdf_maps_upstream_http_failure_to_502  (boundary-adapter)
   test_process_pdf_rejects_paths_outside_storage       (filesystem guard)
   test_process_pdf_delegates_to_run_process_pdf        (internal delegation)
   test_scan_local_pdfs_skips_symlinks_and_non_pdfs     (filesystem-scan utility)
@@ -52,7 +52,7 @@ async def _pi_app_with_pool(contract_conn, tmp_path, monkeypatch):
     """PI app wired to contract conn; PDF storage redirected to tmp_path.
 
     Mocks app.state.pdf_processor (PDFProcessor outbound HTTP carve-out;
-    legitimate per §5.1) so download_pdf's short-circuit paths can be exercised.
+    a permitted boundary-adapter carve-out) so download_pdf's short-circuit paths can be exercised.
     """
     from unittest.mock import MagicMock
 

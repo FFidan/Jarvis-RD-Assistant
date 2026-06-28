@@ -842,3 +842,96 @@ async def test_ensure_smart_fallback_missing_key_guard_intact():
     params = _last_payload(new_route)["litellm_params"]
     assert params["model"] == "ollama_chat/qwen3:4b"
     assert "api_key" not in params
+
+
+# ---------------------------------------------------------------------------
+# Typed deployment parsing: malformed elements are skipped, well-formed parse
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_litellm_deployments_skips_malformed_logs_warning(caplog):
+    """A deployment element missing model_name is logged as WARNING and skipped;
+    a well-formed element is returned as a typed LiteLLMDeployment."""
+    import logging
+
+    from paper_ingestion.services.litellm_config import LiteLLMDeployment, get_litellm_deployments
+
+    respx.get(f"{LITELLM}/v1/model/info").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    # malformed: model_name missing
+                    {
+                        "litellm_params": {"model": "ollama_chat/bad"},
+                        "model_info": {"id": "bad-1", "db_model": True},
+                    },
+                    # well-formed
+                    {
+                        "model_name": "smart",
+                        "litellm_params": {"model": "ollama_chat/qwen3:8b"},
+                        "model_info": {"id": "ok-1", "db_model": True},
+                    },
+                ]
+            },
+        )
+    )
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.services.litellm_config"):
+        result = await get_litellm_deployments()
+
+    assert len(result) == 1
+    dep = result[0]
+    assert isinstance(dep, LiteLLMDeployment)
+    assert dep.model_name == "smart"
+    assert dep.litellm_params["model"] == "ollama_chat/qwen3:8b"
+    assert dep.model_info is not None
+    assert dep.model_info.id == "ok-1"
+    assert dep.model_info.db_model is True
+    # The malformed element must produce a WARNING
+    warning_texts = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("malformed" in t.lower() or "skip" in t.lower() for t in warning_texts)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_litellm_deployments_keeps_deployment_with_null_model_info():
+    """A deployment with an explicit null model_info/litellm_params is KEPT, not dropped.
+
+    The pre-typed code tolerated null via ``entry.get(...) or {}``; the null-coercing
+    validator preserves that so a functional deployment (valid model_name) is not lost.
+    """
+    from paper_ingestion.services.litellm_config import get_litellm_deployments
+
+    respx.get(f"{LITELLM}/v1/model/info").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"model_name": "smart", "litellm_params": None, "model_info": None}]},
+        )
+    )
+
+    result = await get_litellm_deployments()
+
+    assert len(result) == 1
+    assert result[0].model_name == "smart"
+    assert result[0].litellm_params == {}
+    assert result[0].model_info.id == ""
+
+
+async def test_parse_model_target_strips_latest_splits_cloud_and_validates():
+    from paper_ingestion.services.litellm_config import _parse_model_target
+
+    local = _parse_model_target("mistral-nemo:latest")
+    assert local.new_name == "mistral-nemo"
+    assert local.suffix == "mistral-nemo"
+    assert local.cloud_provider is None
+
+    cloud = _parse_model_target("gemini/gemini-1.5-pro")
+    assert cloud.cloud_provider == "google"
+    assert cloud.suffix == "gemini-1.5-pro"
+    assert cloud.new_name == "gemini/gemini-1.5-pro"
+
+    with pytest.raises(ValueError):
+        _parse_model_target("../../etc/passwd")

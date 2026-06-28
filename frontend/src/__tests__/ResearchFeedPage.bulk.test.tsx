@@ -90,7 +90,7 @@ function renderAt(initialEntry: string) {
   );
 }
 
-describe('ResearchFeedPage — bulk selection clears on surface change (NEW-H5)', () => {
+describe('ResearchFeedPage — bulk selection clears on surface change', () => {
   beforeEach(() => {
     useBulkSelection.setState({ selectedIds: new Set() });
   });
@@ -114,7 +114,7 @@ describe('ResearchFeedPage — bulk selection clears on surface change (NEW-H5)'
       expect(useBulkSelection.getState().selectedIds.size).toBe(1);
     });
 
-    // Switch to the Trash surface via §Status facet (F1 IA: Trash is a facet, not a tab)
+    // Switch to the Trash surface via §Status facet (Trash is a facet, not a tab)
     await user.click(screen.getByTestId('facet-status-trash'));
 
     // Selection should now be empty
@@ -124,7 +124,7 @@ describe('ResearchFeedPage — bulk selection clears on surface change (NEW-H5)'
   });
 });
 
-describe('ResearchFeedPage — bulk selection clears on URL-driven surface change (NEW-H5-URL)', () => {
+describe('ResearchFeedPage — bulk selection clears on URL-driven surface change', () => {
   beforeEach(() => {
     useBulkSelection.setState({ selectedIds: new Set() });
   });
@@ -177,7 +177,7 @@ function SurfaceSwitcher() {
   );
 }
 
-describe('ResearchFeedPage — bulk clears on direct setSearchParams (NEW-H5-DIRECT)', () => {
+describe('ResearchFeedPage — bulk clears on direct setSearchParams', () => {
   beforeEach(() => {
     useBulkSelection.setState({ selectedIds: new Set() });
   });
@@ -304,7 +304,7 @@ describe('ResearchFeedPage — bulk clears on filter/facet changes (FEE-1)', () 
   });
 });
 
-describe('ResearchFeedPage — invalid ?surface= falls back to inbox (NEW-M16)', () => {
+describe('ResearchFeedPage — invalid ?surface= falls back to inbox', () => {
   beforeEach(() => {
     useBulkSelection.setState({ selectedIds: new Set() });
   });
@@ -312,7 +312,7 @@ describe('ResearchFeedPage — invalid ?surface= falls back to inbox (NEW-M16)',
   it('surface=__proto__ renders inbox UI', async () => {
     renderAt('/feed?surface=__proto__');
 
-    // Inbox §Status facet should be active (aria-pressed=true) in the F1 facet rail.
+    // Inbox §Status facet should be active (aria-pressed=true) in the facet rail.
     await waitFor(() => {
       expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute(
         'aria-pressed',

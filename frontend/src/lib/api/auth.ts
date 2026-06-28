@@ -32,11 +32,14 @@ export interface AdminUser {
   role: 'user' | 'admin';
   created_at: string;
   last_login_at: string | null;
+  deleted_at?: string | null;
+  invite_link?: string | null;
 }
 
-/** List all non-deleted users. Requires admin role. */
+/** List users, including soft-deleted ones still within the 30-day restore
+ *  grace (so the admin UI can offer a restore action). Requires admin role. */
 export const listUsers = () =>
-  apiFetch<AdminUser[]>('/api/admin/users');
+  apiFetch<AdminUser[]>('/api/admin/users?include_deleted=true');
 
 /** Invite a new user. Sends them a 24-hour magic link. Requires admin role. */
 export const inviteUser = (email: string, role: 'user' | 'admin') =>
@@ -56,10 +59,15 @@ export const updateUserRole = (userId: number, role: 'user' | 'admin') =>
 export const deleteUser = (userId: number) =>
   apiFetch<void>(`/api/admin/users/${userId}`, { method: 'DELETE' });
 
+/** Restore a soft-deleted user within the 30-day grace. Requires admin role. */
+export const restoreUser = (userId: number) =>
+  apiFetch<AdminUser>(`/api/admin/users/${userId}/restore`, { method: 'POST' });
+
 export const sendSignInLink = (userId: number) =>
-  apiFetch<{ sent: boolean }>(`/api/admin/users/${userId}/send-link`, {
-    method: 'POST',
-  });
+  apiFetch<{ sent: boolean; sent_link?: string | null }>(
+    `/api/admin/users/${userId}/send-link`,
+    { method: 'POST' },
+  );
 
 // --- Admin audit log ---
 

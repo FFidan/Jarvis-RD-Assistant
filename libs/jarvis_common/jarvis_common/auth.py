@@ -3,6 +3,7 @@
 import hmac
 import ipaddress
 import logging
+from typing import Any
 
 import asyncpg
 from fastapi import Depends, HTTPException, Request
@@ -30,7 +31,7 @@ _AUTH_MISSING_AUDIT_SKIP_PATHS = frozenset(
     }
 )
 
-# Production secret-strength gate (SEC-A). Minimum lengths mirror the project
+# Production secret-strength gate. Minimum lengths mirror the project
 # convention enforced by scripts/production-readiness-check.sh so the boot gate
 # and the readiness script agree.
 _LITELLM_MASTER_KEY_MIN_LEN = 16
@@ -210,7 +211,10 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
         return
     # If a real key is configured, always enforce it (even in DEV_MODE)
     if jarvis_api_key:
-        if not hmac.compare_digest(api_key or "", jarvis_api_key):
+        if not hmac.compare_digest(
+            (api_key or "").encode("utf-8", "replace"),
+            jarvis_api_key.encode("utf-8", "replace"),
+        ):
             # Emit an auth-failure event; failures indicate a potential probe or
             # misconfigured client. Successes are NOT logged (too noisy per-request).
             try:
@@ -394,8 +398,9 @@ def _raw_socket_ip(request: Request) -> tuple[str | None, bool]:
 def _parse_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
     """Parse ``OWNER_OVERRIDE_ALLOWED_CIDRS`` env var into network objects.
 
-    Falls back to the default loopback + docker-bridge CIDR list when the
-    variable is unset or empty.
+    Falls back to loopback-only (``127.0.0.0/8``) by default when the variable
+    is unset or empty; containerized/bridge callers must set
+    ``OWNER_OVERRIDE_ALLOWED_CIDRS``.
     """
     raw = get_core_settings().owner_override_allowed_cidrs
     networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
@@ -479,8 +484,8 @@ async def current_user_id_with_owner_override(
        b. BOTH the raw transport peer (stashed by
           ``app_factory.RawClientStashMiddleware`` before ProxyHeadersMiddleware
           rewrites ``scope["client"]`` from X-Forwarded-For) AND
-          ``request.client`` are within the allowlist (loopback +
-          docker-bridge by default; configurable via
+          ``request.client`` are within the allowlist (loopback-only
+          (``127.0.0.0/8``) by default; containerized/bridge callers must set
           ``OWNER_OVERRIDE_ALLOWED_CIDRS``).
        c. The supplied ``user_id`` value is an integer that exists in the
           ``users`` table.
@@ -504,7 +509,10 @@ async def current_user_id_with_owner_override(
 
     # Guard (a): valid API key required.
     jarvis_api_key = _CACHED_API_KEY
-    if not jarvis_api_key or not hmac.compare_digest(api_key or "", jarvis_api_key):
+    if not jarvis_api_key or not hmac.compare_digest(
+        (api_key or "").encode("utf-8", "replace"),
+        jarvis_api_key.encode("utf-8", "replace"),
+    ):
         logger.warning(
             "X-Owner-User-Id header present but API key check failed from %s",
             request.client.host if request.client else "unknown",
@@ -586,7 +594,7 @@ async def current_user_id_with_owner_override(
             detail="DB error validating X-Owner-User-Id",
         ) from None
 
-    # SEC-OWNER-2: emit an audit event on every successful override so the
+    # Emit an audit event on every successful override so the
     # operator can detect unexpected per-user identity substitution.  Best-effort:
     # a transient pool failure must never block the request.
     try:
@@ -662,13 +670,12 @@ def validate_production_config() -> None:
     * ``DEV_MODE=true`` is rejected when ``ENVIRONMENT=production``.
     * All granular ``dev_*`` flags are rejected in production.
     * ``JARVIS_API_KEY`` must be set, ≥ 32 characters, and not a placeholder.
-    * ``JARVIS_MODEL_HMAC_KEY`` is required in production (M-07; no derivation
+    * ``JARVIS_MODEL_HMAC_KEY`` is required in production (no derivation
       fallback from the API key).
     * ``JARVIS_CONFIG_KEY`` must be set in production (Fernet row-level encrypt).
-    * ``LITELLM_MASTER_KEY`` must be strong (SEC-A; rejects known placeholders).
-    * ``POSTGRES_PASSWORD`` must be strong (SEC-A; mirrored from readiness-check).
+    * ``LITELLM_MASTER_KEY`` must be strong (rejects known placeholders).
+    * ``POSTGRES_PASSWORD`` must be strong (mirrored from readiness-check).
     * ``APP_BASE_URL`` must be set (prevents magic-link host-header poisoning).
-    * SMTP (host, port, from) must all be configured in production (H-2).
 
     Raises
     ------
@@ -714,7 +721,7 @@ def validate_production_config() -> None:
                 "set a strong secret before deploying to production"
             )
 
-    # H14 / M-07 / SEC-4 — Pulse model HMAC key gate. The pulse classifier signs
+    # Pulse model HMAC key gate. The pulse classifier signs
     # pickle blobs with HMAC-SHA256; without a real key, an attacker with DB
     # write access could forge a signed blob and trigger RCE via pickle.loads.
     # The dedicated ``JARVIS_MODEL_HMAC_KEY`` is mandatory whenever the
@@ -740,7 +747,7 @@ def validate_production_config() -> None:
         import os as _os  # noqa: PLC0415
         from pathlib import Path  # noqa: PLC0415
 
-        # DOM-E-08 — Config encryption key gate. user_config rows are encrypted
+        # Config encryption key gate. user_config rows are encrypted
         # with Fernet using JARVIS_CONFIG_KEY. Without it the first decrypt at
         # request-time raises a cryptic error instead of a clear boot failure.
         # Always require the key in production so the operator is forced to
@@ -758,7 +765,7 @@ def validate_production_config() -> None:
                 f"JARVIS_CONFIG_KEY must be at least 32 characters (got {len(config_key)})"
             )
 
-        # SEC-A — LiteLLM master key gate. Without a strong key a prod VPS can
+        # LiteLLM master key gate. Without a strong key a prod VPS can
         # boot with a guessable proxy credential (e.g. the literal
         # ``sk-jarvis-dev-test``), letting anyone who can reach the LiteLLM
         # port spend tokens. Require it set, ≥ 32 chars, and not a known
@@ -778,7 +785,7 @@ def validate_production_config() -> None:
                 f"{_LITELLM_MASTER_KEY_MIN_LEN} characters (got {len(litellm_key)})"
             )
 
-        # SEC-A — PostgreSQL password gate. Mirror the readiness-script
+        # PostgreSQL password gate. Mirror the readiness-script
         # resolution order (env var, then the Docker Secret mount) so a
         # secrets-file deployment is not falsely flagged. Reject empty,
         # placeholder, and short passwords.
@@ -801,7 +808,7 @@ def validate_production_config() -> None:
                 f"{_POSTGRES_PASSWORD_MIN_LEN} characters (got {len(postgres_password)})"
             )
 
-        # SEC-B — Public base URL gate. Magic-link emails embed APP_BASE_URL;
+        # Public base URL gate. Magic-link emails embed APP_BASE_URL;
         # when it is unset the link host falls back to the inbound request
         # ``Host`` header, which an attacker can poison to harvest tokens.
         # Require it explicitly in production.
@@ -811,25 +818,56 @@ def validate_production_config() -> None:
                 "APP_BASE_URL must be set in production (prevents magic-link host-header poisoning)"
             )
 
-        # H-2 — SMTP gate. When DEV_SMTP_LOG_ONLY is false (already enforced
-        # above for production), SMTP is the only delivery path for magic links.
-        # An operator who forgets to configure SMTP silently breaks auth — or
-        # worse, causes the fallback dev-mode path to log tokens. Require all
-        # three minimum SMTP fields so the misconfiguration is caught at boot.
-        secrets = get_secrets_settings()
-        missing_smtp = [
-            field
-            for field, value in (
-                ("SMTP_HOST", secrets.smtp_host),
-                ("SMTP_PORT", secrets.smtp_port),
-                ("SMTP_FROM", secrets.smtp_from),
+
+async def validate_runtime_config(
+    pool: Any, *, environment: str, setup_token_set: bool, model_hmac_ok: bool
+) -> None:
+    """Post-pool boot gate: hard-fail on live-DB states the env-only
+    ``validate_production_config`` cannot see ([A] multi-user without a real
+    Pulse HMAC key, [B] a production box with no admin and no setup token,
+    [C] a multi-user production box with no deliverable SMTP relay).
+
+    Caller passes pre-read env signals (``setup_token_set``, ``model_hmac_ok``)
+    so this stays free of settings imports. A fresh pre-migration DB is skipped
+    by the caller's UndefinedTableError guard.
+    """
+    env = environment.lower()
+    async with pool.acquire() as conn:
+        user_count = int(
+            await conn.fetchval("SELECT count(*) FROM users WHERE deleted_at IS NULL") or 0
+        )
+        admin_count = int(
+            await conn.fetchval(
+                "SELECT count(*) FROM users WHERE role = 'admin' AND deleted_at IS NULL"
             )
-            if value is None
-        ]
-        if missing_smtp:
+            or 0
+        )
+    multi_user = user_count > 1
+    if multi_user and not model_hmac_ok:
+        raise RuntimeError(
+            "JARVIS_MODEL_HMAC_KEY (>=32 chars) is required once more than one "
+            "user exists (Pulse model-signing key cannot be derived on a "
+            "multi-user deployment). See docs/SECURITY.md#pulse-model-signing."
+        )
+    if admin_count == 0 and not setup_token_set:
+        if env == "production":
             raise RuntimeError(
-                f"SMTP must be fully configured in production "
-                f"(missing: {', '.join(missing_smtp)}). "
-                f"Set SMTP_HOST, SMTP_PORT, and SMTP_FROM, or enable "
-                f"DEV_SMTP_LOG_ONLY only in non-production environments."
+                "JARVIS_SETUP_TOKEN must be set on a production deployment with no "
+                "admin yet (prevents unauthenticated first-admin takeover)."
+            )
+        logger.warning(
+            "First-admin setup window is unprotected: no admin user exists and "
+            "JARVIS_SETUP_TOKEN is not set. Anyone who can reach this instance can "
+            "create the first admin. Set JARVIS_SETUP_TOKEN before exposing it."
+        )
+    if env == "production" and multi_user:
+        from jarvis_common.email import effective_smtp_status  # noqa: PLC0415
+
+        deliverable, _issues = await effective_smtp_status(pool)
+        if not deliverable:
+            logger.warning(
+                "SMTP is not deliverable on a multi-user production deployment; "
+                "magic-link sign-in is unavailable for non-owner users until SMTP "
+                "is configured (env or the setup wizard). Issues: %s",
+                _issues,
             )

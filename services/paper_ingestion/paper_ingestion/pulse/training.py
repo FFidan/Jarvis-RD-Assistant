@@ -18,8 +18,7 @@ _HMAC_DIGEST_LEN = 32  # SHA-256 digest length in bytes
 def _hmac_key() -> bytes:
     """Return the HMAC signing key for model blobs (read at call time, not import time).
 
-    Resolution order (audit H14 — public-literal fallback removed; M-07
-    extended: derivation fallback also forbidden in production):
+    Resolution order (public-literal fallback removed; derivation fallback forbidden in production):
 
     1. ``JARVIS_MODEL_HMAC_KEY`` — dedicated env var, preferred. Use this so
        compromise of the HTTP bearer (``JARVIS_API_KEY``) does not also let an
@@ -58,7 +57,7 @@ def _hmac_key() -> bytes:
     raise RuntimeError(
         "Pulse model HMAC key required: set JARVIS_MODEL_HMAC_KEY (preferred) "
         "or JARVIS_API_KEY. The previous public-literal fallback was removed "
-        "by audit H14 — see docs/SECURITY.md#pulse-model-signing."
+        "see docs/SECURITY.md#pulse-model-signing."
     )
 
 

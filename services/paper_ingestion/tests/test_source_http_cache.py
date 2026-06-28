@@ -12,7 +12,7 @@ Six cases:
 5. SOURCE_HTTP_CACHE_ENABLED=false: pure passthrough, hits==0.
 6. Binary content-type (PDF): never cached even for an allowlisted host.
 
-Plus PI-D/PI-E lock-in (tests 7-9) and SEC-3 regression (tests 14-15).
+Plus PI-D/PI-E lock-in (tests 7-9) and entity-expansion regression (tests 14-15).
 """
 
 from __future__ import annotations
@@ -178,7 +178,7 @@ async def test_secret_query_param_excluded_from_cache_key():
     """Two GETs differing only by ``api_key`` collapse to one cached entry and
     the secret never appears in a stored cache key."""
     # NCBI E-utilities returns XML (retmode=xml); use a well-formed body so the
-    # B3 body guard caches it — this test is about the credential-stripped key.
+    # The body guard caches it — this test is about the credential-stripped key.
     inner = _CountingInner(
         [(200, b"<eSearchResult><IdList/></eSearchResult>"), (200, b"<eSearchResult/>")]
     )
@@ -247,7 +247,7 @@ async def test_hop_by_hop_headers_stripped():
 
 
 # ---------------------------------------------------------------------------
-# 10. B3 — malformed XML from an XML source host is NOT cached
+# 10. Malformed XML from an XML source host is NOT cached
 # ---------------------------------------------------------------------------
 
 
@@ -271,7 +271,7 @@ async def test_malformed_xml_not_cached():
 
 
 # ---------------------------------------------------------------------------
-# 11. B3 — well-formed Atom from arXiv IS cached
+# 11. Well-formed Atom from arXiv IS cached
 # ---------------------------------------------------------------------------
 
 
@@ -290,7 +290,7 @@ async def test_wellformed_atom_is_cached():
 
 
 # ---------------------------------------------------------------------------
-# 12. B3 — empty 200 body is never cached (JSON host)
+# 12. Empty 200 body is never cached (JSON host)
 # ---------------------------------------------------------------------------
 
 
@@ -312,7 +312,7 @@ async def test_empty_body_not_cached():
 
 
 # ---------------------------------------------------------------------------
-# 13. B3 — empty 200 body on an XML host is also not cached
+# 13. Empty 200 body on an XML host is also not cached
 # ---------------------------------------------------------------------------
 
 
@@ -333,7 +333,7 @@ async def test_empty_body_xml_host_not_cached():
 
 
 # ---------------------------------------------------------------------------
-# 14. SEC-3 — entity-expansion payload is rejected by the XML gate
+# 14. Entity-expansion payload is rejected by the XML gate
 # ---------------------------------------------------------------------------
 
 # A modest billion-laughs variant: 3 expansion levels, stays CPU/memory safe
@@ -368,13 +368,13 @@ async def test_entity_expansion_payload_not_cached():
 
 
 # ---------------------------------------------------------------------------
-# 15. SEC-3 — well-formed Atom with no entities still admitted (regression)
+# 15. Well-formed Atom with no entities still admitted (regression)
 # ---------------------------------------------------------------------------
 
 
 async def test_normal_atom_still_admitted_after_sec3_hardening():
     """The hardened parser must not regress normal well-formed Atom feeds.
-    Existing _ATOM_OK body must still be cached by the gate post-SEC-3."""
+    Existing _ATOM_OK body must still be cached by the gate after XML hardening."""
     inner = _CountingInner([(200, _ATOM_OK)])
     transport = CachingTransport(inner)
 

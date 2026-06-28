@@ -519,3 +519,18 @@ export async function fetchSnapshot(paperId: number, page: number): Promise<stri
   const blob = await res.blob();
   return URL.createObjectURL(blob);
 }
+
+/**
+ * Fetch a paper's raw PDF as a blob URL for the in-PDF annotation reader.
+ *
+ * Uses apiFetchRaw so the X-API-Key header is attached (the PDF viewer loads
+ * the document via fetch, not a native element that bypasses the interceptor).
+ *
+ * The caller is responsible for revoking the returned URL via
+ * URL.revokeObjectURL() when the reader unmounts.
+ */
+export async function fetchPdfUrl(paperId: number): Promise<string> {
+  const res = await apiFetchRaw(`/api/pdfs/${paperId}`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}

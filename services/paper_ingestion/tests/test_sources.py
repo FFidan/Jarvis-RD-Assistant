@@ -150,7 +150,7 @@ async def test_discovery_fetch_sources_uses_display_order_ordering():
 
 
 # ---------------------------------------------------------------------------
-# SEC-002: SourceResponse must redact secret config keys
+# SourceResponse must redact secret config keys
 # ---------------------------------------------------------------------------
 
 _FIXED_TS = datetime(2026, 1, 1, tzinfo=UTC)
@@ -348,7 +348,7 @@ async def test_discover_handles_source_run_history_insert_failure(caplog):
 async def test_run_pulse_early_return_stats_has_all_required_keys():
     """Stats dict returned on load_profile failure must include all 12 contract keys.
 
-    Per 02-pulse.md §7 the stats dict must carry deck_date, card_count,
+    The stats dict must carry deck_date, card_count,
     source_counts, and classifier even when the pipeline aborts at step 1.
     """
     from unittest.mock import AsyncMock, MagicMock, patch

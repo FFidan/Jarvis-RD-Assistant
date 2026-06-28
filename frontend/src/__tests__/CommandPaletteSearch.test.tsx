@@ -1,5 +1,5 @@
 /**
- * CommandPaletteSearch — F1 global ⌘K command palette tests
+ * CommandPaletteSearch — global ⌘K command palette tests
  *
  * Coverage:
  *  - ⌘K (the global keydown registered by the controller hook) opens the
@@ -85,7 +85,7 @@ function renderPalette() {
   );
 }
 
-describe('CommandPaletteSearch (F1)', () => {
+describe('CommandPaletteSearch', () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.clearAllMocks();

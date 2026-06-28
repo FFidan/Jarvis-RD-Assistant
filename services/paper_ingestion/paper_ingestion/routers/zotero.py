@@ -12,6 +12,7 @@ from jarvis_common import assert_paper_ownership, current_user_id_strict
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_http_client, limiter
+from paper_ingestion.routers.pdfs import assert_paper_pdf_visible
 
 logger = logging.getLogger(__name__)
 
@@ -144,9 +145,12 @@ async def get_paper_zotero_state(
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow(
-            "SELECT zotero_item_key, zotero_citation_key, zotero_last_pushed_at"
-            " FROM papers WHERE id = $1",
+            "SELECT l.zotero_item_key, l.zotero_citation_key, l.zotero_last_pushed_at"
+            " FROM papers p"
+            " LEFT JOIN paper_user_zotero_links l ON l.paper_id = p.id AND l.user_id = $2"
+            " WHERE p.id = $1",
             paper_id,
+            user_id,
         )
     if not row:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -221,6 +225,43 @@ async def sync_annotations_for_paper(
 
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
+        job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id
+    )
+    return JobEnqueuedResponse(job_id=jarvis_job_id, status="queued")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/zotero/push-highlights/{paper_id}  — enqueue highlight export
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/zotero/push-highlights/{paper_id}",
+    status_code=202,
+    response_model=JobEnqueuedResponse,
+)
+@limiter.limit("10/minute")
+async def push_highlights_to_zotero(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
+) -> JobEnqueuedResponse:
+    """Enqueue a one-way export of a paper's in-app highlights to Zotero.
+
+    Authorized at view level (``assert_paper_pdf_visible``), matching the
+    highlights CRUD router: anyone who can view a PDF and create highlights on
+    it may export their own highlights. The export only ever reads and pushes
+    the caller's own highlights (see ``push_highlights_for_paper``), so view-level
+    access introduces no cross-user exposure.
+    """
+    async with db_pool.acquire() as conn:
+        await assert_paper_pdf_visible(conn, paper_id, user_id)
+
+    from jarvis_common.task_registry import KIND_TO_TASK
+
+    jarvis_job_id = str(uuid.uuid4())
+    await KIND_TO_TASK["zotero.push_highlights"].defer_async(
         job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id
     )
     return JobEnqueuedResponse(job_id=jarvis_job_id, status="queued")

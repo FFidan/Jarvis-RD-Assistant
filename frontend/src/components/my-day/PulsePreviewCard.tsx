@@ -229,7 +229,7 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
           </div>
         )}
 
-        {/* Top 3 preview cards — Trash+Reject hidden per spec §5.2 (Preview shows 👍/👎/💾 only) */}
+        {/* Top 3 preview cards — Trash+Reject hidden for the preview (shows 👍/👎/💾 only) */}
         {previewCards.map((card) => (
           <PulseCard
             key={card.card_id}

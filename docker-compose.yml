@@ -47,6 +47,11 @@ x-shared-env: &shared-env
   # trusted; defaults track JARVIS_NET_SUBNET. If you override JARVIS_NET_SUBNET,
   # this follows it. Loopback covers same-host calls.
   OWNER_OVERRIDE_ALLOWED_CIDRS: ${OWNER_OVERRIDE_ALLOWED_CIDRS:-127.0.0.0/8,${JARVIS_NET_SUBNET:-10.137.241.0/24}}
+  # Source CIDRs trusted as reverse-proxy hops when extracting the real client IP
+  # from X-Forwarded-For (rate-limit keying). Trusts loopback + the jarvis bridge
+  # subnet so the nginx hop is honoured; tracks JARVIS_NET_SUBNET. Empty in code
+  # falls back to loopback-only so a bridge container cannot spoof X-Forwarded-For.
+  TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-127.0.0.0/8,${JARVIS_NET_SUBNET:-10.137.241.0/24}}
   TELEGRAM_BOT_URL: ${TELEGRAM_BOT_URL:-http://telegram_bot:8002}
   OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-false}
   LANGFUSE_HOST: ${LANGFUSE_HOST:-}
@@ -167,6 +172,10 @@ services:
       - "127.0.0.1:6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+      # Read-only view of the sidecar's decrypted-snapshot staging dir so the
+      # one-click restore can recover a collection via file:// (it sits under
+      # Qdrant's default /qdrant/snapshots dir).
+      - restore_staging:/qdrant/snapshots/restore:ro
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/6333 && printf 'GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
       interval: 5s
@@ -232,7 +241,7 @@ services:
     environment:
       # DATABASE_URL deliberately absent — the shim builds it from
       # /run/secrets/postgres_password so the password never appears in
-      # ``docker inspect`` (SEC-002).
+      # ``docker inspect``.
       STORE_MODEL_IN_DB: "true"
     secrets:
       - litellm_master_key
@@ -311,7 +320,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.9.2}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-1.0.0}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -394,7 +403,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.9.2}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-1.0.0}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -416,6 +425,12 @@ services:
       - jarvis_config_key
       - langfuse_init_pk
       - langfuse_init_sk
+    volumes:
+      # Read-only: this service only os.stat()s the maintenance sentinel (so the
+      # P6 maintenance middleware can 503 it too during a restore). Read-only
+      # prevents it from writing a restore-request/backup sentinel — only
+      # paper_ingestion (the admin API) may do that.
+      - backup_trigger:/backup-trigger:ro
     mem_limit: 2g
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8001/health').raise_for_status()\""]
@@ -442,7 +457,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.9.2}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-1.0.0}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -489,7 +504,7 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.9.2}
+    image: jarvis/dashboard:${JARVIS_VERSION:-1.0.0}
     build:
       context: ./frontend
       args:
@@ -558,19 +573,32 @@ services:
       # The on-disk secrets/ source is archived so an encrypted DB backup stays
       # decryptable; mounted read-only at SECRETS_DIR below.
       SECRETS_DIR: /secrets
+      # Stamped into each backup manifest's app_version (so a restore point shows
+      # the JARVIS version it was taken on, not a constant "unknown").
+      JARVIS_VERSION: ${JARVIS_VERSION:-unknown}
     secrets:
       - postgres_password
       - backup_encrypt_key
       - qdrant_api_key
     volumes:
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - ./scripts/restore.sh:/usr/local/bin/restore.sh:ro  # one-click DR restore (runs in this already-privileged sidecar; the app gains zero new privilege)
       - ./secrets:/secrets:ro
       - postgres_backups:/backups
-      - backup_trigger:/backup-trigger  # shared sentinel dir; backup.sh runs immediately when .backup_now appears
+      - backup_trigger:/backup-trigger  # shared sentinel dir; backup.sh runs immediately when .backup_now appears, restore.sh when .restore_request.json appears
+      - restore_staging:/qdrant/snapshots/restore  # rw: the sidecar writes decrypted Qdrant snapshots here for file:// recover
+      - restore_inbox:/restore-inbox  # rw: off-host DR — the operator drops the archive set + one-time backup key here for a cross-host (inbox) restore. The ONLY writable cross-host secrets-staging surface; it is NEVER under the RO /secrets mount above.
+      - ./db/migrations:/app/db/migrations:ro  # ro: restore.sh reads the code's max migration to refuse a newer-than-deployment restore (stable even when the live DB is gone mid-recovery)
+    # When a restore request is present, run restore.sh (drop+reload both DBs +
+    # recover Qdrant behind the maintenance gate); otherwise take the scheduled
+    # backup. The inner poll breaks early on EITHER sentinel so an on-demand
+    # backup or a restore fires within ~5s rather than after the full interval.
     entrypoint: >
-      sh -euc "while true; do /usr/local/bin/backup.sh;
+      sh -euc "while true;
+      do if [ -f /backup-trigger/.restore_request.json ]; then /usr/local/bin/restore.sh; else /usr/local/bin/backup.sh; fi;
       i=0; while [ \"$$i\" -lt \"$${BACKUP_INTERVAL_SECONDS:-86400}\" ]; do
-      if [ -f /backup-trigger/.backup_now ]; then break; fi; sleep 5; i=$$((i+5)); done; done"
+      if [ -f /backup-trigger/.backup_now ] || [ -f /backup-trigger/.restore_request.json ]; then break; fi;
+      sleep 5; i=$$((i+5)); done; done"
     depends_on:
       postgres:
         condition: service_healthy
@@ -630,7 +658,7 @@ services:
     # thereafter; the upstream image digest stays the single source of truth
     # via the LANGFUSE_IMAGE build-arg from versions.env. See
     # ./langfuse/Dockerfile.langfuse + ./langfuse/entrypoint.sh.
-    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-0.9.2}
+    image: jarvis/langfuse-hardened:${JARVIS_VERSION:-1.0.0}
     build:
       context: ./langfuse
       dockerfile: Dockerfile.langfuse
@@ -816,6 +844,8 @@ volumes:
   qdrant_data:
   postgres_backups:
   backup_trigger:
+  restore_staging:  # decrypted Qdrant snapshots staged by restore.sh for file:// recover
+  restore_inbox:  # rw cross-host DR drop zone: operator places the off-host archive set + one-time backup key here for an `inbox` restore (never under the RO /secrets)
   hf_cache:
   caddy_data:
   caddy_config:

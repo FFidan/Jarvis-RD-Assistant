@@ -20,19 +20,21 @@ dimension-locked ``embed`` aliases plus router/general settings.
 Cloud-provider keys (anthropic/openai/gemini) are Fernet-decrypted from
 ``user_config`` in memory and carried in the ``/model/new`` payload; LiteLLM
 stores them encrypted under the pinned ``LITELLM_SALT_KEY`` in its admin DB.
-They are never written to the YAML or any other file (SEC-002).
+They are never written to the YAML or any other file.
 """
 
 import asyncio
 import hashlib
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
 from jarvis_common.llm_client import build_litellm_headers, get_litellm_config
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from paper_ingestion.services.model_prefixes import is_local_ollama
 
@@ -134,6 +136,46 @@ _STATIC_FALLBACK_MODEL = "qwen3:4b"
 # ensure_smart_fallback runs every reconciler pass; a missing cloud key must
 # warn once per distinct model, not every 30 s.
 _FALLBACK_KEYLESS_WARNED: set[str] = set()
+
+
+# ---------------------------------------------------------------------------
+# Typed deployment element models (validated at the boundary from /v1/model/info)
+# ---------------------------------------------------------------------------
+
+
+class LiteLLMModelInfo(BaseModel):
+    """Subset of the model_info dict that callers actually read (YAGNI)."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = ""
+    db_model: bool = False
+
+
+class LiteLLMDeployment(BaseModel):
+    """Single element returned by GET /v1/model/info → data[]."""
+
+    model_config = ConfigDict(extra="ignore")
+    model_name: str  # required; absent = malformed (element is skipped)
+    litellm_params: dict[str, Any] = Field(default_factory=dict)
+    model_info: LiteLLMModelInfo = Field(default_factory=LiteLLMModelInfo)
+
+    @field_validator("litellm_params", "model_info", mode="before")
+    @classmethod
+    def _null_to_default(cls, v: Any) -> Any:
+        # LiteLLM can emit an explicit null for these; the old dict-based code
+        # treated null as empty (entry.get(...) or {}). Coerce so a deployment
+        # with a null model_info/litellm_params is kept, not dropped.
+        return {} if v is None else v
+
+
+def _parse_deployment(elem: Any) -> "LiteLLMDeployment | None":
+    """Validate one raw deployment dict; log WARNING and return None if malformed."""
+    try:
+        return LiteLLMDeployment.model_validate(elem)
+    except Exception as exc:
+        entry_id = elem.get("model_name") if isinstance(elem, dict) else repr(elem)
+        logger.warning("Skipping malformed LiteLLM deployment entry %r: %s", entry_id, exc)
+        return None
 
 
 def _key_fingerprint(api_key: str | None) -> str:
@@ -273,14 +315,14 @@ async def _get_num_ctx(
 # ---------------------------------------------------------------------------
 
 
-async def get_litellm_deployments() -> list[dict[str, Any]]:
+async def get_litellm_deployments() -> list[LiteLLMDeployment]:
     """Return all LiteLLM deployments via ``GET /v1/model/info``.
 
-    Each entry is ``{"model_name": str, "litellm_params": dict,
-    "model_info": {"id": str, "db_model": bool, ...}}``. ``db_model`` is True
-    for admin-DB deployments (deletable via ``/model/delete``) and False for
-    YAML-seeded ones (NOT deletable at runtime). ``litellm_params.api_key`` is
-    masked by LiteLLM and never round-trips through this call.
+    Each entry is a validated ``LiteLLMDeployment`` (model_name, litellm_params,
+    model_info). ``db_model`` is True for admin-DB deployments (deletable via
+    ``/model/delete``) and False for YAML-seeded ones (NOT deletable at runtime).
+    ``litellm_params.api_key`` is masked by LiteLLM and never round-trips.
+    Malformed elements are logged as WARNING and skipped.
 
     Raises ``RuntimeError`` on transport failure or any HTTP >= 400.
     """
@@ -300,7 +342,14 @@ async def get_litellm_deployments() -> list[dict[str, Any]]:
     data = resp.json().get("data")
     if not isinstance(data, list):
         raise RuntimeError("LiteLLM /v1/model/info returned an unexpected shape (no data list)")
-    return [d for d in data if isinstance(d, dict)]
+    result: list[LiteLLMDeployment] = []
+    for elem in data:
+        if not isinstance(elem, dict):
+            continue
+        dep = _parse_deployment(elem)
+        if dep is not None:
+            result.append(dep)
+    return result
 
 
 async def _post_model_new(alias: str, litellm_params: dict[str, Any]) -> str | None:
@@ -371,30 +420,28 @@ async def _post_model_delete(deployment_id: str) -> None:
 
 
 def _deployments_for_alias(
-    deployments: list[dict[str, Any]], alias: str
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    deployments: list[LiteLLMDeployment], alias: str
+) -> tuple[list[LiteLLMDeployment], list[LiteLLMDeployment]]:
     """Split *alias*'s deployments into (db_deployments, yaml_deployments)."""
-    db_entries: list[dict[str, Any]] = []
-    yaml_entries: list[dict[str, Any]] = []
+    db_entries: list[LiteLLMDeployment] = []
+    yaml_entries: list[LiteLLMDeployment] = []
     for entry in deployments:
-        if entry.get("model_name") != alias:
+        if entry.model_name != alias:
             continue
-        info = entry.get("model_info") or {}
-        if isinstance(info, dict) and info.get("db_model"):
+        if entry.model_info.db_model:
             db_entries.append(entry)
         else:
             yaml_entries.append(entry)
     return db_entries, yaml_entries
 
 
-def _deployment_id(entry: dict[str, Any]) -> str | None:
-    info = entry.get("model_info") or {}
-    if isinstance(info, dict) and info.get("id"):
-        return str(info["id"])
+def _deployment_id(entry: LiteLLMDeployment) -> str | None:
+    if entry.model_info.id:
+        return entry.model_info.id
     return None
 
 
-def _carry_base_params(entry: dict[str, Any] | None) -> dict[str, Any]:
+def _carry_base_params(entry: LiteLLMDeployment | None) -> dict[str, Any]:
     """Extract the managed litellm_params from an existing deployment.
 
     Lifts legacy ``extra_body`` values (num_ctx/think) to top level — the only
@@ -403,9 +450,7 @@ def _carry_base_params(entry: dict[str, Any] | None) -> dict[str, Any]:
     """
     if entry is None:
         return {}
-    raw = entry.get("litellm_params")
-    if not isinstance(raw, dict):
-        return {}
+    raw = entry.litellm_params
     carried = {k: raw[k] for k in _CARRIED_PARAM_KEYS if raw.get(k) is not None}
     extra = raw.get("extra_body")
     if isinstance(extra, dict):
@@ -434,7 +479,7 @@ def _routing_signature(params: dict[str, Any]) -> tuple[Any, Any, Any]:
 async def _replace_alias_deployment(
     alias: str,
     new_params: dict[str, Any],
-    stale_db_entries: list[dict[str, Any]],
+    stale_db_entries: list[LiteLLMDeployment],
 ) -> bool:
     """Create the replacement deployment, then delete the superseded DB rows.
 
@@ -478,66 +523,81 @@ async def _replace_alias_deployment(
     return True
 
 
-async def update_litellm_model(
-    config_key: str,
-    model_name: str,
-    db_pool: Any = None,
-    machine_id: str = "",
-    num_ctx: int | None = None,
-    thinking_disabled: bool | None = None,
-) -> bool:
-    """Route an alias to a new model via LiteLLM's admin DB.
+# ---------------------------------------------------------------------------
+# update_litellm_model stages: resolve -> parse -> overrides -> routing -> deliver
+# ---------------------------------------------------------------------------
 
-    Resolves the alias's current deployments (``GET /v1/model/info``), creates
-    the replacement (``POST /model/new`` — carrying merged num_ctx / think /
-    temperature / api_base, and the Fernet-decrypted provider key for cloud
-    models), then deletes the superseded DB deployments (``POST
-    /model/delete``). Deployments are deployment-global: the last writer wins
-    across machines; per-machine num_ctx / thinking preferences are read from
-    user_config for the *delivering* machine.
 
-    ``num_ctx`` and ``thinking_disabled`` are pending per-machine settings
-    overrides and win over persisted DB state. ``num_ctx`` is local/Ollama-only.
+@dataclass(frozen=True, slots=True)
+class _ModelTarget:
+    """Normalized routing target for a requested model name.
 
-    Returns True when a delivery happened, False when nothing needed changing
-    (the alias already routes the requested model with the same effective
-    params). Raises ``RuntimeError`` when delivery fails — including the
-    "No DB Connected" degraded state, which callers map to the
-    ``llm.delivery_pending`` bookkeeping.
+    ``new_name`` is the model string after the implicit ``:latest`` tag is
+    stripped (the value carried forward into the new deployment); ``suffix`` is
+    the part after an optional ``provider/`` prefix (validated);
+    ``cloud_provider`` is the canonical provider name for a known cloud prefix,
+    else None for local/Ollama models.
     """
-    # Resolve config_key -> alias. Accept either format for convenience.
-    alias = ROLE_TO_ALIAS.get(config_key) or (
+
+    new_name: str
+    suffix: str
+    cloud_provider: str | None
+
+
+def _resolve_alias(config_key: str) -> str | None:
+    """Resolve a Settings ``config_key`` (or a bare alias) to the LiteLLM alias.
+
+    Accepts either the ``llm.*`` config-key format or an already-resolved alias
+    for caller convenience; returns None when neither matches.
+    """
+    return ROLE_TO_ALIAS.get(config_key) or (
         config_key if config_key in ROLE_TO_ALIAS.values() else None
     )
-    if not alias:
-        return False
 
-    # -------------------------------------------------------------------------
-    # Detect cloud-provider prefix. gemini/ maps to the "google" provider name.
-    # -------------------------------------------------------------------------
-    cloud_provider: str | None = None
+
+def _parse_model_target(model_name: str) -> _ModelTarget:
+    """Parse a requested model name into a typed routing target.
+
+    Strips the implicit ``:latest`` tag (Ollama's default tag is never stored,
+    so ``mistral-nemo:latest`` and ``mistral-nemo`` must be treated as equal),
+    splits an optional ``provider/`` prefix mapping ``gemini/`` → ``google``,
+    and validates the model-name portion (for ``provider/model`` only
+    the suffix is validated). Raises ``ValueError`` on a disallowed suffix.
+    """
     # Normalize: strip :latest -- Ollama's default implicit tag is never stored
     # anywhere, so "mistral-nemo:latest" and "mistral-nemo" must be treated as equal.
     if model_name.endswith(":latest"):
         model_name = model_name[:-7]
     model_suffix = model_name  # the part after provider/ (or full name for Ollama)
 
+    cloud_provider: str | None = None
     if "/" in model_name:
         prefix, model_suffix = model_name.split("/", 1)
         cloud_provider = _CLOUD_PREFIX_TO_PROVIDER.get(prefix)
 
-    # SEC-002: validate the model-name portion (no path traversal / shell chars).
+    # Validate the model-name portion (no path traversal / shell chars).
     # For "provider/model-name" strings we validate only the model-name suffix.
     _validate_model_name(model_suffix)
+    return _ModelTarget(new_name=model_name, suffix=model_suffix, cloud_provider=cloud_provider)
 
-    # -------------------------------------------------------------------------
-    # Hardware-aware overrides. num_ctx is an Ollama runtime option and must
-    # not be sent to cloud provider aliases. Thinking is model-scoped but only
-    # meaningful for thinking-capable catalog entries. Explicit keyword values
-    # represent pending settings writes and win over persisted DB state.
-    # -------------------------------------------------------------------------
+
+async def _resolve_effective_overrides(
+    target: _ModelTarget,
+    alias: str,
+    machine_id: str,
+    db_pool: Any,
+    num_ctx: int | None,
+    thinking_disabled: bool | None,
+) -> tuple[int | None, bool | None]:
+    """Resolve the effective per-machine num_ctx + thinking-disabled overrides.
+
+    num_ctx is an Ollama runtime option (None for cloud aliases); thinking is
+    honoured only for thinking-capable catalog entries. Explicit keyword values
+    are pending settings writes and win over persisted DB state.
+    """
+    model_name = target.new_name
     effective_num_ctx: int | None = None
-    if cloud_provider is None:
+    if target.cloud_provider is None:
         effective_num_ctx = num_ctx
         if effective_num_ctx is None:
             effective_num_ctx = await _get_num_ctx(alias, machine_id, db_pool)
@@ -569,104 +629,129 @@ async def update_litellm_model(
                 machine_id,
                 alias,
             )
+    return effective_num_ctx, effective_thinking_disabled
 
-    # -------------------------------------------------------------------------
-    # Resolve current routing state.
-    # -------------------------------------------------------------------------
-    deployments = await get_litellm_deployments()
-    db_entries, yaml_entries = _deployments_for_alias(deployments, alias)
-    base_entry = db_entries[0] if db_entries else (yaml_entries[0] if yaml_entries else None)
-    base_params = _carry_base_params(base_entry)
 
-    # New model string: caller-supplied provider prefix wins; otherwise inherit
-    # the existing entry's prefix; otherwise default to the local prefix. Chat
-    # aliases default to ollama_chat/ (the chat transport that honors
-    # grammar-constrained decoding); the dimension-locked embed alias stays on
-    # ollama/ (different endpoint — ollama_chat/ would break embeddings).
+def _resolve_new_model(alias: str, target: _ModelTarget, base_params: dict[str, Any]) -> str:
+    """Compute the new model string for the replacement deployment.
+
+    Caller-supplied provider prefix wins; otherwise inherit the existing entry's
+    non-local prefix; otherwise default to the alias's local prefix. Chat aliases
+    default to ``ollama_chat/`` (honours grammar-constrained decoding); the
+    dimension-locked embed alias stays on ``ollama/`` (different endpoint).
+    """
+    model_name = target.new_name
     existing_model = str(base_params.get("model", ""))
     local_default_prefix = "ollama/" if alias == "embed" else "ollama_chat/"
     if "/" in model_name:
-        new_model = model_name
-    elif "/" in existing_model and not is_local_ollama(existing_model):
+        return model_name
+    if "/" in existing_model and not is_local_ollama(existing_model):
         existing_prefix = existing_model.split("/")[0]
-        new_model = f"{existing_prefix}/{model_name}"
-    else:
-        new_model = f"{local_default_prefix}{model_name}"
+        return f"{existing_prefix}/{model_name}"
+    return f"{local_default_prefix}{model_name}"
 
-    # -------------------------------------------------------------------------
-    # Embed guard: the embed alias is dimension-locked to the Qdrant collection
-    # and stays YAML-seeded. Re-selecting the routed model is a no-op; routing
-    # it anywhere else is refused (a DB embed deployment would stack with the
-    # YAML one and latency routing would mix embedders).
-    # -------------------------------------------------------------------------
-    if alias == "embed":
-        routed = {
-            str((e.get("litellm_params") or {}).get("model", ""))
-            for e in (*db_entries, *yaml_entries)
-        }
-        if new_model in routed:
-            return False
-        raise RuntimeError(
-            f"The embed alias is dimension-locked to the Qdrant collection and cannot "
-            f"be re-routed at runtime (requested {new_model!r}). Switching embedders is "
-            "a deliberate operation: edit litellm/config.yaml and re-embed the corpus."
+
+def _deliver_embed(
+    new_model: str,
+    db_entries: list[LiteLLMDeployment],
+    yaml_entries: list[LiteLLMDeployment],
+) -> bool:
+    """Embed alias is dimension-locked + YAML-seeded.
+
+    Re-selecting the model it already routes is a no-op (False); routing it
+    anywhere else is refused (a DB embed deployment would stack with the YAML
+    one and latency routing would mix embedders).
+    """
+    routed = {str(e.litellm_params.get("model", "")) for e in (*db_entries, *yaml_entries)}
+    if new_model in routed:
+        return False
+    raise RuntimeError(
+        f"The embed alias is dimension-locked to the Qdrant collection and cannot "
+        f"be re-routed at runtime (requested {new_model!r}). Switching embedders is "
+        "a deliberate operation: edit litellm/config.yaml and re-embed the corpus."
+    )
+
+
+async def _deliver_cloud(
+    alias: str,
+    cloud_provider: str,
+    new_model: str,
+    base_params: dict[str, Any],
+    db_entries: list[LiteLLMDeployment],
+    yaml_entries: list[LiteLLMDeployment],
+    db_pool: Any,
+    effective_thinking_disabled: bool | None,
+) -> bool:
+    """Deliver a cloud-provider model + its Fernet-decrypted key.
+
+    The no-op mirrors the ollama shape (single DB entry, no YAML stack, signature
+    match) with the cloud signature = (model, think, key-fingerprint) — num_ctx /
+    api_base don't apply. /v1/model/info pops api_key, so the key leg is the
+    process-local fingerprint of the last delivery; key rotation re-delivers
+    because the fresh key's fingerprint differs from the cached one.
+    """
+    api_key: str | None = None
+    if db_pool is None:
+        logger.warning(
+            "Cannot inject cloud API key for alias %r -- db_pool not provided; "
+            "delivering the deployment without a key",
+            alias,
         )
-
-    # -------------------------------------------------------------------------
-    # Cloud path: deliver model + decrypted key. The no-op mirrors the ollama
-    # shape (single DB entry, no YAML stack, signature match) with the cloud
-    # signature = (model, think, key-fingerprint) — num_ctx/api_base don't
-    # apply. /v1/model/info pops api_key, so the key leg of the signature is
-    # the process-local fingerprint of the last delivery (see
-    # _CLOUD_DELIVERED_FINGERPRINTS above) — key rotation still re-delivers
-    # because the fresh key's fingerprint differs from the cached one.
-    # -------------------------------------------------------------------------
-    if cloud_provider is not None:
-        api_key: str | None = None
-        if db_pool is None:
+    else:
+        api_key = await get_provider_api_key(cloud_provider, db_pool)
+        if api_key is None:
             logger.warning(
-                "Cannot inject cloud API key for alias %r -- db_pool not provided; "
-                "delivering the deployment without a key",
+                "No API key configured for provider %r (alias %r) -- "
+                "delivering the deployment without a key; requests will fail "
+                "until the key is saved",
+                cloud_provider,
                 alias,
             )
-        else:
-            api_key = await get_provider_api_key(cloud_provider, db_pool)
-            if api_key is None:
-                logger.warning(
-                    "No API key configured for provider %r (alias %r) -- "
-                    "delivering the deployment without a key; requests will fail "
-                    "until the key is saved",
-                    cloud_provider,
-                    alias,
-                )
-        new_params: dict[str, Any] = {
-            k: v
-            for k, v in base_params.items()
-            # Ollama-only / local-transport params must not leak onto a cloud deployment.
-            if k not in ("api_base", "num_ctx", "keep_alive", "dimensions", "think", "model")
-        }
-        new_params["model"] = new_model
-        if api_key is not None:
-            new_params["api_key"] = api_key
-        if effective_thinking_disabled:
-            new_params["think"] = False
+    new_params: dict[str, Any] = {
+        k: v
+        for k, v in base_params.items()
+        # Ollama-only / local-transport params must not leak onto a cloud deployment.
+        if k not in ("api_base", "num_ctx", "keep_alive", "dimensions", "think", "model")
+    }
+    new_params["model"] = new_model
+    if api_key is not None:
+        new_params["api_key"] = api_key
+    if effective_thinking_disabled:
+        new_params["think"] = False
 
-        desired_cloud = (new_model, new_params.get("think"), _key_fingerprint(api_key))
-        if len(db_entries) == 1 and not yaml_entries:
-            deployed = db_entries[0].get("litellm_params") or {}
-            if (
-                deployed.get("model") == new_model
-                and deployed.get("think") == new_params.get("think")
-                and _CLOUD_DELIVERED_FINGERPRINTS.get(alias) == desired_cloud
-            ):
-                return False
-        delivered = await _replace_alias_deployment(alias, new_params, db_entries)
-        _CLOUD_DELIVERED_FINGERPRINTS[alias] = desired_cloud
-        return delivered
+    desired_cloud = (new_model, new_params.get("think"), _key_fingerprint(api_key))
+    if len(db_entries) == 1 and not yaml_entries:
+        deployed = db_entries[0].litellm_params
+        if (
+            deployed.get("model") == new_model
+            and deployed.get("think") == new_params.get("think")
+            and _CLOUD_DELIVERED_FINGERPRINTS.get(alias) == desired_cloud
+        ):
+            return False
+    delivered = await _replace_alias_deployment(alias, new_params, db_entries)
+    _CLOUD_DELIVERED_FINGERPRINTS[alias] = desired_cloud
+    return delivered
 
-    # -------------------------------------------------------------------------
-    # Local / Ollama path.
-    # -------------------------------------------------------------------------
+
+async def _deliver_local(
+    alias: str,
+    new_model: str,
+    base_params: dict[str, Any],
+    base_entry: LiteLLMDeployment | None,
+    db_entries: list[LiteLLMDeployment],
+    yaml_entries: list[LiteLLMDeployment],
+    db_pool: Any,
+    effective_num_ctx: int | None,
+    effective_thinking_disabled: bool | None,
+    thinking_disabled: bool | None,
+) -> bool:
+    """Deliver a local/Ollama deployment.
+
+    Seeds the tuned defaults on fresh creation (post-de-seed bootstrap), applies
+    per-machine num_ctx / think, no-ops on a routing-signature match (warning on
+    a divergent YAML-seeded stack), then mirrors a delivered num_ctx into the
+    system prompt-budget row to keep budget readers in lock-step.
+    """
     from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
 
     new_params = {k: v for k, v in base_params.items() if k != "model"}
@@ -688,13 +773,10 @@ async def update_litellm_model(
 
     desired_signature = _routing_signature(new_params)
     if len(db_entries) == 1 and not yaml_entries:
-        if _routing_signature(db_entries[0].get("litellm_params") or {}) == desired_signature:
+        if _routing_signature(db_entries[0].litellm_params) == desired_signature:
             return False
     elif not db_entries and yaml_entries:
-        if any(
-            _routing_signature(e.get("litellm_params") or {}) == desired_signature
-            for e in yaml_entries
-        ):
+        if any(_routing_signature(e.litellm_params) == desired_signature for e in yaml_entries):
             # The YAML already routes exactly this; a DB copy would stack.
             return False
         logger.warning(
@@ -726,6 +808,84 @@ async def update_litellm_model(
         invalidate_effective_num_ctx_cache()
 
     return delivered
+
+
+async def update_litellm_model(
+    config_key: str,
+    model_name: str,
+    db_pool: Any = None,
+    machine_id: str = "",
+    num_ctx: int | None = None,
+    thinking_disabled: bool | None = None,
+) -> bool:
+    """Route an alias to a new model via LiteLLM's admin DB.
+
+    Resolves the alias's current deployments (``GET /v1/model/info``), creates
+    the replacement (``POST /model/new`` — carrying merged num_ctx / think /
+    temperature / api_base, and the Fernet-decrypted provider key for cloud
+    models), then deletes the superseded DB deployments (``POST
+    /model/delete``). Deployments are deployment-global: the last writer wins
+    across machines; per-machine num_ctx / thinking preferences are read from
+    user_config for the *delivering* machine.
+
+    ``num_ctx`` and ``thinking_disabled`` are pending per-machine settings
+    overrides and win over persisted DB state. ``num_ctx`` is local/Ollama-only.
+
+    Returns True when a delivery happened, False when nothing needed changing
+    (the alias already routes the requested model with the same effective
+    params). Raises ``RuntimeError`` when delivery fails — including the
+    "No DB Connected" degraded state, which callers map to the
+    ``llm.delivery_pending`` bookkeeping.
+    """
+    # Stage 1 — resolve config_key -> alias (accept either format for convenience).
+    alias = _resolve_alias(config_key)
+    if not alias:
+        return False
+
+    # Stage 2 — parse the target: strip :latest, split provider/suffix, validate.
+    target = _parse_model_target(model_name)
+
+    # Stage 3 — effective per-machine num_ctx / thinking overrides (pending
+    # settings writes win over persisted DB state; num_ctx is local/Ollama-only).
+    effective_num_ctx, effective_thinking_disabled = await _resolve_effective_overrides(
+        target, alias, machine_id, db_pool, num_ctx, thinking_disabled
+    )
+
+    # Stage 4 — resolve current routing state + the new model string.
+    deployments = await get_litellm_deployments()
+    db_entries, yaml_entries = _deployments_for_alias(deployments, alias)
+    base_entry = db_entries[0] if db_entries else (yaml_entries[0] if yaml_entries else None)
+    base_params = _carry_base_params(base_entry)
+    new_model = _resolve_new_model(alias, target, base_params)
+
+    # Stage 5 — dispatch to the terminal delivery handler. Embed is checked
+    # before cloud (the dimension-locked alias is refused / no-op regardless of
+    # any provider prefix), and cloud before local.
+    if alias == "embed":
+        return _deliver_embed(new_model, db_entries, yaml_entries)
+    if target.cloud_provider is not None:
+        return await _deliver_cloud(
+            alias,
+            target.cloud_provider,
+            new_model,
+            base_params,
+            db_entries,
+            yaml_entries,
+            db_pool,
+            effective_thinking_disabled,
+        )
+    return await _deliver_local(
+        alias,
+        new_model,
+        base_params,
+        base_entry,
+        db_entries,
+        yaml_entries,
+        db_pool,
+        effective_num_ctx,
+        effective_thinking_disabled,
+        thinking_disabled,
+    )
 
 
 async def ensure_smart_fallback(
@@ -784,7 +944,7 @@ async def ensure_smart_fallback(
         if (
             len(db_entries) == 1
             and not yaml_entries
-            and (db_entries[0].get("litellm_params") or {}).get("model") == new_model
+            and db_entries[0].litellm_params.get("model") == new_model
             and _CLOUD_DELIVERED_FINGERPRINTS.get("smart-fallback") == desired_cloud
         ):
             return False
@@ -800,13 +960,11 @@ async def ensure_smart_fallback(
         _CLOUD_DELIVERED_FINGERPRINTS["smart-fallback"] = desired_cloud
         return delivered
 
-    matching_db = [
-        e for e in db_entries if str((e.get("litellm_params") or {}).get("model", "")) == new_model
-    ]
+    matching_db = [e for e in db_entries if str(e.litellm_params.get("model", "")) == new_model]
     stale_db = [e for e in db_entries if e not in matching_db]
 
     if matching_db or any(
-        str((e.get("litellm_params") or {}).get("model", "")) == new_model for e in yaml_entries
+        str(e.litellm_params.get("model", "")) == new_model for e in yaml_entries
     ):
         # A matching deployment already exists. Delete stale sibling DB entries
         # so they cannot keep diverting traffic — mirrors the create-first/

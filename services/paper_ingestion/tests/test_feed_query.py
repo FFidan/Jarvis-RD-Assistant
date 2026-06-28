@@ -107,3 +107,79 @@ def test_neither_flag_produces_no_view_predicate() -> None:
     assert not re.search(re.escape(_ACTIVE_PRED), sql), (
         "active predicate must be absent when unread_only=False and view=None"
     )
+
+
+# ---------------------------------------------------------------------------
+# Live-PG contract: discovery_origin + recent_feedback surface in feed rows
+# (count-unchanged is covered behaviorally below: len(matching) == 1 proves the
+#  correlated recent_feedback subqueries never multiply feed rows)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_feed_surfaces_discovery_origin_and_recent_feedback(
+    contract_conn, contract_two_users
+) -> None:
+    """Feed rows carry discovery_origin and recent_feedback from the new SQL columns.
+
+    Seeds a paper with discovery_origin='pulse' and one recommendation_feedback row
+    (signal='positive', source='feed_thumbs') for user A, then verifies that
+    build_feed_queries → fetch_feed_rows → row_to_feed_paper surfaces both fields.
+    """
+    from paper_ingestion.converters import row_to_feed_paper
+    from paper_ingestion.services.feed_query import fetch_feed_rows
+
+    user_id = contract_two_users.user_a_id
+
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers
+               (external_id, source_type, title, authors, url, discovery_origin, discovered_by)
+           VALUES
+               ('test-origin-rf-fq-01', 'arxiv', 'Origin+Feedback Feed Paper',
+                ARRAY['Test Author'], 'https://example.test/orf-fq01', 'pulse', $1)
+           RETURNING id""",
+        user_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_id,
+        paper_id,
+    )
+    await contract_conn.execute(
+        """INSERT INTO recommendation_feedback (paper_id, user_id, signal, source)
+           VALUES ($1, $2, 'positive', 'feed_thumbs')""",
+        paper_id,
+        user_id,
+    )
+
+    query_parts = build_feed_queries(
+        unread_only=False,
+        sort="date",
+        limit=100,
+        offset=0,
+        q=None,
+        statuses=None,
+        source_types=None,
+        topic_names=None,
+        date_from=None,
+        date_to=None,
+        user_id=user_id,
+    )
+    rows = await fetch_feed_rows(contract_conn, query_parts)
+    matching = [row_to_feed_paper(r) for r in rows if r["id"] == paper_id]
+
+    assert len(matching) == 1, f"Seeded paper {paper_id} not found in feed rows"
+    paper = matching[0]
+    assert paper.discovery_origin == "pulse", (
+        f"Expected discovery_origin='pulse'; got {paper.discovery_origin!r}"
+    )
+    assert paper.recent_feedback is not None, (
+        "Expected recent_feedback to be populated (signal='positive' was seeded)"
+    )
+    assert paper.recent_feedback.signal == "positive", (
+        f"Expected signal='positive'; got {paper.recent_feedback.signal!r}"
+    )
+    assert paper.recent_feedback.source == "feed_thumbs", (
+        f"Expected source='feed_thumbs'; got {paper.recent_feedback.source!r}"
+    )

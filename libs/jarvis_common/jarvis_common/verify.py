@@ -150,7 +150,7 @@ class QuoteVerifier:
         )
         if normalized_quote in normalized_full:
             chunk_id, page_number = self._find_chunk_for_quote(quote, chunks)
-            # B-H-01: raw find may return -1 when normalization changed whitespace/Unicode.
+            # Raw find may return -1 when normalization changed whitespace/Unicode.
             # Accept matched_span_start=None and rely on page_number from _find_chunk_for_quote.
             span_start = full_text.find(quote)
             return VerificationResult(

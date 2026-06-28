@@ -231,7 +231,7 @@ async def rate_card(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
 ) -> PulseRateResponse:
-    """Persist a user rating for a Pulse-shown paper (spec §4.4).
+    """Persist a user rating for a Pulse-shown paper.
 
     Signal routing:
     - ``open``    — logging-only, no DB writes.
@@ -243,7 +243,7 @@ async def rate_card(
 
     Guard: paper must be a member of the requesting user's pulse deck (404 if not).
     """
-    _ = request  # required by slowapi limiter — pyright suppression idiom (plan §2 constraint 7)
+    _ = request  # required by slowapi limiter — pyright suppression idiom
     should_analyze = False
     async with db_pool.acquire() as conn:
         in_deck = await conn.fetchval(

@@ -15,17 +15,18 @@ survivor citations.
   test_persist_contradiction_dedup_uses_direct_equality
 
 Carve-out:
-  - task_registry._TASK_MAP for contradictions.scan (§5.2)
+  - task_registry._TASK_MAP for contradictions.scan
   - AsyncOpenAI / call_llm_structured: NOT touched by these endpoints —
     they are invoked only inside the deferred task body, not in the HTTP path.
     Service-level tests (test_contradictions_service.py) that mock AsyncOpenAI
-    remain as boundary-adapter survivors per §1.3.
+    remain as boundary-adapter survivors.
 """
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import asyncpg
 import pytest
 
 from jarvis_common.testing_contract_apps import (
@@ -59,6 +60,62 @@ async def _seed_contradiction(
             user_id,
         )
     )
+
+
+async def _seed_stance_row(
+    conn,
+    paper_a_id: int,
+    paper_b_id: int,
+    user_id: int,
+    *,
+    stance: str,
+    claim_topic: str,
+    quote_a: str = "quote A",
+    quote_b: str = "quote B",
+) -> int:
+    """Insert a paper_contradictions row carrying a stance + claim_topic."""
+    return int(
+        await conn.fetchval(
+            """
+            INSERT INTO paper_contradictions (
+                paper_a_id, paper_b_id, finding_a, finding_b, quote_a, quote_b,
+                contradiction_type, explanation, confidence, status, user_id,
+                stance, claim_topic
+            ) VALUES ($1, $2, 'A says', 'B says', $3, $4, 'direct',
+                      'they relate', 0.85, 'verified', $5, $6, $7)
+            RETURNING id
+            """,
+            paper_a_id,
+            paper_b_id,
+            quote_a,
+            quote_b,
+            user_id,
+            stance,
+            claim_topic,
+        )
+    )
+
+
+async def _seed_library_paper(conn, user_id: int, external_id: str) -> int:
+    """Insert a paper owned by *user_id* and add it to their library."""
+    paper_id = int(
+        await conn.fetchval(
+            """
+            INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+            VALUES ($1, 'arxiv', 'Paper', ARRAY['A'], $2, $3)
+            RETURNING id
+            """,
+            external_id,
+            f"https://example.test/{external_id}",
+            user_id,
+        )
+    )
+    await conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        user_id,
+        paper_id,
+    )
+    return paper_id
 
 
 # ---------------------------------------------------------------------------
@@ -274,3 +331,234 @@ async def test_c5_05_list_contradictions_paper_id_filter(
     assert cid_yz not in ids, (
         f"paper_id={paper_x_id} filter leaked unrelated contradiction {cid_yz}: {ids}"
     )
+
+
+# ---------------------------------------------------------------------------
+# _persist_contradiction writes stance + claim_topic against the live schema
+# ---------------------------------------------------------------------------
+
+
+async def test_c5_06_persist_writes_stance_and_claim_topic(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """A 'supports' assessment persists stance + claim_topic and reads back.
+
+    # Verified: contradictions_persist.py _persist_contradiction INSERT column
+    # list includes stance + claim_topic (migration 0098). Exercises the real
+    # INSERT against the migrated schema, not a mock.
+    """
+    from paper_ingestion.services.contradiction_models import ContradictionClassification
+    from paper_ingestion.services.contradictions_extract import (
+        ContradictionCandidate,
+        VerifiedFinding,
+    )
+    from paper_ingestion.services.contradictions_persist import _persist_contradiction
+
+    paper_a_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        VALUES ('contra-supp-a', 'arxiv', 'Paper A', ARRAY['A'],
+                'https://example.test/sa', $1)
+        RETURNING id
+        """,
+        contract_two_users.user_a_id,
+    )
+    paper_b_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+        VALUES ('contra-supp-b', 'arxiv', 'Paper B', ARRAY['B'],
+                'https://example.test/sb', $1)
+        RETURNING id
+        """,
+        contract_two_users.user_a_id,
+    )
+
+    candidate = ContradictionCandidate(
+        a=VerifiedFinding(
+            paper_id=paper_a_id,
+            title="Paper A",
+            finding="A finds X",
+            quote="Paper A supports X.",
+            page_number=1,
+            cross_reference_ids=frozenset(),
+        ),
+        b=VerifiedFinding(
+            paper_id=paper_b_id,
+            title="Paper B",
+            finding="B finds X",
+            quote="Paper B also supports X.",
+            page_number=2,
+            cross_reference_ids=frozenset(),
+        ),
+        score=0.9,
+        reason="cross_reference",
+    )
+    classification = ContradictionClassification(
+        is_contradiction=False,
+        stance="supports",
+        claim_topic="whether X holds",
+        explanation="Both findings affirm X.",
+        quote_a="Paper A supports X.",
+        quote_b="Paper B also supports X.",
+        confidence=0.8,
+    )
+
+    cid = await _persist_contradiction(
+        contract_conn,
+        candidate,
+        classification,
+        page_a=1,
+        page_b=2,
+        model="test-model",
+        user_id=contract_two_users.user_a_id,
+    )
+    assert cid is not None
+
+    row = await contract_conn.fetchrow(
+        "SELECT stance, claim_topic FROM paper_contradictions WHERE id = $1", cid
+    )
+    assert row["stance"] == "supports"
+    assert row["claim_topic"] == "whether X holds"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/consensus — aggregate supports/opposes per shared claim
+# ---------------------------------------------------------------------------
+
+
+async def test_c5_07_consensus_aggregates_by_normalized_claim(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """GET /api/consensus folds near-duplicate claim topics and counts stances.
+
+    # Verified: contradictions_persist.aggregate_consensus groups on a
+    # normalized claim_topic (lowercased, punctuation collapsed).
+    """
+    user_a = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_a, "consensus-p1")
+    p2 = await _seed_library_paper(contract_conn, user_a, "consensus-p2")
+    p3 = await _seed_library_paper(contract_conn, user_a, "consensus-p3")
+
+    await _seed_stance_row(
+        contract_conn, p1, p2, user_a, stance="supports", claim_topic="effect of X on Y"
+    )
+    # Near-duplicate phrasing must fold into the same cluster.
+    await _seed_stance_row(
+        contract_conn, p1, p3, user_a, stance="supports", claim_topic="Effect of X, on Y"
+    )
+    await _seed_stance_row(
+        contract_conn, p2, p3, user_a, stance="opposes", claim_topic="effect of x on y"
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/consensus")
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    assert body["total"] == 1, f"near-duplicate topics must fold to one cluster: {body}"
+    claim = body["claims"][0]
+    assert claim["supports"] == 2, f"expected 2 supports: {claim}"
+    assert claim["opposes"] == 1, f"expected 1 opposes: {claim}"
+    assert sorted(claim["paper_ids"]) == sorted([p1, p2, p3])
+    # Each cluster carries its verified evidence (quotes + pages) for drill-down.
+    assert len(claim["assessments"]) == 3, f"expected 3 assessments: {claim}"
+    assert all(a["quote_a"] and a["quote_b"] for a in claim["assessments"])
+    assert {a["stance"] for a in claim["assessments"]} == {"supports", "opposes"}
+
+
+async def test_c5_08_supports_excluded_from_contradictions_list(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """A persisted 'supports' row must not appear in GET /api/contradictions.
+
+    # Verified: list_contradictions adds a stance predicate
+    # (pc.stance IS NULL OR pc.stance = 'opposes').
+    """
+    user_a = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_a, "stance-filter-p1")
+    p2 = await _seed_library_paper(contract_conn, user_a, "stance-filter-p2")
+
+    supports_id = await _seed_stance_row(
+        contract_conn, p1, p2, user_a, stance="supports", claim_topic="topic"
+    )
+    opposes_id = await _seed_stance_row(
+        contract_conn,
+        p1,
+        p2,
+        user_a,
+        stance="opposes",
+        claim_topic="topic",
+        quote_a="qx",
+        quote_b="qy",
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+        resp = await c.get("/api/contradictions")
+
+    assert resp.status_code == 200, resp.text[:300]
+    ids = [r["id"] for r in resp.json()["contradictions"]]
+    assert opposes_id in ids, f"opposes row should remain a contradiction: {ids}"
+    assert supports_id not in ids, f"supports row leaked into contradiction list: {ids}"
+
+
+async def test_c5_09_consensus_tenancy_isolation(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """User B cannot see a consensus cluster built only from user A's papers.
+
+    # Verified: aggregate_consensus reuses the user_library OR-predicate.
+    """
+    user_a = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_a, "consensus-tenancy-p1")
+    p2 = await _seed_library_paper(contract_conn, user_a, "consensus-tenancy-p2")
+    await _seed_stance_row(
+        contract_conn, p1, p2, user_a, stance="supports", claim_topic="private claim"
+    )
+
+    async with _make_client(_pi_app_with_pool, contract_two_users.cookie_b) as c:
+        resp = await c.get("/api/consensus")
+
+    assert resp.status_code == 200, resp.text[:300]
+    body = resp.json()
+    assert body["total"] == 0, f"user B must not see user A's private cluster: {body}"
+    assert body["claims"] == []
+
+
+async def test_c5_10_unique_index_ignores_stance_and_topic_labels(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """The unique index keys on pair + quotes only; a drifted label still collides.
+
+    # Verified: migration 0098 leaves idx_paper_contradictions_unique_quotes on
+    # (pair, md5 quotes), so a re-scan of the same evidence with a drifted
+    # stance/claim_topic label hits the same key and is deduped (the persist
+    # UniqueViolation -> reuse fallback returns the existing row in production,
+    # where each statement autocommits). Were the label part of the key, the
+    # near-duplicate would persist and double-count in the consensus aggregation.
+    """
+    user_a = contract_two_users.user_a_id
+    p1 = await _seed_library_paper(contract_conn, user_a, "dedup-p1")
+    p2 = await _seed_library_paper(contract_conn, user_a, "dedup-p2")
+
+    await _seed_stance_row(
+        contract_conn,
+        p1,
+        p2,
+        user_a,
+        stance="opposes",
+        claim_topic="effect of X on Y",
+        quote_a="Paper A says X.",
+        quote_b="Paper B says not X.",
+    )
+    # Same pair + identical verbatim quotes, drifted stance + claim_topic label.
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await _seed_stance_row(
+            contract_conn,
+            p1,
+            p2,
+            user_a,
+            stance="supports",
+            claim_topic="Effect of X, on Y!",
+            quote_a="Paper A says X.",
+            quote_b="Paper B says not X.",
+        )

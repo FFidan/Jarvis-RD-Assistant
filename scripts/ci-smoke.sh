@@ -8,7 +8,7 @@ PROJECT_NAME="${COMPOSE_PROJECT_NAME:-jarvis_rd_smoke_$RANDOM}"
 OVERRIDE_FILE="$TMP_DIR/docker-compose.smoke-secrets.yml"
 
 # Use a non-default host port for Ollama so the smoke stack can coexist with
-# any other Ollama instance (e.g. claude-context-local) bound to 11434.
+# any other local Ollama instance bound to 11434.
 export OLLAMA_HOST_PORT="${OLLAMA_HOST_PORT:-11440}"
 
 cleanup() {

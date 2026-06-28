@@ -85,12 +85,11 @@ async def _seed_system_row(conn, key: str, value) -> None:
     )
 
 
-def _local_smart_deployments(deployments: list[dict]) -> list[dict]:
+def _local_smart_deployments(deployments: list) -> list:
     return [
         d
         for d in deployments
-        if d.get("model_name") == "smart"
-        and is_local_ollama(str(d.get("litellm_params", {}).get("model", "")))
+        if d.model_name == "smart" and is_local_ollama(str(d.litellm_params.get("model", "")))
     ]
 
 
@@ -120,7 +119,7 @@ async def test_num_ctx_write_delivers_and_updates_budget_reader(
         pytest.skip(
             "live LiteLLM has no local (ollama/ or ollama_chat/) smart deployment to retune"
         )
-    prior_params = before[0]["litellm_params"]
+    prior_params = before[0].litellm_params
     model_id = strip_ollama_prefix(str(prior_params["model"]))
     prior_num_ctx = prior_params.get("num_ctx")
     prior_api_base = prior_params.get("api_base")
@@ -139,9 +138,9 @@ async def test_num_ctx_write_delivers_and_updates_budget_reader(
 
         delivered = _local_smart_deployments(await get_litellm_deployments())
         assert delivered, "smart deployment disappeared after delivery"
-        assert any(d["litellm_params"].get("num_ctx") == 2048 for d in delivered), (
+        assert any(d.litellm_params.get("num_ctx") == 2048 for d in delivered), (
             f"LiteLLM smart deployment must carry num_ctx=2048; "
-            f"got {[d['litellm_params'].get('num_ctx') for d in delivered]}"
+            f"got {[d.litellm_params.get('num_ctx') for d in delivered]}"
         )
 
         row = await contract_conn.fetchrow(

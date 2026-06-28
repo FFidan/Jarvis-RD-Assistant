@@ -323,7 +323,7 @@ def test_load_ingest_key_logs_on_oserror(monkeypatch, caplog):
 
 
 def test_over_limit_batch_is_capped_not_413(app_and_pool):
-    """PI-SEC-03: an over-limit batch is accepted up to the cap; the overflow is
+    """An over-limit batch is accepted up to the cap; the overflow is
     counted as ``skipped`` and the endpoint still returns 200.
 
     Vector retries on any non-2xx, so a hard 413 would trigger an infinite retry
@@ -415,7 +415,7 @@ def test_oversize_chunked_body_returns_413(app_and_pool):
 
 
 def test_normal_batch_not_rejected_by_size_check(app_and_pool):
-    """SEC-NG-01: a normal-sized batch must still be accepted (regression guard)."""
+    """A normal-sized batch must still be accepted (regression guard)."""
     app, _pool, conn = app_and_pool
     client = TestClient(app)
 

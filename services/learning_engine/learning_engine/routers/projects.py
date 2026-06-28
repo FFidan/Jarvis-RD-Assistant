@@ -82,7 +82,7 @@ async def _fetch_project_with_counts(
     )
 
 
-# §3.6/§4c: chapter-rail rows need paper_count + open_question_count.
+# Chapter-rail rows need paper_count + open_question_count.
 # LEFT JOIN LATERAL aggregations keep this single-round-trip and yield 0
 # (via COALESCE) when nothing is linked. Both list branches must carry them.
 _COUNTS_JOIN = """

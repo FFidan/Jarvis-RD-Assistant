@@ -92,26 +92,26 @@ async def test_migrate_skips_null_or_empty_values(fernet_key):
 
 
 # ---------------------------------------------------------------------------
-# CRED-01: telegram.bot_token must be treated as a secret + encrypted
+# telegram.bot_token must be treated as a secret + encrypted
 # ---------------------------------------------------------------------------
 
 
 def test_telegram_bot_token_in_secret_keys():
-    """CRED-01: telegram.bot_token must be in _SECRET_KEYS so it is masked by list_config."""
+    """telegram.bot_token must be in _SECRET_KEYS so it is masked by list_config."""
     from paper_ingestion.services.config_metadata import _SECRET_KEYS
 
     assert "telegram.bot_token" in _SECRET_KEYS
 
 
 def test_telegram_bot_token_in_encrypted_keys():
-    """CRED-01: telegram.bot_token must be in _ENCRYPTED_KEYS so migrate_plaintext_secrets re-encrypts it."""
+    """telegram.bot_token must be in _ENCRYPTED_KEYS so migrate_plaintext_secrets re-encrypts it."""
     from paper_ingestion.services.config_metadata import _ENCRYPTED_KEYS
 
     assert "telegram.bot_token" in _ENCRYPTED_KEYS
 
 
 def test_telegram_bot_token_not_in_allowed_config_keys():
-    """CRED-01: telegram.bot_token must NOT be writable via /api/config (out-of-band setup only)."""
+    """telegram.bot_token must NOT be writable via /api/config (out-of-band setup only)."""
     from paper_ingestion.services.config_metadata import _ALLOWED_CONFIG_KEYS
 
     assert "telegram.bot_token" not in _ALLOWED_CONFIG_KEYS
@@ -119,7 +119,7 @@ def test_telegram_bot_token_not_in_allowed_config_keys():
 
 @pytest.mark.asyncio
 async def test_migrate_rewrites_telegram_bot_token(fernet_key):
-    """CRED-01: a plaintext telegram.bot_token row is re-encrypted by migrate_plaintext_secrets."""
+    """A plaintext telegram.bot_token row is re-encrypted by migrate_plaintext_secrets."""
     from paper_ingestion.services.config_db import migrate_plaintext_secrets
 
     raw_token = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
@@ -139,7 +139,7 @@ async def test_migrate_rewrites_telegram_bot_token(fernet_key):
 
 
 def test_resolve_config_value_masks_telegram_bot_token():
-    """CRED-01: _resolve_config_value returns masked output for a plaintext telegram.bot_token row."""
+    """_resolve_config_value returns masked output for a plaintext telegram.bot_token row."""
     from paper_ingestion.services.config_db import _resolve_config_value
 
     row = {"value": "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi", "encrypted_value": None}

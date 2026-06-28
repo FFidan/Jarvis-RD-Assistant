@@ -1,6 +1,6 @@
 """Tests for GET /health and /health/internal endpoints of the learning_engine service.
 
-Public /health (ζ4: SEC-H09):
+Public /health (unauthenticated callers):
 - Returns only {"status": "ok"|"degraded"} — no dependency details exposed.
 - HTTP 200 when all deps are reachable; HTTP 503 when any check fails.
 
@@ -8,7 +8,7 @@ Authenticated /health/internal:
 - Returns full {status, service, checks} payload.
 - Requires valid API key.
 
-Also covers M26 regression: HealthCheckResponse importable from jarvis_common.
+Also covers importability regression: HealthCheckResponse importable from jarvis_common.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from httpx import ASGITransport
 
 
 # test_health_returns_200_when_ok deleted — covered by shared
-# libs/jarvis_common/tests/contract/test_health_contract.py (X-02 audit).
+# libs/jarvis_common/tests/contract/test_health_contract.py (the shared contract test).
 # test_health_returns_503_when_degraded deleted — same survivor.
 # test_health_internal_returns_full_details deleted — same survivor.
 # test_health_internal_503_has_all_checks deleted — same survivor.
@@ -27,14 +27,14 @@ from httpx import ASGITransport
 
 
 def test_health_check_response_importable():
-    """M26 regression: HealthCheckResponse must be exported from jarvis_common."""
+    """Importability regression: HealthCheckResponse must be exported from jarvis_common."""
     from jarvis_common import HealthCheckResponse
 
     assert HealthCheckResponse is not None
 
 
 # ---------------------------------------------------------------------------
-# Regression: HEALTH-LIVE-403 + SEC-AUTH-1
+# Regression: HEALTH-LIVE-403
 #
 # The _HEALTH_PATHS exemption in verify_api_key must cover /health/live so
 # that unauthenticated liveness probes are never blocked by the global

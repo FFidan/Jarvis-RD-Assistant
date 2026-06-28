@@ -138,7 +138,7 @@ async def test_search_parses_fixture():
     assert "Alice Johnson" in p0.authors
     assert p0.abstract is not None
     assert "Deep" in p0.abstract
-    # example.com is not in ALLOWED_PDF_DOMAINS → filtered out by PI-EDGE-007 validation
+    # example.com is not in ALLOWED_PDF_DOMAINS → filtered out by domain-allowlist validation
     assert p0.pdf_url is None
     assert p0.published_date is not None
     assert p0.published_date.year == 2025
@@ -391,7 +391,7 @@ async def test_fetch_new_since_429_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# PI-EDGE-007: pdf_url validated against ALLOWED_PDF_DOMAINS allowlist
+# pdf_url validated against ALLOWED_PDF_DOMAINS allowlist
 # ---------------------------------------------------------------------------
 
 

@@ -327,7 +327,7 @@ async def test_a135_create_admin_409_when_admin_already_exists(setup_client, con
 
 
 async def test_setup_write_without_token_is_forbidden_over_http(setup_client):
-    """B3/SEC-1 over the real ASGI route: a bootstrap WRITE with no valid token is 403.
+    """Over the real ASGI route: a bootstrap WRITE with no valid token is 403.
 
     The other tests send the default ``X-Setup-Token`` header (positive path).
     This proves the gate END-TO-END over HTTP: with a token configured and no
@@ -644,6 +644,71 @@ async def test_e1_setup_admin_creates_session_and_user(setup_client, contract_co
     )
     assert user_count == 1, "users row must exist after admin creation"
     assert session_count == 1, "sessions row must be created atomically with the users row"
+
+
+# ---------------------------------------------------------------------------
+# [E] OWNER_USER_ID onboarding — first-admin auto-writes the owner.user_id row
+# ---------------------------------------------------------------------------
+
+
+async def test_create_first_admin_writes_owner_config_row(setup_client, contract_conn):
+    """POST /api/setup/admin writes the owner.user_id system row == the new admin id.
+
+    This is what lets owner API-key login work on a later multi-user box with no
+    OWNER_USER_ID env set (the resolver falls back to this DB row).
+    """
+    from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
+
+    resp = await setup_client.post(
+        "/api/setup/admin",
+        json={"email": "owner-row-admin@example.com"},
+    )
+    assert resp.status_code == 200, f"admin creation failed: {resp.text[:300]}"
+    user_id = resp.json()["id"]
+
+    owner_value = await contract_conn.fetchval(
+        "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+        OWNER_USER_ID_CONFIG_KEY,
+    )
+    assert owner_value == user_id, (
+        f"owner.user_id row must equal the new admin id {user_id}; got {owner_value!r}"
+    )
+
+
+async def test_first_admin_owner_row_rolls_back_with_session_failure(
+    setup_client, contract_conn, monkeypatch
+):
+    """The owner.user_id row is written INSIDE the create_first_admin transaction.
+
+    Force the session INSERT (which runs after the owner UPSERT) to fail; the
+    whole transaction rolls back, so neither the user nor the owner row persists.
+    """
+    import contextlib
+
+    import paper_ingestion.routers.setup as setup_router
+    from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
+
+    # ``now + SESSION_TTL`` (the session INSERT) raises a TypeError when
+    # SESSION_TTL is not a timedelta — a deterministic failure after the owner
+    # UPSERT but before the transaction commits.
+    monkeypatch.setattr(setup_router, "SESSION_TTL", "not-a-timedelta")
+
+    with contextlib.suppress(Exception):
+        await setup_client.post(
+            "/api/setup/admin",
+            json={"email": "rollback-admin@example.com"},
+        )
+
+    owner_value = await contract_conn.fetchval(
+        "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+        OWNER_USER_ID_CONFIG_KEY,
+    )
+    assert owner_value is None, "owner.user_id row must roll back with the failed transaction"
+    user_row = await contract_conn.fetchval(
+        "SELECT id FROM users WHERE email = $1",
+        "rollback-admin@example.com",
+    )
+    assert user_row is None, "users row must roll back with the failed transaction"
 
 
 # ---------------------------------------------------------------------------

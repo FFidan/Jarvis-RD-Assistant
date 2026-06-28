@@ -1,4 +1,4 @@
-"""Tests for LG-B4 B1: verify_api_key emits auth events on failure.
+"""Tests that verify_api_key emits auth events on failure.
 
 Verifies that ``jarvis_common.auth.verify_api_key`` calls ``log_event``
 with category='auth', message='invalid_api_key' when an invalid API key

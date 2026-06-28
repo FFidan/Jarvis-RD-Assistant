@@ -171,7 +171,7 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
 
 @pytest.mark.asyncio
 async def test_daily_briefing_passes_owner_headers_on_every_call():
-    """DOM-D-04: each briefing REST call carries the canonical owner headers."""
+    """Each briefing REST call carries the canonical owner headers."""
     bot = AsyncMock()
     config = make_bot_config(BotConfig, telegram_chat_id=9999, jarvis_api_key=SecretStr("secret"))
     pool = AsyncMock()

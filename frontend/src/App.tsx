@@ -11,7 +11,7 @@ import { AuthVerifyPage } from '@/pages/AuthVerifyPage';
 import { HomePage } from '@/pages/HomePage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { useOnlineStatus } from '@/hooks/use-online-status';
-// ResearchFeedPage is lazy-loaded (DOM-F-10) — keeps ~26 kB of feed components
+// ResearchFeedPage is lazy-loaded — keeps ~26 kB of feed components
 // out of the HomePage initial bundle.
 const ResearchFeedPage = lazy(() =>
   import('@/pages/ResearchFeedPage').then((m) => ({ default: m.ResearchFeedPage })),
@@ -32,7 +32,7 @@ import { LogsRoute } from '@/components/auth/LogsRoute';
 // - PaperDetailPage pulls react-markdown + math/syntax stacks (~392 kB).
 // - Setup wizards & AdminUsersPage are large (12-16 kB each) and only used
 //   by admins / on first run.
-// - ResearchFeedPage (DOM-F-10): ~26 kB of feed components excluded from
+// - ResearchFeedPage: ~26 kB of feed components excluded from
 //   the HomePage initial bundle.
 const KnowledgeGraphPage = lazy(() =>
   import('@/pages/KnowledgeGraphPage').then((m) => ({ default: m.KnowledgeGraphPage })),
@@ -42,6 +42,9 @@ const CitationGraphPage = lazy(() =>
 );
 const AnalyticsPage = lazy(() =>
   import('@/pages/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })),
+);
+const ConsensusPage = lazy(() =>
+  import('@/pages/ConsensusPage').then((m) => ({ default: m.ConsensusPage })),
 );
 const LogsPage = lazy(() =>
   import('@/pages/LogsPage').then((m) => ({ default: m.LogsPage })),
@@ -111,7 +114,7 @@ export function App() {
     staleTime: 30_000,
     retry: false,
   });
-  // Offline / PWA contract — CANONICAL (shell-sidebar-admin-ia-redesign-design.md §4):
+  // Offline / PWA contract — CANONICAL:
   // When the device is offline AND a prior authenticated identity exists (isAuthenticated
   // is true with a recent authTime), do NOT hard-bounce to /login. Instead allow the
   // app shell to render so cached read-only surfaces (Library, Paper Detail) are
@@ -201,6 +204,7 @@ export function App() {
                   <Route path="/my-day" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><MyDayPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="settings" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><SettingsPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="analytics" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AnalyticsPage /></Suspense></RouteErrorBoundary>} />
+                  <Route path="consensus" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ConsensusPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="logs" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><LogsRoute><LogsPage /></LogsRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/users" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/audit-log" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminAuditLogPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
@@ -210,7 +214,7 @@ export function App() {
                   <Route path="projects" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="cards" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><LearningCardsPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="feed" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ResearchFeedPage /></Suspense></RouteErrorBoundary>} />
-                  {/* Feed spec §3.4 / Shell spec group Ⅳ: Ask is its own */}
+                  {/* Ask is its own */}
                   {/* nav destination, NOT a folded-in feed filter. The old */}
                   {/* <Navigate to="/feed?surface=ask"> redirect is removed. */}
                   <Route path="ask" element={<RouteErrorBoundary><AskPage /></RouteErrorBoundary>} />

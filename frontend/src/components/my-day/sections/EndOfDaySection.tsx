@@ -12,7 +12,7 @@ import {
 import type { JournalPrompts, MyDayResponse } from '@/types';
 
 /**
- * § End of day — "shutdown ritual that closes the loop" (spec §3.10).
+ * End of day — "shutdown ritual that closes the loop".
  *
  * Three structured prompts mapped to EOD's cognitive functions:
  *   • worked      — progress capture

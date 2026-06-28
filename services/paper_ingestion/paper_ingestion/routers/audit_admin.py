@@ -32,6 +32,40 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return d
 
 
+def _build_audit_query(
+    before_id: int | None,
+    action_prefix: str | None,
+    limit: int,
+) -> tuple[str, list[Any]]:
+    """Return a parameterized ``(sql, params)`` pair for the audit_log cursor query.
+
+    Placeholder numbers are always ``len(params)`` at insertion time — never
+    derived from user input.  User values travel exclusively in ``params``.
+    """
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if before_id is not None:
+        params.append(before_id)
+        conditions.append(f"id < ${len(params)}")
+
+    if action_prefix:
+        escaped = action_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params.append(escaped + "%")
+        conditions.append(rf"action LIKE ${len(params)} ESCAPE '\'")
+
+    params.append(limit + 1)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    sql = (
+        'SELECT id, user_id, action, resource, metadata, "timestamp" AS created_at '
+        "FROM audit_log "
+        + (where + " " if where else "")
+        + "ORDER BY id DESC LIMIT $"
+        + str(len(params))
+    )
+    return sql, params
+
+
 @router.get("/audit-log")
 @limiter.limit("60/minute")
 async def list_audit_log(
@@ -47,31 +81,7 @@ async def list_audit_log(
     (older) page. Optional ``action_prefix`` filters on ``action LIKE
     prefix||'%'`` (prefix is escaped so ``%``/``_`` are treated literally).
     """
-    conditions: list[str] = []
-    params: list[Any] = []
-    idx = 1
-
-    if before_id is not None:
-        conditions.append(f"id < ${idx}")
-        params.append(before_id)
-        idx += 1
-
-    if action_prefix:
-        escaped = action_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        conditions.append(rf"action LIKE ${idx} ESCAPE '\'")
-        params.append(escaped + "%")
-        idx += 1
-
-    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-    params.append(limit + 1)
-
-    sql = f"""
-        SELECT id, user_id, action, resource, metadata, "timestamp" AS created_at
-        FROM audit_log
-        {where_clause}
-        ORDER BY id DESC
-        LIMIT ${idx}
-    """
+    sql, params = _build_audit_query(before_id, action_prefix, limit)
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(sql, *params)

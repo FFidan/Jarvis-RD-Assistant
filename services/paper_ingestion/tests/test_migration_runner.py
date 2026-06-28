@@ -27,6 +27,7 @@ async def test_creates_schema_migrations_table():
     pool, conn = _make_pool_and_conn()
     # Post-squash: no .sql files on disk; mock fetch returns empty (nothing to apply).
     conn.fetch.return_value = []
+    conn.fetchval.return_value = 101  # init.sql premarks the baseline; the schema floor passes.
 
     await run_migrations(pool)
 
@@ -41,8 +42,9 @@ async def test_skips_already_applied_migrations(tmp_path):
     """Migrations already in schema_migrations should not be re-executed."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
-    # Post-squash: all 1..88 are pre-seeded; no .sql files on disk.
-    conn.fetch.return_value = [{"version": v} for v in range(1, 89)]
+    # Post-squash: the baseline is pre-seeded; no .sql files on disk.
+    conn.fetch.return_value = [{"version": v} for v in range(1, 102)]
+    conn.fetchval.return_value = 101  # init.sql premarks the baseline; the schema floor passes.
 
     await run_migrations(pool, migrations_dir=tmp_path)
 
@@ -68,6 +70,7 @@ async def test_no_migrations_applied_when_all_fresh(tmp_path):
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []  # Nothing applied yet
+    conn.fetchval.return_value = 101  # init.sql premarks the baseline; the schema floor passes.
 
     await run_migrations(pool, migrations_dir=tmp_path)
 
@@ -81,6 +84,7 @@ async def test_schema_migrations_select_called():
     pool, conn = _make_pool_and_conn()
     # Post-squash: no .sql files → nothing to probe; mock returns empty applied list.
     conn.fetch.return_value = []
+    conn.fetchval.return_value = 101  # init.sql premarks the baseline; the schema floor passes.
 
     await run_migrations(pool)
 
@@ -97,6 +101,7 @@ async def test_migration_uses_xact_lock():
     pool, conn = _make_pool_and_conn()
     # Post-squash: no .sql files; mock returns empty applied list.
     conn.fetch.return_value = []
+    conn.fetchval.return_value = 101  # init.sql premarks the baseline; the schema floor passes.
 
     await run_migrations(pool)
 

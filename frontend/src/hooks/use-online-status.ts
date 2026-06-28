@@ -7,8 +7,7 @@
  *   - The connectivity banner + per-view offline indicators.
  *
  * Contract reference: internal design spec (archived)
- *   "Offline / PWA contract — CANONICAL" §6 (global connectivity banner) and §4
- *   (last-known-good read mode).
+ *   "Offline / PWA contract — CANONICAL" (global connectivity banner and last-known-good read mode).
  *
  * API (stable — P1c/P1d depend on this shape):
  *

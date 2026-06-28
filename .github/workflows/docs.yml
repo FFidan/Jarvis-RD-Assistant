@@ -1,7 +1,6 @@
 name: Docs
 
 # Build on every push to master (then deploy) and on PRs (build-only check).
-# Keeps the same branch/PR trigger convention as ci.yml.
 on:
   push:
     branches: [master]
@@ -16,12 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-deploy:
-    name: MkDocs build (+ deploy on master)
+  build:
+    name: MkDocs build
     runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
-    permissions:
-      contents: write   # needed for gh-pages branch push on master
-
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -39,10 +35,25 @@ jobs:
       - name: Build (strict — zero warnings allowed)
         run: mkdocs build --strict
 
-      # Deploy only on pushes to master; PRs just build.
-      - name: Deploy to GitHub Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: [build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: write   # needed for gh-pages branch push
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install docs dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: Deploy (force-push gh-pages branch)
         run: mkdocs gh-deploy --force
-        # Deploys to the gh-pages branch (default).
-        # GitHub Pages is configured to serve from that branch.
-        # No custom domain — served at the default *.github.io URL.

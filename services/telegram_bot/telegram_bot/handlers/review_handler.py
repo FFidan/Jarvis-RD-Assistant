@@ -44,7 +44,7 @@ SHOWING_BACK = 1
 # Rating labels
 RATING_LABELS = {1: "Again", 2: "Hard", 3: "Good", 4: "Easy"}
 
-# SEC-RATING-1: guard against malformed callback data before int() parse
+# Guard against malformed callback data before int() parse
 _RATING_RE = re.compile(r"^rate_([1-4])$")
 
 

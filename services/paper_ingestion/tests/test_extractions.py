@@ -5,9 +5,10 @@ so create/update/delete must be admin-only. Any authenticated non-admin tenant
 mutating it would break extraction for every user (e.g. deleting the default
 template).
 
+- no session         → 401 on the list endpoint
 - non-admin session  → 403 on each CUD op
 - admin session      → success
-- read endpoint (GET /api/extraction-templates) is unaffected
+- read endpoint (GET /api/extraction-templates) requires a signed-in session
 
 Schema guard (CFG-EXTPL-1): a live-PG test asserts ``extraction_templates``
 has NO ``user_id`` column so that accidental per-user column addition is caught
@@ -60,7 +61,7 @@ def _app(request):
     query parameter once the slowapi-wrapped endpoint also declares a body.
     """
     from jarvis_common import verify_api_key
-    from jarvis_common.auth import require_admin
+    from jarvis_common.auth import current_user_id_strict, require_admin
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -81,6 +82,11 @@ def _app(request):
             raise HTTPException(status_code=403, detail="Admin role required")
 
     app.dependency_overrides[require_admin] = _patched_require_admin
+
+    # When a role is present there is a valid session; steer current_user_id_strict
+    # to a fixed user so list_templates (which now gates on session) passes.
+    if user_role is not None:
+        app.dependency_overrides[current_user_id_strict] = lambda: 1
 
     yield app, conn
 
@@ -166,13 +172,24 @@ async def test_delete_template_allows_admin(_app):
 
 
 # ---------------------------------------------------------------------------
-# Read endpoint is unaffected by the admin gate
+# Read endpoint: requires a session, but is not admin-gated
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("_app", [None, "user"], indirect=True)
-async def test_list_templates_unaffected_by_admin_gate(_app):
+@pytest.mark.parametrize("_app", [None], indirect=True)
+async def test_list_templates_requires_session(_app):
+    """GET /api/extraction-templates without a session returns 401."""
+    app, _conn = _app
+    async with _client(app) as c:
+        resp = await c.get("/api/extraction-templates")
+    assert resp.status_code == 401, resp.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("_app", ["user"], indirect=True)
+async def test_list_templates_allowed_for_authenticated_user(_app):
+    """GET /api/extraction-templates with a valid session returns 200 (not admin-gated)."""
     app, conn = _app
     async with _client(app) as c:
         resp = await c.get("/api/extraction-templates")

@@ -1,6 +1,6 @@
 # Known Residual Risks
 
-_Last updated: 2026-06-17_
+_Last updated: 2026-06-27_
 
 This document tracks acknowledged-but-deferred risks in JARVIS RD Assistant. Each entry states the rationale for deferring the full fix and the criteria that would reopen it. Closed and falsified findings, plus internal CI/test-infra tracking, are archived separately and are not part of the published site.
 
@@ -31,7 +31,7 @@ Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host pu
 
 ---
 
-## PI-EDGE-005 — contradiction-scan wall-clock budget
+## Contradiction-scan wall-clock budget
 
 **Finding:** the cross-ref pre-filter for contradiction candidate pairs shipped; the remaining sub-item is an outer wall-clock timeout + `asyncio.gather` concurrency for the `_classify_candidate` LLM calls.
 
@@ -45,7 +45,7 @@ Reopen if `OLLAMA_IMAGE` is downgraded below the patched tested pin, the host pu
 
 ## Auth hardening deferrals
 
-### H5 — Migration live-fixture test deferred
+### Migration live-fixture test deferred
 
 One schema migration uses a defensive PL/pgSQL constraint-name lookup. The
 live-fixture migration test covering this path is deferred to a future hardening
@@ -57,29 +57,25 @@ pass with proper ephemeral-Postgres test infra.
 
 ## Telegram / security hardening deferrals
 
-### TG-004 — In-memory bot rate limits
+### In-memory bot rate limits
 
 Accepted for single-user, single-bot LAN deployment. Distributed rate limiting (Redis-backed) is deferred until multi-bot or LAN-exposed scenarios materialize.
 
-### SEC-106 — CSP `style-src 'unsafe-inline'`
+### CSP `style-src 'unsafe-inline'`
 
 Nonce-based CSP requires a multi-day Vite plugin refactor (each style-injecting component must accept a nonce; some third-party libraries don't). Deferred.
 
-### SEC-DEP-001 — Requirements pinning discipline
+### Requirements pinning discipline
 
 Service `requirements.txt` files use `>=` floors (some with ceilings); the hashed pins enforced at install live in the per-service `constraints.txt` (`pip install --require-hashes`). A future pass could add explicit floor+ceiling ranges in `requirements.txt` itself to reduce drift further.
 
-### Search upsert `user_id` stamping
-
-`POST /api/search` performs external-source fetch + DB upsert via `pdf_workflow.upsert_paper`, which doesn't currently stamp `user_id` on the new row. Full multi-user end-to-end isolation requires this. Recommended follow-up.
-
-### TG-BLOAT-01 — `BotConfig.from_env()` sync/async split deferred
+### `BotConfig.from_env()` sync/async split deferred
 
 `from_env()` runs its one-shot DB bot-token read via `asyncio.run(...)`. This is correct today — `from_env()` is only called from the synchronous `main()` before `run_polling()` starts the event loop, so there is no running loop to conflict with. Splitting it into a sync `from_env()` + an `async_from_env()` was scoped as a bloat-reduction but carries no current bug; deferred out of the bugs/security pass to keep its regression surface zero.
 
 ---
 
-## SMTP-EMPTY-STRING-1 — empty-string SMTP env vars silently accepted
+## Empty-string SMTP env vars silently accepted
 
 **Symptom:** Setting any of `SMTP_HOST`, `SMTP_FROM`, `SMTP_USER`, or `SMTP_PASS` to an empty string is silently accepted by `SecretsSettings` (no Pydantic validator rejects `""`). `_EffectiveSmtp.deliverable` evaluates `bool("") == False`, so the magic-link sender falls through to the dev-mode logging path. **The operator sees nothing at startup; users do not receive magic-link emails; the failure is silent.**
 
@@ -93,7 +89,7 @@ Service `requirements.txt` files use `>=` floors (some with ceilings); the hashe
 
 ---
 
-## BUILDER-STAGE-BUILD-UNHASHED-1 — builder stage installs `build` without `--require-hashes`
+## Builder stage installs `build` without `--require-hashes`
 
 The Stage 1 `jarvis-common-builder` installs `build==1.2.2.post1` (and its
 transitives) without `--require-hashes`. Stage 1 is ephemeral — only the
@@ -157,7 +153,7 @@ These document intentional deviations from the container-hardening sweep, each w
 
 ---
 
-### LOW-DRY-001 — Minor un-hoisted duplications (low priority)
+### Minor un-hoisted duplications (low priority)
 
 Two small consolidation items accepted as low-priority code-quality debt:
 
@@ -168,7 +164,7 @@ Two small consolidation items accepted as low-priority code-quality debt:
 
 ---
 
-### JOBS-REGISTRY-GLOBALS-1 — Job task-registry uses module-level globals as test injection points
+### Job task-registry uses module-level globals as test injection points
 
 **Finding:** `jarvis_common`'s job task registry exposes `_pool` and `_http_client` as module-level globals. Tests rely on these globals as injection points to substitute test doubles.
 
@@ -178,13 +174,41 @@ Two small consolidation items accepted as low-priority code-quality debt:
 
 ---
 
-### SETTINGS-BARREL-1 — `paper_ingestion` settings re-export barrel retained for call-site stability
+### `paper_ingestion` settings re-export barrel retained for call-site stability
 
 **Finding:** the `paper_ingestion.services.config` module acts as a re-export barrel for `get_paper_ingestion_settings`, rather than callers importing from the canonical `paper_ingestion.config` directly.
 
 **Why retained:** removing the barrel would require updating every call site that currently patches `paper_ingestion.services.config.get_paper_ingestion_settings` in tests, and the production consumer that imports from that path. The marginal leanness gain does not justify the regression surface. An export-snapshot test guards the barrel's interface.
 
 **Reopen criteria:** if a refactor already touches the majority of call sites, remove the barrel in the same pass.
+
+---
+
+### Context-coupling check — live-model leg skipped in CI
+
+The context-coupling contract test (`services/paper_ingestion/tests/contract/test_ctx_coupling_contract.py`) calls `pytest.skip` when a live LiteLLM instance is not reachable, so the leg that verifies end-to-end `num_ctx` delivery to a running LiteLLM container does not run in CI. The fail-closed path (delivery failure must not advance the budget) and the write-path validator (out-of-bounds values rejected with HTTP 400) do not require a live LiteLLM and are covered unconditionally by the same test file.
+
+**Reopen criteria:** when a CI environment with a live LiteLLM instance is available, remove the skip guard and promote the delivery test to a required gate.
+
+---
+
+### Partial-chunk papers not re-embedded by migration 0096
+
+Migration 0096 set `chunked_at = NOW()` on any paper that already had at least one chunk row, marking it as fully processed. Papers that had only a partial chunk set (for example, due to an interrupted embedding run) were silently promoted to "done" by this one-time stamp. The migration was a deliberate tradeoff to avoid a full re-embed storm at upgrade time.
+
+**Current behavior (HEAD):** the auto-pipeline and pdf-processing path pick up papers where `chunked_at IS NULL` (see `services/paper_ingestion/paper_ingestion/pipelines/auto_fetch.py:186` and `services/paper_ingestion/paper_ingestion/services/pdf_workflow.py:289`), so any future partial-chunk paper (for example from a new interrupted run) will be reprocessed on the next pipeline cycle.
+
+**Remaining gap from migration 0096:** pre-existing partial-chunk papers that migration 0096 promoted to "done" have a non-NULL `chunked_at` and will not be automatically re-embedded. An optional post-release operator reconcile can identify them (heuristic: non-contiguous chunk index sequences) and reset `chunked_at = NULL` to trigger reprocessing. No migration is needed — this is a manual operational step.
+
+**Reopen criteria:** if a significant number of degraded search results are traced to partial embeddings, run the reconcile.
+
+---
+
+### Restore destructive-sentinel: SIGKILL mitigation and operator-clear requirement
+
+`scripts/restore.sh` writes a durable `.destructive` sentinel at the DB DROP boundary (line 178: `touch "$MAINTENANCE_DESTRUCTIVE"`), before any DROP or data modification. While this sentinel is present, the app returns HTTP 503 on all non-exempt routes regardless of sentinel age (see `libs/jarvis_common/jarvis_common/maintenance.py:11–16`). This means a SIGKILL mid-restore no longer leaves the stack silently serving a half-restored database.
+
+**Operator action required to resume:** on a clean same-host restore, `restore.sh` clears both the `.maintenance` and `.destructive` sentinels automatically. For an inbox/off-host restore or a restore from an older backup, the script exits in maintenance mode and both sentinels must be cleared manually — see DEPLOYMENT.md for the full runbook.
 
 ---
 
@@ -207,8 +231,8 @@ The following items were deliberately deferred as low-value or high-churn. Each 
 
 ## Deferred theming / test-hygiene items
 
-- **TEST-01 — Pytest non-fatal warnings.** Pytest emits non-fatal warnings (unawaited-coroutine in async mocks, `@pytest.mark.asyncio` on sync tests, `ORJSONResponse` deprecation). Cosmetic test-hygiene; full suite passes. Deferred.
-- **UI-01 (contrast portion) — Dark-mode destructive text contrast.** Dark-mode contrast of destructive error text (`text-destructive`) is below WCAG AA per Lighthouse. Proper fix is a theme-token adjustment affecting all destructive text; deferred to a theming pass.
+- **Pytest non-fatal warnings.** Pytest emits non-fatal warnings (unawaited-coroutine in async mocks, `@pytest.mark.asyncio` on sync tests, `ORJSONResponse` deprecation). Cosmetic test-hygiene; full suite passes. Deferred.
+- **Dark-mode destructive text contrast.** Dark-mode contrast of destructive error text (`text-destructive`) is below WCAG AA per Lighthouse. Proper fix is a theme-token adjustment affecting all destructive text; deferred to a theming pass.
 
 ## Deferred multi-admin attribution item
 

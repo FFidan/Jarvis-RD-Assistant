@@ -206,3 +206,22 @@ class TestListFeedPapers:
         assert "pn.user_id IS NOT DISTINCT FROM $1" in count_sql
         assert "JOIN paper_notes" not in count_sql
         assert resp.json()["papers"][0]["note_match_count"] == 2
+
+
+def test_feed_route_served_from_papers_feed_module():
+    """After consolidation, GET /api/papers/feed is owned by papers_feed (feed.py gone)."""
+    import pytest
+    from fastapi.routing import APIRoute
+
+    from paper_ingestion.main import app
+
+    route = next(
+        r
+        for r in app.routes
+        if isinstance(r, APIRoute) and r.path == "/api/papers/feed" and "GET" in r.methods
+    )
+    assert route.endpoint.__module__.endswith("routers.papers_feed"), (
+        f"/api/papers/feed must be defined in papers_feed; got {route.endpoint.__module__}"
+    )
+    with pytest.raises(ModuleNotFoundError):
+        __import__("paper_ingestion.routers.feed")

@@ -57,6 +57,7 @@ from jarvis_common.error_handlers import (
     validation_exception_handler,
 )
 from jarvis_common.http_rate_limiter import rate_limit_exceeded_handler
+from jarvis_common.maintenance import configure_maintenance
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 
@@ -393,7 +394,7 @@ def configure_middleware_and_errors(
         else:
             cors_origins = get_jarvis_common_settings().cors_origins_list
     assert cors_origins is not None
-    # H-06: fail-fast BEFORE installing the wildcard CORS middleware so a
+    # Fail-fast BEFORE installing the wildcard CORS middleware so a
     # misconfigured production deploy crashes at startup, not at request time.
     if cors_origins == ["*"] and get_core_settings().environment.lower() == "production":
         raise RuntimeError(
@@ -419,13 +420,22 @@ def configure_middleware_and_errors(
     # being structurally identical; safe to ignore until upstream stubs reconcile.
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxy_hosts)  # type: ignore[reportArgumentType]
 
-    # 5. RawClientStashMiddleware -- added LAST so it runs OUTERMOST/first,
-    # BEFORE ProxyHeadersMiddleware mutates scope["client"] from X-Forwarded-For.
-    # The X-Owner-User-Id guard (jarvis_common.auth) requires BOTH the stashed
-    # raw socket peer AND the rewritten client to be allowlisted (M5). Service
-    # middleware added after this call (e.g. SessionMiddleware) wraps further
-    # outside, which is harmless as long as it does not rewrite scope["client"].
+    # 5. RawClientStashMiddleware -- added AFTER ProxyHeadersMiddleware so it runs
+    # OUTSIDE it (Starlette: later-added = more outer = runs first), snapshotting
+    # the raw socket peer BEFORE ProxyHeadersMiddleware mutates scope["client"]
+    # from X-Forwarded-For. The X-Owner-User-Id guard (jarvis_common.auth) requires
+    # BOTH the stashed raw peer AND the rewritten client to be allowlisted (M5).
     app.add_middleware(RawClientStashMiddleware)
+
+    # 6. MaintenanceMiddleware -- added last in the shared stack so it runs ahead
+    # of the rest of it, short-circuiting non-exempt requests with 503 while a
+    # fresh restore sentinel exists. Pure-ASGI: the non-maintenance path passes
+    # through untouched, so SSE/streaming routes are unaffected. A per-service
+    # SessionMiddleware added afterward (paper_ingestion) wraps further outside,
+    # so an authenticated request still resolves its session before the 503 --
+    # the restore's DB safety comes from restore.sh revoking DB connections, not
+    # from this user-facing gate.
+    configure_maintenance(app)
 
     # Standardized error handlers
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
@@ -440,7 +450,7 @@ async def init_langfuse_hook(
 ) -> None:
     """Initialize Langfuse SDK and Instructor-patched OpenAI client.
 
-    DOM-J-01: shared lifespan hook used by both ``paper_ingestion`` and
+    Shared lifespan hook used by both ``paper_ingestion`` and
     ``learning_engine``.  No-op when ``LANGFUSE_HOST`` is unset (local dev
     without ``--profile observability``).  Attaches ``app.state.openai_client``
     for use by ``call_llm_structured`` in request handlers and job workers.

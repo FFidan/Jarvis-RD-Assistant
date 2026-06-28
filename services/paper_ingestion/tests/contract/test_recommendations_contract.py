@@ -576,7 +576,7 @@ async def test_recommendations_refresh_endpoint_persists_scores_user_scoped(
     calling user and does NOT write rows for other users.
 
     The embedder.discover_from_seeds and embedder.search_similar paths are
-    the §5.1 carve-out boundary (Qdrant/embed). We inject one seeded
+    the carve-out boundary (Qdrant/embed). We inject one seeded
     starred paper, stub the embedder to return one score for a candidate
     paper, and assert the DB row is written with the correct user_id.
     # Verified: recommendations.py:42-48 (trigger_refresh)

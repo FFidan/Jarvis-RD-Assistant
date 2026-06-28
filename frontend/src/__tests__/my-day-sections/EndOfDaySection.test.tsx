@@ -1,5 +1,5 @@
 /**
- * EndOfDaySection — the "shutdown ritual that closes the loop" (spec §3.10):
+ * EndOfDaySection — the "shutdown ritual that closes the loop":
  * 3 structured prompts, prefill hints from day signals, "make this a thread",
  * optional free-note, persisted via the journal POST-upsert.
  */

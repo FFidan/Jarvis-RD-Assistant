@@ -462,11 +462,11 @@ async def prepare_cross_paper_rag(
         selected_chunks = selected_chunks[: body.max_chunks]
 
         # 4. Fetch paper metadata — defense-in-depth user-scope predicate (RAG-DB-1).
-        # Primary isolation is Qdrant's _user_scope_filter (SEC-4); this secondary
+        # Primary isolation is Qdrant's _user_scope_filter; this secondary
         # check ensures mis-tagged Qdrant payloads cannot surface another user's
         # paper metadata.  `papers` is the shared canonical corpus and has NO
         # user_id column — ownership lives in the `user_library` join table.
-        # Mirror SEC-4 ("payload user_id == X OR IS NULL") against the real
+        # Mirror the Qdrant user-scope filter ("payload user_id == X OR IS NULL") against the real
         # schema: a paper is visible iff the caller is unscoped, OR owns it
         # (user_library membership), OR it is canonical (in nobody's library →
         # the relational equivalent of a NULL-user_id chunk).

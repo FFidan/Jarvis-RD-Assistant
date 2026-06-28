@@ -154,7 +154,7 @@ class SemanticScholarSource(PaperSource):
         if pdf_url is not None and not pdf_url.strip():
             pdf_url = None  # Treat empty/whitespace-only as missing
 
-        # DOM-B-09: Validate pdf_url scheme + hostname against the SSRF allowlist
+        # Validate pdf_url scheme + hostname against the SSRF allowlist
         # before storing it — S2 openAccessPdf can return arbitrary third-party URLs.
         if pdf_url is not None:
             _parsed = _urlparse(pdf_url)

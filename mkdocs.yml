@@ -111,6 +111,7 @@ nav:
       - Projects: manual/projects.md
       - Knowledge Graph: manual/knowledge-graph.md
       - Citation Graph: manual/citation-graph.md
+      - Consensus: manual/consensus.md
       - Extraction Table: manual/extraction-table.md
       - Analytics: manual/analytics.md
       - Settings: manual/settings.md

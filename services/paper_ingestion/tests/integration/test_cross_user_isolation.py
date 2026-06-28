@@ -15,7 +15,7 @@ Run (Docker PostgreSQL required)::
 Standard ``uv run pytest`` excludes ``live_pg``/``integration`` so this is
 inert in the fast suite (see root pyproject ``addopts``).
 
-A leak surfaces as a *failing* assertion here — per plan §12.4 those are
+A leak surfaces as a *failing* assertion here — those are
 real bugs to fix at the query layer, not assertions to weaken.
 """
 
@@ -543,6 +543,91 @@ async def test_zotero_note_reads_scoped_to_calling_user(
     )
     assert _A_ZOTERO_NOTE_MARKER not in resp_all.text
     assert _A_ZOTERO_NOTE_MARKER not in resp_zotero.text
+
+
+@pytest.mark.contract
+@pytest.mark.asyncio(loop_scope="session")
+async def test_aud007_zotero_link_scoped_to_calling_user(
+    contract_two_users,
+    contract_conn,
+) -> None:
+    """A paper's Zotero item linkage is per-(paper,user); user B can never
+    read or act on user A's ``zotero_item_key``.
+
+    Seed: a shared paper P carrying A's GLOBAL ``papers.zotero_item_key`` (the
+    legacy column a pre-migration read would pick up) AND A's per-user link row.
+    User B has a valid Zotero config but NO link row for P.
+
+    Asserts the export read path keys off the *requesting* user's link:
+      - push_highlights_for_paper as user B -> ``not_linked`` (B's LEFT JOIN finds
+        no link row; A's key is never read).
+      - push_highlights_for_paper as user A -> ``ok`` (A's link resolves; no
+        unsynced highlights, so exported 0).
+
+    Regression-proof: reverting the read to the global ``p.zotero_item_key`` column
+    makes B observe A's 'A-GLOBAL-KEY' and skip the ``not_linked`` guard, flipping
+    the user-B assertion RED.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+    from jarvis_common.testing import SharedConnPool
+
+    from paper_ingestion.integrations.zotero_service import push_highlights_for_paper
+
+    user_a_id = contract_two_users.user_a_id
+    user_b_id = contract_two_users.user_b_id
+
+    # Shared paper carrying A's GLOBAL key (the pre-migration global column) — present so a
+    # regressed global-column read would observably leak it to user B.
+    paper_id = await contract_conn.fetchval(
+        """INSERT INTO papers
+               (external_id, source_type, title, authors, url, discovered_by, zotero_item_key)
+           VALUES ('iso-aud007-zotero', 'arxiv', 'shared-paper-aud007-zotero',
+                   ARRAY['A. Author'], 'https://example.test/aud007', $1, 'A-GLOBAL-KEY')
+           RETURNING id""",
+        user_a_id,
+    )
+    # A's per-user link row — the ONLY place the per-user link table read looks.
+    await contract_conn.execute(
+        "INSERT INTO paper_user_zotero_links (paper_id, user_id, zotero_item_key)"
+        " VALUES ($1, $2, 'A-LINK-KEY')",
+        int(paper_id),
+        user_a_id,
+    )
+    # Both users carry a usable Zotero config so neither short-circuits to
+    # 'disabled' before reaching the per-user link read.
+    for uid in (user_a_id, user_b_id):
+        for key, value in [
+            ("zotero.api_key", "fake-key"),
+            ("zotero.user_id", "999999"),
+            ("zotero.library_type", "user"),
+        ]:
+            await contract_conn.execute(
+                "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3::jsonb)",
+                uid,
+                key,
+                f'"{value}"',
+            )
+
+    shared = SharedConnPool(contract_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient"):
+        result_b = await push_highlights_for_paper(
+            int(paper_id), db_pool=shared, http_client=http, owner_user_id=user_b_id
+        )
+        result_a = await push_highlights_for_paper(
+            int(paper_id), db_pool=shared, http_client=http, owner_user_id=user_a_id
+        )
+
+    # User B has no link for P: the join yields no row -> not_linked. A reverted
+    # global-column read would return 'A-GLOBAL-KEY' here and skip not_linked.
+    assert result_b["status"] == "not_linked", (
+        f"cross-user LEAK: user B saw user A's Zotero link; got {result_b}"
+    )
+    # User A's own link resolves -> proceeds past not_linked (no highlights to export).
+    assert result_a["status"] == "ok", f"user A's own Zotero link must resolve; got {result_a}"
 
 
 @pytest.mark.contract

@@ -34,6 +34,9 @@ if TYPE_CHECKING:
         TrackedAuthorUpdate,
     )
     from paper_ingestion.models.contradictions import (
+        ConsensusAssessment,
+        ConsensusClaim,
+        ConsensusResponse,
         ContradictionListResponse,
         ContradictionScanRequest,
         PaperContradictionResponse,
@@ -53,6 +56,13 @@ if TYPE_CHECKING:
         ExtractionTemplateUpdate,
         VerificationReport,
         VerificationResult,
+    )
+    from paper_ingestion.models.highlights import (
+        HighlightCreate,
+        HighlightRect,
+        HighlightResponse,
+        HighlightUpdate,
+        Rect,
     )
     from paper_ingestion.models.kg import (
         BatchCitationFetchResponse,
@@ -162,6 +172,9 @@ _SYMBOL_MODULE: dict[str, str] = {
     "TrackedAuthorResponse": "paper_ingestion.models.authors",
     "TrackedAuthorUpdate": "paper_ingestion.models.authors",
     # contradictions
+    "ConsensusAssessment": "paper_ingestion.models.contradictions",
+    "ConsensusClaim": "paper_ingestion.models.contradictions",
+    "ConsensusResponse": "paper_ingestion.models.contradictions",
     "ContradictionListResponse": "paper_ingestion.models.contradictions",
     "ContradictionScanRequest": "paper_ingestion.models.contradictions",
     "PaperContradictionResponse": "paper_ingestion.models.contradictions",
@@ -196,6 +209,12 @@ _SYMBOL_MODULE: dict[str, str] = {
     "KnowledgeGraphResponse": "paper_ingestion.models.kg",
     "RelationshipCreate": "paper_ingestion.models.kg",
     "RelationshipResponse": "paper_ingestion.models.kg",
+    # highlights
+    "HighlightCreate": "paper_ingestion.models.highlights",
+    "HighlightRect": "paper_ingestion.models.highlights",
+    "HighlightResponse": "paper_ingestion.models.highlights",
+    "HighlightUpdate": "paper_ingestion.models.highlights",
+    "Rect": "paper_ingestion.models.highlights",
     # notes
     "NoteCreate": "paper_ingestion.models.notes",
     "NoteResponse": "paper_ingestion.models.notes",
@@ -300,6 +319,9 @@ __all__ = [
     "CitationRelation",
     "Confidence",
     "ConfigEntry",
+    "ConsensusAssessment",
+    "ConsensusClaim",
+    "ConsensusResponse",
     "ContradictionListResponse",
     "ContradictionScanRequest",
     "CrossPaperAskRequest",
@@ -326,6 +348,10 @@ __all__ = [
     "FeedbackResponse",
     "GraphEdge",
     "GraphNode",
+    "HighlightCreate",
+    "HighlightRect",
+    "HighlightResponse",
+    "HighlightUpdate",
     "HybridSearchResult",
     "KGQueryResponse",
     "KeyFinding",
@@ -360,6 +386,7 @@ __all__ = [
     "PulseStatsResponse",
     "RecentFeedback",
     "RecomputePrioritiesResponse",
+    "Rect",
     "RelationshipCreate",
     "RelationshipResponse",
     "RelevanceScoreResponse",

@@ -82,7 +82,7 @@ function renderFeedView() {
   );
 }
 
-describe('FeedView — bulk selection wiring (NEW-H4)', () => {
+describe('FeedView — bulk selection wiring', () => {
   beforeEach(() => {
     useBulkSelection.setState({ selectedIds: new Set() });
   });

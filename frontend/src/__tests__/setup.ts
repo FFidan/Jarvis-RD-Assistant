@@ -2,6 +2,27 @@ import 'fake-indexeddb/auto';
 import '@testing-library/jest-dom';
 import { vi } from 'vitest';
 
+// pdf.js cannot render under jsdom, so globally stub the in-PDF reader library
+// and its worker asset. Tests that exercise the reader (PdfReaderPane.test)
+// provide their own richer file-scoped vi.mock, which takes precedence.
+vi.mock('react-pdf-highlighter-extended', () => ({
+  PdfLoader: () => null,
+  PdfHighlighter: () => null,
+  TextHighlight: () => null,
+  AreaHighlight: () => null,
+  MonitoredHighlightContainer: () => null,
+  useHighlightContainerContext: () => ({
+    highlight: { id: '', position: { boundingRect: {}, rects: [] }, content: {} },
+    isScrolledTo: false,
+  }),
+  usePdfHighlighterContext: () => ({
+    getCurrentSelection: () => null,
+    setTip: () => {},
+    updateTipPosition: () => {},
+  }),
+}));
+vi.mock('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: 'test-worker-url' }));
+
 // jsdom does not implement IntersectionObserver — stub for usePaperScrollSpy and similar.
 if (typeof IntersectionObserver === 'undefined') {
   global.IntersectionObserver = class IntersectionObserver {

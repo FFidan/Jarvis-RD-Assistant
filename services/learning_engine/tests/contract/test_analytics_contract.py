@@ -478,6 +478,50 @@ async def test_http_review_increments_cards_reviewed_total(
     )
 
 
+async def test_offline_sync_past_review_reflected_in_summary(
+    contract_two_users, contract_conn, _le_app, _configure_api_key
+):
+    """An offline review synced for a PAST in-window day increments daily_log for
+    THAT day, so /analytics/summary.cards_reviewed_total reflects it.
+
+    Guards daily_log (summary source) against diverging from review_logs (ground
+    truth) when offline reviews are reconciled days later.
+    """
+    import uuid
+
+    card_id_a = contract_two_users.card_id_a
+    user_a_id = contract_two_users.user_a_id
+    three_days_ago = datetime.now(UTC) - timedelta(days=3)
+    event = {
+        "idempotency_key": f"offline-past-{uuid.uuid4()}",
+        "card_id": card_id_a,
+        "rating": 3,
+        "reviewed_at": three_days_ago.isoformat(),
+        "review_duration_ms": 600,
+    }
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        sync_resp = await c.post("/api/review/sync", json={"reviews": [event]})
+    assert sync_resp.status_code == 200, sync_resp.text[:300]
+    assert sync_resp.json()["synced"] == 1
+
+    counted = await contract_conn.fetchval(
+        "SELECT cards_reviewed FROM daily_log WHERE user_id = $1 AND log_date = $2",
+        user_a_id,
+        three_days_ago.date(),
+    )
+    assert counted == 1, (
+        f"offline past review must increment daily_log for its own UTC day; got {counted!r}"
+    )
+
+    async with _client(_le_app, contract_two_users.cookie_a) as c:
+        summary_resp = await c.get("/api/analytics/summary", params={"days": 30})
+    assert summary_resp.status_code == 200, summary_resp.text[:300]
+    assert summary_resp.json()["cards_reviewed_total"] >= 1, (
+        "summary cards_reviewed_total must include offline-synced past reviews; "
+        f"got {summary_resp.json()['cards_reviewed_total']}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # §LE-001 — NULL arithmetic guard: COALESCE in daily_log DO UPDATE
 # ---------------------------------------------------------------------------

@@ -299,8 +299,8 @@ async def test_stage1_scored_candidate_has_expected_signals():
     signals = result[0].signals
     for key in ("embedding", "topic", "recency", "author_bonus"):
         assert key in signals, f"Missing signal: {key}"
-    # M-06: l2_penalty key dropped from signals (math still applied to embedding)
-    assert "l2_penalty" not in signals, "l2_penalty key must not be in signals (M-06)"
+    # l2_penalty key dropped from signals (math still applied to embedding)
+    assert "l2_penalty" not in signals, "l2_penalty key must not be in signals"
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +346,7 @@ async def test_stage1_with_negative_centroid_applies_penalty():
 
     assert len(result) == 1
     signals = result[0].signals
-    # M-06: l2_penalty key is gone; verify the math is still applied via embedding
+    # l2_penalty key is gone; verify the math is still applied via embedding
     assert "l2_penalty" not in signals
     expected_penalty = l2_lambda * 1.0  # cosine([1,0,0,0], [1,0,0,0]) = 1.0
     # embedding signal = 0.0 (no positive centroid) - penalty → negative

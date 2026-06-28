@@ -1,4 +1,4 @@
-"""Contract tests for audit_log append-only invariant (SEC-AUDIT-1).
+"""Contract tests for audit_log append-only invariant.
 
 # Verified: db/migrations/0090_audit_log_append_only.sql:5 (no_delete_audit_log)
 # Verified: db/migrations/0090_audit_log_append_only.sql:8 (no_update_audit_log)
@@ -7,10 +7,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import asyncpg
 import pytest
 
+from jarvis_common.testing import SharedConnPool
+from paper_ingestion.jobs import data_purge
 from paper_ingestion.jobs.data_purge import _anonymize_audit_log_for_users
 
 pytestmark = [
@@ -79,6 +83,70 @@ async def test_data_purge_anonymizes_audit_log_rows(
     assert "client_ip" not in metadata, "owner-override client_ip must be stripped"
     assert "raw_client_ip" not in metadata, "owner-override raw_client_ip must be stripped"
     assert metadata.get("action_detail") == "login", "non-PII metadata retained"
+
+
+async def test_data_purge_task_delete_and_anonymize_are_atomic(
+    contract_conn: asyncpg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production ``data_purge_task`` must wrap the user DELETE and audit anonymize atomically.
+
+    audit_log has no FK to users, so a failure landing between the hard DELETE
+    and ``_anonymize_audit_log_for_users`` would leave the purged user gone but
+    their audit PII retained forever (GDPR breach). This drives the REAL
+    ``data_purge_task`` (not a reconstruction) against a pool sharing
+    ``contract_conn``, and forces the anonymize step to raise *after* the DELETE
+    has run inside the production ``conn.transaction()``. Atomicity must roll the
+    DELETE back. This FAILS if the production ``conn.transaction()`` wrap is
+    reverted: the DELETE then stays applied and the seeded user disappears.
+    """
+    uid_raw = await contract_conn.fetchval(
+        "INSERT INTO users (email, role, deleted_at)"
+        " VALUES ($1, 'user', NOW() - INTERVAL '60 days') RETURNING id",
+        "purge-atomic@example.test",
+    )
+    assert uid_raw is not None
+    uid: int = uid_raw
+    await contract_conn.execute(
+        "INSERT INTO audit_log (action, resource, user_id, metadata)"
+        " VALUES ('test.atomic_purge', '/auth', $1,"
+        ' \'{"ip": "203.0.113.9", "action_detail": "login"}\')',
+        str(uid),
+    )
+
+    # Drive the production job against a pool sharing contract_conn, so the job's
+    # own conn.transaction() nests as a savepoint on the test's connection.
+    pool = SharedConnPool(contract_conn)
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool, qdrant_client=AsyncMock()))
+
+    # Qdrant purge "succeeds" so the uid is NOT excluded from the hard DELETE,
+    # and the anonymize raises INSIDE the production transaction AFTER the DELETE.
+    monkeypatch.setattr(data_purge, "_purge_qdrant_for_user", AsyncMock(return_value=0))
+    monkeypatch.setattr(
+        data_purge,
+        "_anonymize_audit_log_for_users",
+        AsyncMock(side_effect=RuntimeError("forced rollback mid-purge")),
+    )
+
+    # data_purge_task catches the failure internally (logs, never re-raises).
+    await data_purge.data_purge_task(app)
+
+    user_row = await contract_conn.fetchrow("SELECT id FROM users WHERE id = $1", uid)
+    assert user_row is not None, (
+        "hard-DELETE must roll back with the failed anonymize"
+        " — FAILS if the production conn.transaction() wrap is removed"
+    )
+
+    audit_row = await contract_conn.fetchrow(
+        "SELECT user_id, metadata FROM audit_log WHERE action = 'test.atomic_purge'"
+    )
+    assert audit_row is not None, "audit row must still exist after rollback"
+    assert audit_row["user_id"] == str(uid), (
+        "audit user_id must NOT remain anonymized after rollback"
+    )
+    raw_metadata = audit_row["metadata"]
+    metadata = json.loads(raw_metadata) if isinstance(raw_metadata, str) else raw_metadata
+    assert metadata.get("ip") == "203.0.113.9", "audit PII must be intact when the purge rolls back"
 
 
 async def test_audit_log_rule_reenabled_after_purge(

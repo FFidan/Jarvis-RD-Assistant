@@ -53,6 +53,7 @@ from jarvis_common.email import (
 )
 from jarvis_common.email import smtp_configured as _smtp_configured_probe
 from jarvis_common.net import _reject_non_public_host
+from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
 from jarvis_common.serialization import _coerce_bool
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
 from jarvis_common.settings import get_core_settings, get_secrets_settings
@@ -60,6 +61,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from paper_ingestion.deps import limiter
 from paper_ingestion.routers.auth import _hash_email
+from paper_ingestion.services.config_metadata import _ENCRYPTED_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +297,11 @@ def _require_setup_token(request: Request) -> None:
         return
     expected = get_secrets_settings().jarvis_setup_token
     if expected is None:
+        logger.warning(
+            "First-admin setup is unprotected: a state-changing setup request was "
+            "accepted with no JARVIS_SETUP_TOKEN configured and no admin yet. Set "
+            "JARVIS_SETUP_TOKEN (or run init-secrets) before exposing this instance."
+        )
         return
     provided = request.headers.get("X-Setup-Token", "")
     if not hmac.compare_digest(provided.encode(), expected.get_secret_value().encode()):
@@ -501,8 +508,9 @@ async def system_check(request: Request) -> SystemCheckResponse:
     return SystemCheckResponse(services=services, all_ok=all(s.ok for s in services))
 
 
-async def _persist_config(pool: Any, key: str, value: Any, *, encrypted: bool) -> None:
-    """Insert/update a single user_config row with the right column."""
+async def _persist_config(pool: Any, key: str, value: Any) -> None:
+    """Insert/update a single user_config row, encrypting iff *key* is a canonical secret."""
+    encrypted = key in _ENCRYPTED_KEYS
     if encrypted:
         ciphertext = encrypt_secret(str(value)).encode("ascii")
         async with pool.acquire() as conn:
@@ -674,19 +682,19 @@ async def configure_smtp(body: SmtpBody, request: Request) -> SmtpResponse:
             ) from exc
 
     pool = request.app.state.db_pool
-    await _persist_config(pool, "smtp.host", body.host, encrypted=False)
-    await _persist_config(pool, "smtp.port", body.port, encrypted=False)
+    await _persist_config(pool, "smtp.host", body.host)
+    await _persist_config(pool, "smtp.port", body.port)
     if body.user is not None:
-        await _persist_config(pool, "smtp.user", body.user, encrypted=False)
-    await _persist_config(pool, "smtp.from", body.from_email, encrypted=False)
+        await _persist_config(pool, "smtp.user", body.user)
+    await _persist_config(pool, "smtp.from", body.from_email)
     if body.password:
-        await _persist_config(pool, "smtp.pass", body.password, encrypted=True)
+        await _persist_config(pool, "smtp.pass", body.password)
     # Optional sender identity: None = keep, "" = clear (stored empty, which the
     # sender treats as absent). Validated + not secrets.
     if body.reply_to is not None:
-        await _persist_config(pool, "smtp.reply_to", body.reply_to, encrypted=False)
+        await _persist_config(pool, "smtp.reply_to", body.reply_to)
     if body.from_name is not None:
-        await _persist_config(pool, "smtp.from_name", body.from_name, encrypted=False)
+        await _persist_config(pool, "smtp.from_name", body.from_name)
 
     test_sent: bool | None = None
     test_error: str | None = None
@@ -784,6 +792,17 @@ async def create_first_admin(
             )
             user_id = int(user_row["id"])
 
+            # Record the first admin as the canonical owner so API-key→session
+            # login resolves an owner on a later multi-user box even when the
+            # OWNER_USER_ID env is unset. Same transaction as the user INSERT, so
+            # it commits/rolls back atomically. An env OWNER_USER_ID still wins.
+            await conn.execute(
+                "INSERT INTO user_config (user_id, key, value) VALUES (NULL, $1, $2::jsonb) "
+                "ON CONFLICT (user_id, key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()",
+                OWNER_USER_ID_CONFIG_KEY,
+                user_id,
+            )
+
             session_id = await conn.fetchval(
                 """
                 INSERT INTO sessions (user_id, expires_at)
@@ -830,7 +849,7 @@ async def configure_cloud_llm_keys(
     ):
         if value is None or not value.strip():
             continue
-        await _persist_config(pool, _CLOUD_LLM_KEY_MAP[provider], value.strip(), encrypted=True)
+        await _persist_config(pool, _CLOUD_LLM_KEY_MAP[provider], value.strip())
         saved.append(provider)
 
     # Re-push live: for each saved provider, if an active alias routes to a
@@ -903,7 +922,7 @@ async def configure_telegram_bot_token(
     """
     await require_unconfigured_or_admin(request)
     pool = request.app.state.db_pool
-    await _persist_config(pool, "telegram.bot_token", body.token, encrypted=True)
+    await _persist_config(pool, "telegram.bot_token", body.token)
     return TelegramBotTokenResponse(saved=True, restart_required=True)
 
 
@@ -943,7 +962,7 @@ async def configure_setup_mode(body: SetupModeBody, request: Request) -> SetupMo
     """
     await require_unconfigured_or_admin(request)
     pool = request.app.state.db_pool
-    await _persist_config(pool, "setup.mode", body.mode, encrypted=False)
+    await _persist_config(pool, "setup.mode", body.mode)
     return SetupModeResponse(mode=body.mode, restart_required=False)
 
 

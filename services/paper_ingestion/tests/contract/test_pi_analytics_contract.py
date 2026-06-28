@@ -278,3 +278,47 @@ async def test_c7_05_fetch_and_process_no_pdf_returns_no_pdf_status(
         f"Expected status=no_pdf when no PDF available; got {body}"
     )
     assert body.get("job_id") is None, f"job_id should be None for no_pdf branch; got {body}"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/analytics/fetch-and-process — enqueue failure reverts stub flag
+# ---------------------------------------------------------------------------
+
+
+async def test_c7_06_fetch_and_process_enqueue_failure_reverts_stub_flag(
+    contract_two_users, contract_conn, _pi_app_with_pool, _configure_api_key
+):
+    """A defer_async failure must revert metadata.stub so the row stays retryable.
+
+    Promotes a local-PDF stub, but the enqueue raises. The handler must return
+    503 AND leave metadata.stub='true' (re-flipped) so the opening
+    SELECT … metadata->>'stub'='true' still matches on the next attempt.
+    """
+    stub_id = await contract_conn.fetchval(
+        """
+        INSERT INTO papers (external_id, source_type, title, authors, url, metadata,
+                            pdf_downloaded, pdf_local_path, discovered_by)
+        VALUES ('stub-enqueue-fail', 'arxiv', 'Enqueue-fail stub', ARRAY['A'],
+                'https://example.test/p', '{"stub": "true"}'::jsonb,
+                TRUE, '/tmp/dummy.pdf', $1)
+        RETURNING id
+        """,
+        contract_two_users.user_a_id,
+    )
+    await contract_conn.execute(
+        "INSERT INTO user_library (user_id, paper_id, added_via) VALUES ($1, $2, 'manual_save')",
+        contract_two_users.user_a_id,
+        stub_id,
+    )
+
+    failing_task = AsyncMock()
+    failing_task.defer_async = AsyncMock(side_effect=RuntimeError("broker unreachable"))
+    with patch.dict("jarvis_common.task_registry._TASK_MAP", {"paper.process": failing_task}):
+        async with _make_client(_pi_app_with_pool, contract_two_users.cookie_a) as c:
+            resp = await c.post("/api/analytics/fetch-and-process", json={"paper_id": stub_id})
+
+    assert resp.status_code == 503, resp.text[:300]
+    metadata = await contract_conn.fetchval("SELECT metadata FROM papers WHERE id = $1", stub_id)
+    assert metadata.get("stub") == "true", (
+        f"Stub flag must be reverted on enqueue failure so retry still matches; got {metadata!r}"
+    )

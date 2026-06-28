@@ -5,6 +5,7 @@ import {
   FolderKanban,
   Tag,
   Bell,
+  AlertTriangle,
 } from 'lucide-react';
 import { MetricTile } from '@/components/MetricTile';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -14,6 +15,7 @@ import type { DashboardMetrics } from '@/types';
 interface MetricTileGridProps {
   metrics: DashboardMetrics | undefined;
   isLoading: boolean;
+  isError?: boolean;
 }
 
 const SKELETON_COUNT = 5;
@@ -32,7 +34,7 @@ function SkeletonTile() {
   );
 }
 
-export function MetricTileGrid({ metrics, isLoading }: MetricTileGridProps) {
+export function MetricTileGrid({ metrics, isLoading, isError }: MetricTileGridProps) {
   const unread = metrics?.unread_papers ?? 0;
   const pending = metrics?.pending_papers ?? 0;
   const librarySubtitle =
@@ -61,6 +63,15 @@ export function MetricTileGrid({ metrics, isLoading }: MetricTileGridProps) {
       href: '/settings',
     },
   ];
+
+  if (isError) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-hair p-4 text-sm text-destructive">
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        <span>Dashboard unavailable — retry later or refresh the page.</span>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (

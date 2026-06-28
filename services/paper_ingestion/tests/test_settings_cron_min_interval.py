@@ -1,13 +1,14 @@
-"""H17 — Cron minimum interval validation for pulse.cron.
+"""Cron minimum interval validation for pulse.cron.
 
 Verifies that the settings endpoint rejects cron expressions that fire more
 than once per hour with HTTP 422 (validation error).
 
-Also covers the rollback branch of _apply_cron_reschedule.
+Also covers the rollback branch of _apply_cron_reschedule and the
+scheduler-apply warning surface added to write_config (_apply_schedules).
 """
 
 from __future__ import annotations
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from paper_ingestion.services.config_validators import _validate_cron
@@ -36,7 +37,7 @@ def test_pulse_cron_rejects_sub_hourly_schedule(expr: str):
     ],
 )
 def test_pulse_cron_accepts_valid_schedule(expr: str):
-    """H17 positive path: hourly-or-longer cron expressions must be accepted (D5-11)."""
+    """Positive path: hourly-or-longer cron expressions must be accepted."""
     _validate_cron(expr)  # must not raise
 
 
@@ -138,3 +139,114 @@ async def test_apply_cron_reschedule_rolls_back_with_none_old_cron():
 
     assert len(rollback_calls) == 1
     assert rollback_calls[0][1] is None, "None old_cron must propagate to rollback factory"
+
+
+# ---------------------------------------------------------------------------
+# _apply_schedules: failure surface (M16)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_schedules_pulse_failure_returns_warning_not_raise():
+    """_apply_schedules catches a pulse_cron failure and returns its name, never raises."""
+    from paper_ingestion.services.config_write import _apply_schedules
+
+    mock_scheduler = MagicMock()
+    mock_pool = MagicMock()
+
+    with patch(
+        "paper_ingestion.services.config_write.apply_pulse_cron",
+        side_effect=RuntimeError("scheduler down"),
+    ):
+        failed = await _apply_schedules(
+            db_pool=mock_pool,
+            scheduler=mock_scheduler,
+            key="pulse.cron",
+            value="0 4 * * *",
+            cron_ctx=(None, None),
+        )
+
+    assert failed == ["pulse_cron"], "pulse_cron must appear in the failed list on raise"
+
+
+@pytest.mark.asyncio
+async def test_apply_schedules_zotero_failure_returns_warning_not_raise():
+    """_apply_schedules catches a zotero_cron failure and returns its name, never raises."""
+    from paper_ingestion.services.config_write import _apply_schedules
+
+    mock_pool = MagicMock()
+
+    with patch(
+        "paper_ingestion.services.config_write.apply_zotero_cron",
+        side_effect=RuntimeError("zotero scheduler down"),
+    ):
+        failed = await _apply_schedules(
+            db_pool=mock_pool,
+            scheduler=MagicMock(),
+            key="zotero.poll_cron",
+            value="0 3 * * *",
+            cron_ctx=(None, None),
+        )
+
+    assert failed == ["zotero_cron"]
+
+
+@pytest.mark.asyncio
+async def test_apply_schedules_fetch_interval_failure_returns_warning_not_raise():
+    """_apply_schedules catches a fetch_interval failure and returns its name, never raises."""
+    from paper_ingestion.services.config_write import _apply_schedules
+
+    with patch(
+        "paper_ingestion.services.config_write.apply_fetch_interval",
+        side_effect=RuntimeError("scheduler down"),
+    ):
+        failed = await _apply_schedules(
+            db_pool=MagicMock(),
+            scheduler=MagicMock(),
+            key="automation.fetch_interval_hours",
+            value=6,
+            cron_ctx=(None, None),
+        )
+
+    assert failed == ["fetch_interval"]
+
+
+@pytest.mark.asyncio
+async def test_write_config_scheduler_failure_returns_warning_not_500():
+    """A failing pulse_cron scheduler apply yields ConfigWriteResult with schedule_apply_warnings.
+
+    The DB commit stands (write_config must not raise); the warning names the
+    failed scheduler so callers can surface it to the user.
+    """
+    from paper_ingestion.services.config_write import ConfigWriteResult, write_config
+
+    # Minimal DB mock: fetchrow for old-cron pre-read, execute for UPSERT.
+    mock_conn = AsyncMock()
+    mock_conn.fetchrow.return_value = None  # no existing pulse.cron row
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value = ctx
+
+    with patch(
+        "paper_ingestion.services.config_write.apply_pulse_cron",
+        side_effect=RuntimeError("scheduler is down"),
+    ):
+        result = await write_config(
+            db_pool=mock_pool,
+            scheduler=MagicMock(),
+            http_client=AsyncMock(),
+            ollama_url="http://localhost:11434",
+            key="pulse.cron",
+            value="0 4 * * *",
+            caller_user_id=None,
+        )
+
+    assert isinstance(result, ConfigWriteResult), "write_config must return ConfigWriteResult"
+    assert result.display_value == "0 4 * * *"
+    assert "pulse_cron" in result.schedule_apply_warnings, (
+        "Failed scheduler apply must be named in schedule_apply_warnings"
+    )
+    # DB conn.execute was called (UPSERT committed before scheduler was attempted).
+    assert mock_conn.execute.called, "DB UPSERT must be committed even when scheduler fails"

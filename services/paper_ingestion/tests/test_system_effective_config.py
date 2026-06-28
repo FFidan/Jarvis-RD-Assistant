@@ -133,9 +133,17 @@ def test_role_code_defaults_mirror_canonical_fallbacks():
     M1.5 mirrors the role defaults locally to avoid importing the FastAPI entrypoint at
     runtime. This test pins the mirror to ``_LITELLM_ROLE_FALLBACKS`` so a default change
     that is not reflected here fails loudly — a drift-detector must not silently drift.
+    Both structures must also agree with the single-source constants so future
+    per-file edits are caught immediately.
     """
+    from paper_ingestion.constants import FAST_MODEL_DEFAULT, SMART_MODEL_DEFAULT
     from paper_ingestion.main import _LITELLM_ROLE_FALLBACKS
     from paper_ingestion.routers.system import _ROLE_CODE_DEFAULTS
 
     for role, default in _ROLE_CODE_DEFAULTS.items():
         assert default == _LITELLM_ROLE_FALLBACKS[f"llm.{role}_model"][1]
+
+    assert _ROLE_CODE_DEFAULTS["smart"] == SMART_MODEL_DEFAULT
+    assert _ROLE_CODE_DEFAULTS["fast"] == FAST_MODEL_DEFAULT
+    assert _LITELLM_ROLE_FALLBACKS["llm.smart_model"][1] == SMART_MODEL_DEFAULT
+    assert _LITELLM_ROLE_FALLBACKS["llm.fast_model"][1] == FAST_MODEL_DEFAULT

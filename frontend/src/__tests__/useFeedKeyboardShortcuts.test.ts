@@ -265,9 +265,9 @@ describe('useFeedKeyboardShortcuts', () => {
     expect(onNext).not.toHaveBeenCalled();
   });
 
-  // ── M17 — ref-stability ───────────────────────────────────────────────────
+  // ── ref-stability ─────────────────────────────────────────────────────────
 
-  describe('M17 — ref-stability: listener registered exactly once', () => {
+  describe('ref-stability: listener registered exactly once', () => {
     let addSpy: ReturnType<typeof vi.spyOn>;
 
     beforeEach(() => {

@@ -155,9 +155,9 @@ class JarvisCommonSettings(BaseSettings):
     trusted_proxy_cidrs: str = Field(
         default="",
         description=(
-            "Comma-separated list of additional trusted proxy CIDRs "
-            "(TRUSTED_PROXY_CIDRS).  Appended to the built-in default list "
-            "inside ``http_rate_limiter``."
+            "Comma-separated list of trusted proxy CIDRs (TRUSTED_PROXY_CIDRS). "
+            "When non-empty, this REPLACES the built-in default (loopback only) "
+            "inside ``http_rate_limiter``; when empty, the default is used."
         ),
     )
 

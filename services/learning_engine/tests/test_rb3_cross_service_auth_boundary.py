@@ -146,7 +146,7 @@ def test_quick_add_task_is_session_only_by_design() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SEC-OWNER-1: executive My-Day routes — owner-override resolver pinned
+# Executive My-Day routes — owner-override resolver pinned
 # ---------------------------------------------------------------------------
 
 

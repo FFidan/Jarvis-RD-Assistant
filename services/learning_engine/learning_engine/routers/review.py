@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 from datetime import UTC, datetime, timedelta
 
 import asyncpg
@@ -23,6 +24,22 @@ from learning_engine.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_DESIRED_RETENTION = 0.9
+_MIN_DESIRED_RETENTION = 0.01
+_MAX_DESIRED_RETENTION = 0.99
+
+
+def _clamp_desired_retention(value: float) -> float:
+    """Constrain a user-configured FSRS retention to the scheduler's usable open interval.
+
+    py-fsrs requires desired_retention in (0, 1); non-finite values, 0, negatives,
+    or >=1 yield degenerate/negative intervals rather than an exception. Fall back
+    to the default for non-finite input; clamp to [0.01, 0.99] otherwise.
+    """
+    if not math.isfinite(value):
+        return _DEFAULT_DESIRED_RETENTION
+    return max(_MIN_DESIRED_RETENTION, min(_MAX_DESIRED_RETENTION, value))
 
 
 def _to_utc(dt: datetime) -> datetime:
@@ -68,7 +85,7 @@ async def _build_fsrs_manager_from_db(
     for row in rows:
         try:
             if row["key"] == "fsrs.desired_retention":
-                desired_retention = float(row["value"])
+                desired_retention = _clamp_desired_retention(float(row["value"]))
             elif row["key"] == "fsrs.learning_steps":
                 steps_raw = (
                     json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
@@ -155,10 +172,12 @@ async def submit_review(
             )
 
             await conn.execute(
-                "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() WHERE id = $3",
+                "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
+                "WHERE id = $3 AND user_id = $4",
                 new_state,
                 next_due,
                 card_id,
+                user_id,
             )
 
             log_id = await conn.fetchval(
@@ -205,7 +224,6 @@ async def sync_reviews(
     synced = 0
     skipped = 0
     already_synced = 0
-    new_today = 0  # newly-inserted reviews whose reviewed_at is today (UTC)
     if not body.reviews:
         return ReviewSyncResponse(synced=0, skipped=0, already_synced=0)
 
@@ -228,7 +246,9 @@ async def sync_reviews(
 
     # Process events in chunks of 50; acquire a fresh connection per chunk.
     _batch_size = 50
-    events = body.reviews
+    # Replay oldest-first: per-card FSRS state must advance chronologically even
+    # if a client submits out of order. Stable sort preserves equal-timestamp order.
+    events = sorted(body.reviews, key=lambda e: _to_utc(e.reviewed_at).astimezone(UTC))
     for batch_start in range(0, len(events), _batch_size):
         batch = events[batch_start : batch_start + _batch_size]
         async with db_pool.acquire() as conn:
@@ -250,7 +270,9 @@ async def sync_reviews(
                         skipped += 1
                         continue
                     new_state, log_dict, next_due = fsrs_manager.schedule_review(
-                        card["fsrs_state"], event.rating.value
+                        card["fsrs_state"],
+                        event.rating.value,
+                        review_datetime=_to_utc(event.reviewed_at).astimezone(UTC),
                     )
                     inserted_log_id = await conn.fetchval(
                         """
@@ -286,23 +308,21 @@ async def sync_reviews(
                         user_id,
                     )
                     reviewed_at_utc = _to_utc(event.reviewed_at).astimezone(UTC)
-                    if reviewed_at_utc.date() == datetime.now(UTC).date():
-                        new_today += 1
+                    # Atomic with the review_logs insert above: daily_log is the
+                    # per-day denormalization of review_logs, keyed by the event's
+                    # own UTC date so offline reviews land on the day they happened.
+                    await conn.execute(
+                        """
+                        INSERT INTO daily_log (user_id, log_date, cards_reviewed)
+                        VALUES ($1, $2, 1)
+                        ON CONFLICT (user_id, log_date)
+                        DO UPDATE SET cards_reviewed = COALESCE(daily_log.cards_reviewed, 0) + 1
+                        """,
+                        user_id,
+                        reviewed_at_utc.date(),
+                    )
                 applied.add(event.idempotency_key)
                 synced += 1
-
-    if new_today > 0:
-        async with db_pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO daily_log (user_id, log_date, cards_reviewed)
-                VALUES ($1, CURRENT_DATE, $2)
-                ON CONFLICT (user_id, log_date)
-                DO UPDATE SET cards_reviewed = COALESCE(daily_log.cards_reviewed, 0) + $2
-                """,
-                user_id,
-                new_today,
-            )
 
     return ReviewSyncResponse(synced=synced, skipped=skipped, already_synced=already_synced)
 
@@ -378,7 +398,12 @@ async def get_stats(
             )
             streak_days = compute_streak(
                 [
-                    datetime(r["review_date"].year, r["review_date"].month, r["review_date"].day)
+                    datetime(
+                        r["review_date"].year,
+                        r["review_date"].month,
+                        r["review_date"].day,
+                        tzinfo=UTC,
+                    )
                     for r in streak_rows
                 ]
             )

@@ -108,7 +108,7 @@ async def upsert_journal_entry(
 # GET /api/my-day/yesterday  (on-the-fly rollup — NO materialized job)
 # ---------------------------------------------------------------------------
 #
-# Spec §3.2 / §4.2: § Yesterday is derived live from existing tables, removing
+# Yesterday is derived live from existing tables, removing
 # the stated daily-rollup-job blocker. ``tz_offset_minutes`` is the caller's UTC
 # offset in minutes (minutes EAST of UTC, i.e. JS ``-getTimezoneOffset()``); the
 # server stores no per-user timezone so the client supplies it. Default 0 = UTC.

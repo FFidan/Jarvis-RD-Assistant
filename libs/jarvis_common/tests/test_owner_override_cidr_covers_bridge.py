@@ -2,7 +2,7 @@
 cover the jarvis bridge subnet, or the Telegram bot's per-user (X-Owner-User-Id)
 service calls 403 on a default deploy.
 
-Regression guard for the audit finding C1: the bare code default is now
+Regression guard: the bare code default is now
 deny-by-default loopback-only (127.0.0.0/8), which does NOT cover the jarvis
 bridge (JARVIS_NET_SUBNET, default 10.137.241.0/24), so docker-compose.yml must
 set OWNER_OVERRIDE_ALLOWED_CIDRS to track JARVIS_NET_SUBNET. This test fails if

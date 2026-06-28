@@ -1,5 +1,5 @@
 /**
- * FacetRail component tests — F1 Feed IA Redesign
+ * FacetRail component tests — Feed IA Redesign
  *
  * Coverage:
  *  - §Status counts render for inbox/library/trash

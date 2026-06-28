@@ -175,7 +175,7 @@ async def test_unpair_not_paired_chat_replies_informational():
 
 # test_whoami_paired_chat_shows_paired_since — deleted; real DB read covered by
 #   services/telegram_bot/tests/contract/test_tg_contract.py::test_whoami_command_reads_real_pairing
-# Note: DOM-D-07 leak assertion retained in test_whoami_does_not_leak_db_user_id below.
+# Note: DB PK leak assertion retained in test_whoami_does_not_leak_db_user_id below.
 
 
 @pytest.mark.asyncio
@@ -213,13 +213,13 @@ async def test_whoami_unpaired_even_when_chat_matches_env_var():
 
 
 # ---------------------------------------------------------------------------
-# DOM-D-05: /pair rebound — second pairing from a new chat emits audit + notify
+# /pair rebound — second pairing from a new chat emits audit + notify
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_pair_rebound_emits_system_event_and_notifies_prior_chat():
-    """DOM-D-05: pairing from a new chat displacing an existing pairing must:
+    """Pairing from a new chat displacing an existing pairing must:
     - emit a system_events 'pairing.rebound' audit entry via log_event
     - attempt to notify the prior chat_id via bot.send_message
     - still succeed and reply Paired to the new chat
@@ -272,7 +272,7 @@ async def test_pair_rebound_emits_system_event_and_notifies_prior_chat():
 
 @pytest.mark.asyncio
 async def test_pair_rebound_stale_prior_chat_does_not_fail_new_pairing():
-    """DOM-D-05: if notifying prior chat raises (stale/blocked), pairing still succeeds."""
+    """If notifying prior chat raises (stale/blocked), pairing still succeeds."""
     future = datetime.now(UTC) + timedelta(minutes=10)
     conn = _make_conn()
     upsert_result = {"was_update": True, "prior_chat_id": 9999}
@@ -371,13 +371,13 @@ async def test_pair_chat_already_paired_to_another_account():
 
 
 # ---------------------------------------------------------------------------
-# DOM-D-07: /whoami must not leak raw DB user_id (PK)
+# /whoami must not leak raw DB user_id (PK)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_whoami_does_not_leak_db_user_id():
-    """DOM-D-07: /whoami reply must contain no 'user_id=<digits>' pattern."""
+    """/whoami reply must contain no 'user_id=<digits>' pattern."""
     paired_at = datetime.now(UTC)
     row = {
         "user_id": 12345678,
@@ -391,12 +391,8 @@ async def test_whoami_does_not_leak_db_user_id():
     await whoami_command(update, context)
 
     text = update.message.reply_text.call_args[0][0]
-    assert not re.search(r"user_id=\d+", text), (
-        f"DOM-D-07: raw DB PK leaked in /whoami reply: {text!r}"
-    )
-    assert "12345678" not in text, (
-        f"DOM-D-07: raw numeric PK 12345678 leaked in /whoami reply: {text!r}"
-    )
+    assert not re.search(r"user_id=\d+", text), f"raw DB PK leaked in /whoami reply: {text!r}"
+    assert "12345678" not in text, f"raw numeric PK 12345678 leaked in /whoami reply: {text!r}"
 
 
 # ---------------------------------------------------------------------------

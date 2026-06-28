@@ -12,6 +12,7 @@ from paper_ingestion.services.contradiction_models import ContradictionClassific
 from paper_ingestion.services.contradictions import (
     ContradictionCandidate,
     VerifiedFinding,
+    _classify_candidate,
     _load_verified_findings,
     _persist_contradiction,
     _polarity_score,
@@ -19,6 +20,7 @@ from paper_ingestion.services.contradictions import (
     list_contradictions,
     scan_contradictions,
 )
+from pydantic import ValidationError
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -242,6 +244,8 @@ async def test_scan_contradictions_persists_only_when_both_quotes_verify(monkeyp
         assert model
         return ContradictionClassification(
             is_contradiction=True,
+            stance="opposes",
+            claim_topic="effect of the method on accuracy",
             contradiction_type="result",
             explanation="The reported accuracy direction conflicts.",
             quote_a="Method improves accuracy.",
@@ -334,6 +338,8 @@ async def test_scan_contradictions_discards_unverified_llm_quotes(monkeypatch):
     ):
         return ContradictionClassification(
             is_contradiction=True,
+            stance="opposes",
+            claim_topic="whether the method conflicts",
             contradiction_type="direct",
             explanation="The reported findings directly conflict with each other.",
             quote_a="invented A",
@@ -454,7 +460,7 @@ def test_polarity_uses_word_boundaries():
 
 
 # ---------------------------------------------------------------------------
-# B2.3 — cross-ref pre-filter for library-wide scans (PI-EDGE-005)
+# Cross-ref pre-filter for library-wide scans
 # ---------------------------------------------------------------------------
 
 
@@ -596,6 +602,131 @@ def test_persist_contradiction_dedup_uses_direct_equality():
 
 
 # ---------------------------------------------------------------------------
+# stance + claim_topic (consensus view)
+# ---------------------------------------------------------------------------
+
+
+def _make_candidate(paper_a_id: int = 1, paper_b_id: int = 2) -> ContradictionCandidate:
+    return ContradictionCandidate(
+        a=VerifiedFinding(
+            paper_id=paper_a_id,
+            title="Paper A",
+            finding="Finding A",
+            quote="Quote A",
+            page_number=1,
+            cross_reference_ids=frozenset(),
+        ),
+        b=VerifiedFinding(
+            paper_id=paper_b_id,
+            title="Paper B",
+            finding="Finding B",
+            quote="Quote B",
+            page_number=2,
+            cross_reference_ids=frozenset(),
+        ),
+        score=0.8,
+        reason="cross_reference",
+    )
+
+
+def test_supports_stance_requires_quotes():
+    """A persisted stance (supports/opposes) must carry non-empty quotes."""
+    with pytest.raises(ValidationError):
+        ContradictionClassification(
+            is_contradiction=False,
+            stance="supports",
+            claim_topic="whether X holds",
+            explanation="Both findings affirm the claim.",
+            quote_a="",
+            quote_b="",
+            confidence=0.7,
+        )
+
+
+def test_neutral_stance_allows_empty_quotes():
+    """A 'neutral' stance is never persisted, so it does not require quotes."""
+    model = ContradictionClassification(
+        is_contradiction=False,
+        stance="neutral",
+        explanation="The findings differ only in scope.",
+        confidence=0.4,
+    )
+    assert model.stance == "neutral"
+    assert model.quote_a == "" and model.quote_b == ""
+
+
+@pytest.mark.asyncio
+async def test_classify_candidate_drops_neutral(monkeypatch):
+    """_classify_candidate returns None for a neutral stance (not persisted)."""
+    neutral = ContradictionClassification(
+        is_contradiction=False,
+        stance="neutral",
+        explanation="The findings differ only in scope.",
+        confidence=0.4,
+    )
+
+    async def fake_call(*_args, **_kwargs):
+        return neutral
+
+    monkeypatch.setattr("paper_ingestion.services.contradictions.call_llm_structured", fake_call)
+    result = await _classify_candidate(AsyncMock(), AsyncMock(), _make_candidate(), model="m")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_classify_candidate_keeps_supports(monkeypatch):
+    """_classify_candidate keeps a 'supports' stance so it reaches verify/persist."""
+    supports = ContradictionClassification(
+        is_contradiction=False,
+        stance="supports",
+        claim_topic="whether X holds",
+        explanation="Both findings affirm the claim.",
+        quote_a="Paper A supports X.",
+        quote_b="Paper B also supports X.",
+        confidence=0.8,
+    )
+
+    async def fake_call(*_args, **_kwargs):
+        return supports
+
+    monkeypatch.setattr("paper_ingestion.services.contradictions.call_llm_structured", fake_call)
+    result = await _classify_candidate(AsyncMock(), AsyncMock(), _make_candidate(), model="m")
+    assert result is not None
+    assert result.stance == "supports"
+
+
+@pytest.mark.asyncio
+async def test_persist_contradiction_writes_stance_and_claim_topic():
+    """_persist_contradiction passes stance + claim_topic as INSERT bind params."""
+    _, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord({"id": 55})
+
+    classification = ContradictionClassification(
+        is_contradiction=False,
+        stance="supports",
+        claim_topic="whether X holds",
+        explanation="Both findings affirm the claim.",
+        quote_a="Quote A",
+        quote_b="Quote B",
+        confidence=0.8,
+    )
+    result = await _persist_contradiction(
+        conn,
+        _make_candidate(),
+        classification,
+        page_a=1,
+        page_b=2,
+        model="test-model",
+        user_id=7,
+    )
+
+    assert result == 55
+    params = conn.fetchrow.await_args_list[0].args[1:]
+    assert "supports" in params, f"expected stance in INSERT params, got {params}"
+    assert "whether X holds" in params, f"expected claim_topic in INSERT params, got {params}"
+
+
+# ---------------------------------------------------------------------------
 # user_id scoping (cross-user isolation)
 # ---------------------------------------------------------------------------
 
@@ -656,6 +787,8 @@ async def test_persist_contradiction_writes_user_id():
     )
     classification = ContradictionClassification(
         is_contradiction=True,
+        stance="opposes",
+        claim_topic="conflict topic",
         contradiction_type="result",
         explanation="Conflict explanation.",
         quote_a="Quote A",

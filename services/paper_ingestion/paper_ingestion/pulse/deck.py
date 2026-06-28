@@ -92,7 +92,7 @@ async def _persist_deck_inner(
     await conn.execute("DELETE FROM pulse_cards WHERE deck_id = $1", deck_id)
 
     # -------------------------------------------------------------------------
-    # L3 safeguard — spec §7.3.1 two-pass min-candidate guarantee
+    # L3 safeguard — two-pass min-candidate guarantee
     #
     # Count how many of the incoming candidates would survive the 60-day
     # negative-feedback exclusion before committing to it.  If fewer than 20
@@ -101,7 +101,7 @@ async def _persist_deck_inner(
     # -------------------------------------------------------------------------
     external_ids = [sc.paper.external_id for sc in cards]
 
-    # spec §7.3.1 — count candidates that pass the 60d negative-feedback filter
+    # Count candidates that pass the 60d negative-feedback filter
     l3_pass_count: int = await conn.fetchval(
         """
         SELECT COUNT(*)
@@ -134,7 +134,7 @@ async def _persist_deck_inner(
             sc.reasoning_confidence.value if sc.reasoning_confidence is not None else None
         )
         if apply_l3_filter:
-            # spec §7.3.1 — exclude papers with 60d negative feedback for this user
+            # Exclude papers with 60d negative feedback for this user
             inserted_id = await conn.fetchval(
                 f"""
             INSERT INTO pulse_cards
@@ -147,7 +147,7 @@ async def _persist_deck_inner(
                   AND pus.user_id IS NOT DISTINCT FROM $11
             WHERE p.external_id = $2
               AND NOT ({EXCLUDED_STATE_SQL})
-              -- spec §7.3.1: exclude papers with 60d negative feedback for this user
+              -- Exclude papers with 60d negative feedback for this user
               AND NOT EXISTS (
                   SELECT 1 FROM recommendation_feedback rf
                    WHERE rf.paper_id = p.id

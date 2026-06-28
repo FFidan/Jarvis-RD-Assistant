@@ -27,6 +27,7 @@ const listUsersMock = vi.fn();
 const inviteUserMock = vi.fn();
 const updateUserRoleMock = vi.fn();
 const deleteUserMock = vi.fn();
+const restoreUserMock = vi.fn();
 const sendSignInLinkMock = vi.fn();
 
 vi.mock('sonner', () => ({
@@ -100,6 +101,7 @@ vi.mock('@/lib/api', async () => {
     inviteUser: (email: string, role: string) => inviteUserMock(email, role),
     updateUserRole: (userId: number, role: string) => updateUserRoleMock(userId, role),
     deleteUser: (userId: number) => deleteUserMock(userId),
+    restoreUser: (userId: number) => restoreUserMock(userId),
     sendSignInLink: (userId: number) => sendSignInLinkMock(userId),
   };
 });
@@ -269,7 +271,7 @@ describe('AdminUsersPage', () => {
   });
 });
 
-describe('per-row role select isolation (DOM-F-07)', () => {
+describe('per-row role select isolation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _mockRole = 'admin';
@@ -321,7 +323,7 @@ describe('per-row role select isolation (DOM-F-07)', () => {
   });
 });
 
-describe('per-row delete button isolation (DOM-F-07 delete)', () => {
+describe('per-row delete button isolation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _mockRole = 'admin';
@@ -365,7 +367,7 @@ describe('per-row delete button isolation (DOM-F-07 delete)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// H2 — mutation lifecycle: onMutate / onSettled wiring
+// mutation lifecycle: onMutate / onSettled wiring
 // ---------------------------------------------------------------------------
 
 describe('AdminUsersPage — role mutation lifecycle (H2)', () => {
@@ -512,6 +514,27 @@ describe('AdminUsersPage — send sign-in link', () => {
     });
   });
 
+  it('surfaces the manual link to copy when SMTP cannot deliver it', async () => {
+    const { toast } = await import('sonner');
+    const link = 'https://localhost:3001/auth/verify?token=xyz789';
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+    sendSignInLinkMock.mockResolvedValueOnce({ sent: true, sent_link: link });
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /send sign-in link to alice@example\.com/i }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/sign-in link to share/i)).toHaveValue(link);
+    });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // The link goes to the dialog, not a transient toast.
+    expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
+  });
+
   it('hides the send sign-in link button for soft-deleted rows', async () => {
     listUsersMock.mockResolvedValueOnce([
       _sampleUsers[0],
@@ -549,6 +572,89 @@ describe('AdminUsersPage — send sign-in link', () => {
 
     await waitFor(() => expect(aliceBtn).toBeDisabled());
     expect(adminBtn).not.toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Restore a soft-deleted user from the users table
+// ---------------------------------------------------------------------------
+
+describe('AdminUsersPage — restore soft-deleted user', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _mockRole = 'admin';
+    _mockUserId = 1;
+  });
+
+  function renderPageWithSpiedClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/admin/users']}>
+          <Routes>
+            <Route path="/admin/users" element={<AdminUsersPage />} />
+            <Route path="/" element={<div>HOME</div>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return { invalidateSpy };
+  }
+
+  const deletedAlice = { ..._sampleUsers[1], deleted_at: new Date().toISOString() };
+
+  it('renders a Restore control (not Send/Trash) for a soft-deleted row, restores on click, and invalidates the users query', async () => {
+    listUsersMock.mockResolvedValue([_sampleUsers[0], deletedAlice]);
+    restoreUserMock.mockResolvedValueOnce({ ..._sampleUsers[1], deleted_at: null });
+
+    const { invalidateSpy } = renderPageWithSpiedClient();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    const restoreBtn = screen.getByRole('button', { name: /restore alice@example\.com/i });
+    expect(restoreBtn).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /send sign-in link to alice@example\.com/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /remove alice@example\.com/i }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(restoreBtn);
+
+    await waitFor(() => {
+      expect(restoreUserMock).toHaveBeenCalledWith(2);
+    });
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: QUERY_KEYS.admin.users() });
+    });
+  });
+
+  it('surfaces the backend error detail via toast when restore fails (409 model-hmac)', async () => {
+    const { toast } = await import('sonner');
+    listUsersMock.mockResolvedValue([_sampleUsers[0], deletedAlice]);
+    restoreUserMock.mockRejectedValueOnce(
+      new ApiError(
+        409,
+        '{"detail":"Set JARVIS_MODEL_HMAC_KEY (>=32 chars) before adding or restoring additional users — a derived key is unsafe on a multi-user deployment."}',
+      ),
+    );
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    await userEvent.click(screen.getByRole('button', { name: /restore alice@example\.com/i }));
+
+    await waitFor(() => {
+      expect(restoreUserMock).toHaveBeenCalledWith(2);
+    });
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        expect.stringContaining('JARVIS_MODEL_HMAC_KEY'),
+      );
+    });
   });
 });
 

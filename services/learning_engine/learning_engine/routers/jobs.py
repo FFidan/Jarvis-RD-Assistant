@@ -2,7 +2,7 @@
 
 Thin shim over :func:`jarvis_common.jobs_router.build_jobs_router` — see that
 module for endpoint contracts and shared invariants (LE-002 ownership
-coercion, SYM-002 mutable-default fix, ``noop.test`` toggle).
+coercion, mutable-default fix, ``noop.test`` toggle).
 
 ``card.generate_batch`` is intentionally excluded from the public allowlist;
 that batch operation is dispatched through ``/api/generation/batch`` with its

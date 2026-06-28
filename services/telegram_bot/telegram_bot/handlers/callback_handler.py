@@ -3,7 +3,7 @@
 Handles non-review callbacks triggered by inline keyboard buttons on
 paper listings, project listings, and task actions.
 
-Spec §5.3 callback name convention:
+Callback name convention:
     paper:<action>:<id>                              — lifecycle / curation
     paper:feedback_(pos|neg):<id>:<source>           — per-paper feedback signal
 
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Dispatch tables (spec §5.3)
+# Dispatch tables
 # ---------------------------------------------------------------------------
 
 
@@ -138,7 +138,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
 async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``paper:<action>:<id>`` — lifecycle / curation via backend API.
 
-    Spec §5.3 callback convention.  Dispatches via :data:`_PAPER_ACTION_ENDPOINTS`.
+    Callback convention.  Dispatches via :data:`_PAPER_ACTION_ENDPOINTS`.
     Preserves the H1 invariant (single ``query.answer()`` per success path).
     """
     query = update.callback_query
@@ -273,7 +273,7 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     Ownership is enforced server-side: the LE ``PUT /api/tasks/{id}`` endpoint scopes
     by the forwarded ``X-Owner-User-Id`` header, so a non-owned task returns 404 →
-    "not found" with no existence leak (TG-SEC-03 now lives in the LE contract).
+    "not found" with no existence leak.
     """
     query = update.callback_query
     if query is None:

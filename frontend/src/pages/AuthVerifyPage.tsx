@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import type { SessionUser } from '@/stores/auth-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { verifyMagicLink } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
@@ -17,22 +18,39 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
  *   (loginWithSession) and navigate to "/".
  * - On failure, navigate to /login?error=<reason>.
  *
- * StrictMode-safety: React 18 double-invokes effects in dev. We use a ref
- * guard so we only POST once even if the effect re-runs.
+ * StrictMode-safety: React 18 double-invokes effects in dev. The module-level
+ * Map dedupes the single-use token POST so both mounts share one in-flight
+ * promise — the live mount navigates on success; no double-POST, no spurious
+ * rejection from a consumed token.
  */
+
+// Dedupe the single-use verify across StrictMode's dev double-mount so the
+// token is POSTed exactly once; both mounts await the same promise.
+const inflightVerifications = new Map<string, Promise<SessionUser>>();
+
+function verifyOnce(token: string): Promise<SessionUser> {
+  let p = inflightVerifications.get(token);
+  if (!p) {
+    p = verifyMagicLink(token);
+    inflightVerifications.set(token, p);
+  }
+  return p;
+}
+
+/** Exposed only for test tear-down — call in beforeEach to prevent Map leakage across tests. */
+export function __resetVerifyDedupeForTests(): void {
+  inflightVerifications.clear();
+}
+
 export function AuthVerifyPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { loginWithSession } = useAuthStore();
   const [status, setStatus] = useState<'verifying' | 'error'>('verifying');
   const [errorMsg, setErrorMsg] = useState('');
-  const ranOnceRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (ranOnceRef.current) return;
-    ranOnceRef.current = true;
-
     const token = searchParams.get('token');
     if (!token) {
       navigate('/login?error=Missing+token', { replace: true });
@@ -42,17 +60,16 @@ export function AuthVerifyPage() {
     let cancelled = false;
     void (async () => {
       try {
-        const user = await verifyMagicLink(token);
+        const user = await verifyOnce(token);
         if (cancelled) return;
-        loginWithSession(user);
+        await loginWithSession(user);
+        if (cancelled) return;
         navigate('/', { replace: true });
       } catch (err) {
         if (cancelled) return;
         const message = errorMessage(err, 'Invalid or expired link');
         setErrorMsg(message);
         setStatus('error');
-        // Brief display window then redirect; this gives the user a chance
-        // to read what went wrong before getting bounced back to /login.
         timerRef.current = setTimeout(() => {
           navigate(`/login?error=${encodeURIComponent(message)}`, { replace: true });
         }, 2000);

@@ -39,15 +39,22 @@ export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
         {(index + 1).toString().padStart(2, '0')}
       </span>
 
-      {/* Completion circle */}
+      {/* Completion circle — 44px tap target on touch (data-touch-target); the
+          small dot is an inner span so the visual stays 14px while the hit-area
+          lifts to 44px on touch devices. */}
       <button
+        data-touch-target
         onClick={() => completeMutation.mutate()}
         disabled={completeMutation.isPending}
-        className={`h-3.5 w-3.5 rounded-full border-[1.5px] hover:bg-[var(--ink-blue-soft)] shrink-0 transition-colors ${
-          index === 0 ? 'border-[var(--ink-blue)]' : 'border-zinc-300 dark:border-zinc-700'
-        }`}
+        className="flex items-center justify-center shrink-0 disabled:opacity-40"
         aria-label="Mark task done"
-      />
+      >
+        <span
+          className={`h-3.5 w-3.5 rounded-full border-[1.5px] hover:bg-[var(--ink-blue-soft)] transition-colors ${
+            index === 0 ? 'border-[var(--ink-blue)]' : 'border-zinc-300 dark:border-zinc-700'
+          }`}
+        />
+      </button>
 
       {/* Title */}
       <span className="text-[13.5px] text-soft group-hover:text-strong truncate flex-1">
@@ -69,7 +76,7 @@ export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
         </button>
       )}
 
-      {/* Focus button — always visible (§1d); binds this task to the Pomodoro */}
+      {/* Focus button — always visible; binds this task to the Pomodoro */}
       <button
         data-touch-target
         onClick={() =>
@@ -87,7 +94,7 @@ export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
         data-touch-target
         onClick={() => deleteMutation.mutate()}
         disabled={deleteMutation.isPending}
-        className="opacity-0 group-hover:opacity-100 h-6 w-6 flex items-center justify-center text-faint hover:text-red-600 transition-opacity shrink-0"
+        className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 h-6 w-6 flex items-center justify-center text-faint hover:text-red-600 transition-opacity shrink-0"
         aria-label="Delete task"
       >
         ✕

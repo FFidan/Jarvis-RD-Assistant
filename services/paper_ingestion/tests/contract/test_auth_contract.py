@@ -202,7 +202,7 @@ async def test_a18_logout_without_session_returns_204(
 
 
 # ---------------------------------------------------------------------------
-# AUTH-03: non-ASCII api_key body must return 403, not 500
+# Non-ASCII api_key body must return 403, not 500
 # ---------------------------------------------------------------------------
 
 
@@ -210,7 +210,7 @@ async def test_a17_api_key_session_non_ascii_returns_403(
     _pi_app_with_pool,
     _configure_api_key,
 ):
-    """AUTH-03: POST /api/auth/api-key-session with a non-ASCII body key → 403, not 500.
+    """POST /api/auth/api-key-session with a non-ASCII body key → 403, not 500.
 
     Before the fix, ``hmac.compare_digest(submitted, _CACHED_API_KEY)`` raised
     ``TypeError: non-ASCII characters in compared strings`` when either operand
@@ -233,7 +233,7 @@ async def test_a17_api_key_session_non_ascii_returns_403(
 
 
 # ---------------------------------------------------------------------------
-# B1 / SEC-2: api-key-session multi-tenant gate (owner exemption + fallback)
+# api-key-session multi-tenant gate (owner exemption + fallback)
 #
 # Verified: services/paper_ingestion/paper_ingestion/routers/auth.py:391
 # (api_key_session gate). The endpoint binds the session to the configured
@@ -316,7 +316,7 @@ async def test_flag_on_without_owner_user_id_refuses_fallback_409(
     contract_conn,
     monkeypatch,
 ):
-    """SEC-2: flag ON, no OWNER_USER_ID, multi-user → lowest-id fallback refused (409)."""
+    """Multi-tenant gate ON, no OWNER_USER_ID, multi-user → lowest-id fallback refused (409)."""
     await _seed_user_with_role(contract_conn, "admin-a@example.com", "admin")
     await _seed_user_with_role(contract_conn, "admin-b@example.com", "admin")
     monkeypatch.delenv("OWNER_USER_ID", raising=False)
@@ -382,7 +382,7 @@ async def test_db_override_enables_multi_user_login(
     """The DB override (auth.api_key_login_enabled row) flips the gate when env is off.
 
     With OWNER_USER_ID set to a live admin the owner is already exempt, so to
-    exercise the DB-override read path use the SEC-2 branch: flag enabled purely
+    exercise the DB-override read path: flag enabled purely
     via the DB row, no OWNER_USER_ID, multi-user → fallback refused (409). A
     bare 403 would prove the override was NOT read.
     """
@@ -402,7 +402,68 @@ async def test_db_override_enables_multi_user_login(
         resp = await c.post("/api/auth/api-key-session", json={})
 
     assert resp.status_code == 409, (
-        f"DB override must enable the gate (then SEC-2 409s the fallback), "
+        f"DB override must enable the gate (then 409s the fallback), "
         f"got {resp.status_code}: {resp.text[:300]}"
     )
     assert "OWNER_USER_ID" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# [E] OWNER_USER_ID onboarding — the auto-written owner.user_id DB row resolves
+# the owner when the OWNER_USER_ID env is unset (first-admin wizard path).
+# ---------------------------------------------------------------------------
+
+
+async def test_db_owner_row_exempts_when_env_unset(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """[E]: with no OWNER_USER_ID env, the owner.user_id DB row resolves the owner,
+    so the multi-tenant 409 does NOT fire and the session binds to that owner."""
+    from jarvis_common.owner import OWNER_USER_ID_CONFIG_KEY
+
+    owner_id = await _seed_user_with_role(contract_conn, "db-owner-admin@example.com", "admin")
+    await _seed_user_with_role(contract_conn, "db-owner-member@example.com", "user")
+    await contract_conn.execute(
+        "INSERT INTO user_config (user_id, key, value) VALUES (NULL, $1, $2::jsonb)",
+        OWNER_USER_ID_CONFIG_KEY,
+        owner_id,
+    )
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 200, (
+        f"DB owner row must resolve the owner (no env), got {resp.status_code}: {resp.text[:300]}"
+    )
+    assert resp.json()["id"] == owner_id
+    assert resp.json()["role"] == "admin"
+    assert "jarvis_session" in resp.cookies
+
+
+async def test_sec2_409_message_names_both_env_and_wizard(
+    _pi_app_with_pool,
+    _configure_api_key,
+    contract_conn,
+    monkeypatch,
+):
+    """With neither env nor an owner.user_id DB row, the 409 still fires and
+    its message names BOTH the env and the first-admin wizard paths."""
+    await _seed_user_with_role(contract_conn, "noowner-admin-a@example.com", "admin")
+    await _seed_user_with_role(contract_conn, "noowner-admin-b@example.com", "admin")
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.setenv("API_KEY_LOGIN_ENABLED", "true")
+
+    async with _make_unauthenticated_client(_pi_app_with_pool) as c:
+        resp = await c.post("/api/auth/api-key-session", json={})
+
+    assert resp.status_code == 409, (
+        f"No env and no DB owner row must still 409, got {resp.status_code}: {resp.text[:300]}"
+    )
+    detail = resp.json()["detail"]
+    assert "OWNER_USER_ID" in detail
+    assert "setup wizard" in detail, f"the error message must name the wizard path; got: {detail!r}"

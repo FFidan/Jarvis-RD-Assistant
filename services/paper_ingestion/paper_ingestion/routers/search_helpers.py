@@ -426,8 +426,22 @@ async def _load_local_library_matches(
         """
 
     # Scope library-preview to the caller's user_library when authenticated;
-    # single-user fallback returns canonical-corpus matches.
+    # single-user fallback returns canonical-corpus matches. The Zotero "in
+    # library" indicator is per-user: it is read from paper_user_zotero_links
+    # keyed on the resolved link owner (the caller, or the sole active user in
+    # single-user mode), never the vestigial global papers.zotero_item_key.
     async with db_pool.acquire() as conn:
+        from paper_ingestion.integrations.zotero_service import (  # noqa: PLC0415
+            _resolve_zotero_user_id,
+        )
+
+        # Resolve None (single-user) to the sole active user so the link join
+        # never keys on a NULL $1 (which would match no link row and silently
+        # drop the indicator). Genuinely ambiguous -> None -> no link row.
+        args.append(await _resolve_zotero_user_id(conn, args[0]))
+        link_join = (
+            f"LEFT JOIN paper_user_zotero_links l ON l.paper_id = p.id AND l.user_id = ${len(args)}"
+        )
         if args[0] is not None:  # user_id present
             rows = await conn.fetch(
                 f"""
@@ -438,7 +452,7 @@ async def _load_local_library_matches(
                        p.published_date,
                        p.url,
                        p.metadata,
-                       p.zotero_item_key,
+                       l.zotero_item_key AS zotero_item_key,
                        EXISTS (
                            SELECT 1
                            FROM project_papers pp
@@ -448,6 +462,7 @@ async def _load_local_library_matches(
                        ) AS has_project_links
                 FROM papers p
                 JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
+                {link_join}
                 WHERE TRUE
                 {candidate_predicate}
                 ORDER BY p.id ASC
@@ -467,7 +482,7 @@ async def _load_local_library_matches(
                        p.published_date,
                        p.url,
                        p.metadata,
-                       p.zotero_item_key,
+                       l.zotero_item_key AS zotero_item_key,
                        EXISTS (
                            SELECT 1
                            FROM project_papers pp
@@ -476,6 +491,7 @@ async def _load_local_library_matches(
                            WHERE pp.paper_id = p.id
                        ) AS has_project_links
                 FROM papers p
+                {link_join}
                 WHERE ($1::int IS NULL OR TRUE)
                 {candidate_predicate}
                 ORDER BY p.id ASC

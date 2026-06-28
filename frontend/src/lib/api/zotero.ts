@@ -22,6 +22,10 @@ export async function zoteroResync(paperId: number): Promise<{ job_id: string; s
   return apiFetch(`/api/zotero/resync/${paperId}`, { method: 'POST' });
 }
 
+export async function zoteroPushHighlights(paperId: number): Promise<{ job_id: string; status: string }> {
+  return apiFetch(`/api/zotero/push-highlights/${paperId}`, { method: 'POST' });
+}
+
 export async function zoteroPollNow(): Promise<{ job_id: string; status: string }> {
   return apiFetch('/api/zotero/poll', { method: 'POST' });
 }

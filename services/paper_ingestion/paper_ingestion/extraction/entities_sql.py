@@ -105,7 +105,7 @@ async def get_knowledge_graph(
     """Get the full knowledge graph or a filtered subset.
 
     When *user_id* is provided the result is scoped to entities that the
-    caller has at least one ``paper_entities`` row for (M-01).  Passing
+    caller has at least one ``paper_entities`` row.  Passing
     ``None`` preserves the legacy owner/server path (unscoped).
     """
     try:
@@ -255,7 +255,7 @@ async def query_knowledge_graph(
       3. else → generic name LIKE search across entities joined to paper_entities
 
     When *user_id* is provided the result is scoped to entities and
-    relationships the caller has ``paper_entities`` rows for (M-04).
+    relationships the caller has ``paper_entities`` rows for.
     Passing ``None`` preserves the legacy owner/server path (unscoped).
     """
     # Simple keyword extraction for SQL matching

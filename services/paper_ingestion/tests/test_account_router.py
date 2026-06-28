@@ -59,6 +59,8 @@ async def test_email_verification_sent_false_when_smtp_raises() -> None:
     pool, conn = make_pool_and_conn(
         fetchrow_side_effects=[user_row, None, user_row],
     )
+    # fetchval: cooldown check — None means no recent token, so mint proceeds.
+    conn.fetchval = AsyncMock(return_value=None)
     conn.execute = AsyncMock(return_value=None)
     request = _build_request(pool)
     body = AccountUpdate(email="new@example.com")

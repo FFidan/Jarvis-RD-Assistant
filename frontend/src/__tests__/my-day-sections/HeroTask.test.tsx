@@ -1,5 +1,5 @@
 /**
- * HeroTask — Pomodoro §1a controls: Pause/Resume, Skip break,
+ * HeroTask — Pomodoro controls: Pause/Resume, Skip break,
  * Stop & log, and cycle progress dots.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';

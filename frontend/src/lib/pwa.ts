@@ -3,7 +3,7 @@
  *
  * Contract reference:
  *   internal design spec (archived)
- *   "Offline / PWA contract — CANONICAL" §1, §2, §7.
+ *   "Offline / PWA contract — CANONICAL".
  *
  * Responsibilities (foundation only — UI lives elsewhere):
  *   - Register `/sw.js` after load (dev-safe: skipped in DEV / non-secure ctx).

@@ -1,4 +1,4 @@
-<!-- verified-against-UI: 2026-06-13 | routes: /, /my-day, /pulse, /feed, /feed?surface=search, /projects, /knowledge, /citations, /extractions, /cards, /analytics, /ask, /admin/users, /admin/system-health, /admin/audit-log, /logs, /settings -->
+<!-- verified-against-UI: 2026-06-27 | routes: /, /my-day, /pulse, /feed, /feed?surface=search, /projects, /knowledge, /citations, /consensus, /extractions, /cards, /analytics, /ask, /admin/users, /admin/system-health, /admin/audit-log, /logs, /settings -->
 
 # Navigation
 
@@ -27,7 +27,7 @@ The sidebar is divided into five labelled groups identified by Roman numerals. E
 | Group | Items (route) |
 |-------|---------------|
 | **Ⅰ Today** — *What needs your attention right now.* | [Home](home-my-day.md) (`/`) · [My Day](home-my-day.md) (`/my-day`) · [Pulse Deck](pulse.md) (`/pulse`) · [Library](research-feed.md) (`/feed`) · [Discover](research-feed.md) (`/feed?surface=search`) |
-| **Ⅱ Read** — *Your library, projects, and the graph that connects them.* | [Projects](projects.md) (`/projects`) · [Knowledge Graph](knowledge-graph.md) (`/knowledge`) · [Citation Graph](citation-graph.md) (`/citations`) · [Extraction Table](extraction-table.md) (`/extractions`) |
+| **Ⅱ Read** — *Your library, projects, and the graph that connects them.* | [Projects](projects.md) (`/projects`) · [Knowledge Graph](knowledge-graph.md) (`/knowledge`) · [Citation Graph](citation-graph.md) (`/citations`) · [Consensus](consensus.md) (`/consensus`) · [Extraction Table](extraction-table.md) (`/extractions`) |
 | **Ⅲ Learn** — *Cards, analytics, and how your knowledge grows.* | [Learning Cards](learning-cards.md) (`/cards`) · [Analytics](analytics.md) (`/analytics`) |
 | **Ⅳ Ask** — *Cross-paper reasoning and workspace.* | [Ask](ask.md) (`/ask`) |
 | **Ⅴ Admin** — *Users, health, backups, and audit trail.* (**admin role only**) | [User Management](admin.md) (`/admin/users`) · [System Health](admin.md) (`/admin/system-health`) · [Audit Log](admin.md) (`/admin/audit-log`) · [Backups](admin.md) (`/admin/backups`) · [System Logs](admin.md) (`/logs`) |

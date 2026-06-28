@@ -127,9 +127,16 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (data.type === 'JARVIS_LOGOUT') {
-    // Cross-user data hygiene: drop all cached API responses so the next
-    // user never sees the previous user's data.
-    event.waitUntil(caches.delete(RUNTIME_API_CACHE));
+    // Cross-user data hygiene: drop all cached API responses so the next user
+    // never sees the previous user's data. If the caller supplied a reply port
+    // (MessageChannel), acknowledge once the delete settles so the app can wait
+    // for a clean cache before exposing the next identity.
+    const replyPort = event.ports && event.ports[0];
+    const cleared = caches.delete(RUNTIME_API_CACHE).then(
+      () => replyPort && replyPort.postMessage({ type: 'JARVIS_LOGOUT_DONE' }),
+      () => replyPort && replyPort.postMessage({ type: 'JARVIS_LOGOUT_DONE' }),
+    );
+    event.waitUntil(cleared);
   }
 });
 

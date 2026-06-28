@@ -326,12 +326,12 @@ async def test_stream_job_owner_only(contract_two_users, _jobs_app, _configure_a
 
 
 # ---------------------------------------------------------------------------
-# SEC-CRIT-01 / H-05: anonymous callers rejected on SSE + list_jobs
+# Anonymous callers rejected on SSE + list_jobs
 # ---------------------------------------------------------------------------
 
 
 async def test_anonymous_stream_returns_401(_jobs_app, _configure_api_key):
-    """SEC-CRIT-01/H-05: anonymous SSE GET (no session) returns 401.
+    """Anonymous SSE GET (no session) returns 401.
 
     stream_job now uses current_user_id_strict so any caller without a valid
     browser session receives 401 before the ownership check runs.
@@ -350,7 +350,7 @@ async def test_anonymous_stream_returns_401(_jobs_app, _configure_api_key):
 
 
 async def test_anonymous_list_jobs_returns_401(_jobs_app, _configure_api_key):
-    """SEC-CRIT-01/H-05: anonymous list_jobs GET (no session) returns 401.
+    """Anonymous list_jobs GET (no session) returns 401.
 
     list_jobs now uses current_user_id_strict so an API-key-only caller cannot
     retrieve a job list without a resolved user identity.
@@ -367,7 +367,7 @@ async def test_anonymous_list_jobs_returns_401(_jobs_app, _configure_api_key):
 def test_owner_matches_rejects_none_caller():
     """_owner_matches(None, None) is False — NULL-row jobs require authenticated callers.
 
-    SEC-CRIT-01/H-05: the old behaviour returned True for (None, None),
+    The old behaviour returned True for (None, None),
     meaning anonymous callers matched system-owned NULL-row jobs via SSE.
     The fix makes caller_user_id=None always return False.
 
@@ -382,7 +382,7 @@ def test_owner_matches_rejects_none_caller():
 async def test_owner_can_stream_own_job(contract_two_users, _jobs_app, _configure_api_key):
     """Authenticated owner gets 200 text/event-stream on their own job.
 
-    Verifies the happy-path: after SEC-CRIT-01 fix, authenticated owners must
+    Verifies the happy-path: authenticated owners must
     still be able to open the SSE stream.
 
     Verified: jobs_router.py stream_job — owner check passes → StreamingResponse.

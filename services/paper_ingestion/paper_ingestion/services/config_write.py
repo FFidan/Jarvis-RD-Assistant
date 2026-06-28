@@ -13,6 +13,7 @@ from jarvis_common.auth import (
 )
 from jarvis_common.crypto import encrypt_secret, mask_secret
 from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
+from pydantic import BaseModel, model_serializer
 
 from paper_ingestion.services.config_db import _write_config_row
 from paper_ingestion.services.config_metadata import (
@@ -41,6 +42,7 @@ from paper_ingestion.services.scheduler_effects import (
 __all__ = [
     "_fetch_system_config_values",
     "_apply_litellm_runtime_update",
+    "ConfigWriteResult",
     "write_config",
 ]
 
@@ -58,6 +60,29 @@ _DELIVERY_PENDING_KEY = "llm.delivery_pending"
 # value must be a no-op, never a write — otherwise the literal mask overwrites the
 # stored secret (defense-in-depth; the in-product forms also guard via draft!=current).
 _MASK_SENTINEL_RE = re.compile(r"^\*{4}(.{4})?$")
+
+
+class ConfigWriteResult(BaseModel):
+    """Return value of ``write_config`` carrying the display value and any scheduler warnings.
+
+    ``schedule_apply_warnings`` is populated with the names of schedulers that failed to
+    apply the new value live (e.g. ``["pulse_cron"]``).  The DB commit always stands; the
+    startup reconciler re-reads the DB on boot so any inconsistency is transient.
+
+    Serialises as just ``display_value`` so that existing callers that embed it in a
+    ``ConfigEntry(value=result)`` field see backward-compatible JSON output (a plain
+    scalar/value, not a ``{"display_value": …, "schedule_apply_warnings": […]}`` dict).
+    Callers that need the warnings read ``.schedule_apply_warnings`` directly.
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    display_value: Any
+    schedule_apply_warnings: list[str] = []
+
+    @model_serializer
+    def _serialize(self) -> Any:  # noqa: PLR6301
+        return self.display_value
 
 
 def _is_litellm_no_db_error(detail: str) -> bool:
@@ -243,6 +268,67 @@ async def _update_delivery_pending_roles(
         await _update_delivery_pending_roles_on_conn(conn, roles=roles, pending=pending)
 
 
+async def _apply_schedules(
+    *,
+    db_pool: asyncpg.Pool,
+    scheduler: Any,
+    key: str,
+    value: Any,
+    cron_ctx: tuple[str | None, int | None],
+) -> list[str]:
+    """Apply scheduler side-effects for cron/interval keys; return names of any that failed.
+
+    *cron_ctx* is ``(old_cron, row_user_id)`` — the pre-read old cron expression and the
+    scoped user-id needed for zotero rollback.  Only the relevant component is used per key.
+
+    Each apply is wrapped in a broad try/except so a scheduler failure never blocks the
+    response (the DB commit already stands).  The startup reconciler re-reads cron from DB
+    on boot, so any live inconsistency is transient.
+    """
+    old_cron, row_user_id = cron_ctx
+    failed: list[str] = []
+
+    if key == "pulse.cron":
+        try:
+            await apply_pulse_cron(
+                db_pool=db_pool,
+                scheduler=scheduler,
+                new_cron=value,
+                old_cron=old_cron,
+            )
+        except Exception as exc:
+            logger.warning(
+                "pulse_cron scheduler apply failed (value saved): %s", exc, exc_info=True
+            )
+            failed.append("pulse_cron")
+
+    if key == "zotero.poll_cron":
+        try:
+            await apply_zotero_cron(
+                db_pool=db_pool,
+                scheduler=scheduler,
+                new_cron=value,
+                old_cron=old_cron,
+                row_user_id=row_user_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "zotero_cron scheduler apply failed (value saved): %s", exc, exc_info=True
+            )
+            failed.append("zotero_cron")
+
+    if key == "automation.fetch_interval_hours":
+        try:
+            apply_fetch_interval(scheduler=scheduler, hours=max(int(value), 1))
+        except Exception as exc:
+            logger.warning(
+                "fetch_interval scheduler apply failed (value saved): %s", exc, exc_info=True
+            )
+            failed.append("fetch_interval")
+
+    return failed
+
+
 async def write_config(
     *,
     db_pool: asyncpg.Pool,
@@ -253,18 +339,21 @@ async def write_config(
     value: Any,
     caller_user_id: int | None,
     update_litellm_model_fn: Any = None,
-) -> Any:
+) -> "ConfigWriteResult":
     """Persist a config value and apply all related side-effects.
 
     This is the core of what was previously the ``set_config`` handler body.
-    Returns the display value (masked if the key is an encrypted secret).
+    Returns a :class:`ConfigWriteResult` carrying the display value (masked if
+    the key is an encrypted secret) and any scheduler-apply warnings.
 
     Raises ``fastapi.HTTPException`` on validation failure, model-assignment
-    rejection, LiteLLM update failure, or scheduler rollback. For LiteLLM
-    runtime keys a delivery failure means NO row is written (fail-closed),
-    except the "No DB Connected" case (LiteLLM degraded to DB-less mode),
-    where the row is committed and the role is recorded in
-    ``llm.delivery_pending`` while the boot reconciler keeps retrying.
+    rejection, or LiteLLM update failure.  Scheduler-apply failures are caught
+    and surfaced in ``ConfigWriteResult.schedule_apply_warnings`` rather than
+    raised — the DB commit always stands. For LiteLLM runtime keys a delivery
+    failure means NO row is written (fail-closed), except the "No DB Connected"
+    case (LiteLLM degraded to DB-less mode), where the row is committed and the
+    role is recorded in ``llm.delivery_pending`` while the boot reconciler keeps
+    retrying.
     """
     from fastapi import HTTPException  # noqa: PLC0415
 
@@ -309,7 +398,7 @@ async def write_config(
     # Encrypted keys: a re-submitted mask sentinel ('****' / '****' + last4) is a
     # no-op — never encrypt the masked echo over the real secret.
     if key in _ENCRYPTED_KEYS and _MASK_SENTINEL_RE.fullmatch(str(value)):
-        return mask_secret(str(value))
+        return ConfigWriteResult(display_value=mask_secret(str(value)))
 
     # Model assignment check
     if key in ROLE_TO_ALIAS:
@@ -381,7 +470,7 @@ async def write_config(
             )
         if runtime_key["kind"] == "num_ctx" and outcome == "applied":
             invalidate_effective_num_ctx_cache()
-        return value
+        return ConfigWriteResult(display_value=value)
 
     # Read old cron values before overwriting (for rollback)
     old_pulse_cron: str | None = None
@@ -424,27 +513,15 @@ async def write_config(
     if key == API_KEY_LOGIN_CONFIG_KEY:
         invalidate_api_key_login_cache()
 
-    # Scheduler side-effects
-    if key == "pulse.cron":
-        await apply_pulse_cron(
-            db_pool=db_pool,
-            scheduler=scheduler,
-            new_cron=value,
-            old_cron=old_pulse_cron,
-        )
-
-    if key == "zotero.poll_cron":
-        await apply_zotero_cron(
-            db_pool=db_pool,
-            scheduler=scheduler,
-            new_cron=value,
-            old_cron=old_zotero_poll_cron,
-            row_user_id=row_user_id,
-        )
-
-    if key == "automation.fetch_interval_hours":
-        hours = max(int(value), 1)
-        apply_fetch_interval(scheduler=scheduler, hours=hours)
+    # Scheduler side-effects — failures are caught, logged, and surfaced as warnings.
+    _old_cron = old_pulse_cron if key == "pulse.cron" else old_zotero_poll_cron
+    schedule_warnings = await _apply_schedules(
+        db_pool=db_pool,
+        scheduler=scheduler,
+        key=key,
+        value=value,
+        cron_ctx=(_old_cron, row_user_id),
+    )
 
     # Zotero library-scope cache bust
     if key in _ZOTERO_LIBRARY_SCOPE_KEYS:
@@ -459,5 +536,5 @@ async def write_config(
     if key == "user.timezone":
         await reload_telegram_nudges()
 
-    # Return display value (masked for secrets)
-    return mask_secret(str(value)) if key in _ENCRYPTED_KEYS else value
+    display_value = mask_secret(str(value)) if key in _ENCRYPTED_KEYS else value
+    return ConfigWriteResult(display_value=display_value, schedule_apply_warnings=schedule_warnings)

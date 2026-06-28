@@ -640,7 +640,7 @@ describe('ModelSelector', () => {
   });
 
   // -------------------------------------------------------------------------
-  // fit_detail-based disabled state (Contract 06 §6, §10.3)
+  // fit_detail-based disabled state
   // -------------------------------------------------------------------------
 
   it('disables options whose fit_detail.default is "unfit"', async () => {

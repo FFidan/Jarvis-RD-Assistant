@@ -2,7 +2,7 @@
 
 These call ``_reject_non_public_host`` / ``_send_test_email`` DIRECTLY (no HTTP
 handler), so they live in a plain unit file rather than tests/contract/ — the
-contract-shape guard (docs/contracts/07-testing.md §2.1) requires contract files
+contract-shape guard (docs/contracts/07-testing.md) requires contract files
 to drive the HTTP handler. The HTTP-driven SSRF assertion lives in
 contract/test_setup_contract.py::test_smtp_test_send_rejects_private_host.
 

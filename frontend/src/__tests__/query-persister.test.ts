@@ -6,7 +6,8 @@
  *     excludes non-success / no-data states, rejects malformed keys.
  *   - persister round-trip: dehydrate read surface → restore into a fresh
  *     QueryClient; NON-GOAL queries are NOT restored.
- *   - clearPersistedQueryCache: empties IDB + posts the SW JARVIS_LOGOUT msg.
+ *   - clearPersistedQueryCache: empties the IDB snapshot; no longer posts to
+ *     the SW (auth-store is the sole JARVIS_LOGOUT notifier).
  *   - getPersistedCacheTimestamp: null before any persist, epoch-ms after.
  *
  * `fake-indexeddb/auto` (devDep, test-only) installs a spec-compliant
@@ -156,13 +157,7 @@ describe('persister round-trip (dehydrate -> restore)', () => {
 });
 
 describe('clearPersistedQueryCache', () => {
-  it('empties IDB and posts the SW JARVIS_LOGOUT message', async () => {
-    const post = vi.fn();
-    Object.defineProperty(navigator, 'serviceWorker', {
-      configurable: true,
-      value: { controller: { postMessage: post } },
-    });
-
+  it('empties the IDB snapshot on logout', async () => {
     const c = new QueryClient({
       defaultOptions: { queries: { gcTime: 1_000_000 } },
     });
@@ -175,14 +170,18 @@ describe('clearPersistedQueryCache', () => {
     await clearPersistedQueryCache();
 
     expect(await getPersistedCacheTimestamp()).toBeNull();
-    expect(post).toHaveBeenCalledWith({ type: 'JARVIS_LOGOUT' });
-
-    // @ts-expect-error — tidy the stub we installed.
-    delete navigator.serviceWorker;
   });
 
   it('does not throw when no service worker controls the page', async () => {
     await expect(clearPersistedQueryCache()).resolves.toBeUndefined();
+  });
+
+  it('clearPersistedQueryCache no longer posts JARVIS_LOGOUT (auth-store is the sole notifier)', async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal('navigator', { serviceWorker: { controller: { postMessage } } });
+    await clearPersistedQueryCache();
+    expect(postMessage).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });
 

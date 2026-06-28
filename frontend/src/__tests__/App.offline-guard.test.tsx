@@ -3,7 +3,7 @@
  * Session-expiry side-effect must run out of the render body (not during render).
  *
  * Canonical contract: internal design spec (archived)
- * "Offline / PWA contract — CANONICAL" §4 (last-known-good read mode).
+ * "Offline / PWA contract — CANONICAL" (last-known-good read mode).
  *
  * Security invariant being tested:
  *   (a) ONLINE + expired session → still redirects to /login (no regression);

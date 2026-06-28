@@ -35,6 +35,24 @@ export interface RestorePoint {
   encrypted: boolean;
   total_size_bytes: number;
   files: RestorePointFile[];
+  app_version: string | null;
+  schema_version: number | null;
+  compat: 'same' | 'older' | 'newer' | 'unknown';
+}
+
+export interface RestoreRequest {
+  timestamp: string;
+  confirm: string;
+}
+
+export interface RestoreStatus {
+  state: string;
+  current_step: string | null;
+  steps: { name: string; status: string }[];
+  safety_backup_ts: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
 }
 
 export interface RestoreLastRun {
@@ -68,3 +86,14 @@ export async function downloadBackup(name: string): Promise<void> {
   );
   triggerBlobDownload(await res.blob(), name);
 }
+
+/** Start a one-click restore from the named restore point. `confirm` gates the destructive op. */
+export const requestRestore = (timestamp: string, confirm: string) =>
+  apiFetch<{ status: string }>('/api/admin/backups/restore', {
+    method: 'POST',
+    body: JSON.stringify({ timestamp, confirm } satisfies RestoreRequest),
+  });
+
+/** Poll the live restore progress (state machine + per-step status). */
+export const getRestoreStatus = () =>
+  apiFetch<RestoreStatus>('/api/admin/backups/restore/status');

@@ -1,4 +1,4 @@
-"""UI_v3 §I Account — self-service current-user profile endpoints.
+"""Account — self-service current-user profile endpoints.
 
 Three endpoints, all strictly scoped to the authenticated caller via
 ``current_user_id_strict`` (never another user's row):
@@ -42,6 +42,7 @@ from paper_ingestion.models.account import (
     ConfirmEmailChangeBody,
 )
 from paper_ingestion.routers.auth import (
+    MAGIC_LINK_COOLDOWN,
     MAGIC_LINK_TTL,
     _audit_pool,
     _hash_email,
@@ -83,6 +84,23 @@ _ACCOUNT_SELECT = (
     "SELECT id, email, role, display_name, created_at, last_login_at "
     "FROM users WHERE id = $1 AND deleted_at IS NULL"
 )
+
+
+async def _is_email_change_on_cooldown(conn, user_id: int) -> bool:
+    """Return True when a pending email-change token was minted within MAGIC_LINK_COOLDOWN.
+
+    Scoped to ``pending_email IS NOT NULL`` so login links don't suppress
+    email-change links and vice versa.
+    """
+    recent = await conn.fetchval(
+        "SELECT created_at FROM magic_link_tokens"
+        " WHERE user_id = $1 AND pending_email IS NOT NULL"
+        " ORDER BY created_at DESC LIMIT 1",
+        user_id,
+    )
+    return (
+        recent is not None and datetime.now(UTC) - recent.replace(tzinfo=UTC) < MAGIC_LINK_COOLDOWN
+    )
 
 
 @router.get("", response_model=AccountResponse)
@@ -160,37 +178,38 @@ async def update_account(
                         detail="A user with that email already exists",
                     )
 
-                raw_token = secrets.token_urlsafe(32)
-                token_hash = _hash_token(raw_token)
-                expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
-                await conn.execute(
-                    """
+                if not await _is_email_change_on_cooldown(conn, user_id):
+                    raw_token = secrets.token_urlsafe(32)
+                    token_hash = _hash_token(raw_token)
+                    expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
+                    await conn.execute(
+                        """
                     INSERT INTO magic_link_tokens
                         (token_hash, user_id, expires_at, pending_email)
                     VALUES ($1, $2, $3, $4)
                     """,
-                    token_hash,
-                    user_id,
-                    expires_at,
-                    new_email,
-                )
-                link = _build_email_confirm_link(request, raw_token)
-                try:
-                    await send_magic_link(new_email, link, pool=pool)
-                    email_verification_sent = True
-                except Exception:  # noqa: BLE001 — never leak SMTP detail
-                    logger.exception(
-                        "send_magic_link (email-change) failed for email_hash=%s",
-                        _hash_email(new_email),
+                        token_hash,
+                        user_id,
+                        expires_at,
+                        new_email,
                     )
-                if _audit is not None:
-                    await log_audit(
-                        _audit,
-                        action="account.email.change.requested",
-                        resource=f"users/{user_id}",
-                        user_id=str(user_id),
-                        metadata={"new_email_hash": _hash_email(new_email)},
-                    )
+                    link = _build_email_confirm_link(request, raw_token)
+                    try:
+                        await send_magic_link(new_email, link, pool=pool)
+                        email_verification_sent = True
+                    except Exception:  # noqa: BLE001 — never leak SMTP detail
+                        logger.exception(
+                            "send_magic_link (email-change) failed for email_hash=%s",
+                            _hash_email(new_email),
+                        )
+                    if _audit is not None:
+                        await log_audit(
+                            _audit,
+                            action="account.email.change.requested",
+                            resource=f"users/{user_id}",
+                            user_id=str(user_id),
+                            metadata={"new_email_hash": _hash_email(new_email)},
+                        )
 
         # Re-read so the response reflects the persisted row (email unchanged
         # until the token is confirmed).

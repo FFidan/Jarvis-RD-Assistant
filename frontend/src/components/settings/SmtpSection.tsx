@@ -1,5 +1,5 @@
 /**
- * SmtpSection — Email / SMTP relay settings (§IV System, admin-only).
+ * SmtpSection — Email / SMTP relay settings (System, admin-only).
  *
  * On mount: GET /api/setup/smtp hydrates host/port/user/from_email/reply_to/
  * from_name and reports effective-config health (deliverable + issues) for the

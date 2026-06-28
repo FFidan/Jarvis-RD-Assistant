@@ -1,5 +1,5 @@
 /**
- * H12 — Suspense wrapping for lazy-loaded routes.
+ * Suspense wrapping for lazy-loaded routes.
  *
  * Verifies that the lazy routes (OnboardingWizard via the onboarding gate,
  * LogsPage, AdminUsersPage, PaperDetailPage, ResearchFeedPage) show the
@@ -78,7 +78,7 @@ function renderApp(initialEntries: string[]) {
   );
 }
 
-describe('H12 — lazy routes wrapped in <Suspense>', () => {
+describe('lazy routes wrapped in <Suspense>', () => {
   it('onboarding gate (pre-auth, unconfigured) shows PageFallback while OnboardingWizard suspends', async () => {
     // Fresh install: unconfigured + not setup_completed → the gate renders the
     // lazy OnboardingWizard, which suspends. "Loading..." must show (gate
@@ -137,7 +137,7 @@ describe('H12 — lazy routes wrapped in <Suspense>', () => {
     expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);
   });
 
-  // DOM-F-10: ResearchFeedPage is now lazy-loaded
+  // ResearchFeedPage is now lazy-loaded
   it('/feed shows PageFallback while ResearchFeedPage suspends', () => {
     useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: 'k' });
     renderApp(['/feed']);
