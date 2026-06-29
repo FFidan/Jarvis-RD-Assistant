@@ -61,7 +61,7 @@ auto-generated** by `scripts/gen-langfuse-keys.sh` on first use. **Never commit 
 
 They seed the Langfuse headless-init (project public/secret key). Rotation invalidates
 the existing Langfuse project credentials and requires a Langfuse volume wipe per
-`docs/observability` §9.2 (operator-only; `OBSERVABILITY_ENABLED` is off by default so
+`docs/observability` §9.2 (administrator-only; `OBSERVABILITY_ENABLED` is off by default so
 this is a no-op on standard deployments). The `make up` target ensures they are always
 present before `docker compose up`.
 

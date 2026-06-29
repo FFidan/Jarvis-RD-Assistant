@@ -3,9 +3,9 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## v1.0.0 (2026-06-27) — Consensus view, in-PDF annotation with Zotero sync, one-click restore, and multi-user hardening
+## v1.0.0 (2026-06-29) — First stable public-launch release: consensus, PDF annotation, Zotero sync, restore, and multi-user hardening
 
-First stable release. It adds a cross-paper consensus view, an in-PDF reader with spatial highlights that sync to Zotero, and guided one-click backup restore, and completes per-user isolation and restore-safety hardening across the application.
+First stable release and public-launch baseline. Earlier tags were private development and hardening milestones; v1.0.0 is the first version intended for public availability. It adds a cross-paper consensus view, an in-PDF reader with spatial highlights that sync to Zotero, guided one-click backup restore, and completes per-user isolation and restore-safety hardening across the application.
 
 ### Added
 - **Consensus view.** A new page shows where the papers in your library agree or disagree on shared claims extracted by the contradiction pipeline: an "Agreement by claim" chart with per-claim Supports and Opposes counts, and expandable evidence showing the assessed quote from each compared paper. A consensus scan can be queued on demand, with a guided empty state for the first run.
@@ -18,6 +18,7 @@ First stable release. It adds a cross-paper consensus view, an in-PDF reader wit
 - **Per-user Zotero.** A paper's Zotero item, attachment, citation key, and sync state are now scoped to each user through a per-user link table, so collaborators no longer share or overwrite one another's Zotero links. Citation keys and the library Zotero indicator are likewise scoped per user.
 - **Restore safety.** A sentinel-driven maintenance mode keeps the application returning 503 while a destructive restore is unfinished or was interrupted, rather than serving partially restored data; the boot sequence validates multi-user, setup-token, and email configuration once the database is available.
 - **Hybrid-search enrichment** batches paper lookups into a single query.
+- **Public project notices.** The license appendix, NOTICE, AUTHORS file, citation metadata, and package metadata now name Ferhat Fidan as maintainer/copyright holder, list `jarvis-rd@limitcycle.dev` as the project contact, and disclose substantial AI-assisted development while keeping the Apache-2.0 license terms intact.
 
 ### Security
 - **Per-user data isolation.** PDF and page-snapshot access for private sources is scoped to the owner, the filesystem-wide local PDF scan is restricted to administrators, and a task's parent must belong to the same project.
@@ -51,7 +52,7 @@ First stable release. It adds a cross-paper consensus view, an in-PDF reader wit
 ### Security
 - **Structured-output enforcement at the model boundary.** AI features use grammar-constrained decoding so a model can no longer return its response schema instead of a result; the daily Pulse, knowledge-graph extraction, and summaries degrade honestly rather than silently accepting malformed output.
 - **Owner sign-in safeguard.** A configured owner can always create an API-key session, preventing a multi-user lockout; on multi-user deployments API-key login requires an explicit owner, and a dedicated model-signing key is required.
-- **First-run setup token.** Bootstrap setup writes require a one-time token issued by the installer, closing an unauthenticated first-administrator takeover window on network-reachable deployments; the setup status stays readable so the wizard can guide the operator.
+- **First-run setup token.** Bootstrap setup writes require a one-time token issued by the installer, closing an unauthenticated first-administrator takeover window on network-reachable deployments; the setup status stays readable so the wizard can guide the administrator.
 - **Backups never archive secrets unencrypted**, and required secrets are provisioned as a prerequisite of `make up`.
 
 ### Fixed
@@ -93,7 +94,7 @@ First stable release. It adds a cross-paper consensus view, an in-PDF reader wit
 - The restore runbook references the actual Qdrant collections (`kg_entities`, `paper_chunks`) and notes the decrypt-first step for encrypted snapshots.
 - The Backups panel shows a distinct loading state instead of briefly reading "backup service not running", and reports an explicit "status unavailable" state when the status check fails.
 
-### Internal
+### Maintenance
 - Widened the supported FastAPI range and migrated route enumeration to the version-stable API.
 - Added a first-run clean-machine smoke check to CI.
 
@@ -146,7 +147,7 @@ First stable release. It adds a cross-paper consensus view, an in-PDF reader wit
 - Langfuse is disabled cleanly with a single startup line when unconfigured, instead of logging a warning on every traced call.
 
 ### Documentation
-- Documented the `litellm_salt_key` operator secret and the encrypted-restore recipe, the `uv` toolchain prerequisite for contributors, and the `smtp.reply_to` / `smtp.from_name` settings; reconciled version strings and "Last updated" stamps.
+- Documented the `litellm_salt_key` deployment secret and the encrypted-restore recipe, the `uv` toolchain prerequisite for contributors, and the `smtp.reply_to` / `smtp.from_name` settings; reconciled version strings and "Last updated" stamps.
 
 ## v0.8.6 (2026-06-15) — SMTP sender identity & dependency security
 
@@ -187,7 +188,7 @@ toolchain is brought up to date.
 - The Telegram bot token is stored as a secret; the self-hoster setup scripts generate and validate every required secret through one generator.
 - Infra-event uploads are bounded by streamed size; paper-summary reads are scoped to the owner.
 
-### Docs & internal
+### Docs & maintenance
 - Replaced developer-rig GPU names with hardware-tier descriptors; removed internal tracking identifiers from comments and tests; neutralized key-rotation guard wording.
 - Re-baselined the database schema into a single clean baseline; localized de-duplication across source plugins, the request layer, and lifecycle responses.
 - Upgraded the frontend toolchain (ESLint 10, Tailwind CSS 4) and wired the end-to-end test suite into CI.
@@ -325,9 +326,9 @@ mobile refinements.
 
 ---
 
-## v0.6.0 (2026-06-06) — first public release
+## v0.6.0 (2026-06-06) — Multi-user self-hosting hardening
 
-First public release of JARVIS RD Assistant. Highlights since v0.5.0: **per-user
+Private hardening milestone for the later public launch. Highlights since v0.5.0: **per-user
 multi-tenant isolation**, **GDPR-purge correctness**, **SMTP-SSRF + credential
 encryption**, **token-only Telegram pairing** and the Telegram→REST decoupling,
 **GPU/setup foolproofing**, **whole-app mobile**, and a **unified onboarding wizard**.
@@ -424,11 +425,11 @@ encryption**, **token-only Telegram pairing** and the Telegram→REST decoupling
 
 ### Overview
 
-This release consolidates six weeks of internal audit and hardening in preparation for the first public launch. Approximately 120 findings across security, correctness, architecture, and developer experience were addressed. The core RAG pipeline, spaced-repetition learning system, and daily executive-function interface are now fully hardened for multi-tenant self-hosting. Major work included a cross-tenant audit (all data paths verified user-scoped), a dependency security pass (PDF engine migrated to Docling, closing transitive CVEs), and extensive public-readiness remediation. The migration history was squashed into a single `db/init.sql` baseline with new migrations starting at 0089.
+This release consolidates six weeks of audit and hardening in preparation for the eventual public launch. Approximately 120 findings across security, correctness, architecture, and developer experience were addressed. The core RAG pipeline, spaced-repetition learning system, and daily executive-function interface are now fully hardened for multi-tenant self-hosting. Major work included a cross-tenant audit (all data paths verified user-scoped), a dependency security pass (PDF engine migrated to Docling, closing transitive CVEs), and extensive public-readiness remediation. The migration history was squashed into a single `db/init.sql` baseline with new migrations starting at 0089.
 
 ### Detailed changes (2026-05-26)
 
-A six-week internal audit-and-remediation pass closed roughly 120 findings ahead of the first public release. The themes below capture user-visible and operator-visible changes; commit-level detail follows in the per-area sections.
+A six-week audit-and-remediation pass closed roughly 120 findings ahead of the eventual public launch. The themes below capture user-visible and administrator-visible changes; commit-level detail follows in the per-area sections.
 
 **Security.** The background-job Server-Sent Events stream now requires an authenticated session — it previously accepted unauthenticated subscriptions and returned job state for the NULL user. All cross-user data paths were re-audited: project recommendations, paper-source feedback, author alerts, and review-deck queries are now scoped to the logged-in user, and admins cannot read other users' research data. Prompt-injection vectors in PDF body text, paper titles, discovery snippets, and tracked-author bios are stripped before reaching the model with a documented prompt-shape contract enforced by an AST check. Container processes drop privileges, run with `no-new-privileges` set, and ship with a root-level `.dockerignore` so secret files and host-bound paths cannot accidentally land in the build context. Lock-file integrity (Python `uv.lock`, npm `package-lock.json`) is now verified against registry pins at install. Append-only audit logs reject `UPDATE`/`DELETE` at the PostgreSQL rule level, and the pairing-code length, rating regex, and ProjectManager method signatures were tightened against malformed input.
 
@@ -438,11 +439,11 @@ A six-week internal audit-and-remediation pass closed roughly 120 findings ahead
 
 **Developer experience.** Continuous integration now enforces type-check (Pyright zero errors), a test-shape contract (each test belongs to one of four documented shapes), the LLM prompt-shape AST check, and PII / burned-secret allowlists. The CI workflow was migrated to `astral-sh/setup-uv@v6` with a Python 3.12 pin and `uv sync --frozen`, cutting wall-clock from 8–15 minutes to 4–5 minutes. A pre-commit hook runs the same gates locally.
 
-**Public-launch preparation.** This release ships a rewritten README with above-the-fold product screenshots, a Highlights section, and the four-audience deployment path; weekly `dependabot` updates for pip, npm, Docker base images, and GitHub Actions; structured GitHub issue templates (bug report, feature request) with security reports routed to a private GitHub Security Advisory; and a root `SECURITY.md` pointing to the threat model.
+**Public-launch groundwork.** This release ships a rewritten README with above-the-fold product screenshots, a Highlights section, and the four-audience deployment path; weekly `dependabot` updates for pip, npm, Docker base images, and GitHub Actions; structured GitHub issue templates (bug report, feature request) with security reports routed to a private GitHub Security Advisory; and a root `SECURITY.md` pointing to the threat model.
 
 ### Upgrade Notes
 
-- **Migration baseline squashed.** The 88-file migration chain prior to v0.5.0 was consolidated into `db/init.sql` as the single baseline; new migrations start at 0089. The migration runner detects squashed-init state and applies forward without interruption — operators upgrading from v0.4.1 or earlier need no manual intervention. See `tests/test_baseline_invariants.py` for the schema invariants pinned.
+- **Migration baseline squashed.** The 88-file migration chain prior to v0.5.0 was consolidated into `db/init.sql` as the single baseline; new migrations start at 0089. The migration runner detects squashed-init state and applies forward without interruption — administrators upgrading from v0.4.1 or earlier need no manual intervention. See `tests/test_baseline_invariants.py` for the schema invariants pinned.
 
 ### Security
 - Cross-tenant project leak in recommender: `_refresh_recommendations_for_user` now scopes the projects query to `user_id`.
@@ -474,12 +475,12 @@ A six-week internal audit-and-remediation pass closed roughly 120 findings ahead
 
 
 ### Documentation
-- Published an MkDocs-Material operator and developer documentation site to GitHub Pages, including a complete end-user guide covering every surface plus plain-English sign-in and account-recovery steps.
+- Published an MkDocs-Material administrator and developer documentation site to GitHub Pages, including a complete end-user guide covering every surface plus plain-English sign-in and account-recovery steps.
 - Added a public `ROADMAP.md` and corrected a batch of documentation drift (migration counts, deprecated environment variables, and stale internal links).
 - Documented the `setup.sh --check` pre-flight, single/multi-user modes, and the source HTTP-cache environment variables.
 
 
 
-## Pre-public development (v0.1 – v0.4.1)
+## Early private development (v0.1 – v0.4.1)
 
-The v0.1 through v0.4.1 releases represent the full private development phase. The core RAG pipeline was built across this period: multi-source paper discovery (arXiv, Semantic Scholar, OpenAlex, PubMed), PDF extraction with page-level citation provenance, a three-stage LLM-reranked Pulse recommendation engine, and a semantic knowledge graph with entity extraction and contradiction detection. Spaced-repetition learning cards (FSRS) and a daily executive-function interface (My Day, Pomodoro timer, journal, project tracking) were added alongside the recommendation system. Multi-tenancy and security hardening — magic-link authentication, strict user_id scoping across all data paths, per-user FSRS and recommendation state, cross-user isolation CI gates, Docker Secrets, and a container-hardening sweep — were progressively applied from v0.2 onward. The job infrastructure was migrated from a custom worker to procrastinate-backed async task queues with SSE progress streaming. Observability tooling (Langfuse, Sentry, structured audit logging) and a one-shot installer wizard were added in v0.3–v0.4. The v0.4.1 release closed the last known cross-tenant data leaks and completed a full adversarial-review pass before the v0.5.0 pre-release consolidation.
+The v0.1 through v0.4.1 releases represent the early private development phase. The core RAG pipeline was built across this period: multi-source paper discovery (arXiv, Semantic Scholar, OpenAlex, PubMed), PDF extraction with page-level citation provenance, a three-stage LLM-reranked Pulse recommendation engine, and a semantic knowledge graph with entity extraction and contradiction detection. Spaced-repetition learning cards (FSRS) and a daily executive-function interface (My Day, Pomodoro timer, journal, project tracking) were added alongside the recommendation system. Multi-tenancy and security hardening — magic-link authentication, strict user_id scoping across all data paths, per-user FSRS and recommendation state, cross-user isolation CI gates, Docker Secrets, and a container-hardening sweep — were progressively applied from v0.2 onward. The job infrastructure was migrated from a custom worker to procrastinate-backed async task queues with SSE progress streaming. Observability tooling (Langfuse, Sentry, structured audit logging) and a one-shot installer wizard were added in v0.3–v0.4. The v0.4.1 release closed the last known cross-tenant data leaks and completed a full adversarial-review pass before the v0.5.0 consolidation.

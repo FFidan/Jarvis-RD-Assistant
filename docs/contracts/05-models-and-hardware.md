@@ -30,7 +30,7 @@ UX** (per-machine VRAM fit, context-size controls, thinking-mode toggle).
 ### Non-goals (hard)
 - **Benchmark theater** — no per-discipline benchmark claims, no ranking by generic STEM scores.
   The curated catalog is the authority for model identity, roles, assignability, and Ollama lifecycle.
-  An operator-only settings plane (`GET/POST /api/settings/ai`) may consume
+  A maintainer-controlled settings plane (`GET/POST /api/settings/ai`) may consume
   `config/llm-tier-candidates.yaml` as an empirical overlay for backend/model candidates that were
   actually bench-run on target hardware; those rows are allow-list inputs, not marketing claims.
 - **Work-style onboarding wizard** — tier-based recommendation is sufficient.
