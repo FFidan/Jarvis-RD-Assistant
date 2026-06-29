@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "Self-hosted research workspace for evidence-grounded literature discovery and synthesis"
 readme = "README.md"
 authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
+maintainers = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
 requires-python = ">=3.12"
 license = "Apache-2.0"
 keywords = ["research-assistant", "scientific-literature", "rag", "self-hosted", "zotero"]
@@ -18,6 +19,7 @@ classifiers = [
 Documentation = "https://ffidan.github.io/Jarvis-RD-Assistant/"
 Repository = "https://github.com/FFidan/Jarvis-RD-Assistant"
 Issues = "https://github.com/FFidan/Jarvis-RD-Assistant/issues"
+Authors = "https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/AUTHORS.md"
 
 [dependency-groups]
 jarvis-common = [

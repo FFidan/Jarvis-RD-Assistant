@@ -13,7 +13,6 @@ venv/
 env/
 *.egg-info/
 dist/
-.desloppify/
 build/
 .eggs/
 
@@ -74,23 +73,10 @@ htmlcov/
 # Raw pdfs and images
 *.pdf
 *.png
-# Exception: handoff/ design package screenshots are the acceptance bar for the My Day redesign
-!handoff/screenshots/*.png
 # Exception: PWA app icons must be committed (required for Android-Chrome install / maskable)
 !frontend/public/icons/*.png
 # Exception: README / docs-site product screenshots must be committed (else they 404 on the public repo)
 !docs/screenshots/*.png
-
-# AI agent / tool scaffolding
-.claude/
-.serena/
-.ralph/
-.playwright-mcp/
-.superpowers/
-.gemini/
-inspection/
-# Local token-usage analytics output
-codeburn-*
 
 # Test artifacts
 **/test-results/
@@ -98,32 +84,11 @@ codeburn-*
 # Perf profile snapshots (reproducible via `make profile`)
 artifacts/
 
-# CodeBoarding scratch outputs
-.codeboarding/
-
 # MkDocs build output (generated; deploy target is gh-pages branch)
 site/
 Jarvis_RD.zip
 
-# Internal handoff bundles + agent-internal plans (operator-only)
-handoff/
-Jarvis_RD_UI_3/
-docs/superpowers/
 *.tar.gz
-codeboarding_*.log
 
-# Internal dev-process artifacts (operator-only)
-docs/audit/
-docs/archive/
-docs/exec/
-
-# Local-only tooling & operator notes (not shipped publicly)
-AGENTS.md
-CLAUDE.md
-.codex
-docs/agents-shim.md
-docs/AGENTIC_WORKFLOW.md
-scripts/verify-edits.sh
-
-# Parallel task worktrees
+# Local worktrees
 .worktrees/

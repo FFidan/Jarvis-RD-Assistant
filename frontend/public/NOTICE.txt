@@ -1,8 +1,12 @@
 JARVIS RD Assistant — Web Frontend Notices
 ==========================================
 
+Copyright 2026 Ferhat Fidan.
+Project contact: JARVIS RD Assistant <jarvis-rd@limitcycle.dev>.
+
 JARVIS RD Assistant is licensed under the Apache License, Version 2.0. The full
 project license is available in the repository root as LICENSE.
+Authorship and AI-assistance disclosure are recorded in AUTHORS.md.
 
 The frontend bundles third-party packages under their respective licenses. The
 resolved dependency inventory is recorded in frontend/package-lock.json; the

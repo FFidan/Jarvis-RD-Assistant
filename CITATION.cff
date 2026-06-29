@@ -5,6 +5,7 @@ type: software
 authors:
   - family-names: Fidan
     given-names: Ferhat
+    email: "jarvis-rd@limitcycle.dev"
 version: 1.0.0
 date-released: 2026-06-29
 repository-code: "https://github.com/FFidan/Jarvis-RD-Assistant"

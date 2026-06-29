@@ -1,7 +1,9 @@
 JARVIS RD Assistant
 Copyright 2026 Ferhat Fidan
+Project contact: JARVIS RD Assistant <jarvis-rd@limitcycle.dev>
 
 Licensed under the Apache License, Version 2.0. See LICENSE for the full terms.
+Authorship and AI-assistance disclosure are recorded in AUTHORS.md.
 
 This file records third-party dependency information for release review. Exact
 resolved versions are defined by uv.lock and frontend/package-lock.json; release

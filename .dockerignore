@@ -1,14 +1,11 @@
 # Secrets + env
 secrets/
 .env
-.desloppify/
 .env.*
 
 # Git internals
 .git/
 
-# Agent runtime artifacts (untracked but defense-in-depth)
-handoff/
 tests/_artifacts/
 
 # Python caches + virtualenvs
@@ -24,7 +21,7 @@ tests/_artifacts/
 **/dist/
 frontend/build/
 
-# Docs (operator-only at build context; not needed in image)
+# Docs are not needed in the runtime image build context
 docs/
 
 # Big binary artifacts
@@ -33,14 +30,3 @@ docs/
 *.log
 *.png
 Jarvis_RD.zip
-
-# Local-only tooling & caches (not part of the image build context)
-.serena/
-.codeboarding/
-.ralph/
-.superpowers/
-.claude/
-.gemini/
-.codex
-AGENTS.md
-CLAUDE.md

@@ -48,7 +48,15 @@ agreement is required.
 
 ## AI-Assisted Contributions
 
-This project was built with substantial AI assistance, and AI-assisted contributions are welcome — but every PR, human- or agent-authored, must pass the full gate (`make check`: ruff lint, pyright, tach, the Python + frontend test suites, and the build) before review.
+This project was built with substantial AI assistance, primarily using Claude
+Code, and AI-assisted contributions are welcome. If an AI tool materially
+contributed, keep truthful `Co-Authored-By` trailers where appropriate, but do
+not include generated tool footers, session URLs, or internal workflow labels in
+commit messages or PR descriptions.
+
+Every PR, human- or agent-authored, must pass the full gate (`make check`: ruff
+lint, pyright, tach, the Python + frontend test suites, and the build) before
+review.
 
 ---
 

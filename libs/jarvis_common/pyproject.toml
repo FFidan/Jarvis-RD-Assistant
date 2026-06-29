@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "jarvis-common"
 version = "0.1.0"
 description = "Shared application infrastructure for JARVIS RD Assistant"
+authors = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
+maintainers = [{ name = "Ferhat Fidan", email = "jarvis-rd@limitcycle.dev" }]
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [

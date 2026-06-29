@@ -246,10 +246,27 @@ See **[docs/DEPLOYMENT.md → Troubleshooting](docs/DEPLOYMENT.md#troubleshootin
 
 See [Methods and limitations](docs/METHODS_AND_LIMITATIONS.md) for verification semantics, data-flow boundaries, and appropriate use.
 
-## Built with AI-assisted development
+## Authorship and AI-assisted development
 
-JARVIS RD Assistant was built with substantial AI-assisted development. Contributions remain the maintainer's responsibility and are checked with `ruff`, `pyright`, `tach` module-boundary checks, Python and frontend tests, database-backed contract tests, and cross-user isolation tests. GitHub-hosted CI runs for public-repository changes; `make check` is the corresponding local quality gate. Mocked end-to-end and scheduled model-pipeline smoke tests provide additional, non-equivalent coverage.
+JARVIS RD Assistant is maintained and copyrighted by Ferhat Fidan
+<jarvis-rd@limitcycle.dev>. It was built with substantial AI-assisted
+development, primarily using Claude Code. The Git history keeps
+`Co-Authored-By: Claude ...` trailers where they accurately record AI-assisted
+work.
+
+Ferhat Fidan remains responsible for reviewing, accepting, maintaining, and
+licensing the project. AI tools are disclosed for provenance; they are not listed
+as project copyright holders. See [AUTHORS.md](AUTHORS.md).
+
+Changes are checked with `ruff`, `pyright`, `tach` module-boundary checks,
+Python and frontend tests, database-backed contract tests, and cross-user
+isolation tests. GitHub-hosted CI runs for public-repository changes; the
+corresponding local gate is `make check`. Mocked end-to-end and scheduled
+model-pipeline smoke tests provide additional, non-equivalent coverage.
 
 ## License
 
-[Apache 2.0](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/LICENSE)
+[Apache 2.0](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/LICENSE).
+The root LICENSE file is the canonical Apache-2.0 text; project copyright,
+contact, authorship, and third-party notices are recorded in [NOTICE](NOTICE)
+and [AUTHORS.md](AUTHORS.md).
