@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+        <meta name="description" content="Documentation for the self-hosted JARVIS RD Assistant research workspace, including user workflows, deployment, security, and engineering contracts.">
       
       
       
@@ -14,7 +14,7 @@
       
       
       
-        <link rel="next" href="manual/">
+        <link rel="next" href="METHODS_AND_LIMITATIONS/">
       
       
         
@@ -243,6 +243,25 @@
   
   
   
+    <li class="md-tabs__item">
+      <a href="METHODS_AND_LIMITATIONS/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Methods and limitations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
     
     
       <li class="md-tabs__item">
@@ -445,6 +464,33 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="METHODS_AND_LIMITATIONS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Methods and limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
     
     
     
@@ -459,10 +505,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -480,8 +526,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1078,10 +1124,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -1099,8 +1145,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1277,10 +1323,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
             
   
   
@@ -1298,8 +1344,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1497,13 +1543,14 @@
 
 
 <h1 id="jarvis-rd-assistant">JARVIS RD Assistant<a class="headerlink" href="#jarvis-rd-assistant" title="Permanent link">&para;</a></h1>
-<p>A self-hosted research assistant that turns a stream of papers into a working
-body of knowledge: discover and triage papers, ask questions across your whole
-library, extract structured findings, build knowledge and citation graphs, and
-turn what you read into spaced-repetition cards and project tasks — all on your
-own hardware, with your data never leaving your machine.</p>
-<p><strong>Self-hosted. Multi-tenant. Yours.</strong> Run it for yourself or a small team; every
-user's library, notes, and progress stay private to them.</p>
+<p>A self-hosted research workspace for discovering, organizing, and interrogating
+scientific literature. JARVIS links generated claims to retrieved source text,
+combines literature work with spaced-repetition learning and project tasks, and
+can run model inference on infrastructure you control with Ollama.</p>
+<p>If you configure a cloud model through LiteLLM, relevant prompts and source
+excerpts are sent to that provider. Generated outputs can still be incomplete
+or wrong; read <a href="METHODS_AND_LIMITATIONS/">Methods and limitations</a> before
+relying on verification badges, consensus views, or extracted evidence.</p>
 <hr />
 <h2 id="get-started">Get started<a class="headerlink" href="#get-started" title="Permanent link">&para;</a></h2>
 <ul>

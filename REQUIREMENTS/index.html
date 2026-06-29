@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+        <meta name="description" content="Documentation for the self-hosted JARVIS RD Assistant research workspace, including user workflows, deployment, security, and engineering contracts.">
       
       
       
@@ -243,6 +243,25 @@
   
   
   
+    <li class="md-tabs__item">
+      <a href="../METHODS_AND_LIMITATIONS/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Methods and limitations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
     
     
       <li class="md-tabs__item">
@@ -378,6 +397,33 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../METHODS_AND_LIMITATIONS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Methods and limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
     
     
     
@@ -392,10 +438,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -413,8 +459,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1016,10 +1062,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   
@@ -1037,8 +1083,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_3">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1383,10 +1429,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
             
   
   
@@ -1404,8 +1450,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1906,7 +1952,7 @@ Cytoscape ^3.33, Lucide React, Radix UI, Playwright (dev).</p>
 and stored encrypted at rest via <strong>Settings → Integrations → Zotero</strong>, not as
 environment variables.</p>
 <p>Full <code>.env</code> reference: <code>.env.example</code>. Secrets runbook: <a href="../DEPLOYMENT/">docs/DEPLOYMENT.md</a>.
-Observability variables (Langfuse): <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md">docs/contracts/04-observability.md</a>.</p>
+Observability variables (Langfuse): <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md">docs/contracts/04-observability.md</a>.</p>
 <h2 id="key-dependency-floors">Key Dependency Floors<a class="headerlink" href="#key-dependency-floors" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1932,7 +1978,7 @@ Observability variables (Langfuse): <a href="https://github.com/FFidan/Jarvis-RD
 <h2 id="secrets-database">Secrets &amp; Database<a class="headerlink" href="#secrets-database" title="Permanent link">&para;</a></h2>
 <p>Secrets use Docker Secrets. Initialise locally with <code>bash scripts/init-secrets.sh</code>
 (or <code>scripts/jarvis-setup.sh</code>). Full table: <a href="../DEPLOYMENT/">docs/DEPLOYMENT.md</a>.</p>
-<p>Fresh installs: <code>db/init.sql</code>. Migration history: <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/migrations/README.md"><code>db/migrations/README.md</code></a>.</p>
+<p>Fresh installs: <code>db/init.sql</code>. Migration history: <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/db/migrations/README.md"><code>db/migrations/README.md</code></a>.</p>
 <h2 id="optional-reranker">Optional Reranker<a class="headerlink" href="#optional-reranker" title="Permanent link">&para;</a></h2>
 <p>Two flags required:</p>
 <ol>

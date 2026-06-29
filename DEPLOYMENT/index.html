@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+        <meta name="description" content="Documentation for the self-hosted JARVIS RD Assistant research workspace, including user workflows, deployment, security, and engineering contracts.">
       
       
       
@@ -243,6 +243,25 @@
   
   
   
+    <li class="md-tabs__item">
+      <a href="../METHODS_AND_LIMITATIONS/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Methods and limitations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
     
     
       <li class="md-tabs__item">
@@ -378,6 +397,33 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../METHODS_AND_LIMITATIONS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Methods and limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
     
     
     
@@ -392,10 +438,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -413,8 +459,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1016,10 +1062,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   
@@ -1037,8 +1083,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_3">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1806,10 +1852,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
             
   
   
@@ -1827,8 +1873,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2549,7 +2595,7 @@
 
 <h1 id="deployment-guide">Deployment Guide<a class="headerlink" href="#deployment-guide" title="Permanent link">&para;</a></h1>
 <p>JARVIS is a self-hosted research assistant. This document covers running it — from the localhost happy path to LAN exposure, Cloudflare Tunnel, TLS, backups, and common failure modes.</p>
-<p>For first-time setup, start with <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md">README.md</a> Quickstart. If the two conflict, this file is canonical.</p>
+<p>For first-time setup, start with <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/README.md">README.md</a> Quickstart. If the two conflict, this file is canonical.</p>
 <hr />
 <h2 id="solo-deployment-recommended-for-single-user">Solo deployment (recommended for single-user)<a class="headerlink" href="#solo-deployment-recommended-for-single-user" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>bash<span class="w"> </span>scripts/init-secrets.sh<span class="w">   </span><span class="c1"># idempotent; generates API key, config key, HMAC key if absent</span>
@@ -2657,7 +2703,7 @@
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>make<span class="w"> </span>observability-up
 </code></pre></div>
 <p>Open <code>http://localhost:3002</code> and sign in with <code>LANGFUSE_INIT_USER_EMAIL</code> (default <code>operator@jarvis.local</code>). Langfuse is a single operator tool, loopback-bound, decoupled from JARVIS user accounts.</p>
-<p>Full contract and rotation procedure: <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md">docs/contracts/04-observability.md</a> §9.</p>
+<p>Full contract and rotation procedure: <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md">docs/contracts/04-observability.md</a> §9.</p>
 <hr />
 <h2 id="remote-access-optional">Remote access (optional)<a class="headerlink" href="#remote-access-optional" title="Permanent link">&para;</a></h2>
 <p>By default the dashboard is reachable only on the machine it runs on
@@ -3395,10 +3441,10 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <hr />
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md">README.md</a> — quick start and high-level orientation.</li>
+<li><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/README.md">README.md</a> — quick start and high-level orientation.</li>
 <li><a href="../SECURITY/">docs/SECURITY.md</a> — threat model, auth boundaries, multi-tenant hardening checklist.</li>
 <li><a href="../known-residual-risks/">docs/known-residual-risks.md</a> — acknowledged-but-deferred risks and their reopen criteria.</li>
-<li><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md">docs/contracts/04-observability.md</a> — Langfuse env-var table, trust boundary, rotation procedure.</li>
+<li><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md">docs/contracts/04-observability.md</a> — Langfuse env-var table, trust boundary, rotation procedure.</li>
 </ul>
 
 

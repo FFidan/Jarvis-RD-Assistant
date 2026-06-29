@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Deployment, architecture, engineering standards, security, and API contracts for JARVIS RD Assistant operators and developers.">
+        <meta name="description" content="Documentation for the self-hosted JARVIS RD Assistant research workspace, including user workflows, deployment, security, and engineering contracts.">
       
       
       
@@ -239,6 +239,25 @@
   
   
   
+    <li class="md-tabs__item">
+      <a href="../../METHODS_AND_LIMITATIONS/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Methods and limitations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
     
     
       <li class="md-tabs__item">
@@ -372,6 +391,33 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../METHODS_AND_LIMITATIONS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Methods and limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
     
     
     
@@ -386,10 +432,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -407,8 +453,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1005,10 +1051,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -1026,8 +1072,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1204,10 +1250,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
             
   
   
@@ -1225,8 +1271,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1448,7 +1494,7 @@
 <h1 id="no-per-model-supports_structured_output-boolean">No per-model <code>supports_structured_output</code> boolean<a class="headerlink" href="#no-per-model-supports_structured_output-boolean" title="Permanent link">&para;</a></h1>
 <p><strong>Date:</strong> 2026-06-25
 <strong>Status:</strong> Accepted
-<strong>Deciders:</strong> Engineering (v1.0.0 wave, M1.6)</p>
+<strong>Deciders:</strong> Engineering</p>
 <hr />
 <h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
 <p>In v0.9.1 the flagship Pulse run reported <code>llm_calls: 0</code> — the <code>fast</code> model (<code>qwen3:4b</code>) was
@@ -1468,7 +1514,7 @@ echo the schema object as output.</p>
 <p>Root-cause enforcement at the choke point via <code>Mode.JSON_SCHEMA</code> + <code>ollama_chat/</code> transport,
 rather than a per-model capability boolean, a boot fail-fast, or an empirical canary per model.</p>
 <p>The instructor client is built once per service lifespan with <code>instructor.Mode.JSON_SCHEMA</code>
-(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/app_factory.py#L467-L473">app_factory.py:467-473</a>).
+(<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/app_factory.py#L467-L473">app_factory.py:467-473</a>).
 All chat-based local aliases route via the <code>ollama_chat/</code> prefix, which carries the schema as the
 <code>format</code> field to Ollama's <code>/api/chat</code> endpoint (grammar-constrained token sampling). Schema-echo
 is structurally impossible: the decoding layer must produce a JSON value that conforms to the
@@ -1495,11 +1541,11 @@ schema, independent of what the model's internal representations prefer.</p>
 </tr>
 <tr>
 <td><code>KGExtractionOutput</code> schema: nested arrays, constrained Literal enums, <code>min_length</code>, up to 25 objects</td>
-<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/extraction/kg_models.py#L58-L70">kg_models.py:58-70</a></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/extraction/kg_models.py#L58-L70">kg_models.py:58-70</a></td>
 </tr>
 <tr>
 <td><code>PulseScoringOutput</code> schema: 3 flat fields (<code>relevance</code>, <code>novelty</code>, <code>reasoning</code>)</td>
-<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/models.py#L6-L11">pulse/models.py:6-11</a></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/models.py#L6-L11">pulse/models.py:6-11</a></td>
 </tr>
 <tr>
 <td><code>Mode.JSON_SCHEMA</code> emits native <code>response_format: {type: json_schema, …}</code> — no prompt injection</td>
@@ -1507,11 +1553,11 @@ schema, independent of what the model's internal representations prefer.</p>
 </tr>
 <tr>
 <td><code>ollama_chat/</code> prefix → Ollama <code>/api/chat</code>, where <code>format:&lt;schema&gt;</code> enforces grammar constraints</td>
-<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/services/model_prefixes.py#L13">model_prefixes.py:13</a></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/services/model_prefixes.py#L13">model_prefixes.py:13</a></td>
 </tr>
 <tr>
 <td>VRAM-tiered empirical bench data</td>
-<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/config/llm-tier-candidates.yaml">config/llm-tier-candidates.yaml</a></td>
+<td><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/config/llm-tier-candidates.yaml">config/llm-tier-candidates.yaml</a></td>
 </tr>
 </tbody>
 </table>
@@ -1527,7 +1573,7 @@ schema, independent of what the model's internal representations prefer.</p>
 <li><strong>Degrade is the default.</strong> When a structured call fails (Pydantic <code>ValidationError</code> after
   retries), each site degrades gracefully per the fallback table in
   <a href="03-llm.md#33-fallback-per-site">03-llm.md §3.3</a>. Pulse logs a warning and degrades to Stage 1
-  ranking (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/paper_ingestion/pulse/job.py#L337-L345">pulse/job.py:337-345</a>).</li>
+  ranking (<a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/paper_ingestion/pulse/job.py#L337-L345">pulse/job.py:337-345</a>).</li>
 <li><strong>Opt-in hard-gate via <code>JARVIS_STRICT_MODELS</code>.</strong> Operators who cannot tolerate graceful
   degradation set this flag; a real probe runs at startup and hard-blocks the affected feature on
   failure. This is not a boot fail-fast — the service starts; only the affected structured-output
