@@ -7,8 +7,7 @@ name: Nightly LLM smoke
 #
 # The offline cassette leg (respx-mocked /v1/chat/completions) runs always so
 # the smoke is meaningful even without a live model; the live leg runs only when
-# LITELLM_BASE_URL is set (it is on the self-hosted runner, where the Docker
-# stack with ollama + litellm is already up).
+# LITELLM_BASE_URL is explicitly configured for a reachable model endpoint.
 
 on:
   schedule:
@@ -20,18 +19,16 @@ permissions:
 
 jobs:
   nightly-llm-smoke:
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Nightly structured-pipeline smoke
         # The live leg runs only when LITELLM_SMOKE_BASE_URL is set as a repo
-        # variable. On the self-hosted runner where the Docker stack is up,
-        # the operator sets LITELLM_SMOKE_BASE_URL=http://localhost:4000 (or
-        # http://127.0.0.1:4000 — LiteLLM is published on the host there,
-        # docker-compose.yml: "127.0.0.1:4000:4000"). Leave it unset on public
-        # runners (no stack reachable) → the run is honestly cassette-only.
+        # variable. Leave it unset on GitHub-hosted runners unless they can reach
+        # an explicitly managed test endpoint; otherwise the run is cassette-only.
         # No hardcoded localhost default: a public ubuntu-latest runner has no
         # stack and must stay cassette-only.
         env:

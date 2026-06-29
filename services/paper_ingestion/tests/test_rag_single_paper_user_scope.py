@@ -10,7 +10,7 @@ Also covers the M7 defense-in-depth Qdrant filter composition of
 ``search_chunks_in_paper``: the user scope must be NESTED as one element of
 the outer ``must`` list (a sub-Filter).  Flat-merging its ``should`` branches
 beside the ``must`` list would make them advisory (scoring-only) in real
-Qdrant — the M6 trap — so the composition shape is asserted directly at the
+Qdrant, so the composition shape is asserted directly at the
 Qdrant boundary.
 """
 
@@ -123,7 +123,7 @@ def _make_embedder_with_captured_qdrant():
 async def test_search_chunks_in_paper_nests_user_scope_as_must_subfilter() -> None:
     """User scope must be ONE nested sub-Filter inside the outer ``must`` list.
 
-    Revert-proof for the M6 trap: if a refactor flat-merges the scope's
+    Regression guard: if a refactor flat-merges the scope's
     ``should`` branches beside the outer ``must`` list, the outer ``should``
     assertion fails (advisory-only in real Qdrant = silent cross-tenant leak).
     """
@@ -205,7 +205,7 @@ async def test_search_chunks_in_paper_default_none_filter_unchanged() -> None:
 async def test_search_similar_nests_user_scope_as_must_subfilter() -> None:
     """User scope must be ONE nested sub-Filter inside the outer ``must`` list.
 
-    Revert-proof for the M6 trap: ``search_similar`` previously flat-merged the
+    Regression guard: ``search_similar`` previously flat-merged the
     scope's ``should`` branches beside ``must_not``, where they are advisory
     (scoring-only) in real Qdrant — a silent cross-tenant leak.  The paper
     exclusion stays in ``must_not``; the scope must be restrictive (``must``).

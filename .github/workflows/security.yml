@@ -7,6 +7,7 @@ name: Security
 # .github/workflows/sbom.yml.  The terminal `security-gate` job can be added
 # to ci.yml gate.needs once the workflow has a green baseline.
 on:
+  public:
   push:
     branches: [master]
   pull_request:
@@ -24,16 +25,16 @@ jobs:
   # pip-audit — Python dependency CVE scan (per-service requirements.txt)
   # ---------------------------------------------------------------------------
   pip-audit:
+    if: github.event.repository.private == false
     name: pip-audit (Python SCA)
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
-          enable-cache: ${{ vars.JARVIS_RUNNER == '' }}
-          prune-cache: false  # self-hosted: skip post-job prune (races the shared uv cache lock across parallel runners)
+          enable-cache: true
           python-version: "3.12"
 
       # Audit the hash-pinned constraints.txt (exact == pins + --hash) with
@@ -60,8 +61,9 @@ jobs:
   # npm-audit — Frontend JavaScript dependency CVE scan
   # ---------------------------------------------------------------------------
   npm-audit:
+    if: github.event.repository.private == false
     name: npm-audit (JS SCA)
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
@@ -83,8 +85,9 @@ jobs:
   # Version pin: v2.0.2 (latest stable at 2026-05-26; update via renovate/dependabot)
   # ---------------------------------------------------------------------------
   osv-scanner:
+    if: github.event.repository.private == false
     name: osv-scanner (multi-ecosystem CVE)
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
@@ -101,8 +104,9 @@ jobs:
         run: /tmp/osv-scanner scan --recursive .
 
   docker-build-smoke:
+    if: github.event.repository.private == false
     name: Docker build smoke test
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     env:
       # BuildKit (buildx is installed on the runner) — enables the
       # `RUN --mount=type=cache` pip wheel cache in the 3 service Dockerfiles, so
@@ -177,12 +181,13 @@ jobs:
   # ---------------------------------------------------------------------------
   # gitleaks — Secret scan over the FULL git history (every commit).
   # Version pin: v8.30.1 (latest stable 8.x at 2026-06-24; update via dependabot).
-  # Uses the prebuilt binary (mirrors the osv-scanner pattern; no Go toolchain on
-  # the self-hosted runner). Allowlist for non-secrets lives in .gitleaks.toml.
+  # Uses the prebuilt binary (mirrors the osv-scanner pattern; no Go toolchain
+  # required). Allowlist for non-secrets lives in .gitleaks.toml.
   # ---------------------------------------------------------------------------
   gitleaks:
+    if: github.event.repository.private == false
     name: gitleaks (secret scan)
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -213,7 +218,7 @@ jobs:
   # ---------------------------------------------------------------------------
   codeql:
     name: CodeQL (${{ matrix.language }})
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # Code scanning (SARIF upload) requires GitHub Advanced Security on a PRIVATE
     # repo and is free once the repo is public. Run CodeQL only when the repo is
     # public, so it auto-activates at the public flip with no further edit; while
@@ -245,12 +250,12 @@ jobs:
   # security-gate — Enforced as a required status check via branch protection (not via cross-workflow needs:).
   security-gate:
     name: Security gate
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     needs: [pip-audit, npm-audit, osv-scanner, docker-build-smoke, gitleaks, codeql]
     # always() so the gate reports a definitive pass/fail even when codeql is
     # SKIPPED on a private repo (see the codeql job). Job results are read via env
     # and checked explicitly — a skipped codeql is acceptable, any failure is not.
-    if: always()
+    if: ${{ always() && github.event.repository.private == false }}
     steps:
       - name: Verify security jobs
         env:

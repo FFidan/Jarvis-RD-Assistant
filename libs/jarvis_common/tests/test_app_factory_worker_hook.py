@@ -1,4 +1,4 @@
-"""Unit tests for ``make_procrastinate_worker_hook`` (LOW-DRY1).
+"""Unit tests for the shared ``make_procrastinate_worker_hook``.
 
 The factory returns the lifespan start hook shared by ``paper_ingestion`` and
 ``learning_engine``; the per-service variation (register_fn + queue list) is

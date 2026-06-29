@@ -13,6 +13,7 @@ venv/
 env/
 *.egg-info/
 dist/
+.desloppify/
 build/
 .eggs/
 
@@ -82,7 +83,6 @@ htmlcov/
 
 # AI agent / tool scaffolding
 .claude/
-.desloppify/
 .serena/
 .ralph/
 .playwright-mcp/

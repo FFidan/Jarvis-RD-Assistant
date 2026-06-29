@@ -130,9 +130,83 @@ def test_gate_fails_empty_license(tmp_path):
     assert rc == 1
 
 
+def test_gate_allows_reviewed_nvidia_license_marker(tmp_path):
+    rc = main(
+        [
+            "gate",
+            "--python-json",
+            _py_json(
+                tmp_path,
+                [
+                    {
+                        "Name": "cuda-toolkit",
+                        "Version": "13.0.2",
+                        "License": "UNKNOWN",
+                    }
+                ],
+            ),
+        ]
+    )
+    assert rc == 0
+
+
+def test_gate_rejects_changed_license_for_reviewed_package(tmp_path):
+    rc = main(
+        [
+            "gate",
+            "--python-json",
+            _py_json(
+                tmp_path,
+                [
+                    {
+                        "Name": "cuda-toolkit",
+                        "Version": "13.0.2",
+                        "License": "LicenseRef-unreviewed",
+                    }
+                ],
+            ),
+        ]
+    )
+    assert rc == 1
+
+
 # ---------------------------------------------------------------------------
 # cmd_check_notice — Node JSON coverage (NEW)
 # ---------------------------------------------------------------------------
+
+
+def test_check_notice_requires_reviewed_nvidia_package_attribution(tmp_path):
+    python_data = [{"Name": "cuda-toolkit", "Version": "13.0.2", "License": "UNKNOWN"}]
+    (tmp_path / "p.json").write_text(json.dumps(python_data))
+    (tmp_path / "NOTICE").write_text("NOTICE\n======\n")
+    rc = main(
+        [
+            "check-notice",
+            "--python-json",
+            str(tmp_path / "p.json"),
+            "--notice",
+            str(tmp_path / "NOTICE"),
+        ]
+    )
+    assert rc == 1
+
+
+def test_check_notice_accepts_matching_reviewed_nvidia_package(tmp_path):
+    python_data = [{"Name": "cuda-toolkit", "Version": "13.0.2", "License": "UNKNOWN"}]
+    (tmp_path / "p.json").write_text(json.dumps(python_data))
+    (tmp_path / "NOTICE").write_text(
+        "NOTICE\n======\n\n  cuda-toolkit  13.0.2  — NVIDIA CUDA Toolkit\n"
+    )
+    rc = main(
+        [
+            "check-notice",
+            "--python-json",
+            str(tmp_path / "p.json"),
+            "--notice",
+            str(tmp_path / "NOTICE"),
+        ]
+    )
+    assert rc == 0
 
 
 def test_check_notice_passes_when_node_lgpl_attributed(tmp_path):

@@ -52,11 +52,29 @@ _WEAK_COPYLEFT = re.compile(
 )
 _UNRECOGNIZED = re.compile(r"^(UNKNOWN|LicenseRef-)", re.IGNORECASE)
 
+# These NVIDIA runtime packages use non-SPDX metadata but have been reviewed
+# against the vendor links recorded in their installed package metadata and NOTICE.
+# Match both package and marker exactly; every other unknown remains fail-closed.
+_REVIEWED_UNRECOGNIZED_PYTHON = {
+    ("cuda-bindings", "LicenseRef-NVIDIA-SOFTWARE-LICENSE"),
+    ("cuda-toolkit", "UNKNOWN"),
+    ("nvidia-cublas", "LicenseRef-NVIDIA-Proprietary"),
+    ("nvidia-cuda-runtime", "LicenseRef-NVIDIA-Proprietary"),
+    ("nvidia-cudnn-cu13", "LicenseRef-NVIDIA-Proprietary"),
+    ("nvidia-nccl-cu13", "LicenseRef-NVIDIA-Proprietary"),
+    ("nvidia-nvshmem-cu13", "LicenseRef-NVIDIA-Proprietary"),
+}
+
 
 def is_unrecognized(license_str: str) -> bool:
     """True for empty, UNKNOWN, or LicenseRef- strings that cannot be classified."""
     s = (license_str or "").strip()
     return not s or bool(_UNRECOGNIZED.match(s))
+
+
+def is_reviewed_unrecognized_python(name: str, license_str: str) -> bool:
+    """Return whether an exact package/license marker received manual review."""
+    return (name.lower(), (license_str or "").strip()) in _REVIEWED_UNRECOGNIZED_PYTHON
 
 
 def is_strong_copyleft(license_str: str) -> bool:
@@ -115,7 +133,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
         ver = dep.get("Version", "?")
         if is_strong_copyleft(lic):
             hits.append(("python", name, ver, _first_line(lic)))
-        elif is_unrecognized(lic):
+        elif is_unrecognized(lic) and not is_reviewed_unrecognized_python(name, lic):
             unknown.append(("python", name, ver, lic or "(empty)"))
 
     if args.node_json:
@@ -227,6 +245,25 @@ def cmd_check_notice(args: argparse.Namespace) -> int:
     ]
     if drift:
         failures.append("attributed version out of date: " + "; ".join(drift))
+
+    reviewed_python = {
+        d.get("Name", ""): d.get("Version", "")
+        for d in python_deps
+        if is_reviewed_unrecognized_python(d.get("Name", ""), d.get("License", ""))
+    }
+    missing_reviewed = sorted(set(reviewed_python) - set(notice_pkgs))
+    if missing_reviewed:
+        failures.append(
+            "reviewed proprietary/custom-license dependencies not attributed in NOTICE: "
+            + ", ".join(missing_reviewed)
+        )
+    reviewed_drift = [
+        f"{name}: NOTICE={notice_pkgs[name]} installed={ver}"
+        for name, ver in sorted(reviewed_python.items())
+        if name in notice_pkgs and notice_pkgs[name] != ver
+    ]
+    if reviewed_drift:
+        failures.append("reviewed dependency version out of date: " + "; ".join(reviewed_drift))
 
     # Node check (optional; pass --node-json to enable)
     if args.node_json:

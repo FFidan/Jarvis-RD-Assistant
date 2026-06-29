@@ -11,6 +11,7 @@ name: First-run smoke
 # after it has proven stable over several green master runs.
 
 on:
+  public:
   push:
     branches: [master]
   workflow_dispatch:
@@ -20,7 +21,8 @@ permissions:
 
 jobs:
   first-run-smoke:
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0

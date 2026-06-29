@@ -37,6 +37,8 @@ Each answer message contains:
 
 > **Unverified ≠ wrong.** It means the system could not match the answer's sentences to the retrieved source passages — the answer may still be accurate, but it could not be verified against what was retrieved from your library.
 
+“Verified” is also not independent fact-checking: it describes textual support in the retrieved passages, not whether the paper or generated interpretation is scientifically correct.
+
 Click the badge to see which sentences could not be matched to a source.
 
 **SourcesAccordion** — collapsed by default; click to expand. Lists the **Source Passages** retrieved and used to construct the answer. Each entry shows the paper title, the passage excerpt, and a link to the [Paper Detail](paper-detail.md) page for that paper.

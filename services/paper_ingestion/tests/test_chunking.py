@@ -58,7 +58,7 @@ def test_chunk_text_start_char_offsets_exact_multi_section_multi_paragraph() -> 
         ]
         # Every paragraph stays under CHUNK_TOKEN_LIMIT so chunking never enters
         # the token-window force-split path — this test pins the paragraph
-        # sub-split offset accounting the falsified finding targeted.
+        # sub-split offset accounting covered by this regression test.
         assert all(len(enc.encode(p)) <= CHUNK_TOKEN_LIMIT for p in paragraphs)
         return "\n\n".join(paragraphs)
 

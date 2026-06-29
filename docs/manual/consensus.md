@@ -2,6 +2,8 @@
 
 # Consensus
 
+Consensus is a model-assisted evidence map over the papers available to JARVIS. It is not a statistical consensus estimate, systematic review, or meta-analysis; missing papers, extraction errors, and model interpretation can change the result.
+
 The **Consensus** page (at `/consensus`, in the **Ⅱ Read** sidebar group) shows where the papers in your library agree and disagree on shared claims extracted by the contradiction-detection pipeline.
 
 <!-- screenshot: /consensus — page showing the "Agreement by claim" stacked bar chart with several claim rows -->

@@ -1,13 +1,14 @@
 # JARVIS RD Assistant
 
-A self-hosted research assistant that turns a stream of papers into a working
-body of knowledge: discover and triage papers, ask questions across your whole
-library, extract structured findings, build knowledge and citation graphs, and
-turn what you read into spaced-repetition cards and project tasks — all on your
-own hardware, with your data never leaving your machine.
+A self-hosted research workspace for discovering, organizing, and interrogating
+scientific literature. JARVIS links generated claims to retrieved source text,
+combines literature work with spaced-repetition learning and project tasks, and
+can run model inference on infrastructure you control with Ollama.
 
-**Self-hosted. Multi-tenant. Yours.** Run it for yourself or a small team; every
-user's library, notes, and progress stay private to them.
+If you configure a cloud model through LiteLLM, relevant prompts and source
+excerpts are sent to that provider. Generated outputs can still be incomplete
+or wrong; read [Methods and limitations](METHODS_AND_LIMITATIONS.md) before
+relying on verification badges, consensus views, or extracted evidence.
 
 ---
 

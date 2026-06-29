@@ -1,14 +1,10 @@
-JARVIS R&D Assistant — Third-Party Software Notices (Web Frontend)
-==================================================================
+JARVIS RD Assistant — Web Frontend Notices
+==========================================
 
-This web application is licensed under the Apache License, Version 2.0.
+JARVIS RD Assistant is licensed under the Apache License, Version 2.0. The full
+project license is available in the repository root as LICENSE.
 
-It bundles open-source components distributed under their respective
-open-source licenses (including the MIT, BSD-2-Clause, BSD-3-Clause, ISC,
-and Apache-2.0 licenses). Major components include React, TanStack Query,
-and Zustand, among others.
-
-The authoritative list of bundled dependencies and their exact versions is
-recorded in this project's frontend/package-lock.json. Full per-dependency
-copyright and license texts are distributed with the project source code:
-each package retains its own LICENSE file under node_modules/<package>/.
+The frontend bundles third-party packages under their respective licenses. The
+resolved dependency inventory is recorded in frontend/package-lock.json; the
+repository's NOTICE file and release SBOM describe the corresponding review
+process. Package metadata and upstream license texts remain authoritative.

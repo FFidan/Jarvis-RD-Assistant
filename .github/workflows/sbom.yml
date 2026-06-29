@@ -1,6 +1,7 @@
 name: SBOM
 
 on:
+  public:
   release:
     types: [published]
   pull_request:
@@ -14,14 +15,15 @@ permissions:
 
 jobs:
   python-sbom:
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
-          enable-cache: ${{ vars.JARVIS_RUNNER == '' }}
+          enable-cache: true
 
       - name: Sync dependencies
         run: uv sync --frozen
@@ -38,7 +40,8 @@ jobs:
           path: sbom-python.json
 
   node-sbom:
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
@@ -71,14 +74,15 @@ jobs:
   # gate, so a transitive copyleft dep is a review item, not an automatic build
   # break. Tool/setup failures still fail the job.
   license-scan:
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
-          enable-cache: ${{ vars.JARVIS_RUNNER == '' }}
+          enable-cache: true
 
       - name: Sync Python dependencies
         run: uv sync --frozen
@@ -164,7 +168,7 @@ jobs:
   # while the repository is private this job is skipped, so it does not block the
   # private release tag; it auto-activates at the public flip with no edit.
   license-gate:
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     if: ${{ github.event.repository.private == false }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -172,7 +176,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
-          enable-cache: ${{ vars.JARVIS_RUNNER == '' }}
+          enable-cache: true
 
       - name: Sync Python dependencies
         run: uv sync --frozen

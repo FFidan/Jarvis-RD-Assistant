@@ -34,7 +34,7 @@ Once extraction is complete, the results are displayed in the **ExtractionDataTa
 - **Columns** correspond to the papers you selected.
 - Each cell shows the extracted value for that field in that paper. Cells may be empty if the model could not find a relevant value.
 
-The table is suitable for comparing how different papers describe the same aspects of a research problem — useful for systematic reviews and meta-analyses.
+The table helps compare how selected papers describe the same aspects of a research problem. It can support screening and evidence organization, but every extracted value should be checked against the source before use in a systematic review or meta-analysis.
 
 ---
 

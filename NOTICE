@@ -1,27 +1,20 @@
 JARVIS RD Assistant
 Copyright 2026 Ferhat Fidan
 
-This product is licensed under the Apache License, Version 2.0 (the "License").
-You may not use this product except in compliance with the License.
-A copy of the License is included in this repository as the LICENSE file
-and is also available at https://www.apache.org/licenses/LICENSE-2.0
+Licensed under the Apache License, Version 2.0. See LICENSE for the full terms.
 
----
+This file records third-party dependency information for release review. Exact
+resolved versions are defined by uv.lock and frontend/package-lock.json; release
+artifacts include machine-generated software bills of materials. Dependency
+licenses remain governed by their respective authors and license texts.
 
-This product includes third-party software. The following notices are provided
-to satisfy attribution and disclosure requirements of those licenses. All
-third-party packages are used unmodified as standard pip/npm dependencies.
-
-Generated from pip-licenses --python .venv/bin/python (223 packages, 2026-06-25).
-No AGPL-licensed packages are present in this distribution.
+Inventory snapshot generated from the lock-resolved project environment on
+2026-06-25. Re-run the repository license gate before each release.
 
 ================================================================================
 LGPL-3.0 — GNU Lesser General Public License v3 (weak copyleft)
 ================================================================================
-These packages are used unmodified as dynamically-loaded pip dependencies.
-LGPL permits use in any licensed software, including Apache-2.0, provided the
-library itself remains unmodified and end-users can replace it. No source
-disclosure obligation applies to this project.
+Packages identified by the inventory as LGPL-licensed dependencies:
 
   frozendict        2.4.7   — LGPL-3.0
   psycopg           3.3.4   — LGPL-3.0-only
@@ -33,9 +26,7 @@ disclosure obligation applies to this project.
 ================================================================================
 MPL-2.0 — Mozilla Public License 2.0 (file-level copyleft)
 ================================================================================
-MPL-2.0 is file-level copyleft: only modifications to the MPL-covered files
-themselves must remain MPL-2.0. Merely depending on these packages imposes no
-obligation on the rest of this project.
+Packages identified by the inventory as containing MPL-licensed material:
 
   certifi     2026.4.22  — MPL-2.0   (CA bundle; transitive via requests/httpx)
   orjson      3.11.8     — MPL-2.0 AND (Apache-2.0 OR MIT)  (partial MPL files)
@@ -58,11 +49,9 @@ Full third-party notices for the bundled PDFium components are available at:
 ================================================================================
 NVIDIA Proprietary — GPU runtime libraries (GPU image only)
 ================================================================================
-The following NVIDIA CUDA libraries are included in the GPU Docker image only.
-They are redistributed under the NVIDIA Software License Agreement and/or the
-NVIDIA End User License Agreement. These libraries are NOT open-source but are
-freely redistributable under NVIDIA's standard terms for CUDA-enabled software.
-They are NOT present in CPU-only deployments.
+The GPU dependency set can include the following NVIDIA CUDA libraries. Review
+the applicable NVIDIA terms when building or distributing GPU images. They are
+not part of CPU-only deployments.
 
   cuda-bindings          13.2.0    — LicenseRef-NVIDIA-SOFTWARE-LICENSE
   cuda-toolkit           13.0.2    — NVIDIA CUDA Toolkit (EULA)
@@ -99,9 +88,9 @@ document ingestion pipeline. They are permissively licensed.
 ================================================================================
 All other packages
 ================================================================================
-The remaining 197 packages are permissively licensed (MIT, BSD-2, BSD-3, ISC,
-Apache-2.0, and functionally equivalent variants). No further attribution or
-disclosure obligation applies.
+The remaining packages in this snapshot were reported under permissive license
+identifiers such as MIT, BSD, ISC, and Apache-2.0. Consult the generated SBOM,
+package metadata, and upstream license texts for authoritative terms.
 
-Full license texts for all installed packages are available by running:
+To inspect the current Python environment locally, run:
   uv tool run pip-licenses --python .venv/bin/python --format=plain-vertical --with-license-file

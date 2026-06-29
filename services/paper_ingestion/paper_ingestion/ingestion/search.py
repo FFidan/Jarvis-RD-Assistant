@@ -105,7 +105,7 @@ class EmbeddingSearchMixin:
         # M7: nest the user scope as ONE sub-Filter element of the outer `must`
         # list so it is AND-combined (restrictive).  A `should` list sitting
         # beside `must_not` is advisory (scoring-only) in Qdrant, not
-        # restrictive — the M6 trap that leaked cross-tenant chunks.
+        # restrictive — the previous flat-filter composition leaked cross-tenant chunks.
         must_clauses: list = []
         user_scope = _user_scope_filter(user_id, library_paper_ids)
         if user_scope is not None:
@@ -205,7 +205,7 @@ class EmbeddingSearchMixin:
         # list so it is AND-combined with the paper_id condition.  Do NOT
         # flat-merge its `should` branches into this Filter: in Qdrant a
         # `should` list sitting beside a `must` list is advisory
-        # (scoring-only), not restrictive — the M6 trap.
+        # (scoring-only), not restrictive — the previous flat-filter composition bug.
         user_scope = _user_scope_filter(user_id, library_paper_ids)
         if user_scope is not None:
             must_clauses.append(user_scope)

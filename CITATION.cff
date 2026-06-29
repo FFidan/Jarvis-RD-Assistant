@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "JARVIS RD Assistant"
+type: software
+authors:
+  - family-names: Fidan
+    given-names: Ferhat
+version: 1.0.0
+date-released: 2026-06-29
+repository-code: "https://github.com/FFidan/Jarvis-RD-Assistant"
+url: "https://ffidan.github.io/Jarvis-RD-Assistant/"
+license: Apache-2.0

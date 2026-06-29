@@ -27,7 +27,7 @@ active projects; reads Telegram daily; distrusts uncited AI summaries; has a rea
 | Problem | How JARVIS Addresses It |
 |---|---|
 | **Information overload** | Automated daily/weekly briefings scoped to user-defined topics |
-| **Hallucination risk** | Every claim linked to exact quotes and page numbers; 4-layer verification |
+| **Unsupported generated claims** | Source-linked retrieval, quote matching, and visible confidence signals |
 | **Knowledge decay** | FSRS spaced repetition turns paper insights into durable memory |
 | **Poor project tracking** | Lightweight project manager with Telegram milestone reminders |
 | **Vendor lock-in / privacy** | Fully self-hosted; LiteLLM supports local models or any API provider |
@@ -36,7 +36,7 @@ active projects; reads Telegram daily; distrusts uncited AI summaries; has a rea
 ### Success Definition
 
 A researcher can answer "What papers matter this week, and what should I remember from last
-month?" — without a browser, without hallucinated claims, in under 2 minutes.
+month?" with source-linked evidence and a workflow that makes unsupported output visible.
 
 ---
 
@@ -161,18 +161,22 @@ Verifiability over fluency — the differentiating feature. All generated conten
 Each summary includes: title / authors / date / venue from source API (never LLM-generated);
 2–3 cited sentences with page numbers; key claims as `Claim | Exact Quote | Page`; paper link.
 
-### 5.3 4-Layer Verification Pipeline
+### 5.3 Evidence-Grounding Pipeline
 1. **Grounded Generation** — LLM receives only paper chunks; metadata from API only.
 2. **Quote Verification** — two complementary bars apply. Verbatim quotes
    (summaries, flashcards, extraction) require a 97% fuzzy match
    (`jarvis_common/verify.py` `FUZZY_THRESHOLD`). Synthesized RAG answers
-   use a sentence-level grounded-support bar of 70%, calibrated against the
-   live corpus where grounded synthesis scores ~75–77 and domain-plausible
-   fabrications top out ~57 (`rag/verification.py` `RAG_SUPPORT_FUZZY`).
+   use a sentence-level grounded-support bar of 70% (`rag/verification.py`
+   `RAG_SUPPORT_FUZZY`). These are engineering thresholds, not estimates of
+   scientific truth or model accuracy.
    The two bars serve different semantics: 97 is a verbatim-quote check;
    70 is a paraphrase-grounding check. Do not unify them.
 3. **PDF Page Snapshots** — 150 DPI pypdfium2; `GET /api/snapshots/{paper_id}/{page}`.
 4. **Cross-Reference Check** — semantic consistency checking across ingested papers.
+
+The pipeline assesses support in retrieved text. It does not independently
+fact-check a paper, reproduce an experiment, or guarantee that retrieval found
+all relevant evidence. See [Methods and limitations](METHODS_AND_LIMITATIONS.md).
 
 ### 5.4 Confidence Signals
 - **HIGH** — clear abstract, explicit results, all quotes verified

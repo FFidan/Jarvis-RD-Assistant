@@ -8,6 +8,7 @@ name: CI
 # + frontend. Requiring individual jobs directly is fragile (a renamed job
 # silently drops the gate); `gate` makes the requirement self-enforcing.
 on:
+  public:
   push:
     branches: [master]
   pull_request:
@@ -21,28 +22,23 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
-  # Run the test environment in UTC so date-relative tests (which seed rows via
-  # Python `date.today()`) agree with the app's UTC date handling (Postgres
-  # `CURRENT_DATE` / `AT TIME ZONE 'UTC'` / `datetime.now(UTC)`). When running
-  # on a self-hosted runner whose system clock is not UTC, the runner clock and
-  # the DB clock can disagree near midnight UTC, which deterministically fails
-  # the my-day/analytics contract tests.
+  # Run the test environment in UTC so date-relative tests agree with the app's
+  # UTC date handling across Python and PostgreSQL.
   TZ: UTC
 
 jobs:
   lint-test:
+    if: github.event.repository.private == false
     name: Lint + fast test suite
     timeout-minutes: 20
-    # optional self-hosted-runner repo variable; unset → GitHub-hosted ubuntu-latest
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
-          enable-cache: ${{ vars.JARVIS_RUNNER == '' }}
-          prune-cache: false  # self-hosted: skip post-job prune (races the shared uv cache lock across parallel runners)
+          enable-cache: true
           python-version: "3.12"
 
       - name: Sync dependencies
@@ -95,9 +91,10 @@ jobs:
         run: bash scripts/check-python-deps.sh
 
   cross-user-isolation:
+    if: github.event.repository.private == false
     name: Cross-user isolation (release gate)
     timeout-minutes: 20
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # A runner-managed PostgreSQL 16 (postgres:16.8) is provided via the
     # `services:` block below, on tmpfs.  The live-PG fixtures clone a fresh
     # EMPTY database from it per session (CREATE DATABASE … TEMPLATE template0)
@@ -144,8 +141,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
-          enable-cache: ${{ vars.JARVIS_RUNNER == '' }}
-          prune-cache: false  # self-hosted: skip post-job prune (races the shared uv cache lock across parallel runners)
+          enable-cache: true
           python-version: "3.12"
 
       - name: Sync dependencies
@@ -198,9 +194,10 @@ jobs:
           fi
 
   contract-tests:
+    if: github.event.repository.private == false
     name: Contract layer (DB-backed)
     timeout-minutes: 20
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # A runner-managed PostgreSQL 16 (postgres:16.8) is provided via `services:`
     # below, on tmpfs.  The contract_pg_dsn fixture clones ONE fresh empty
     # database from it per session (CREATE DATABASE … TEMPLATE template0) and
@@ -236,8 +233,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
-          enable-cache: ${{ vars.JARVIS_RUNNER == '' }}
-          prune-cache: false  # self-hosted: skip post-job prune (races the shared uv cache lock across parallel runners)
+          enable-cache: true
           python-version: "3.12"
 
       - name: Sync dependencies
@@ -269,9 +265,10 @@ jobs:
           fi
 
   frontend:
+    if: github.event.repository.private == false
     name: Frontend lint + test + build
     timeout-minutes: 20
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
@@ -298,6 +295,7 @@ jobs:
         run: npm --prefix frontend run build
 
   e2e-mocked:
+    if: github.event.repository.private == false
     name: E2E mocked smoke (non-blocking)
     # NOT listed in gate.needs — failures are informational only (continue-on-error: true).
     # The mocked suite is green as of 2026-06; it was previously red/cancelled due to a
@@ -306,7 +304,7 @@ jobs:
     #   1. Set `continue-on-error: false` on this job (line below).
     #   2. Add "e2e-mocked" to gate.needs (the list in the gate job below).
     timeout-minutes: 15
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # Run only after the frontend build succeeds so we know the bundle is healthy.
     needs: [frontend]
     continue-on-error: true
@@ -355,9 +353,10 @@ jobs:
 
   # gate — Enforced as a required status check via branch protection (not via cross-workflow needs:).
   gate:
+    if: ${{ always() && github.event.repository.private == false }}
     name: CI gate (required status check)
     timeout-minutes: 5
-    runs-on: ${{ vars.JARVIS_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     needs: [lint-test, cross-user-isolation, contract-tests, frontend]
     steps:
       - name: All required jobs passed

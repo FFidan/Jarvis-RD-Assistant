@@ -1,6 +1,7 @@
 # Secrets + env
 secrets/
 .env
+.desloppify/
 .env.*
 
 # Git internals
@@ -35,7 +36,6 @@ Jarvis_RD.zip
 
 # Local-only tooling & caches (not part of the image build context)
 .serena/
-.desloppify/
 .codeboarding/
 .ralph/
 .superpowers/

@@ -510,7 +510,7 @@ def make_procrastinate_worker_hook(
 ) -> LifespanHook:
     """Return a lifespan hook that starts the procrastinate worker for a service.
 
-    LOW-DRY1: ``paper_ingestion`` and ``learning_engine`` carried near-identical
+    ``paper_ingestion`` and ``learning_engine`` previously carried near-identical
     ``_start_procrastinate_worker`` hooks differing only in the task-register
     function and the queue list — those two variations are injected here.  The
     teardown counterpart is already shared (:func:`shutdown_procrastinate_worker`).

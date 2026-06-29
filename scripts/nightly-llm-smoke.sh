@@ -12,8 +12,7 @@
 #   2. Live (only when LITELLM_BASE_URL is set) — drives each of the 9 structured
 #      pipelines against the real deployed model and asserts a parsed result.
 #
-# Assumes the Docker stack (ollama + litellm) is already running on the
-# self-hosted runner.
+# The live leg requires LITELLM_BASE_URL to point to a reachable test endpoint.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,7 +39,7 @@ run_cassette_leg() {
 if [[ -z "${LITELLM_BASE_URL:-}" ]]; then
   echo "=== Nightly LLM smoke: LITELLM_BASE_URL unset — live leg NOT configured ==="
   echo "    To enable the live leg, set the LITELLM_SMOKE_BASE_URL repo variable"
-  echo "    (e.g. http://localhost:4000) on the self-hosted runner where the stack runs."
+  echo "    only when the runner can reach a managed test endpoint."
   run_cassette_leg
   echo "=== Nightly LLM smoke: PASS (cassette only — live leg not configured) ==="
   exit 0
@@ -55,7 +54,7 @@ if ! curl --fail --silent --show-error --max-time 10 \
   echo "=== Nightly LLM smoke: FAIL — LITELLM_BASE_URL=$LITELLM_BASE_URL is set but unreachable ===" >&2
   echo "    The live leg is configured but the LiteLLM endpoint did not respond at" >&2
   echo "    ${LITELLM_BASE_URL%/}/health/liveliness. Refusing to silently pass." >&2
-  echo "    On the self-hosted runner, verify the Docker stack (ollama + litellm) is up" >&2
+  echo "    Verify that the configured model endpoint is reachable" >&2
   echo "    and that LITELLM_SMOKE_BASE_URL points at the host-published port" >&2
   echo "    (docker-compose.yml publishes litellm at 127.0.0.1:4000)." >&2
   exit 1

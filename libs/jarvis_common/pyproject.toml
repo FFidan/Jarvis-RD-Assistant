@@ -5,7 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jarvis-common"
 version = "0.1.0"
+description = "Shared application infrastructure for JARVIS RD Assistant"
 requires-python = ">=3.12"
+license = "Apache-2.0"
 dependencies = [
     "asyncpg>=0.30.0",
     "asyncpg-listen>=0.0.9",

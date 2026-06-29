@@ -31,8 +31,8 @@
 
 site_name: JARVIS RD Assistant
 site_description: >-
-  Deployment, architecture, engineering standards, security, and API contracts
-  for JARVIS RD Assistant operators and developers.
+  Documentation for the self-hosted JARVIS RD Assistant research workspace,
+  including user workflows, deployment, security, and engineering contracts.
 site_url: "https://ffidan.github.io/Jarvis-RD-Assistant/"
 
 # Repo link shown in the Material theme header
@@ -98,6 +98,7 @@ exclude_docs: |
 # also remain excluded.
 nav:
   - Home: index.md
+  - Methods and limitations: METHODS_AND_LIMITATIONS.md
   - User Guide:
       - Overview: manual/index.md
       - Getting Started: manual/getting-started.md

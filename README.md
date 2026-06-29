@@ -1,6 +1,8 @@
 # JARVIS RD Assistant
 
-> Self-hosted AI research assistant: citation-backed paper briefings, spaced-repetition learning, integrated project management. FastAPI + React + Postgres + Qdrant.
+> A self-hosted research workspace for paper discovery, evidence-grounded synthesis, PDF annotation, Zotero sync, and spaced repetition.
+
+JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It pairs local-first models with source-linked retrieval so generated claims can be traced back to papers in the researcher's library.
 
 📖 **Docs:** https://ffidan.github.io/Jarvis-RD-Assistant/ &nbsp;·&nbsp; 📦 **Releases:** https://github.com/FFidan/Jarvis-RD-Assistant/releases &nbsp;·&nbsp; 🔒 **Security:** [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/SECURITY.md)
 
@@ -71,7 +73,7 @@ See `./setup.sh --help` for all flags (including `--profile=local-https` for sel
 
 ## What it does
 
-Runs on your own hardware via Ollama (or cloud providers through LiteLLM). Designed for researchers tracking multiple topics who want an assistant that does not hallucinate.
+Runs on your own hardware with Ollama, with optional cloud-model access through LiteLLM. It is designed for researchers who want literature workflows with visible sources and inspectable evidence.
 
 **Core subsystems:**
 
@@ -83,8 +85,8 @@ Runs on your own hardware via Ollama (or cloud providers through LiteLLM). Desig
 
 ### Design choices
 
-- **Anti-hallucination pipeline.** Verified summaries, flashcard evidence, KG edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. Weekly Summary separates verified from unverified themes. A conservative contradiction scanner persists only quote-backed conflicts.
-- **Local-first.** Runs on Ollama with no cloud dependency. LiteLLM provides a unified gateway so you can swap between local and cloud models without code changes. See the [LLM tier benchmark](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/perf/2026-05-22-llm-tier-bench.md) for tier-by-tier model recommendations.
+- **Evidence grounding and verification.** Summaries, flashcard evidence, graph edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. These checks improve traceability; they are not independent fact-checking and do not guarantee correctness.
+- **Local-first deployment.** Ollama keeps model inference on infrastructure you control. If you configure a cloud provider through LiteLLM, relevant prompts and source excerpts are sent to that provider. See the [LLM tier benchmark](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/perf/2026-05-22-llm-tier-bench.md) for model recommendations.
 - **Hybrid search.** BM25 full-text search fused with Qdrant vector search via reciprocal rank fusion, then reranked with a cross-encoder for high-precision retrieval.
 
 ## Architecture
@@ -110,7 +112,7 @@ Solo install: the **Quickstart** above is all you need. For team/multi-user setu
 
 ## Security
 
-JARVIS is multi-tenant: every user's research data is isolated at the query layer. The ops API key (`JARVIS_API_KEY`) is a service credential, not a user login. Admins manage users but cannot read other users' research data.
+JARVIS applies user scoping at the application and query layers. The ops API key (`JARVIS_API_KEY`) is a service credential, not a user login. Application admins do not receive a research-data browsing interface for other users; infrastructure operators with database, filesystem, backup, or model-provider access remain inside the trust boundary.
 
 See [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/SECURITY.md) for vulnerability disclosure and [docs/SECURITY.md](docs/SECURITY.md) for the full threat model, dev-flag behaviour, secret environment-variable reference, audit-log coverage, and operational hardening checklist.
 
@@ -238,9 +240,15 @@ See **[docs/DEPLOYMENT.md → Troubleshooting](docs/DEPLOYMENT.md#troubleshootin
 - [docs/perf/](https://github.com/FFidan/Jarvis-RD-Assistant/tree/master/docs/perf) — empirical model recommendations per hardware tier.
 - [CHANGELOG.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/CHANGELOG.md) — release notes per version.
 
+## Methods and limitations
+
+“Verified” means that the system matched a generated statement or quote to retrieved source text. It does not mean that the underlying paper is correct, that the statement was independently reproduced, or that the output is free of omissions or interpretation errors. Retrieval quality depends on the ingested corpus, PDF extraction, model choice, and configuration. The Consensus and Extraction Table features are research aids, not substitutes for a systematic review, meta-analysis, or expert judgment.
+
+See [Methods and limitations](docs/METHODS_AND_LIMITATIONS.md) for verification semantics, data-flow boundaries, and appropriate use.
+
 ## Built with AI-assisted development
 
-JARVIS RD Assistant was built with heavy AI-assisted development, kept honest by layered automated gates. On every change, `ruff`, `pyright`, `tach` module-boundary checks, a fast unit test suite (excluding the database-backed, integration, and slow tests), cross-user multi-tenant isolation tests, DB-backed contract tests, and a full frontend lint/typecheck/test/build are all required gates. A mocked end-to-end smoke suite runs informational. Live-model tests run on a nightly schedule.
+JARVIS RD Assistant was built with substantial AI-assisted development. Contributions remain the maintainer's responsibility and are checked with `ruff`, `pyright`, `tach` module-boundary checks, Python and frontend tests, database-backed contract tests, and cross-user isolation tests. GitHub-hosted CI runs for public-repository changes; `make check` is the corresponding local quality gate. Mocked end-to-end and scheduled model-pipeline smoke tests provide additional, non-equivalent coverage.
 
 ## License
 

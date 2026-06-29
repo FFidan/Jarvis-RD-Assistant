@@ -94,7 +94,7 @@ def _register_tasks(procrastinate_app: Any) -> None:
 
 
 # B.4 Step 4 — start the procrastinate worker polling learning_engine + builtin
-# (LOW-DRY1: hook body shared via jarvis_common.app_factory).
+# Hook body is shared via jarvis_common.app_factory.
 _start_procrastinate_worker = make_procrastinate_worker_hook(
     _register_tasks, queues=["learning_engine", "builtin"]
 )

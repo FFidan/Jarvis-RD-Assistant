@@ -29,6 +29,11 @@ isolation expectation that every contributor must follow.
 6. Use [Conventional Commits](https://www.conventionalcommits.org/) style for
    commit messages (`feat:`, `fix:`, `chore:`, `docs:`, etc.) — makes the
    changelog easier to generate and review.
+7. Write for a public audience. PR titles, descriptions, and commit messages
+   must explain the user or engineering value without local hostnames, private
+   paths, internal audit IDs, agent-orchestration notes, or temporary branch
+   names. AI co-author trailers are welcome when they accurately record the
+   contribution.
 
 ---
 
