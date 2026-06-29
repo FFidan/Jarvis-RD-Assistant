@@ -493,6 +493,46 @@ async def test_litellm_probe_uses_per_request_timeout() -> None:
     assert kwargs.get("timeout") == 2.0, "LiteLLM probe must pass an explicit per-request timeout"
 
 
+async def test_litellm_probe_uses_dedicated_client_when_shared_pool_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default LiteLLM health probes retry outside the shared app HTTP pool."""
+    import httpx
+    from jarvis_common.health import make_litellm_probe
+    from jarvis_common.llm_client import LiteLLMConfig
+
+    calls = {"dedicated": 0, "shared": 0}
+
+    class SharedClient:
+        async def get(self, _url: str, *, timeout: float) -> object:
+            calls["shared"] += 1
+            raise httpx.ConnectTimeout("pool saturated")
+
+    class Response:
+        status_code = 200
+
+    class DedicatedClient:
+        async def __aenter__(self) -> DedicatedClient:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+        async def get(self, _url: str, *, timeout: float) -> Response:
+            calls["dedicated"] += 1
+            assert timeout == 2.0
+            return Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", DedicatedClient)
+    request = _fake_request()
+    request.app.state.http_client = SharedClient()
+
+    probe = make_litellm_probe(config=LiteLLMConfig(base_url="http://litellm:4000"))
+
+    assert await probe(request) == "ok"
+    assert calls == {"shared": 1, "dedicated": 1}
+
+
 async def test_vector_probe_short_circuits_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     """_probe_vector returns 'unknown' with no network round-trip when vector_api_url is empty."""
     import paper_ingestion.main as pi_main

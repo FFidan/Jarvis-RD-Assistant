@@ -37,6 +37,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -45,7 +46,6 @@ from jarvis_common.models import HealthCheckResponse
 
 if TYPE_CHECKING:
     import asyncpg
-    import httpx
     from slowapi import Limiter
 
     from jarvis_common.llm_client import LiteLLMConfig
@@ -286,29 +286,42 @@ def make_litellm_probe(
 ) -> HealthProbe:
     """Build a ``HealthProbe`` that hits LiteLLM's ``/health/readiness``.
 
-    Pass *http_client* and *config* explicitly when both are already
-    available; otherwise leave them ``None`` and the probe resolves
-    ``request.app.state.<http_client_attr>`` plus a fresh
-    :func:`get_litellm_config` on each call (matching the pattern of the
-    service-local probes this factory replaces).
+    Pass *http_client* and *config* explicitly when both are already available.
+    Otherwise the probe first tries ``request.app.state.<http_client_attr>`` so
+    it matches service-local wiring, then retries once with a dedicated
+    short-lived client if the shared pool is saturated. A health check should
+    not report LiteLLM down solely because product LLM traffic has occupied the
+    shared app client.
 
     Returns ``"ok"`` on HTTP 200, ``"unavailable"`` on any other status or
     exception. The per-probe timeout is enforced by :func:`run_health_checks`.
     """
 
+    async def _get_readiness(client: httpx.AsyncClient, base_url: str) -> httpx.Response:
+        return await client.get(f"{base_url}/health/readiness", timeout=2.0)
+
     async def _probe(request: Request) -> str:
         try:
-            client = (
-                http_client
-                if http_client is not None
-                else getattr(request.app.state, http_client_attr)
-            )
             cfg = config
             if cfg is None:
                 from jarvis_common.llm_client import get_litellm_config  # noqa: PLC0415
 
                 cfg = get_litellm_config()
-            resp = await client.get(f"{cfg.base_url}/health/readiness", timeout=2.0)
+
+            if http_client is not None:
+                resp = await _get_readiness(http_client, cfg.base_url)
+            else:
+                try:
+                    shared_client = getattr(request.app.state, http_client_attr)
+                    resp = await _get_readiness(shared_client, cfg.base_url)
+                except Exception:
+                    _logger.debug(
+                        "LiteLLM health check via shared HTTP client failed; "
+                        "retrying with dedicated client",
+                        exc_info=True,
+                    )
+                    async with httpx.AsyncClient() as dedicated_client:
+                        resp = await _get_readiness(dedicated_client, cfg.base_url)
             return "ok" if resp.status_code == 200 else "unavailable"
         except Exception:
             _logger.warning("Health check: LiteLLM unavailable", exc_info=True)
