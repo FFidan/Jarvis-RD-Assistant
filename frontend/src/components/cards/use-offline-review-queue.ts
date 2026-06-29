@@ -6,12 +6,12 @@
  * else changes — ReviewMode is not rearchitected.
  *
  * Contract references:
- *   - internal design spec (archived)
+ *   - offline review sync contract
  *     §Offline → "P2 (offline review + sync) — the flow this spec owns".
- *   - internal design spec (archived)
+ *   - offline review sync contract
  *     "Offline / PWA contract — CANONICAL": reconcile = a SINGLE toast
  *     "N synced, M skipped" (no merge UI).
- *   - internal design spec (archived)
+ *   - offline review sync contract
  *     (the wire contract handed to the functional/backend track).
  *
  * Behaviour

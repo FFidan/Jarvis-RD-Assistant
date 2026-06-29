@@ -1,6 +1,6 @@
 ## Summary
 
-<!-- One-paragraph description of what this PR does and why. Write for a public audience: omit local hostnames and paths, internal audit IDs, agent-process notes, and temporary branch names. -->
+<!-- One-paragraph description of what this PR does and why. Write for a public audience: omit local hostnames, local paths, temporary branch names, and private implementation-process notes. -->
 
 Closes #
 

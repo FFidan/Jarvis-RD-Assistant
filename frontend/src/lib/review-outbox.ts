@@ -4,15 +4,15 @@
  * The ONLY offline-write surface — flashcard review.
  *
  * Contract references:
- *   - internal design spec (archived)
+ *   - offline review sync contract
  *     §Offline / PWA contract → "P2 (offline review + sync) — the flow this spec owns".
- *   - internal design spec (archived)
+ *   - offline review sync contract
  *     "Offline / PWA contract — CANONICAL" → flashcard review = only offline-write;
  *     sync = idempotent batch replay → server recomputes FSRS; reconcile = a
  *     SINGLE toast "N synced, M skipped" (no merge UI).
  *   - The wire/idempotency contract this client implements is specified for the
  *     functional/backend track in
- *     internal design spec (archived).
+ *     offline review sync contract.
  *
  * What this does
  * --------------
@@ -313,7 +313,7 @@ export async function drainReviewOutbox(
 
 /**
  * The endpoint path the client targets. The backend track implements a
- * compatible handler — see internal design spec (archived).
+ * compatible handler — see offline review sync contract.
  */
 export const REVIEW_SYNC_PATH = '/api/review/sync';
 

@@ -84,7 +84,7 @@ exclude_docs: |
   # System Contracts: demoted from the public site (internal full-fidelity
   # spec docs). These files MUST STAY ON DISK — docs/contracts/07-testing.md is
   # parsed by scripts/check-test-shape.py (TS-08) and required by
-  # scripts/check_agent_docs.py (PUBLIC_DOC_PATHS); deleting it breaks CI.
+  # scripts/check_contract_docs.py (PUBLIC_DOC_PATHS); deleting it breaks CI.
   # Excluding from the rendered site is safe; do not delete the directory.
   contracts/
 

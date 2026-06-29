@@ -3,7 +3,7 @@
  * service worker is allowed to runtime-cache for offline read mode.
  *
  * Contract reference:
- *   internal design spec (archived)
+ *   service-worker cache policy
  *   "Offline / PWA contract — CANONICAL".
  *
  * IMPORTANT: `frontend/public/sw.js` is plain JS served verbatim from /public

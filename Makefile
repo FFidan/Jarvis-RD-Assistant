@@ -110,7 +110,7 @@ check: no-tracked-secrets secure-secrets deps-check lint
 	uv run tach check
 	$(MAKE) typecheck
 	uv run python3 scripts/check-test-shape.py
-	uv run python3 scripts/check_agent_docs.py
+	uv run python3 scripts/check_contract_docs.py
 	bash scripts/check-burned-secrets.sh
 	bash scripts/tests/test_backup_coverage.sh
 	bash scripts/tests/test_restore_coverage.sh

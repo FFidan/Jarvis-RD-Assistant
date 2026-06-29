@@ -545,7 +545,7 @@ def test_extract_text_sync_strips_null_bytes_keeping_anchors_aligned(
 ) -> None:
     """Null bytes are stripped per page BEFORE anchoring, so full_text[start:end]
     still reconstructs each page (PostgreSQL rejects \\x00; stale offsets here
-    would misattribute page numbers — the exact failure this wave prevents)."""
+    would misattribute page numbers — the exact failure this test prevents)."""
     pages = {1: "## A\x00\n\nalpha\x00 text", 2: "## B\n\nbeta\x00"}
     _patch_converter(monkeypatch, _fake_docling_doc(pages))
 

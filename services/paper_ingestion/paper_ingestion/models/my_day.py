@@ -1,6 +1,6 @@
 """Pydantic models for the on-the-fly Yesterday rollup (My-Day).
 
-Spec: internal design spec (archived)
+Contract: My Day API behavior
 Yesterday is an **on-the-fly query**, NOT a materialized
 daily-rollup job (YAGNI; the stated rollup blocker is removed). Derived from
 ``tasks`` (completed / deferred) and ``daily_log`` (focus hours, cards

@@ -4,7 +4,7 @@ This file documents the maintenance conventions for `docs/manual/`.
 
 ## Scope
 
-`docs/manual/` is the **end-user website manual** for JARVIS RD Assistant. It is a website-only artefact: it is not part of the lean canonical operator/developer doc set, it is not listed in `scripts/check_agent_docs.py` `DOC_PATHS`, and it must not be added there. MkDocs renders it alongside the operator docs, but it is governed separately.
+`docs/manual/` is the **end-user website manual** for JARVIS RD Assistant. It is a website-only artefact: it is not part of the lean canonical operator/developer doc set, it is not listed in `scripts/check_contract_docs.py` `DOC_PATHS`, and it must not be added there. MkDocs renders it alongside the operator docs, but it is governed separately.
 
 ## Verified-against-UI header
 
@@ -50,7 +50,7 @@ Do not commit binary screenshot files to the repository without explicit approva
 1. Create `docs/manual/<feature>.md` with the verified-against-UI header.
 2. Add the page to the `nav` section of `mkdocs.yml` under `User Guide:`.
 3. Add a one-line entry to the table in `docs/manual/index.md`.
-4. Do **not** add the path to `DOC_PATHS` in `scripts/check_agent_docs.py`.
+4. Do **not** add the path to `DOC_PATHS` in `scripts/check_contract_docs.py`.
 
 ## Groundedness rule
 

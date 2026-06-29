@@ -2,7 +2,7 @@
  * pwa — service worker registration + install affordance.
  *
  * Contract reference:
- *   internal design spec (archived)
+ *   Offline/PWA behavior contract
  *   "Offline / PWA contract — CANONICAL".
  *
  * Responsibilities (foundation only — UI lives elsewhere):

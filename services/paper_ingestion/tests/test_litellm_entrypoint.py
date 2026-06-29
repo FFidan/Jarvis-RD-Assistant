@@ -44,7 +44,7 @@ def test_litellm_entrypoint_deleted() -> None:
 def test_litellm_config_requires_master_key() -> None:
     """litellm/config.yaml must contain an active master_key in general_settings.
 
-    Group C (commit c84a7f9c) added master_key: os.environ/LITELLM_MASTER_KEY
+    The config supports master_key: os.environ/LITELLM_MASTER_KEY
     to gate LiteLLM admin endpoints (/model/new, /model/delete, /v1/model/info,
     etc.). Loopback binding is defence-in-depth; master_key is the second layer.
     """

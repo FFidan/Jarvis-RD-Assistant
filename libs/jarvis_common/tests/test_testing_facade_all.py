@@ -10,9 +10,9 @@ def test_seed_helpers_not_in_testing_all() -> None:
 
 
 def test_spin_pg_container_helper_exists() -> None:
-    """Private helper must exist to eliminate duplication (CF-W4G3)."""
+    """Private helper must exist to eliminate duplicated container setup."""
     from jarvis_common import testing_db
 
     assert hasattr(testing_db, "_spin_pg_container"), (
-        "_spin_pg_container must exist after CF-W4G3 refactor"
+        "_spin_pg_container must exist to centralize container setup"
     )

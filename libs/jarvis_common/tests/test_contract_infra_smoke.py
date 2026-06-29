@@ -1,4 +1,4 @@
-"""Char-tests proving the Wave-4 contract fixture infra invariants.
+"""Char-tests proving the contract fixture infra invariants.
 
 Each test was authored with a RED proof (the assertion was first proven to FAIL
 against a deliberately-broken fixture: e.g. commenting out txn.rollback to prove

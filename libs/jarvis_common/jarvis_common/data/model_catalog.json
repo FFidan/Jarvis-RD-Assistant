@@ -209,7 +209,7 @@
     "license": "Apache 2.0",
     "tier": 2,
     "description": "Stable non-thinking local model with strong citation quality for mid-tier GPUs.",
-    "notes": "Bench-validated for the ~16 GB hardware tier; no streaming think-strip dependency.",
+    "notes": "Bench-validated for the ~16 GB hardware tier with strong citation quality.",
     "last_reviewed": "2026-06-13",
     "phase": "default",
     "assignable": true,

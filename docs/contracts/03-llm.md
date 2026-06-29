@@ -615,7 +615,7 @@ The implementation MUST satisfy these. Testable.
 | `LLM_TIMEOUT_SHORT/DEFAULT/LONG` | libs/jarvis_common/jarvis_common/llm_client.py:69-71 | 30 / 120 / 300 seconds |
 | `EmptyVisibleLLMContentError` | libs/jarvis_common/jarvis_common/llm_client.py:74 | Raised when the scalar helper returns no visible content after `<think>` stripping |
 | `get_litellm_config` | libs/jarvis_common/jarvis_common/llm_client.py:123 | Resolves LiteLLM base URL → `LiteLLMConfig` |
-| `request_chat_completion_content` | libs/jarvis_common/jarvis_common/llm_client.py:226 | Raw chat completion; returns think-stripped string |
+| `request_chat_completion_content` | libs/jarvis_common/jarvis_common/llm_client.py:226 | Raw chat completion; returns content with model reasoning tags removed |
 | `call_llm_structured` | libs/jarvis_common/jarvis_common/llm_client.py:328 | Instructor-patched structured output; returns a validated `T` |
 | Instructor client bootstrap (`Mode.JSON_SCHEMA`) | libs/jarvis_common/jarvis_common/app_factory.py:467-473 | `instructor.from_openai(…, mode=instructor.Mode.JSON_SCHEMA)` — grammar-constrained decoding by construction |
 | `OLLAMA_PREFIXES` / `strip_ollama_prefix` / `is_local_ollama` | services/paper_ingestion/paper_ingestion/services/model_prefixes.py:13-30 | Transport prefix helpers; `ollama_chat/` routes to `/api/chat` (format constraint honored); `ollama/` routes to `/api/generate` (embedding) |

@@ -95,7 +95,7 @@ def _wire_pi_app(*, db_up: bool = True, http_healthy: bool = True) -> Any:
     pool = _make_mock_pool(raise_on_acquire=not db_up)
     http = _make_mock_http(healthy=http_healthy)
     qdrant = MagicMock()
-    qdrant.get_collections = AsyncMock(return_value=MagicMock())
+    qdrant.collection_exists = AsyncMock(return_value=True)
 
     app.state.db_pool = pool
     app.state.http_client = http
@@ -548,3 +548,62 @@ async def test_vector_probe_short_circuits_when_disabled(monkeypatch: pytest.Mon
 
     assert await pi_main._probe_vector(request) == "unknown"
     http.get.assert_not_called()
+
+
+async def test_paper_ingestion_qdrant_probe_checks_required_collection() -> None:
+    """_probe_qdrant returns 'ok' only when the paper chunk collection exists."""
+    import paper_ingestion.main as pi_main
+    from paper_ingestion.ingestion.embedding_config import COLLECTION_NAME
+
+    qdrant = MagicMock()
+    qdrant.collection_exists = AsyncMock(return_value=True)
+    request = _fake_request()
+    request.app.state.qdrant_client = qdrant
+
+    assert await pi_main._probe_qdrant(request) == "ok"
+    qdrant.collection_exists.assert_awaited_once_with(COLLECTION_NAME)
+
+
+async def test_paper_ingestion_qdrant_probe_missing_collection_degrades() -> None:
+    """A missing required collection is a real dependency failure."""
+    import paper_ingestion.main as pi_main
+
+    qdrant = MagicMock()
+    qdrant.collection_exists = AsyncMock(return_value=False)
+    request = _fake_request()
+    request.app.state.qdrant_client = qdrant
+
+    assert await pi_main._probe_qdrant(request) == "unavailable"
+
+
+async def test_paper_ingestion_qdrant_probe_timeout_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow metadata call is visible but does not make public health return 503."""
+    import asyncio
+
+    import paper_ingestion.main as pi_main
+
+    async def slow_probe(_collection_name: str) -> bool:
+        await asyncio.sleep(0.01)
+        return True
+
+    monkeypatch.setattr(pi_main, "_QDRANT_HEALTH_TIMEOUT_S", 0.001)
+    qdrant = MagicMock()
+    qdrant.collection_exists = AsyncMock(side_effect=slow_probe)
+    request = _fake_request()
+    request.app.state.qdrant_client = qdrant
+
+    assert await pi_main._probe_qdrant(request) == "unknown"
+
+
+async def test_paper_ingestion_qdrant_probe_exception_degrades() -> None:
+    """Non-timeout Qdrant exceptions remain degraded."""
+    import paper_ingestion.main as pi_main
+
+    qdrant = MagicMock()
+    qdrant.collection_exists = AsyncMock(side_effect=RuntimeError("dependency down"))
+    request = _fake_request()
+    request.app.state.qdrant_client = qdrant
+
+    assert await pi_main._probe_qdrant(request) == "unavailable"

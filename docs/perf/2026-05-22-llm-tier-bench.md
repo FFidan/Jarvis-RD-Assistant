@@ -50,7 +50,7 @@ Zero `<think>` tag leakage confirmed across all 48 prompts (4 cells × 12 prompt
 
 **Three additional truncations** (q05, q06, q08) — partial answer + mid-sentence cut at max_tokens. The strip-fix is innocent here; the cap is the limit.
 
-**Persistent paper-number scrambling** across all 12 — the model's internal "Paper N" labels don't match the seed JSON order. Lower citation-grounding scores. Out-of-scope for this run (RAG retrieval ordering, not streaming-strip).
+**Persistent paper-label scrambling** across all 12 — model-generated paper labels did not match the seed JSON order. Lower citation-grounding scores. Out-of-scope for this run (RAG retrieval ordering, not response cleanup).
 
 ### `ge-48` Qwen/Qwen3-8B-AWQ — 84/144 (was 63/144 in an earlier run)
 

@@ -3,7 +3,7 @@
  * (offline / PWA track).
  *
  * Contract reference:
- *   internal design spec (archived)
+ *   Offline/PWA behavior contract
  *   "Offline / PWA contract — CANONICAL" (per-view offline-state indicator
  *   system) + per-surface table.
  *

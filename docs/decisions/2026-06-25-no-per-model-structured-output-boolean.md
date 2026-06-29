@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-25
 **Status:** Accepted
-**Deciders:** Engineering (v1.0.0 wave, M1.6)
+**Deciders:** Engineering
 
 ---
 

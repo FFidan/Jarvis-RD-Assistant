@@ -2,7 +2,7 @@
 
 This module preserves the ``from jarvis_common.testing import X`` import path
 used by ~70 test files across 4 services. The actual implementations are
-decomposed per the 2026-05-24 polish-wave decomposition:
+split into focused helper modules:
 
   - clusters 1-5  -> testing_db.py            (NEW)
   - cluster 6     -> testing_auth.py          (NEW)

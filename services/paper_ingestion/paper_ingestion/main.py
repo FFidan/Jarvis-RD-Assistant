@@ -62,7 +62,11 @@ from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.constants import FAST_MODEL_DEFAULT, SMART_MODEL_DEFAULT
 from paper_ingestion.deps import limiter
 from paper_ingestion.ingestion.embedder import Embedder
-from paper_ingestion.ingestion.embedding_config import EMBEDDING_MODEL, EMBEDDING_MODEL_NAME
+from paper_ingestion.ingestion.embedding_config import (
+    COLLECTION_NAME,
+    EMBEDDING_MODEL,
+    EMBEDDING_MODEL_NAME,
+)
 from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
 from paper_ingestion.migrations_runner import run_migrations
 from paper_ingestion.models import PaperSourceConfig, SourceType
@@ -294,6 +298,7 @@ _RECONCILE_FAILURE_STREAKS: dict[str, int] = {}
 # value once per process lifetime instead of every 30 s.
 _ALIAS_PLACEHOLDER_LOGGED: set[tuple[str, str]] = set()
 _EMBED_MISMATCH_WARNED: set[str] = set()
+_QDRANT_HEALTH_TIMEOUT_S = 2.0
 
 
 def _log_reconcile_failure(target: str) -> None:
@@ -894,12 +899,23 @@ app.include_router(account_router.router)
 
 
 async def _probe_qdrant(request: Request) -> str:
+    qdrant = getattr(request.app.state, "qdrant_client", None)
+    if qdrant is None:
+        logger.warning("Health check: Qdrant client missing")
+        return "unavailable"
+
     try:
-        await asyncio.wait_for(request.app.state.qdrant_client.get_collections(), timeout=5.0)
+        exists = await asyncio.wait_for(
+            qdrant.collection_exists(COLLECTION_NAME),
+            timeout=_QDRANT_HEALTH_TIMEOUT_S,
+        )
+    except TimeoutError:
+        logger.warning("Health check: Qdrant collection probe timed out")
+        return "unknown"
     except Exception:
         logger.warning("Health check: Qdrant unavailable", exc_info=True)
         return "unavailable"
-    return "ok"
+    return "ok" if exists else "unavailable"
 
 
 async def _probe_ollama(request: Request) -> str:

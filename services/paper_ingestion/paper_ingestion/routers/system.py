@@ -734,7 +734,7 @@ _STATUS_RANK: dict[str, int] = {"green": 0, "amber": 1, "red": 2}
 
 
 class ReadinessCheck(BaseModel):
-    """One pre-public-launch readiness probe result."""
+    """One release-readiness probe result."""
 
     name: str
     status: ReadinessStatus

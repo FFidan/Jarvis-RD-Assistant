@@ -2,7 +2,7 @@
  * P1c — offline last-known-good route-guard tests.
  * Session-expiry side-effect must run out of the render body (not during render).
  *
- * Canonical contract: internal design spec (archived)
+ * Canonical contract: Offline/PWA behavior contract
  * "Offline / PWA contract — CANONICAL" (last-known-good read mode).
  *
  * Security invariant being tested:

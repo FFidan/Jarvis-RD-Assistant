@@ -31,8 +31,7 @@ isolation expectation that every contributor must follow.
    changelog easier to generate and review.
 7. Write for a public audience. PR titles, descriptions, and commit messages
    must explain the user or engineering value without local hostnames, private
-   paths, internal audit IDs, agent-orchestration notes, or temporary branch
-   names. AI co-author trailers are welcome when they accurately record the
+   paths, temporary branch names, or private implementation-process notes. AI co-author trailers are welcome when they accurately record the
    contribution.
 
 ---
@@ -117,7 +116,7 @@ This mirrors the CI `lint-test` + `frontend` jobs end-to-end:
 | Tach | module boundary check (`uv run tach check`) |
 | Pyright | type check (`npx --yes pyright@1.1.408`) |
 | Test-shape | `uv run python3 scripts/check-test-shape.py` |
-| Agent-docs check | `uv run python3 scripts/check_agent_docs.py` |
+| Contract-docs check | `uv run python3 scripts/check_contract_docs.py` |
 | Guard: burned secrets | `bash scripts/check-burned-secrets.sh` |
 | Fast pytest suite | `uv run pytest` (see below) |
 | Frontend | lint + typecheck + unit tests + build |

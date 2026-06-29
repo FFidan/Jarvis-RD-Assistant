@@ -1,6 +1,6 @@
 """Shared Telegram-bot test infrastructure: PTB Update/BotConfig factories + async-CM stubs.
 
-Clusters 7-8 of the 2026-05-24 polish-wave decomposition of ``jarvis_common.testing``:
+Telegram-focused helpers extracted from ``jarvis_common.testing``:
 
 7. ``make_telegram_update`` + ``make_bot_config`` (PTB-level factories used by D9-04)
 8. ``FakeAcquireCM`` + ``FakeTxnCM`` (asyncpg async-CM stubs used by telegram pairing tests, D8-04)

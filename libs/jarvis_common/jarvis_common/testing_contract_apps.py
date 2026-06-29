@@ -14,7 +14,6 @@ __all__ = [
     "make_contract_client",
     "patch_app_state",
     "patch_dependency_overrides",
-    # cluster 10 (moved from testing.py in 2026-05-24 polish wave)
     "_make_pi_contract_app_with_litellm_sidecar",
     "_make_le_contract_app_with_litellm_sidecar",
 ]
@@ -133,7 +132,6 @@ def patch_dependency_overrides(
 
 
 # === Cluster 10: LiteLLM contract-app builders ===
-# (moved from testing.py in the 2026-05-24 polish-wave decomposition)
 
 
 def _make_pi_contract_app_with_litellm_sidecar():

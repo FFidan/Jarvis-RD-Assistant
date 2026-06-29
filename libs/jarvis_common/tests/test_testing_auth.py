@@ -20,7 +20,7 @@ from jarvis_common.testing_auth import _apply_default_authenticated_user
 def _make_fake_routers_pkg(resolver_names: tuple[str, ...]) -> types.ModuleType:
     """Build a synthetic routers package with one submodule exposing each resolver name."""
     pkg = types.ModuleType("fake_routers_pkg")
-    pkg_path = "/tmp/fake_routers_pkg_w5_03_test"
+    pkg_path = "/tmp/fake_routers_pkg_auth_test"
     pkg.__path__ = [pkg_path]
     sys.modules["fake_routers_pkg"] = pkg
 

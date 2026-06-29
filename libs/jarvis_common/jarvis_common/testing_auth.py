@@ -1,7 +1,7 @@
 """Shared auth test infrastructure: ASGI ``RoleMiddleware`` shim and
 ``_default_authenticated_user`` autouse fixture helper.
 
-Cluster 6 of the 2026-05-24 polish-wave decomposition of ``jarvis_common.testing``.
+Authentication-focused helpers extracted from ``jarvis_common.testing``.
 """
 
 from __future__ import annotations

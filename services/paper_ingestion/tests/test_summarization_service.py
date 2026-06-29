@@ -653,7 +653,7 @@ async def test_generate_paper_summary_persists_user_id():
 async def test_generate_paper_summary_raises_llm_error_on_pydantic_validation_error():
     """pydantic.ValidationError from LLM parsing must raise LLMError, not HTTPException.
 
-    BUG-SUMMARIZER-1 fix (commit 60d9b36d): call_llm_structured raising a
+    Regression coverage: call_llm_structured raising a
     pydantic.ValidationError is caught and re-raised as LLMError("Malformed LLM response").
     """
     import pydantic

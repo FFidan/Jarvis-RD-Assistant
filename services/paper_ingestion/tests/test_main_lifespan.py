@@ -437,7 +437,7 @@ async def test_autoconfigure_models_hook_stores_bare_string_models_and_int_num_c
     in json.dumps() a second time would produce ``'"qwen3:4b"'`` in the DB
     (a JSON-encoded JSON string) instead of the bare string ``"qwen3:4b"``.
 
-    Widened intent (Wave-2 FX10): the hook now also seeds per-machine num_ctx
+    Widened intent: the hook now also seeds per-machine num_ctx
     rows alongside each model. Those carry an int value — assert the model rows
     stay bare strings AND the num_ctx rows stay bare ints (neither stringified
     nor double-encoded JSON).

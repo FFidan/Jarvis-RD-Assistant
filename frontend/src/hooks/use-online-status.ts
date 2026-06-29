@@ -6,7 +6,7 @@
  *     on a stale/unrefreshable session — render cached content read-only instead.
  *   - The connectivity banner + per-view offline indicators.
  *
- * Contract reference: internal design spec (archived)
+ * Contract reference: online status behavior
  *   "Offline / PWA contract — CANONICAL" (global connectivity banner and last-known-good read mode).
  *
  * API (stable — P1c/P1d depend on this shape):

@@ -3,7 +3,7 @@
  * offline connectivity.
  *
  * Contract reference:
- *   internal design spec (archived)
+ *   Offline/PWA behavior contract
  *   "Offline / PWA contract — CANONICAL" (global connectivity banner and install affordance).
  *
  * Behaviour:

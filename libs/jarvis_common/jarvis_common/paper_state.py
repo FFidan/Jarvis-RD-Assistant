@@ -82,7 +82,7 @@ async def upsert_paper_user_state(
     paper_id:
         PK of the paper being updated.
     user_id:
-        User owning the state row; ``None`` for single-tenant (pre-Wave-2).
+        User owning the state row; ``None`` for single-tenant configurations.
     state:
         New state string (e.g. ``'reading'``, ``'done'``).  Meaning depends on
         the variant — see module docstring.

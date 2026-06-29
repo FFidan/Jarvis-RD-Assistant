@@ -1,4 +1,4 @@
-"""Tests for GET /api/system/readiness (pre-public-launch checklist)."""
+"""Tests for GET /api/system/readiness (release-readiness checklist)."""
 
 from __future__ import annotations
 

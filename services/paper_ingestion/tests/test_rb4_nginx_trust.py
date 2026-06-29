@@ -91,6 +91,22 @@ def test_nginx_does_not_reference_nginx_trusted_proxy_cidr_var():
         )
 
 
+def test_nginx_serves_mjs_assets_with_javascript_mime():
+    """Vite .mjs worker assets must not fall back to octet-stream."""
+    text = _nginx_text()
+    mjs_location = (
+        "location ~* \\.mjs$ {\n"
+        "        include /etc/nginx/nginx-security-headers.conf;\n"
+        "        default_type application/javascript;\n"
+        "        try_files $uri =404;\n"
+        '        add_header Cache-Control "public, max-age=31536000, immutable";'
+    )
+    assert mjs_location in text
+    assert text.index("location ~* \\.mjs$") < text.index(
+        "location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$"
+    )
+
+
 # ---------------------------------------------------------------------------
 # docker-compose.yml assertions
 # ---------------------------------------------------------------------------

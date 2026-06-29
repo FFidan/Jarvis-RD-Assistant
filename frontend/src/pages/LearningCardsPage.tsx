@@ -14,8 +14,7 @@
  * OFFLINE → appends to an IndexedDB outbox + resolves so the session advances;
  * on offline→online → drains the outbox idempotently and shows a single
  * reconcile toast. No other file needed changing — the seam is here.
- * See internal design spec (archived), Offline section
- * and internal design spec (archived).
+ * See the Offline/PWA behavior contract.
  */
 
 import { useCallback, useEffect, useState } from 'react';

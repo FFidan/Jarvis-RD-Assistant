@@ -9,6 +9,9 @@ dead-end backend) fails here without a database.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from paper_ingestion.services.ai_settings import (
@@ -64,3 +67,28 @@ def test_catalog_fallback_is_always_available_for_every_tier(tier: str) -> None:
     assert fallback["backend"] == "ollama"
     assert fallback["catalog_id"]
     assert fallback["source"] == "catalog"
+
+
+def test_shipped_model_selection_text_has_no_private_process_residue() -> None:
+    """Public model-selection text must stay free of implementation diary terms."""
+    repo_root = Path(__file__).resolve().parents[3]
+    files = [
+        find_candidate_config_path(),
+        repo_root / "libs/jarvis_common/jarvis_common/data/model_catalog.json",
+    ]
+    forbidden_terms = (
+        "think" + "-strip",
+        "streaming" + "-strip",
+        "internal " + "Paper",
+        "docs/" + "exec",
+        "." + "worktrees",
+        "work" + "tree",
+        "agent" + "-process",
+        "Live" + "-deployment validated",
+    )
+
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        for term in forbidden_terms:
+            assert term not in text, f"{path} contains private process term {term!r}"
+        assert not re.search(r"commit [0-9a-f]{7,40}", text), f"{path} contains commit diary text"

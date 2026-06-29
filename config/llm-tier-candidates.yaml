@@ -29,7 +29,7 @@ tiers:
         rank: 1
         score: null
         evidence: static-benchmark
-        reasoning: "CPU-only inference; smallest Qwen3 thinking variant. ~1.3 GB RAM. Conservative pick by family consistency; no bench evidence required at this tier."
+        reasoning: "CPU-only option for constrained machines; smallest Qwen3 candidate in the catalog."
 
   lt-8:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
@@ -39,13 +39,13 @@ tiers:
         rank: 1
         score: null
         evidence: static-benchmark
-        reasoning: "<8 GB VRAM; small thinking model. Conservative pick for constrained hardware."
+        reasoning: "Small-footprint option for machines with less than 8 GB VRAM."
       - backend: ollama
         model: llama3.2:3b
         rank: 2
         score: null
         evidence: static-benchmark
-        reasoning: "Llama 3.2 3B alternative — non-thinking, fits comfortably under 8 GB."
+        reasoning: "Compact alternative model for machines with less than 8 GB VRAM."
 
   8-16:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
@@ -55,13 +55,13 @@ tiers:
         rank: 1
         score: 67
         evidence: bench
-        reasoning: "Bench-validated winner for the ≈16 GB tier (validated on ≈16 GB GPU). Stable non-thinking model; no streaming-strip dependency. Strong citation quality."
+        reasoning: "Bench-validated default for mid-tier GPUs with strong citation quality."
       - backend: ollama
         model: deepseek-r1:7b
         rank: 2
         score: 79
         evidence: bench
-        reasoning: "DeepSeek-R1 distill on qwen-7b, thinking-mode. Bench-validated on the ≈16 GB tier (≈16 GB GPU) at ~5 GB Q4 native. Scores above qwen2.5 baseline on reasoning prompts but shows weaker citation grounding (uses internal Paper N labels instead of arxiv IDs). Thinking-model option for users who want chain-of-thought reasoning; non-thinking qwen2.5 stays #1 for citation quality."
+        reasoning: "Bench-validated alternative for mid-tier GPUs; useful for reasoning-heavy prompts, with qwen2.5 retained as the citation-quality default."
 
   16-24:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
@@ -73,13 +73,13 @@ tiers:
         evidence: sim-bench
         sim_vram_mb: 19320
         sim_or_native: sim
-        reasoning: "Sim-bench candidate for the 16-24 GB tier (simulated on the ≈48 GB tier at constrained util). Non-thinking model, no think-strip dependency. Strong on focused single-paper tasks; relative ranking valid across cards in this VRAM range."
+        reasoning: "Simulated benchmark pick for 16-24 GB GPUs; strong on focused single-paper tasks."
       - backend: ollama
         model: qwen2.5:7b-instruct
         rank: 2
         score: null
         evidence: static-benchmark
-        reasoning: "Conservative Ollama fallback for users who don't want vLLM. Inferred from 8-16 winner; comfortable in 16-24 VRAM."
+        reasoning: "Conservative Ollama fallback for users who prefer the default local runtime."
 
   24-48:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
@@ -91,13 +91,13 @@ tiers:
         evidence: sim-bench
         sim_vram_mb: 24576
         sim_or_native: sim
-        reasoning: "Highest-scoring sim-tier candidate for the 24-48 GB tier (simulated on the ≈48 GB tier). Non-thinking model, no think-strip dependency. Leads among sim-tier candidates on methodology, critique, synthesis, and math prompts."
+        reasoning: "Highest-scoring simulated benchmark candidate for 24-48 GB GPUs."
       - backend: ollama
         model: qwen2.5:7b-instruct
         rank: 2
         score: null
         evidence: static-benchmark
-        reasoning: "Conservative Ollama fallback. Comfortable in 24-48 VRAM."
+        reasoning: "Conservative Ollama fallback for 24-48 GB GPUs."
 
   ge-48:
     fallback_for_tier: { backend: ollama, model: qwen3:4b }
@@ -107,47 +107,16 @@ tiers:
         rank: 1
         score: 92
         evidence: bench
-        reasoning: "Bench-validated winner for the ≥48 GB tier (validated on ≥40 GB / 48 GB-class GPU). Think-strip confirmed working — zero tag leakage across all prompts. Known caveat: a low max_tokens cap can fire inside a <think> block, leaving full_answer empty; production fix is to raise max_tokens for thinking models or detect in_think=True at stream end and retry."
+        reasoning: "Bench-validated default for high-VRAM GPUs; strongest option in the local evaluation set."
       - backend: vllm
         model: Qwen/Qwen3-8B-AWQ
         rank: 2
         score: 84
         evidence: bench
-        reasoning: "Bench-validated on the ≥48 GB tier (≥40 GB / 48 GB-class GPU). Thinking-mode model; think-strip improvement visible vs earlier baselines. Same empty-answer-on-truncation caveat as the 14B (see known issues below). Recommended when the 14B is too slow or memory-constrained."
+        reasoning: "Bench-validated high-VRAM alternative when the 14B model is too slow or memory-constrained."
       - backend: ollama
         model: qwen3:30b-a3b
         rank: 3
         score: null
         evidence: live-deployment
-        reasoning: "Live-deployment validated on a 48 GB deployment at 16k context (v0.7). Catalog-verified and assignable via the UI. Recommended Ollama default for ≥40 GB hardware; does not require vLLM."
-
-# Known issues + future candidates:
-#
-# 1. Streaming <think> leak — FIXED (commit e1aedb4d).
-#    strip_think_blocks now matches <think>.*?(?:</think>|$) so unclosed
-#    blocks at max_tokens truncation are stripped. Streaming path
-#    (strip_think_streaming) was already correct; the bug was in the
-#    non-streaming companion.
-#
-# 2. Empty-answer-on-truncation — when a Qwen3 thinking model hits
-#    max_tokens INSIDE a <think> block, in_think=True suppression keeps
-#    the carry hidden (no leak), but full_answer stays empty. Fix:
-#    (a) raise max_tokens for thinking models, or (b) detect
-#    in_think=True at stream end and retry with extra_body.think=false.
-#    Affects ge-48 thinking candidates only; doesn't invalidate rankings
-#    since the same issue applied equally to all thinking candidates.
-#
-# 3. casperhansen/deepseek-r1-distill-qwen-14b-awq — vLLM boot timed out
-#    during benchmarking. Worth retrying with VLLM_BOOT_TIMEOUT_S=3600
-#    on a clean docker volume.
-#
-# 4. ELVISIO/Qwen3-30B-A3B-AWQ — Engine core init crash on first attempt
-#    (likely MoE-AWQ compatibility issue with vllm v0.11.0). Defer to
-#    a future vllm release with better MoE-AWQ support.
-#
-# 5. Qwen3-8B-AWQ at sim-tier (16-24 / 24-48) — does NOT fit at
-#    util=0.42 or util=0.53. NOT a candidate below ge-48.
-#
-# 6. Paper-number scrambling — models show misattribution between seed
-#    papers and internal "Paper N" labels. RAG retrieval ordering is
-#    inconsistent. Tracked as a separate RAG-grounding follow-up.
+        reasoning: "Catalog-verified Ollama default for high-VRAM hardware; assignable through the UI."

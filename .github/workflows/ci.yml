@@ -82,7 +82,7 @@ jobs:
         run: python3 scripts/check-no-jsonb-double-encode.py
 
       - name: Guard - docs links in sync
-        run: python3 scripts/check_agent_docs.py
+        run: python3 scripts/check_contract_docs.py
 
       - name: Guard - migrations no explicit transaction
         run: bash scripts/check-migrations-no-tx.sh
@@ -99,8 +99,7 @@ jobs:
     # `services:` block below, on tmpfs.  The live-PG fixtures clone a fresh
     # EMPTY database from it per session (CREATE DATABASE … TEMPLATE template0)
     # instead of shelling `docker run`, so pytest issues ZERO docker commands and
-    # parallel runners never contend on the Docker daemon (root fix for
-    # CI-CROSS-USER-FLAKY-1).  The host port is RANDOM (`ports: - 5432`): this
+    # parallel runners never contend on the Docker daemon.  The host port is RANDOM (`ports: - 5432`): this
     # avoids colliding with a pre-existing local Postgres on port 5432, and also
     # lets two concurrent jobs on one host coexist.
     # The first step resolves JARVIS_TEST_PG_ADMIN_DSN from the assigned port.

@@ -2,7 +2,7 @@
  * query-persister — last-known-good offline cache for TanStack Query.
  *
  * Contract reference:
- *   internal design spec (archived)
+ *   query persistence contract
  *   "Offline / PWA contract — CANONICAL" (Client cache + last-known-good)
  *   + "Explicit offline NON-GOALS" + the per-surface offline table.
  *
