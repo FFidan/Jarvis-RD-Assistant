@@ -76,6 +76,7 @@ _PROBE_TIMEOUT_S: float = 5.0
 # healthy beyond this window.
 _SWEEP_MEMO_TTL_S: float = 1.0
 _SWEEP_MEMO_ATTR: str = "_health_sweep_memo"
+_SWEEP_TASK_ATTR: str = "_health_sweep_task"
 
 _logger = logging.getLogger(__name__)
 
@@ -118,24 +119,40 @@ async def _execute_sweep(request: Request, checks: list[HealthCheck]) -> tuple[s
 async def run_health_checks(
     request: Request, checks: list[HealthCheck]
 ) -> tuple[str, dict[str, str]]:
-    """Return ``(status, checks_dict)``, reusing a sub-second sweep memo.
+    """Return ``(status, checks_dict)``, reusing in-flight and recent sweeps.
 
-    Probes run concurrently (see :func:`_execute_sweep`). The result is cached
-    on ``request.app.state`` for :data:`_SWEEP_MEMO_TTL_S`; the paired
-    ``/health`` + ``/health/internal`` poll therefore triggers a single probe
-    run per cycle instead of two. The TTL is shorter than any poll interval, so
-    a degraded/unknown status is never served as healthy past the window.
+    Probes run concurrently (see :func:`_execute_sweep`). A sweep already in
+    progress on ``request.app.state`` is shared by simultaneous ``/health`` and
+    ``/health/internal`` requests, then the result is cached for
+    :data:`_SWEEP_MEMO_TTL_S`. The TTL is shorter than any poll interval, so a
+    degraded/unknown status is never served as healthy past the window.
     """
     now = time.monotonic()
     memo: _SweepMemo | None = getattr(request.app.state, _SWEEP_MEMO_ATTR, None)
     if memo is not None and now < memo.expires_at:
         return memo.status, dict(memo.results)
 
-    status, results = await _execute_sweep(request, checks)
+    task: asyncio.Task[tuple[str, dict[str, str]]] | None = getattr(
+        request.app.state, _SWEEP_TASK_ATTR, None
+    )
+    if task is None or task.done():
+        task = asyncio.create_task(_execute_sweep(request, checks))
+        setattr(request.app.state, _SWEEP_TASK_ATTR, task)
+
+    try:
+        status, results = await task
+    finally:
+        if getattr(request.app.state, _SWEEP_TASK_ATTR, None) is task and task.done():
+            delattr(request.app.state, _SWEEP_TASK_ATTR)
+
     setattr(
         request.app.state,
         _SWEEP_MEMO_ATTR,
-        _SweepMemo(expires_at=now + _SWEEP_MEMO_TTL_S, status=status, results=results),
+        _SweepMemo(
+            expires_at=time.monotonic() + _SWEEP_MEMO_TTL_S,
+            status=status,
+            results=results,
+        ),
     )
     return status, dict(results)
 

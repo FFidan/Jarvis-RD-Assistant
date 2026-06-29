@@ -52,10 +52,12 @@ def _clear_sweep_memo(app: Any) -> None:
     dependency state between cases; without this reset a prior cycle's cached
     status would leak into the next case within the memo TTL.
     """
-    from jarvis_common.health import _SWEEP_MEMO_ATTR
+    from jarvis_common.health import _SWEEP_MEMO_ATTR, _SWEEP_TASK_ATTR
 
     if hasattr(app.state, _SWEEP_MEMO_ATTR):
         delattr(app.state, _SWEEP_MEMO_ATTR)
+    if hasattr(app.state, _SWEEP_TASK_ATTR):
+        delattr(app.state, _SWEEP_TASK_ATTR)
 
 
 def _make_mock_pool(*, raise_on_acquire: bool = False) -> MagicMock:
@@ -408,6 +410,33 @@ async def test_double_sweep_eliminated_within_ttl() -> None:
 
     assert first == second == ("ok", {"dep": "ok"})
     assert calls["n"] == 1, "probe ran more than once — sweep memo did not dedupe the paired poll"
+
+
+async def test_concurrent_health_polls_share_in_flight_sweep() -> None:
+    """Concurrent /health + /health/internal polling shares one in-flight probe sweep."""
+    import asyncio
+
+    from jarvis_common.health import run_health_checks
+
+    calls = {"n": 0}
+    release = asyncio.Event()
+
+    async def _counting(_request: Any) -> str:
+        calls["n"] += 1
+        await release.wait()
+        return "ok"
+
+    request = _fake_request()
+    checks = [("dep", _counting)]
+    first = asyncio.create_task(run_health_checks(request, checks))
+    second = asyncio.create_task(run_health_checks(request, checks))
+    await asyncio.sleep(0)
+
+    release.set()
+    results = await asyncio.gather(first, second)
+
+    assert results == [("ok", {"dep": "ok"}), ("ok", {"dep": "ok"})]
+    assert calls["n"] == 1, "concurrent health polls should share one in-flight sweep"
 
 
 async def test_sweep_memo_expires_after_ttl() -> None:
