@@ -736,6 +736,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#pdf-reader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PDF Reader
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#cross-references" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1053,6 +1064,34 @@
     
   
     Citation Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../consensus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Consensus
   
 
     
@@ -1766,6 +1805,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#pdf-reader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PDF Reader
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#cross-references" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1994,6 +2044,29 @@
 <p>Limitations and caveats noted by the paper or inferred by the analysis pipeline.</p>
 <h3 id="key-findings">Key findings<a class="headerlink" href="#key-findings" title="Permanent link">&para;</a></h3>
 <p>A list of key findings and evidence items extracted from the paper. A snapshot shows the most important findings inline; a full structured list provides every finding with source-chunk references.</p>
+<h3 id="pdf-reader">PDF Reader<a class="headerlink" href="#pdf-reader" title="Permanent link">&para;</a></h3>
+<p>An in-page PDF reader that renders the source PDF and lets you annotate it with spatial highlights. The reader becomes available once the PDF has been downloaded; until then the section shows a prompt to download it.</p>
+<!-- screenshot: /paper/:paperId — PDF Reader section showing the rendered PDF with a highlight popup open -->
+
+<p><strong>Reading the PDF</strong></p>
+<p>The PDF renders directly in the browser. Scroll through pages as you would in any PDF viewer.</p>
+<p><strong>Adding a highlight</strong></p>
+<p>Select any text in the PDF with your pointer. A popup appears above the selection with:</p>
+<ul>
+<li>An optional note field.</li>
+<li>A color picker with four preset colors: Yellow, Green, Blue, and Pink. Yellow is the default.</li>
+<li><strong>Save</strong> and <strong>Cancel</strong> buttons.</li>
+</ul>
+<p>Click <strong>Save</strong> to store the highlight. It is immediately overlaid on the PDF.</p>
+<p><strong>Editing a highlight</strong></p>
+<p>Click an existing highlight to open the inline editor below the PDF controls. The editor shows the selected quote (read-only), the note field, and the color picker. Change the note or color and click <strong>Save</strong> to update.</p>
+<p><strong>Deleting a highlight</strong></p>
+<p>Open the inline editor for the highlight and click <strong>Delete</strong>. A confirmation dialog asks you to confirm before the highlight is permanently removed.</p>
+<p><strong>Exporting highlights to Zotero</strong></p>
+<p>The <strong>Sync highlights to Zotero</strong> button pushes this paper's not-yet-synced highlights to Zotero as annotations (already-synced highlights are skipped). The button is only active when the paper has already been sent to Zotero (via <strong>Send to Zotero</strong> in the right pane). If the paper is not yet linked, hover the button to see the prompt to push it first.</p>
+<blockquote>
+<p><strong>Offline:</strong> The PDF reader loads the PDF over an authenticated request and requires an active connection. Highlight edits also require a connection.</p>
+</blockquote>
 <h3 id="cross-references">Cross-references<a class="headerlink" href="#cross-references" title="Permanent link">&para;</a></h3>
 <p>Papers that this paper references or is referenced by, drawn from citation data. Each cross-reference links to that paper's detail page.</p>
 <h3 id="in-paper-contradictions">In-paper contradictions<a class="headerlink" href="#in-paper-contradictions" title="Permanent link">&para;</a></h3>
@@ -2109,7 +2182,7 @@
 <li><strong>Flagged</strong> — a checkbox to mark this paper for follow-up.</li>
 </ul>
 <h3 id="zotero-sync">Zotero sync<a class="headerlink" href="#zotero-sync" title="Permanent link">&para;</a></h3>
-<p>Shows the sync status with Zotero (not synced / synced / error). Provides a <strong>Push to Zotero</strong> shortcut; also accessible via the individual pipeline action button above.</p>
+<p>Shows the sync status with Zotero (not synced / synced / error). Provides a <strong>Send to Zotero</strong> shortcut; also accessible via the individual pipeline action button above.</p>
 <h3 id="contradictions">Contradictions<a class="headerlink" href="#contradictions" title="Permanent link">&para;</a></h3>
 <p>Lists contradictions detected between this paper and other papers in your library. Each item shows the conflicting claim and the other paper involved. A <strong>Scan contradictions</strong> button queues a new contradiction-detection scan for this paper.</p>
 <hr />

@@ -767,6 +767,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/consensus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Consensus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/extraction-table/" class="md-nav__link">
         
   
@@ -2110,7 +2138,7 @@
 <a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>├── libs/jarvis_common/    # Shared Python library (auth, DB helpers, LLM client)
 <a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>├── db/
 <a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>│   ├── init.sql           # PostgreSQL bedrock schema
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>│   └── migrations/        # Versioned schema changes (0092+; 0089–0091 folded into init.sql)
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>│   └── migrations/        # Versioned schema changes (0102+; 0089–0101 folded into init.sql)
 <a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>├── litellm/config.yaml    # LLM gateway routing (smart/fast/embed aliases)
 <a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>├── docker-compose.yml     # All services
 <a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>├── .env.example           # Configuration template
@@ -2201,7 +2229,7 @@
 <li><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/CHANGELOG.md">CHANGELOG.md</a> — release notes per version.</li>
 </ul>
 <h2 id="built-with-ai-assisted-development">Built with AI-assisted development<a class="headerlink" href="#built-with-ai-assisted-development" title="Permanent link">&para;</a></h2>
-<p>JARVIS RD Assistant was built with heavy AI-assisted development, kept honest by strict automated gates — <code>ruff</code>, <code>pyright</code>, <code>tach</code> module-boundary checks, the full test suite, and multi-tenant-isolation tests all run in CI on every change.</p>
+<p>JARVIS RD Assistant was built with heavy AI-assisted development, kept honest by layered automated gates. On every change, <code>ruff</code>, <code>pyright</code>, <code>tach</code> module-boundary checks, a fast unit test suite (excluding the database-backed, integration, and slow tests), cross-user multi-tenant isolation tests, DB-backed contract tests, and a full frontend lint/typecheck/test/build are all required gates. A mocked end-to-end smoke suite runs informational. Live-model tests run on a nightly schedule.</p>
 <h2 id="license">License<a class="headerlink" href="#license" title="Permanent link">&para;</a></h2>
 <p><a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/LICENSE">Apache 2.0</a></p>
 

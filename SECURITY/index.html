@@ -767,6 +767,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/consensus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Consensus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/extraction-table/" class="md-nav__link">
         
   
@@ -1420,6 +1448,34 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#one-click-restore-security-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One-click Restore — Security Posture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="One-click Restore — Security Posture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#off-host-cross-host-restore-security-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Off-host (cross-host) restore — Security Posture
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1911,6 +1967,34 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#one-click-restore-security-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One-click Restore — Security Posture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="One-click Restore — Security Posture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#off-host-cross-host-restore-security-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Off-host (cross-host) restore — Security Posture
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2160,9 +2244,12 @@ calls. This header is only honored when all three guards pass:</p>
 <p>The bot resolves the <code>user_id</code> it injects from <code>telegram_user_pairings</code> — the
 durable record written when a user runs <code>/pair &lt;token&gt;</code> in the bot. This is
 the bot's sole identity mechanism; it does not rely on a fixed chat-id
-environment variable. The <code>telegram.owner_chat_id</code> config key and the
-<code>TELEGRAM_CHAT_ID</code> environment variable are retained as inert tombstones (not
-read at runtime) and may be removed in a future cleanup.</p>
+environment variable. The <code>TELEGRAM_CHAT_ID</code> environment variable is an inert
+tombstone (not read at runtime) and may be removed in a future cleanup. The
+<code>telegram.owner_chat_id</code> config key is active: the scheduler reads it to
+resolve the deployment owner's Telegram chat ID for timezone-based nudge
+scheduling and job failure-alert delivery (see
+<code>services/telegram_bot/telegram_bot/scheduler.py</code>).</p>
 <p>The bot's product-data tenant isolation (projects, tasks, milestones, papers,
 author alerts) is enforced entirely server-side by the service endpoints it
 calls — the same routes the web app uses. The bot is a REST caller, not a
@@ -2290,6 +2377,28 @@ configured.</p>
 </ul>
 <p>Review this posture whenever <code>OLLAMA_IMAGE</code> is updated or the Compose network
 topology changes.</p>
+<hr />
+<h2 id="one-click-restore-security-posture">One-click Restore — Security Posture<a class="headerlink" href="#one-click-restore-security-posture" title="Permanent link">&para;</a></h2>
+<p>The admin Backups panel (v1.0.0+) allows an admin to restore the instance to a previous backup point from the browser.</p>
+<p><strong>Privilege boundary:</strong> the app container gains no new operating-system privilege. On restore request, it writes a small JSON sentinel file to the <code>backup_trigger</code> volume (a minimal RW mount shared only with the backup sidecar). All destructive operations — DROP/CREATE DATABASE, the gunzip-and-psql dump reload, Qdrant snapshot recovery — run exclusively inside the <code>postgres-backup</code> sidecar, which already runs with the elevated database credentials it needs for scheduled backups. The <code>/backups</code> volume remains read-only to the app container; the app cannot read or overwrite backup archives.</p>
+<p><strong>Access controls:</strong></p>
+<ul>
+<li>Restore can only be triggered by an <strong>active admin browser session</strong>. The ops API key (<code>JARVIS_API_KEY</code>) cannot trigger a restore.</li>
+<li>A <strong>typed confirmation</strong> (the word RESTORE) is required before the sentinel is written.</li>
+<li>A <strong>safety pre-backup</strong> is taken before any data is modified. If the restore fails after the destructive step, the safety backup appears in the admin panel and can be used to recover.</li>
+<li>A <strong>NEWER-version block</strong> prevents restoring a backup that was made by a newer app version than is currently running — the operator must update the app first.</li>
+</ul>
+<p><strong>Residual risk:</strong> an attacker who compromises an admin browser session can trigger a restore, causing data loss (current state is overwritten with the backup). This is equivalent to the existing risk of any admin action that modifies instance state. The safety pre-backup and typed confirmation reduce accidental-trigger risk; they do not prevent a deliberate action by a compromised admin account. For the full residual-risk register, see <a href="../known-residual-risks/">docs/known-residual-risks.md</a>.</p>
+<h3 id="off-host-cross-host-restore-security-posture">Off-host (cross-host) restore — Security Posture<a class="headerlink" href="#off-host-cross-host-restore-security-posture" title="Permanent link">&para;</a></h3>
+<p>Off-host disaster recovery (recovering on a fresh host from off-site backups) is <strong>operator-driven via the runbook</strong> in <a href="../DEPLOYMENT/">DEPLOYMENT.md</a>, not a WebUI action — a total-host-loss recovery may have no working UI. It adds <strong>no new application surface or privilege</strong>: the app gains nothing; the same already-privileged <code>postgres-backup</code> sidecar runs the same <code>restore.sh</code>, triggered by an operator-written request. It is the only restore path that touches secrets, so it is hardened specifically:</p>
+<ul>
+<li><strong>The backup encryption key is held out-of-band and is one-time.</strong> The operator drops it into the writable <code>restore_inbox</code> volume as <code>operator_key</code> for a single restore. <code>restore.sh</code> <strong>shreds</strong> it (<code>shred -u</code>, falling back to <code>rm</code>) on every clean or recorded-failure exit, so a failed restore never leaves the key on the volume. A <code>SIGKILL</code> of the sidecar cannot run the exit trap; the next run shreds any leftover before re-staging.</li>
+<li><strong>No write is ever attempted against the read-only <code>/secrets</code> mount.</strong> On a fresh host the script cannot and does not write <code>/secrets</code> (it stays <code>:ro</code>). The <strong>rw <code>restore_inbox</code></strong> volume is the only writable cross-host secrets-staging surface, and it is never mounted under <code>/secrets</code>.</li>
+<li><strong>Plaintext secrets are shredded after use.</strong> The script decrypts the secrets archive only into a <code>chmod 700</code> staging dir under the inbox, reads the role password to rebind the database role, and then <strong>shreds the staged files (<code>shred</code> per file) and removes the staging on exit</strong> (a bare <code>rm</code> would leave block-level residue on a journaling/overlay filesystem). A <code>SIGKILL</code> mid-restore can leave staged plaintext until the next run shreds it. Materializing the host <code>./secrets</code> for the app is a separate, explicit operator step.</li>
+<li><strong>A wrong key fails safe.</strong> The operator key is validated (present + non-empty) before any destructive step, and the pre-<code>DROP</code> decrypt probe proves it actually decrypts the database archives before anything is dropped — so a wrong or corrupt key destroys nothing.</li>
+<li><strong>Role-password rebind is a parameterized-safe SQL literal.</strong> The restored password is embedded in <code>ALTER ROLE … WITH PASSWORD</code> with single quotes doubled, so a password containing a quote cannot break the statement or inject SQL.</li>
+<li><strong>Same-host rollback is unchanged and never touches secrets.</strong> The one-click (<code>local</code>) path leaves <code>./secrets</code> read-only and the live config key in place; all of the above applies only to the <code>inbox</code> path.</li>
+</ul>
 
 
 

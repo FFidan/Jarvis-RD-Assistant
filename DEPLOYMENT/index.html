@@ -767,6 +767,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../manual/consensus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Consensus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../manual/extraction-table/" class="md-nav__link">
         
   
@@ -1545,6 +1573,56 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Restore">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-click-restore-admin-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One-click restore (admin UI)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-restore-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual restore (fallback)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#off-host-total-host-loss-recovery-inbox-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Off-host / total-host-loss recovery (inbox restore)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sentinel-cleanup-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sentinel cleanup reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -2337,6 +2415,56 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Restore">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-click-restore-admin-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One-click restore (admin UI)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-restore-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual restore (fallback)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#off-host-total-host-loss-recovery-inbox-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Off-host / total-host-loss recovery (inbox restore)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sentinel-cleanup-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sentinel cleanup reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
       </ul>
@@ -2899,7 +3027,7 @@ admin user exists (the normal single-tenant state).</p>
 <h2 id="backup-restore">Backup + Restore<a class="headerlink" href="#backup-restore" title="Permanent link">&para;</a></h2>
 <h3 id="backup">Backup<a class="headerlink" href="#backup" title="Permanent link">&para;</a></h3>
 <p><code>scripts/backup.sh</code> runs by default in the <code>postgres-backup</code> sidecar (a daily run plus on-demand triggers). It is on out of the box and archives are encrypted with the auto-generated <code>backup_encrypt_key</code>; if you back up externally, opt out with <code>docker compose stop postgres-backup</code>.</p>
-<p>Admins can list, download, and trigger an on-demand backup from the WebUI at <strong>Admin → Backups</strong> (the on-demand button signals the sidecar to run immediately). Restore stays a manual host procedure — the page surfaces the commands below as a read-only runbook but never executes them.</p>
+<p>Admins can list, download, trigger an on-demand backup, and restore from any listed backup point in the WebUI at <strong>Admin → Backups</strong>. The on-demand backup button signals the sidecar to run immediately. Restore can be performed either from the admin UI (one-click) or from the host command line (manual, for situations where the app itself cannot run).</p>
 <p>JARVIS state lives in more than one place, so each run captures <strong>all four</strong> of the durable stores (per-store files are timestamped together so a single run is internally consistent):</p>
 <table>
 <thead>
@@ -2922,7 +3050,7 @@ admin user exists (the normal single-tenant state).</p>
 </tr>
 <tr>
 <td>Qdrant vectors</td>
-<td><code>qdrant_&lt;collection&gt;_&lt;ts&gt;.snapshot</code></td>
+<td><code>qdrant_&lt;collection&gt;_&lt;ts&gt;.snapshot[.enc]</code></td>
 <td>One per collection via Qdrant's snapshot REST API; <strong>best-effort</strong> — if Qdrant is unreachable this is skipped and the Postgres/secrets backups still succeed</td>
 </tr>
 <tr>
@@ -2964,7 +3092,7 @@ admin user exists (the normal single-tenant state).</p>
 <tr>
 <td><code>BACKUP_ENCRYPT_KEYFILE</code></td>
 <td><code>/run/secrets/backup_encrypt_key</code></td>
-<td>When the file is non-empty, DB dumps and the secrets archive are encrypted at rest (<code>.enc</code> suffix)</td>
+<td>When the file is non-empty, DB dumps, Qdrant snapshots, and the secrets archive are encrypted at rest (<code>.enc</code> suffix)</td>
 </tr>
 <tr>
 <td><code>LITELLM_DATABASE</code></td>
@@ -2990,7 +3118,7 @@ admin user exists (the normal single-tenant state).</p>
 </table>
 <p>The <code>litellm</code> DB is owned by the same superuser (<code>POSTGRES_USER</code>) that created it, so the same credentials dump both DBs. A failed <code>pg_dump</code> aborts the run (non-zero exit) rather than leaving a tiny but well-formed empty archive. The encryption key, Qdrant API key, and <code>./secrets</code> source are already wired into the <code>postgres-backup</code> sidecar in <code>docker-compose.yml</code>. S3 credentials: <code>AWS_ACCESS_KEY_ID</code> + <code>AWS_SECRET_ACCESS_KEY</code> (or IAM instance role) scoped to <code>s3:PutObject</code>.</p>
 <blockquote>
-<p><strong>Without an encryption key the secrets archive is written in the clear</strong> and the script logs a warning — set <code>BACKUP_ENCRYPT_KEYFILE</code> (default already points at the <code>backup_encrypt_key</code> Docker Secret) for production.</p>
+<p><strong>In production (<code>ENVIRONMENT=production</code>) the backup hard-fails if <code>BACKUP_ENCRYPT_KEYFILE</code> is unset</strong> — the script exits immediately and no secrets archive is written. In non-production the secrets archive is skipped (not written in the clear) and the script logs a warning. Set <code>BACKUP_ENCRYPT_KEYFILE</code> (the default already points at the <code>backup_encrypt_key</code> Docker Secret) before running in production.</p>
 <p><strong>Store the backup encryption key OFF-SITE, separately from the <code>.enc</code>
 archives.</strong> The secrets archive is encrypted with <code>backup_encrypt_key</code> and
 that key is <strong>excluded</strong> from the archive (it is not packed inside the file
@@ -3000,6 +3128,20 @@ backups if you also kept a copy of <code>backup_encrypt_key</code> somewhere els
 key makes every encrypted backup permanently unrecoverable.</p>
 </blockquote>
 <h3 id="restore">Restore<a class="headerlink" href="#restore" title="Permanent link">&para;</a></h3>
+<h4 id="one-click-restore-admin-ui">One-click restore (admin UI)<a class="headerlink" href="#one-click-restore-admin-ui" title="Permanent link">&para;</a></h4>
+<p>From <strong>Admin → Backups</strong>, choose a backup set from the archive table and click <strong>Restore</strong>. Type <strong>RESTORE</strong> in the confirmation dialog to proceed. The sidecar:</p>
+<ol>
+<li>Takes a <strong>safety pre-backup</strong> of the current live data before making any destructive change.</li>
+<li>Checks that the backup is not <strong>newer</strong> than the running app version — if it is, the restore is refused and you must update the app first (<code>./update.sh</code>).</li>
+<li>Drops and recreates both databases behind a <strong>maintenance gate</strong> (the app returns "restore in progress" to all users while this runs).</li>
+<li>Recovers the Qdrant search index best-effort — if the Qdrant step fails, the database restore still completes. The search index re-embeds automatically from the restored data on next use; no paper data is lost.</li>
+</ol>
+<p>After the restore, all users are signed out (the session store was replaced) and will need to sign in again.</p>
+<p><strong>Security posture:</strong> the app container holds no new privilege — it only writes a small JSON sentinel file to the <code>backup_trigger</code> volume. All destructive work (DROP/CREATE DATABASE, pg_restore, Qdrant recovery) runs exclusively inside the already-privileged <code>postgres-backup</code> sidecar. The <code>/backups</code> volume remains read-only to the app container. The restore can only be triggered by an active admin browser session (not the ops API key), and requires typing the word RESTORE to confirm.</p>
+<p><strong>Residual risk:</strong> a compromised admin browser session can trigger a restore, replacing live data with the chosen backup point (a safety pre-backup is always taken first, so the prior state remains recoverable). See <a href="../SECURITY/">SECURITY.md</a> and <code>docs/known-residual-risks.md</code> for the full residual-risk register.</p>
+<hr />
+<h4 id="manual-restore-fallback">Manual restore (fallback)<a class="headerlink" href="#manual-restore-fallback" title="Permanent link">&para;</a></h4>
+<p>Use the steps below when the app itself cannot start — for example, after a total host failure where you are starting fresh on a new machine. The one-click path is unavailable in that case; this procedure does the same work from the host.</p>
 <p><strong>Step 0 — decrypt</strong> (if the archive ends in <code>.enc</code>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">  </span>-kfile<span class="w"> </span>./secrets/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
@@ -3027,18 +3169,135 @@ key makes every encrypted backup permanently unrecoverable.</p>
 <a id="__codelineno-26-10" name="__codelineno-26-10" href="#__codelineno-26-10"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
 </code></pre></div>
 <p><strong>Step 3 — Qdrant</strong> — stop the container first so the snapshot restore doesn't race an active index write:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>qdrant
-<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_papers_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/restore.snapshot
-<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>qdrant
-<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
-<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
-<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="s1">  &quot;http://localhost:6333/collections/papers/snapshots/recover&quot; \</span>
-<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
-<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/restore.snapshot\&quot;}&quot;&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># JARVIS uses TWO Qdrant collections — restore both.</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>qdrant
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_paper_chunks_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/paper_chunks.snapshot
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>qdrant_kg_entities_YYYYMMDD_HHMMSS.snapshot<span class="w"> </span>qdrant:/qdrant/snapshots/kg_entities.snapshot
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>qdrant
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>
+<a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="c1"># Recover paper_chunks (paper embeddings):</span>
+<a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
+<a id="__codelineno-27-9" name="__codelineno-27-9" href="#__codelineno-27-9"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
+<a id="__codelineno-27-10" name="__codelineno-27-10" href="#__codelineno-27-10"></a><span class="s1">  &quot;http://localhost:6333/collections/paper_chunks/snapshots/recover&quot; \</span>
+<a id="__codelineno-27-11" name="__codelineno-27-11" href="#__codelineno-27-11"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
+<a id="__codelineno-27-12" name="__codelineno-27-12" href="#__codelineno-27-12"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/paper_chunks.snapshot\&quot;}&quot;&#39;</span>
+<a id="__codelineno-27-13" name="__codelineno-27-13" href="#__codelineno-27-13"></a>
+<a id="__codelineno-27-14" name="__codelineno-27-14" href="#__codelineno-27-14"></a><span class="c1"># Recover kg_entities (knowledge-graph entities):</span>
+<a id="__codelineno-27-15" name="__codelineno-27-15" href="#__codelineno-27-15"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>qdrant<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;curl -s -X PUT \</span>
+<a id="__codelineno-27-16" name="__codelineno-27-16" href="#__codelineno-27-16"></a><span class="s1">  -H &quot;api-key: $(cat /run/secrets/qdrant_api_key)&quot; \</span>
+<a id="__codelineno-27-17" name="__codelineno-27-17" href="#__codelineno-27-17"></a><span class="s1">  &quot;http://localhost:6333/collections/kg_entities/snapshots/recover&quot; \</span>
+<a id="__codelineno-27-18" name="__codelineno-27-18" href="#__codelineno-27-18"></a><span class="s1">  -H &quot;Content-Type: application/json&quot; \</span>
+<a id="__codelineno-27-19" name="__codelineno-27-19" href="#__codelineno-27-19"></a><span class="s1">  -d &quot;{\&quot;location\&quot;:\&quot;file:///qdrant/snapshots/kg_entities.snapshot\&quot;}&quot;&#39;</span>
+</code></pre></div>
+<hr />
+<h4 id="off-host-total-host-loss-recovery-inbox-restore">Off-host / total-host-loss recovery (inbox restore)<a class="headerlink" href="#off-host-total-host-loss-recovery-inbox-restore" title="Permanent link">&para;</a></h4>
+<p>Use this when you are recovering on a <strong>fresh host</strong> from an off-site copy of the backups — the original machine (and its <code>./secrets</code>) is gone. Unlike the manual fallback above (which you run statement-by-statement), this path reuses the same hardened <code>restore.sh</code> that the one-click restore uses, driven by a request you write yourself. It is the only restore path that materializes secrets and rebinds the database role, because a fresh cluster starts with a different role password than the backup was taken with.</p>
+<p><strong>What is automated vs operator-run.</strong> <code>restore.sh</code> (in the <code>postgres-backup</code> sidecar) automatically: takes a safety pre-backup, runs the compat + decrypt-probe gates, drops/recreates/reloads both databases, recovers Qdrant, <strong>rebinds the <code>jarvis</code> role password</strong> (<code>ALTER ROLE … WITH PASSWORD</code>, the chosen path — see below), and <strong>shreds the one-time operator key + the plaintext secrets staging on exit</strong>. You (the operator) run: dropping the archive set + key into the inbox, writing the trigger, and afterwards materializing the host <code>./secrets</code>, recreating the app containers + the <code>postgres-backup</code> sidecar, and clearing the maintenance gate.</p>
+<p><strong>Prerequisites:</strong> the off-site <strong>archive set</strong> for one timestamp (<code>jarvis_&lt;ts&gt;.sql.gz.enc</code>, <code>litellm_&lt;ts&gt;.sql.gz.enc</code>, <code>secrets_&lt;ts&gt;.tar.gz.enc</code>, any <code>qdrant_*_&lt;ts&gt;.snapshot.enc</code>, and <code>manifest_&lt;ts&gt;.json</code>), plus the <strong>backup encryption key</strong> you kept out-of-band (the key is excluded from its own archive, so you must hold a separate copy — see the off-site-key warning above).</p>
+<p>The drop zone is the <strong><code>restore_inbox</code></strong> Docker volume, mounted <strong>read-write</strong> into the sidecar at <code>/restore-inbox</code>. It is the only writable cross-host secrets-staging surface and is <strong>never</strong> under the read-only <code>/secrets</code> mount.</p>
+<ol>
+<li>
+<p><strong>Bring up a fresh stack</strong> on the new host (<code>./setup.sh</code> / <code>docker compose up -d</code>). This initialises Postgres with a fresh role password; the restore rebinds it in step 4.</p>
+</li>
+<li>
+<p><strong>Place the archive set into the inbox.</strong> Either copy it from your off-site store, or pull it from S3 with the built-in helper (S3-pull is optional and aws-guarded; it does nothing and prints a notice if <code>aws</code>/<code>BACKUP_S3_BUCKET</code> are absent):</p>
+</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># Option A — copy a local off-site set into the volume:</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>./offsite/.<span class="w"> </span>postgres-backup:/restore-inbox/
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="c1"># Option B — pull one timestamp&#39;s set from S3 into the inbox:</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_TS</span><span class="o">=</span>&lt;ts&gt;<span class="w"> </span>-e<span class="w"> </span><span class="nv">BACKUP_PULL_DEST</span><span class="o">=</span>/restore-inbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="w">  </span>postgres-backup<span class="w"> </span>/usr/local/bin/backup.sh
+</code></pre></div>
+<ol>
+<li><strong>Place the one-time backup key</strong> into the inbox as the file <strong><code>operator_key</code></strong> (fixed name), then write the restore trigger. <code>restore.sh</code> validates the key exists before any destructive step and verifies it actually decrypts the database archives before any <code>DROP</code> (a wrong key fails safe, destroying nothing):</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>cp<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span>postgres-backup:/restore-inbox/operator_key
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">  </span><span class="s1">&#39;printf &quot;{\&quot;source\&quot;:\&quot;inbox\&quot;,\&quot;timestamp\&quot;:\&quot;&lt;ts&gt;\&quot;}&quot; &gt; /backup-trigger/.restore_request.json&#39;</span>
+</code></pre></div>
+<p>The sidecar's poll loop runs <code>restore.sh</code> within a few seconds. Watch progress in <code>/backup-trigger/.restore_status.json</code> (or the sidecar logs).</p>
+<ol>
+<li>
+<p><strong>Password binding (chosen path):</strong> on a fresh cluster the <code>jarvis</code> role's password was fixed at first-init from the new host's <code>POSTGRES_PASSWORD</code>, but the restored databases (dumped <code>--no-owner --no-acl</code>) do not carry roles, and the app will read the <strong>old</strong> restored <code>postgres_password.txt</code>. So <code>restore.sh</code> runs <code>ALTER ROLE "jarvis" WITH PASSWORD '&lt;restored&gt;'</code> against the running Postgres after the database reload, making the live role match the restored secret. <em>Alternative (for operators who hold <code>./secrets</code> out-of-band):</em> materialize the host <code>./secrets</code> from the backup <strong>before</strong> the stack's <code>postgres</code> first-init on an empty data directory — then the role is created with the restored password and no rebind is needed. Do not wipe the Postgres data volume after the inbox restore, or the rebind is lost.</p>
+</li>
+<li>
+<p><strong>Materialize the host <code>./secrets</code> and recreate the app + sidecar.</strong> <code>restore.sh</code> decrypts the secrets archive only internally (to read the role password for the rebind) and then <strong>shreds that staging</strong> on exit (<code>shred</code> per file, then remove) — it does not leave the decrypted bundle on the volume. Populate the host <code>./secrets</code> yourself from the same archive so the app can decrypt the restored config-key Fernet rows, then <strong>recreate</strong> (not merely restart) every container that authenticates with <code>postgres_password</code>, <strong>including the <code>postgres-backup</code> sidecar</strong> — Docker file-secrets are re-read only when a container is recreated, so a sidecar left running would keep the stale new-host password and its scheduled backups would start failing authentication:</p>
+</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>openssl<span class="w"> </span>enc<span class="w"> </span>-aes-256-cbc<span class="w"> </span>-pbkdf2<span class="w"> </span>-iter<span class="w"> </span><span class="m">600000</span><span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="w">  </span>-kfile<span class="w"> </span>/path/to/backup_encrypt_key.txt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span>-in<span class="w"> </span>secrets_&lt;ts&gt;.tar.gz.enc<span class="w"> </span><span class="p">|</span><span class="w"> </span>tar<span class="w"> </span>-xzf<span class="w"> </span>-<span class="w"> </span>-C<span class="w"> </span>./secrets
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--force-recreate<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="w">  </span>paper_ingestion<span class="w"> </span>learning_engine<span class="w"> </span>litellm<span class="w"> </span>dashboard<span class="w"> </span>postgres-backup
+</code></pre></div>
+<ol>
+<li><strong>Clear maintenance.</strong> Unlike the same-host one-click restore, the off-host path deliberately leaves the stack in maintenance (HTTP 503) until you finish — the app boots with the new-host password while the role was rebound to the restored one, so it is not servable until step 5 completes. Once the recreated containers are healthy, lift the gate:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
+</code></pre></div>
+<p>The off-host path opens the destructive window (it drops and reloads the databases), so it holds a <strong>durable</strong> <code>.destructive</code> sentinel that — unlike the soft <code>.maintenance</code> sentinel — does <strong>not</strong> auto-expire after <code>MAINTENANCE_MAX_AGE_S</code>. You <strong>must</strong> clear both sentinels explicitly with the command above; skipping it leaves the stack at HTTP 503 indefinitely.</p>
+<ol>
+<li><strong>Cleanup.</strong> The operator key is one-time: <code>restore.sh</code> shreds <code>/restore-inbox/operator_key</code> (and shreds + removes the plaintext staging) on every clean or recorded-failure exit. Remove the archive set from the inbox once recovery is confirmed.</li>
+</ol>
+<hr />
+<h4 id="sentinel-cleanup-reference">Sentinel cleanup reference<a class="headerlink" href="#sentinel-cleanup-reference" title="Permanent link">&para;</a></h4>
+<p>The app returns HTTP 503 during and after a restore via two sentinel files in the <code>backup_trigger</code> volume:</p>
+<table>
+<thead>
+<tr>
+<th>Sentinel</th>
+<th>Env var</th>
+<th>Default path</th>
+<th>Expiry</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Soft</td>
+<td><code>MAINTENANCE_SENTINEL</code></td>
+<td><code>/backup-trigger/.maintenance</code></td>
+<td>Auto-expires after <code>MAINTENANCE_MAX_AGE_S</code> (default 1800 s)</td>
+</tr>
+<tr>
+<td>Durable</td>
+<td><code>MAINTENANCE_DESTRUCTIVE_SENTINEL</code></td>
+<td><code>/backup-trigger/.destructive</code></td>
+<td>Never auto-expires; written at the DROP boundary</td>
+</tr>
+</tbody>
+</table>
+<p><strong>A clean same-host one-click restore</strong> clears both sentinels automatically at the end of the restore — no operator action needed.</p>
+<p><strong>The following situations leave the stack at HTTP 503 after <code>restore.sh</code> exits.</strong> Complete the required step first, then clear both sentinels:</p>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Required step before clearing</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Off-host (inbox) restore</td>
+<td>Materialize <code>./secrets</code> and recreate app containers (step 5 above)</td>
+</tr>
+<tr>
+<td>Older-than-code restore (backup schema &lt; current code)</td>
+<td>Recreate app containers so forward migrations run on startup</td>
+</tr>
+<tr>
+<td>Crash after the DROP boundary</td>
+<td>Restore from the safety backup the sidecar took before the destructive step</td>
+</tr>
+</tbody>
+</table>
+<p>Once the required step is done, clear both sentinels:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres-backup<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/backup-trigger/.maintenance<span class="w"> </span>/backup-trigger/.destructive
 </code></pre></div>
 <hr />
 <h2 id="production-readiness-check">Production Readiness Check<a class="headerlink" href="#production-readiness-check" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>bash<span class="w"> </span>scripts/production-readiness-check.sh
 </code></pre></div>
 <p><code>setup.sh</code> runs this at install end. It checks <code>DEV_*</code> flags, <code>JARVIS_API_KEY</code> length, SMTP presence, and HTTPS config. Exit non-zero on any HIGH finding; <code>--profile=letsencrypt</code> treats that as fatal.</p>
 <hr />
