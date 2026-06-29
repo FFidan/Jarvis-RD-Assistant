@@ -3,6 +3,9 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+**Release-history note:** This changelog is retrospective. The repository remained private through the pre-v1.0.0 tags; all entries before v1.0.0 describe private development and hardening milestones.
+Wording such as "public-ready", "public-readiness", or "public-launch groundwork" in older entries means preparation for the v1.0.0 public launch, not earlier public availability.
+
 ## v1.0.0 (2026-06-29) — First stable public-launch release: consensus, PDF annotation, Zotero sync, restore, and multi-user hardening
 
 First stable release and public-launch baseline. Earlier tags were private development and hardening milestones; v1.0.0 is the first version intended for public availability. It adds a cross-paper consensus view, an in-PDF reader with spatial highlights that sync to Zotero, guided one-click backup restore, and completes per-user isolation and restore-safety hardening across the application.
@@ -163,7 +166,7 @@ First stable release and public-launch baseline. Earlier tags were private devel
 
 ## v0.8.5 (2026-06-14) — Trustworthy, Comprehensible & Credible
 
-A polish release focused on trust, plain language, and a clean, public-ready
+A polish release focused on trust, plain language, and a clean, launch-ready
 codebase. Researcher-facing screens no longer surface implementation jargon,
 real settings dead-ends and false-failure states are fixed, and the project's
 toolchain is brought up to date.
@@ -439,7 +442,7 @@ A six-week audit-and-remediation pass closed roughly 120 findings ahead of the e
 
 **Developer experience.** Continuous integration now enforces type-check (Pyright zero errors), a test-shape contract (each test belongs to one of four documented shapes), the LLM prompt-shape AST check, and PII / burned-secret allowlists. The CI workflow was migrated to `astral-sh/setup-uv@v6` with a Python 3.12 pin and `uv sync --frozen`, cutting wall-clock from 8–15 minutes to 4–5 minutes. A pre-commit hook runs the same gates locally.
 
-**Public-launch groundwork.** This release ships a rewritten README with above-the-fold product screenshots, a Highlights section, and the four-audience deployment path; weekly `dependabot` updates for pip, npm, Docker base images, and GitHub Actions; structured GitHub issue templates (bug report, feature request) with security reports routed to a private GitHub Security Advisory; and a root `SECURITY.md` pointing to the threat model.
+**Launch groundwork.** This private milestone ships a rewritten README with above-the-fold product screenshots, a Highlights section, and the four-audience deployment path; weekly `dependabot` updates for pip, npm, Docker base images, and GitHub Actions; structured GitHub issue templates (bug report, feature request) with security reports routed to a private GitHub Security Advisory; and a root `SECURITY.md` pointing to the threat model.
 
 ### Upgrade Notes
 
@@ -476,11 +479,11 @@ A six-week audit-and-remediation pass closed roughly 120 findings ahead of the e
 
 ### Documentation
 - Published an MkDocs-Material administrator and developer documentation site to GitHub Pages, including a complete end-user guide covering every surface plus plain-English sign-in and account-recovery steps.
-- Added a public `ROADMAP.md` and corrected a batch of documentation drift (migration counts, deprecated environment variables, and stale internal links).
+- Added a launch-facing `ROADMAP.md` and corrected a batch of documentation drift (migration counts, deprecated environment variables, and stale internal links).
 - Documented the `setup.sh --check` pre-flight, single/multi-user modes, and the source HTTP-cache environment variables.
 
 
 
-## Early private development (v0.1 – v0.4.1)
+## Early private foundations (v0.1 – v0.4.1)
 
-The v0.1 through v0.4.1 releases represent the early private development phase. The core RAG pipeline was built across this period: multi-source paper discovery (arXiv, Semantic Scholar, OpenAlex, PubMed), PDF extraction with page-level citation provenance, a three-stage LLM-reranked Pulse recommendation engine, and a semantic knowledge graph with entity extraction and contradiction detection. Spaced-repetition learning cards (FSRS) and a daily executive-function interface (My Day, Pomodoro timer, journal, project tracking) were added alongside the recommendation system. Multi-tenancy and security hardening — magic-link authentication, strict user_id scoping across all data paths, per-user FSRS and recommendation state, cross-user isolation CI gates, Docker Secrets, and a container-hardening sweep — were progressively applied from v0.2 onward. The job infrastructure was migrated from a custom worker to procrastinate-backed async task queues with SSE progress streaming. Observability tooling (Langfuse, Sentry, structured audit logging) and a one-shot installer wizard were added in v0.3–v0.4. The v0.4.1 release closed the last known cross-tenant data leaks and completed a full adversarial-review pass before the v0.5.0 consolidation.
+The v0.1 through v0.4.1 entries summarize the earliest private milestones. The core RAG pipeline was built across this period: multi-source paper discovery (arXiv, Semantic Scholar, OpenAlex, PubMed), PDF extraction with page-level citation provenance, a three-stage LLM-reranked Pulse recommendation engine, and a semantic knowledge graph with entity extraction and contradiction detection. Spaced-repetition learning cards (FSRS) and a daily executive-function interface (My Day, Pomodoro timer, journal, project tracking) were added alongside the recommendation system. Multi-tenancy and security hardening — magic-link authentication, strict user_id scoping across all data paths, per-user FSRS and recommendation state, cross-user isolation CI gates, Docker Secrets, and a container-hardening sweep — were progressively applied from v0.2 onward. The job infrastructure was migrated from a custom worker to procrastinate-backed async task queues with SSE progress streaming. Observability tooling (Langfuse, Sentry, structured audit logging) and a one-shot installer wizard were added in v0.3–v0.4. The v0.4.1 release closed the last known cross-tenant data leaks and completed a full adversarial-review pass before the v0.5.0 consolidation.
