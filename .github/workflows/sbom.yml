@@ -5,7 +5,7 @@ on:
   release:
     types: [published]
   pull_request:
-    branches: [master]
+    branches: [main]
   push:
     tags: ["v*"]
   workflow_dispatch:

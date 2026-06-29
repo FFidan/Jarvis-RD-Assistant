@@ -1,12 +1,12 @@
 # 07 — Testing Contract
 **Status:** LIVING
 **Reviewers must update this contract in the same patch as any change to:**
-- The public surface of [libs/jarvis_common/jarvis_common/testing.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing.py) (the canonical-factory facade) or its submodules `testing_db.py` / `testing_telegram.py` / `testing_auth.py` / `testing_search.py`
-- The public surface of [libs/jarvis_common/jarvis_common/testing_contract_apps.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_contract_apps.py) (contract app/client helpers)
-- The set of `pytest.mark.*` markers registered in [pyproject.toml](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/pyproject.toml)
+- The public surface of [libs/jarvis_common/jarvis_common/testing.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing.py) (the canonical-factory facade) or its submodules `testing_db.py` / `testing_telegram.py` / `testing_auth.py` / `testing_search.py`
+- The public surface of [libs/jarvis_common/jarvis_common/testing_contract_apps.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py) (contract app/client helpers)
+- The set of `pytest.mark.*` markers registered in [pyproject.toml](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/pyproject.toml)
 - The carve-out registry in §5 (idiomatic-mock boundaries)
-- The autouse `_default_authenticated_user` stub in [services/paper_ingestion/tests/conftest.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/tests/conftest.py)
-- The pre-commit test-shape checker in [scripts/check-test-shape.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/scripts/check-test-shape.py)
+- The autouse `_default_authenticated_user` stub in [services/paper_ingestion/tests/conftest.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/tests/conftest.py)
+- The pre-commit test-shape checker in [scripts/check-test-shape.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/scripts/check-test-shape.py)
 
 This contract describes **what a Python test in this repo must look like**.
 `jarvis_common.testing` is a backwards-compatible facade — `from
@@ -29,9 +29,9 @@ The contract is **machine-enforceable** where practical (pre-commit hook), **pol
 
 **Out of scope.**
 - Frontend testing (Vitest + Playwright) — see [ENGINEERING_STANDARDS.md §Testing](../ENGINEERING_STANDARDS.md#testing).
-- E2E Playwright spec authorship — see [frontend/e2e/](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/frontend/e2e) and the `:e2e:mocked` / `:e2e:live` / `:e2e:mutating` lane conventions documented in `frontend/playwright.config.ts`
+- E2E Playwright spec authorship — see [frontend/e2e/](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/frontend/e2e) and the `:e2e:mocked` / `:e2e:live` / `:e2e:mutating` lane conventions documented in `frontend/playwright.config.ts`
 - Performance benchmarks (`scripts/perf/`) — separate program
-- Migration tests (`db/migrations/`) — governed by [scripts/check-migrations-no-tx.sh](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/scripts/check-migrations-no-tx.sh)
+- Migration tests (`db/migrations/`) — governed by [scripts/check-migrations-no-tx.sh](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/scripts/check-migrations-no-tx.sh)
 
 ---
 
@@ -314,17 +314,17 @@ If a contract test makes a real HTTP request to `api.openai.com` or starts a rea
 
 ## 4. Invariants
 
-Rules TS-01..TS-07 are machine-checked by [scripts/check-test-shape.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/scripts/check-test-shape.py) on every commit touching test files. TS-08 is enforced by review. Each invariant has an ERROR or WARN level; ERROR blocks the commit.
+Rules TS-01..TS-07 are machine-checked by [scripts/check-test-shape.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/scripts/check-test-shape.py) on every commit touching test files. TS-08 is enforced by review. Each invariant has an ERROR or WARN level; ERROR blocks the commit.
 
 | ID | Invariant | Level | Rationale |
 |---|---|---|---|
 | TS-01 | New test files MUST NOT contain `.__wrapped__(` | ERROR | Handler-bypass anti-pattern (§2.1) |
 | TS-02 | New test files MUST NOT contain SQL-substring assertions (regex: `assert .* in .*sql`, `assert .*"(SELECT\|INSERT\|UPDATE\|WHERE\|JOIN)`) | ERROR | SQL-substring anti-pattern (§2.3) |
-| TS-03 | New contract test files (under `tests/contract/`) MUST declare `pytest.mark.contract` in their `pytestmark` | ERROR | Required by [pyproject.toml addopts](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/pyproject.toml) marker registration |
+| TS-03 | New contract test files (under `tests/contract/`) MUST declare `pytest.mark.contract` in their `pytestmark` | ERROR | Required by [pyproject.toml addopts](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/pyproject.toml) marker registration |
 | TS-04 | New contract test files under `services/paper_ingestion/tests/contract/` MUST declare `pytest.mark.real_auth` in their `pytestmark` | ERROR | The autouse `_default_authenticated_user` fixture would otherwise resolve `cookie_b` as user 1 (silent IDOR-test failure) |
 | TS-05 | New contract test files MUST set `loop_scope="session"` on `pytest.mark.asyncio` and on any `@pytest_asyncio.fixture` | ERROR | Fixture loop-mismatch causes "Task attached to a different loop" failures (pre-existing tech debt that the test recomposition program cleaned up) |
 | TS-06 | New contract test files MUST contain at least one `# Verified: <file>:<line>` comment per `def test_*` | WARN | Documents the production symbol the test exercises so a reviewer can confirm the cited line still matches behavior |
-| TS-07 | Test files MUST NOT redefine inline `_make_pool` / `_mock_pool` / `_make_embedder` / `_build_request` / `FakeRecord` / `_make_telegram_update` / `make_config` when the canonical version is importable from `jarvis_common.testing` (canonical replacement for `make_config`: `jarvis_common.testing.make_bot_config`, defined in [testing_telegram.py:92](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_telegram.py#L92)) | WARN | Factory dedup — keep [jarvis_common.testing](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing.py) the single source of truth |
+| TS-07 | Test files MUST NOT redefine inline `_make_pool` / `_mock_pool` / `_make_embedder` / `_build_request` / `FakeRecord` / `_make_telegram_update` / `make_config` when the canonical version is importable from `jarvis_common.testing` (canonical replacement for `make_config`: `jarvis_common.testing.make_bot_config`, defined in [testing_telegram.py:92](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_telegram.py#L92)) | WARN | Factory dedup — keep [jarvis_common.testing](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing.py) the single source of truth |
 | TS-08 | The carve-out registry (§5) MUST NOT be deleted or weakened without a paired contract update | ERROR (enforced by review) | Carve-outs protect CI cost + reliability — deleting one without a replacement plan is a real regression |
 
 ### 4.1 Why TS-01 + TS-02 are ERRORs, not WARNs
@@ -455,20 +455,20 @@ facade); the `file:line` points at the submodule that defines it.
 
 | Citation | File:line | Behavior |
 |---|---|---|
-| `make_pool_and_conn` canonical factory | [testing_db.py:101](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_db.py#L101) | `(conn, *, fetchval_return, fetchrow_return, fetch_return, raise_on_acquire, ...)` → `(pool, conn)` tuple. Canonical inline `_make_pool` replacement. |
-| `SharedConnPool` | [testing_db.py:703](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_db.py#L703) | Pool-shaped wrapper exposing a single contract_conn via `acquire()` AND direct pool methods (`fetch`/`fetchrow`/`fetchval`/`execute`/`executemany`). |
-| `contract_conn` fixture | [testing_db.py:642](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_db.py#L642) | Per-test asyncpg connection wrapped in a transaction that rolls back on test exit. Requires `JARVIS_RUN_LIVE_PG=1`. |
-| `contract_two_users` fixture | [testing_db.py:918](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_db.py#L918) | Seeds two real DB users with valid session cookies + owned resources (paper, note, deck, etc.) all within the contract_conn transaction. |
-| `make_bot_config` | [testing_telegram.py:92](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_telegram.py#L92) | Canonical `BotConfig` factory for telegram_bot tests (TS-07 `make_config` replacement). |
-| `configure_contract_api_key` | [testing_contract_apps.py:43](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L43) | Context manager that sets the contract API key and refreshes auth/settings caches before and after the test. |
-| `make_contract_client` | [testing_contract_apps.py:60](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L60) | ASGI `httpx.AsyncClient` factory with the standard contract API-key header and optional session cookie. |
-| `patch_app_state` | [testing_contract_apps.py:80](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L80) | Restores exact `app.state` attributes after contract app wiring. |
-| `patch_dependency_overrides` | [testing_contract_apps.py:105](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L105) | Patches FastAPI dependency overrides without clearing unrelated keys, then restores exact previous values. |
-| `_default_authenticated_user` autouse stub | [services/paper_ingestion/tests/conftest.py:146](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/tests/conftest.py#L146) | Returns user_id=1 globally for all PI tests UNLESS the test is marked `pytest.mark.real_auth`. The marker opt-out is mandatory for any PI contract test that depends on session cookies. |
-| `pytest.mark.{contract,real_auth,live_pg}` registration | [pyproject.toml:138-143](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/pyproject.toml#L138-L143) | Marker descriptions in `[tool.pytest.ini_options].markers`. |
-| Default `addopts` excludes | [pyproject.toml:160](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/pyproject.toml#L160) | `addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"` — `contract` tests are collected-but-skipped without `JARVIS_RUN_LIVE_PG=1`. |
-| `test_baseline_invariants.py` (DO NOT DELETE) | [services/paper_ingestion/tests/test_baseline_invariants.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/services/paper_ingestion/tests/test_baseline_invariants.py) | Post-squash schema invariants. Marked `live_pg`. |
-| `scripts/check-test-shape.py` (enforcement) | [scripts/check-test-shape.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/scripts/check-test-shape.py) | Pre-commit hook implementing TS-01..TS-07 invariants (TS-08 is review-only). |
+| `make_pool_and_conn` canonical factory | [testing_db.py:101](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L101) | `(conn, *, fetchval_return, fetchrow_return, fetch_return, raise_on_acquire, ...)` → `(pool, conn)` tuple. Canonical inline `_make_pool` replacement. |
+| `SharedConnPool` | [testing_db.py:703](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L703) | Pool-shaped wrapper exposing a single contract_conn via `acquire()` AND direct pool methods (`fetch`/`fetchrow`/`fetchval`/`execute`/`executemany`). |
+| `contract_conn` fixture | [testing_db.py:642](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L642) | Per-test asyncpg connection wrapped in a transaction that rolls back on test exit. Requires `JARVIS_RUN_LIVE_PG=1`. |
+| `contract_two_users` fixture | [testing_db.py:918](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_db.py#L918) | Seeds two real DB users with valid session cookies + owned resources (paper, note, deck, etc.) all within the contract_conn transaction. |
+| `make_bot_config` | [testing_telegram.py:92](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_telegram.py#L92) | Canonical `BotConfig` factory for telegram_bot tests (TS-07 `make_config` replacement). |
+| `configure_contract_api_key` | [testing_contract_apps.py:43](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L43) | Context manager that sets the contract API key and refreshes auth/settings caches before and after the test. |
+| `make_contract_client` | [testing_contract_apps.py:60](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L60) | ASGI `httpx.AsyncClient` factory with the standard contract API-key header and optional session cookie. |
+| `patch_app_state` | [testing_contract_apps.py:80](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L80) | Restores exact `app.state` attributes after contract app wiring. |
+| `patch_dependency_overrides` | [testing_contract_apps.py:105](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/libs/jarvis_common/jarvis_common/testing_contract_apps.py#L105) | Patches FastAPI dependency overrides without clearing unrelated keys, then restores exact previous values. |
+| `_default_authenticated_user` autouse stub | [services/paper_ingestion/tests/conftest.py:146](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/tests/conftest.py#L146) | Returns user_id=1 globally for all PI tests UNLESS the test is marked `pytest.mark.real_auth`. The marker opt-out is mandatory for any PI contract test that depends on session cookies. |
+| `pytest.mark.{contract,real_auth,live_pg}` registration | [pyproject.toml:138-143](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/pyproject.toml#L138-L143) | Marker descriptions in `[tool.pytest.ini_options].markers`. |
+| Default `addopts` excludes | [pyproject.toml:160](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/pyproject.toml#L160) | `addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"` — `contract` tests are collected-but-skipped without `JARVIS_RUN_LIVE_PG=1`. |
+| `test_baseline_invariants.py` (DO NOT DELETE) | [services/paper_ingestion/tests/test_baseline_invariants.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/services/paper_ingestion/tests/test_baseline_invariants.py) | Post-squash schema invariants. Marked `live_pg`. |
+| `scripts/check-test-shape.py` (enforcement) | [scripts/check-test-shape.py](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/scripts/check-test-shape.py) | Pre-commit hook implementing TS-01..TS-07 invariants (TS-08 is review-only). |
 
 ---
 

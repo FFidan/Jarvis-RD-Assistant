@@ -96,7 +96,7 @@ The `image:` tag in `docker-compose.yml` is applied to the built result so that
 
 Before tagging a release:
 
-- [ ] All planned changes for the milestone have merged to `master`.
+- [ ] All planned changes for the milestone have merged to `main`.
 - [ ] Version bumped in lockstep: `pyproject.toml`, `frontend/package.json` (and `package-lock.json`, via `npm version`), the `docker-compose.yml` `JARVIS_VERSION` fallback, and the `CHANGELOG.md` heading + date.
 - [ ] `uv run pytest -x` passes.
 - [ ] `npm --prefix frontend run test -- --run` passes.

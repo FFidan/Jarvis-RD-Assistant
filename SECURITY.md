@@ -8,7 +8,7 @@ Use [GitHub Security Advisories](https://github.com/FFidan/Jarvis-RD-Assistant/s
 
 ## Supported versions
 
-The `master` branch is the only actively-supported release line. Fixes are not back-ported to prior tags.
+The `main` branch is the only actively-supported release line. Fixes are not back-ported to prior tags.
 
 ## Threat model + operational guidance
 

@@ -1,12 +1,12 @@
 name: Docs
 
-# Build on every push to master (then deploy) and on PRs (build-only check).
+# Build on every push to main (then deploy) and on PRs (build-only check).
 on:
   public:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 permissions:
   contents: read
@@ -40,7 +40,7 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     needs: [build]
-    if: github.event.repository.private == false && (github.event_name == 'public' || (github.event_name == 'push' && github.ref == 'refs/heads/master'))
+    if: github.event.repository.private == false && (github.event_name == 'public' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     permissions:
       contents: write   # needed for gh-pages branch push

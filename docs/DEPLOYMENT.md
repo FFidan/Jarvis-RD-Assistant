@@ -2,7 +2,7 @@
 
 JARVIS is a self-hosted research assistant. This document covers running it — from the localhost happy path to LAN exposure, Cloudflare Tunnel, TLS, backups, and common failure modes.
 
-For first-time setup, start with [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md) Quickstart. If the two conflict, this file is canonical.
+For first-time setup, start with [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/README.md) Quickstart. If the two conflict, this file is canonical.
 
 ---
 
@@ -120,7 +120,7 @@ make observability-up
 
 Open `http://localhost:3002` and sign in with `LANGFUSE_INIT_USER_EMAIL` (default `operator@jarvis.local`). Langfuse is a single operator tool, loopback-bound, decoupled from JARVIS user accounts.
 
-Full contract and rotation procedure: [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md) §9.
+Full contract and rotation procedure: [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md) §9.
 
 ---
 
@@ -739,7 +739,7 @@ JARVIS exposes a REST API on `paper_ingestion` (:8010) and `learning_engine` (:8
 
 ## See also
 
-- [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/README.md) — quick start and high-level orientation.
+- [README.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/README.md) — quick start and high-level orientation.
 - [docs/SECURITY.md](SECURITY.md) — threat model, auth boundaries, multi-tenant hardening checklist.
 - [docs/known-residual-risks.md](known-residual-risks.md) — acknowledged-but-deferred risks and their reopen criteria.
-- [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md) — Langfuse env-var table, trust boundary, rotation procedure.
+- [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md) — Langfuse env-var table, trust boundary, rotation procedure.

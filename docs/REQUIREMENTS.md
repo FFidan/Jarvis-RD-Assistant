@@ -109,7 +109,7 @@ and stored encrypted at rest via **Settings → Integrations → Zotero**, not a
 environment variables.
 
 Full `.env` reference: `.env.example`. Secrets runbook: [docs/DEPLOYMENT.md](DEPLOYMENT.md).
-Observability variables (Langfuse): [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md).
+Observability variables (Langfuse): [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md).
 
 ## Key Dependency Floors
 
@@ -123,7 +123,7 @@ Observability variables (Langfuse): [docs/contracts/04-observability.md](https:/
 Secrets use Docker Secrets. Initialise locally with `bash scripts/init-secrets.sh`
 (or `scripts/jarvis-setup.sh`). Full table: [docs/DEPLOYMENT.md](DEPLOYMENT.md).
 
-Fresh installs: `db/init.sql`. Migration history: [`db/migrations/README.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/db/migrations/README.md).
+Fresh installs: `db/init.sql`. Migration history: [`db/migrations/README.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/db/migrations/README.md).
 
 ## Optional Reranker
 

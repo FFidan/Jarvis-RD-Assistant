@@ -4,11 +4,11 @@
 
 JARVIS RD Assistant helps researchers discover, organize, and interrogate scientific literature. It pairs local-first models with source-linked retrieval so generated claims can be traced back to papers in the researcher's library.
 
-📖 **Docs:** https://ffidan.github.io/Jarvis-RD-Assistant/ &nbsp;·&nbsp; 📦 **Releases:** https://github.com/FFidan/Jarvis-RD-Assistant/releases &nbsp;·&nbsp; 🔒 **Security:** [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/SECURITY.md)
+📖 **Docs:** https://ffidan.github.io/Jarvis-RD-Assistant/ &nbsp;·&nbsp; 📦 **Releases:** https://github.com/FFidan/Jarvis-RD-Assistant/releases &nbsp;·&nbsp; 🔒 **Security:** [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/SECURITY.md)
 
-[![CI](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml)
-[![Docs](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml/badge.svg?branch=master)](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/LICENSE)
+[![CI](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/ci.yml)
+[![Docs](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/FFidan/Jarvis-RD-Assistant/actions/workflows/docs.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 ![My Day — JARVIS RD Assistant](docs/screenshots/02-my-day.png)
@@ -86,7 +86,7 @@ Runs on your own hardware with Ollama, with optional cloud-model access through 
 ### Design choices
 
 - **Evidence grounding and verification.** Summaries, flashcard evidence, graph edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. These checks improve traceability; they are not independent fact-checking and do not guarantee correctness.
-- **Local-first deployment.** Ollama keeps model inference on infrastructure you control. If you configure a cloud provider through LiteLLM, relevant prompts and source excerpts are sent to that provider. See the [LLM tier benchmark](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/perf/2026-05-22-llm-tier-bench.md) for model recommendations.
+- **Local-first deployment.** Ollama keeps model inference on infrastructure you control. If you configure a cloud provider through LiteLLM, relevant prompts and source excerpts are sent to that provider. See the [LLM tier benchmark](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/perf/2026-05-22-llm-tier-bench.md) for model recommendations.
 - **Hybrid search.** BM25 full-text search fused with Qdrant vector search via reciprocal rank fusion, then reranked with a cross-encoder for high-precision retrieval.
 
 ## Architecture
@@ -104,7 +104,7 @@ flowchart TD
     LL --> OL["Ollama · :11434"]
 ```
 
-**Optional services:** Telegram bot (`--profile telegram`), Langfuse LLM-trace observability (off by default — `make observability-up`; see [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/contracts/04-observability.md)).
+**Optional services:** Telegram bot (`--profile telegram`), Langfuse LLM-trace observability (off by default — `make observability-up`; see [docs/contracts/04-observability.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/contracts/04-observability.md)).
 
 ## Deployment
 
@@ -114,7 +114,7 @@ Solo install: the **Quickstart** above is all you need. For team/multi-user setu
 
 JARVIS applies user scoping at the application and query layers. The ops API key (`JARVIS_API_KEY`) is a service credential, not a user login. Application admins do not receive a research-data browsing interface for other users; infrastructure operators with database, filesystem, backup, or model-provider access remain inside the trust boundary.
 
-See [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/SECURITY.md) for vulnerability disclosure and [docs/SECURITY.md](docs/SECURITY.md) for the full threat model, dev-flag behaviour, secret environment-variable reference, audit-log coverage, and operational hardening checklist.
+See [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/SECURITY.md) for vulnerability disclosure and [docs/SECURITY.md](docs/SECURITY.md) for the full threat model, dev-flag behaviour, secret environment-variable reference, audit-log coverage, and operational hardening checklist.
 
 ## Development
 
@@ -159,7 +159,7 @@ The canonical pre-push gate is **`make check`** — the same set CI runs. The `d
 | `EMBEDDING_MODEL_NAME` | Human-readable embedding model stored on chunk metadata (default: `qwen3-embedding:4b`). |
 | `EMBEDDING_DIMENSION` | Must match the embedding model (default: `2560`). |
 
-See [`.env.example`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/.env.example) for the full annotated list. For production deployments using Docker Secrets (`_FILE` variants), see [`secrets/README.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/secrets/README.md).
+See [`.env.example`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/.env.example) for the full annotated list. For production deployments using Docker Secrets (`_FILE` variants), see [`secrets/README.md`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/secrets/README.md).
 
 ### Adding a paper source
 
@@ -194,7 +194,7 @@ See [`.env.example`](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/.
 
 ### Contributing
 
-See [CONTRIBUTING.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/CONTRIBUTING.md) for branching, commit-message style, and the pull-request checklist. Issues filed via the [bug report](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/.github/ISSUE_TEMPLATE/bug_report.md) and [feature request](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/.github/ISSUE_TEMPLATE/feature_request.md) templates get triaged fastest. Security reports: see [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/SECURITY.md).
+See [CONTRIBUTING.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/CONTRIBUTING.md) for branching, commit-message style, and the pull-request checklist. Issues filed via the [bug report](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/.github/ISSUE_TEMPLATE/bug_report.md) and [feature request](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/.github/ISSUE_TEMPLATE/feature_request.md) templates get triaged fastest. Security reports: see [SECURITY.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/SECURITY.md).
 
 ## Tech stack
 
@@ -235,10 +235,10 @@ See **[docs/DEPLOYMENT.md → Troubleshooting](docs/DEPLOYMENT.md#troubleshootin
 ## Further reading
 
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — single-source operator guide: deployment modes, TLS, tunnels, backups, troubleshooting.
-- [docs/PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/docs/PRD.md) — product requirements and feature-level spec, including the Discovery & Pulse design.
+- [docs/PRD.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/docs/PRD.md) — product requirements and feature-level spec, including the Discovery & Pulse design.
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — non-functional requirements and technical constraints.
-- [docs/perf/](https://github.com/FFidan/Jarvis-RD-Assistant/tree/master/docs/perf) — empirical model recommendations per hardware tier.
-- [CHANGELOG.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/CHANGELOG.md) — release notes per version.
+- [docs/perf/](https://github.com/FFidan/Jarvis-RD-Assistant/tree/main/docs/perf) — empirical model recommendations per hardware tier.
+- [CHANGELOG.md](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/CHANGELOG.md) — release notes per version.
 
 ## Methods and limitations
 
@@ -266,7 +266,7 @@ model-pipeline smoke tests provide additional, non-equivalent coverage.
 
 ## License
 
-[Apache 2.0](https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/LICENSE).
+[Apache 2.0](https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/LICENSE).
 The root LICENSE file is the canonical Apache-2.0 text; project copyright,
 contact, authorship, and third-party notices are recorded in [NOTICE](NOTICE)
 and [AUTHORS.md](AUTHORS.md).

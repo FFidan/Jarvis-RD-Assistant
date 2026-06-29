@@ -19,7 +19,7 @@ classifiers = [
 Documentation = "https://ffidan.github.io/Jarvis-RD-Assistant/"
 Repository = "https://github.com/FFidan/Jarvis-RD-Assistant"
 Issues = "https://github.com/FFidan/Jarvis-RD-Assistant/issues"
-Authors = "https://github.com/FFidan/Jarvis-RD-Assistant/blob/master/AUTHORS.md"
+Authors = "https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/AUTHORS.md"
 
 [dependency-groups]
 jarvis-common = [

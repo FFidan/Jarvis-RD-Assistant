@@ -10,16 +10,16 @@ name: CI
 on:
   public:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   # Run the test environment in UTC so date-relative tests agree with the app's
@@ -299,7 +299,7 @@ jobs:
     # NOT listed in gate.needs — failures are informational only (continue-on-error: true).
     # The mocked suite is green as of 2026-06; it was previously red/cancelled due to a
     # Service-Worker-vs-page.route bypass, fixed via serviceWorkers:'block' in playwright.config.ts.
-    # Promote to required after >=2 consecutive green e2e-mocked runs on master. Two edits required:
+    # Promote to required after >=2 consecutive green e2e-mocked runs on main. Two edits required:
     #   1. Set `continue-on-error: false` on this job (line below).
     #   2. Add "e2e-mocked" to gate.needs (the list in the gate job below).
     timeout-minutes: 15

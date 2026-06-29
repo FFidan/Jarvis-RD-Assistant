@@ -7,13 +7,13 @@ name: First-run smoke
 #
 # Intentionally NOT a required gate and NOT on pull_request: the first run pulls
 # 7-11 GB of model data and can take 20-60 minutes, far too heavy to block PRs.
-# It runs on pushes to master and on demand. Promote it to a required gate only
-# after it has proven stable over several green master runs.
+# It runs on pushes to main and on demand. Promote it to a required gate only
+# after it has proven stable over several green main runs.
 
 on:
   public:
   push:
-    branches: [master]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
