@@ -39,12 +39,6 @@ export default defineConfig({
           groups: [
             { name: 'vendor-cytoscape', test: /node_modules\/cytoscape/ },
             {
-              // PDF reader stack (Paper Detail only) — keep pdf.js out of the
-              // shared/index bundle.
-              name: 'vendor-pdf',
-              test: /node_modules\/(pdfjs-dist|react-pdf-highlighter-extended|react-rnd)/,
-            },
-            {
               name: 'vendor-recharts',
               test: /node_modules\/(recharts|react-smooth|victory-vendor|d3-|decimal\.js-light|internmap|robust-predicates|delaunator)/,
             },
