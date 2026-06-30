@@ -172,20 +172,19 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
     await expect(page.getByRole('navigation', { name: 'breadcrumb' })).toContainText('Topics');
   });
 
-  test('§I Account section header appears in rail', async ({ page }) => {
+  test('Account section header appears in rail', async ({ page }) => {
     await setupMocks(page);
     await page.goto('/settings');
-    await expect(page.getByText('§I', { exact: true })).toBeVisible({ timeout: 8000 });
+    await expect(page.getByText('Account', { exact: true })).toBeVisible({ timeout: 8000 });
   });
 
-  test('§II Sources rail item appears (single Sources entry — not per-source-type)', async ({ page }) => {
+  test('Sources rail item appears (single Sources entry)', async ({ page }) => {
     await setupMocks(page);
     await page.goto('/settings');
 
-    // Wait for rail to render — admin session so §II should appear.
-    // §II Sources is now a single "Sources" rail item (SettingsRail ALL_SECTIONS).
-    // Individual per-source-type items were removed in the v0.8 IA redesign.
-    await expect(page.getByText('§II', { exact: true })).toBeVisible({ timeout: 8000 });
+    // Wait for rail to render — admin session so Sources should appear.
+    // Sources is now a single "Sources" rail item (SettingsRail ALL_SECTIONS).
+    await expect(page.getByText('Sources', { exact: true }).first()).toBeVisible({ timeout: 8000 });
     await expect(page.getByRole('button', { name: 'Sources' })).toBeVisible({ timeout: 8000 });
   });
 
@@ -245,13 +244,14 @@ test.describe('Settings IA 2-pane navigation @settings-ia', () => {
     });
 
     await page.goto('/settings');
-    await expect(page.getByText('§I', { exact: true })).toBeVisible({ timeout: 8000 });
-    await expect(page.getByText('§V', { exact: true })).toBeVisible();
-    await expect(page.getByText('§VI', { exact: true })).toBeVisible();
+    const nav = page.getByRole('navigation', { name: 'Settings navigation' });
+    await expect(nav.getByText('Account', { exact: true })).toBeVisible({ timeout: 8000 });
+    await expect(nav.getByText('Integrations', { exact: true })).toBeVisible();
+    await expect(nav.getByText('Research', { exact: true })).toBeVisible();
 
-    await expect(page.getByText('§II', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('§III', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('§IV', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Sources', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Models', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('System', { exact: true })).toHaveCount(0);
   });
 
   test('non-admin deep-link to sources redirects to Topics', async ({ page }) => {

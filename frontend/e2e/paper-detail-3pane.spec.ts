@@ -226,8 +226,8 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     const nav = page.getByRole('navigation', { name: 'Paper navigation' });
     await expect(nav).toBeVisible({ timeout: 8000 });
 
-    // § Pipeline header
-    await expect(nav.getByText('§ Pipeline')).toBeVisible();
+    // Pipeline steps header
+    await expect(nav.getByText('Processing steps')).toBeVisible();
     // All steps complete
     await expect(nav.getByText('Downloaded')).toBeVisible();
     await expect(nav.getByText('2 passages')).toBeVisible();
@@ -242,7 +242,7 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     // appears in the sidebar link and potentially the page heading.
     const breadcrumb = page.getByRole('navigation', { name: /breadcrumb/i });
     await expect(breadcrumb.getByText('Library').first()).toBeVisible({ timeout: 8000 });
-    await expect(page.getByText('reading')).toBeVisible();
+    await expect(breadcrumb.getByText('Reading')).toBeVisible();
   });
 
   test('center: title rendered as heading', async ({ page }) => {
@@ -330,7 +330,7 @@ test.describe('Paper Detail 3-pane — desktop', () => {
 
     // ChunksTab renders but each ChunkItem is individually collapsed.
     // Click the first chunk item header to expand its content.
-    await page.getByText(/Chunk 0/).click();
+    await page.getByText(/Passage 0/).click();
 
     // Now content is visible
     await expect(page.getByText(/CHUNK_0_CONTENT/)).toBeVisible({ timeout: 5000 });
@@ -371,7 +371,7 @@ test.describe('Paper Detail 3-pane — desktop', () => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
-    const nav = page.getByRole('navigation', { name: 'Paper navigation' });
+    const nav = page.getByRole('navigation', { name: 'Paper navigation' }).first();
     await expect(nav).toBeVisible({ timeout: 8000 });
 
     // Click Brief in TOC — should set aria-current on the button

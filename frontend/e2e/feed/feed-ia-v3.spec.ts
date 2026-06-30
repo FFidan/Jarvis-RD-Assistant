@@ -237,7 +237,7 @@ test.describe('F1 Feed IA v3 — mocked walk', () => {
   test('Library-led: library scope toggle is visible at surface=library', async ({ page }) => {
     await page.goto('/feed?surface=library');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('tablist', { name: /library corpus scope/i })).toBeVisible();
+    await expect(page.getByRole('tablist', { name: /library scope/i })).toBeVisible();
   });
 
   // ── Trash as §Status facet ─────────────────────────────────────────────

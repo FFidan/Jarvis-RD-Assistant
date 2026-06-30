@@ -65,5 +65,6 @@ export async function seedAuthedSession(page: Page): Promise<void> {
       version: 0,
     };
     window.sessionStorage.setItem('jarvis-auth', JSON.stringify(state));
+    window.localStorage.setItem('jarvis-onboarding-dismissed', 'true');
   }, apiKey);
 }

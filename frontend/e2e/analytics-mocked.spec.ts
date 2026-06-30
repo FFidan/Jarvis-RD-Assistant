@@ -168,19 +168,19 @@ test.describe('Analytics IA (mocked)', () => {
   });
 
   test('§ LIBRARY section marker is visible', async ({ page }) => {
-    // MarkerCaption renders "§ " + "LIBRARY" as sibling text nodes in a <span>
+    // MarkerCaption renders "LIBRARY" inside a span
     // Use locator with exact text content matching
-    await expect(page.locator('span').filter({ hasText: /^§ LIBRARY$/ })).toBeVisible();
+    await expect(page.locator('span').filter({ hasText: /^LIBRARY$/ })).toBeVisible();
   });
 
   test('§ REVIEWS section marker is visible', async ({ page }) => {
     // Use span filter to avoid matching "Reviews by Rating" card title
-    await expect(page.locator('span').filter({ hasText: /^§ REVIEWS$/ })).toBeVisible();
+    await expect(page.locator('span').filter({ hasText: /^REVIEWS$/ })).toBeVisible();
   });
 
   test('§ COST section marker is visible', async ({ page }) => {
     // Use span filter to avoid matching "LLM Cost Over Time"
-    await expect(page.locator('span').filter({ hasText: /^§ COST$/ })).toBeVisible();
+    await expect(page.locator('span').filter({ hasText: /^COST$/ })).toBeVisible();
   });
 
   test('all six existing chart card titles are visible (regression guard)', async ({ page }) => {

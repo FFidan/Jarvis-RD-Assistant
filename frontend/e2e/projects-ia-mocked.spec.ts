@@ -212,30 +212,29 @@ test.describe('Projects IA Redesign (mocked)', () => {
     await seedAuthedSession(page);
     await mockProjectsRoutes(page);
     await page.goto('/projects');
-    // Wait for the chapter rail to be visible
-    await expect(page.getByText(/§ CHAPTERS/i)).toBeVisible({ timeout: 10_000 });
+    // Wait for the project rail to be visible
+    await expect(page.getByText(/PROJECTS ·/i)).toBeVisible({ timeout: 10_000 });
   });
 
-  // ── 3.1 Chapter rail ────────────────────────────────────────────────────────
+  // ── 3.1 Project rail ────────────────────────────────────────────────────────
 
-  test('§ CHAPTERS header is visible in the rail', async ({ page }) => {
-    await expect(page.getByText(/§ CHAPTERS/i)).toBeVisible();
+  test('PROJECTS header is visible in the rail', async ({ page }) => {
+    await expect(page.getByText(/PROJECTS ·/i)).toBeVisible();
   });
 
-  test('roman numeral I is shown for the first chapter', async ({ page }) => {
-    // Scope to the font-mono span that ChapterRail renders for roman numerals.
-    // getByText('I') matches 28+ elements (letter 'I' appears in many words).
-    await expect(page.locator('span.font-mono').getByText('I', { exact: true }).first()).toBeVisible();
+  test('number 1 is shown for the first project', async ({ page }) => {
+    // Scope to the font-mono span that ChapterRail renders for index numbering.
+    await expect(page.locator('span.font-mono').getByText('1', { exact: true }).first()).toBeVisible();
   });
 
-  test('project name appears in the chapter rail', async ({ page }) => {
+  test('project name appears in the project rail', async ({ page }) => {
     await expect(page.getByText('RGS Thesis').first()).toBeVisible();
   });
 
   // ── 3.2 Status vocabulary ────────────────────────────────────────────────────
 
-  test('status chip shows translated label "reading" for active status', async ({ page }) => {
-    await expect(page.getByText('reading').first()).toBeVisible({ timeout: 8_000 });
+  test('status chip shows translated label "In progress" for active status', async ({ page }) => {
+    await expect(page.getByText('In progress').first()).toBeVisible({ timeout: 8_000 });
   });
 
   // ── 3.6 Counts in rail ────────────────────────────────────────────────────────
@@ -244,8 +243,8 @@ test.describe('Projects IA Redesign (mocked)', () => {
     await expect(page.getByText('1 papers')).toBeVisible({ timeout: 8_000 });
   });
 
-  test('chapter row shows open_question_count = 1 Qs', async ({ page }) => {
-    await expect(page.getByText('1 Qs')).toBeVisible({ timeout: 8_000 });
+  test('chapter row shows open_question_count = 1 Questions', async ({ page }) => {
+    await expect(page.getByText('1 Questions')).toBeVisible({ timeout: 8_000 });
   });
 
   // ── 3.7 Auto-select ────────────────────────────────────────────────────────────
@@ -259,24 +258,24 @@ test.describe('Projects IA Redesign (mocked)', () => {
 
   // ── 3.3 Document pane sections ────────────────────────────────────────────────
 
-  test('§ OPEN QUESTIONS section is visible in the document pane', async ({ page }) => {
-    await expect(page.getByText(/§ OPEN QUESTIONS/i)).toBeVisible({ timeout: 8_000 });
+  test('OPEN QUESTIONS section is visible in the document pane', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: /OPEN QUESTIONS/i })).toBeVisible({ timeout: 8_000 });
   });
 
-  test('§ RECENT ACTIVITY section is visible in the document pane', async ({ page }) => {
-    await expect(page.getByText(/§ RECENT ACTIVITY/i)).toBeVisible({ timeout: 8_000 });
+  test('RECENT ACTIVITY section is visible in the document pane', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: /RECENT ACTIVITY/i })).toBeVisible({ timeout: 8_000 });
   });
 
-  test('§ MILESTONES section is visible in the document pane', async ({ page }) => {
-    await expect(page.getByText(/§ MILESTONES/i)).toBeVisible({ timeout: 8_000 });
+  test('MILESTONES section is visible in the document pane', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: /MILESTONES/i })).toBeVisible({ timeout: 8_000 });
   });
 
-  test('§ TASKS section is visible in the document pane', async ({ page }) => {
-    await expect(page.getByText(/§ TASKS/i)).toBeVisible({ timeout: 8_000 });
+  test('TASKS section is visible in the document pane', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: /TASKS/i })).toBeVisible({ timeout: 8_000 });
   });
 
-  test('§ PAPERS section is visible in the document pane', async ({ page }) => {
-    await expect(page.getByText(/§ PAPERS/i)).toBeVisible({ timeout: 8_000 });
+  test('PAPERS section is visible in the document pane', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: /PAPERS/i })).toBeVisible({ timeout: 8_000 });
   });
 
   // ── § OPEN QUESTIONS content ──────────────────────────────────────────────────
@@ -288,8 +287,8 @@ test.describe('Projects IA Redesign (mocked)', () => {
     ).toBeVisible({ timeout: 8_000 });
   });
 
-  test('open questions section shows § OPEN QUESTIONS · 1 count', async ({ page }) => {
-    await expect(page.getByText(/§ OPEN QUESTIONS · 1/i)).toBeVisible({ timeout: 8_000 });
+  test('open questions section shows OPEN QUESTIONS · 1 count', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: /OPEN QUESTIONS · 1/i })).toBeVisible({ timeout: 8_000 });
   });
 
   test('add question inline: typing and submitting adds a new question', async ({ page }) => {
@@ -310,10 +309,10 @@ test.describe('Projects IA Redesign (mocked)', () => {
   });
 
   test('recent activity item shows paper title label', async ({ page }) => {
-    // Scope to § RECENT ACTIVITY section to avoid strict-mode: the same title also
-    // appears in the § PAPERS section below.
+    // Scope to RECENT ACTIVITY section to avoid strict-mode: the same title also
+    // appears in the PAPERS section below.
     await expect(
-      page.getByLabel('§ RECENT ACTIVITY').getByText('Test-time scaling of diffusion LMs'),
+      page.getByLabel(/RECENT ACTIVITY/i).getByText('Test-time scaling of diffusion LMs'),
     ).toBeVisible({ timeout: 8_000 });
   });
 
@@ -334,36 +333,37 @@ test.describe('Projects IA Redesign (mocked)', () => {
     await expect(page.getByText('Draft introduction')).toBeVisible({ timeout: 8_000 });
   });
 
-  test('seeded paper appears in § PAPERS section', async ({ page }) => {
-    // Scope to § PAPERS section to avoid strict-mode: the same title also
-    // appears in the § RECENT ACTIVITY section above.
+  test('seeded paper appears in PAPERS section', async ({ page }) => {
+    // Scope to PAPERS section to avoid strict-mode: the same title also
+    // appears in the RECENT ACTIVITY section above.
     await expect(
-      page.getByLabel(/§ PAPERS/).getByText('Test-time scaling of diffusion LMs'),
+      page.getByLabel(/PAPERS/i).getByText('Test-time scaling of diffusion LMs'),
     ).toBeVisible({ timeout: 8_000 });
   });
 
-  test('Add Milestone button is present in § MILESTONES section', async ({ page }) => {
+  test('Add Milestone button is present in MILESTONES section', async ({ page }) => {
     await expect(page.getByRole('button', { name: /add milestone/i })).toBeVisible({
       timeout: 8_000,
     });
   });
 
-  test('Add Task button is present in § TASKS section', async ({ page }) => {
+  test('Add Task button is present in TASKS section', async ({ page }) => {
     await expect(page.getByRole('button', { name: /add task/i })).toBeVisible({
       timeout: 8_000,
     });
   });
 
-  test('"Link a paper" search input is present in § PAPERS section', async ({ page }) => {
+  test('"Link a paper" search input is present in PAPERS section', async ({ page }) => {
     await expect(page.getByPlaceholder(/search papers/i)).toBeVisible({ timeout: 8_000 });
   });
 
-  test('New Chapter button is visible in rail footer', async ({ page }) => {
-    await expect(page.getByText(/new chapter/i)).toBeVisible({ timeout: 8_000 });
+  test('New Project button is visible in rail footer', async ({ page }) => {
+    // The button has text "New Project" but accessible name "Create project" due to aria-label
+    await expect(page.getByRole('button', { name: /create project/i })).toBeVisible({ timeout: 8_000 });
   });
 
-  test('Create Project dialog opens from New Chapter button', async ({ page }) => {
-    await page.getByText(/new chapter/i).click();
+  test('Create Project dialog opens from New Project button', async ({ page }) => {
+    await page.getByRole('button', { name: /create project/i }).click();
     await expect(page.getByRole('heading', { name: /create project/i })).toBeVisible({
       timeout: 5_000,
     });

@@ -156,7 +156,7 @@ test.describe('Learning Cards IA — review session', () => {
   });
 
   test('card shows deck name in eyebrow after decks load', async ({ page }) => {
-    await expect(page.getByText(/§ Card 1 · RGS THESIS/i)).toBeVisible({ timeout: 8000 });
+    await expect(page.getByText(/Card 1 · RGS THESIS/i)).toBeVisible({ timeout: 8000 });
   });
 
   test('card shows "last seen" in eyebrow', async ({ page }) => {
@@ -165,7 +165,7 @@ test.describe('Learning Cards IA — review session', () => {
 
   test('click to reveal shows § ANSWER section', async ({ page }) => {
     await page.getByText(/click to reveal answer/i).click();
-    await expect(page.getByText(/§ Answer/i)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/Answer/i)).toBeVisible({ timeout: 5000 });
     await expect(page.getByText('O(n log n) in the average case.')).toBeVisible();
   });
 

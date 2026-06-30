@@ -218,12 +218,12 @@ test.describe('My Day v5 redesign — smoke', () => {
     // mock). § Open threads always renders (empty affordance). EOD is the
     // shutdown ritual.
     const alwaysVisible = [
-      '§ Now',
-      "§ Today's intent",
-      '§ Projects',
-      '§ Open threads',
-      '§ Learning & focus',
-      '§ End of day',
+      'Now',
+      "Today's intent",
+      'Projects',
+      'Open threads',
+      'Learning & focus',
+      'End of day',
     ];
 
     for (const marker of alwaysVisible) {
@@ -241,10 +241,10 @@ test.describe('My Day v5 redesign — smoke', () => {
     await page.waitForTimeout(1_000);
 
     // TriageSection: returns null when actionItems.length === 0 && foundational.length === 0
-    await expect(page.locator('text="§ Triage"')).toHaveCount(0);
+    await expect(page.locator('text="Triage"')).toHaveCount(0);
 
     // TodaysPulseSection: returns null on 404 (cards.length <= 1)
-    await expect(page.locator('text="§ Today\'s pulse"')).toHaveCount(0);
+    await expect(page.locator('text="Today\'s pulse"')).toHaveCount(0);
   });
 
   // ── 3. Hero mode picker — Pulse #1 always shows; others conditional ──────
@@ -330,7 +330,7 @@ test.describe('My Day v5 redesign — smoke', () => {
     await page.goto('/my-day');
     await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
 
-    await expect(page.locator('text="§ Open threads"').first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('text="Open threads"').first()).toBeVisible({ timeout: 5_000 });
     await expect(page.getByRole('button', { name: /\+ new thread/i })).toBeVisible();
   });
 

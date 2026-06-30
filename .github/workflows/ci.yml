@@ -61,7 +61,7 @@ jobs:
       - name: Pyright (type check)
         # Resolves imports against the uv-synced .venv created above; pyrightconfig.json
         # pins basic mode + the services/lib include set (tests/scripts/frontend excluded).
-        run: npx --yes pyright@1.1.408
+        run: uv run npx --yes pyright@1.1.408
 
       - name: Test-shape check
         run: uv run python3 scripts/check-test-shape.py
@@ -302,7 +302,7 @@ jobs:
     # Promote to required after >=2 consecutive green e2e-mocked runs on main. Two edits required:
     #   1. Set `continue-on-error: false` on this job (line below).
     #   2. Add "e2e-mocked" to gate.needs (the list in the gate job below).
-    timeout-minutes: 15
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     # Run only after the frontend build succeeds so we know the bundle is healthy.
     needs: [frontend]
@@ -339,11 +339,12 @@ jobs:
             curl -sf http://127.0.0.1:3001/ > /dev/null 2>&1 && break
             sleep 1
           done
-          # Run mocked specs (no live backend required). Workers=1 to avoid Vite
-          # lazy-chunk race that intermittently fails citation/knowledge graph pages.
+          # Run mocked specs (no live backend required). Workers=2 to speed up E2E tests
+          # on 2-core runners (Vite preview serves a pre-built static bundle, so there is
+          # no dynamic compilation race).
           # Uses the test:e2e:mocked npm script which targets the explicit mocked spec list.
           PLAYWRIGHT_BASE_URL=http://127.0.0.1:3001 npm --prefix frontend run test:e2e:mocked -- \
-            --workers=1 \
+            --workers=2 \
             --reporter=line || rc=$?
           kill "$SERVER_PID" || true
           exit "${rc:-0}"
@@ -358,5 +359,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint-test, cross-user-isolation, contract-tests, frontend]
     steps:
-      - name: All required jobs passed
-        run: echo "lint-test + cross-user-isolation + contract-tests + frontend all green"
+      - name: Verify CI jobs
+        env:
+          LINT_TEST: ${{ needs.lint-test.result }}
+          CROSS_USER_ISOLATION: ${{ needs.cross-user-isolation.result }}
+          CONTRACT_TESTS: ${{ needs.contract-tests.result }}
+          FRONTEND: ${{ needs.frontend.result }}
+        run: |
+          fail=0
+          for pair in "lint-test=$LINT_TEST" "cross-user-isolation=$CROSS_USER_ISOLATION" \
+                      "contract-tests=$CONTRACT_TESTS" "frontend=$FRONTEND"; do
+            name="${pair%%=*}"; result="${pair##*=}"
+            if [ "$result" != "success" ]; then
+              echo "::error::required CI job '$name' did not succeed (result=$result)"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "CI gate: all required jobs are green."
+          exit "$fail"
