@@ -7,13 +7,13 @@
  *   - Ask page renders + submits question to the cross-paper RAG endpoint
  *
  * Uses page.route() to mock the backend so the spec works without Docker.
- * Uses seedAuthedSession() from e2e/helpers/setup.ts to bypass login.
+ * Seeds sessionStorage directly to bypass login.
  *
  * baseURL: http://127.0.0.1:3001 (set via PLAYWRIGHT_BASE_URL env var)
  */
 
 import { test, expect } from '@playwright/test';
-import { seedAuthedSession } from './helpers/setup';
+import { installMockedApiDefaults } from './helpers/setup';
 
 // ---------------------------------------------------------------------------
 // Route mocks
@@ -84,6 +84,7 @@ async function mockCommonEndpoints(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('jarvis-onboarding-dismissed', 'true');
   });
+  await installMockedApiDefaults(page);
 
   // Stack health — required for HealthDots
   await page.route('/api/health/stack', (route) =>
@@ -114,24 +115,7 @@ async function mockCommonEndpoints(page: Page) {
     route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
   );
 
-  // Catch-all API — return {} for everything except the routes handled above.
-  // NOTE: page.route() uses LIFO order (last registered = first matched), so this
-  // catch-all is checked first. Calling route.continue() for the already-handled
-  // routes lets Playwright fall through to the specific handlers registered above.
-  await page.route('/api/**', (route) => {
-    const url = route.request().url();
-    if (
-      url.includes('/api/health/stack') ||
-      url.includes('/api/auth/verify') ||
-      url.includes('/api/setup/status') ||
-      url.includes('/api/papers/feed') ||
-      url.includes('/api/topics')
-    ) {
-      route.continue();
-    } else {
-      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
-    }
-  });
+  // Shared defaults fail unexpected /api/** calls with a clear mocked-test error.
 }
 
 // ---------------------------------------------------------------------------
@@ -217,21 +201,6 @@ test.describe('Sidebar — admin user', () => {
     await page.route('/api/topics', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
     );
-    // Catch-all: continue for specifically-handled routes, {} for everything else.
-    await page.route('/api/**', (route) => {
-      const url = route.request().url();
-      if (
-        url.includes('/api/health/stack') ||
-        url.includes('/api/auth/verify') ||
-        url.includes('/api/setup/status') ||
-        url.includes('/api/papers/feed') ||
-        url.includes('/api/topics')
-      ) {
-        route.continue();
-      } else {
-        route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
-      }
-    });
 
     await page.goto('/');
   });
@@ -282,13 +251,8 @@ test.describe('Ask page (group Ⅳ)', () => {
   test.beforeEach(async ({ page }) => {
     await seedRegularSession(page);
 
-    // Register catch-all FIRST so that specific handlers registered below take
-    // priority (page.route uses LIFO — last registered = first checked).
-    await page.route('/api/**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
-    );
+    await installMockedApiDefaults(page);
 
-    // Specific handlers registered AFTER the catch-all take priority over it:
     await page.route('/api/health/stack', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(HEALTH_RESPONSE) }),
     );
@@ -368,22 +332,6 @@ test.describe('Regression — all routes still reachable', () => {
     await page.route('/api/topics', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
     );
-    // Catch-all: continue for specifically-handled routes (and health/stack
-    // which has no specific handler here — letting it network-error keeps
-    // HealthDots in its safe isError branch rather than crashing on {}).
-    await page.route('/api/**', (route) => {
-      const url = route.request().url();
-      if (
-        url.includes('/api/setup/status') ||
-        url.includes('/api/papers/feed') ||
-        url.includes('/api/topics') ||
-        url.includes('/api/health/stack')
-      ) {
-        route.continue();
-      } else {
-        route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
-      }
-    });
   });
 
   const routes = [

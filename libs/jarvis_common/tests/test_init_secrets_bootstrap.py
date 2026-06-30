@@ -21,6 +21,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "init-secrets.sh"
+SECRET_DIR_MODE = 0o700
+SECRET_FILE_MODE = 0o644
 
 # The "core" keys that ship as empty placeholders in .env.example and are
 # consumed by docker-compose.yml as `_FILE` Docker secrets.
@@ -59,6 +61,10 @@ def _count_lines(env_path: Path, key: str) -> int:
     return sum(1 for ln in env_path.read_text().splitlines() if ln.startswith(f"{key}="))
 
 
+def _mode(path: Path) -> int:
+    return path.stat().st_mode & 0o777
+
+
 def test_fills_empty_placeholders_and_writes_secret_files(tmp_path: Path) -> None:
     # Simulate `cp .env.example .env`: every core key present but EMPTY.
     _stage(tmp_path, "# core secrets\n" + "".join(f"{k}=\n" for k in CORE_KEYS))
@@ -66,12 +72,14 @@ def test_fills_empty_placeholders_and_writes_secret_files(tmp_path: Path) -> Non
     result = _run(tmp_path)
 
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert _mode(tmp_path / "secrets") == SECRET_DIR_MODE
     for key, filename in CORE_KEYS.items():
         secret_file = tmp_path / "secrets" / filename
         assert secret_file.exists() and secret_file.read_text().strip(), (
             f"{filename} missing/empty for placeholder key {key}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
+        assert _mode(secret_file) == SECRET_FILE_MODE
         # The placeholder must be filled IN PLACE — exactly one line, non-empty.
         assert _count_lines(tmp_path / ".env", key) == 1, (
             f"{key} appears more than once in .env (duplicate-append bug):\n"
@@ -86,6 +94,7 @@ def test_is_idempotent_and_preserves_existing_values(tmp_path: Path) -> None:
     assert first.returncode == 0, first.stderr
     pw1 = (tmp_path / "secrets" / "postgres_password.txt").read_text()
     cfg1 = (tmp_path / "secrets" / "jarvis_config_key.txt").read_text()
+    (tmp_path / "secrets" / "postgres_password.txt").chmod(0o600)
 
     second = _run(tmp_path)
     assert second.returncode == 0, second.stderr
@@ -94,5 +103,8 @@ def test_is_idempotent_and_preserves_existing_values(tmp_path: Path) -> None:
     # render every encrypted user_config row unreadable).
     assert (tmp_path / "secrets" / "postgres_password.txt").read_text() == pw1
     assert (tmp_path / "secrets" / "jarvis_config_key.txt").read_text() == cfg1
+    assert _mode(tmp_path / "secrets") == SECRET_DIR_MODE
+    assert _mode(tmp_path / "secrets" / "postgres_password.txt") == SECRET_FILE_MODE
+    assert _mode(tmp_path / "secrets" / "jarvis_config_key.txt") == SECRET_FILE_MODE
     for key in ("POSTGRES_PASSWORD", "JARVIS_CONFIG_KEY"):
         assert _count_lines(tmp_path / ".env", key) == 1, "duplicate KEY= line after re-run"

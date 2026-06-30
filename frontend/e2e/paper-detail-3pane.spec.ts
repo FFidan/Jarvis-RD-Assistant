@@ -15,7 +15,7 @@
  *  - Breadcrumb score: NOT rendered when summary has no recommendation_score
  */
 import { test, expect } from '@playwright/test';
-import { seedAuthedSession } from './helpers/setup';
+import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
 
 // ── Mock data ──────────────────────────────────────────────────────────────
 
@@ -115,6 +115,7 @@ const mockContradictions = {
 
 test.beforeEach(async ({ page }) => {
   await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
 
   // FirstRunGate — must return setup_completed: true or the wizard intercepts the page.
   await page.route('**/api/setup/status', async (route) => {

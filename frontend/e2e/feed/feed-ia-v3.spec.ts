@@ -7,7 +7,7 @@
  * Base URL: http://127.0.0.1:3001 (mocked — no live backend required)
  */
 import { test, expect } from '@playwright/test';
-import { seedAuthedSession } from '../helpers/setup';
+import { installMockedApiDefaults, seedAuthedSession } from '../helpers/setup';
 
 // ── shared stub data ───────────────────────────────────────────────────────
 
@@ -102,11 +102,6 @@ async function stubFeedRoutes(page: import('@playwright/test').Page) {
     localStorage.setItem('jarvis-onboarding-dismissed', 'true');
   });
 
-  // Register catch-all FIRST so specific handlers added below take priority (LIFO).
-  await page.route('/api/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
-  );
-
   // Auth verify — AppShell checks auth state on mount.
   await page.route('/api/auth/verify', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 1, email: 'test@example.com', role: 'user' }) }),
@@ -164,6 +159,7 @@ async function stubFeedRoutes(page: import('@playwright/test').Page) {
 test.describe('F1 Feed IA v3 — mocked walk', () => {
   test.beforeEach(async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await stubFeedRoutes(page);
   });
 

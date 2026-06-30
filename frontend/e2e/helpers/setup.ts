@@ -24,6 +24,112 @@ function authHeaders(): Record<string, string> {
   };
 }
 
+
+function jsonResponse(body: unknown, status = 200) {
+  return {
+    status,
+    contentType: 'application/json',
+    body: JSON.stringify(body),
+  };
+}
+
+const EMPTY_FEED_COUNTS = {
+  inbox: 0,
+  library: 0,
+  reading_list: 0,
+  reading: 0,
+  done: 0,
+  starred: 0,
+  trash: 0,
+  active: 0,
+  kept: 0,
+  all_non_trash: 0,
+  by_source: {},
+  by_topic: [],
+  untagged: 0,
+};
+
+const SETUP_STATUS = {
+  setup_completed: true,
+  models_ready: true,
+  models_downloading: [],
+  topics_count: 0,
+  telegram_configured: false,
+  telegram_paired: false,
+};
+
+/**
+ * Register common mocked API defaults for app-shell/background requests.
+ *
+ * Register this before spec-specific routes. Playwright runs matching handlers
+ * in reverse registration order, so later per-spec routes override these
+ * defaults. Any other /api/** request returns 501 to make missing mocks obvious.
+ */
+export async function installMockedApiDefaults(page: Page): Promise<void> {
+  await page.route('/api/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (method === 'GET' && path === '/api/setup/status') {
+      await route.fulfill(jsonResponse({ configured: true, setup_completed: true }));
+      return;
+    }
+    if (method === 'GET' && path === '/api/system/setup-status') {
+      await route.fulfill(jsonResponse(SETUP_STATUS));
+      return;
+    }
+    if (method === 'GET' && path === '/api/auth/verify') {
+      await route.fulfill(jsonResponse({ id: 1, email: 'test@example.com', role: 'user' }));
+      return;
+    }
+    if (method === 'GET' && path === '/api/logs/summary') {
+      await route.fulfill(jsonResponse({ by_level: {}, by_category: {}, total: 0 }));
+      return;
+    }
+    if (method === 'GET' && path === '/api/jobs') {
+      await route.fulfill(jsonResponse([]));
+      return;
+    }
+    if (method === 'GET' && path === '/api/topics') {
+      await route.fulfill(jsonResponse([]));
+      return;
+    }
+    if (method === 'GET' && path === '/api/papers/feed/counts') {
+      await route.fulfill(jsonResponse(EMPTY_FEED_COUNTS));
+      return;
+    }
+    if (method === 'GET' && path === '/api/papers/feed') {
+      await route.fulfill(jsonResponse({ papers: [], total: 0 }));
+      return;
+    }
+    if (method === 'GET' && /^\/api\/papers\/\d+\/highlights$/.test(path)) {
+      await route.fulfill(jsonResponse([]));
+      return;
+    }
+    if (method === 'GET' && /^\/api\/pdfs\/\d+$/.test(path)) {
+      await route.fulfill(jsonResponse({ detail: 'PDF not available in mocked e2e' }, 404));
+      return;
+    }
+    if (method === 'GET' && path.startsWith('/api/config/')) {
+      await route.fulfill(jsonResponse({ value: true }));
+      return;
+    }
+    if (method === 'GET' && path === '/api/health/stack') {
+      await route.fulfill(jsonResponse({ overall: 'ok', services: [], degradedCount: 0, downCount: 0 }));
+      return;
+    }
+
+    await route.fulfill(
+      jsonResponse(
+        { error: `Unexpected mocked API request: ${method} ${path}${url.search}` },
+        501,
+      ),
+    );
+  });
+}
+
 export async function forceSetupIncomplete(request: APIRequestContext): Promise<void> {
   const res = await request.put('/api/config/setup.completed', {
     headers: authHeaders(),

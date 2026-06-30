@@ -21,8 +21,31 @@ const sanitizeSchema = {
 // list). Extend it to pass data:image/* through so the img component override can
 // apply its own fine-grained regex check. data:image/* is XSS-safe because browsers
 // parse it as binary image data, not as HTML or script.
+const SAFE_MARKDOWN_IMAGE_SRC = /^(https?:|data:image\/(png|jpe?g|gif|webp|svg\+xml);)/i;
+
+function normalizedUrlSchemePrefix(url: string): string {
+  return url.trimStart().toLowerCase();
+}
+
+function isSafeMarkdownHref(href: string | undefined): href is string {
+  if (!href) return false;
+  const normalized = normalizedUrlSchemePrefix(href);
+  if (
+    normalized.startsWith('javascript:') ||
+    normalized.startsWith('vbscript:') ||
+    normalized.startsWith('data:')
+  ) {
+    return false;
+  }
+  return defaultUrlTransform(href) !== '';
+}
+
+function isSafeMarkdownImageSrc(src: string | undefined): src is string {
+  return typeof src === 'string' && SAFE_MARKDOWN_IMAGE_SRC.test(src.trimStart());
+}
+
 function urlTransform(url: string, key: string): string {
-  if (key === 'src' && /^data:image\//i.test(url)) return url;
+  if (key === 'src' && isSafeMarkdownImageSrc(url)) return url;
   return defaultUrlTransform(url);
 }
 
@@ -117,11 +140,7 @@ export function MarkdownContent({ children, className, unverifiedSentences }: Ma
         urlTransform={urlTransform}
         components={{
           a: ({ node: _node, href, children, ...props }) => {
-            const hrefLower = (href ?? '').toLowerCase().trimStart();
-            const isDangerous =
-              hrefLower.startsWith('javascript:') ||
-              (hrefLower.startsWith('data:') && !hrefLower.startsWith('data:image/'));
-            if (isDangerous) {
+            if (!isSafeMarkdownHref(href)) {
               return <span {...props}>{children}</span>;
             }
             return (
@@ -132,10 +151,7 @@ export function MarkdownContent({ children, className, unverifiedSentences }: Ma
           },
           img: ({ node: _node, src, alt, ...props }) => {
             // Allow only http/https and safe data:image/* URIs; reject everything else.
-            const safe =
-              typeof src === 'string' &&
-              /^(https?:|data:image\/(png|jpe?g|gif|webp|svg\+xml);)/i.test(src);
-            if (!safe) return null;
+            if (!isSafeMarkdownImageSrc(src)) return null;
             return <img src={src} alt={alt ?? ''} loading="lazy" {...props} />;
           },
           ...(hasUnverified

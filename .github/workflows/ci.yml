@@ -339,7 +339,9 @@ jobs:
             curl -sf http://127.0.0.1:3001/ > /dev/null 2>&1 && break
             sleep 1
           done
-          # Run mocked specs (no live backend required). Workers=2 to speed up E2E tests
+          # Run mocked specs against the static frontend only; any /api call not intercepted
+          # by Playwright should fail the spec rather than reaching a live backend.
+          # Workers=2 to speed up E2E tests
           # on 2-core runners (Vite preview serves a pre-built static bundle, so there is
           # no dynamic compilation race).
           # Uses the test:e2e:mocked npm script which targets the explicit mocked spec list.

@@ -8,7 +8,7 @@
  * Seed: two periods of daily_log data so deltas are non-zero.
  */
 import { test, expect } from '@playwright/test';
-import { seedAuthedSession } from './helpers/setup';
+import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
 
 // ── Seed data ────────────────────────────────────────────────────────────────
 
@@ -93,6 +93,7 @@ async function mockAnalyticsRoutes(page: import('@playwright/test').Page) {
 test.describe('Analytics IA (mocked)', () => {
   test.beforeEach(async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await mockAnalyticsRoutes(page);
     // Mock the setup config endpoint so the app doesn't block on setup gate
     await page.route('**/api/config/**', (route) =>

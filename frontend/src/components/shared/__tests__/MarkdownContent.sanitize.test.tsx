@@ -72,6 +72,30 @@ describe('MarkdownContent — XSS sanitization', () => {
     const img = container.querySelector('img');
     expect(img).toBeNull();
   });
+
+  it('blocks vbscript: hrefs regardless of casing', () => {
+    const { container } = render(<MarkdownContent>{'[click](VbScRiPt:msgbox(1))'}</MarkdownContent>);
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('blocks whitespace-prefixed javascript: hrefs', () => {
+    const { container } = render(<MarkdownContent>{'[click]( javascript:alert(1))'}</MarkdownContent>);
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('blocks non-image data: hrefs', () => {
+    const { container } = render(<MarkdownContent>{'[click](data:text/html,<h1>x</h1>)'}</MarkdownContent>);
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('keeps safe https links as external links', () => {
+    const { container } = render(<MarkdownContent>{'[safe](https://example.com)'}</MarkdownContent>);
+    const anchor = container.querySelector('a');
+    expect(anchor).not.toBeNull();
+    expect(anchor?.getAttribute('href')).toBe('https://example.com');
+    expect(anchor?.getAttribute('target')).toBe('_blank');
+    expect(anchor?.getAttribute('rel')).toBe('noopener noreferrer');
+  });
 });
 
 describe('MarkdownContent — LaTeX math rendering', () => {

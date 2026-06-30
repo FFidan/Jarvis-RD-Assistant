@@ -22,7 +22,7 @@
  */
 
 import { test, expect, type Page, type Route } from '@playwright/test';
-import { seedAuthedSession } from './helpers/setup';
+import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
 
 // ---------------------------------------------------------------------------
 // Reachability guard — skip gracefully if dashboard is not up
@@ -184,6 +184,7 @@ test.describe('My Day v5 redesign — smoke', () => {
     await skipIfUnreachable(page);
     // Seed auth before any navigation so Zustand hydrates correctly
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await installMyDayMocks(page);
   });
 
@@ -356,6 +357,7 @@ test.describe('dark mode toggle', () => {
   test.beforeEach(async ({ page }) => {
     await skipIfUnreachable(page);
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await installMyDayMocks(page);
   });
 

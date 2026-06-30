@@ -9,7 +9,7 @@
  * one activity item (added_paper), one milestone, one task.
  */
 import { test, expect } from '@playwright/test';
-import { seedAuthedSession } from './helpers/setup';
+import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
 
 // ── Seed data ─────────────────────────────────────────────────────────────────
 
@@ -210,6 +210,7 @@ async function mockProjectsRoutes(page: import('@playwright/test').Page) {
 test.describe('Projects IA Redesign (mocked)', () => {
   test.beforeEach(async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await mockProjectsRoutes(page);
     await page.goto('/projects');
     // Wait for the project rail to be visible

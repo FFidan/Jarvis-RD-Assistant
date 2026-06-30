@@ -19,7 +19,7 @@
  */
 
 import { test, expect, type Page, type Route } from '@playwright/test';
-import { seedAuthedSession } from './helpers/setup';
+import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -250,13 +250,8 @@ async function routeMyDaySupport(page: Page) {
     localStorage.setItem('jarvis-onboarding-dismissed', 'true');
   });
 
-  // Catch-all FIRST (lowest LIFO priority) — must be registered before
-  // routePulseToday (called after this function) so pulse wins.
-  await page.route('/api/**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
-  );
+  // Shared mocked defaults are registered by the caller before page-specific routes.
 
-  // Specific handlers registered after catch-all = higher LIFO priority:
 
   // Auth verify — AppShell checks auth state on mount.
   await page.route('/api/auth/verify', (route: Route) =>
@@ -315,6 +310,7 @@ test.describe('Feedback loop — negative feedback and Pulse L3 exclusion', () =
   test.beforeEach(async ({ page }) => {
     await skipIfUnreachable(page);
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     // FirstRunGate — must return setup_completed: true or the wizard intercepts all routes.
     await page.route('**/api/setup/status', async (route: Route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) });

@@ -27,7 +27,10 @@ warn() { printf '%s[WARN]%s  %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 command -v openssl >/dev/null 2>&1 \
   || { warn "openssl not found — cannot generate secrets."; exit 1; }
 
+SECRET_FILE_MODE=644
+
 mkdir -p secrets
+chmod 700 secrets
 [ -f .env ] || touch .env
 
 FAILED=0
@@ -110,13 +113,14 @@ sync_secret() {
   fi
   if [ ! -f "$file" ]; then
     printf '%s' "$value" > "$file"
-    chmod 600 "$file"
+    chmod "$SECRET_FILE_MODE" "$file"
     ok "${file} created."
   elif [ "$(tr -d '\r\n' < "$file")" != "$value" ]; then
     printf '%s' "$value" > "$file"
-    chmod 600 "$file"
+    chmod "$SECRET_FILE_MODE" "$file"
     ok "${file} synced to match ${key}."
   else
+    chmod "$SECRET_FILE_MODE" "$file"
     info "${file} already in sync."
   fi
 }

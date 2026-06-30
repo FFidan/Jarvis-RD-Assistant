@@ -10,7 +10,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
-import { seedAuthedSession } from './helpers/setup';
+import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -68,13 +68,6 @@ async function seedRoutes(page: Page, { dueNow = 5 }: { dueNow?: number } = {}) 
     localStorage.setItem('jarvis-onboarding-dismissed', 'true');
   });
 
-  // Register catch-all FIRST so specific handlers added below take priority (LIFO).
-  await page.route('/api/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
-  );
-
-  // Specific handlers (registered after catch-all = checked first due to LIFO):
-
   // Auth verify — AppShell checks auth state on mount.
   await page.route('/api/auth/verify', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 1, email: 'test@example.com', role: 'user' }) }),
@@ -128,6 +121,7 @@ async function seedRoutes(page: Page, { dueNow = 5 }: { dueNow?: number } = {}) 
 test.describe('Learning Cards IA — review session', () => {
   test.beforeEach(async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await seedRoutes(page);
     await page.goto('/cards');
   });
@@ -205,6 +199,7 @@ test.describe('Learning Cards IA — review session', () => {
 test.describe('Learning Cards IA — library navigation', () => {
   test('breadcrumb Flashcards link navigates to Library view', async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await seedRoutes(page);
     await page.goto('/cards');
     await expect(page.getByRole('button', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
@@ -214,6 +209,7 @@ test.describe('Learning Cards IA — library navigation', () => {
 
   test('Library view shows StatsHeader tiles', async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
     await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
@@ -224,6 +220,7 @@ test.describe('Learning Cards IA — library navigation', () => {
 
   test('Library view shows deck grid with deck names', async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
     await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
@@ -233,6 +230,7 @@ test.describe('Learning Cards IA — library navigation', () => {
 
   test('Library view shows Generate and New Card buttons', async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
     await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
@@ -242,6 +240,7 @@ test.describe('Learning Cards IA — library navigation', () => {
 
   test('deck with due cards shows "Start review" button', async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
     await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
@@ -251,6 +250,7 @@ test.describe('Learning Cards IA — library navigation', () => {
 
   test('StatsHeader NOT shown in review session mode', async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 5 });
     await page.goto('/cards');
     await expect(page.getByText(/all decks · session/i)).toBeVisible({ timeout: 8000 });
@@ -262,6 +262,7 @@ test.describe('Learning Cards IA — library navigation', () => {
 test.describe('Learning Cards IA — URL routing', () => {
   test('?mode=library shows Library view directly', async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 5 });
     await page.goto('/cards?mode=library');
     await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });
@@ -269,6 +270,7 @@ test.describe('Learning Cards IA — URL routing', () => {
 
   test('no-due-cards defaults to Library view', async ({ page }) => {
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     await seedRoutes(page, { dueNow: 0 });
     await page.goto('/cards');
     await expect(page.getByRole('heading', { name: /flashcards/i })).toBeVisible({ timeout: 8000 });

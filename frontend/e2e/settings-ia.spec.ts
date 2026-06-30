@@ -11,10 +11,10 @@
  *  - Default landing is Research / Topics.
  *
  * Uses page.route to mock API responses; no live backend required.
- * seedAuthedSession writes sessionStorage before first navigation.
+ * Test helpers write sessionStorage before first navigation.
  */
 import { test, expect, type Page } from '@playwright/test';
-import { seedAuthedSession } from './helpers/setup';
+import { installMockedApiDefaults } from './helpers/setup';
 
 const MOCK_ACCOUNT = {
   id: 1,
@@ -62,6 +62,7 @@ async function seedAdminSession(page: Page) {
 
 async function setupMocks(page: Page) {
   await seedAdminSession(page);
+  await installMockedApiDefaults(page);
 
   // SetupGate uses GET /api/system/setup-status (not /api/setup/status).
   // Mock both so neither gate redirects.

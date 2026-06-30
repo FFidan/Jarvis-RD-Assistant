@@ -17,7 +17,7 @@
  */
 
 import { test, expect, type Page, type Route } from '@playwright/test';
-import { seedAuthedSession } from './helpers/setup';
+import { installMockedApiDefaults, seedAuthedSession } from './helpers/setup';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -196,6 +196,7 @@ test.describe('Feed — full lifecycle smoke', () => {
   test.beforeEach(async ({ page }) => {
     await skipIfUnreachable(page);
     await seedAuthedSession(page);
+    await installMockedApiDefaults(page);
     // FirstRunGate — must return setup_completed: true or the wizard intercepts all routes.
     await page.route('**/api/setup/status', async (route: Route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) });
