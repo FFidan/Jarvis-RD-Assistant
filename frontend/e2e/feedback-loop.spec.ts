@@ -254,7 +254,7 @@ async function routeMyDaySupport(page: Page) {
 
 
   // Auth verify — AppShell checks auth state on mount.
-  await page.route('/api/auth/verify', (route: Route) =>
+  await page.route('**/api/auth/verify', (route: Route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 1, email: 'test@example.com', role: 'user' }) }),
   );
 
@@ -268,7 +268,7 @@ async function routeMyDaySupport(page: Page) {
   await page.route('**/api/papers/feed**', async (route: Route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: [], total: 0 }) });
   });
-  await page.route('/api/topics', async (route: Route) => {
+  await page.route('**/api/topics', async (route: Route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
   });
 
@@ -278,9 +278,9 @@ async function routeMyDaySupport(page: Page) {
   await page.route('**/api/nudges/**', async (route: Route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ nudges: [] }) });
   });
-  // Use /api/jobs* (not **/api/jobs**) — the ** prefix would also match Vite's
+  // Use /api/jobs* RegExp (not **/api/jobs**) — the ** prefix would also match Vite's
   // source module URL /src/lib/api/jobs.ts, causing a MIME-type mismatch crash.
-  await page.route('/api/jobs*', async (route: Route) => {
+  await page.route(/\/api\/jobs(\?|\/|$)/, async (route: Route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ jobs: [] }) });
   });
 }

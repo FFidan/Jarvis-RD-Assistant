@@ -79,6 +79,16 @@ def test_file_read_failure_raises_at_construction(monkeypatch):
         SecretsSettings()
 
 
+def test_file_read_failure_does_not_fall_back_to_env(monkeypatch):
+    _isolated_env(
+        monkeypatch,
+        JARVIS_API_KEY_FILE="/nonexistent/path/does/not/exist",
+        JARVIS_API_KEY="fallback-env-value",
+    )
+    with pytest.raises((RuntimeError, FileNotFoundError, OSError)):
+        SecretsSettings()
+
+
 # ---------------------------------------------------------------------------
 # smtp.* empty-string rejection
 #

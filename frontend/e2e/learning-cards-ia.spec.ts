@@ -108,10 +108,10 @@ async function seedRoutes(page: Page, { dueNow = 5 }: { dueNow?: number } = {}) 
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(REVIEW_RESPONSE) }),
   );
 
-  // Use /api/cards* (not **/api/cards**) — the ** prefix would also match Vite's
+  // Use /api/cards* RegExp (not **/api/cards**) — the ** prefix would also match Vite's
   // source module URL /src/lib/api/cards.ts, returning JSON for a JS module request
   // and crashing the page with a MIME-type error.
-  await page.route('/api/cards*', (route) =>
+  await page.route(/\/api\/cards(\?|\/|$)/, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
   );
 }

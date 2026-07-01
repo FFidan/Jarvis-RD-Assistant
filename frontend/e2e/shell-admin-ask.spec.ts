@@ -87,17 +87,17 @@ async function mockCommonEndpoints(page: Page) {
   await installMockedApiDefaults(page);
 
   // Stack health — required for HealthDots
-  await page.route('/api/health/stack', (route) =>
+  await page.route('**/api/health/stack', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(HEALTH_RESPONSE) }),
   );
 
   // Auth verify — required by app bootstrap
-  await page.route('/api/auth/verify', (route) =>
+  await page.route('**/api/auth/verify', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 1, email: 'test@example.com', role: 'user' }) }),
   );
 
   // FirstRunGate — must return setup_completed: true or the onboarding wizard renders.
-  await page.route('/api/setup/status', (route) =>
+  await page.route('**/api/setup/status', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: true, setup_completed: true }) }),
   );
 
@@ -105,13 +105,13 @@ async function mockCommonEndpoints(page: Page) {
   // which hits /api/papers/feed. Without a proper FeedResponse shape the component
   // does `feedQuery.data.papers.length` on an empty object and throws, causing the
   // top-level ErrorBoundary to replace the entire app with "Something went wrong".
-  await page.route('/api/papers/feed**', (route) =>
+  await page.route('**/api/papers/feed**', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: [], total: 0 }) }),
   );
 
   // Topics — OnboardingTour also calls fetchTopics (/api/topics) to check zeroTopics.
   // Returning an empty array matches the Topic[] type and avoids any length check issues.
-  await page.route('/api/topics', (route) =>
+  await page.route('**/api/topics', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
   );
 

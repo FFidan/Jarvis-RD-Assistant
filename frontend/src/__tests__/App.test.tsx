@@ -28,22 +28,24 @@ vi.mock('@/lib/api', async () => {
       nudge_count: 0,
       onboarding_stage: 'complete',
     }),
+    verifyMagicLink: vi.fn().mockResolvedValue({ id: 7, email: 'a@b.com', role: 'admin' }),
   };
 });
 
 // Mock fetch for auth store
 vi.stubGlobal('fetch', vi.fn());
 
+const api = await import('@/lib/api');
 const { App } = await import('@/App');
 const { useAuthStore } = await import('@/stores/auth-store');
 
-function renderApp() {
+function renderApp(initialEntries: string[] = ['/']) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={initialEntries}>
         <App />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -69,5 +71,15 @@ describe('App', () => {
     // renders a loading placeholder until the setup-status query resolves.
     const dashboards = await screen.findAllByText('Dashboard');
     expect(dashboards.length).toBeGreaterThanOrEqual(1);
+  });
+
+
+  it('keeps magic-link verification mounted while auth state flips', async () => {
+    useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    renderApp(['/auth/verify?token=route-flip-token']);
+
+    expect(await screen.findByText('Dashboard')).toBeInTheDocument();
+    expect(vi.mocked(api.verifyMagicLink)).toHaveBeenCalledWith('route-flip-token');
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
   });
 });

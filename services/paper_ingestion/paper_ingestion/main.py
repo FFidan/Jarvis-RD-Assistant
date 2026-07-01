@@ -298,7 +298,10 @@ _RECONCILE_FAILURE_STREAKS: dict[str, int] = {}
 # value once per process lifetime instead of every 30 s.
 _ALIAS_PLACEHOLDER_LOGGED: set[tuple[str, str]] = set()
 _EMBED_MISMATCH_WARNED: set[str] = set()
-_QDRANT_HEALTH_TIMEOUT_S = 2.0
+# Keep below jarvis_common.health._PROBE_TIMEOUT_S so Qdrant metadata slowness
+# is classified by _probe_qdrant as "unknown", not by the outer sweep as
+# degraded "timeout".
+_QDRANT_HEALTH_TIMEOUT_S = 4.0
 
 
 def _log_reconcile_failure(target: str) -> None:

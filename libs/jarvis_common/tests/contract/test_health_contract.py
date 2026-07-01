@@ -607,3 +607,34 @@ async def test_paper_ingestion_qdrant_probe_exception_degrades() -> None:
     request.app.state.qdrant_client = qdrant
 
     assert await pi_main._probe_qdrant(request) == "unavailable"
+
+
+async def test_paper_ingestion_qdrant_timeout_stays_within_outer_health_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qdrant metadata slowness reports unknown, not outer-sweep timeout."""
+    import asyncio
+
+    import jarvis_common.health as health
+    import paper_ingestion.main as pi_main
+
+    async def slow_probe(_collection_name: str) -> bool:
+        await asyncio.sleep(0.02)
+        return True
+
+    app = _wire_pi_app()
+    monkeypatch.setattr(health, "_PROBE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(pi_main, "_QDRANT_HEALTH_TIMEOUT_S", 0.01)
+    app.state.qdrant_client.collection_exists = AsyncMock(side_effect=slow_probe)
+    _clear_sweep_memo(app)
+
+    try:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/health/internal")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["checks"]["qdrant"] == "unknown"

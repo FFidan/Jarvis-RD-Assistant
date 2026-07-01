@@ -291,7 +291,7 @@ export function AdminSystemHealthPage() {
                 for local development — they flag settings that must be changed before a public
                 production deployment. See the{' '}
                 <a
-                  href="/docs/DEPLOYMENT/#production-readiness-check"
+                  href="https://ffidan.github.io/Jarvis-RD-Assistant/DEPLOYMENT/#production-readiness-check"
                   className="underline"
                   target="_blank"
                   rel="noopener noreferrer"
