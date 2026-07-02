@@ -153,7 +153,7 @@ async def test_push_paper_reads_zotero_config_for_owner_user():
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch(
-        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        "paper_ingestion.integrations._zotero_push._get_zotero_config",
         AsyncMock(return_value={"enabled": False}),
     ) as get_config:
         await push_paper_to_zotero(
@@ -215,7 +215,7 @@ async def test_poll_zotero_library_reads_config_for_polling_user():
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch(
-        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        "paper_ingestion.integrations._zotero_poll._get_zotero_config",
         AsyncMock(return_value={"enabled": False}),
     ) as get_config:
         result = await poll_zotero_library(pool, http, polling_user_id=42)
@@ -465,7 +465,7 @@ async def test_resync_delegates_force_repush():
     pool = MagicMock()
     http = AsyncMock(spec=httpx.AsyncClient)
     with patch(
-        "paper_ingestion.integrations.zotero_service.push_paper_to_zotero",
+        "paper_ingestion.integrations._zotero_push.push_paper_to_zotero",
         new=AsyncMock(),
     ) as mock_push:
         await resync_paper_to_zotero(paper_id=42, db_pool=pool, http_client=http, owner_user_id=5)
@@ -959,7 +959,7 @@ async def test_poll_multi_sync_advances_cursor_without_reenqueue(monkeypatch):
     items 21-25 and move the cursor forward. Guards against gating the enqueue on
     an analysis-completion marker (e.g. pdf_downloaded), which never flips for
     pdf-url-less Zotero papers and would re-enqueue every imported item forever."""
-    from paper_ingestion.integrations import zotero_service
+    from paper_ingestion.integrations import _zotero_poll
 
     items = [_zotero_item(key=f"ITEM{i:02d}", title=f"P{i}", doi="") for i in range(1, 26)]
 
@@ -975,10 +975,10 @@ async def test_poll_multi_sync_advances_cursor_without_reenqueue(monkeypatch):
         seen[ext] = pid
         return FakeRecord({"id": pid, "is_insert": True})
 
-    monkeypatch.setattr(zotero_service, "upsert_paper", _stateful_upsert)
-    monkeypatch.setattr(zotero_service, "add_to_library", AsyncMock())
-    monkeypatch.setattr(zotero_service, "_upsert_paper_user_state", AsyncMock())
-    monkeypatch.setattr(zotero_service, "_resolve_zotero_user_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(_zotero_poll, "upsert_paper", _stateful_upsert)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", AsyncMock())
+    monkeypatch.setattr(_zotero_poll, "_resolve_zotero_user_id", AsyncMock(return_value=None))
 
     # One uniform conn for every acquire: .fetch → config rows (for _get_zotero_config),
     # .execute → no-op (version persist). upsert/resolve/library/state are monkeypatched,
@@ -1024,7 +1024,7 @@ async def test_poll_multi_sync_advances_cursor_without_reenqueue(monkeypatch):
 async def test_doi_match_adds_paper_to_polling_users_library(monkeypatch):
     """A Zotero item whose DOI matches an existing corpus paper is added to the
     polling user's library and seeded to_read (not just item-key linked)."""
-    from paper_ingestion.integrations import zotero_service
+    from paper_ingestion.integrations import _zotero_poll
 
     add_library_calls: list[tuple] = []
     upsert_state_calls: list[tuple] = []
@@ -1035,8 +1035,8 @@ async def test_doi_match_adds_paper_to_polling_users_library(monkeypatch):
     async def _spy_upsert_state(conn, paper_id, user_id, *, state, starred, on_conflict):
         upsert_state_calls.append((paper_id, user_id, state, on_conflict))
 
-    monkeypatch.setattr(zotero_service, "add_to_library", _spy_add_to_library)
-    monkeypatch.setattr(zotero_service, "_upsert_paper_user_state", _spy_upsert_state)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", _spy_add_to_library)
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", _spy_upsert_state)
 
     # DOI lookup conn: fetchrow returns a row with existing zotero_item_key (skips key-update branch).
     doi_conn = _make_conn(
@@ -1077,7 +1077,7 @@ async def test_doi_match_with_malformed_url_links_without_validation(monkeypatch
     url validation. Building PaperCreate up-front would raise here and abort the
     whole poll, pinning the cursor and wedging every subsequent sync.
     """
-    from paper_ingestion.integrations import zotero_service
+    from paper_ingestion.integrations import _zotero_poll
 
     async def _spy_add_to_library(conn, *, user_id, paper_id, added_via):
         pass
@@ -1085,8 +1085,8 @@ async def test_doi_match_with_malformed_url_links_without_validation(monkeypatch
     async def _spy_upsert_state(conn, paper_id, user_id, *, state, starred, on_conflict):
         pass
 
-    monkeypatch.setattr(zotero_service, "add_to_library", _spy_add_to_library)
-    monkeypatch.setattr(zotero_service, "_upsert_paper_user_state", _spy_upsert_state)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", _spy_add_to_library)
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", _spy_upsert_state)
 
     doi_conn = _make_conn(
         fetchrow=FakeRecord({"id": 91, "zotero_item_key": "EXISTING", "discovered_by": 5})
@@ -1118,7 +1118,7 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
     (cursor stays at last_version so the batch retries), while a valid item in
     the same batch is still passed to _ingest_new_item.
     """
-    from paper_ingestion.integrations import zotero_service
+    from paper_ingestion.integrations import _zotero_poll
 
     enqueued_keys: list[str] = []
 
@@ -1126,7 +1126,7 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
         enqueued_keys.append(item_key)
         return True
 
-    monkeypatch.setattr(zotero_service, "_ingest_new_item", _spy_ingest)
+    monkeypatch.setattr(_zotero_poll, "_ingest_new_item", _spy_ingest)
 
     # Config conn only — _persist_poll_cursor is not called when cursor is pinned.
     pool = _make_poll_pool()
@@ -1154,14 +1154,14 @@ async def test_non_doi_malformed_item_does_not_stall_sync(monkeypatch):
 
 async def test_doi_match_no_polling_user_skips_library_link(monkeypatch):
     """When polling_user_id is None the DOI-match branch must not call add_to_library."""
-    from paper_ingestion.integrations import zotero_service
+    from paper_ingestion.integrations import _zotero_poll
 
     add_library_calls: list = []
 
     async def _spy_add_to_library(conn, *, user_id, paper_id, added_via):
         add_library_calls.append((user_id, paper_id))
 
-    monkeypatch.setattr(zotero_service, "add_to_library", _spy_add_to_library)
+    monkeypatch.setattr(_zotero_poll, "add_to_library", _spy_add_to_library)
 
     doi_conn = _make_conn(
         fetchrow=FakeRecord({"id": 55, "zotero_item_key": "KEY2", "discovered_by": 3})
@@ -1186,14 +1186,14 @@ async def test_doi_match_no_polling_user_skips_library_link(monkeypatch):
 async def test_poll_new_paper_none_user_skips_state_seed(monkeypatch):
     """The new-paper upsert branch must not seed paper_user_state when polling_user_id
     is None — a NULL user_id state row is an orphan (mirrors the DOI branch guard)."""
-    from paper_ingestion.integrations import zotero_service
+    from paper_ingestion.integrations import _zotero_poll
 
     state_calls: list = []
 
     async def _spy_state(conn, paper_id, user_id, *, state, starred, on_conflict):
         state_calls.append((paper_id, user_id, on_conflict))
 
-    monkeypatch.setattr(zotero_service, "_upsert_paper_user_state", _spy_state)
+    monkeypatch.setattr(_zotero_poll, "_upsert_paper_user_state", _spy_state)
 
     item = _zotero_item(key="NOUSER1", doi="")
     upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 12, "is_insert": True}))
@@ -1631,7 +1631,7 @@ async def test_poll_zotero_library_sets_source_type_zotero():
         mock_analyze_task.defer_async = AsyncMock()
         with patch.dict(task_registry._TASK_MAP, {"paper.analyze": mock_analyze_task}):
             with patch(
-                "paper_ingestion.integrations.zotero_service.upsert_paper",
+                "paper_ingestion.integrations._zotero_poll.upsert_paper",
                 side_effect=_fake_upsert,
             ):
                 result = await poll_zotero_library(db_pool=pool, http_client=http)
@@ -1659,7 +1659,7 @@ async def test_push_paper_to_zotero_handles_decrypt_error_silently(caplog):
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch(
-        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        "paper_ingestion.integrations._zotero_push._get_zotero_config",
         AsyncMock(side_effect=ZoteroConfigDecryptError("api_key")),
     ):
         with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
@@ -1683,7 +1683,7 @@ async def test_sync_annotations_for_paper_handles_decrypt_error(caplog):
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch(
-        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        "paper_ingestion.integrations._zotero_highlights._get_zotero_config",
         AsyncMock(side_effect=ZoteroConfigDecryptError("api_key")),
     ):
         with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
@@ -1703,7 +1703,7 @@ async def test_poll_zotero_library_handles_decrypt_error(caplog):
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch(
-        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        "paper_ingestion.integrations._zotero_poll._get_zotero_config",
         AsyncMock(side_effect=ZoteroConfigDecryptError("api_key")),
     ):
         with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
@@ -1940,7 +1940,7 @@ def _highlight_row(
 def _patch_page_sizes(sizes: dict[int, tuple[float, float]] | None = None):
     """Patch the off-disk page-size resolver with a fixed mapping."""
     return patch(
-        "paper_ingestion.integrations.zotero_service._get_page_sizes",
+        "paper_ingestion.integrations._zotero_highlights._get_page_sizes",
         AsyncMock(return_value=sizes if sizes is not None else {3: (612.0, 792.0)}),
     )
 
@@ -2259,7 +2259,7 @@ async def test_push_highlight_creates_and_uploads_attachment_when_absent(tmp_pat
     with (
         patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
         patch(
-            "paper_ingestion.integrations.zotero_service._paper_pdf_path",
+            "paper_ingestion.integrations._zotero_highlights._paper_pdf_path",
             return_value=pdf_path,
         ),
         _patch_page_sizes(),
@@ -2308,7 +2308,7 @@ async def test_push_highlight_quota_exceeded_maps_to_failure(tmp_path):
     with (
         patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client,
         patch(
-            "paper_ingestion.integrations.zotero_service._paper_pdf_path",
+            "paper_ingestion.integrations._zotero_highlights._paper_pdf_path",
             return_value=pdf_path,
         ),
     ):
@@ -2637,7 +2637,7 @@ async def test_push_highlights_job_allows_visible_not_owned_public_paper():
     sentinel = {"paper_id": 7, "status": "ok", "exported": 0}
 
     with patch(
-        "paper_ingestion.integrations.zotero_service.push_highlights_for_paper",
+        "paper_ingestion.integrations._zotero_jobs.push_highlights_for_paper",
         AsyncMock(return_value=sentinel),
     ) as mock_push:
         result = await _zotero_push_highlights_job(pool, http, {"paper_id": 7, "user_id": 42}, ctx)
@@ -2664,7 +2664,7 @@ async def test_push_highlights_job_404s_foreign_private_paper():
     ctx = AsyncMock()
 
     with patch(
-        "paper_ingestion.integrations.zotero_service.push_highlights_for_paper",
+        "paper_ingestion.integrations._zotero_jobs.push_highlights_for_paper",
         AsyncMock(),
     ) as mock_push:
         with pytest.raises(HTTPException) as exc_info:
@@ -2694,7 +2694,7 @@ async def test_push_highlights_job_single_user_skips_visibility_check():
             AsyncMock(),
         ) as mock_visible,
         patch(
-            "paper_ingestion.integrations.zotero_service.push_highlights_for_paper",
+            "paper_ingestion.integrations._zotero_jobs.push_highlights_for_paper",
             AsyncMock(return_value=sentinel),
         ) as mock_push,
     ):

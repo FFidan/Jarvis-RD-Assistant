@@ -19,7 +19,6 @@ while letting paper_ingestion express its rich init pipeline as
 """
 
 import asyncio
-import contextlib
 import dataclasses
 import logging
 import os
@@ -49,7 +48,6 @@ from jarvis_common.app_factory import (
 )
 from jarvis_common.auth import validate_runtime_config
 from jarvis_common.cached_transport import CachingTransport
-from jarvis_common.db_helpers import _ALIAS_MODELS
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 from jarvis_common.verify import QuoteVerifier
@@ -59,7 +57,6 @@ from qdrant_client import AsyncQdrantClient
 # Trigger source registration via imports
 import paper_ingestion.sources  # noqa: F401
 from paper_ingestion.config import get_paper_ingestion_settings
-from paper_ingestion.constants import FAST_MODEL_DEFAULT, SMART_MODEL_DEFAULT
 from paper_ingestion.deps import limiter
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.ingestion.embedding_config import (
@@ -68,6 +65,25 @@ from paper_ingestion.ingestion.embedding_config import (
     EMBEDDING_MODEL_NAME,
 )
 from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
+
+# Re-exported so `from paper_ingestion.main import <name>` keeps resolving after
+# the LiteLLM reconciler moved to paper_ingestion.litellm_reconciler. main.py
+# itself uses only _start/_shutdown (lifespan wiring); the rest are facade-only.
+from paper_ingestion.litellm_reconciler import (  # noqa: F401
+    _ALIAS_PLACEHOLDER_LOGGED,
+    _EMBED_MISMATCH_WARNED,
+    _LITELLM_RECONCILE_INTERVAL_SECONDS,
+    _LITELLM_ROLE_FALLBACKS,
+    _RECONCILE_FAILURE_STREAKS,
+    _RECONCILE_TERSE_EVERY_N,
+    _desired_model_for_role,
+    _litellm_model_reconciler_loop,
+    _log_reconcile_failure,
+    _mark_role_pending,
+    _reconcile_litellm_models_once,
+    _shutdown_litellm_reconciler,
+    _start_litellm_reconciler,
+)
 from paper_ingestion.migrations_runner import run_migrations
 from paper_ingestion.models import PaperSourceConfig, SourceType
 from paper_ingestion.pdf_processor import PDFProcessor
@@ -257,245 +273,10 @@ async def _refresh_telegram_username(app: FastAPI) -> None:
     await refresh_telegram_bot_username(app.state.db_pool, app.state.http_client)
 
 
-# ---------------------------------------------------------------------------
-# LiteLLM model reconciler — replaces the old boot-time "_rehydrate" pass.
-#
-# litellm/config.yaml deliberately carries NO smart/fast/smart-fallback aliases
-# (a YAML alias can never be deleted at runtime and would STACK with its DB
-# replacement). The reconciler therefore guarantees those deployments exist in
-# LiteLLM's admin DB: a persistent background loop runs one pass ~every 30 s
-# (matching LiteLLM's own DB-reconciler cadence), marking the affected roles in
-# ``llm.delivery_pending`` while undelivered so the UI shows an honest
-# "pending — applying automatically" pill instead of a phantom "applied".
-# A LiteLLM stuck DB-less (prisma migrate failed) stays visibly pending while
-# the loop keeps retrying — a loud, honest degradation instead of a silently
-# LLM-dead deployment.
-# ---------------------------------------------------------------------------
-
-_LITELLM_RECONCILE_INTERVAL_SECONDS = 30.0
-
-# Desired-model resolution, one-way precedence: user_config (Settings choice)
-# wins; else the setup-chosen .env value when the env var is present in this
-# process; else the static always-pulled default (OLLAMA_MODELS coherence).
-_LITELLM_ROLE_FALLBACKS: dict[str, tuple[str, str]] = {
-    "llm.smart_model": ("JARVIS_SMART_MODEL", SMART_MODEL_DEFAULT),
-    "llm.fast_model": ("JARVIS_FAST_MODEL", FAST_MODEL_DEFAULT),
-}
-
-# Transition-aware failure logging for the persistent reconciler. A degraded
-# LiteLLM would otherwise emit a full WARNING+traceback per role every 30 s
-# (~5,760 tracebacks/day). Policy: full traceback on the FIRST consecutive
-# failure per delivery target, then one terse WARNING every
-# _RECONCILE_TERSE_EVERY_N passes (~10 min at the 30 s cadence) while the
-# failure persists; the streak resets on success so the next distinct outage
-# logs a fresh traceback. The recovery transition stays the loop's
-# "all deployments reconciled" INFO.
-_RECONCILE_TERSE_EVERY_N = 20
-_RECONCILE_FAILURE_STREAKS: dict[str, int] = {}
-
-# One-shot anomaly logs: a stored bare-alias placeholder and a legacy
-# embed-model mismatch repeat identically on every pass — log each distinct
-# value once per process lifetime instead of every 30 s.
-_ALIAS_PLACEHOLDER_LOGGED: set[tuple[str, str]] = set()
-_EMBED_MISMATCH_WARNED: set[str] = set()
 # Keep below jarvis_common.health._PROBE_TIMEOUT_S so Qdrant metadata slowness
 # is classified by _probe_qdrant as "unknown", not by the outer sweep as
 # degraded "timeout".
 _QDRANT_HEALTH_TIMEOUT_S = 4.0
-
-
-def _log_reconcile_failure(target: str) -> None:
-    """Streak-aware delivery-failure logging (call from an ``except`` block)."""
-    streak = _RECONCILE_FAILURE_STREAKS.get(target, 0)
-    if streak == 0:
-        logger.warning(
-            "LiteLLM reconcile: could not deliver %s; will retry",
-            target,
-            exc_info=True,
-        )
-    elif streak % _RECONCILE_TERSE_EVERY_N == 0:
-        logger.warning(
-            "LiteLLM reconcile: still cannot deliver %s (%d consecutive failures); will retry",
-            target,
-            streak + 1,
-        )
-    _RECONCILE_FAILURE_STREAKS[target] = streak + 1
-
-
-async def _mark_role_pending(pool: Any, role: str, pending: bool) -> None:
-    """Best-effort llm.delivery_pending bookkeeping — never raises."""
-    from paper_ingestion.services.config_write import (  # noqa: PLC0415
-        _update_delivery_pending_roles,
-    )
-
-    try:
-        await _update_delivery_pending_roles(pool, roles={role}, pending=pending)
-    except Exception:
-        logger.warning(
-            "Could not update llm.delivery_pending for role %s during reconcile",
-            role,
-            exc_info=True,
-        )
-
-
-async def _desired_model_for_role(pool: Any, config_key: str) -> str:
-    """Resolve the model the *config_key* role should route (see precedence above)."""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL", config_key
-        )
-    if row is not None:
-        model_id = str(row["value"])
-        if model_id in _ALIAS_MODELS:
-            # Defense-in-depth: a stray re-seed could store the bare alias
-            # ("smart"); forwarding it would create ollama/smart → 404.
-            # Logged once per distinct value — this resolves every pass.
-            if (config_key, model_id) not in _ALIAS_PLACEHOLDER_LOGGED:
-                _ALIAS_PLACEHOLDER_LOGGED.add((config_key, model_id))
-                logger.info(
-                    "Ignoring stored value for %s: %r is an alias placeholder, not a model",
-                    config_key,
-                    model_id,
-                )
-        elif model_id:
-            return model_id
-    env_name, static_default = _LITELLM_ROLE_FALLBACKS[config_key]
-    return os.environ.get(env_name, "").strip() or static_default
-
-
-async def _reconcile_litellm_models_once(pool: Any) -> bool:
-    """One reconcile pass. Returns True when every delivery is verified.
-
-    Per-role failures are caught, logged, and marked pending — a pass never
-    raises for delivery errors, so the surrounding loop (and the lifespan)
-    survives LiteLLM still warming up or running DB-less.
-    """
-    from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
-        ROLE_TO_ALIAS,
-        _config_lock,
-        ensure_smart_fallback,
-        update_litellm_model,
-    )
-
-    machine_id = socket.gethostname()
-    all_ok = True
-    desired_by_key: dict[str, str] = {}
-    for config_key in _LITELLM_ROLE_FALLBACKS:
-        role = ROLE_TO_ALIAS[config_key]
-        try:
-            # _config_lock serializes against Settings PUT deliveries: an
-            # interleaved /model/new + /model/delete pair could delete a
-            # deployment a concurrent request just created. The row read sits
-            # INSIDE the lock so a racing PUT and this pass converge on the
-            # same committed value regardless of order.
-            async with _config_lock:
-                desired = await _desired_model_for_role(pool, config_key)
-                desired_by_key[config_key] = desired
-                await update_litellm_model(config_key, desired, db_pool=pool, machine_id=machine_id)
-        except Exception:
-            _log_reconcile_failure(config_key)
-            await _mark_role_pending(pool, role, True)
-            all_ok = False
-            continue
-        _RECONCILE_FAILURE_STREAKS.pop(config_key, None)
-        # Delivered (True) or already routing the committed model (False) —
-        # either way LiteLLM routes the desired model: clear any stale marker.
-        await _mark_role_pending(pool, role, False)
-
-    # smart-fallback: the real deployment group behind router_settings'
-    # smart → ["smart-fallback"] mapping (fast-tier model, timeout 120). Not a
-    # settings role, so it has no pending marker — just retry until it exists.
-    if all_ok:
-        try:
-            async with _config_lock:
-                await ensure_smart_fallback(
-                    desired_by_key["llm.fast_model"], db_pool=pool, machine_id=machine_id
-                )
-        except Exception:
-            _log_reconcile_failure("smart-fallback")
-            all_ok = False
-        else:
-            _RECONCILE_FAILURE_STREAKS.pop("smart-fallback", None)
-
-    # embed is dimension-locked and YAML-seeded — never delivered here. A
-    # stored llm.embed_model that differs from the static default needs a
-    # deliberate YAML edit + re-embed, so only warn (no pending: no automatic
-    # delivery is coming for it).
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT value FROM user_config WHERE key = 'llm.embed_model' AND user_id IS NULL"
-        )
-    if row is not None:
-        embed_model = str(row["value"])
-        if (
-            embed_model not in _ALIAS_MODELS
-            and embed_model != EMBEDDING_MODEL_NAME
-            # Legacy rows trip this on EVERY pass — warn once per distinct value.
-            and embed_model not in _EMBED_MISMATCH_WARNED
-        ):
-            _EMBED_MISMATCH_WARNED.add(embed_model)
-            logger.warning(
-                "llm.embed_model is %r but the embed alias is YAML-seeded with %r; "
-                "switching embedders requires editing litellm/config.yaml and re-embedding",
-                embed_model,
-                EMBEDDING_MODEL_NAME,
-            )
-
-    return all_ok
-
-
-async def _litellm_model_reconciler_loop(pool: Any) -> None:
-    """Persistent reconcile loop: one pass ~every 30 s for the process lifetime.
-
-    WHY persistent (not stop-on-first-success): a LiteLLM that later restarts
-    against an unreachable admin DB (prisma migrate WARN-and-continue) comes
-    back DB-less with ONLY the YAML models — i.e. with NO smart/fast
-    deployments at all, because the YAML is de-seeded — and a stopped loop
-    would leave the deployment LLM-dead until an operator restarts this
-    service. The ~30 s cadence matches LiteLLM's own DB reconciler; a
-    steady-state pass costs three cheap GETs that no-op on comparison. This
-    loop is also the re-convergence path for a delivered-but-uncommitted
-    settings write (PUT failed after /model/new succeeded): the next pass
-    routes LiteLLM back to the still-stored row.
-    """
-    reconciled_logged = False
-    while True:
-        try:
-            if await _reconcile_litellm_models_once(pool):
-                if not reconciled_logged:
-                    logger.info("LiteLLM model reconciler: all deployments reconciled")
-                    reconciled_logged = True
-            else:
-                reconciled_logged = False
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # Belt-and-braces: per-role errors are handled inside the pass;
-            # this catches infrastructure failures (e.g. DB pool teardown).
-            logger.warning(
-                "LiteLLM model reconciler pass failed unexpectedly; retrying",
-                exc_info=True,
-            )
-            reconciled_logged = False
-        await asyncio.sleep(_LITELLM_RECONCILE_INTERVAL_SECONDS)
-
-
-async def _start_litellm_reconciler(app: FastAPI) -> None:
-    """Start the persistent LiteLLM model reconciler as a background task."""
-    app.state.litellm_reconciler_task = asyncio.create_task(
-        _litellm_model_reconciler_loop(app.state.db_pool),
-        name="litellm_model_reconciler",
-    )
-
-
-async def _shutdown_litellm_reconciler(app: FastAPI) -> None:
-    """Cancel the reconciler task and await its termination (clean teardown)."""
-    task = getattr(app.state, "litellm_reconciler_task", None)
-    if task is None or task.done():
-        return
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
 
 
 async def _fetch_installed_ollama_models(app: FastAPI) -> list[dict[str, Any]]:
@@ -831,6 +612,8 @@ from paper_ingestion.routers import (  # noqa: E402
     settings,
     snapshots,
     system,
+    system_capabilities,
+    system_readiness,
     telegram,
     threads,
     topics,
@@ -885,6 +668,8 @@ app.include_router(pulse_router.router)
 app.include_router(zotero_router.router)
 app.include_router(telegram.router)
 app.include_router(system.router)
+app.include_router(system_readiness.router)
+app.include_router(system_capabilities.router)
 app.include_router(jobs.router)
 app.include_router(logs.router)
 app.include_router(audit_admin_router.router)

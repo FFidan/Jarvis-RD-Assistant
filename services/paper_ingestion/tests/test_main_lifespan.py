@@ -30,15 +30,15 @@ def _reset_reconciler_log_state():
     """The reconciler's transition-only logging keeps module-level state
     (failure streaks + once-per-value seen-sets) — clear it per test so the
     first-failure / first-anomaly log assertions are deterministic."""
-    from paper_ingestion import main as main_module
+    from paper_ingestion import litellm_reconciler
 
-    main_module._RECONCILE_FAILURE_STREAKS.clear()
-    main_module._ALIAS_PLACEHOLDER_LOGGED.clear()
-    main_module._EMBED_MISMATCH_WARNED.clear()
+    litellm_reconciler._RECONCILE_FAILURE_STREAKS.clear()
+    litellm_reconciler._ALIAS_PLACEHOLDER_LOGGED.clear()
+    litellm_reconciler._EMBED_MISMATCH_WARNED.clear()
     yield
-    main_module._RECONCILE_FAILURE_STREAKS.clear()
-    main_module._ALIAS_PLACEHOLDER_LOGGED.clear()
-    main_module._EMBED_MISMATCH_WARNED.clear()
+    litellm_reconciler._RECONCILE_FAILURE_STREAKS.clear()
+    litellm_reconciler._ALIAS_PLACEHOLDER_LOGGED.clear()
+    litellm_reconciler._EMBED_MISMATCH_WARNED.clear()
 
 
 @pytest.fixture()
@@ -983,10 +983,10 @@ async def test_reconcile_persistent_failure_logs_terse_heartbeat(
     """While a failure persists, a terse no-traceback WARNING fires every Nth pass."""
     import logging
 
-    from paper_ingestion import main as main_module
+    from paper_ingestion import litellm_reconciler
     from paper_ingestion.main import _reconcile_litellm_models_once
 
-    monkeypatch.setattr(main_module, "_RECONCILE_TERSE_EVERY_N", 2)
+    monkeypatch.setattr(litellm_reconciler, "_RECONCILE_TERSE_EVERY_N", 2)
     pool, conn = _make_pool()
     conn.fetchrow.return_value = None
 
@@ -1093,10 +1093,10 @@ async def test_reconciler_loop_is_persistent_across_success() -> None:
     mock_reconcile = AsyncMock(side_effect=[False, True, True])
     with (
         patch(
-            "paper_ingestion.main._reconcile_litellm_models_once",
+            "paper_ingestion.litellm_reconciler._reconcile_litellm_models_once",
             new=mock_reconcile,
         ),
-        patch("paper_ingestion.main.asyncio.sleep", new=_fake_sleep),
+        patch("paper_ingestion.litellm_reconciler.asyncio.sleep", new=_fake_sleep),
         pytest.raises(asyncio.CancelledError),
     ):
         await _litellm_model_reconciler_loop(MagicMock())
@@ -1126,7 +1126,7 @@ async def test_start_and_shutdown_reconciler_hooks_cancel_cleanly() -> None:
     app = FastAPI()
     app.state.db_pool = MagicMock()
     with patch(
-        "paper_ingestion.main._reconcile_litellm_models_once",
+        "paper_ingestion.litellm_reconciler._reconcile_litellm_models_once",
         new=_never_done,
     ):
         await _start_litellm_reconciler(app)
