@@ -2850,7 +2850,7 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 </code></pre></div>
 <p>Add <code>--apply</code> after the dry run validates every row. The script runs in a transaction and never logs plaintext or ciphertext.</p>
 <h3 id="docker-secrets">Docker Secrets<a class="headerlink" href="#docker-secrets" title="Permanent link">&para;</a></h3>
-<p>JARVIS supports Docker Secrets for sensitive credentials. Each is read from a file at runtime via a <code>_FILE</code>-suffixed env var, keeping plaintext out of the compose environment and shell history. Secrets live in <code>secrets/</code> at the repo root (gitignored); <code>setup.sh</code> creates and populates them on first run.</p>
+<p>JARVIS supports Docker Secrets for sensitive credentials. Each is read from a file at runtime via a <code>_FILE</code>-suffixed env var, keeping plaintext out of the compose environment and shell history. Secrets live in <code>secrets/</code> at the repo root (gitignored); <code>setup.sh</code> creates and populates them on first run. Each file is mode <code>644</code> inside a mode <code>700</code> <code>secrets/</code> directory: the owner-only directory keeps the files private on the host, while the world-readable file bit lets the non-root service containers read them through the compose bind mount.</p>
 <p><strong>Operator-provisioned secrets</strong> (create manually if not using <code>setup.sh</code>):</p>
 <table>
 <thead>
@@ -2917,7 +2917,7 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <code>langfuse_init_pk</code>, <code>langfuse_init_sk</code> — Langfuse SDK keys injected into app services. <code>langfuse_pg_password</code>, <code>langfuse_nextauth_secret</code>, <code>langfuse_salt</code> — internal Langfuse service credentials.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># To rotate a secret manually:</span>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nb">echo</span><span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;&lt;new-value&gt;&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>secrets/jarvis_api_key.txt
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>secrets/jarvis_api_key.txt
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>chmod<span class="w"> </span><span class="m">644</span><span class="w"> </span>secrets/jarvis_api_key.txt
 <a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>paper_ingestion<span class="w"> </span>learning_engine
 </code></pre></div>
 <h3 id="web-ui-configuration">Web UI configuration<a class="headerlink" href="#web-ui-configuration" title="Permanent link">&para;</a></h3>
@@ -2964,7 +2964,7 @@ refused — a <code>444</code> surfaces as a <code>502</code> through a proxy:</
 <p>Exposes JARVIS over an outbound tunnel — no inbound port needed. Edge TLS is terminated by Cloudflare.</p>
 <p><strong>Prerequisites:</strong> A Cloudflare account with a configured tunnel (<a href="https://one.dash.cloudflare.com/">Zero Trust dashboard</a>).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nb">echo</span><span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;&lt;your-tunnel-token&gt;&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>secrets/cloudflare_tunnel_token.txt
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>secrets/cloudflare_tunnel_token.txt
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>chmod<span class="w"> </span><span class="m">644</span><span class="w"> </span>secrets/cloudflare_tunnel_token.txt
 <a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>tunnel<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 <p><code>setup.sh</code> option 3 writes the token and brings the tunnel profile up automatically. The <code>cloudflared</code> container reads the token from <code>/run/secrets/cloudflare_tunnel_token</code>.</p>
