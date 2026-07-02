@@ -110,7 +110,7 @@ This mirrors the CI `lint-test` + `frontend` jobs end-to-end:
 | Step | What it runs |
 |---|---|
 | Guard: no tracked secrets | `bash scripts/check-no-tracked-secrets.sh` |
-| Guard: secret file permissions | `find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 600 {} \;` |
+| Guard: secret file permissions | `chmod 700 secrets` + `find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 644 {} \;` |
 | Dependency parity | `bash scripts/check-python-deps.sh` |
 | Lint | ruff + migrations-no-tx + no-jsonb-double-encode + no-unsafe-resolver |
 | Tach | module boundary check (`uv run tach check`) |

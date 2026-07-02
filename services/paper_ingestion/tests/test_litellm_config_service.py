@@ -935,3 +935,53 @@ async def test_parse_model_target_strips_latest_splits_cloud_and_validates():
 
     with pytest.raises(ValueError):
         _parse_model_target("../../etc/passwd")
+
+
+# ---------------------------------------------------------------------------
+# _key_fingerprint: PBKDF2-keyed delivery-change identity
+# ---------------------------------------------------------------------------
+
+
+def _fingerprint_with_secret(
+    monkeypatch: pytest.MonkeyPatch, api_key: str | None, secret: str | None
+) -> str:
+    """Compute _key_fingerprint with JARVIS_CONFIG_KEY set to *secret* (None = unset)."""
+    from jarvis_common.settings import get_secrets_settings
+
+    if secret is None:
+        monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
+        monkeypatch.delenv("JARVIS_CONFIG_KEY_FILE", raising=False)
+    else:
+        monkeypatch.setenv("JARVIS_CONFIG_KEY", secret)
+    get_secrets_settings.cache_clear()
+    return litellm_config_module._key_fingerprint(api_key)
+
+
+def test_key_fingerprint_differs_by_config_secret(monkeypatch):
+    """The same api_key keyed under two config secrets yields distinct fingerprints."""
+    fp_a = _fingerprint_with_secret(monkeypatch, "sk-provider-key", "secret-alpha")
+    fp_b = _fingerprint_with_secret(monkeypatch, "sk-provider-key", "secret-bravo")
+    assert fp_a != fp_b
+
+
+def test_key_fingerprint_stable_for_same_key_and_secret(monkeypatch):
+    """A fixed (api_key, secret) pair maps to a stable 16-hex-char fingerprint."""
+    fp_first = _fingerprint_with_secret(monkeypatch, "sk-provider-key", "secret-alpha")
+    fp_second = _fingerprint_with_secret(monkeypatch, "sk-provider-key", "secret-alpha")
+    assert fp_first == fp_second
+    assert len(fp_first) == 16
+    assert all(c in "0123456789abcdef" for c in fp_first)
+
+
+def test_key_fingerprint_stable_without_config_key(monkeypatch):
+    """No config secret (fallback salt) still yields a stable non-empty fingerprint."""
+    fp_first = _fingerprint_with_secret(monkeypatch, "sk-provider-key", None)
+    fp_second = _fingerprint_with_secret(monkeypatch, "sk-provider-key", None)
+    assert fp_first == fp_second
+    assert len(fp_first) == 16
+
+
+@pytest.mark.parametrize("empty", ["", None])
+def test_key_fingerprint_empty_for_missing_key(monkeypatch, empty):
+    """No api_key → empty fingerprint regardless of the configured secret."""
+    assert _fingerprint_with_secret(monkeypatch, empty, "secret-alpha") == ""

@@ -23,7 +23,7 @@ from jarvis_common import (
     current_user_id_strict_with_owner_override,
     get_current_user_id,
     log_audit,
-    require_admin,
+    require_admin_or_api_key,
 )
 from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.paper_state import trash_paper as _trash_paper
@@ -74,7 +74,7 @@ async def generate_pulse(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     current_uid: int = Depends(get_current_user_id),
-    _admin: None = Depends(require_admin),
+    _admin: None = Depends(require_admin_or_api_key),
 ) -> PulseGenerateResponse:
     """Enqueue an on-demand Pulse deck generation job.
 

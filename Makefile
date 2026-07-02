@@ -69,9 +69,10 @@ clean-venvs:
 typecheck:
 	npx --yes pyright@1.1.408
 
-## Enforce 0600 permissions on all secret files (run on first checkout and in CI)
+## Enforce the secrets contract: directory 700 (owner-only), files 644 (readable by non-root service containers via the compose bind mount)
 secure-secrets:
-	find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 600 {} \;
+	chmod 700 secrets
+	find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 644 {} \;
 
 ## Boot core Docker services with disposable secrets and probe health endpoints
 ci-smoke:

@@ -348,7 +348,7 @@ def test_parse_entry_rejects_non_allowlisted_pdf(caplog):
         paper = source._parse_entry(entry)
 
     assert paper.pdf_url is None
-    assert any("evil.example.com" in r.message for r in caplog.records)
+    assert any(r.args and r.args[0] == "evil.example.com" for r in caplog.records)
 
 
 def test_parse_entry_accepts_allowlisted_pdf():

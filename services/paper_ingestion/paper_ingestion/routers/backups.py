@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import require_admin, require_admin_or_api_key, verify_api_key
 from jarvis_common.migrations import required_code_schema
+from jarvis_common.paths import secure_path
 from pydantic import BaseModel, ValidationError
 
 from paper_ingestion.deps import limiter
@@ -222,7 +223,8 @@ def _read_manifest(ts: str) -> dict | None:
     metadata (filenames, sha256 hex, version ints) written by ``backup.sh``.
     """
     try:
-        return json.loads((_BACKUP_DIR / f"manifest_{ts}.json").read_text())
+        manifest_path = secure_path(_BACKUP_DIR, f"manifest_{ts}.json")
+        return json.loads(manifest_path.read_text())
     except (OSError, ValueError):
         return None
 
@@ -464,10 +466,13 @@ async def request_restore(req: RestoreRequest, request: Request) -> dict[str, st
         )
     # Reject a manifest that is present but unparseable: _read_manifest returns
     # None only on OSError/ValueError, so a present valid-but-no-schema_version
-    # manifest still restores — only a structurally broken one is blocked.
-    if (_BACKUP_DIR / f"manifest_{req.timestamp}.json").exists() and _read_manifest(
-        req.timestamp
-    ) is None:
+    # manifest still restores — only a structurally broken one is blocked. A path
+    # that escapes _BACKUP_DIR is treated exactly like an absent manifest.
+    try:
+        manifest_present = secure_path(_BACKUP_DIR, f"manifest_{req.timestamp}.json").exists()
+    except ValueError:
+        manifest_present = False
+    if manifest_present and _read_manifest(req.timestamp) is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="That backup's manifest is present but unreadable or incomplete",
@@ -571,7 +576,12 @@ async def restore_status(request: Request) -> RestoreStatus:
 async def download_backup(name: str, request: Request) -> FileResponse:
     """Stream a single backup archive to an authenticated admin."""
     _validate_name(name)
-    path = _BACKUP_DIR / name
+    try:
+        path = secure_path(_BACKUP_DIR, name)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path"
+        ) from None
     if not path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backup not found")
     await log_audit(

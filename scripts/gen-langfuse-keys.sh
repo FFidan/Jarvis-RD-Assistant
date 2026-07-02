@@ -53,7 +53,7 @@ if needs_regen secrets/langfuse_init_sk.txt "$BURNED_SK_PREFIX"; then
   printf 'sk-lf-%s' "$(rand)" > secrets/langfuse_init_sk.txt
   echo "gen sk"
 fi
-chmod 600 secrets/langfuse_init_pk.txt secrets/langfuse_init_sk.txt
+chmod 644 secrets/langfuse_init_pk.txt secrets/langfuse_init_sk.txt
 
 # ---------------------------------------------------------------------------
 # 2. Mirror values into .env so compose interpolates them without cat-in-env.

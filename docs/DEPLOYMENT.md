@@ -277,7 +277,7 @@ Add `--apply` after the dry run validates every row. The script runs in a transa
 
 ### Docker Secrets
 
-JARVIS supports Docker Secrets for sensitive credentials. Each is read from a file at runtime via a `_FILE`-suffixed env var, keeping plaintext out of the compose environment and shell history. Secrets live in `secrets/` at the repo root (gitignored); `setup.sh` creates and populates them on first run.
+JARVIS supports Docker Secrets for sensitive credentials. Each is read from a file at runtime via a `_FILE`-suffixed env var, keeping plaintext out of the compose environment and shell history. Secrets live in `secrets/` at the repo root (gitignored); `setup.sh` creates and populates them on first run. Each file is mode `644` inside a mode `700` `secrets/` directory: the owner-only directory keeps the files private on the host, while the world-readable file bit lets the non-root service containers read them through the compose bind mount.
 
 **Operator-provisioned secrets** (create manually if not using `setup.sh`):
 
@@ -300,7 +300,7 @@ JARVIS supports Docker Secrets for sensitive credentials. Each is read from a fi
 ```bash
 # To rotate a secret manually:
 echo -n '<new-value>' > secrets/jarvis_api_key.txt
-chmod 600 secrets/jarvis_api_key.txt
+chmod 644 secrets/jarvis_api_key.txt
 docker compose up -d paper_ingestion learning_engine
 ```
 
@@ -328,7 +328,7 @@ Exposes JARVIS over an outbound tunnel — no inbound port needed. Edge TLS is t
 
 ```bash
 echo -n '<your-tunnel-token>' > secrets/cloudflare_tunnel_token.txt
-chmod 600 secrets/cloudflare_tunnel_token.txt
+chmod 644 secrets/cloudflare_tunnel_token.txt
 docker compose --profile tunnel up -d
 ```
 

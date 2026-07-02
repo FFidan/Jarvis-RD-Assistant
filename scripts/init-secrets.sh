@@ -27,6 +27,9 @@ warn() { printf '%s[WARN]%s  %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 command -v openssl >/dev/null 2>&1 \
   || { warn "openssl not found — cannot generate secrets."; exit 1; }
 
+# Secret files are world-readable (644) so the non-root service containers can
+# read the compose bind-mounted files; the mode 700 secrets/ directory below
+# carries host confidentiality via owner-only traversal.
 SECRET_FILE_MODE=644
 
 mkdir -p secrets
@@ -199,7 +202,7 @@ sync_secret TELEGRAM_BOT_TOKEN telegram_bot_token.txt
 # correct sentinel for "Telegram not configured".
 if [ ! -f "secrets/telegram_bot_token.txt" ]; then
   : > secrets/telegram_bot_token.txt
-  chmod 600 secrets/telegram_bot_token.txt
+  chmod "$SECRET_FILE_MODE" secrets/telegram_bot_token.txt
   info "secrets/telegram_bot_token.txt created as empty placeholder (Telegram not configured)."
 fi
 

@@ -271,3 +271,40 @@ def test_code_max_migration_returns_floor_when_dir_missing(monkeypatch, tmp_path
     # instead of degrading to "unknown".
     monkeypatch.setenv("DB_MIGRATIONS_DIR", str(tmp_path / "does_not_exist"))
     assert bk._code_max_migration() == 101
+
+
+@pytest.mark.asyncio
+async def test_download_backup_serves_valid_archive(backup_dir, monkeypatch):
+    """A valid archive name still serves the file (200) through the secure_path guard.
+
+    Confirms the traversal-safe join does not reject a legitimate allowlisted
+    name — the happy path is unchanged after centralising the guard.
+    """
+    from unittest.mock import AsyncMock
+
+    import httpx
+    from httpx import ASGITransport
+    from jarvis_common.auth import require_admin, verify_api_key
+
+    from paper_ingestion.main import app
+
+    name = "jarvis_20260624_120000.sql.gz"
+    (backup_dir / name).write_bytes(b"J" * 10)
+
+    monkeypatch.setattr(bk, "log_audit", AsyncMock())
+    monkeypatch.setattr(app.state, "db_pool", AsyncMock(), raising=False)
+    app.state.limiter.enabled = False
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: None
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get(f"/api/admin/backups/{name}/download")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 200
+    assert resp.content == b"J" * 10

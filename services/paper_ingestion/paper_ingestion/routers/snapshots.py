@@ -1,11 +1,10 @@
 """PDF page snapshot serving endpoint."""
 
-from pathlib import Path
-
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from jarvis_common.auth import get_current_user_id
+from jarvis_common.paths import secure_path
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
@@ -53,12 +52,11 @@ async def get_snapshot(
     page : int
         Page number (1-indexed).
     """
-    base = Path(SNAPSHOT_STORAGE_PATH).resolve()
-    snapshot_path = (base / str(paper_id) / f"page_{page}.png").resolve()
-
     # Path traversal protection
-    if not snapshot_path.is_relative_to(base):
-        raise HTTPException(400, "Invalid path")
+    try:
+        snapshot_path = secure_path(SNAPSHOT_STORAGE_PATH, str(paper_id), f"page_{page}.png")
+    except ValueError:
+        raise HTTPException(400, "Invalid path") from None
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(

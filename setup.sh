@@ -621,6 +621,7 @@ CLOUDFLARE_TUNNEL_TOKEN=""
 USE_TUNNEL_PROFILE=0
 ACCESS_MODE_LABEL="localhost"
 CORS_ORIGINS_OVERRIDE=""
+CF_TRUST_OVERRIDE=""
 LAN_IP=""
 TUNNEL_HOSTNAME=""
 DASHBOARD_BIND_HOST="127.0.0.1"
@@ -778,7 +779,7 @@ if [ "$NON_INTERACTIVE" -eq 1 ]; then
     TELEGRAM_BOT_TOKEN="$_ni_tg"
     USE_TELEGRAM_PROFILE=1
     ok "Telegram token accepted (from environment)."
-    printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
+    printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 644 secrets/telegram_bot_token.txt
   else
     info "No valid TELEGRAM_BOT_TOKEN in environment — skipping Telegram bot."
     TELEGRAM_BOT_TOKEN=""
@@ -796,7 +797,7 @@ else
       TELEGRAM_BOT_TOKEN="$tg_try"
       USE_TELEGRAM_PROFILE=1
       ok "Telegram token accepted."
-      printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
+      printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 644 secrets/telegram_bot_token.txt
     else
       warn "That didn't look like a valid Telegram token (format: <digits>:<20+ chars>). Try again or press Enter to skip."
       tg_try2="$(prompt_telegram)"
@@ -804,7 +805,7 @@ else
         TELEGRAM_BOT_TOKEN="$tg_try2"
         USE_TELEGRAM_PROFILE=1
         ok "Telegram token accepted."
-        printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
+        printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 644 secrets/telegram_bot_token.txt
       else
         warn "Skipping Telegram — bot will not start. Add TELEGRAM_BOT_TOKEN to .env later to enable."
       fi
@@ -938,7 +939,7 @@ ok ".env written (mode 600)."
 # -----------------------------------------------------------------------------
 info "Writing Docker secret files via scripts/init-secrets.sh..."
 bash "${SCRIPT_DIR}/scripts/init-secrets.sh"
-ok "Docker secret files ready in secrets/ (mode 600)."
+ok "Docker secret files ready in secrets/ (files 644, directory 700)."
 
 # De-seed guard: switchable model aliases (smart/fast/smart-fallback) live in
 # LiteLLM's admin DB (delivered by the paper_ingestion boot reconciler), never
@@ -955,12 +956,13 @@ bash scripts/render-litellm-config.sh || warn "litellm config de-seed failed (co
 # (also invoked by `make up`); it is idempotent and self-rotates burned keys.
 info "Generating Langfuse init keypair via scripts/gen-langfuse-keys.sh..."
 bash "${SCRIPT_DIR}/scripts/gen-langfuse-keys.sh"
-ok "Langfuse init keypair ready in secrets/ (mode 600)."
+ok "Langfuse init keypair ready in secrets/ (files 644, directory 700)."
 
-# Enforce 600 mode on any secret files that already exist
+# Enforce the secrets contract (rationale at SECRET_FILE_MODE in scripts/init-secrets.sh)
 if [ -d secrets ]; then
-  find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 600 {} \;
-  ok "secrets/ files enforced to mode 600."
+  chmod 700 secrets
+  find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 644 {} \;
+  ok "secrets/ hardened: directory 700 (owner-only), files 644 (readable by service containers via bind mount)."
 fi
 
 # -----------------------------------------------------------------------------

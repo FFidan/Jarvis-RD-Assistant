@@ -1,11 +1,10 @@
 """Raw-PDF serving endpoint for the in-PDF annotation reader."""
 
-from pathlib import Path
-
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from jarvis_common.auth import get_current_user_id
+from jarvis_common.paths import secure_path
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
@@ -89,13 +88,12 @@ async def get_pdf(
     paper_id : int
         Paper ID.
     """
-    base = Path(PDF_STORAGE_PATH).resolve()
-    pdf_path = (base / f"{paper_id}.pdf").resolve()
-
     # Path-traversal guard, mirroring the snapshots endpoint. ``paper_id`` is
     # int-typed so this is unreachable in practice, but kept as defence-in-depth.
-    if not pdf_path.is_relative_to(base):
-        raise HTTPException(400, "Invalid path")
+    try:
+        pdf_path = secure_path(PDF_STORAGE_PATH, f"{paper_id}.pdf")
+    except ValueError:
+        raise HTTPException(400, "Invalid path") from None
 
     async with db_pool.acquire() as conn:
         await assert_paper_pdf_visible(conn, paper_id, user_id)

@@ -520,3 +520,47 @@ def test_process_pdf_async_response_model_no_500():
 
 
 # Cluster 4 deletion (2026-05-22): superseded by test_pi_pdf_contract.py (P-01..P-07).
+
+
+# ---------------------------------------------------------------------------
+# get_pdf raw-serving endpoint: secure_path traversal guard → 400
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_pdf_rejects_traversal_path(monkeypatch):
+    """GET /api/pdfs/{id} returns 400 when secure_path reports the path escapes storage.
+
+    ``paper_id`` is int-typed so a traversing segment cannot reach the handler
+    through routing; the router's ``secure_path`` reference is patched to raise
+    ValueError to exercise the guard's 400 branch end-to-end.
+    """
+    from httpx import ASGITransport
+
+    import paper_ingestion.routers.pdfs as pdfs_mod
+    from jarvis_common.auth import get_current_user_id, verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    pool, _ = make_pool_and_conn()
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[get_current_user_id] = lambda: 1
+
+    def _escape(*_args, **_kwargs):
+        raise ValueError("path escapes base directory")
+
+    monkeypatch.setattr(pdfs_mod, "secure_path", _escape)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/api/pdfs/1")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+    assert resp.status_code == 400

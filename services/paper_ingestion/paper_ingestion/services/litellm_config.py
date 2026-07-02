@@ -34,6 +34,7 @@ import httpx
 from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.db_helpers import invalidate_effective_num_ctx_cache
 from jarvis_common.llm_client import build_litellm_headers, get_litellm_config
+from jarvis_common.settings import get_secrets_settings
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from paper_ingestion.services.model_prefixes import is_local_ollama
@@ -179,10 +180,16 @@ def _parse_deployment(elem: Any) -> "LiteLLMDeployment | None":
 
 
 def _key_fingerprint(api_key: str | None) -> str:
-    """Short non-reversible identity for a delivered key ('' = no key)."""
+    """Short keyed, non-reversible identity for a delivered key ('' = no key).
+
+    Uncached by design: caching would retain the plaintext key material in the
+    cache keys, and at reconciler cadence the derivation cost is negligible.
+    """
     if not api_key:
         return ""
-    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
+    cfg = get_secrets_settings().jarvis_config_key
+    secret = cfg.get_secret_value().encode() if cfg else b"jarvis-key-fingerprint"
+    return hashlib.pbkdf2_hmac("sha256", api_key.encode(), secret, 10_000).hex()[:16]
 
 
 def _redact_secret(text: str, secret: Any) -> str:

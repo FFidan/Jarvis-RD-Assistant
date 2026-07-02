@@ -1291,9 +1291,9 @@ async def test_pulse_generate_user_id_threading_deck_is_user_scoped(
     )
 
 
-# POST /api/pulse/generate: non-admin caller is rejected with 403
-# Verified: routers/pulse.py generate_pulse — Depends(require_admin)
-# Verified: libs/jarvis_common/jarvis_common/auth.py:206 (require_admin → 403)
+# POST /api/pulse/generate: non-admin browser caller is rejected with 403
+# Verified: routers/pulse.py generate_pulse — Depends(require_admin_or_api_key)
+# Verified: libs/jarvis_common/jarvis_common/auth.py:281-294 (non-admin session → 403)
 
 
 async def test_pulse_generate_non_admin_returns_403(
@@ -1303,7 +1303,7 @@ async def test_pulse_generate_non_admin_returns_403(
 ):
     """POST /api/pulse/generate as a non-admin browser user returns 403.
 
-    The contract_two_users fixture seeds role='user'; the admin gate must fire
+    The contract_two_users fixture seeds role='user'; the auth gate must fire
     before any advisory-lock probe or job enqueue.
     """
     async with _client(_pi_pulse_app, contract_two_users.cookie_b) as c:
@@ -1311,6 +1311,44 @@ async def test_pulse_generate_non_admin_returns_403(
 
     assert resp.status_code == 403, (
         f"Non-admin POST /api/pulse/generate must be 403; got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+# POST /api/pulse/generate: ops API-key caller (no admin session) passes the auth gate
+# Verified: routers/pulse.py generate_pulse — Depends(require_admin_or_api_key)
+# Verified: libs/jarvis_common/jarvis_common/auth.py:281-294 (session role absent → admitted)
+
+
+async def test_pulse_generate_accepts_api_key_caller_without_admin_session(
+    _pi_pulse_app,
+    _configure_api_key,
+    contract_two_users,
+):
+    """POST /api/pulse/generate must not 401/403 an ops API-key caller.
+
+    The bot and cron reach this endpoint with an API key and no browser session,
+    so request.state.user_role is absent. The gate must be require_admin_or_api_key,
+    which admits a session-less ops caller; require_admin rejected it with 403.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from jarvis_common import get_current_user_id
+    from jarvis_common.task_registry import _TASK_MAP
+
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+
+    _pi_pulse_app.dependency_overrides[get_current_user_id] = lambda: contract_two_users.user_a_id
+    try:
+        with patch.dict(_TASK_MAP, {"pulse.generate": fake_task}):
+            async with _client(_pi_pulse_app, None) as c:
+                resp = await c.post("/api/pulse/generate")
+    finally:
+        _pi_pulse_app.dependency_overrides.pop(get_current_user_id, None)
+
+    assert resp.status_code not in (401, 403), (
+        f"Session-less ops API-key caller must pass the auth gate on "
+        f"POST /api/pulse/generate; got {resp.status_code}: {resp.text[:300]}"
     )
 
 

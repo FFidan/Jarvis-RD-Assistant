@@ -17,6 +17,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 import pypdfium2 as pdfium  # page snapshot generation only; text extraction uses Docling
+from jarvis_common.paths import secure_path
 from jarvis_common.settings import get_core_settings
 
 from paper_ingestion.config import ALLOWED_PDF_DOMAINS, get_paper_ingestion_settings
@@ -61,7 +62,11 @@ def check_pdf_path_safe(pdf_path: Path, storage: Path | str = _STORAGE_DEFAULT) 
     """
     if storage is _STORAGE_DEFAULT:
         storage = PDF_STORAGE_PATH
-    return pdf_path.resolve().is_relative_to(Path(storage).resolve())
+    try:
+        secure_path(storage, str(pdf_path))
+    except ValueError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------

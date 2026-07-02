@@ -3,27 +3,28 @@
 These files contain credentials mounted into containers via Docker Secrets.
 They are NOT checked into git.
 
-**All secret files MUST be mode 600 to prevent accidental world-readability.** Use the commands below or run `chmod 600 secrets/*.txt` after creating them.
+**Secret files use mode 644 inside the mode 700 `secrets/` directory.** The owner-only directory keeps the files private on the host; the file read bit lets the non-root service containers read them through the compose bind mount. Setting files to 600 makes the services crash on startup with a permission error. Use the commands below or run `chmod 700 secrets && chmod 644 secrets/*.txt` after creating them.
 
 ## Setup
 
 Create one file per secret before running `docker compose up`:
 
 ```bash
-printf "%s" "your-postgres-password" > secrets/postgres_password.txt && chmod 600 secrets/postgres_password.txt
-printf "%s" "your-litellm-master-key" > secrets/litellm_master_key.txt && chmod 600 secrets/litellm_master_key.txt
-printf "%s" "your-jarvis-api-key"    > secrets/jarvis_api_key.txt && chmod 600 secrets/jarvis_api_key.txt
-printf "%s" "your-telegram-token"    > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
-printf "%s" "your-qdrant-api-key"    > secrets/qdrant_api_key.txt && chmod 600 secrets/qdrant_api_key.txt
+printf "%s" "your-postgres-password" > secrets/postgres_password.txt && chmod 644 secrets/postgres_password.txt
+printf "%s" "your-litellm-master-key" > secrets/litellm_master_key.txt && chmod 644 secrets/litellm_master_key.txt
+printf "%s" "your-jarvis-api-key"    > secrets/jarvis_api_key.txt && chmod 644 secrets/jarvis_api_key.txt
+printf "%s" "your-telegram-token"    > secrets/telegram_bot_token.txt && chmod 644 secrets/telegram_bot_token.txt
+printf "%s" "your-qdrant-api-key"    > secrets/qdrant_api_key.txt && chmod 644 secrets/qdrant_api_key.txt
 # jarvis_config_key.txt must be a Fernet key — generate one with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-printf "%s" "your-fernet-key-base64url=" > secrets/jarvis_config_key.txt && chmod 600 secrets/jarvis_config_key.txt
+printf "%s" "your-fernet-key-base64url=" > secrets/jarvis_config_key.txt && chmod 644 secrets/jarvis_config_key.txt
 ```
 
 Alternatively, batch chmod after creation:
 
 ```bash
-chmod 600 secrets/*.txt
+chmod 700 secrets
+chmod 644 secrets/*.txt
 ```
 
 ## Files
@@ -42,16 +43,17 @@ chmod 600 secrets/*.txt
 
 ## Mode Bits Reminder
 
-**Every secret file must have mode 600** to prevent accidental world-readability. Verify with:
+**Every secret file must have mode 644, and the `secrets/` directory mode 700.** Verify with:
 
 ```bash
 ls -la secrets/*.txt
 ```
 
-All files should show `-rw-------` (mode 600). If any are world-readable, fix them:
+All files should show `-rw-r--r--` (mode 644) and the directory `drwx------` (mode 700). If they differ, fix them:
 
 ```bash
-chmod 600 secrets/*.txt
+chmod 700 secrets
+chmod 644 secrets/*.txt
 ```
 
 ## Langfuse Init Keypair

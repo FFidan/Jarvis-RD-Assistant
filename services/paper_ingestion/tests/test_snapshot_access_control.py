@@ -4,10 +4,8 @@ Coverage:
   (a) Tenant B gets 404 for tenant A's uploaded/local paper snapshot.
   (b) A public-source paper snapshot is still served to a non-owner (D4).
   (c) Unknown paper_id returns opaque 404 (no existence oracle).
-  (d) Path-traversal guard: is_relative_to check blocks escaping paths.
+  (d) Path-traversal guard: secure_path blocks escaping paths (400).
 """
-
-import pathlib
 
 import httpx
 import pytest
@@ -208,22 +206,25 @@ async def test_unknown_paper_id_returns_404(_snap_app):
 
 
 async def test_path_traversal_guard_still_active(_snap_app, monkeypatch):
-    """is_relative_to guard returns HTTP 400 when resolved path escapes storage root.
+    """secure_path guard returns HTTP 400 when the resolved path escapes storage root.
 
     The production guard is:
-        if not snapshot_path.is_relative_to(base):
+        try:
+            snapshot_path = secure_path(SNAPSHOT_STORAGE_PATH, str(paper_id), ...)
+        except ValueError:
             raise HTTPException(400, "Invalid path")
 
     Since paper_id and page are typed ``int``, FastAPI rejects non-numeric path
     segments before the handler runs, so traversal can only originate from a
-    compromised storage path or future refactor.  We monkeypatch
-    ``pathlib.Path.is_relative_to`` to return ``False`` to directly exercise
-    the guard's 400 branch without relying on filesystem layout.
+    compromised storage path or future refactor.  We monkeypatch the router's
+    ``secure_path`` reference to raise ``ValueError`` to directly exercise the
+    guard's 400 branch without relying on filesystem layout.
 
-    Non-tautology guarantee: removing the ``is_relative_to`` guard from the
+    Non-tautology guarantee: removing the ``secure_path`` guard from the
     production handler would cause this test to receive 200 (file found) or 404
     (file missing) instead of 400, so the assertion fails.
     """
+    import paper_ingestion.routers.snapshots as snap_mod
     from jarvis_common.auth import get_current_user_id
 
     app, conn = _snap_app
@@ -231,8 +232,10 @@ async def test_path_traversal_guard_still_active(_snap_app, monkeypatch):
     # Use a public-source paper so the DB scoping gate does not fire first.
     conn.fetchrow.return_value = _paper_row("arxiv", in_library=False)
 
-    # Force is_relative_to to report that the resolved path escapes the base.
-    monkeypatch.setattr(pathlib.Path, "is_relative_to", lambda self, *args: False)
+    def _escape(*_args, **_kwargs):
+        raise ValueError("path escapes base directory")
+
+    monkeypatch.setattr(snap_mod, "secure_path", _escape)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

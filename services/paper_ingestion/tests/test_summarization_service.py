@@ -1372,3 +1372,93 @@ async def test_condense_level_cap_warns_but_still_returns_reduce_summary(monkeyp
     assert conn_phase2.fetchrow.call_args.args[2] == "capped brief"
     # A truncation/cap warning fired (either the level cap or the regroup floor).
     assert any("truncated" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Snapshot linking for verified findings
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_link_harness(llm_output: SummarizationOutput):
+    """Pool, capture-dict, and verifier that marks every finding verified."""
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = [_chunk_row()]
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = _stored_row()
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    captured: dict = {}
+
+    def _verify(findings, full_text, chunks):
+        captured["findings"] = findings
+        for f in findings:
+            f.verified = True
+        return SimpleNamespace(
+            total_findings=len(findings), verified_count=len(findings), confidence=Confidence.HIGH
+        )
+
+    verifier = MagicMock()
+    verifier.verify_findings.side_effect = _verify
+    return pool, captured, verifier
+
+
+@pytest.mark.asyncio
+async def test_verified_finding_links_relative_snapshot_path():
+    """A verified finding with a positive page number links a base-relative snapshot path."""
+    llm_output = SummarizationOutput(
+        tldr="A good paper",
+        summary_brief="Brief summary",
+        summary_detailed="Detailed summary",
+        key_findings=[KeyFindingOutput(finding="F", quote="Q", page_number=3)],
+    )
+    pool, captured, verifier = _snapshot_link_harness(llm_output)
+
+    patch_ctx, _llm_mock = _patched_call_llm(return_value=llm_output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+        )
+
+    assert captured["findings"][0].snapshot_path == "7/page_3.png"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_link_skipped_when_candidate_escapes_base(monkeypatch):
+    """A snapshot candidate rejected by the traversal guard is skipped, never linked."""
+    llm_output = SummarizationOutput(
+        tldr="A good paper",
+        summary_brief="Brief summary",
+        summary_detailed="Detailed summary",
+        key_findings=[KeyFindingOutput(finding="F", quote="Q", page_number=3)],
+    )
+    pool, captured, verifier = _snapshot_link_harness(llm_output)
+
+    def _reject(*args, **kwargs):
+        raise ValueError("path escapes base directory")
+
+    monkeypatch.setattr(summarization, "secure_path", _reject)
+
+    patch_ctx, _llm_mock = _patched_call_llm(return_value=llm_output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            verifier=verifier,
+            embedder=MagicMock(),
+        )
+
+    assert captured["findings"][0].snapshot_path is None

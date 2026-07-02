@@ -21,6 +21,7 @@ from jarvis_common.llm_client import (
     call_llm_structured,
     observe,
 )
+from jarvis_common.paths import secure_path
 from jarvis_common.prompt_safety import max_input_chars, safe_for_prompt, wrap_delimited
 from jarvis_common.text_windows import chunk_windows
 from jarvis_common.verify import Confidence as QuoteConfidence
@@ -724,9 +725,11 @@ async def generate_paper_summary(
     snapshot_base_path = Path(snapshot_base).resolve()
     for f in verified_findings:
         if isinstance(f.page_number, int) and f.page_number > 0:
-            candidate = snapshot_base_path / str(paper_id) / f"page_{f.page_number}.png"
-            if candidate.resolve().is_relative_to(snapshot_base_path):
-                f.snapshot_path = str(candidate.relative_to(snapshot_base_path))
+            try:
+                candidate = secure_path(snapshot_base, str(paper_id), f"page_{f.page_number}.png")
+            except ValueError:
+                continue
+            f.snapshot_path = str(candidate.relative_to(snapshot_base_path))
 
     # Verification failure drops the findings but keeps the LLM's own
     # brief/detailed — the UI labels them "LLM-generated"; confidence LOW +
