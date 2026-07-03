@@ -93,9 +93,17 @@ export function DeckBrowser({ selectedDeckId, onSelectDeck, onStartReview }: Dec
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {decks.map((deck) => (
-            <button
+            <div
               key={deck.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectDeck(deck.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelectDeck(deck.id);
+                }
+              }}
               className={cn(
                 'flex flex-col items-start rounded-lg border p-4 text-left transition-colors hover:bg-accent',
                 selectedDeckId === deck.id && 'bg-accent border-primary',
@@ -147,7 +155,7 @@ export function DeckBrowser({ selectedDeckId, onSelectDeck, onStartReview }: Dec
               <p className="text-xs text-muted-foreground mt-2">
                 {deck.card_count} card{deck.card_count !== 1 ? 's' : ''}
               </p>
-            </button>
+            </div>
           ))}
         </div>
       )}

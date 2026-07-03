@@ -214,6 +214,54 @@ async def _probe_ollama() -> tuple[bool, list[str]]:
     return result
 
 
+async def _fetch_litellm_deployments_safe() -> list[Any] | None:
+    """Fetch LiteLLM deployments for the model-warnings probe; None on failure."""
+    try:
+        from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
+            get_litellm_deployments,
+        )
+
+        return await get_litellm_deployments()
+    except Exception:
+        logger.debug("model_warnings: LiteLLM probe failed — skipping", exc_info=True)
+        return None
+
+
+def _build_role_routing_map(deployments: list[Any]) -> dict[str, str]:
+    """Build role → routed-model map (ollama/ prefix stripped + :latest stripped)."""
+    role_to_routed: dict[str, str] = {}
+    for dep in deployments:
+        alias = dep.model_name
+        if alias not in _MODEL_ROLES:
+            continue
+        params = dep.litellm_params
+        routed_full = str(params.get("model", ""))
+        if not routed_full:
+            continue
+        routed_full = strip_ollama_prefix(routed_full)
+        role_to_routed[alias] = _strip_latest(routed_full)
+    return role_to_routed
+
+
+async def _fetch_installed_ollama_models(ollama_url: str) -> set[str] | None:
+    """Fetch installed Ollama model names (:latest-stripped); None on failure."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{ollama_url}/api/tags")
+        if resp.status_code != 200:
+            # Reachable-but-erroring Ollama (e.g. 503 during startup): log the
+            # status so it is greppable, then degrade to no warnings.
+            logger.debug(
+                "model_warnings: Ollama /api/tags returned %s — skipping", resp.status_code
+            )
+            return None
+        data = resp.json()
+        return {_strip_latest(m.get("name", "")) for m in data.get("models", [])}
+    except Exception:
+        logger.debug("model_warnings: Ollama probe failed — skipping", exc_info=True)
+        return None
+
+
 async def _compute_model_warnings() -> list[str]:
     """Return per-role routing warnings for GET /api/system/setup-status.
 
@@ -230,57 +278,25 @@ async def _compute_model_warnings() -> list[str]:
     if cached is not None:
         return cached
 
-    warnings: list[str] = []
-    try:
-        from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
-            get_litellm_deployments,
-        )
-
-        deployments = await get_litellm_deployments()
-    except Exception:
-        logger.debug("model_warnings: LiteLLM probe failed — skipping", exc_info=True)
+    deployments = await _fetch_litellm_deployments_safe()
+    if deployments is None:
         _model_warnings_cache.set(now, [])
         return []
 
-    # Build role → routed-model map (ollama/ prefix stripped + :latest stripped).
-    role_to_routed: dict[str, str] = {}
-    for dep in deployments:
-        alias = dep.model_name
-        if alias not in _MODEL_ROLES:
-            continue
-        params = dep.litellm_params
-        routed_full = str(params.get("model", ""))
-        if not routed_full:
-            continue
-        routed_full = strip_ollama_prefix(routed_full)
-        role_to_routed[alias] = _strip_latest(routed_full)
-
+    role_to_routed = _build_role_routing_map(deployments)
     if not role_to_routed:
         _model_warnings_cache.set(now, [])
         return []
 
-    # Fetch installed Ollama models.
     ollama_url = get_paper_ingestion_settings().ollama_base_url
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"{ollama_url}/api/tags")
-        if resp.status_code != 200:
-            # Reachable-but-erroring Ollama (e.g. 503 during startup): log the
-            # status so it is greppable, then degrade to no warnings.
-            logger.debug(
-                "model_warnings: Ollama /api/tags returned %s — skipping", resp.status_code
-            )
-            _model_warnings_cache.set(now, [])
-            return []
-        data = resp.json()
-        installed: set[str] = {_strip_latest(m.get("name", "")) for m in data.get("models", [])}
-    except Exception:
-        logger.debug("model_warnings: Ollama probe failed — skipping", exc_info=True)
+    installed = await _fetch_installed_ollama_models(ollama_url)
+    if installed is None:
         _model_warnings_cache.set(now, [])
         return []
 
     # Emit a warning for each Ollama role that routes a model not yet pulled.
     # Cloud models (containing "/") are skipped — pulled check is Ollama-specific.
+    warnings: list[str] = []
     for role in ("smart", "fast"):
         routed = role_to_routed.get(role)
         if routed is None or "/" in routed:
@@ -393,23 +409,13 @@ class SystemModelsWithDeliveryResponse(SystemModelsResponse):
     consistent: bool = True
 
 
-async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryResponse:
-    """Inner logic for /models — no auth check; callers must enforce admin gate."""
-    ollama_url = get_paper_ingestion_settings().ollama_base_url
-    http = request.app.state.http_client
-    result: dict[str, Any] = {
-        "status": "ok",
-        "installed": [],
-        "hardware": {},
-        "current": {},
-        "issues": {},
-        "catalog": [],
-        "recommendations": {},
-    }
-
-    cloud_api_keys: dict[str, bool] = {"anthropic": False, "openai": False, "google": False}
+async def _load_current_model_assignments(
+    db_pool: asyncpg.Pool,
+) -> tuple[dict[str, Any], str | None]:
+    """Load committed smart/fast/embed model assignments. issue is set on read failure."""
+    current: dict[str, Any] = {}
     try:
-        async with request.app.state.db_pool.acquire() as conn:
+        async with db_pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT key, value FROM user_config "
                 "WHERE key = ANY($1::text[]) AND user_id IS NULL",
@@ -421,38 +427,37 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
             # Strip wrapping quotes from JSONB-encoded strings
             if isinstance(val, str):
                 val = val.strip('"')
-            result["current"][short_key] = val
+            current[short_key] = val
     except Exception:
         logger.warning("Could not load current model assignments", exc_info=True)
-        result["issues"]["current"] = "Could not load current model assignments."
+        return current, "Could not load current model assignments."
+    return current, None
 
-    # Per-role delivery state (CRIT-1): roles listed in llm.delivery_pending have
-    # a committed config row that LiteLLM has not accepted yet. On read failure
-    # delivery stays empty — absence of a claim, never a phantom "applied".
+
+async def _load_model_delivery_state(db_pool: asyncpg.Pool) -> dict[str, str]:
+    """Per-role delivery state: roles in llm.delivery_pending await LiteLLM acceptance."""
+    # On read failure delivery stays empty — absence of a claim, never a phantom "applied".
     from paper_ingestion.services.config_write import (  # noqa: PLC0415
         _DELIVERY_PENDING_KEY,
         _fetch_system_config_values,
     )
 
-    result["delivery"] = {}
     try:
-        pending_values = await _fetch_system_config_values(
-            request.app.state.db_pool, [_DELIVERY_PENDING_KEY]
-        )
+        pending_values = await _fetch_system_config_values(db_pool, [_DELIVERY_PENDING_KEY])
         raw_pending = pending_values.get(_DELIVERY_PENDING_KEY)
         pending_roles = {str(r) for r in raw_pending} if isinstance(raw_pending, list) else set()
-        result["delivery"] = {
+        return {
             role: "pending_restart" if role in pending_roles else "applied" for role in _MODEL_ROLES
         }
     except Exception:
         logger.warning("Could not load model delivery state", exc_info=True)
+        return {}
 
-    # Routing truth (T1.3): read what LiteLLM is *actually* routing right now
-    # and compare against the committed DB intent in `current`.  Normalize the
-    # provider prefix (e.g. "ollama/qwen3:8b" → "qwen3:8b") so the comparison
+
+async def _load_routing_truth(current: dict[str, Any]) -> tuple[dict[str, str], bool]:
+    """Read what LiteLLM actually routes now and compare against the committed intent."""
+    # Provider prefix is normalized ("ollama/qwen3:8b" → "qwen3:8b") so the comparison
     # is apples-to-apples with how `current` stores model names.
-    result["routing"] = {}
-    result["consistent"] = True
     try:
         from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
             get_litellm_deployments,
@@ -462,6 +467,7 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
         # Build a role → routed-model map from the deployment list.
         # Each deployment entry has model_name == alias (smart/fast/embed) and
         # litellm_params.model == the full routed model string (e.g. "ollama/qwen3:8b").
+        routing: dict[str, str] = {}
         for dep in deployments:
             alias = dep.model_name
             if alias not in _MODEL_ROLES:
@@ -478,38 +484,40 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
             routed_normalized = _strip_latest(routed_normalized)
             # Multiple deployments per alias can exist mid-replace; the
             # reconciler removes stale duplicates on its next pass.
-            result["routing"][alias] = routed_normalized
+            routing[alias] = routed_normalized
 
         # Consistency check: every role that has a stored intent must be routing
         # that exact model.  Roles with no stored intent are skipped — no intent
         # means no expectation to violate.  Both sides are :latest-normalized so
         # a direct-API-created row never shows false divergence.
-        stored_current: dict[str, str] = result.get("current") or {}
         all_consistent = True
         for role in _MODEL_ROLES:
             role_key = f"{role}_model"
-            intent = stored_current.get(role_key)
+            intent = current.get(role_key)
             if not intent:
                 continue
-            routed = result["routing"].get(role)
+            routed = routing.get(role)
             if _strip_latest(routed or "") != _strip_latest(intent):
                 all_consistent = False
-        result["consistent"] = all_consistent
+        return routing, all_consistent
     except Exception:
         logger.warning("Could not load LiteLLM routing state", exc_info=True)
-        result["routing"] = {}
         # If there is stored intent we cannot verify → not consistent.
-        stored_current = result.get("current") or {}
-        result["consistent"] = not any(stored_current.get(f"{role}_model") for role in _MODEL_ROLES)
+        consistent = not any(current.get(f"{role}_model") for role in _MODEL_ROLES)
+        return {}, consistent
 
-    cloud_api_keys = await _cloud_key_presence(request.app.state.db_pool)
 
+async def _load_installed_ollama_models(
+    http: httpx.AsyncClient, ollama_url: str
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Fetch installed Ollama models. issue is set on read failure."""
+    installed: list[dict[str, Any]] = []
     try:
         resp = await http.get(f"{ollama_url}/api/tags", timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
             for m in data.get("models", []):
-                result["installed"].append(
+                installed.append(
                     {
                         "name": m.get("name", ""),
                         "size": m.get("size", 0),
@@ -519,16 +527,87 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
                 )
     except Exception:
         logger.warning("Could not load installed Ollama models", exc_info=True)
-        result["issues"]["installed"] = "Could not load installed Ollama models."
+        return installed, "Could not load installed Ollama models."
+    return installed, None
 
+
+async def _load_ollama_runtime_count(
+    http: httpx.AsyncClient, ollama_url: str
+) -> tuple[int | None, str | None]:
+    """Fetch the count of currently-loaded Ollama runtime models. issue is set on read failure."""
     try:
         resp = await http.get(f"{ollama_url}/api/ps", timeout=5.0)
         if resp.status_code == 200:
             data = resp.json()
-            result["hardware"]["ollama_running"] = len(data.get("models", []))
+            return len(data.get("models", [])), None
     except Exception:
         logger.warning("Could not load Ollama runtime status", exc_info=True)
-        result["issues"]["runtime"] = "Could not load Ollama runtime status."
+        return None, "Could not load Ollama runtime status."
+    return None, None
+
+
+async def _load_num_ctx_overrides(db_pool: asyncpg.Pool, machine_id: str | None) -> dict[str, int]:
+    """Fetch per-machine num_ctx overrides so fit_detail reflects the user's chosen context."""
+    num_ctx_per_role: dict[str, int] = {}
+    if not machine_id:
+        return num_ctx_per_role
+    num_ctx_keys = [f"llm.{machine_id}.{role}_num_ctx" for role in ("smart", "fast", "embed")]
+    try:
+        async with db_pool.acquire() as conn:
+            num_ctx_rows = await conn.fetch(
+                "SELECT key, value FROM user_config "
+                "WHERE key = ANY($1::text[]) AND user_id IS NULL",
+                num_ctx_keys,
+            )
+        for row in num_ctx_rows:
+            raw_key = row["key"]  # e.g. "llm.host.smart_num_ctx"
+            role_part = raw_key.split(".")[-1].replace("_num_ctx", "")
+            raw_val = row["value"]
+            try:
+                num_ctx_per_role[role_part] = int(raw_val)
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        logger.warning("Could not load per-machine num_ctx config", exc_info=True)
+    return num_ctx_per_role
+
+
+async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryResponse:
+    """Inner logic for /models — no auth check; callers must enforce admin gate."""
+    ollama_url = get_paper_ingestion_settings().ollama_base_url
+    http = request.app.state.http_client
+    result: dict[str, Any] = {
+        "status": "ok",
+        "installed": [],
+        "hardware": {},
+        "current": {},
+        "issues": {},
+        "catalog": [],
+        "recommendations": {},
+    }
+
+    cloud_api_keys: dict[str, bool] = {"anthropic": False, "openai": False, "google": False}
+    result["current"], current_issue = await _load_current_model_assignments(
+        request.app.state.db_pool
+    )
+    if current_issue:
+        result["issues"]["current"] = current_issue
+
+    result["delivery"] = await _load_model_delivery_state(request.app.state.db_pool)
+
+    result["routing"], result["consistent"] = await _load_routing_truth(result["current"])
+
+    cloud_api_keys = await _cloud_key_presence(request.app.state.db_pool)
+
+    result["installed"], installed_issue = await _load_installed_ollama_models(http, ollama_url)
+    if installed_issue:
+        result["issues"]["installed"] = installed_issue
+
+    ollama_running, runtime_issue = await _load_ollama_runtime_count(http, ollama_url)
+    if ollama_running is not None:
+        result["hardware"]["ollama_running"] = ollama_running
+    if runtime_issue:
+        result["issues"]["runtime"] = runtime_issue
 
     try:
         validate_embedding_configuration(
@@ -541,28 +620,7 @@ async def _get_system_models_data(request: Request) -> SystemModelsWithDeliveryR
     hardware: HardwareInfo = await async_get_cached_hardware(request.app.state)
     result["hardware"].update(hardware.to_dict())
 
-    # Fetch per-machine num_ctx overrides so fit_detail reflects the user's chosen context.
-    num_ctx_per_role: dict[str, int] = {}
-    machine_id = hardware.machine_id
-    if machine_id:
-        num_ctx_keys = [f"llm.{machine_id}.{role}_num_ctx" for role in ("smart", "fast", "embed")]
-        try:
-            async with request.app.state.db_pool.acquire() as conn:
-                num_ctx_rows = await conn.fetch(
-                    "SELECT key, value FROM user_config "
-                    "WHERE key = ANY($1::text[]) AND user_id IS NULL",
-                    num_ctx_keys,
-                )
-            for row in num_ctx_rows:
-                raw_key = row["key"]  # e.g. "llm.host.smart_num_ctx"
-                role_part = raw_key.split(".")[-1].replace("_num_ctx", "")
-                raw_val = row["value"]
-                try:
-                    num_ctx_per_role[role_part] = int(raw_val)
-                except (TypeError, ValueError):
-                    pass
-        except Exception:
-            logger.warning("Could not load per-machine num_ctx config", exc_info=True)
+    num_ctx_per_role = await _load_num_ctx_overrides(request.app.state.db_pool, hardware.machine_id)
 
     result["catalog"] = build_model_statuses(
         installed=result["installed"],

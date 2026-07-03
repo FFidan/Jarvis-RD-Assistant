@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 **Release-history note:** This changelog is retrospective. The repository remained private through the pre-v1.0.0 tags; all entries before v1.0.0 describe private development and hardening milestones.
 Wording such as "public-ready", "public-readiness", or "public-launch groundwork" in older entries means preparation for the v1.0.0 public launch, not earlier public availability.
 
+## v1.0.1 (2026-07-03) — Maintenance: first-run reliability, security hardening, and module decomposition
+
+A maintenance release focused on first-run reliability, security hardening, and backend code structure. There are no user-facing feature changes and public API behavior is unchanged.
+
+### Fixed
+- **First-run startup for non-root service containers.** Generated secret files are now readable by the non-root users that the service containers run as, so a fresh setup or `make up` no longer fails when a container cannot read its bind-mounted secret. The secrets directory keeps owner-only access, so host-side confidentiality is unchanged.
+- **Setup script robustness.** Removed an unset-variable error that could abort the setup script on the non-tunnel access paths.
+- **Scheduled trigger authorization.** The scheduled Pulse generation endpoint again accepts the API-key caller used by automated triggers.
+- **Console warnings.** Fixed an invalid nested-button structure in the deck browser and a controlled/uncontrolled tooltip toggle in the chat empty state.
+
+### Security
+- **Traversal-safe file serving.** Centralized path validation for served PDFs, page snapshots, and backup archives behind a single traversal-safe path-join helper.
+- **Keyed provider-key fingerprint.** The in-process fingerprint used to detect provider-key delivery changes is now a keyed, computationally hardened hash rather than a plain digest.
+- **Static-analysis alerts.** All previously open code-scanning alerts are resolved.
+
+### Changed
+- **Module decomposition.** Several large backend modules were split into focused modules with unchanged public behavior: the application entrypoint's model reconciler, the system readiness and capabilities routers, the Zotero integration (configuration, push, highlights, polling, and job handlers), and the LiteLLM HTTP helpers.
+- **Complexity reductions.** High-complexity functions across the summarization, search, retrieval-streaming, model-lifecycle, system, and Zotero paths were decomposed into smaller helpers, and duplicated logic was consolidated. The Python complexity budget and the frontend lint budget were both ratcheted down to the new lower levels.
+- **Dependencies.** Raised the docling version ceiling and picked up a group of frontend patch and minor dependency updates.
+
 ## v1.0.0 (2026-06-29) — First stable public-launch release: consensus, PDF annotation, Zotero sync, restore, and multi-user hardening
 
 First stable release and public-launch baseline. Earlier tags were private development and hardening milestones; v1.0.0 is the first version intended for public availability. It adds a cross-paper consensus view, an in-PDF reader with spatial highlights that sync to Zotero, guided one-click backup restore, and completes per-user isolation and restore-safety hardening across the application.

@@ -19,6 +19,9 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _TARGETS = ("services", "libs", "scripts")
+# Tests are excluded so the budget tracks production complexity only; a long
+# fixture or a many-argument test helper must not consume production headroom.
+_EXCLUDE = "**/tests/**"
 
 
 def baseline() -> dict[str, int]:
@@ -35,6 +38,8 @@ def measure(codes: list[str]) -> dict[str, int]:
             "check",
             "--select",
             ",".join(codes),
+            "--extend-exclude",
+            _EXCLUDE,
             "--statistics",
             "--output-format",
             "json",

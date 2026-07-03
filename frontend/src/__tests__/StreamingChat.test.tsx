@@ -224,3 +224,31 @@ describe('StreamingChat — Ask-gating tooltip', () => {
     expect(textarea).not.toBeDisabled();
   });
 });
+
+describe('StreamingChat — tooltip stays controlled across renders (B5.2)', () => {
+  beforeEach(() => {
+    mockUseStreamingChat.mockReturnValue(baseHookReturn());
+  });
+
+  // Uses the real @radix-ui/react-tooltip primitives (not the file-level mock above) because
+  // the controlled/uncontrolled warning originates inside Radix's useControllableState.
+  it('does not warn when hasAnalyzedPapers flips false -> true on a mounted instance', async () => {
+    vi.resetModules();
+    vi.doUnmock('@/components/ui/tooltip');
+    const { StreamingChat: RealTooltipStreamingChat } = await import('@/components/chat/StreamingChat');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { rerender } = render(
+      <RealTooltipStreamingChat chatId="c1" scope="cross-paper" hasAnalyzedPapers={false} />,
+    );
+    rerender(<RealTooltipStreamingChat chatId="c1" scope="cross-paper" hasAnalyzedPapers={true} />);
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+});

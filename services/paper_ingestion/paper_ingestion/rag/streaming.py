@@ -315,6 +315,82 @@ async def prepare_single_paper_rag(
     return messages, sources_list
 
 
+async def _search_and_merge_chunks(
+    embedder: "Embedder",
+    body: CrossPaperAskRequest,
+    user_id: int | None,
+    library_paper_ids: list[int] | None,
+) -> list[dict]:
+    """Search all chunks — optionally via query decomposition — and merge."""
+    if body.decompose:
+        fast_model = get_fast_model()
+        sub_queries = await decompose_query(body.question, model=fast_model)
+        per_query_limit = max(body.max_chunks * 2 // len(sub_queries), 3)
+
+        results = await asyncio.gather(
+            *(
+                embedder.search_chunks_global(
+                    query_text=sq,
+                    limit=per_query_limit,
+                    score_threshold=_SEARCH_SCORE_THRESHOLD,
+                    user_id=user_id,
+                    library_paper_ids=library_paper_ids,
+                )
+                for sq in sub_queries
+            )
+        )
+
+        # Merge: flatten all chunks, dedup by (paper_id, chunk_index) keeping
+        # highest score. The relevance cutoff runs per sub-query list — each
+        # list's scores are cosine vs its OWN sub-query embedding.
+        seen: dict[tuple[int, int], dict] = {}
+        for chunk_list in results:
+            for chunk in _apply_relative_cutoff(chunk_list):
+                key = (chunk["paper_id"], chunk["chunk_index"])
+                if key not in seen or chunk["score"] > seen[key]["score"]:
+                    seen[key] = chunk
+        return list(seen.values())
+    return _apply_relative_cutoff(
+        await embedder.search_chunks_global(
+            query_text=body.question,
+            limit=body.max_chunks * 2,
+            score_threshold=_SEARCH_SCORE_THRESHOLD,
+            user_id=user_id,
+            library_paper_ids=library_paper_ids,
+        )
+    )
+
+
+def _select_chunks_by_paper(all_chunks: list[dict], max_papers: int, max_chunks: int) -> list[dict]:
+    """Group by paper (top-2 each), trim to max_papers, flatten to max_chunks."""
+    # 2. Deduplicate: group by paper_id, keep top 2 chunks per paper
+    chunks_by_paper: dict[int, list[dict]] = {}
+    for chunk in all_chunks:
+        pid = chunk["paper_id"]
+        if pid not in chunks_by_paper:
+            chunks_by_paper[pid] = []
+        chunks_by_paper[pid].append(chunk)
+
+    for pid in chunks_by_paper:
+        chunks_by_paper[pid].sort(key=lambda c: c["score"], reverse=True)
+        chunks_by_paper[pid] = chunks_by_paper[pid][:2]
+
+    # 3. Trim to max_papers (pick papers with highest top-chunk score)
+    paper_ids_sorted = sorted(
+        chunks_by_paper.keys(),
+        key=lambda pid: chunks_by_paper[pid][0]["score"],
+        reverse=True,
+    )
+    paper_ids_sorted = paper_ids_sorted[:max_papers]
+
+    # Flatten and trim to max_chunks total
+    selected_chunks: list[dict] = []
+    for pid in paper_ids_sorted:
+        selected_chunks.extend(chunks_by_paper[pid])
+    selected_chunks.sort(key=lambda c: c["score"], reverse=True)
+    return selected_chunks[:max_chunks]
+
+
 @observe()
 async def prepare_cross_paper_rag(
     embedder: "Embedder",
@@ -361,44 +437,7 @@ async def prepare_cross_paper_rag(
             library_paper_ids = [row["paper_id"] for row in lib_rows]
 
         # 1. Search all chunks — optionally via query decomposition
-        if body.decompose:
-            fast_model = get_fast_model()
-            sub_queries = await decompose_query(body.question, model=fast_model)
-            per_query_limit = max(body.max_chunks * 2 // len(sub_queries), 3)
-
-            results = await asyncio.gather(
-                *(
-                    embedder.search_chunks_global(
-                        query_text=sq,
-                        limit=per_query_limit,
-                        score_threshold=_SEARCH_SCORE_THRESHOLD,
-                        user_id=user_id,
-                        library_paper_ids=library_paper_ids,
-                    )
-                    for sq in sub_queries
-                )
-            )
-
-            # Merge: flatten all chunks, dedup by (paper_id, chunk_index) keeping
-            # highest score. The relevance cutoff runs per sub-query list — each
-            # list's scores are cosine vs its OWN sub-query embedding.
-            seen: dict[tuple[int, int], dict] = {}
-            for chunk_list in results:
-                for chunk in _apply_relative_cutoff(chunk_list):
-                    key = (chunk["paper_id"], chunk["chunk_index"])
-                    if key not in seen or chunk["score"] > seen[key]["score"]:
-                        seen[key] = chunk
-            all_chunks = list(seen.values())
-        else:
-            all_chunks = _apply_relative_cutoff(
-                await embedder.search_chunks_global(
-                    query_text=body.question,
-                    limit=body.max_chunks * 2,
-                    score_threshold=_SEARCH_SCORE_THRESHOLD,
-                    user_id=user_id,
-                    library_paper_ids=library_paper_ids,
-                )
-            )
+        all_chunks = await _search_and_merge_chunks(embedder, body, user_id, library_paper_ids)
 
         if not all_chunks:
             logger.warning(
@@ -434,32 +473,8 @@ async def prepare_cross_paper_rag(
                 sources=[],
             )
 
-        # 2. Deduplicate: group by paper_id, keep top 2 chunks per paper
-        chunks_by_paper: dict[int, list[dict]] = {}
-        for chunk in all_chunks:
-            pid = chunk["paper_id"]
-            if pid not in chunks_by_paper:
-                chunks_by_paper[pid] = []
-            chunks_by_paper[pid].append(chunk)
-
-        for pid in chunks_by_paper:
-            chunks_by_paper[pid].sort(key=lambda c: c["score"], reverse=True)
-            chunks_by_paper[pid] = chunks_by_paper[pid][:2]
-
-        # 3. Trim to max_papers (pick papers with highest top-chunk score)
-        paper_ids_sorted = sorted(
-            chunks_by_paper.keys(),
-            key=lambda pid: chunks_by_paper[pid][0]["score"],
-            reverse=True,
-        )
-        paper_ids_sorted = paper_ids_sorted[: body.max_papers]
-
-        # Flatten and trim to max_chunks total
-        selected_chunks: list[dict] = []
-        for pid in paper_ids_sorted:
-            selected_chunks.extend(chunks_by_paper[pid])
-        selected_chunks.sort(key=lambda c: c["score"], reverse=True)
-        selected_chunks = selected_chunks[: body.max_chunks]
+        # 2-3. Dedup by paper (top-2 each), trim to max_papers, flatten to max_chunks
+        selected_chunks = _select_chunks_by_paper(all_chunks, body.max_papers, body.max_chunks)
 
         # 4. Fetch paper metadata — defense-in-depth user-scope predicate (RAG-DB-1).
         # Primary isolation is Qdrant's _user_scope_filter; this secondary
@@ -552,6 +567,56 @@ async def prepare_cross_paper_rag(
 # ---------------------------------------------------------------------------
 
 
+def _extract_delta(line: str) -> tuple[str, str | None, bool]:
+    """Parse one SSE line → (delta content, model, done). Empty content ⇒ skip."""
+    if not line.startswith("data: "):
+        return "", None, False
+    data_str = line[6:]
+    if data_str.strip() == "[DONE]":
+        return "", None, True
+    chunk = json.loads(data_str)
+    model = chunk.get("model") or None
+    choices = chunk.get("choices")
+    if not choices:
+        return "", model, False
+    return choices[0].get("delta", {}).get("content", ""), model, False
+
+
+def _stream_error_message(exc: Exception) -> str:
+    """Map a streaming exception to a user-facing error message."""
+    _err_msgs = {
+        httpx.TimeoutException: "LLM request timed out. Please try again.",
+        httpx.ConnectError: "Cannot connect to LLM service. Check that services are running.",
+    }
+    return next(
+        (m for t, m in _err_msgs.items() if isinstance(exc, t)),
+        "An error occurred while generating the response. Please try again later.",
+    )
+
+
+async def _confidence_events(
+    full_answer: str,
+    sources_list: list[dict],
+    verifier: "QuoteVerifier | None",
+    db_pool: "asyncpg.Pool | None",
+):
+    """Yield a trailing confidence SSE event after answer verification (or none)."""
+    if verifier is None:
+        logger.warning(
+            "stream_rag_events called with verifier=None; confidence event will be omitted"
+        )
+    if verifier is not None and db_pool is not None:
+        try:
+            from paper_ingestion.rag.verification import verify_answer_summary
+
+            summary = await verify_answer_summary(full_answer, sources_list, verifier, db_pool)
+            # Nothing checkable → no confidence event at all; the FE renders no badge.
+            if summary.get("confidence") is not None:
+                yield sse_event({"type": "confidence", **summary})
+        except Exception as exc:  # noqa: BLE001 — don't break the stream if verification errors
+            logger.warning("RAG verification failed: %s", exc, exc_info=True)
+
+
 @observe(as_type="generation")
 async def stream_rag_events(
     http_client: httpx.AsyncClient,
@@ -584,18 +649,11 @@ async def stream_rag_events(
         ) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
+                content, chunk_model, done = _extract_delta(line)
+                if done:
                     break
-                chunk = json.loads(data_str)
                 if model_used is None:
-                    model_used = chunk.get("model") or None
-                choices = chunk.get("choices")
-                if not choices:
-                    continue
-                content = choices[0].get("delta", {}).get("content", "")
+                    model_used = chunk_model
                 if not content:
                     continue
                 visible, in_think, think_carry = strip_think_streaming(
@@ -605,14 +663,7 @@ async def stream_rag_events(
                     full_answer += visible
                     yield sse_event({"type": "token", "content": visible})
     except Exception as e:
-        _err_msgs = {
-            httpx.TimeoutException: "LLM request timed out. Please try again.",
-            httpx.ConnectError: "Cannot connect to LLM service. Check that services are running.",
-        }
-        msg = next(
-            (m for t, m in _err_msgs.items() if isinstance(e, t)),
-            "An error occurred while generating the response. Please try again later.",
-        )
+        msg = _stream_error_message(e)
         logger.error("LLM streaming failed: %r", e, exc_info=True)
         async for event in sse_error_stream(msg):
             yield event
@@ -624,18 +675,6 @@ async def stream_rag_events(
     yield sse_event({"type": "sources", "sources": sources_list})
     yield sse_event({"type": "done", "full_answer": full_answer, "model_used": model_used})
     # Sentence-level verification — runs after tokens have streamed (additive latency only)
-    if verifier is None:
-        logger.warning(
-            "stream_rag_events called with verifier=None; confidence event will be omitted"
-        )
-    if verifier is not None and db_pool is not None:
-        try:
-            from paper_ingestion.rag.verification import verify_answer_summary
-
-            summary = await verify_answer_summary(full_answer, sources_list, verifier, db_pool)
-            # Nothing checkable → no confidence event at all; the FE renders no badge.
-            if summary.get("confidence") is not None:
-                yield sse_event({"type": "confidence", **summary})
-        except Exception as exc:  # noqa: BLE001 — don't break the stream if verification errors
-            logger.warning("RAG verification failed: %s", exc, exc_info=True)
+    async for event in _confidence_events(full_answer, sources_list, verifier, db_pool):
+        yield event
     yield SSE_DONE

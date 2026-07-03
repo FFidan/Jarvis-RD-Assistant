@@ -22,6 +22,17 @@ from paper_ingestion.integrations._zotero_push import (
 logger = logging.getLogger("paper_ingestion.integrations.zotero_service")
 
 
+async def _revalidate_paper_ownership(pool: asyncpg.Pool, payload: dict[str, Any]) -> int:
+    """Re-validate ownership at job execution time to prevent IDOR via queued jobs."""
+    from jarvis_common.db_helpers import assert_paper_ownership
+
+    paper_id = int(payload["paper_id"])
+    user_id = payload.get("user_id")
+    async with pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+    return paper_id
+
+
 async def _zotero_push_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -34,14 +45,8 @@ async def _zotero_push_job(
         paper_id (int): DB paper ID to push.
         user_id (int | None): Caller user ID for ownership check.
     """
-    from jarvis_common.db_helpers import assert_paper_ownership
-
-    paper_id: int = payload["paper_id"]
+    paper_id = await _revalidate_paper_ownership(pool, payload)
     user_id = payload.get("user_id")
-
-    # Re-validate ownership at job execution time to prevent IDOR via queued jobs.
-    async with pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
 
     await ctx.update_progress(0.1, "Starting Zotero push")
     await push_paper_to_zotero(paper_id, pool, http_client, owner_user_id=user_id)
@@ -61,14 +66,8 @@ async def _zotero_resync_job(
         paper_id (int): DB paper ID to resync.
         user_id (int | None): Caller user ID for ownership check.
     """
-    from jarvis_common.db_helpers import assert_paper_ownership
-
-    paper_id: int = payload["paper_id"]
+    paper_id = await _revalidate_paper_ownership(pool, payload)
     user_id = payload.get("user_id")
-
-    # Re-validate ownership at job execution time to prevent IDOR via queued jobs.
-    async with pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
 
     await ctx.update_progress(0.1, "Clearing existing Zotero key")
     await resync_paper_to_zotero(paper_id, pool, http_client, owner_user_id=user_id)
@@ -108,14 +107,8 @@ async def _zotero_sync_annotations_job(
         paper_id (int): DB paper ID to sync annotations for.
         user_id (int | None): Caller user ID for ownership check.
     """
-    from jarvis_common.db_helpers import assert_paper_ownership
-
-    paper_id = int(payload["paper_id"])
+    paper_id = await _revalidate_paper_ownership(pool, payload)
     user_id = payload.get("user_id")
-
-    # Re-validate ownership at job execution time to prevent IDOR via queued jobs.
-    async with pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
 
     await ctx.update_progress(0.1, "Fetching Zotero annotations")
     result = await sync_annotations_for_paper(

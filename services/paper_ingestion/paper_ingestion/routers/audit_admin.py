@@ -13,6 +13,7 @@ from typing import Any
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
 from jarvis_common.auth import require_admin, verify_api_key
+from jarvis_common.db_helpers import escape_like
 
 from paper_ingestion.deps import get_db_pool, limiter
 
@@ -50,7 +51,7 @@ def _build_audit_query(
         conditions.append(f"id < ${len(params)}")
 
     if action_prefix:
-        escaped = action_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        escaped = escape_like(action_prefix)
         params.append(escaped + "%")
         conditions.append(rf"action LIKE ${len(params)} ESCAPE '\'")
 

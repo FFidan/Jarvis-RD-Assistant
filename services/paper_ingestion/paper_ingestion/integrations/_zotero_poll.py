@@ -352,41 +352,23 @@ async def _persist_poll_cursor(
         logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)
 
 
-async def poll_zotero_library(
+@dataclass(frozen=True, slots=True)
+class _PollBatch:
+    """Per-cycle counters produced by processing a fetched batch of Zotero items."""
+
+    new_count: int
+    linked_count: int
+    enqueued_count: int
+    capped: bool
+    failed_keys: list[str]
+
+
+async def _process_poll_batch(
     db_pool: asyncpg.Pool,
-    http_client: httpx.AsyncClient,
-    polling_user_id: int | None = None,
-) -> dict[str, Any]:
-    """Incremental poll of Zotero library since last known version.
-
-    For each new item:
-    - If Extra field contains 'jarvis_paper_id=' → skip (originated in JARVIS)
-    - If DOI matches existing JARVIS paper → link zotero_item_key (skip ingestion)
-    - Else → enqueue paper.process job with Zotero metadata as seed
-
-    Persists last library version in user_config as 'zotero.last_library_version'.
-    """
-    from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
-
-    config = await _load_poll_config(db_pool, polling_user_id)
-    if isinstance(config, dict):
-        return config
-    last_version = config.last_version
-
-    client = ZoteroClient(
-        api_key=config.api_key,
-        user_id=config.user_id,
-        library_type=config.library_type,  # type: ignore[arg-type]
-        group_id=config.group_id,
-        http_client=http_client,
-    )
-
-    try:
-        items, new_version = await client.fetch_items_since(last_version)
-    except Exception:
-        logger.error("Zotero poll: fetch_items_since failed", exc_info=True)
-        return {"status": "error", "message": "fetch failed"}
-
+    items: list[dict[str, Any]],
+    polling_user_id: int | None,
+) -> _PollBatch:
+    """Link or ingest each new item, stopping at the per-cycle enqueue cap."""
     new_count = 0
     linked_count = 0
     enqueued_count = 0
@@ -435,20 +417,60 @@ async def poll_zotero_library(
             )
             failed_keys.append(parsed.item_key)
 
+    return _PollBatch(new_count, linked_count, enqueued_count, capped, failed_keys)
+
+
+async def poll_zotero_library(
+    db_pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    polling_user_id: int | None = None,
+) -> dict[str, Any]:
+    """Incremental poll of Zotero library since last known version.
+
+    For each new item:
+    - If Extra field contains 'jarvis_paper_id=' → skip (originated in JARVIS)
+    - If DOI matches existing JARVIS paper → link zotero_item_key (skip ingestion)
+    - Else → enqueue paper.process job with Zotero metadata as seed
+
+    Persists last library version in user_config as 'zotero.last_library_version'.
+    """
+    from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
+
+    config = await _load_poll_config(db_pool, polling_user_id)
+    if isinstance(config, dict):
+        return config
+    last_version = config.last_version
+
+    client = ZoteroClient(
+        api_key=config.api_key,
+        user_id=config.user_id,
+        library_type=config.library_type,  # type: ignore[arg-type]
+        group_id=config.group_id,
+        http_client=http_client,
+    )
+
+    try:
+        items, new_version = await client.fetch_items_since(last_version)
+    except Exception:
+        logger.error("Zotero poll: fetch_items_since failed", exc_info=True)
+        return {"status": "error", "message": "fetch failed"}
+
+    batch = await _process_poll_batch(db_pool, items, polling_user_id)
+
     # If any items failed, log a summary error and pin the cursor so the next
     # poll retries the entire batch from the same starting version.
-    if failed_keys:
+    if batch.failed_keys:
         logger.error(
             "Zotero poll: %d items failed; first 5: %s",
-            len(failed_keys),
-            failed_keys[:5],
+            len(batch.failed_keys),
+            batch.failed_keys[:5],
         )
         new_version = last_version
 
     # Persist updated library version.
     # If the enqueue cap was hit, do NOT advance the cursor — the next sync
     # will re-fetch items starting from last_version and process the next batch.
-    if capped:
+    if batch.capped:
         new_version = last_version
         logger.info(
             "Zotero poll: enqueue cap (%d) reached — deferring version advance to next sync",
@@ -459,17 +481,17 @@ async def poll_zotero_library(
 
     logger.info(
         "Zotero poll complete: new=%d linked=%d enqueued=%d version=%d→%d",
-        new_count,
-        linked_count,
-        enqueued_count,
+        batch.new_count,
+        batch.linked_count,
+        batch.enqueued_count,
         last_version,
         new_version,
     )
     return {
         "status": "ok",
-        "new_items": new_count,
-        "linked": linked_count,
-        "enqueued": enqueued_count,
+        "new_items": batch.new_count,
+        "linked": batch.linked_count,
+        "enqueued": batch.enqueued_count,
         "version_from": last_version,
         "version_to": new_version,
     }

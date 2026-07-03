@@ -46,6 +46,67 @@ logger = logging.getLogger(__name__)
 _HYBRID_SEARCH_SCORE_THRESHOLD = 0.05
 
 
+def _build_bm25_query(query: str, candidate_limit: int, user_id: int | None) -> tuple[str, tuple]:
+    """Return (SQL, args) for the BM25 leg, library-scoped when user_id is set (RD-DA-003)."""
+    if user_id is not None:
+        bm25_sql = """
+            SELECT p.id, p.title, p.authors, p.url, p.abstract,
+                   p.published_date,
+                   ts_rank(p.search_vector,
+                           websearch_to_tsquery('english', $1)) AS bm25_score
+            FROM papers p
+            JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $3
+            WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
+            ORDER BY bm25_score DESC
+            LIMIT $2
+        """
+        return bm25_sql, (query, candidate_limit, user_id)
+    bm25_sql = """
+        SELECT p.id, p.title, p.authors, p.url, p.abstract,
+               p.published_date,
+               ts_rank(p.search_vector,
+                       websearch_to_tsquery('english', $1)) AS bm25_score
+        FROM papers p
+        WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
+        ORDER BY bm25_score DESC
+        LIMIT $2
+    """
+    return bm25_sql, (query, candidate_limit)
+
+
+async def _fetch_missing_metadata(
+    db_pool: asyncpg.Pool, missing_ids: list[int], user_id: int | None
+) -> dict[int, dict]:
+    """Fetch semantic-only paper metadata with a visibility re-check (RD-DA-003)."""
+    async with db_pool.acquire() as conn:
+        if user_id is not None:
+            meta_rows = await conn.fetch(
+                "SELECT p.id, p.title, p.authors, p.url, p.abstract, p.published_date "
+                "FROM papers p "
+                "JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2 "
+                "WHERE p.id = ANY($1::int[])",
+                missing_ids,
+                user_id,
+            )
+        else:
+            meta_rows = await conn.fetch(
+                "SELECT id, title, authors, url, abstract, published_date "
+                "FROM papers WHERE id = ANY($1::int[])",
+                missing_ids,
+            )
+    meta: dict[int, dict] = {}
+    for row in meta_rows:
+        meta[row["id"]] = {
+            "id": row["id"],
+            "title": row["title"],
+            "authors": row["authors"],
+            "url": row["url"],
+            "abstract": row["abstract"],
+            "published_date": row["published_date"],
+        }
+    return meta
+
+
 class EmbeddingSearchMixin:
     """Vector search, hybrid (BM25+RRF) search, reranking, and recommendations."""
 
@@ -459,34 +520,7 @@ class EmbeddingSearchMixin:
         # PI-CORE-006: fetch limit+offset candidates so pagination works correctly
         # after RRF fusion.  Cap at 200 to match search_chunks_global's guard.
         candidate_limit = min(limit + offset, 200)
-        # RD-DA-003: scope BM25 to the requesting user's visible papers when
-        # user_id is set.  Without this JOIN the BM25 leg exposes titles,
-        # authors, abstracts of papers owned by other users.
-        if user_id is not None:
-            bm25_sql = """
-                SELECT p.id, p.title, p.authors, p.url, p.abstract,
-                       p.published_date,
-                       ts_rank(p.search_vector,
-                               websearch_to_tsquery('english', $1)) AS bm25_score
-                FROM papers p
-                JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $3
-                WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
-                ORDER BY bm25_score DESC
-                LIMIT $2
-            """
-            bm25_args: tuple = (query, candidate_limit, user_id)
-        else:
-            bm25_sql = """
-                SELECT p.id, p.title, p.authors, p.url, p.abstract,
-                       p.published_date,
-                       ts_rank(p.search_vector,
-                               websearch_to_tsquery('english', $1)) AS bm25_score
-                FROM papers p
-                WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
-                ORDER BY bm25_score DESC
-                LIMIT $2
-            """
-            bm25_args = (query, candidate_limit)
+        bm25_sql, bm25_args = _build_bm25_query(query, candidate_limit, user_id)
         async with db_pool.acquire() as conn:
             with probe_span("hybrid_search_bm25_sql", candidate_limit=candidate_limit):
                 bm25_rows = await conn.fetch(bm25_sql, *bm25_args)
@@ -555,34 +589,7 @@ class EmbeddingSearchMixin:
         # ------------------------------------------------------------------
         missing_ids = [pid for pid in top_ids if pid not in bm25_meta]
         if missing_ids:
-            async with db_pool.acquire() as conn:
-                # RD-DA-003: re-verify visibility before returning semantic-only metadata.
-                # The semantic leg is already scoped by search_chunks_global, but a
-                # secondary check here prevents stale Qdrant entries from leaking rows.
-                if user_id is not None:
-                    meta_rows = await conn.fetch(
-                        "SELECT p.id, p.title, p.authors, p.url, p.abstract, p.published_date "
-                        "FROM papers p "
-                        "JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2 "
-                        "WHERE p.id = ANY($1::int[])",
-                        missing_ids,
-                        user_id,
-                    )
-                else:
-                    meta_rows = await conn.fetch(
-                        "SELECT id, title, authors, url, abstract, published_date "
-                        "FROM papers WHERE id = ANY($1::int[])",
-                        missing_ids,
-                    )
-            for row in meta_rows:
-                bm25_meta[row["id"]] = {
-                    "id": row["id"],
-                    "title": row["title"],
-                    "authors": row["authors"],
-                    "url": row["url"],
-                    "abstract": row["abstract"],
-                    "published_date": row["published_date"],
-                }
+            bm25_meta.update(await _fetch_missing_metadata(db_pool, missing_ids, user_id))
 
         # ------------------------------------------------------------------
         # Build result list
@@ -650,59 +657,16 @@ class EmbeddingSearchMixin:
             FieldCondition,
             Filter,
             MatchAny,
-            MatchValue,
             RecommendInput,
             RecommendQuery,
             RecommendStrategy,
         )
 
-        all_positive: list = []  # mix of point ID strings and raw vectors
-
-        # Pass 1: Scroll Qdrant for each seed; collect IDs missing from Qdrant.
-        missing_seed_ids: list[int] = []
-        for seed_id in seed_paper_ids:
-            # Scroll Qdrant for this seed's chunks
-            seed_filter = Filter(
-                must=[FieldCondition(key="paper_id", match=MatchValue(value=seed_id))]
-            )
-            records, _ = await self.qdrant.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter=seed_filter,
-                limit=1000,
-                with_payload=False,
-                with_vectors=False,
-            )
-
-            if records:
-                # Sample evenly spaced point IDs
-                ids = [str(r.id) for r in records]
-                if len(ids) <= max_points_per_seed:
-                    sampled = ids
-                else:
-                    step = len(ids) / max_points_per_seed
-                    sampled = [ids[int(i * step)] for i in range(max_points_per_seed)]
-                all_positive.extend(sampled)
-            else:
-                missing_seed_ids.append(seed_id)
-
-        # Pass 2: Batch-fetch metadata for all missing seeds in a single DB round-trip,
-        # then release the connection before doing any embedding network I/O.
-        if missing_seed_ids:
-            async with db_pool.acquire() as conn:
-                missing_rows = await conn.fetch(
-                    "SELECT id, title, abstract FROM papers WHERE id = ANY($1::bigint[])",
-                    missing_seed_ids,
-                )
-            # Connection released here — embed outside the DB context.
-            texts_to_embed: list[str] = []
-            for row in missing_rows:
-                title = row["title"] or ""
-                abstract = row["abstract"] or ""
-                if title or abstract:
-                    texts_to_embed.append(f"{title}. {abstract}".strip())
-            if texts_to_embed:
-                vectors = await self.embed_texts(texts_to_embed)
-                all_positive.extend(vectors)
+        # Mixed on purpose: Qdrant accepts point IDs and raw vectors as positive examples.
+        all_positive, missing_seed_ids = await self._scroll_seed_points(
+            seed_paper_ids, max_points_per_seed
+        )
+        all_positive.extend(await self._embed_missing_seeds(db_pool, missing_seed_ids))
 
         if not all_positive:
             return []
@@ -755,3 +719,56 @@ class EmbeddingSearchMixin:
         # Sort by score descending and trim to requested limit
         results = sorted(best.values(), key=lambda x: x["score"], reverse=True)
         return results[:limit]
+
+    async def _scroll_seed_points(
+        self, seed_paper_ids: list[int], max_points_per_seed: int
+    ) -> tuple[list, list[int]]:
+        """Scroll Qdrant per seed; return (sampled point IDs, seeds absent from Qdrant)."""
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        all_positive: list = []
+        missing_seed_ids: list[int] = []
+        for seed_id in seed_paper_ids:
+            seed_filter = Filter(
+                must=[FieldCondition(key="paper_id", match=MatchValue(value=seed_id))]
+            )
+            records, _ = await self.qdrant.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=seed_filter,
+                limit=1000,
+                with_payload=False,
+                with_vectors=False,
+            )
+            if records:
+                ids = [str(r.id) for r in records]
+                if len(ids) <= max_points_per_seed:
+                    sampled = ids
+                else:
+                    step = len(ids) / max_points_per_seed
+                    sampled = [ids[int(i * step)] for i in range(max_points_per_seed)]
+                all_positive.extend(sampled)
+            else:
+                missing_seed_ids.append(seed_id)
+        return all_positive, missing_seed_ids
+
+    async def _embed_missing_seeds(
+        self, db_pool: asyncpg.Pool, missing_seed_ids: list[int]
+    ) -> list:
+        """Embed title+abstract for seeds absent from Qdrant; return their vectors."""
+        if not missing_seed_ids:
+            return []
+        async with db_pool.acquire() as conn:
+            missing_rows = await conn.fetch(
+                "SELECT id, title, abstract FROM papers WHERE id = ANY($1::bigint[])",
+                missing_seed_ids,
+            )
+        # Connection released here — embed outside the DB context.
+        texts_to_embed: list[str] = []
+        for row in missing_rows:
+            title = row["title"] or ""
+            abstract = row["abstract"] or ""
+            if title or abstract:
+                texts_to_embed.append(f"{title}. {abstract}".strip())
+        if not texts_to_embed:
+            return []
+        return await self.embed_texts(texts_to_embed)

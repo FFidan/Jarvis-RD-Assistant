@@ -158,3 +158,80 @@ async def test_search_router_caller_no_offset_unchanged():
 
     assert len(results) == 5
     assert [r["id"] for r in results] == [1, 2, 3, 4, 5]
+
+
+# ---------------------------------------------------------------------------
+# Characterization: semantic-only papers get metadata via a second DB fetch,
+# and user_id is threaded into both the BM25 and metadata queries.
+# ---------------------------------------------------------------------------
+
+
+def _make_pool_with_fetch_sequence(record_batches: list[list]) -> tuple[AsyncMock, AsyncMock]:
+    """Pool whose conn.fetch returns each batch in turn; returns (pool, conn)."""
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=record_batches)
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = AsyncMock()
+    pool.acquire = MagicMock(return_value=ctx)
+    return pool, conn
+
+
+@pytest.mark.asyncio
+async def test_hybrid_semantic_only_paper_gets_metadata_fetched():
+    """A paper found only in the semantic leg gets its metadata via the second DB fetch."""
+    embedder = _make_embedder()
+    bm25_records = [_dict_to_record(r) for r in _make_bm25_rows(1)]  # id=1
+    semantic_meta = _dict_to_record(
+        {
+            "id": 42,
+            "title": "Semantic Paper",
+            "authors": ["A"],
+            "url": "https://example.com/42",
+            "abstract": "Abs 42",
+            "published_date": None,
+        }
+    )
+    pool, conn = _make_pool_with_fetch_sequence([bm25_records, [semantic_meta]])
+
+    chunks = [{"paper_id": 42, "score": 0.9}]
+    with patch.object(
+        embedder, "search_chunks_global", new_callable=AsyncMock, return_value=chunks
+    ):
+        results = await embedder.hybrid_search("q", pool, limit=10, offset=0)
+
+    ids = [r["id"] for r in results]
+    assert ids == [1, 42]
+    assert conn.fetch.await_count == 2  # BM25 fetch + semantic-only metadata fetch
+    paper42 = next(r for r in results if r["id"] == 42)
+    assert paper42["title"] == "Semantic Paper"
+    assert paper42["bm25_rank"] is None
+    assert paper42["semantic_rank"] == 1
+
+
+@pytest.mark.asyncio
+async def test_hybrid_user_scoped_threads_user_id_into_queries():
+    """When user_id is set, both the BM25 and metadata fetches (and the semantic leg) receive it."""
+    embedder = _make_embedder()
+    bm25_records = [_dict_to_record(r) for r in _make_bm25_rows(1)]
+    semantic_meta = _dict_to_record(
+        {
+            "id": 42,
+            "title": "Semantic Paper",
+            "authors": ["A"],
+            "url": "https://example.com/42",
+            "abstract": "Abs 42",
+            "published_date": None,
+        }
+    )
+    pool, conn = _make_pool_with_fetch_sequence([bm25_records, [semantic_meta]])
+
+    chunks = [{"paper_id": 42, "score": 0.9}]
+    search_global = AsyncMock(return_value=chunks)
+    with patch.object(embedder, "search_chunks_global", search_global):
+        await embedder.hybrid_search("q", pool, limit=10, offset=0, user_id=7)
+
+    assert 7 in conn.fetch.await_args_list[0].args  # BM25 leg scoped to user 7
+    assert 7 in conn.fetch.await_args_list[1].args  # semantic-only metadata scoped to user 7
+    assert search_global.await_args.kwargs.get("user_id") == 7

@@ -341,6 +341,91 @@ def _quote_confidence(total: int, verified: int) -> QuoteConfidence:
     return QuoteConfidence.LOW
 
 
+async def _condense_digests(
+    client: "openai.AsyncOpenAI",
+    *,
+    db_pool: asyncpg.Pool,
+    model: str,
+    safe_title: str,
+    safe_authors: str,
+    digests: list[str],
+    paper_id: int,
+) -> str:
+    """Hierarchically condense window digests to one reduce-window block."""
+    level_texts = digests
+    level = 0
+    while True:
+        reduce_budget = await _input_char_budget(db_pool, _SUMMARY_OUTPUT_TOKENS)
+        block, truncated = wrap_delimited(
+            "paper_digests", "\n\n".join(level_texts), max_chars=reduce_budget
+        )
+        fits = not truncated and len(level_texts) <= _MAX_DIGESTS_PER_REDUCE
+        if fits or level >= _MAX_REDUCE_LEVELS:
+            if not fits:
+                logger.warning(
+                    "summarization: digests still exceed one reduce window after %d levels;"
+                    " reduce input truncated (paper_id=%s)",
+                    level,
+                    paper_id,
+                )
+            break
+        # Regroup on ESCAPED digest lengths for the same reason as the map path:
+        # wrap_delimited escapes before truncating, so windowing raw lengths lets
+        # escape inflation cut a group's tail. Window the escaped texts to fix the
+        # group sizes, then recover the matching raw digests by offset and pass
+        # those (wrap_delimited re-escapes them to the same length).
+        escaped_level = [safe_for_prompt(t, mode="escape") for t in level_texts]
+        escaped_groups = [
+            group[i : i + _MAX_DIGESTS_PER_REDUCE]
+            for group in chunk_windows(escaped_level, reduce_budget)
+            for i in range(0, len(group), _MAX_DIGESTS_PER_REDUCE)
+        ]
+        if len(escaped_groups) <= 1:
+            logger.warning(
+                "summarization: digests cannot be regrouped below one window;"
+                " reduce input truncated (paper_id=%s)",
+                paper_id,
+            )
+            break
+        logger.info(
+            "summarization condense level=%d: %d digests → %d groups (paper_id=%s)",
+            level,
+            len(level_texts),
+            len(escaped_groups),
+            paper_id,
+        )
+        condensed: list[str] = []
+        offset = 0
+        for escaped_group in escaped_groups:
+            raw_group = level_texts[offset : offset + len(escaped_group)]
+            offset += len(escaped_group)
+            group_block, group_truncated = wrap_delimited(
+                "paper_digests", "\n\n".join(raw_group), max_chars=reduce_budget
+            )
+            if group_truncated:
+                logger.warning(
+                    "summarization: escaped digest group exceeded reduce budget;"
+                    " tail truncated (level=%d, paper_id=%s)",
+                    level,
+                    paper_id,
+                )
+            merged = await _call_summarize_llm(
+                client,
+                response_model=CondensedDigest,
+                prompt=SUMMARIZE_PROMPT_TEMPLATE.format(
+                    title=safe_title, authors=safe_authors, text=group_block
+                ),
+                system=_SYSTEM_CONDENSE,
+                max_tokens=_DIGEST_OUTPUT_TOKENS,
+                model=model,
+                paper_id=paper_id,
+            )
+            condensed.append("\n".join(f"- {point}" for point in merged.key_points))
+        level_texts = condensed
+        level += 1
+    return block
+
+
 async def _map_reduce_summary(
     client: "openai.AsyncOpenAI",
     *,
@@ -418,77 +503,15 @@ async def _map_reduce_summary(
         carried_findings.extend(window_verified)
         digests.append(_render_digest(digest.key_points, window_verified))
 
-    level_texts = digests
-    level = 0
-    while True:
-        reduce_budget = await _input_char_budget(db_pool, _SUMMARY_OUTPUT_TOKENS)
-        block, truncated = wrap_delimited(
-            "paper_digests", "\n\n".join(level_texts), max_chars=reduce_budget
-        )
-        fits = not truncated and len(level_texts) <= _MAX_DIGESTS_PER_REDUCE
-        if fits or level >= _MAX_REDUCE_LEVELS:
-            if not fits:
-                logger.warning(
-                    "summarization: digests still exceed one reduce window after %d levels;"
-                    " reduce input truncated (paper_id=%s)",
-                    level,
-                    paper_id,
-                )
-            break
-        # Regroup on ESCAPED digest lengths for the same reason as the map path:
-        # wrap_delimited escapes before truncating, so windowing raw lengths lets
-        # escape inflation cut a group's tail. Window the escaped texts to fix the
-        # group sizes, then recover the matching raw digests by offset and pass
-        # those (wrap_delimited re-escapes them to the same length).
-        escaped_level = [safe_for_prompt(t, mode="escape") for t in level_texts]
-        escaped_groups = [
-            group[i : i + _MAX_DIGESTS_PER_REDUCE]
-            for group in chunk_windows(escaped_level, reduce_budget)
-            for i in range(0, len(group), _MAX_DIGESTS_PER_REDUCE)
-        ]
-        if len(escaped_groups) <= 1:
-            logger.warning(
-                "summarization: digests cannot be regrouped below one window;"
-                " reduce input truncated (paper_id=%s)",
-                paper_id,
-            )
-            break
-        logger.info(
-            "summarization condense level=%d: %d digests → %d groups (paper_id=%s)",
-            level,
-            len(level_texts),
-            len(escaped_groups),
-            paper_id,
-        )
-        condensed: list[str] = []
-        offset = 0
-        for escaped_group in escaped_groups:
-            raw_group = level_texts[offset : offset + len(escaped_group)]
-            offset += len(escaped_group)
-            group_block, group_truncated = wrap_delimited(
-                "paper_digests", "\n\n".join(raw_group), max_chars=reduce_budget
-            )
-            if group_truncated:
-                logger.warning(
-                    "summarization: escaped digest group exceeded reduce budget;"
-                    " tail truncated (level=%d, paper_id=%s)",
-                    level,
-                    paper_id,
-                )
-            merged = await _call_summarize_llm(
-                client,
-                response_model=CondensedDigest,
-                prompt=SUMMARIZE_PROMPT_TEMPLATE.format(
-                    title=safe_title, authors=safe_authors, text=group_block
-                ),
-                system=_SYSTEM_CONDENSE,
-                max_tokens=_DIGEST_OUTPUT_TOKENS,
-                model=model,
-                paper_id=paper_id,
-            )
-            condensed.append("\n".join(f"- {point}" for point in merged.key_points))
-        level_texts = condensed
-        level += 1
+    block = await _condense_digests(
+        client,
+        db_pool=db_pool,
+        model=model,
+        safe_title=safe_title,
+        safe_authors=safe_authors,
+        digests=digests,
+        paper_id=paper_id,
+    )
 
     reduce_prompt = SUMMARIZE_PROMPT_TEMPLATE.format(
         title=safe_title, authors=safe_authors, text=block
@@ -578,37 +601,14 @@ async def _find_cross_references(
     ]
 
 
-@observe()
-async def generate_paper_summary(
-    paper_id: int,
+async def _load_paper_for_summary(
     db_pool: asyncpg.Pool,
-    http_client: httpx.AsyncClient,
-    verifier: "QuoteVerifier",
-    embedder,
     *,
-    user_id: int | None = None,
-    openai_client: "openai.AsyncOpenAI | None" = None,
-    force: bool = False,
-) -> SummaryGenerationResult:
-    """Generate an LLM summary for a paper with quote verification.
-
-    Fetches chunks, calls the LLM, verifies quoted findings against source
-    text, and stores the resulting summary.  Papers that fit one context
-    window are summarized in a single call; longer papers go through a
-    full-coverage map-reduce (every chunk lands in exactly one window).
-    Returns the existing summary if one already exists (idempotent, with
-    ``coverage=1.0`` and ``passes=0``), unless ``force=True`` — then the
-    summary is regenerated and upserted over the existing row.
-
-    Parameters
-    ----------
-    openai_client:
-        Instructor-patched ``openai.AsyncOpenAI`` client.  Defaults to
-        ``svc.openai_client`` (set by the service lifespan).  Tests may
-        inject a mock here directly.
-    """
-    # --- Fetch all needed data under advisory lock ---
-    # Capture everything as plain Python objects before releasing the connection.
+    paper_id: int,
+    user_id: int | None,
+    force: bool,
+) -> SummaryGenerationResult | tuple[asyncpg.Record, list[ChunkResponse], str, str]:
+    """Load the paper inputs under an advisory lock, or the early result when idempotent."""
     async with db_pool.acquire() as conn:
         async with advisory_lock(conn, 2, paper_id):
             paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
@@ -644,9 +644,62 @@ async def generate_paper_summary(
 
             # Read model preference from user_config while connection is held
             smart_model = get_smart_model()
-    # Lock and connection released here.
+    return paper_row, chunks, full_text, smart_model
 
-    llm_model_name = smart_model
+
+def _apply_verification_fallback(
+    report: VerificationReport,
+    summary_brief: str,
+    summary_detailed: str,
+    abstract: str | None,
+    verified_findings: list[KeyFinding],
+) -> tuple[str, str, list[KeyFinding], bool]:
+    """Drop findings and substitute the abstract when verification found nothing."""
+    degraded = False
+    if report.total_findings == 0 or report.verified_count == 0:
+        verified_findings = []
+        if not (summary_brief or "").strip():
+            summary_brief = abstract or "No abstract available."
+            degraded = True
+        if not (summary_detailed or "").strip():
+            summary_detailed = abstract or "No abstract available."
+            degraded = True
+    return summary_brief, summary_detailed, verified_findings, degraded
+
+
+@observe()
+async def generate_paper_summary(
+    paper_id: int,
+    db_pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    verifier: "QuoteVerifier",
+    embedder,
+    *,
+    user_id: int | None = None,
+    openai_client: "openai.AsyncOpenAI | None" = None,
+    force: bool = False,
+) -> SummaryGenerationResult:
+    """Generate an LLM summary for a paper with quote verification.
+
+    Fetches chunks, calls the LLM, verifies quoted findings against source
+    text, and stores the resulting summary.  Papers that fit one context
+    window are summarized in a single call; longer papers go through a
+    full-coverage map-reduce (every chunk lands in exactly one window).
+    Returns the existing summary if one already exists (idempotent, with
+    ``coverage=1.0`` and ``passes=0``), unless ``force=True`` — then the
+    summary is regenerated and upserted over the existing row.
+
+    Parameters
+    ----------
+    openai_client:
+        Instructor-patched ``openai.AsyncOpenAI`` client.  Defaults to
+        ``svc.openai_client`` (set by the service lifespan).  Tests may
+        inject a mock here directly.
+    """
+    loaded = await _load_paper_for_summary(db_pool, paper_id=paper_id, user_id=user_id, force=force)
+    if isinstance(loaded, SummaryGenerationResult):
+        return loaded
+    paper_row, chunks, full_text, llm_model_name = loaded
 
     # Read S2 TLDR from paper metadata (if sourced from Semantic Scholar)
     s2_tldr = (paper_row["metadata"] or {}).get("s2_tldr", "")
@@ -735,17 +788,13 @@ async def generate_paper_summary(
     # brief/detailed — the UI labels them "LLM-generated"; confidence LOW +
     # summary_verified=False carry the trust signal. The abstract substitutes
     # only when the LLM text itself is empty.
-    summary_brief = parsed.summary_brief
-    summary_detailed = parsed.summary_detailed
-    degraded = False
-    if report.total_findings == 0 or report.verified_count == 0:
-        verified_findings = []
-        if not (summary_brief or "").strip():
-            summary_brief = paper_row["abstract"] or "No abstract available."
-            degraded = True
-        if not (summary_detailed or "").strip():
-            summary_detailed = paper_row["abstract"] or "No abstract available."
-            degraded = True
+    summary_brief, summary_detailed, verified_findings, degraded = _apply_verification_fallback(
+        report,
+        parsed.summary_brief,
+        parsed.summary_detailed,
+        paper_row["abstract"],
+        verified_findings,
+    )
 
     # --- Store in DB (new connection, no advisory lock) ---
     # ON CONFLICT DO UPDATE handles the rare race where two concurrent requests

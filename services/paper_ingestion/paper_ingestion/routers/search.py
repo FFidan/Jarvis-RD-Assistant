@@ -141,6 +141,97 @@ async def _resolve_sources_for_search(
 # ---------------------------------------------------------------------------
 
 
+def _collect_available_plugins(
+    source_types: list[SourceType],
+    budgets: list[int],
+    resolved_plugins: dict[SourceType, Any],
+    source_load_errors: dict[SourceType, Exception],
+) -> tuple[list[tuple[str, Any, int]], list[str]]:
+    """Partition resolved sources into usable plugins and degraded source names."""
+    plugins: list[tuple[str, Any, int]] = []
+    degraded_sources: list[str] = []
+    for st, budget in zip(source_types, budgets):
+        plugin = resolved_plugins.get(st)
+        if plugin is not None:
+            plugins.append((st.value, plugin, budget))
+            continue
+        exc = source_load_errors.get(st)
+        if isinstance(exc, HTTPException):
+            logger.warning("Source %s unavailable for search: %s", st.value, exc.detail)
+            degraded_sources.append(st.value)
+        elif exc is not None:
+            logger.warning("Source %s unavailable for search: %s", st.value, exc)
+            degraded_sources.append(st.value)
+    return plugins, degraded_sources
+
+
+async def _search_source_papers(
+    source_name: str, plugin: Any, budget: int, body: SearchRequest
+) -> tuple[str, list[PaperCreate], bool]:
+    """Search one source, returning an empty result with a failure flag on error."""
+    try:
+        papers = await plugin.search(
+            body.query,
+            budget,
+            year_from=body.year_from,
+            year_to=body.year_to,
+            sort_by=body.sort_by,
+            author=body.author,
+        )
+        return source_name, papers, False
+    except Exception as exc:  # broad: heterogeneous plugins raise different exception types
+        logger.warning("Source %s search failed: %s", source_name, exc, exc_info=True)
+        return source_name, [], True
+
+
+def _merge_search_results(
+    per_source: dict[str, list[PaperCreate]], sort_by: str | None
+) -> list[PaperCreate]:
+    """Merge per-source results (date sort or round-robin interleave) and dedup."""
+    if sort_by == "date":
+        all_papers: list[PaperCreate] = []
+        for papers in per_source.values():
+            all_papers.extend(papers)
+        deduped = _dedup_papers(all_papers)
+        deduped.sort(key=lambda p: p.published_date or date.min, reverse=True)
+    else:
+        interleaved = _round_robin_merge(per_source)
+        deduped = _dedup_papers(interleaved)
+    return deduped
+
+
+async def _persist_search_results(
+    db_pool: asyncpg.Pool, deduped: list[PaperCreate], user_id: int
+) -> list[PaperResponse]:
+    """Upsert search results into the DB and add them to the caller's library."""
+    saved_results: list[PaperResponse] = []
+    async with db_pool.acquire() as conn:
+        for paper in deduped:
+            paper.discovery_origin = "user_initiated"
+            row = await upsert_paper(conn, paper, discovered_by=user_id)
+            if user_id is not None:
+                await add_to_library(
+                    conn,
+                    user_id=user_id,
+                    paper_id=row["id"],
+                    added_via="manual_save",
+                )
+            saved_results.append(row_to_paper_response(row))
+    return saved_results
+
+
+def _count_results_by_source(
+    per_source: dict[str, list[PaperCreate]], deduped: list[PaperCreate]
+) -> dict[str, int]:
+    """Count deduped results per source name."""
+    per_source_counts: dict[str, int] = {}
+    for source_name in per_source:
+        per_source_counts[source_name] = sum(
+            1 for p in deduped if p.source_type.value == source_name
+        )
+    return per_source_counts
+
+
 @router.post("/search", response_model=MultiSourceSearchResponse)
 @limiter.limit("30/minute")
 async def search_papers(
@@ -174,43 +265,17 @@ async def search_papers(
         budgets[i] += 1
 
     # Resolve source instances (skip disabled/unknown without failing the whole request)
-    plugins = []
-    degraded_sources: list[str] = []
     resolved_plugins, source_load_errors = await _resolve_sources_for_search(
         source_types, db_pool, http_client, request
     )
-    for st, budget in zip(source_types, budgets):
-        plugin = resolved_plugins.get(st)
-        if plugin is not None:
-            plugins.append((st.value, plugin, budget))
-            continue
-        exc = source_load_errors.get(st)
-        if isinstance(exc, HTTPException):
-            logger.warning("Source %s unavailable for search: %s", st.value, exc.detail)
-            degraded_sources.append(st.value)
-        elif exc is not None:
-            logger.warning("Source %s unavailable for search: %s", st.value, exc)
-            degraded_sources.append(st.value)
+    plugins, degraded_sources = _collect_available_plugins(
+        source_types, budgets, resolved_plugins, source_load_errors
+    )
 
     # Fan-out search across all available sources concurrently
-    async def _search_one(
-        source_name: str, plugin: Any, budget: int
-    ) -> tuple[str, list[PaperCreate], bool]:
-        try:
-            papers = await plugin.search(
-                body.query,
-                budget,
-                year_from=body.year_from,
-                year_to=body.year_to,
-                sort_by=body.sort_by,
-                author=body.author,
-            )
-            return source_name, papers, False
-        except Exception as exc:  # broad: heterogeneous plugins raise different exception types
-            logger.warning("Source %s search failed: %s", source_name, exc, exc_info=True)
-            return source_name, [], True
-
-    raw_results = await asyncio.gather(*[_search_one(n, p, b) for n, p, b in plugins])
+    raw_results = await asyncio.gather(
+        *[_search_source_papers(name, plugin, budget, body) for name, plugin, budget in plugins]
+    )
 
     # Collect per-source results, track errors
     per_source: dict[str, list[PaperCreate]] = {}
@@ -219,40 +284,14 @@ async def search_papers(
         if failed and source_name not in degraded_sources:
             degraded_sources.append(source_name)
 
-    # Merge: date sort → sort merged list; else round-robin interleave
-    if body.sort_by == "date":
-        all_papers: list[PaperCreate] = []
-        for papers in per_source.values():
-            all_papers.extend(papers)
-        deduped = _dedup_papers(all_papers)
-        deduped.sort(key=lambda p: p.published_date or date.min, reverse=True)
-    else:
-        interleaved = _round_robin_merge(per_source)
-        deduped = _dedup_papers(interleaved)
+    deduped = _merge_search_results(per_source, body.sort_by)
 
     # Upsert into DB (per original /api/search behavior).
     # Insert canonical, then add to the caller's user_library so the
     # manually-searched paper appears in *their* feed.
-    saved_results: list[PaperResponse] = []
-    async with db_pool.acquire() as conn:
-        for paper in deduped:
-            paper.discovery_origin = "user_initiated"
-            row = await upsert_paper(conn, paper, discovered_by=user_id)
-            if user_id is not None:
-                await add_to_library(
-                    conn,
-                    user_id=user_id,
-                    paper_id=row["id"],
-                    added_via="manual_save",
-                )
-            saved_results.append(row_to_paper_response(row))
+    await _persist_search_results(db_pool, deduped, user_id)
 
-    # Build per_source_counts from deduped results
-    per_source_counts: dict[str, int] = {}
-    for source_name in per_source:
-        per_source_counts[source_name] = sum(
-            1 for p in deduped if p.source_type.value == source_name
-        )
+    per_source_counts = _count_results_by_source(per_source, deduped)
 
     return MultiSourceSearchResponse(
         results=deduped,
@@ -260,6 +299,73 @@ async def search_papers(
         per_source_counts=per_source_counts,
         degraded_sources=degraded_sources,
     )
+
+
+def _collect_preview_available_plugins(
+    source_types: list[SourceType],
+    budgets: list[int],
+    resolved_plugins: dict[SourceType, Any],
+    source_load_errors: dict[SourceType, Exception],
+) -> tuple[list[tuple[str, Any, int]], list[str], dict[str, SearchPreviewSourceError]]:
+    """Partition resolved preview sources into usable plugins, degraded names, and errors."""
+    plugins: list[tuple[str, Any, int]] = []
+    degraded_sources: list[str] = []
+    source_errors: dict[str, SearchPreviewSourceError] = {}
+    for st, budget in zip(source_types, budgets):
+        plugin = resolved_plugins.get(st)
+        if plugin is not None:
+            plugins.append((st.value, plugin, budget))
+            continue
+        exc = source_load_errors.get(st)
+        if isinstance(exc, HTTPException):
+            logger.warning("Source %s unavailable for preview search: %s", st.value, exc.detail)
+            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
+            degraded_sources.append(st.value)
+        elif isinstance(exc, PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS):
+            logger.warning("Source %s unavailable for preview search: %s", st.value, exc)
+            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
+            degraded_sources.append(st.value)
+        elif exc is not None:
+            logger.warning("Source %s unavailable for preview search: %s", st.value, exc)
+            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
+            degraded_sources.append(st.value)
+    return plugins, degraded_sources, source_errors
+
+
+async def _search_preview_source_papers(
+    source_name: str, plugin: Any, budget: int, body: SearchRequest
+) -> tuple[str, list[PaperCreate], SearchPreviewSourceError | None]:
+    """Search one source for the preview flow, capturing errors instead of raising."""
+    try:
+        papers = await plugin.search(
+            body.query,
+            budget,
+            year_from=body.year_from,
+            year_to=body.year_to,
+            sort_by=body.sort_by,
+            author=body.author,
+        )
+        return source_name, papers, None
+    except Exception as exc:  # broad: heterogeneous plugins raise different exception types
+        logger.warning("Source %s preview search failed: %s", source_name, exc, exc_info=True)
+        error = _build_preview_source_error(source_name, exc, plugin=plugin)
+        return source_name, [], error
+
+
+async def _build_preview_results(
+    db_pool: asyncpg.Pool, deduped: list[PaperCreate], user_id: int
+) -> list[SearchPreviewResult]:
+    """Attach local-library match metadata to each deduped preview result."""
+    library_indexes, title_year_candidates = await _load_local_library_matches(
+        db_pool, deduped, user_id
+    )
+    return [
+        SearchPreviewResult(
+            **paper.model_dump(),
+            library_match=_match_preview_result(paper, library_indexes, title_year_candidates),
+        )
+        for paper in deduped
+    ]
 
 
 @router.post("/search-preview", response_model=SearchPreviewResponse)
@@ -287,55 +393,24 @@ async def search_papers_preview(
         budgets[i] += 1
 
     # Resolve source instances
-    plugins = []
-    degraded_sources: list[str] = []
-    source_errors: dict[str, SearchPreviewSourceError] = {}
     resolved_plugins, source_load_errors = await _resolve_sources_for_search(
         source_types, db_pool, http_client, request
     )
-    for st, budget in zip(source_types, budgets):
-        plugin = resolved_plugins.get(st)
-        if plugin is not None:
-            plugins.append((st.value, plugin, budget))
-            continue
-        exc = source_load_errors.get(st)
-        if isinstance(exc, HTTPException):
-            logger.warning("Source %s unavailable for preview search: %s", st.value, exc.detail)
-            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
-            degraded_sources.append(st.value)
-        elif isinstance(exc, PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS):
-            logger.warning("Source %s unavailable for preview search: %s", st.value, exc)
-            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
-            degraded_sources.append(st.value)
-        elif exc is not None:
-            logger.warning("Source %s unavailable for preview search: %s", st.value, exc)
-            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
-            degraded_sources.append(st.value)
+    plugins, degraded_sources, source_errors = _collect_preview_available_plugins(
+        source_types, budgets, resolved_plugins, source_load_errors
+    )
 
     if not plugins:
         # All sources failed to load — raise using first source's type for compat
         raise HTTPException(status_code=400, detail="No sources available for search")
 
     # Fan-out search concurrently
-    async def _search_one(
-        source_name: str, plugin: Any, budget: int
-    ) -> tuple[str, list[PaperCreate], SearchPreviewSourceError | None]:
-        try:
-            papers = await plugin.search(
-                body.query,
-                budget,
-                year_from=body.year_from,
-                year_to=body.year_to,
-                sort_by=body.sort_by,
-                author=body.author,
-            )
-            return source_name, papers, None
-        except Exception as exc:  # broad: heterogeneous plugins raise different exception types
-            logger.warning("Source %s preview search failed: %s", source_name, exc, exc_info=True)
-            error = _build_preview_source_error(source_name, exc, plugin=plugin)
-            return source_name, [], error
-
-    raw_results = await asyncio.gather(*[_search_one(n, p, b) for n, p, b in plugins])
+    raw_results = await asyncio.gather(
+        *[
+            _search_preview_source_papers(name, plugin, budget, body)
+            for name, plugin, budget in plugins
+        ]
+    )
 
     per_source: dict[str, list[PaperCreate]] = {}
     for source_name, papers, error in raw_results:
@@ -344,33 +419,11 @@ async def search_papers_preview(
             source_errors[source_name] = error
             degraded_sources.append(source_name)
 
-    # Merge and dedup
-    if body.sort_by == "date":
-        all_papers: list[PaperCreate] = []
-        for papers in per_source.values():
-            all_papers.extend(papers)
-        deduped = _dedup_papers(all_papers)
-        deduped.sort(key=lambda p: p.published_date or date.min, reverse=True)
-    else:
-        interleaved = _round_robin_merge(per_source)
-        deduped = _dedup_papers(interleaved)
+    deduped = _merge_search_results(per_source, body.sort_by)
 
-    library_indexes, title_year_candidates = await _load_local_library_matches(
-        db_pool, deduped, user_id
-    )
-    preview_results = [
-        SearchPreviewResult(
-            **paper.model_dump(),
-            library_match=_match_preview_result(paper, library_indexes, title_year_candidates),
-        )
-        for paper in deduped
-    ]
+    preview_results = await _build_preview_results(db_pool, deduped, user_id)
 
-    per_source_counts: dict[str, int] = {}
-    for source_name in per_source:
-        per_source_counts[source_name] = sum(
-            1 for p in deduped if p.source_type.value == source_name
-        )
+    per_source_counts = _count_results_by_source(per_source, deduped)
 
     return SearchPreviewResponse(
         results=preview_results,

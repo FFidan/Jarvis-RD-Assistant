@@ -145,6 +145,194 @@ async def push_paper_to_zotero(
     logger.info("Paper %d pushed to Zotero", paper_id)
 
 
+def _build_creators(authors: list[Any]) -> list[dict[str, str]]:
+    """Map a paper's authors (strings or dicts) to Zotero creator entries."""
+    creators: list[dict[str, str]] = []
+    for author in authors:
+        if isinstance(author, str):
+            parts = author.rsplit(" ", 1)
+            creators.append(
+                {
+                    "creatorType": "author",
+                    "firstName": parts[0] if len(parts) > 1 else "",
+                    "lastName": parts[-1],
+                }
+            )
+        elif isinstance(author, dict):
+            creators.append(
+                {
+                    "creatorType": "author",
+                    "firstName": author.get("firstName", author.get("first_name", "")),
+                    "lastName": author.get("lastName", author.get("last_name", "")),
+                }
+            )
+    return creators
+
+
+async def _reconcile_existing_item(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    client: Any,
+    paper: Any,
+    project_ids: list[int],
+    owner_user_id: int | None,
+) -> None:
+    """File an already-pushed Zotero item into any newly linked project collections."""
+    paper_id = paper["id"]
+    collection_keys = await _resolve_project_collection_keys(
+        conn, client, project_ids, owner_user_id
+    )
+    if collection_keys:
+        try:
+            await client.add_item_to_collections(paper["zotero_item_key"], collection_keys)
+        except Exception:
+            logger.warning(
+                "Zotero collection reconcile failed for paper %d", paper_id, exc_info=True
+            )
+    logger.debug(
+        "Paper %d already in Zotero (%s); collections reconciled",
+        paper_id,
+        paper["zotero_item_key"],
+    )
+
+
+async def _lookup_existing_by_doi(client: Any, paper: Any) -> str | None:
+    """Return an existing Zotero item key matched by the paper's DOI, or None."""
+    if not paper["doi"]:
+        return None
+    try:
+        existing_item = await client.search_by_doi(paper["doi"])
+        if existing_item:
+            logger.info(
+                "Paper %d already in Zotero by DOI, reusing key %s",
+                paper["id"],
+                existing_item["key"],
+            )
+            return existing_item["key"]
+    except Exception:
+        logger.warning("Zotero DOI search failed for paper %d", paper["id"], exc_info=True)
+    return None
+
+
+async def _create_zotero_item(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    client: Any,
+    paper: Any,
+    project_ids: list[int],
+    owner_user_id: int | None,
+) -> str | None:
+    """Create a new Zotero item for the paper; return its key, or None on failure."""
+    paper_id = paper["id"]
+    creators = _build_creators(paper["authors"] or [])
+
+    # Fetch topics as Zotero tags.
+    topic_rows = await conn.fetch(
+        "SELECT t.name FROM topics t"
+        " JOIN paper_topics pt ON pt.topic_id = t.id"
+        " WHERE pt.paper_id = $1",
+        paper_id,
+    )
+    tags = [{"tag": row["name"]} for row in topic_rows]
+
+    item_data: dict[str, Any] = {
+        "itemType": "journalArticle",
+        "title": paper["title"] or "",
+        "creators": creators,
+        "DOI": paper["doi"] or "",
+        "url": paper["url"] or "",
+        "abstractNote": paper["abstract"] or "",
+        "tags": tags,
+        "extra": f"jarvis_paper_id={paper_id}",
+        "collections": [],
+    }
+
+    # Resolve / create a Zotero collection for each linked project.
+    collection_keys = await _resolve_project_collection_keys(
+        conn, client, project_ids, owner_user_id
+    )
+    item_data["collections"] = collection_keys
+
+    try:
+        result = await client.create_item(item_data)
+        zotero_key = result.get("successful", {}).get("0", {}).get("key")
+        if not zotero_key:
+            logger.error("Zotero push failed for paper %d: no key in response %s", paper_id, result)
+            return None
+    except Exception:
+        logger.error("Zotero push failed for paper %d", paper_id, exc_info=True)
+        raise
+    return zotero_key
+
+
+async def _persist_zotero_link(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    paper_id: int,
+    resolved_owner_id: int | None,
+    zotero_key: str,
+) -> bool:
+    """Persist the Zotero item key; False if already linked (shared-DOI sibling = done)."""
+    try:
+        await conn.execute(
+            """
+            INSERT INTO paper_user_zotero_links
+                (paper_id, user_id, zotero_item_key, zotero_last_pushed_at, updated_at)
+            VALUES ($1, $2, $3, NOW(), NOW())
+            ON CONFLICT (paper_id, user_id) DO UPDATE
+               SET zotero_item_key = EXCLUDED.zotero_item_key,
+                   zotero_last_pushed_at = EXCLUDED.zotero_last_pushed_at,
+                   updated_at = NOW()
+            """,
+            paper_id,
+            resolved_owner_id,
+            zotero_key,
+        )
+    except asyncpg.UniqueViolationError:
+        # DOI dedup can resolve a Zotero item this user already linked to a sibling
+        # papers row sharing the DOI (papers are deduped by external_id, not DOI).
+        # The partial unique index uq_pu_zotero_item(user_id, zotero_item_key) —
+        # which ON CONFLICT (paper_id, user_id) does NOT arbitrate — fires. The
+        # paper is already represented in the user's Zotero, so treat it as done
+        # rather than aborting the (unwrapped) push/resync job.
+        logger.info(
+            "Zotero push: paper %d maps to item %s already linked for user %s "
+            "(shared DOI, sibling paper row); skipping duplicate link",
+            paper_id,
+            zotero_key,
+            resolved_owner_id,
+        )
+        return False
+    return True
+
+
+async def _persist_bbt_citation_key(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+    client: Any,
+    paper_id: int,
+    resolved_owner_id: int | None,
+    zotero_key: str,
+) -> None:
+    """Best-effort: store the Better BibTeX citation key from the local BBT plugin."""
+    try:
+        bbt_key = await client.fetch_bbt_citation_key(zotero_key)
+        if bbt_key:
+            await conn.execute(
+                """
+                INSERT INTO paper_user_zotero_links
+                    (paper_id, user_id, zotero_citation_key, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (paper_id, user_id) DO UPDATE
+                   SET zotero_citation_key = EXCLUDED.zotero_citation_key,
+                       updated_at = NOW()
+                """,
+                paper_id,
+                resolved_owner_id,
+                bbt_key,
+            )
+    except Exception:
+        logger.debug(
+            "BBT citation key fetch failed for paper %d (non-fatal)", paper_id, exc_info=True
+        )
+
+
 async def _push_paper_with_conn(
     paper_id: int,
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
@@ -207,154 +395,23 @@ async def _push_paper_with_conn(
         # Already pushed for this owner: reconcile collections (resync clears the
         # key first, so a forced re-push falls through to the create branch instead).
         if paper["zotero_item_key"]:
-            # A project linked AFTER the first push must still file the existing
-            # item into that project's collection rather than no-op.
-            collection_keys = await _resolve_project_collection_keys(
-                conn, client, project_ids, owner_user_id
-            )
-            if collection_keys:
-                try:
-                    await client.add_item_to_collections(paper["zotero_item_key"], collection_keys)
-                except Exception:
-                    logger.warning(
-                        "Zotero collection reconcile failed for paper %d", paper_id, exc_info=True
-                    )
-            logger.debug(
-                "Paper %d already in Zotero (%s); collections reconciled",
-                paper_id,
-                paper["zotero_item_key"],
-            )
+            await _reconcile_existing_item(conn, client, paper, project_ids, owner_user_id)
             return
 
-        # DOI deduplication — reuse existing Zotero item if found.
-        zotero_key: str | None = None
-        if paper["doi"]:
-            try:
-                existing_item = await client.search_by_doi(paper["doi"])
-                if existing_item:
-                    zotero_key = existing_item["key"]
-                    logger.info(
-                        "Paper %d already in Zotero by DOI, reusing key %s", paper_id, zotero_key
-                    )
-            except Exception:
-                logger.warning("Zotero DOI search failed for paper %d", paper_id, exc_info=True)
-
+        # DOI deduplication — reuse an existing Zotero item if found; otherwise create one.
+        zotero_key = await _lookup_existing_by_doi(client, paper)
         if zotero_key is None:
-            # Build creators list from authors field (list of strings or dicts).
-            authors: list[Any] = paper["authors"] or []
-            creators: list[dict[str, str]] = []
-            for author in authors:
-                if isinstance(author, str):
-                    parts = author.rsplit(" ", 1)
-                    creators.append(
-                        {
-                            "creatorType": "author",
-                            "firstName": parts[0] if len(parts) > 1 else "",
-                            "lastName": parts[-1],
-                        }
-                    )
-                elif isinstance(author, dict):
-                    creators.append(
-                        {
-                            "creatorType": "author",
-                            "firstName": author.get("firstName", author.get("first_name", "")),
-                            "lastName": author.get("lastName", author.get("last_name", "")),
-                        }
-                    )
-
-            # Fetch topics as Zotero tags.
-            topic_rows = await conn.fetch(
-                "SELECT t.name FROM topics t"
-                " JOIN paper_topics pt ON pt.topic_id = t.id"
-                " WHERE pt.paper_id = $1",
-                paper_id,
-            )
-            tags = [{"tag": row["name"]} for row in topic_rows]
-
-            item_data: dict[str, Any] = {
-                "itemType": "journalArticle",
-                "title": paper["title"] or "",
-                "creators": creators,
-                "DOI": paper["doi"] or "",
-                "url": paper["url"] or "",
-                "abstractNote": paper["abstract"] or "",
-                "tags": tags,
-                "extra": f"jarvis_paper_id={paper_id}",
-                "collections": [],
-            }
-
-            # Resolve / create a Zotero collection for each linked project.
-            collection_keys = await _resolve_project_collection_keys(
-                conn, client, project_ids, owner_user_id
-            )
-            item_data["collections"] = collection_keys
-
-            try:
-                result = await client.create_item(item_data)
-                zotero_key = result.get("successful", {}).get("0", {}).get("key")
-                if not zotero_key:
-                    logger.error(
-                        "Zotero push failed for paper %d: no key in response %s", paper_id, result
-                    )
-                    return
-            except Exception:
-                logger.error("Zotero push failed for paper %d", paper_id, exc_info=True)
-                raise
+            zotero_key = await _create_zotero_item(conn, client, paper, project_ids, owner_user_id)
+            if zotero_key is None:
+                return
 
         # Persist the Zotero item key in the per-user link table (the global
         # papers.zotero_* columns are no longer written — linkage is per-(paper,user)).
-        try:
-            await conn.execute(
-                """
-                INSERT INTO paper_user_zotero_links
-                    (paper_id, user_id, zotero_item_key, zotero_last_pushed_at, updated_at)
-                VALUES ($1, $2, $3, NOW(), NOW())
-                ON CONFLICT (paper_id, user_id) DO UPDATE
-                   SET zotero_item_key = EXCLUDED.zotero_item_key,
-                       zotero_last_pushed_at = EXCLUDED.zotero_last_pushed_at,
-                       updated_at = NOW()
-                """,
-                paper_id,
-                resolved_owner_id,
-                zotero_key,
-            )
-        except asyncpg.UniqueViolationError:
-            # DOI dedup can resolve a Zotero item this user already linked to a sibling
-            # papers row sharing the DOI (papers are deduped by external_id, not DOI).
-            # The partial unique index uq_pu_zotero_item(user_id, zotero_item_key) —
-            # which ON CONFLICT (paper_id, user_id) does NOT arbitrate — fires. The
-            # paper is already represented in the user's Zotero, so treat it as done
-            # rather than aborting the (unwrapped) push/resync job.
-            logger.info(
-                "Zotero push: paper %d maps to item %s already linked for user %s "
-                "(shared DOI, sibling paper row); skipping duplicate link",
-                paper_id,
-                zotero_key,
-                resolved_owner_id,
-            )
+        if not await _persist_zotero_link(conn, paper_id, resolved_owner_id, zotero_key):
             return
 
         # Best-effort: fetch Better BibTeX citation key from local BBT plugin.
-        try:
-            bbt_key = await client.fetch_bbt_citation_key(zotero_key)
-            if bbt_key:
-                await conn.execute(
-                    """
-                    INSERT INTO paper_user_zotero_links
-                        (paper_id, user_id, zotero_citation_key, updated_at)
-                    VALUES ($1, $2, $3, NOW())
-                    ON CONFLICT (paper_id, user_id) DO UPDATE
-                       SET zotero_citation_key = EXCLUDED.zotero_citation_key,
-                           updated_at = NOW()
-                    """,
-                    paper_id,
-                    resolved_owner_id,
-                    bbt_key,
-                )
-        except Exception:
-            logger.debug(
-                "BBT citation key fetch failed for paper %d (non-fatal)", paper_id, exc_info=True
-            )
+        await _persist_bbt_citation_key(conn, client, paper_id, resolved_owner_id, zotero_key)
 
 
 async def resync_paper_to_zotero(

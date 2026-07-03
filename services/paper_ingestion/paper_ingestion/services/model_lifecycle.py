@@ -641,6 +641,73 @@ def safe_num_ctx(
     return best
 
 
+def _status_for_entry(
+    entry: ModelCatalogEntry,
+    *,
+    active: bool,
+    fit: Fit,
+    provider_key_present: bool,
+    installed_names: dict[str, dict[str, Any]],
+) -> tuple[Status, bool, dict[str, Any]]:
+    """Resolve (status, pulled, installed-payload) for one catalog entry."""
+    if entry.provider != "ollama":
+        status: Status = "cloud_active" if active and provider_key_present else "cloud_required"
+        return status, False, {}
+    tag = normalize_model_tag(entry.ollama_tag or entry.id)
+    installed_payload = installed_names.get(tag)
+    pulled = installed_payload is not None
+    if active:
+        status = "active"
+    elif pulled:
+        status = "pulled"
+    elif fit == "unfit":
+        status = "unfit"
+    else:
+        status = "downloadable"
+    return status, pulled, installed_payload or {}
+
+
+def _assignability_for_entry(
+    entry: ModelCatalogEntry,
+    *,
+    status: Status,
+    pulled: bool,
+    active: bool,
+    provider_key_present: bool,
+) -> tuple[bool, str | None]:
+    """Resolve (can_assign, assign_blocker) for one catalog entry."""
+    if not entry.assignable:
+        return False, (
+            entry.notes or "This model is tracked for evaluation but is not assignable yet."
+        )
+    if entry.provider == "ollama":
+        can_assign = pulled or active
+        if can_assign:
+            return True, None
+        if status == "unfit":
+            return False, "Model does not fit this machine."
+        return False, "Pull this model first."
+    can_assign = provider_key_present or active
+    assign_blocker = (
+        None
+        if can_assign
+        else f"Configure the {entry.provider} API key before assigning this model."
+    )
+    return can_assign, assign_blocker
+
+
+def _effective_num_ctx_for_entry(entry: ModelCatalogEntry, ctx_per_role: dict[str, int]) -> int:
+    """Most permissive user-specified num_ctx across entry's roles, else the catalog default."""
+    role_ctxs = [ctx_per_role[r] for r in entry.roles if r in ctx_per_role]
+    if role_ctxs:
+        return max(role_ctxs)
+    return (
+        entry.default_num_ctx
+        if entry.default_num_ctx is not None
+        else min(_DEFAULT_NUM_CTX_FALLBACK, entry.context_tokens)
+    )
+
+
 def build_model_statuses(
     *,
     installed: list[dict[str, Any]],
@@ -675,58 +742,24 @@ def build_model_statuses(
         provider_key_present = bool(cloud_keys.get(entry.provider, False))
         fit = _fit_for_entry(entry, hardware=hw, cloud_key_present=provider_key_present)
 
-        if entry.provider == "ollama":
-            tag = normalize_model_tag(entry.ollama_tag or entry.id)
-            installed_payload = installed_names.get(tag)
-            pulled = installed_payload is not None
-            if active:
-                status: Status = "active"
-            elif pulled:
-                status = "pulled"
-            elif fit == "unfit":
-                status = "unfit"
-            else:
-                status = "downloadable"
-            payload.update(installed_payload or {})
-        else:
-            pulled = False
-            status = "cloud_active" if active and provider_key_present else "cloud_required"
+        status, pulled, installed_payload = _status_for_entry(
+            entry,
+            active=active,
+            fit=fit,
+            provider_key_present=provider_key_present,
+            installed_names=installed_names,
+        )
+        payload.update(installed_payload)
 
-        if not entry.assignable:
-            can_assign = False
-            assign_blocker = (
-                entry.notes or "This model is tracked for evaluation but is not assignable yet."
-            )
-        elif entry.provider == "ollama":
-            can_assign = pulled or active
-            if can_assign:
-                assign_blocker = None
-            elif status == "unfit":
-                assign_blocker = "Model does not fit this machine."
-            else:
-                assign_blocker = "Pull this model first."
-        else:
-            can_assign = provider_key_present or active
-            assign_blocker = (
-                None
-                if can_assign
-                else (f"Configure the {entry.provider} API key before assigning this model.")
-            )
+        can_assign, assign_blocker = _assignability_for_entry(
+            entry,
+            status=status,
+            pulled=pulled,
+            active=active,
+            provider_key_present=provider_key_present,
+        )
 
-        # Determine the effective num_ctx for fit calculation.  Use the
-        # most permissive (max) user-specified value across all roles this
-        # entry supports; fall back to the catalog default when absent.
-        role_ctxs = [ctx_per_role[r] for r in entry.roles if r in ctx_per_role]
-        effective_num_ctx: int
-        if role_ctxs:
-            effective_num_ctx = max(role_ctxs)
-        else:
-            effective_num_ctx = (
-                entry.default_num_ctx
-                if entry.default_num_ctx is not None
-                else min(_DEFAULT_NUM_CTX_FALLBACK, entry.context_tokens)
-            )
-
+        effective_num_ctx = _effective_num_ctx_for_entry(entry, ctx_per_role)
         fit_detail = compute_vram_fit(entry, effective_num_ctx, hw)
 
         payload.update(
@@ -831,6 +864,30 @@ async def model_assignment_error(
     return None
 
 
+async def _stream_pull_progress(resp: httpx.Response, ctx: Any, last_message: str) -> str:
+    """Forward Ollama pull progress events to the job stream; returns the latest status."""
+    async for line in resp.aiter_lines():
+        await _raise_if_cancelled(ctx)
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        status = str(event.get("status") or last_message)
+        last_message = status
+        total = event.get("total")
+        completed = event.get("completed")
+        if isinstance(total, int | float) and total > 0 and isinstance(completed, int | float):
+            progress = min(0.99, max(0.01, float(completed) / float(total)))
+            await ctx.update_progress(progress, status)
+        elif event.get("status"):
+            await ctx.update_progress(0.05, status)
+        if event.get("error"):
+            raise RuntimeError(str(event["error"]))
+    return last_message
+
+
 async def _model_pull_job(
     pool: Any,
     http_client: httpx.AsyncClient,
@@ -864,29 +921,7 @@ async def _model_pull_job(
             if resp.status_code >= 400:
                 text = await resp.aread()
                 raise RuntimeError(f"Ollama model pull failed ({resp.status_code}): {text[:200]!r}")
-            async for line in resp.aiter_lines():
-                await _raise_if_cancelled(ctx)
-                if not line.strip():
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                status = str(event.get("status") or last_message)
-                last_message = status
-                total = event.get("total")
-                completed = event.get("completed")
-                if (
-                    isinstance(total, int | float)
-                    and total > 0
-                    and isinstance(completed, int | float)
-                ):
-                    progress = min(0.99, max(0.01, float(completed) / float(total)))
-                    await ctx.update_progress(progress, status)
-                elif event.get("status"):
-                    await ctx.update_progress(0.05, status)
-                if event.get("error"):
-                    raise RuntimeError(str(event["error"]))
+            last_message = await _stream_pull_progress(resp, ctx, last_message)
     except httpx.HTTPError as exc:
         await ctx.update_progress(0.0, f"Failed: Could not reach Ollama pull API: {exc}")
         raise RuntimeError(f"Could not reach Ollama pull API: {exc}") from exc

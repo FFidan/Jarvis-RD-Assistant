@@ -85,9 +85,9 @@ async def _zotero_request_with_retry(
         # because Zotero's rate-limit window is typically minutes-long.
         return resp
     logger.info(
-        "Zotero 429 — sleeping %.1fs before retry (url=%s)",
+        "Zotero 429 on %s — sleeping %.1fs before retry",
+        method,
         delay,
-        url,
     )
     await asyncio.sleep(delay)
     return await http.request(method, url, **kwargs)

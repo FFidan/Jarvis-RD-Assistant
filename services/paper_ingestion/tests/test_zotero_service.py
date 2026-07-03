@@ -2709,6 +2709,76 @@ async def test_push_highlights_job_single_user_skips_visibility_check():
     mock_push.assert_awaited_once_with(7, pool, http, owner_user_id=None)
 
 
+async def test_zotero_push_job_revalidates_ownership_before_push():
+    """zotero.push re-validates ownership at execution time, then delegates the push."""
+    from paper_ingestion.integrations.zotero_service import _zotero_push_job
+
+    conn = _make_conn()
+    pool = _make_pool(conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    ctx = AsyncMock()
+
+    with (
+        patch("jarvis_common.db_helpers.assert_paper_ownership", AsyncMock()) as mock_assert,
+        patch(
+            "paper_ingestion.integrations._zotero_jobs.push_paper_to_zotero",
+            AsyncMock(),
+        ) as mock_push,
+    ):
+        result = await _zotero_push_job(pool, http, {"paper_id": 7, "user_id": 42}, ctx)
+
+    mock_assert.assert_awaited_once_with(conn, 7, 42)
+    mock_push.assert_awaited_once_with(7, pool, http, owner_user_id=42)
+    assert result == {"paper_id": 7, "status": "pushed"}
+
+
+async def test_zotero_resync_job_revalidates_ownership_before_resync():
+    """zotero.resync re-validates ownership at execution time, then delegates the resync."""
+    from paper_ingestion.integrations.zotero_service import _zotero_resync_job
+
+    conn = _make_conn()
+    pool = _make_pool(conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    ctx = AsyncMock()
+
+    with (
+        patch("jarvis_common.db_helpers.assert_paper_ownership", AsyncMock()) as mock_assert,
+        patch(
+            "paper_ingestion.integrations._zotero_jobs.resync_paper_to_zotero",
+            AsyncMock(),
+        ) as mock_resync,
+    ):
+        result = await _zotero_resync_job(pool, http, {"paper_id": 7, "user_id": 42}, ctx)
+
+    mock_assert.assert_awaited_once_with(conn, 7, 42)
+    mock_resync.assert_awaited_once_with(7, pool, http, owner_user_id=42)
+    assert result == {"paper_id": 7, "status": "resynced"}
+
+
+async def test_zotero_sync_annotations_job_revalidates_ownership_before_sync():
+    """zotero.sync_annotations re-validates ownership at execution time, then delegates."""
+    from paper_ingestion.integrations.zotero_service import _zotero_sync_annotations_job
+
+    conn = _make_conn()
+    pool = _make_pool(conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    ctx = AsyncMock()
+    sentinel = {"paper_id": 7, "status": "ok", "imported": 3}
+
+    with (
+        patch("jarvis_common.db_helpers.assert_paper_ownership", AsyncMock()) as mock_assert,
+        patch(
+            "paper_ingestion.integrations._zotero_jobs.sync_annotations_for_paper",
+            AsyncMock(return_value=sentinel),
+        ) as mock_sync,
+    ):
+        result = await _zotero_sync_annotations_job(pool, http, {"paper_id": 7, "user_id": 42}, ctx)
+
+    mock_assert.assert_awaited_once_with(conn, 7, 42)
+    mock_sync.assert_awaited_once_with(7, pool, http, owner_user_id=42)
+    assert result == sentinel
+
+
 def test_parse_zotero_item_builds_authors_url_fallback_and_skips_jarvis_origin():
     from paper_ingestion.integrations.zotero_service import _parse_zotero_item
 

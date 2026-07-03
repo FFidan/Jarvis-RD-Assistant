@@ -42,6 +42,7 @@ export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true
   // First question of this chat: the warm-up hint only applies before any prior answer.
   const isFirstQuestion = messages.filter((m) => m.role === 'user').length <= 1;
   const [input, setInput] = useState('');
+  const [tipOpen, setTipOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll on new content
@@ -149,7 +150,7 @@ export function StreamingChat({ chatId, scope, paperId, hasAnalyzedPapers = true
       {/* Input */}
       <div className="border-t p-4">
         <TooltipProvider>
-          <Tooltip open={!hasAnalyzedPapers ? undefined : false}>
+          <Tooltip open={!hasAnalyzedPapers && tipOpen} onOpenChange={setTipOpen}>
             <TooltipTrigger asChild>
               {/* span wrapper needed so tooltip fires even when inner inputs are disabled */}
               <span className="block">

@@ -908,3 +908,47 @@ async def test_system_models_routing_consistent_with_latest_suffix(_app, monkeyp
     assert body.consistent is True, (
         f"consistent must be True when :latest is the only difference; routing={body.routing}"
     )
+
+
+@pytest.mark.asyncio
+async def test_system_models_num_ctx_override_reflected_in_fit_detail(_app, monkeypatch):
+    """Per-machine num_ctx overrides flow into catalog fit_detail; unparsable values are skipped.
+
+    Staged: llm.<machine>.smart_num_ctx = 32768 (int) and
+    llm.<machine>.embed_num_ctx = "notanint". Smart-role catalog entries must
+    report fit_detail.at_num_ctx == 32768; embed entries fall back to their
+    catalog default because the unparsable override is ignored.
+    """
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+    import paper_ingestion.services.litellm_config as _lc
+
+    request = _make_request(app.state.db_pool, mock_http)
+
+    async def fetch_side_effect(sql, keys):
+        if any(str(k).endswith("_num_ctx") for k in keys):
+            smart_key = next(k for k in keys if k.endswith("smart_num_ctx"))
+            embed_key = next(k for k in keys if k.endswith("embed_num_ctx"))
+            return [
+                FakeRecord(key=smart_key, value=32768),
+                FakeRecord(key=embed_key, value="notanint"),
+            ]
+        return []
+
+    conn.fetch.side_effect = fetch_side_effect
+    mock_http.get.side_effect = httpx.ConnectError("no ollama")
+
+    async def _no_deployments():
+        return []
+
+    monkeypatch.setattr(_lc, "get_litellm_deployments", _no_deployments)
+
+    body = await get_system_models(request)
+
+    by_id = {item["id"]: item for item in body.catalog}
+    assert by_id["qwen3:8b"]["fit_detail"]["at_num_ctx"] == 32768, (
+        f"smart override must reach fit_detail; got {by_id['qwen3:8b']['fit_detail']}"
+    )
+    assert by_id["qwen3-embedding:0.6b"]["fit_detail"]["at_num_ctx"] == 512, (
+        "unparsable embed override must be skipped so the catalog default (512) applies"
+    )

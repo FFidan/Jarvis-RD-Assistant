@@ -356,9 +356,8 @@ async def _replace_alias_deployment(
             f"(delivery rolled back): {'; '.join(delete_errors)}"
         )
     logger.info(
-        "LiteLLM alias %r now routes %s (deployment %s; %d stale deployment(s) removed)",
+        "LiteLLM alias %r now routes deployment %s (%d stale deployment(s) removed)",
         alias,
-        new_params.get("model"),
         new_id or "<unknown id>",
         len(stale_db_entries),
     )
@@ -575,6 +574,85 @@ async def _deliver_cloud(
     return delivered
 
 
+def _local_new_params(
+    alias: str,
+    new_model: str,
+    base_params: dict[str, Any],
+    base_entry: LiteLLMDeployment | None,
+    effective_num_ctx: int | None,
+    effective_thinking_disabled: bool | None,
+    thinking_disabled: bool | None,
+) -> dict[str, Any]:
+    """Build the litellm_params payload for a local/Ollama delivery."""
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+    new_params = {k: v for k, v in base_params.items() if k != "model"}
+    if base_entry is None:
+        # Fresh creation (post-de-seed bootstrap): seed the tuned defaults.
+        new_params = {**ALIAS_BOOTSTRAP_PARAMS.get(alias, {}), **new_params}
+    new_params["model"] = new_model
+    if is_local_ollama(new_model):
+        new_params["api_base"] = get_paper_ingestion_settings().ollama_base_url
+    # else (inherited non-cloud prefix, e.g. the vLLM openai/ spike): keep the
+    # carried api_base — forcing the Ollama URL would break that transport.
+    if effective_num_ctx is not None and is_local_ollama(new_model):
+        new_params["num_ctx"] = effective_num_ctx
+    if effective_thinking_disabled:
+        new_params["think"] = False
+    elif thinking_disabled is False:
+        # Explicit re-enable: remove the think flag, preserving everything else.
+        new_params.pop("think", None)
+    return new_params
+
+
+def _local_is_noop(
+    alias: str,
+    new_params: dict[str, Any],
+    db_entries: list[LiteLLMDeployment],
+    yaml_entries: list[LiteLLMDeployment],
+) -> bool:
+    """True when the alias already routes *new_params* — no delivery needed."""
+    desired_signature = _routing_signature(new_params)
+    if len(db_entries) == 1 and not yaml_entries:
+        return _routing_signature(db_entries[0].litellm_params) == desired_signature
+    if not db_entries and yaml_entries:
+        if any(_routing_signature(e.litellm_params) == desired_signature for e in yaml_entries):
+            # The YAML already routes exactly this; a DB copy would stack.
+            return True
+        logger.warning(
+            "Alias %r is YAML-seeded with different routing than requested. The YAML "
+            "deployment cannot be removed at runtime and will STACK with the new DB "
+            "deployment — remove the %r entry from litellm/config.yaml.",
+            alias,
+            alias,
+        )
+    return False
+
+
+async def _mirror_num_ctx_budget(
+    delivered: bool,
+    db_pool: Any,
+    alias: str,
+    effective_num_ctx: int | None,
+    new_model: str,
+) -> None:
+    """Mirror a delivered per-machine num_ctx into the system prompt-budget row."""
+    # Keeps prompt-budget readers in lock-step with the window just delivered to
+    # the proxy; a stale budget row would silently overflow the new context.
+    if not (
+        delivered
+        and db_pool is not None
+        and effective_num_ctx is not None
+        and is_local_ollama(new_model)
+    ):
+        return
+    from paper_ingestion.services.config_db import _upsert_system_num_ctx  # noqa: PLC0415
+
+    async with db_pool.acquire() as conn:
+        await _upsert_system_num_ctx(conn, alias, effective_num_ctx)
+    invalidate_effective_num_ctx_cache()
+
+
 async def _deliver_local(
     alias: str,
     new_model: str,
@@ -594,61 +672,20 @@ async def _deliver_local(
     a divergent YAML-seeded stack), then mirrors a delivered num_ctx into the
     system prompt-budget row to keep budget readers in lock-step.
     """
-    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
-
-    new_params = {k: v for k, v in base_params.items() if k != "model"}
-    if base_entry is None:
-        # Fresh creation (post-de-seed bootstrap): seed the tuned defaults.
-        new_params = {**ALIAS_BOOTSTRAP_PARAMS.get(alias, {}), **new_params}
-    new_params["model"] = new_model
-    if is_local_ollama(new_model):
-        new_params["api_base"] = get_paper_ingestion_settings().ollama_base_url
-    # else (inherited non-cloud prefix, e.g. the vLLM openai/ spike): keep the
-    # carried api_base — forcing the Ollama URL would break that transport.
-    if effective_num_ctx is not None and is_local_ollama(new_model):
-        new_params["num_ctx"] = effective_num_ctx
-    if effective_thinking_disabled:
-        new_params["think"] = False
-    elif thinking_disabled is False:
-        # Explicit re-enable: remove the think flag, preserving everything else.
-        new_params.pop("think", None)
-
-    desired_signature = _routing_signature(new_params)
-    if len(db_entries) == 1 and not yaml_entries:
-        if _routing_signature(db_entries[0].litellm_params) == desired_signature:
-            return False
-    elif not db_entries and yaml_entries:
-        if any(_routing_signature(e.litellm_params) == desired_signature for e in yaml_entries):
-            # The YAML already routes exactly this; a DB copy would stack.
-            return False
-        logger.warning(
-            "Alias %r is YAML-seeded with different routing than requested. The YAML "
-            "deployment cannot be removed at runtime and will STACK with the new DB "
-            "deployment — remove the %r entry from litellm/config.yaml.",
-            alias,
-            alias,
-        )
+    new_params = _local_new_params(
+        alias,
+        new_model,
+        base_params,
+        base_entry,
+        effective_num_ctx,
+        effective_thinking_disabled,
+        thinking_disabled,
+    )
+    if _local_is_noop(alias, new_params, db_entries, yaml_entries):
+        return False
 
     delivered = await _replace_alias_deployment(alias, new_params, db_entries)
-
-    # Keep the prompt-budget source of truth in lock-step with the value just
-    # delivered to the (deployment-global) proxy. The Settings PUT path writes
-    # this same system row on success; without mirroring it here, a reconciler
-    # or model-change delivery of a per-machine num_ctx would route the new
-    # window while the budget readers kept using a stale one (silent overflow
-    # across a fleet). Only when a num_ctx actually rode the delivery.
-    if (
-        delivered
-        and db_pool is not None
-        and effective_num_ctx is not None
-        and is_local_ollama(new_model)
-    ):
-        from paper_ingestion.services.config_db import _upsert_system_num_ctx  # noqa: PLC0415
-
-        async with db_pool.acquire() as conn:
-            await _upsert_system_num_ctx(conn, alias, effective_num_ctx)
-        invalidate_effective_num_ctx_cache()
-
+    await _mirror_num_ctx_budget(delivered, db_pool, alias, effective_num_ctx, new_model)
     return delivered
 
 
@@ -730,88 +767,84 @@ async def update_litellm_model(
     )
 
 
-async def ensure_smart_fallback(
-    fast_model: str,
-    db_pool: Any = None,
-    machine_id: str = "",  # noqa: ARG001  (signature parity with update_litellm_model; reserved)
-) -> bool:
-    """Ensure the ``smart-fallback`` deployment group exists and routes *fast_model*.
-
-    ``router_settings.fallbacks`` in the YAML maps ``smart → ["smart-fallback"]``;
-    this function creates the real deployment behind that group (the fast-tier
-    model with a longer timeout). Cloud fast models mirror
-    ``update_litellm_model``'s cloud semantics (no api_base/num_ctx/think; the
-    Fernet-decrypted provider key is carried); when the provider key is missing
-    the fallback pins to the static pulled default instead of creating a
-    deployment that cannot authenticate — i.e. one guaranteed to fail exactly
-    when smart fails. Returns True when a delivery happened, False when the
-    deployment already routes the target. Raises ``RuntimeError`` on delivery
-    failure.
-    """
+def _smart_fallback_normalize(fast_model: str) -> tuple[str, str | None]:
+    """Strip the implicit :latest tag, validate, and detect a cloud prefix."""
     if fast_model.endswith(":latest"):
         fast_model = fast_model[:-7]
     _validate_model_name(fast_model.split("/", 1)[-1])
-
     cloud_provider: str | None = None
     if "/" in fast_model:
         cloud_provider = _CLOUD_PREFIX_TO_PROVIDER.get(fast_model.split("/", 1)[0])
+    return fast_model, cloud_provider
 
+
+async def _smart_fallback_resolve_cloud_key(
+    fast_model: str,
+    cloud_provider: str | None,
+    db_pool: Any,
+) -> tuple[str, str | None, str | None]:
+    """Resolve the provider key for a cloud fast model, else pin the static default."""
+    if cloud_provider is None:
+        return fast_model, None, None
     api_key: str | None = None
-    if cloud_provider is not None:
-        if db_pool is not None:
-            api_key = await get_provider_api_key(cloud_provider, db_pool)
-        if api_key is None:
-            if fast_model not in _FALLBACK_KEYLESS_WARNED:
-                _FALLBACK_KEYLESS_WARNED.add(fast_model)
-                logger.warning(
-                    "smart-fallback: no %r API key available for %r; pinning the "
-                    "fallback to the static default %r until a key is saved",
-                    cloud_provider,
-                    fast_model,
-                    _STATIC_FALLBACK_MODEL,
-                )
-            cloud_provider = None
-            fast_model = _STATIC_FALLBACK_MODEL
+    if db_pool is not None:
+        api_key = await get_provider_api_key(cloud_provider, db_pool)
+    if api_key is not None:
+        return fast_model, cloud_provider, api_key
+    if fast_model not in _FALLBACK_KEYLESS_WARNED:
+        _FALLBACK_KEYLESS_WARNED.add(fast_model)
+        logger.warning(
+            "smart-fallback: no %r API key available for %r; pinning the "
+            "fallback to the static default %r until a key is saved",
+            cloud_provider,
+            fast_model,
+            _STATIC_FALLBACK_MODEL,
+        )
+    return _STATIC_FALLBACK_MODEL, None, None
 
-    new_model = fast_model if "/" in fast_model else f"ollama_chat/{fast_model}"
 
-    deployments = await get_litellm_deployments()
-    db_entries, yaml_entries = _deployments_for_alias(deployments, "smart-fallback")
+async def _smart_fallback_deliver_cloud(
+    new_model: str,
+    api_key: str | None,
+    db_entries: list[LiteLLMDeployment],
+    yaml_entries: list[LiteLLMDeployment],
+) -> bool:
+    """Deliver (or no-op) the cloud smart-fallback deployment."""
+    # Process-local fingerprint in the no-op check: a rotated key re-delivers
+    # within one reconciler pass instead of riding the stale key forever.
+    desired_cloud = (new_model, None, _key_fingerprint(api_key))
+    if (
+        len(db_entries) == 1
+        and not yaml_entries
+        and db_entries[0].litellm_params.get("model") == new_model
+        and _CLOUD_DELIVERED_FINGERPRINTS.get("smart-fallback") == desired_cloud
+    ):
+        return False
+    cloud_params: dict[str, Any] = {
+        k: v
+        for k, v in ALIAS_BOOTSTRAP_PARAMS["smart-fallback"].items()
+        # Ollama-only params must not leak onto a cloud deployment.
+        if k not in ("num_ctx", "think")
+    }
+    cloud_params["model"] = new_model
+    cloud_params["api_key"] = api_key
+    delivered = await _replace_alias_deployment("smart-fallback", cloud_params, db_entries)
+    _CLOUD_DELIVERED_FINGERPRINTS["smart-fallback"] = desired_cloud
+    return delivered
 
-    if cloud_provider is not None:
-        # Same no-op shape as update_litellm_model's cloud branch: live model
-        # match + process-local key fingerprint, so a rotated key re-delivers
-        # within one reconciler pass instead of riding the stale key forever.
-        desired_cloud = (new_model, None, _key_fingerprint(api_key))
-        if (
-            len(db_entries) == 1
-            and not yaml_entries
-            and db_entries[0].litellm_params.get("model") == new_model
-            and _CLOUD_DELIVERED_FINGERPRINTS.get("smart-fallback") == desired_cloud
-        ):
-            return False
-        cloud_params: dict[str, Any] = {
-            k: v
-            for k, v in ALIAS_BOOTSTRAP_PARAMS["smart-fallback"].items()
-            # Ollama-only params must not leak onto a cloud deployment.
-            if k not in ("num_ctx", "think")
-        }
-        cloud_params["model"] = new_model
-        cloud_params["api_key"] = api_key
-        delivered = await _replace_alias_deployment("smart-fallback", cloud_params, db_entries)
-        _CLOUD_DELIVERED_FINGERPRINTS["smart-fallback"] = desired_cloud
-        return delivered
 
+async def _smart_fallback_deliver_local(
+    new_model: str,
+    db_entries: list[LiteLLMDeployment],
+    yaml_entries: list[LiteLLMDeployment],
+) -> bool:
+    """Deliver (or no-op) the local smart-fallback deployment."""
     matching_db = [e for e in db_entries if str(e.litellm_params.get("model", "")) == new_model]
-    stale_db = [e for e in db_entries if e not in matching_db]
-
     if matching_db or any(
         str(e.litellm_params.get("model", "")) == new_model for e in yaml_entries
     ):
-        # A matching deployment already exists. Delete stale sibling DB entries
-        # so they cannot keep diverting traffic — mirrors the create-first/
-        # delete-old ordering of _replace_alias_deployment (delete-only here
-        # because the matching deployment is already correct).
+        # No-op, but delete stale siblings so they cannot keep diverting traffic.
+        stale_db = [e for e in db_entries if e not in matching_db]
         for entry in stale_db:
             dep_id = _deployment_id(entry)
             if dep_id is not None:
@@ -831,3 +864,35 @@ async def ensure_smart_fallback(
         "api_base": get_paper_ingestion_settings().ollama_base_url,
     }
     return await _replace_alias_deployment("smart-fallback", new_params, db_entries)
+
+
+async def ensure_smart_fallback(
+    fast_model: str,
+    db_pool: Any = None,
+    machine_id: str = "",  # noqa: ARG001  (signature parity with update_litellm_model; reserved)
+) -> bool:
+    """Ensure the ``smart-fallback`` deployment group exists and routes *fast_model*.
+
+    ``router_settings.fallbacks`` in the YAML maps ``smart → [\"smart-fallback\"]``;
+    this function creates the real deployment behind that group (the fast-tier
+    model with a longer timeout). Cloud fast models mirror
+    ``update_litellm_model``'s cloud semantics (no api_base/num_ctx/think; the
+    Fernet-decrypted provider key is carried); when the provider key is missing
+    the fallback pins to the static pulled default instead of creating a
+    deployment that cannot authenticate — i.e. one guaranteed to fail exactly
+    when smart fails. Returns True when a delivery happened, False when the
+    deployment already routes the target. Raises ``RuntimeError`` on delivery
+    failure.
+    """
+    fast_model, cloud_provider = _smart_fallback_normalize(fast_model)
+    fast_model, cloud_provider, api_key = await _smart_fallback_resolve_cloud_key(
+        fast_model, cloud_provider, db_pool
+    )
+    new_model = fast_model if "/" in fast_model else f"ollama_chat/{fast_model}"
+
+    deployments = await get_litellm_deployments()
+    db_entries, yaml_entries = _deployments_for_alias(deployments, "smart-fallback")
+
+    if cloud_provider is not None:
+        return await _smart_fallback_deliver_cloud(new_model, api_key, db_entries, yaml_entries)
+    return await _smart_fallback_deliver_local(new_model, db_entries, yaml_entries)

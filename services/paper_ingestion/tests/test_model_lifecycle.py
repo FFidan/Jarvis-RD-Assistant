@@ -175,6 +175,72 @@ async def test_model_pull_job_stops_when_cancelled_mid_stream() -> None:
     assert ctx.messages[-1][0] < 1.0
 
 
+class _NeverCancelledCtx:
+    def __init__(self) -> None:
+        self.messages: list[tuple[float, str | None]] = []
+
+    async def update_progress(self, progress: float, message: str | None = None) -> None:
+        self.messages.append((progress, message))
+
+    async def is_cancelled(self) -> bool:
+        return False
+
+
+class _ErrorStreamResponse:
+    status_code = 200
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def aiter_lines(self):
+        yield '{"status":"pulling","error":"disk full"}'
+
+
+class _ErrorHTTPClient:
+    def stream(self, *args, **kwargs):
+        return _ErrorStreamResponse()
+
+
+async def test_model_pull_job_reports_progress_and_completes() -> None:
+    ctx = _NeverCancelledCtx()
+
+    result = await _model_pull_job(
+        None,
+        _HTTPClient(),
+        {"ollama_tag": "qwen3:4b", "ollama_url": "http://ollama:11434"},
+        ctx,
+    )
+
+    assert result == {"tag": "qwen3:4b", "status": "pulled", "message": "pulling"}
+    assert ctx.messages == [
+        (0.0, "Starting pull for qwen3:4b"),
+        (0.1, "pulling"),
+        (0.2, "pulling"),
+        (1.0, "Done"),
+    ]
+
+
+async def test_model_pull_job_raises_on_stream_error_event() -> None:
+    ctx = _NeverCancelledCtx()
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        await _model_pull_job(
+            None,
+            _ErrorHTTPClient(),
+            {"ollama_tag": "qwen3:4b", "ollama_url": "http://ollama:11434"},
+            ctx,
+        )
+
+    assert ctx.messages == [
+        (0.0, "Starting pull for qwen3:4b"),
+        (0.05, "pulling"),
+        (0.0, "Failed: disk full"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # compute_vram_fit tests (regression guard + edge cases)
 # ---------------------------------------------------------------------------
