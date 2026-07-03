@@ -2598,13 +2598,16 @@
 <p>For first-time setup, start with <a href="https://github.com/FFidan/Jarvis-RD-Assistant/blob/main/README.md">README.md</a> Quickstart. If the two conflict, this file is canonical.</p>
 <hr />
 <h2 id="solo-deployment-recommended-for-single-user">Solo deployment (recommended for single-user)<a class="headerlink" href="#solo-deployment-recommended-for-single-user" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>bash<span class="w"> </span>scripts/init-secrets.sh<span class="w">   </span><span class="c1"># idempotent; generates API key, config key, HMAC key if absent</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">           </span><span class="c1"># waits for postgres → init-migrations → all services</span>
+<p>Use the installer for first-time setup. It generates secrets, selects single-user
+or multi-user mode, detects GPU support, starts the stack, and opens the
+first-run wizard.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>./setup.sh<span class="w"> </span>--check<span class="w">   </span><span class="c1"># read-only preflight</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>./setup.sh
 </code></pre></div>
-<blockquote>
-<p><strong>GPU users:</strong> run <code>bash setup.sh</code> instead of the bare <code>docker compose up -d</code> above — it engages the GPU overlay. See <a href="#gpu-acceleration-optional">GPU acceleration</a> for details.</p>
-</blockquote>
-<p>Required <code>.env</code> vars (<code>init-secrets.sh</code> generates any that are blank):</p>
+<p>Manual <code>docker compose up -d</code> is an advanced recovery path after <code>.env</code> and
+secrets already exist. GPU users should prefer <code>./setup.sh</code>; it persists the GPU
+overlay so later compose starts keep using it. See <a href="#gpu-acceleration-optional">GPU acceleration</a>.</p>
+<p>Required <code>.env</code> vars (<code>setup.sh</code> or <code>init-secrets.sh</code> generates any that are blank):</p>
 <table>
 <thead>
 <tr>
@@ -2640,14 +2643,12 @@
 <h2 id="fresh-install-on-a-second-machine">Fresh install on a second machine<a class="headerlink" href="#fresh-install-on-a-second-machine" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>git<span class="w"> </span>clone<span class="w"> </span>&lt;your-remote&gt;/JARVIS_RD_Assistant.git
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">cd</span><span class="w"> </span>JARVIS_RD_Assistant
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>bash<span class="w"> </span>scripts/init-secrets.sh
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nv">$EDITOR</span><span class="w"> </span>.env<span class="w">     </span><span class="c1"># optional: set TELEGRAM_BOT_TOKEN for Telegram</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>./setup.sh<span class="w"> </span>--check
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>./setup.sh
 </code></pre></div>
-<blockquote>
-<p><strong>GPU users:</strong> run <code>bash setup.sh</code> in place of the bare <code>docker compose up -d</code> above — it engages the GPU overlay. See <a href="#gpu-acceleration-optional">GPU acceleration</a> for details.</p>
-</blockquote>
+<p>Manual <code>.env</code> editing is optional and mostly for advanced operators. Telegram,
+SMTP, source keys, model choices, and cloud providers can be configured through
+the first-run wizard or Settings after the stack starts.</p>
 <p><strong>Telegram is optional.</strong> If you enable it, two machines must <strong>never</strong> share a bot token — Telegram routes updates to whichever client polled last. Create a separate bot via @BotFather per machine.</p>
 <p>After the stack is healthy, open the dashboard. The onboarding wizard runs on first visit and guides you through admin-account creation, SMTP, Pulse schedule, and Telegram pairing in one continuous flow.</p>
 <h3 id="source-http-cache">Source HTTP cache<a class="headerlink" href="#source-http-cache" title="Permanent link">&para;</a></h3>

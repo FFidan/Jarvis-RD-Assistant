@@ -2137,7 +2137,7 @@
 </code></pre></div>
 <h3 id="local-setup">Local setup<a class="headerlink" href="#local-setup" title="Permanent link">&para;</a></h3>
 <p>We strictly use Docker Compose for local development to avoid polluting the host with heavy ML dependencies.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">                    </span><span class="c1"># Start all services</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">                    </span><span class="c1"># Start local development services</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>paper_ingestion<span class="w">  </span><span class="c1"># Follow logs</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>pytest<span class="w"> </span>tests/<span class="w">  </span><span class="c1"># Run a service&#39;s tests</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>paper_ingestion<span class="w"> </span>ruff<span class="w"> </span>check<span class="w"> </span>.<span class="w">   </span><span class="c1"># Lint one service</span>
@@ -2284,7 +2284,7 @@
 <li><a href="https://inciteful.xyz">Inciteful</a> — citation graph algorithms (PageRank + Adamic/Adar) for paper discovery.</li>
 <li><a href="https://github.com/MaartenGr/BERTopic">BERTopic</a> — neural topic modeling with dynamic temporal topics.</li>
 <li><a href="https://github.com/AkariAsai/OpenScholar">OpenScholar</a> — iterative self-feedback RAG over scientific literature.</li>
-<li><a href="https://github.com/Future-House/paper-qa">PaperQA2</a> — metadata-aware embeddings and agentic retrieval.</li>
+<li><a href="https://github.com/Future-House/paper-qa">PaperQA2</a> — metadata-aware embeddings and tool-based retrieval.</li>
 </ul>
 <p>These projects are credited for the ideas and patterns that informed JARVIS's design, not for copied code. All are MIT/Apache-licensed.</p>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
