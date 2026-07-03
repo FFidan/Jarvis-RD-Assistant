@@ -9,9 +9,9 @@ export const ACCENT_PRESETS = [
 export type AccentId = typeof ACCENT_PRESETS[number]['id'];
 
 export const TYPE_PRESETS = [
-  { id: 'serif-calm',   label: 'Serif Calm',   description: 'Source Serif 4 · JetBrains Mono' },
-  { id: 'sans-modern',  label: 'Sans Modern',  description: 'Inter · IBM Plex Mono' },
-  { id: 'editorial',    label: 'Editorial',    description: 'PT Serif · IBM Plex Sans' },
+  { id: 'serif-calm',   label: 'Serif Calm',   description: 'System serif · system mono' },
+  { id: 'sans-modern',  label: 'Sans Modern',  description: 'System sans · system mono' },
+  { id: 'editorial',    label: 'Editorial',    description: 'Georgia · system sans' },
   { id: 'legacy',       label: 'Legacy',       description: 'System sans — pre-v5 native look' },
 ] as const;
 

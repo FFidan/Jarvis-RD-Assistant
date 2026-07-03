@@ -6,8 +6,8 @@ authors:
   - family-names: Fidan
     given-names: Ferhat
     email: "jarvis-rd@limitcycle.dev"
-version: 1.0.0
-date-released: 2026-06-29
+version: 1.0.1
+date-released: 2026-07-03
 repository-code: "https://github.com/FFidan/Jarvis-RD-Assistant"
 url: "https://ffidan.github.io/Jarvis-RD-Assistant/"
 license: Apache-2.0

@@ -207,6 +207,26 @@ def _all_lines(path: str) -> list[tuple[int, str]]:
         return []
 
 
+def _default_paths() -> list[str]:
+    """Return tracked files the CI/Makefile no-arg invocation must check."""
+    result = subprocess.run(
+        ["git", "ls-files"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    paths: list[str] = []
+    for raw in result.stdout.splitlines():
+        path = raw.strip()
+        if not path:
+            continue
+        if _is_test_file(path) or _is_contract_file(path) or path == _TS08_CONTRACT_PATH:
+            paths.append(path)
+    return paths
+
+
 # ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
@@ -376,7 +396,13 @@ def check_file(path: str) -> tuple[list[str], list[str]]:
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return 0
+        argv = _default_paths()
+        if not argv:
+            print(
+                "error: no default files discovered; refusing to pass without checks",
+                file=sys.stderr,
+            )
+            return 1
 
     all_errors: list[str] = []
     all_warnings: list[str] = []

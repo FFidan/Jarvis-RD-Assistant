@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
 from email.utils import formataddr
 
@@ -227,16 +228,13 @@ async def _smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
 
 
 async def _required_smtp_empty_string(pool: asyncpg.Pool | None) -> bool:
-    """True iff a REQUIRED field (host/from) is present but an empty string.
+    """True iff a required SMTP field is present but empty.
 
-    This is the silent-fail case (empty-string SMTP var accepted): ``_effective_smtp``
-    coerces empty DB values to absent, and an empty env var is accepted as-is,
-    so neither shows up as 'configured'. We inspect the RAW DB system rows and
-    raw env values for host/from to surface it as an explicit warning.
+    ``SecretsSettings`` rejects explicit empty SMTP values, so this probe reads
+    raw env values to keep the status endpoint diagnostic instead of crashing.
     """
-    s = get_secrets_settings()
-    for env_val in (s.smtp_host, s.smtp_from):
-        if env_val is not None and env_val.get_secret_value() == "":
+    for env_name in ("SMTP_HOST", "SMTP_FROM"):
+        if os.environ.get(env_name) == "":
             return True
     if pool is None:
         return False
@@ -302,7 +300,7 @@ def _hash_email(email: str) -> str:
     Use this wherever an email must appear in a log record instead of the raw
     address (or any derived secret such as a magic-link token).
     """
-    return hashlib.sha256(email.encode()).hexdigest()
+    return hashlib.sha256(email.lower().encode("utf-8")).hexdigest()
 
 
 _PLAIN_BODY_TEMPLATE = (

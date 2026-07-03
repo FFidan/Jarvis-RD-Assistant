@@ -131,7 +131,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 We strictly use Docker Compose for local development to avoid polluting the host with heavy ML dependencies.
 
 ```bash
-docker compose up -d                    # Start all services
+docker compose up -d                    # Start local development services
 docker compose logs -f paper_ingestion  # Follow logs
 docker compose exec paper_ingestion pytest tests/  # Run a service's tests
 docker compose exec paper_ingestion ruff check .   # Lint one service
@@ -224,7 +224,7 @@ The Discovery & Pulse subsystem draws on ideas and patterns from:
 - [Inciteful](https://inciteful.xyz) — citation graph algorithms (PageRank + Adamic/Adar) for paper discovery.
 - [BERTopic](https://github.com/MaartenGr/BERTopic) — neural topic modeling with dynamic temporal topics.
 - [OpenScholar](https://github.com/AkariAsai/OpenScholar) — iterative self-feedback RAG over scientific literature.
-- [PaperQA2](https://github.com/Future-House/paper-qa) — metadata-aware embeddings and agentic retrieval.
+- [PaperQA2](https://github.com/Future-House/paper-qa) — metadata-aware embeddings and tool-based retrieval.
 
 These projects are credited for the ideas and patterns that informed JARVIS's design, not for copied code. All are MIT/Apache-licensed.
 

@@ -29,7 +29,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = [
@@ -290,6 +290,22 @@ class SecretsSettings(BaseSettings):
     @classmethod
     def _resolve_file_indirection(cls, values):
         return _resolve_env_file_indirection(values, cls.model_fields)
+
+    @field_validator(
+        "smtp_host",
+        "smtp_port",
+        "smtp_user",
+        "smtp_pass",
+        "smtp_from",
+        "smtp_reply_to",
+        "smtp_from_name",
+        mode="before",
+    )
+    @classmethod
+    def _reject_empty_smtp_secret(cls, value):
+        if value == "":
+            raise ValueError("SMTP secret values must be unset or non-empty")
+        return value
 
 
 @lru_cache(maxsize=1)

@@ -8,7 +8,8 @@ shipped per release, and [docs/SECURITY.md](docs/SECURITY.md) for the security m
 
 ## Shipped
 
-Current release: **v1.0.0**.
+Current release: **v1.0.1**. See [CHANGELOG.md](CHANGELOG.md) for the
+maintenance changes since the v1.0.0 public baseline.
 
 - **Multi-tenant, self-hostable.** Magic-link sessions and an API-key session
   path for single-operator installs; admin role separation; Telegram account
@@ -39,6 +40,16 @@ Current release: **v1.0.0**.
 
 ## In progress
 
+- **First-hour local-first polish.** Tighten the early experience so a fresh
+  install is more honest and immediately useful: first-party assets only,
+  clearer library-processing actions, current public version wording, and an
+  onboarding path that helps users discover papers before the dashboard feels
+  empty.
+- **Local model and retrieval quality validation.** Candidate local model and
+  reranking defaults are being evaluated against JARVIS-specific retrieval,
+  citation, latency, and structured-output behavior before any public default
+  changes. The default product posture remains local-first; cloud providers are
+  optional integrations, not requirements.
 - **Tablet / PWA reading-experience polish.** Refinements to offline reading,
   installable PWA affordances, and tablet layout optimizations for the already-shipped
   information-architecture redesign so already-processed material (summaries,
@@ -46,6 +57,16 @@ Current release: **v1.0.0**.
 
 ## Planned (exploratory — no dates)
 
+- **Day-one library processing.** A clearer whole-library workflow that can
+  download, process, summarize, extract, and show progress for a real imported
+  or discovered corpus without requiring users to understand the internal
+  processing stages.
+- **Knowledge export and account self-service.** Markdown-friendly exports for
+  generated research knowledge, plus easier access to already-supported
+  account-level data export.
+- **Learning and project workspace evolution.** Better flashcard quality, review
+  momentum, project-centered queues, and research-work management should mature
+  before the broad conversational layer depends on that context.
 - **Hermes — conversational layer.** A chat-native interface over the existing
   RAG / citation / contradiction / knowledge-graph substrate: ask your library
   questions and get cited, contradiction-aware answers. **Conditional GO** —
@@ -55,6 +76,10 @@ Current release: **v1.0.0**.
   so the agent is testable from day one). The orchestration substrate
   (thin custom loop vs an existing agent framework) is an explicit spike —
   the plan does not pre-assume any particular library. Realistic estimate ~20d.
+- **Research-workflow expansion.** Longer-horizon exploration of systematic
+  review workflows, a JARVIS MCP surface for external research tools, and
+  graph-assisted retrieval over the existing citation and knowledge-graph
+  substrate.
 
 ## Not planned
 

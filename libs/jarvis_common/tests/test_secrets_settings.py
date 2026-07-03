@@ -24,6 +24,18 @@ def _isolated_env(monkeypatch, **kwargs):
         "JARVIS_CONFIG_KEY_OLD_FILE",
         "SMTP_HOST",
         "SMTP_HOST_FILE",
+        "SMTP_PORT",
+        "SMTP_PORT_FILE",
+        "SMTP_USER",
+        "SMTP_USER_FILE",
+        "SMTP_PASS",
+        "SMTP_PASS_FILE",
+        "SMTP_FROM",
+        "SMTP_FROM_FILE",
+        "SMTP_REPLY_TO",
+        "SMTP_REPLY_TO_FILE",
+        "SMTP_FROM_NAME",
+        "SMTP_FROM_NAME_FILE",
     ):
         monkeypatch.delenv(name, raising=False)
     for name, value in kwargs.items():
@@ -91,50 +103,33 @@ def test_file_read_failure_does_not_fall_back_to_env(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # smtp.* empty-string rejection
-#
-# NOTE: All five smtp fields (smtp_host, smtp_port, smtp_user, smtp_pass,
-# smtp_from) are typed as ``SecretStr | None`` with NO empty-string
-# validator in SecretsSettings.  Setting any of them to "" produces a
-# SecretStr('') rather than raising a ValidationError.  There is no
-# production constraint to test here — the boot-time SMTP-misconfig WARNING
-# (not a hard fail) is the intentional design.
-#
-# Each test below asserts the real current behavior (empty accepted), then
-# calls ``pytest.xfail()`` to record an honest XFAIL.  When a validator is
-# added, ``SecretsSettings()`` will raise before the assertion is reached and
-# the test will fail outright, forcing a proper rejection test to be written.
-#
-# Verified against HEAD: PYTHONPATH=libs/jarvis_common uv run python -c
-#   "from jarvis_common.settings import SecretsSettings; ..."
-# — all five fields ACCEPT empty string (2026-05-24).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "env_name,field_name",
+    "env_name",
     [
-        ("SMTP_HOST", "smtp_host"),
-        ("SMTP_FROM", "smtp_from"),
-        ("SMTP_USER", "smtp_user"),
-        ("SMTP_PASS", "smtp_pass"),
+        "SMTP_HOST",
+        "SMTP_PORT",
+        "SMTP_FROM",
+        "SMTP_USER",
+        "SMTP_PASS",
+        "SMTP_REPLY_TO",
+        "SMTP_FROM_NAME",
     ],
 )
-def test_smtp_field_rejects_empty_string(monkeypatch, env_name: str, field_name: str) -> None:
-    """Each smtp.* field should reject an empty-string value with ValidationError.
-
-    Documents the gap honestly: no empty-string validator exists today so
-    SecretsSettings() accepts "" and the assertion below passes, after which
-    pytest.xfail() records an explicit XFAIL tied to the real observed state.
-    When a validator is added, SecretsSettings() will raise before the
-    assertion is reached — the test will fail (not xfail), forcing the
-    caller to remove this gap note and add a real rejection test.
-    """
+def test_smtp_field_rejects_empty_string(monkeypatch, env_name: str) -> None:
+    """Explicit empty SMTP env values are rejected; unset values still mean disabled."""
     _isolated_env(monkeypatch, **{env_name: ""})
-    s = SecretsSettings()
-    val = getattr(s, field_name)
-    # Confirm current behavior: empty string is accepted (SecretStr, not None).
-    assert val is not None and val.get_secret_value() == ""
-    pytest.xfail(
-        "empty-SMTP acceptance is the intentional boot-time WARNING design; "
-        "no empty-string validator exists yet"
-    )
+
+    with pytest.raises(ValueError, match="SMTP secret values must be unset or non-empty"):
+        SecretsSettings()
+
+
+def test_unset_smtp_fields_remain_allowed(monkeypatch) -> None:
+    """Single-user/no-SMTP fallback remains available when SMTP vars are absent."""
+    _isolated_env(monkeypatch)
+    settings = SecretsSettings()
+
+    assert settings.smtp_host is None
+    assert settings.smtp_from is None

@@ -237,3 +237,76 @@ def test_ts08_ignores_non_contract_files(tmp_path):
     )
     assert not errors, f"check_contract_doc should ignore non-contract paths; got: {errors}"
     assert not warnings
+
+
+def test_main_no_args_scans_default_paths(monkeypatch, tmp_path):
+    """CI/Makefile no-arg invocation must not silently skip all checks."""
+    checked: list[str] = []
+    contract_checked: list[str] = []
+    test_path = tmp_path / "services" / "paper_ingestion" / "tests" / "test_example.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text("def test_example():\n    assert True\n", encoding="utf-8")
+
+    monkeypatch.setattr(_mod, "_default_paths", lambda: [str(test_path)])
+
+    def fake_check_file(path: str) -> tuple[list[str], list[str]]:
+        checked.append(path)
+        return [], []
+
+    def fake_check_contract_doc(path: str) -> tuple[list[str], list[str]]:
+        contract_checked.append(path)
+        return [], []
+
+    monkeypatch.setattr(_mod, "check_file", fake_check_file)
+    monkeypatch.setattr(_mod, "check_contract_doc", fake_check_contract_doc)
+
+    assert _mod.main([]) == 0
+    assert checked == [str(test_path)]
+    assert contract_checked == [str(test_path)]
+
+
+def test_default_paths_selects_tracked_tests_and_contracts(monkeypatch):
+    """Default discovery uses tracked test/contract files and excludes unrelated paths."""
+
+    class Result:
+        returncode = 0
+        stdout = "\n".join(
+            [
+                "README.md",
+                "libs/jarvis_common/tests/test_email.py",
+                "services/paper_ingestion/tests/test_reranker_loadfail.py",
+                "docs/contracts/07-testing.md",
+                "docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl",
+            ]
+        )
+        stderr = ""
+
+    monkeypatch.setattr(_mod.subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert _mod._default_paths() == [
+        "libs/jarvis_common/tests/test_email.py",
+        "services/paper_ingestion/tests/test_reranker_loadfail.py",
+        "docs/contracts/07-testing.md",
+    ]
+
+
+def test_main_no_args_fails_when_default_paths_empty(monkeypatch, capsys):
+    """No-arg invocation must fail closed instead of passing without checks."""
+
+    monkeypatch.setattr(_mod, "_default_paths", lambda: [])
+
+    assert _mod.main([]) == 1
+    assert "no default files discovered" in capsys.readouterr().err
+
+
+def test_default_paths_returns_empty_on_git_failure(monkeypatch):
+    """A git discovery failure is visible to main() as an empty fail-closed set."""
+
+    class Result:
+        returncode = 128
+        stdout = ""
+        stderr = "fatal: not a git repository"
+
+    monkeypatch.setattr(_mod.subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert _mod._default_paths() == []

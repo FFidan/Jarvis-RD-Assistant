@@ -518,23 +518,19 @@ async def test_effective_smtp_status_from_only_no_host(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_effective_smtp_status_empty_string_required_field(monkeypatch) -> None:
-    """Empty-string required env field triggers the empty-value issue message."""
+    """Explicit empty SMTP env now fails settings validation instead of degrading."""
     from jarvis_common.email import effective_smtp_status
     from jarvis_common.settings import get_secrets_settings
+    from pydantic import ValidationError
 
-    monkeypatch.setenv("SMTP_HOST", "")  # present but empty — silent-fail case
+    monkeypatch.setenv("SMTP_HOST", "")
     monkeypatch.setenv("SMTP_FROM", "bot@example.com")
     get_secrets_settings.cache_clear()
 
-    deliverable, issues = await effective_smtp_status(pool=None)
+    with pytest.raises(ValidationError, match="SMTP secret values must be unset or non-empty"):
+        await effective_smtp_status(pool=None)
 
     get_secrets_settings.cache_clear()
-    assert deliverable is False
-    assert len(issues) == 1
-    # Must mention "empty" in some form and be value-free
-    assert "empty" in issues[0].lower()
-    assert "bot@example.com" not in issues[0]
-    assert "SMTP_HOST" not in issues[0]
 
 
 # ---------------------------------------------------------------------------
@@ -810,3 +806,16 @@ def test_plain_body_brace_url_rendered_verbatim(link: str) -> None:
     assert link in body, (
         f"Link with brace chars was not embedded verbatim.\nLink:  {link!r}\nBody:\n{body}"
     )
+
+
+def test_hash_email_is_case_insensitive() -> None:
+    from jarvis_common.email import _hash_email
+
+    assert _hash_email("User@Example.COM") == _hash_email("user@example.com")
+
+
+def test_email_hash_matches_auth_router_canonicalization() -> None:
+    from jarvis_common.email import _hash_email as mail_hash_email
+    from paper_ingestion.routers.auth import _hash_email as auth_hash_email
+
+    assert mail_hash_email("User@Example.COM") == auth_hash_email("user@example.com")

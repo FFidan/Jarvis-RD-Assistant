@@ -17,6 +17,7 @@ import { userEvent } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QUERY_KEYS } from '@/lib/query-keys';
+import { useJobStore } from '@/stores/job-store';
 
 function LocationDisplay() {
   const location = useLocation();
@@ -63,7 +64,12 @@ vi.mock('@/lib/api', () => ({
   requestTelegramPairToken: vi.fn(),
 }));
 
+vi.mock('@/lib/api/pulse', () => ({
+  generatePulseNow: vi.fn().mockResolvedValue({ job_id: 'pulse-job-1', status: 'queued' }),
+}));
+
 const api = await import('@/lib/api');
+const pulseApi = await import('@/lib/api/pulse');
 const { OnboardingWizard } = await import('@/pages/OnboardingWizard');
 const { useAuthStore } = await import('@/stores/auth-store');
 
@@ -110,6 +116,7 @@ describe('OnboardingWizard', () => {
     vi.clearAllMocks();
     sessionStorage.clear();
     useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+    useJobStore.getState()._reset();
     vi.mocked(api.getFirstRunStatus).mockResolvedValue({ configured: false, setup_completed: false });
     vi.mocked(api.getSetupStatus).mockResolvedValue({
       setup_completed: false,
@@ -126,6 +133,96 @@ describe('OnboardingWizard', () => {
       paired_at: null,
     });
     vi.mocked(api.fetchConfig).mockResolvedValue([]);
+  });
+
+
+
+  it('single-user first run puts admin creation before optional SMTP', async () => {
+    renderWizard(
+      { configured: false, setup_completed: false, setup_mode: 'single' },
+      false,
+      '/?step=2',
+    );
+
+    expect(await screen.findByText('Create your admin account')).toBeInTheDocument();
+    expect(screen.queryByText('SMTP relay')).not.toBeInTheDocument();
+    expect(screen.getByText('Step 2 of 9')).toBeInTheDocument();
+  });
+
+  it('Done step offers first discovery and tracks the queued pulse job', async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
+
+    renderWizard({ configured: true, setup_completed: false }, true, '/?step=8', queryClient);
+
+    expect(await screen.findByText('Start discovery')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /discover papers now/i }));
+
+    await waitFor(() => {
+      expect(pulseApi.generatePulseNow).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(useJobStore.getState().jobs['pulse-job-1']?.kind).toBe('pulse.generate');
+    });
+  });
+
+  it('Done step tracks a running discovery job as running', async () => {
+    const user = userEvent.setup();
+    vi.mocked(pulseApi.generatePulseNow).mockResolvedValueOnce({ job_id: 'pulse-job-running', status: 'running' });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
+
+    renderWizard({ configured: true, setup_completed: false }, true, '/?step=8', queryClient);
+
+    expect(await screen.findByText('Start discovery')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /discover papers now/i }));
+
+    await waitFor(() => {
+      expect(useJobStore.getState().jobs['pulse-job-running']?.status).toBe('running');
+    });
+  });
+
+  it('Done step keeps dashboard navigation available after discovery rate-limit errors', async () => {
+    const user = userEvent.setup();
+    vi.mocked(pulseApi.generatePulseNow).mockRejectedValueOnce(new Error('429 Too Many Requests'));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
+
+    renderWizard({ configured: true, setup_completed: false }, true, '/?step=8', queryClient);
+
+    expect(await screen.findByText('Start discovery')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /discover papers now/i }));
+
+    expect(await screen.findByText(/429 Too Many Requests/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /go to dashboard/i })).toBeEnabled();
+  });
+
+  it('Done step keeps dashboard navigation available when discovery is already running', async () => {
+    const user = userEvent.setup();
+    vi.mocked(pulseApi.generatePulseNow).mockRejectedValueOnce(new Error('409 Conflict'));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(QUERY_KEYS.setup.firstRun(), { configured: true, setup_completed: false });
+
+    renderWizard({ configured: true, setup_completed: false }, true, '/?step=8', queryClient);
+
+    expect(await screen.findByText('Start discovery')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /discover papers now/i }));
+
+    expect(await screen.findByText(/409 Conflict/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /go to dashboard/i })).toBeEnabled();
+  });
+
+  it('multi-user first run preserves optional SMTP before admin creation', async () => {
+    renderWizard(
+      { configured: false, setup_completed: false, setup_mode: 'multi' },
+      false,
+      '/?step=2',
+    );
+
+    expect(await screen.findByText('SMTP relay')).toBeInTheDocument();
+    expect(screen.queryByText('Create your admin account')).not.toBeInTheDocument();
+    expect(screen.getByText('Step 2 of 9')).toBeInTheDocument();
   });
 
   // (a)

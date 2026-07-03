@@ -43,7 +43,7 @@ month?" with source-linked evidence and a workflow that makes unsupported output
 ## 2. User Stories
 
 ### 2.1 Setup and Configuration
-- Deploy with `docker compose up`; configure LLM provider via environment variables.
+- Install with `./setup.sh`, complete the first-run wizard, and tune model providers through Settings.
 - Define research topics with search terms and optional descriptions.
 - Connect Telegram bot; set briefing schedule; add or remove paper sources.
 
@@ -122,7 +122,7 @@ Threat model: `docs/SECURITY.md` and `docs/ARCHITECTURE.md`.
 
 ### 4.1 Security
 - Provider credentials encrypted at rest (`JARVIS_CONFIG_KEY`); Docker secrets supported.
-- No telemetry, no external analytics. Only outbound connections to configured APIs.
+- No telemetry, no external analytics, and no third-party font/CDN fetches. Only outbound connections to configured APIs and source integrations.
 - Startup validates encrypted config rows before schedulers/workers start.
 
 ### 4.2 Performance
@@ -229,11 +229,11 @@ Discovery & Pulse design borrows ideas from (no code copied; all MIT/Apache-lice
 
 The MVP is complete when a user can:
 
-1. Deploy with `docker compose up`
-2. Configure topics and LLM provider via `.env`
-3. Receive a daily Telegram briefing with cited summaries
-4. Save or star a paper from Telegram
-5. Review auto-generated flashcards on Telegram with FSRS scheduling
-6. Create a project with milestones and receive deadline reminders
-7. View briefing history, card stats, and project status on the dashboard
-8. Verify every claim by tapping through to the source paper or viewing the PDF snapshot
+1. Install with `./setup.sh` and complete the first-run web wizard.
+2. Configure topics, sources, SMTP, optional Telegram, and optional cloud providers through Settings.
+3. Discover or import papers and build a daily Pulse with cited summaries.
+4. Save, star, summarize, extract, and ask cited questions over papers from the dashboard.
+5. Review generated flashcards with FSRS scheduling.
+6. Create projects with milestones, notes, and research tasks.
+7. View briefing history, card stats, project status, and system health on the dashboard.
+8. Verify every generated claim by following citations, quotes, and source-paper links.

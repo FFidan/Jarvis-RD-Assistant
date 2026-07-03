@@ -25,6 +25,18 @@ export const ALL_STEPS: readonly StepKind[] = [
   'done',
 ];
 
+export const SINGLE_USER_FIRST_RUN_STEPS: readonly StepKind[] = [
+  'welcome',
+  'admin',
+  'smtp',
+  'cloud',
+  'topic',
+  'automation',
+  'sources',
+  'telegram',
+  'done',
+];
+
 export const SETUP_TOKEN_STORAGE_KEY = 'jarvis_setup_token';
 
 export function readStoredSetupToken(): string | null {

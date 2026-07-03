@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { markSetupCompleted, type FirstRunStatus } from '@/lib/api';
 import {
   ALL_STEPS,
+  SINGLE_USER_FIRST_RUN_STEPS,
   readStoredSetupToken,
   storeSetupToken,
   markFirstRunCompleted,
@@ -42,7 +43,9 @@ export function OnboardingWizard({ firstRun, authed }: OnboardingWizardProps) {
   }, []);
 
   const showAdminStep = !firstRun.configured;
-  const steps = showAdminStep ? ALL_STEPS : ALL_STEPS.filter((s) => s !== 'admin');
+  const baseSteps =
+    showAdminStep && firstRun.setup_mode === 'single' ? SINGLE_USER_FIRST_RUN_STEPS : ALL_STEPS;
+  const steps = showAdminStep ? baseSteps : ALL_STEPS.filter((s) => s !== 'admin');
   const totalSteps = steps.length;
 
   const clampStep = (raw: string | null): number => {

@@ -142,9 +142,9 @@
   --border-dashed: #d4d4d8;        /* zinc-300 */
 
   /* Type stacks */
-  --font-sans:  "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
-  --font-serif: "Source Serif 4", "Source Serif Pro", ui-serif, Georgia, Cambria, serif;
-  --font-mono:  "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-sans:  ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-mono:  ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "DejaVu Sans Mono", monospace;
 
   /* Layout */
   --page-max-width: 860px;
@@ -307,13 +307,13 @@ html.dark.accent-plum {
 /* ── Type pairing presets ───────────────────────────── */
 /* Default (serif-calm) is already :root — no class needed */
 html.type-sans-modern {
-  --font-sans:  "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono:  "IBM Plex Mono", ui-monospace, monospace;
+  --font-sans:  ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-serif: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono:  ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "DejaVu Sans Mono", monospace;
 }
 html.type-editorial {
-  --font-serif: "PT Serif", "Georgia", ui-serif, serif;
-  --font-sans:  "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-sans:  ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
 }
 html.type-legacy {
   --font-sans:  ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;

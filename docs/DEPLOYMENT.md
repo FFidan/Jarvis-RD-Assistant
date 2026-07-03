@@ -8,14 +8,20 @@ For first-time setup, start with [README.md](https://github.com/FFidan/Jarvis-RD
 
 ## Solo deployment (recommended for single-user)
 
+Use the installer for first-time setup. It generates secrets, selects single-user
+or multi-user mode, detects GPU support, starts the stack, and opens the
+first-run wizard.
+
 ```bash
-bash scripts/init-secrets.sh   # idempotent; generates API key, config key, HMAC key if absent
-docker compose up -d           # waits for postgres → init-migrations → all services
+./setup.sh --check   # read-only preflight
+./setup.sh
 ```
 
-> **GPU users:** run `bash setup.sh` instead of the bare `docker compose up -d` above — it engages the GPU overlay. See [GPU acceleration](#gpu-acceleration-optional) for details.
+Manual `docker compose up -d` is an advanced recovery path after `.env` and
+secrets already exist. GPU users should prefer `./setup.sh`; it persists the GPU
+overlay so later compose starts keep using it. See [GPU acceleration](#gpu-acceleration-optional).
 
-Required `.env` vars (`init-secrets.sh` generates any that are blank):
+Required `.env` vars (`setup.sh` or `init-secrets.sh` generates any that are blank):
 
 | Var | Purpose |
 |---|---|
@@ -40,13 +46,13 @@ curl http://127.0.0.1:8011/health   # learning_engine
 ```bash
 git clone <your-remote>/JARVIS_RD_Assistant.git
 cd JARVIS_RD_Assistant
-cp .env.example .env
-bash scripts/init-secrets.sh
-$EDITOR .env     # optional: set TELEGRAM_BOT_TOKEN for Telegram
-docker compose up -d
+./setup.sh --check
+./setup.sh
 ```
 
-> **GPU users:** run `bash setup.sh` in place of the bare `docker compose up -d` above — it engages the GPU overlay. See [GPU acceleration](#gpu-acceleration-optional) for details.
+Manual `.env` editing is optional and mostly for advanced operators. Telegram,
+SMTP, source keys, model choices, and cloud providers can be configured through
+the first-run wizard or Settings after the stack starts.
 
 **Telegram is optional.** If you enable it, two machines must **never** share a bot token — Telegram routes updates to whichever client polled last. Create a separate bot via @BotFather per machine.
 

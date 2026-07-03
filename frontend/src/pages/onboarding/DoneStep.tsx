@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button';
 import { SetupStep } from '@/components/setup/SetupStep';
 import { SystemCheck } from '@/components/setup/SystemCheck';
 import { markSetupCompleted } from '@/lib/api';
+import { generatePulseNow } from '@/lib/api/pulse';
+import { useJobStore } from '@/stores/job-store';
 import { errorMessage } from '@/lib/errors';
 import { markFirstRunCompleted } from './shared';
 
@@ -27,10 +29,21 @@ export function DoneStep({
     mutationFn: markSetupCompleted,
     onSuccess: () => {
       markFirstRunCompleted(queryClient);
-      navigate('/', { replace: true });
     },
     onError: (err: Error) => {
       console.error('Failed to mark setup completed', err);
+    },
+  });
+
+  const pulseMut = useMutation({
+    mutationFn: generatePulseNow,
+    onSuccess: (res) => {
+      useJobStore.getState().trackExternalJob({
+        jobId: res.job_id,
+        kind: 'pulse.generate',
+        payload: { source: 'first_run' },
+        status: res.status === 'running' ? 'running' : 'queued',
+      });
     },
   });
 
@@ -114,9 +127,38 @@ export function DoneStep({
         </div>
       </div>
       {authed && (
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-muted-foreground">Setup readiness</p>
-          <SystemCheck />
+        <div className="space-y-4">
+          <div className="rounded-md border border-border bg-muted/30 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Start discovery</p>
+                <p className="text-sm text-muted-foreground">
+                  Build your first Pulse from configured paper sources before the dashboard feels empty.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => pulseMut.mutate()}
+                disabled={pulseMut.isPending || pulseMut.isSuccess}
+              >
+                {pulseMut.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                {pulseMut.isSuccess ? 'Discovery queued' : 'Discover papers now'}
+              </Button>
+            </div>
+            {pulseMut.isError && (
+              <p className="mt-2 text-sm text-destructive">
+                Discovery could not start: {errorMessage(pulseMut.error, 'try again from the dashboard.')}
+              </p>
+            )}
+          </div>
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-muted-foreground">Setup readiness</p>
+            <SystemCheck />
+          </div>
         </div>
       )}
     </SetupStep>
