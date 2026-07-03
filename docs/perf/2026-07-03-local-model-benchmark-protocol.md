@@ -58,21 +58,47 @@ retrieval order, or paper-label stability.
 | `smart` | returned exact `OK` | 7299 | eligible for full benchmark only; not promoted from smoke |
 | `smart-fallback` | returned reasoning-like prefix instead of exact `OK` | 565 | blocks promotion until hidden-reasoning suppression is fixed and rerun |
 
-Additional environment checks: product Ollama was not reachable on host port
-`11434`; the separate claude-context Ollama on `11437` only had
-`nomic-embed-text:latest`, so it was not used as a product benchmark runtime.
-LiteLLM listed `embed`, `embed-4b`, `fast`, `smart-fallback`, and `smart`.
+Additional environment checks: the product benchmark runtime must be the JARVIS
+stack's own LiteLLM/Ollama path. A separate non-product embedding-only daemon
+was intentionally excluded. LiteLLM listed `embed`, `embed-4b`, `fast`,
+`smart-fallback`, and `smart`.
 
 ## Fixed Eval Inputs
 
 - Manifest: `docs/perf/eval_sets/2026-07-03-scientific-rag-eval.jsonl`
 - Harness: `scripts/perf/llm_retrieval_eval.py`
+- Answer key: `docs/perf/eval_sets/2026-07-03-scientific-rag-answer-key.jsonl`
 - Operator notes: `scripts/perf/llm_retrieval_eval_README.md`
 
 The manifest contains 10 open-access paper slots and 25 fixed scientific RAG
 questions. The question pack covers method explanation, limitations, numeric
 extraction, cross-paper synthesis, contradiction/tension, reproducibility detail,
 and adversarial unanswerable prompts.
+
+## Execution Workflow
+
+The harness now separates three phases:
+
+1. `--dry-run` validates manifest and aggregation plumbing with fixture rows.
+2. `--capture-only` calls product RAG endpoints and writes raw rows with
+   `scores: null` under ignored `artifacts/perf/<run-id>/raw_answers.jsonl`.
+   Library-wide capture requires `--fixed-pack-library-confirmed`, because the
+   product cross-paper route searches the authenticated library rather than an
+   explicit paper-id list.
+3. `--answers-jsonl` aggregates only complete judge-reviewed rows with real
+   score objects, exact fixed-question coverage, non-empty source/citation
+   evidence, numeric latency/VRAM metadata, and fixed-pack scope markers for
+   library-wide questions.
+
+The capture phase requires an explicit paper map from stable `paper_key` values
+to local database paper ids. That map, cookies, raw answers, local logs, and
+judge scratch notes are operator artifacts and must not be committed. Reranker,
+backend, and model candidates should be measured behind existing aliases or
+explicit temporary overrides, then rolled back before normal product use.
+
+Cloud providers are not part of default promotion. They may be used only as
+optional BYOK comparison inputs if the owner asks, and any such comparison must
+be labeled as optional rather than local-first baseline evidence.
 
 ## Prior Regression Checks Carried Forward
 
@@ -104,8 +130,16 @@ candidate.
 
 ## Promotion Rules
 
-A promotion requires measured rows over the fixed pack. Dry-run fixture output
-and route smoke output are never promotion evidence. A default candidate must
-beat the current baseline by at least 10 percent total weighted score and must
-not regress evidence grounding, citation-label stability, structured-output
-validity, visible hidden-reasoning suppression, or hardware fit.
+A promotion requires measured rows over the fixed pack. Dry-run fixture output,
+route smoke output, and capture-only rows with `scores: null` are never
+promotion evidence. Rows from cross-paper or unanswerable questions are not
+fixed-pack evidence unless the benchmark library was isolated to the fixed pack
+and the judged rows preserve that scope marker. A default candidate must beat
+the current baseline by at
+least 10 percent total weighted score and must not regress evidence grounding,
+citation-label stability, structured-output validity, visible hidden-reasoning
+suppression, or hardware fit.
+
+No MkDocs/public link should be added unless a maintainer review verifies that the
+result packet is reproducible, source-backed, free of subjective LLM-judge prose, and
+free of raw local traces or private deployment details.
